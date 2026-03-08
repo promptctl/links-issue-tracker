@@ -6,24 +6,24 @@
 - Dolt CLI `>= 1.81.10`
 - Go toolchain (for `go install`)
 
-## Install `lk`
+## Install `lit`
 
 ```sh
-go install github.com/bmf/links-issue-tracker/cmd/lk@latest
+go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 
 ## Enable shell completion (optional)
 
 ```sh
-lk completion bash > ~/.local/share/bash-completion/completions/lk
-lk completion zsh > ~/.zfunc/_lk
-lk completion fish > ~/.config/fish/completions/lk.fish
+lit completion bash > ~/.local/share/bash-completion/completions/lit
+lit completion zsh > ~/.zfunc/_lit
+lit completion fish > ~/.config/fish/completions/lit.fish
 ```
 
 ## Install sync automation once per clone
 
 ```sh
-lk hooks install
+lit hooks install
 ```
 
 This installs a shared `pre-push` hook in your clone’s common Git dir so all worktrees inherit the same behavior.

@@ -15,13 +15,13 @@ This keeps local state durable and auditable after every mutation.
 
 Sync uses Dolt remotes, but remote configuration comes from Git remotes.
 
-Before every `lk sync` command, `links` reconciles Dolt remotes from `git remote -v` fetch URLs.
+Before every `lit sync` command, `links` reconciles Dolt remotes from `git remote -v` fetch URLs.
 
 ## Automation model
 
-`lk hooks install` installs a shared `pre-push` hook that:
+`lit hooks install` installs a shared `pre-push` hook that:
 
-- attempts `lk sync push` for pushed branches
+- attempts `lit sync push` for pushed branches
 - never blocks `git push`
 - emits one yellow warning line on sync failure
 

@@ -14,8 +14,8 @@ func TestCompletionScriptsRender(t *testing.T) {
 		if err := runCompletion(&stdout, []string{shell}); err != nil {
 			t.Fatalf("runCompletion(%q) error = %v", shell, err)
 		}
-		if !strings.Contains(stdout.String(), "lk") {
-			t.Fatalf("completion output for %q missing lk command name: %q", shell, stdout.String())
+		if !strings.Contains(stdout.String(), "lit") {
+			t.Fatalf("completion output for %q missing lit command name: %q", shell, stdout.String())
 		}
 	}
 }
@@ -25,13 +25,13 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
 		t.Fatalf("Run(help) error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "lk completion <bash|zsh|fish>") {
+	if !strings.Contains(stdout.String(), "lit completion <bash|zsh|fish>") {
 		t.Fatalf("help output missing completion command: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "lk quickstart [--json]") {
+	if !strings.Contains(stdout.String(), "lit quickstart [--json]") {
 		t.Fatalf("help output missing quickstart command: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "lk hooks install [--json]") {
+	if !strings.Contains(stdout.String(), "lit hooks install [--json]") {
 		t.Fatalf("help output missing hooks command: %q", stdout.String())
 	}
 }

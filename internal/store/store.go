@@ -2052,5 +2052,5 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 
 func newIssueID(workspaceID string) string {
 	prefix := strings.SplitN(workspaceID, "-", 2)[0]
-	return fmt.Sprintf("lk-%s-%s", prefix, uuid.NewString()[:8])
+	return fmt.Sprintf("lit-%s-%s", prefix, uuid.NewString()[:8])
 }

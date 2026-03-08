@@ -12,7 +12,7 @@ That means all worktrees in the same clone share one up-to-date issue view.
 
 ## One write boundary
 
-All writes happen through `lk`. You do not edit database state directly.
+All writes happen through `lit`. You do not edit database state directly.
 
 ## Optimistic concurrency with `workspace_revision`
 

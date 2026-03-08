@@ -12,7 +12,7 @@ import (
 func main() {
 	if err := cli.Run(context.Background(), os.Stdout, os.Stderr, os.Args[1:]); err != nil {
 		exitCode := cli.ExitCode(err)
-		if os.Getenv("LK_ERROR_JSON") == "1" {
+		if os.Getenv("LIT_ERROR_JSON") == "1" {
 			_ = json.NewEncoder(os.Stderr).Encode(map[string]any{
 				"error": map[string]any{
 					"message":   err.Error(),

@@ -265,7 +265,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
-		return errors.New("usage: lk show <id>")
+		return errors.New("usage: lit show <id>")
 	}
 	fs := flag.NewFlagSet("show", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -274,7 +274,7 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lk show <id>")
+		return errors.New("usage: lit show <id>")
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 	if err != nil {
@@ -289,7 +289,7 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runEdit(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
-		return errors.New("usage: lk edit <id> [flags]")
+		return errors.New("usage: lit edit <id> [flags]")
 	}
 	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -307,7 +307,7 @@ func runEdit(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lk edit <id> [flags]")
+		return errors.New("usage: lit edit <id> [flags]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
@@ -348,7 +348,7 @@ func runEdit(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: lk %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
 	}
 	fs := flag.NewFlagSet(action, flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -360,7 +360,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lk %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
 	}
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 		IssueID:          positional[0],
@@ -377,11 +377,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 || args[0] != "add" {
-		return errors.New("usage: lk comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	positional, flagArgs := splitArgs(args[1:], 1)
 	if len(positional) != 1 {
-		return errors.New("usage: lk comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	fs := flag.NewFlagSet("comment add", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -393,7 +393,7 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lk comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
 	if err != nil {
@@ -408,13 +408,13 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 
 func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk dep <add|rm> ...")
+		return errors.New("usage: lit dep <add|rm> ...")
 	}
 	switch args[0] {
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lk dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
 		}
 		fs := flag.NewFlagSet("dep add", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -426,7 +426,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lk dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
 		}
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
 		if err != nil {
@@ -440,7 +440,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lk dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
 		fs := flag.NewFlagSet("dep rm", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -451,7 +451,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lk dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
 		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType, optionalExpectedRevision(fs, expectedRevision)); err != nil {
 			return err
@@ -463,7 +463,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	case "ls":
 		positional, flagArgs := splitArgs(args[1:], 1)
 		if len(positional) != 1 {
-			return errors.New("usage: lk dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
 		}
 		fs := flag.NewFlagSet("dep ls", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -473,7 +473,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lk dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
 		}
 		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], *relType)
 		if err != nil {
@@ -489,19 +489,19 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return nil
 		})
 	default:
-		return errors.New("usage: lk dep <add|rm|ls> ...")
+		return errors.New("usage: lit dep <add|rm|ls> ...")
 	}
 }
 
 func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk label <add|rm> ...")
+		return errors.New("usage: lit label <add|rm> ...")
 	}
 	switch args[0] {
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lk label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
 		}
 		fs := flag.NewFlagSet("label add", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -512,7 +512,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lk label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
 		}
 		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
 		if err != nil {
@@ -522,7 +522,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lk label rm <issue-id> <label> [--json]")
+			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 		}
 		fs := flag.NewFlagSet("label rm", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -532,7 +532,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lk label rm <issue-id> <label> [--json]")
+			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 		}
 		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1], optionalExpectedRevision(fs, expectedRevision))
 		if err != nil {
@@ -540,19 +540,19 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 		return printValue(stdout, labels, *jsonOut, printLabels)
 	default:
-		return errors.New("usage: lk label <add|rm> ...")
+		return errors.New("usage: lit label <add|rm> ...")
 	}
 }
 
 func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk parent <set|clear> ...")
+		return errors.New("usage: lit parent <set|clear> ...")
 	}
 	switch args[0] {
 	case "set":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lk parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]")
+			return errors.New("usage: lit parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]")
 		}
 		fs := flag.NewFlagSet("parent set", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -579,7 +579,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	case "clear":
 		positional, flagArgs := splitArgs(args[1:], 1)
 		if len(positional) != 1 {
-			return errors.New("usage: lk parent clear <child-id> [--expected-revision N] [--json]")
+			return errors.New("usage: lit parent clear <child-id> [--expected-revision N] [--json]")
 		}
 		fs := flag.NewFlagSet("parent clear", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -596,14 +596,14 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		})
 	default:
-		return errors.New("usage: lk parent <set|clear> ...")
+		return errors.New("usage: lit parent <set|clear> ...")
 	}
 }
 
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
-		return errors.New("usage: lk children <parent-id> [--json]")
+		return errors.New("usage: lit children <parent-id> [--json]")
 	}
 	fs := flag.NewFlagSet("children", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -639,7 +639,7 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 
 func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk beads <import|export> --db <path> [--json]")
+		return errors.New("usage: lit beads <import|export> --db <path> [--json]")
 	}
 	switch args[0] {
 	case "import":
@@ -651,7 +651,7 @@ func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if strings.TrimSpace(*dbPath) == "" {
-			return errors.New("usage: lk beads import --db <path> [--json]")
+			return errors.New("usage: lit beads import --db <path> [--json]")
 		}
 		summary, err := beads.Import(ctx, ap.Store, *dbPath)
 		if err != nil {
@@ -671,7 +671,7 @@ func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if strings.TrimSpace(*dbPath) == "" {
-			return errors.New("usage: lk beads export --db <path> [--json]")
+			return errors.New("usage: lit beads export --db <path> [--json]")
 		}
 		summary, err := beads.Export(ctx, ap.Store, *dbPath)
 		if err != nil {
@@ -683,7 +683,7 @@ func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		})
 	default:
-		return errors.New("usage: lk beads <import|export> --db <path> [--json]")
+		return errors.New("usage: lit beads <import|export> --db <path> [--json]")
 	}
 }
 
@@ -717,7 +717,7 @@ func runWorkspace(stdout io.Writer, ap *app.App, args []string) error {
 
 func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk sync <status|remote|fetch|pull|push> ...")
+		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
 	syncState, err := syncDoltRemotesFromGit(ctx, ws)
 	if err != nil {
@@ -726,7 +726,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	switch args[0] {
 	case "remote":
 		if len(args) < 2 {
-			return errors.New("usage: lk sync remote ls [--json]")
+			return errors.New("usage: lit sync remote ls [--json]")
 		}
 		switch args[1] {
 		case "ls":
@@ -755,7 +755,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 				return err
 			})
 		default:
-			return errors.New("usage: lk sync remote ls [--json]")
+			return errors.New("usage: lit sync remote ls [--json]")
 		}
 	case "fetch":
 		fs := flag.NewFlagSet("sync fetch", flag.ContinueOnError)
@@ -922,7 +922,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		})
 	default:
-		return errors.New("usage: lk sync <status|remote|fetch|pull|push> ...")
+		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
 }
 
@@ -1121,7 +1121,7 @@ func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 
 func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk backup <create|list|restore> ...")
+		return errors.New("usage: lit backup <create|list|restore> ...")
 	}
 	switch args[0] {
 	case "create":
@@ -1190,7 +1190,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			restorePath = latestSnapshot.Path
 		}
 		if restorePath == "" {
-			return errors.New("usage: lk backup restore --path <snapshot.json> [--force] [--json] or --latest")
+			return errors.New("usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest")
 		}
 		if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 			return err
@@ -1202,7 +1202,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		})
 	default:
-		return errors.New("usage: lk backup <create|list|restore> ...")
+		return errors.New("usage: lit backup <create|list|restore> ...")
 	}
 }
 
@@ -1233,7 +1233,7 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		}
 		restorePath = latest.Path
 	default:
-		return errors.New("usage: lk recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]")
+		return errors.New("usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]")
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
@@ -1248,12 +1248,12 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 
 func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk bulk <label|close|archive|import> ...")
+		return errors.New("usage: lit bulk <label|close|archive|import> ...")
 	}
 	switch args[0] {
 	case "label":
 		if len(args) < 2 {
-			return errors.New("usage: lk bulk label <add|rm> ...")
+			return errors.New("usage: lit bulk label <add|rm> ...")
 		}
 		action := args[1]
 		fs := flag.NewFlagSet("bulk label", flag.ContinueOnError)
@@ -1295,7 +1295,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 					continue
 				}
 			default:
-				return errors.New("usage: lk bulk label <add|rm> ...")
+				return errors.New("usage: lit bulk label <add|rm> ...")
 			}
 			results[issueID] = "ok"
 			if nextExpected != nil {
@@ -1379,13 +1379,13 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return err
 		})
 	default:
-		return errors.New("usage: lk bulk <label|close|archive|import> ...")
+		return errors.New("usage: lit bulk <label|close|archive|import> ...")
 	}
 }
 
 func runCompletion(stdout io.Writer, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: lk completion <bash|zsh|fish>")
+		return errors.New("usage: lit completion <bash|zsh|fish>")
 	}
 	switch args[0] {
 	case "bash":
@@ -1398,7 +1398,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 		_, err := io.WriteString(stdout, fishCompletionScript)
 		return err
 	default:
-		return errors.New("usage: lk completion <bash|zsh|fish>")
+		return errors.New("usage: lit completion <bash|zsh|fish>")
 	}
 }
 
@@ -1410,34 +1410,34 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lk quickstart [--json]")
+		return errors.New("usage: lit quickstart [--json]")
 	}
 
 	payload := map[string]any{
 		"summary": "Agent quickstart for links issue tracking",
 		"workflow": []string{
-			"Discover workspace identity and revision with `lk workspace --json`.",
-			"Install git hook automation once with `lk hooks install`.",
-			"List active issues with `lk ls --format lines --json` or narrow with `--query`.",
-			"Create issues with `lk new ...`; use `--type epic` for epics.",
-			"Connect issues using `lk parent set` and `lk dep add --type related-to|blocks`.",
+			"Discover workspace identity and revision with `lit workspace --json`.",
+			"Install git hook automation once with `lit hooks install`.",
+			"List active issues with `lit ls --format lines --json` or narrow with `--query`.",
+			"Create issues with `lit new ...`; use `--type epic` for epics.",
+			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
 			"Mutate safely with `--expected-revision` from `workspace_revision`.",
-			"Configure remotes with `git remote`; `lk sync` mirrors those remotes into Dolt automatically.",
-			"Run health checks with `lk doctor` and repair known corruption with `lk fsck --repair`.",
-			"Snapshot and rollback using `lk backup create`, `lk backup restore`, or `lk recover`.",
+			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
+			"Run health checks with `lit doctor` and repair known corruption with `lit fsck --repair`.",
+			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
 		},
 		"examples": []string{
-			"lk hooks install --json",
-			"lk workspace --json",
-			"lk ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
-			"lk new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent --json",
-			"lk parent set lk-124 lk-100 --json",
-			"lk dep add lk-124 lk-122 --type related-to --json",
-			"lk edit lk-124 --priority 1 --expected-revision 42 --json",
+			"lit hooks install --json",
+			"lit workspace --json",
+			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
+			"lit new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent --json",
+			"lit parent set <issue-id> <parent-issue-id> --json",
+			"lit dep add <issue-id> <dependency-issue-id> --type related-to --json",
+			"lit edit <issue-id> --priority 1 --expected-revision <workspace-revision> --json",
 			"git remote add origin https://github.com/org/repo.git",
-			"lk sync remote ls --json",
-			"lk sync pull --remote origin --branch main --json",
-			"lk sync push --remote origin --branch main --json",
+			"lit sync remote ls --json",
+			"lit sync pull --remote origin --branch main --json",
+			"lit sync push --remote origin --branch main --json",
 		},
 		"exit_codes": map[string]int{
 			"ok":             ExitOK,
@@ -1456,17 +1456,17 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"links agent quickstart",
 			"",
 			"1) Discover context",
-			"   `lk hooks install --json`",
-			"   `lk workspace --json`",
+			"   `lit hooks install --json`",
+			"   `lit workspace --json`",
 			"",
 			"2) Find work",
-			"   `lk ls --format lines --json`",
-			"   `lk ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
+			"   `lit ls --format lines --json`",
+			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
 			"",
 			"3) Create and relate issues/epics",
-			"   `lk new --title \"...\" --type task|bug|feature|chore|epic --json`",
-			"   `lk parent set <child-id> <parent-id> --json`",
-			"   `lk dep add <src-id> <dst-id> --type blocks|related-to|parent-child --json`",
+			"   `lit new --title \"...\" --type task|bug|feature|chore|epic --json`",
+			"   `lit parent set <child-id> <parent-id> --json`",
+			"   `lit dep add <src-id> <dst-id> --type blocks|related-to|parent-child --json`",
 			"",
 			"4) Safe mutations",
 			"   Read `workspace_revision` and pass `--expected-revision N` on writes.",
@@ -1474,18 +1474,18 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"5) Dolt remote sync",
 			"   Configure remotes with git, then run sync commands.",
 			"   `git remote -v`",
-			"   `lk sync remote ls --json`",
-			"   `lk sync fetch --remote origin --json`",
-			"   `lk sync pull --remote origin --branch main --json`",
-			"   `lk sync push --remote origin --branch main --json`",
+			"   `lit sync remote ls --json`",
+			"   `lit sync fetch --remote origin --json`",
+			"   `lit sync pull --remote origin --branch main --json`",
+			"   `lit sync push --remote origin --branch main --json`",
 			"   If sync warning appears, agent should auto-retry silently before escalating.",
 			"",
 			"6) Integrity and recovery",
-			"   `lk doctor --json`",
-			"   `lk fsck --repair --json`",
-			"   `lk backup create --json`",
-			"   `lk backup restore --latest --json`",
-			"   `lk recover --latest-backup --json`",
+			"   `lit doctor --json`",
+			"   `lit fsck --repair --json`",
+			"   `lit backup create --json`",
+			"   `lit backup restore --latest --json`",
+			"   `lit recover --latest-backup --json`",
 			"",
 			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d stale_revision=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitStaleRevision, ExitCorruption),
 		}
@@ -1831,49 +1831,49 @@ type CorruptionError struct {
 func (e CorruptionError) Error() string { return e.Message }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `links / lk
+	fmt.Fprint(w, `links / lit
 
 Usage:
-  lk new --title <title> [--description <text>] [--type task|feature|bug|chore|epic] [--priority 0-4] [--assignee <user>] [--labels a,b] [--expected-revision N] [--json]
-  lk ls [--status open|closed] [--type <type>] [--assignee <user>] [--priority-min N] [--priority-max N] [--search <text>] [--ids a,b] [--labels a,b] [--has-comments] [--include-archived] [--include-deleted] [--updated-after RFC3339] [--updated-before RFC3339] [--query <expr>] [--sort field:asc|desc,...] [--columns id,state,title,...] [--format lines|table] [--limit N] [--json]
-  lk show <id> [--json]
-  lk edit <id> [--title ...] [--description ...] [--type ...] [--priority ...] [--assignee ...|--clear-assignee] [--labels a,b|--clear-labels] [--expected-revision N] [--json]
-  lk close <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk open <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk archive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk delete <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk unarchive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk restore <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk comment add <id> --body <text> [--by <user>] [--expected-revision N] [--json]
-  lk label add <issue-id> <label> [--by <user>] [--expected-revision N] [--json]
-  lk label rm <issue-id> <label> [--expected-revision N] [--json]
-  lk parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]
-  lk parent clear <child-id> [--expected-revision N] [--json]
-  lk children <parent-id> [--json]
-  lk dep add <src-id> <dst-id> [--type blocks|parent-child|related-to] [--by <user>] [--expected-revision N] [--json]
-  lk dep rm <src-id> <dst-id> [--type blocks|parent-child|related-to] [--expected-revision N] [--json]
-  lk dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]
-  lk export [--json]
-  lk sync status [--json]
-  lk sync remote ls [--json]
-  lk sync fetch [--remote <name>] [--prune] [--json]
-  lk sync pull [--remote <name>] [--branch <name>] [--json]
-  lk sync push [--remote <name>] [--branch <name>] [--set-upstream] [--force] [--json]
-  lk doctor [--json]
-  lk fsck [--repair] [--json]
-  lk backup create [--keep N] [--json]
-  lk backup list [--json]
-  lk backup restore (--path <snapshot.json> | --latest) [--force] [--json]
-  lk recover (--from-sync <path> | --from-backup <path> | --latest-backup) [--force] [--json]
-  lk bulk label <add|rm> --ids a,b --label <name> [--by <user>] [--expected-revision N] [--json]
-  lk bulk <close|archive> --ids a,b --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lk bulk import --path <export.json> [--force] [--json]
-  lk hooks install [--json]
-  lk quickstart [--json]
-  lk completion <bash|zsh|fish>
-  lk beads import --db <path> [--json]
-  lk beads export --db <path> [--json]
-  lk workspace [--json]
+  lit new --title <title> [--description <text>] [--type task|feature|bug|chore|epic] [--priority 0-4] [--assignee <user>] [--labels a,b] [--expected-revision N] [--json]
+  lit ls [--status open|closed] [--type <type>] [--assignee <user>] [--priority-min N] [--priority-max N] [--search <text>] [--ids a,b] [--labels a,b] [--has-comments] [--include-archived] [--include-deleted] [--updated-after RFC3339] [--updated-before RFC3339] [--query <expr>] [--sort field:asc|desc,...] [--columns id,state,title,...] [--format lines|table] [--limit N] [--json]
+  lit show <id> [--json]
+  lit edit <id> [--title ...] [--description ...] [--type ...] [--priority ...] [--assignee ...|--clear-assignee] [--labels a,b|--clear-labels] [--expected-revision N] [--json]
+  lit close <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit open <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit archive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit delete <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit unarchive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit restore <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit comment add <id> --body <text> [--by <user>] [--expected-revision N] [--json]
+  lit label add <issue-id> <label> [--by <user>] [--expected-revision N] [--json]
+  lit label rm <issue-id> <label> [--expected-revision N] [--json]
+  lit parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]
+  lit parent clear <child-id> [--expected-revision N] [--json]
+  lit children <parent-id> [--json]
+  lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to] [--by <user>] [--expected-revision N] [--json]
+  lit dep rm <src-id> <dst-id> [--type blocks|parent-child|related-to] [--expected-revision N] [--json]
+  lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]
+  lit export [--json]
+  lit sync status [--json]
+  lit sync remote ls [--json]
+  lit sync fetch [--remote <name>] [--prune] [--json]
+  lit sync pull [--remote <name>] [--branch <name>] [--json]
+  lit sync push [--remote <name>] [--branch <name>] [--set-upstream] [--force] [--json]
+  lit doctor [--json]
+  lit fsck [--repair] [--json]
+  lit backup create [--keep N] [--json]
+  lit backup list [--json]
+  lit backup restore (--path <snapshot.json> | --latest) [--force] [--json]
+  lit recover (--from-sync <path> | --from-backup <path> | --latest-backup) [--force] [--json]
+  lit bulk label <add|rm> --ids a,b --label <name> [--by <user>] [--expected-revision N] [--json]
+  lit bulk <close|archive> --ids a,b --reason <text> [--by <user>] [--expected-revision N] [--json]
+  lit bulk import --path <export.json> [--force] [--json]
+  lit hooks install [--json]
+  lit quickstart [--json]
+  lit completion <bash|zsh|fish>
+  lit beads import --db <path> [--json]
+  lit beads export --db <path> [--json]
+  lit workspace [--json]
 `)
 }
 

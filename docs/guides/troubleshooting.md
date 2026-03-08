@@ -13,13 +13,13 @@ Upgrade Dolt to `>= 1.81.10`.
 The hook is warn-only and never blocks push. Retry manually:
 
 ```sh
-lk sync push --remote origin --branch <branch>
+lit sync push --remote origin --branch <branch>
 ```
 
 Then check status:
 
 ```sh
-lk sync status --json
+lit sync status --json
 ```
 
 ## Integrity errors
@@ -27,8 +27,8 @@ lk sync status --json
 Run:
 
 ```sh
-lk doctor --json
-lk fsck --repair --json
+lit doctor --json
+lit fsck --repair --json
 ```
 
 ## Unexpected state after import/restore
@@ -36,6 +36,6 @@ lk fsck --repair --json
 Use backups:
 
 ```sh
-lk backup list --json
-lk backup restore --latest --json
+lit backup list --json
+lit backup restore --latest --json
 ```

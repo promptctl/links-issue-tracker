@@ -15,13 +15,13 @@ const linksPrePushHookMarker = "# links-hook: pre-push v1"
 
 func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lk hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 	switch args[0] {
 	case "install":
 		return runHooksInstall(stdout, ws, args[1:])
 	default:
-		return errors.New("usage: lk hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 }
 
@@ -32,7 +32,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 			jsonOut = true
 			continue
 		}
-		return errors.New("usage: lk hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
@@ -112,7 +112,7 @@ while read -r branch; do
   if [[ -z "${branch}" ]]; then
     continue
   fi
-  if ! lk sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
+  if ! lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
     sync_failed=1
   fi
 done <<EOF
@@ -120,7 +120,7 @@ ${branches}
 EOF
 
 if [[ "${sync_failed}" -ne 0 ]]; then
-  printf '\033[33m[links] warning: db sync failed; agent should auto-retry lk sync push --remote %s\033[0m\n' "${remote_name}" >&2
+  printf '\033[33m[links] warning: db sync failed; agent should auto-retry lit sync push --remote %s\033[0m\n' "${remote_name}" >&2
 fi
 
 exit 0
