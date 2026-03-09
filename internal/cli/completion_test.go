@@ -31,6 +31,9 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 	if !strings.Contains(stdout.String(), "lit quickstart [--json]") {
 		t.Fatalf("help output missing quickstart command: %q", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]") {
+		t.Fatalf("help output missing ready command: %q", stdout.String())
+	}
 	if !strings.Contains(stdout.String(), "lit hooks install [--json]") {
 		t.Fatalf("help output missing hooks command: %q", stdout.String())
 	}
