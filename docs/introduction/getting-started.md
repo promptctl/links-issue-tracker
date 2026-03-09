@@ -6,6 +6,8 @@
 lit workspace --json
 ```
 
+`--json` is optional in non-interactive runs because default output mode is `auto` (TTY -> text, non-TTY -> JSON). Keep `--json` in scripts for explicit compatibility.
+
 If this repository used Beads before, run the migration once:
 
 ```sh

@@ -28,11 +28,42 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/syncfile"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"golang.org/x/term"
 )
 
 var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found on remote`)
 
+const outputModeEnvVar = "LIT_OUTPUT"
+
+type outputMode string
+
+const (
+	outputModeAuto outputMode = "auto"
+	outputModeText outputMode = "text"
+	outputModeJSON outputMode = "json"
+)
+
+type outputModeWriter struct {
+	io.Writer
+	mode outputMode
+}
+
+func (w outputModeWriter) linksOutputMode() outputMode {
+	return w.mode
+}
+
+type outputModeProvider interface {
+	linksOutputMode() outputMode
+}
+
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
+	normalizedArgs, resolvedOutputMode, err := parseGlobalOutputMode(args, stdout)
+	if err != nil {
+		return err
+	}
+	args = normalizedArgs
+	stdout = outputModeWriter{Writer: stdout, mode: resolvedOutputMode}
+
 	if len(args) == 0 {
 		printUsage(stderr)
 		return nil
@@ -179,6 +210,81 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	}
 }
 
+func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMode, error) {
+	// [LAW:single-enforcer] Global output precedence (--output/--json/env/auto) is enforced exactly once at CLI entry.
+	mode, err := modeFromEnv()
+	if err != nil {
+		return nil, "", err
+	}
+	index := 0
+	for index < len(args) {
+		switch args[index] {
+		case "--json":
+			mode = outputModeJSON
+			index++
+		case "--output":
+			if index+1 >= len(args) {
+				return nil, "", errors.New("usage: lit [--output auto|text|json] [--json] [command]")
+			}
+			parsedMode, parseErr := parseOutputMode(args[index+1])
+			if parseErr != nil {
+				return nil, "", parseErr
+			}
+			mode = parsedMode
+			index += 2
+		default:
+			if strings.HasPrefix(args[index], "--output=") {
+				parsedMode, parseErr := parseOutputMode(strings.TrimPrefix(args[index], "--output="))
+				if parseErr != nil {
+					return nil, "", parseErr
+				}
+				mode = parsedMode
+				index++
+				continue
+			}
+			goto done
+		}
+	}
+
+done:
+	if mode == outputModeAuto {
+		mode = detectOutputMode(stdout)
+	}
+	return args[index:], mode, nil
+}
+
+func modeFromEnv() (outputMode, error) {
+	raw := strings.TrimSpace(strings.ToLower(os.Getenv(outputModeEnvVar)))
+	if raw == "" {
+		return outputModeAuto, nil
+	}
+	return parseOutputMode(raw)
+}
+
+func parseOutputMode(raw string) (outputMode, error) {
+	switch strings.TrimSpace(strings.ToLower(raw)) {
+	case string(outputModeAuto):
+		return outputModeAuto, nil
+	case string(outputModeText):
+		return outputModeText, nil
+	case string(outputModeJSON):
+		return outputModeJSON, nil
+	default:
+		return "", fmt.Errorf("unsupported output mode %q (expected auto|text|json)", raw)
+	}
+}
+
+func detectOutputMode(stdout io.Writer) outputMode {
+	file, ok := stdout.(*os.File)
+	if !ok {
+		return outputModeJSON
+	}
+	if term.IsTerminal(int(file.Fd())) {
+		return outputModeText
+	}
+	return outputModeJSON
+}
+
 func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := flag.NewFlagSet("new", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -292,7 +398,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, issues)
 	}
 	columns := parseColumns(*columnsExpr)
@@ -334,7 +440,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, issues)
 	}
 	columns := parseColumns(*columnsExpr)
@@ -366,7 +472,7 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, detail)
 	}
 	return printIssueDetail(stdout, detail)
@@ -632,7 +738,7 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, children)
 	}
 	return printIssueLines(stdout, children, []string{"id", "state", "title"})
@@ -718,7 +824,7 @@ func runWorkspace(stdout io.Writer, ap *app.App, args []string) error {
 		"database_path":  ap.Workspace.DatabasePath,
 		"dolt_repo_path": ap.Workspace.DoltRepoPath,
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, payload)
 	}
 	for _, key := range []string{"workspace_id", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path"} {
@@ -1155,7 +1261,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		if err := writeJSON(stdout, report); err != nil {
 			return err
 		}
@@ -1183,7 +1289,7 @@ func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if *jsonOut {
+	if shouldWriteJSON(stdout, *jsonOut) {
 		if err := writeJSON(stdout, report); err != nil {
 			return err
 		}
@@ -1576,8 +1682,24 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-func printValue(w io.Writer, v any, jsonOut bool, textFn func(io.Writer, any) error) error {
+func shouldWriteJSON(w io.Writer, jsonOut bool) bool {
 	if jsonOut {
+		return true
+	}
+	// [LAW:one-source-of-truth] Writer-bound output mode is the canonical default signal for format selection.
+	return outputModeFromWriter(w) == outputModeJSON
+}
+
+func outputModeFromWriter(w io.Writer) outputMode {
+	provider, ok := w.(outputModeProvider)
+	if !ok {
+		return outputModeText
+	}
+	return provider.linksOutputMode()
+}
+
+func printValue(w io.Writer, v any, jsonOut bool, textFn func(io.Writer, any) error) error {
+	if shouldWriteJSON(w, jsonOut) {
 		return writeJSON(w, v)
 	}
 	return textFn(w, v)
@@ -1909,8 +2031,14 @@ func printUsage(w io.Writer) {
 Worktree-native issue tracker with Dolt-backed sync.
 
 Usage:
-  lit [command]
-  lit [command] [flags]
+  lit [--output auto|text|json] [--json] [command]
+  lit [--output auto|text|json] [--json] [command] [flags]
+
+Global Output Mode:
+  default        auto (TTY -> text, non-TTY -> json)
+  --json         Explicit shorthand for JSON output compatibility
+  --output MODE  Force output mode (auto|text|json)
+  LIT_OUTPUT     Environment default when flags are not provided
 
 Issue Workflow:
   init           Initialize links in the current repository (auto-migrates Beads residue)

@@ -22,6 +22,12 @@ Install:
 go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 
+Output mode defaults to `auto`:
+- TTY sessions emit text
+- non-TTY sessions emit JSON
+- `--json` remains an explicit JSON shorthand for script compatibility
+- `--output auto|text|json` and `LIT_OUTPUT` control overrides
+
 Initialize in your repo (auto-migrates Beads residue and installs defaults):
 
 ```sh

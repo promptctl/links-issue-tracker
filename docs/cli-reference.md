@@ -6,6 +6,16 @@ For full syntax, run:
 lit help
 ```
 
+## Global output mode
+
+`lit` resolves output mode in one place with deterministic precedence:
+
+1. global flags before the command (`--output auto|text|json` and `--json`, last flag wins)
+2. `LIT_OUTPUT` environment default
+3. automatic fallback (`text` on TTY, `json` otherwise)
+
+Command-local `--json` remains supported for existing scripts.
+
 ## Common commands
 
 ### Create/list/show
