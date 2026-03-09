@@ -1,0 +1,15 @@
+{
+  "name": "links-marketplace",
+  "description": "Local marketplace for links plugin development",
+  "owner": {
+    "name": "links"
+  },
+  "plugins": [
+    {
+      "name": "links",
+      "source": "./claude-plugin",
+      "description": "Issue tracking workflow integration for links",
+      "version": "0.1.0"
+    }
+  ]
+}

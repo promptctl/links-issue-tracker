@@ -9,7 +9,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -30,15 +29,6 @@ type Store struct {
 	workspaceID string
 }
 
-type StaleRevisionError struct {
-	Expected int64
-	Actual   int64
-}
-
-func (e StaleRevisionError) Error() string {
-	return fmt.Sprintf("stale workspace revision: expected %d, actual %d", e.Expected, e.Actual)
-}
-
 type NotFoundError struct {
 	Entity string
 	ID     string
@@ -49,9 +39,8 @@ func (e NotFoundError) Error() string {
 }
 
 type SyncState struct {
-	Path              string
-	ContentHash       string
-	WorkspaceRevision int64
+	Path        string
+	ContentHash string
 }
 
 type ImportIssue struct {
@@ -92,24 +81,22 @@ type ImportLabel struct {
 }
 
 type CreateIssueInput struct {
-	Title            string
-	Description      string
-	IssueType        string
-	Priority         int
-	Assignee         string
-	Labels           []string
-	ExpectedRevision *int64
+	Title       string
+	Description string
+	IssueType   string
+	Priority    int
+	Assignee    string
+	Labels      []string
 }
 
 type UpdateIssueInput struct {
-	Title            *string
-	Description      *string
-	IssueType        *string
-	Status           *string
-	Priority         *int
-	Assignee         *string
-	Labels           *[]string
-	ExpectedRevision *int64
+	Title       *string
+	Description *string
+	IssueType   *string
+	Status      *string
+	Priority    *int
+	Assignee    *string
+	Labels      *[]string
 }
 
 type SortSpec struct {
@@ -136,40 +123,35 @@ type ListIssuesFilter struct {
 }
 
 type AddCommentInput struct {
-	IssueID          string
-	Body             string
-	CreatedBy        string
-	ExpectedRevision *int64
+	IssueID   string
+	Body      string
+	CreatedBy string
 }
 
 type AddRelationInput struct {
-	SrcID            string
-	DstID            string
-	Type             string
-	CreatedBy        string
-	ExpectedRevision *int64
+	SrcID     string
+	DstID     string
+	Type      string
+	CreatedBy string
 }
 
 type SetParentInput struct {
-	ChildID          string
-	ParentID         string
-	CreatedBy        string
-	ExpectedRevision *int64
+	ChildID   string
+	ParentID  string
+	CreatedBy string
 }
 
 type AddLabelInput struct {
-	IssueID          string
-	Name             string
-	CreatedBy        string
-	ExpectedRevision *int64
+	IssueID   string
+	Name      string
+	CreatedBy string
 }
 
 type TransitionIssueInput struct {
-	IssueID          string
-	Action           string
-	Reason           string
-	CreatedBy        string
-	ExpectedRevision *int64
+	IssueID   string
+	Action    string
+	Reason    string
+	CreatedBy string
 }
 
 type HealthReport struct {
@@ -298,18 +280,10 @@ func (s *Store) migrate(ctx context.Context) error {
 		`INSERT IGNORE INTO meta(meta_key, meta_value) VALUES ('schema_version', '1')`); err != nil {
 		return fmt.Errorf("store schema_version: %w", err)
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT IGNORE INTO meta(meta_key, meta_value) VALUES ('workspace_revision', '0')`); err != nil {
-		return fmt.Errorf("store workspace_revision: %w", err)
-	}
 	if err := s.commitWorkingSet(ctx, "Initialize links schema"); err != nil {
 		return err
 	}
 	return nil
-}
-
-func (s *Store) GetWorkspaceRevision(ctx context.Context) (int64, error) {
-	return s.getWorkspaceRevision(ctx, nil)
 }
 
 func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
@@ -323,16 +297,6 @@ func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
 	if err != nil {
 		return SyncState{}, err
 	}
-	revisionValue, err := s.getMeta(ctx, nil, "last_sync_workspace_revision")
-	if err != nil {
-		return SyncState{}, err
-	}
-	if strings.TrimSpace(revisionValue) != "" {
-		state.WorkspaceRevision, err = strconv.ParseInt(revisionValue, 10, 64)
-		if err != nil {
-			return SyncState{}, fmt.Errorf("parse last_sync_workspace_revision: %w", err)
-		}
-	}
 	return state, nil
 }
 
@@ -343,9 +307,8 @@ func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
 	}
 	defer tx.Rollback()
 	for key, value := range map[string]string{
-		"last_sync_path":               strings.TrimSpace(state.Path),
-		"last_sync_hash":               strings.TrimSpace(state.ContentHash),
-		"last_sync_workspace_revision": strconv.FormatInt(state.WorkspaceRevision, 10),
+		"last_sync_path": strings.TrimSpace(state.Path),
+		"last_sync_hash": strings.TrimSpace(state.ContentHash),
 	} {
 		if err := s.setMeta(ctx, tx, key, value); err != nil {
 			return err
@@ -394,9 +357,6 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		return model.Issue{}, fmt.Errorf("begin create issue tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Issue{}, err
-	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
 		id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
 	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
@@ -409,9 +369,6 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		return model.Issue{}, err
 	}
 	if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", "links"); err != nil {
-		return model.Issue{}, err
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -693,9 +650,6 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		return model.Issue{}, fmt.Errorf("begin update issue tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Issue{}, err
-	}
 	_, err = tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
 		WHERE id = ?`, issue.Title, issue.Description, issue.Status, issue.Priority, issue.IssueType, issue.Assignee, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID)
@@ -706,9 +660,6 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
 			return model.Issue{}, err
 		}
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Issue{}, fmt.Errorf("commit update issue: %w", err)
@@ -737,14 +688,8 @@ func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comme
 		return model.Comment{}, fmt.Errorf("begin add comment tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Comment{}, err
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
 		return model.Comment{}, fmt.Errorf("insert comment: %w", err)
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return model.Comment{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Comment{}, fmt.Errorf("commit add comment: %w", err)
@@ -785,14 +730,8 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 		return model.Relation{}, fmt.Errorf("begin add relation tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Relation{}, err
-	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
 		return model.Relation{}, fmt.Errorf("insert relation: %w", err)
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return model.Relation{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Relation{}, fmt.Errorf("commit add relation: %w", err)
@@ -803,7 +742,7 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 	return rel, nil
 }
 
-func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string, expectedRevision *int64) error {
+func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string) error {
 	if relType == "related-to" {
 		ordered := []string{srcID, dstID}
 		sort.Strings(ordered)
@@ -814,9 +753,6 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 		return fmt.Errorf("begin remove relation tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, expectedRevision); err != nil {
-		return err
-	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, relType)
 	if err != nil {
 		return fmt.Errorf("delete relation: %w", err)
@@ -824,9 +760,6 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		return fmt.Errorf("relation not found")
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit remove relation: %w", err)
@@ -858,11 +791,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
-	workspaceRevision, err := s.GetWorkspaceRevision(ctx)
-	if err != nil {
-		return model.Export{}, err
-	}
-	return model.Export{Version: 1, WorkspaceID: s.workspaceID, WorkspaceRevision: workspaceRevision, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, History: history}, nil
+	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, History: history}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
@@ -923,9 +852,6 @@ func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 		}
 		if _, err := tx.ExecContext(ctx, `UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id`); err != nil {
 			return HealthReport{}, fmt.Errorf("repair related ordering: %w", err)
-		}
-		if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-			return HealthReport{}, err
 		}
 		if err := tx.Commit(); err != nil {
 			return HealthReport{}, fmt.Errorf("commit fsck repair: %w", err)
@@ -998,9 +924,6 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	if err := s.replaceLabelsTx(ctx, tx, in.ID, labels, "import"); err != nil {
 		return err
 	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit import issue: %w", err)
 	}
@@ -1039,9 +962,6 @@ func (s *Store) ImportComment(ctx context.Context, in ImportComment) error {
 		in.ID, in.IssueID, strings.TrimSpace(in.Body), in.CreatedAt.Format(time.RFC3339Nano), createdBy)
 	if err != nil {
 		return fmt.Errorf("import comment: %w", err)
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit import comment: %w", err)
@@ -1087,9 +1007,6 @@ func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
 	if err != nil {
 		return fmt.Errorf("import relation: %w", err)
 	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit import relation: %w", err)
 	}
@@ -1124,9 +1041,6 @@ func (s *Store) ImportLabel(ctx context.Context, in ImportLabel) error {
 	if err != nil {
 		return fmt.Errorf("import label: %w", err)
 	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit import label: %w", err)
 	}
@@ -1153,17 +1067,11 @@ func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error
 		return nil, fmt.Errorf("begin add label tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return nil, err
-	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
 		VALUES (?, ?, ?, ?)
 		ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, time.Now().UTC().Format(time.RFC3339Nano), createdBy)
 	if err != nil {
 		return nil, fmt.Errorf("insert label: %w", err)
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit add label: %w", err)
@@ -1174,7 +1082,7 @@ func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error
 	return s.ListLabels(ctx, in.IssueID)
 }
 
-func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string, expectedRevision *int64) ([]string, error) {
+func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]string, error) {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
 		return nil, err
 	}
@@ -1187,9 +1095,6 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string, expe
 		return nil, fmt.Errorf("begin remove label tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, expectedRevision); err != nil {
-		return nil, err
-	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, issueID, label)
 	if err != nil {
 		return nil, fmt.Errorf("delete label: %w", err)
@@ -1197,9 +1102,6 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string, expe
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		return nil, fmt.Errorf("label %q not found on issue %q", label, issueID)
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit remove label: %w", err)
@@ -1210,7 +1112,7 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string, expe
 	return s.ListLabels(ctx, issueID)
 }
 
-func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []string, createdBy string, expectedRevision *int64) error {
+func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []string, createdBy string) error {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
 		return err
 	}
@@ -1223,13 +1125,7 @@ func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []stri
 		return fmt.Errorf("begin replace labels tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, expectedRevision); err != nil {
-		return err
-	}
 	if err := s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy); err != nil {
-		return err
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
 		return err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1314,17 +1210,11 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		return model.Issue{}, fmt.Errorf("begin transition issue tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Issue{}, err
-	}
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
 		issue.Status, issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAt), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
 		return model.Issue{}, fmt.Errorf("update issue lifecycle: %w", err)
 	}
 	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
-		return model.Issue{}, err
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1375,9 +1265,6 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 		return model.Relation{}, fmt.Errorf("begin set parent tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, in.ExpectedRevision); err != nil {
-		return model.Relation{}, err
-	}
 	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, in.ChildID); err != nil {
 		return model.Relation{}, fmt.Errorf("clear parent relation: %w", err)
 	}
@@ -1394,9 +1281,6 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`, rel.SrcID, rel.DstID, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
 		return model.Relation{}, fmt.Errorf("insert parent relation: %w", err)
 	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return model.Relation{}, err
-	}
 	if err := tx.Commit(); err != nil {
 		return model.Relation{}, fmt.Errorf("commit set parent: %w", err)
 	}
@@ -1406,7 +1290,7 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	return rel, nil
 }
 
-func (s *Store) ClearParent(ctx context.Context, childID string, expectedRevision *int64) error {
+func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	if _, err := s.GetIssue(ctx, childID); err != nil {
 		return err
 	}
@@ -1415,9 +1299,6 @@ func (s *Store) ClearParent(ctx context.Context, childID string, expectedRevisio
 		return fmt.Errorf("begin clear parent tx: %w", err)
 	}
 	defer tx.Rollback()
-	if err := s.ensureExpectedRevisionTx(ctx, tx, expectedRevision); err != nil {
-		return err
-	}
 	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
 	if err != nil {
 		return fmt.Errorf("delete parent relation: %w", err)
@@ -1425,9 +1306,6 @@ func (s *Store) ClearParent(ctx context.Context, childID string, expectedRevisio
 	affected, _ := res.RowsAffected()
 	if affected == 0 {
 		return NotFoundError{Entity: "parent relation", ID: childID}
-	}
-	if _, err := s.bumpWorkspaceRevisionTx(ctx, tx); err != nil {
-		return err
 	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit clear parent: %w", err)
@@ -1528,13 +1406,6 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 			return fmt.Errorf("restore issue history %s: %w", event.ID, err)
 		}
 	}
-	workspaceRevision := export.WorkspaceRevision
-	if workspaceRevision < 0 {
-		workspaceRevision = 0
-	}
-	if err := s.setMeta(ctx, tx, "workspace_revision", strconv.FormatInt(workspaceRevision, 10)); err != nil {
-		return err
-	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit replace from export: %w", err)
 	}
@@ -1566,34 +1437,6 @@ func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Rela
 	}
 	return rels, rows.Err()
 }
-
-func (s *Store) getWorkspaceRevision(ctx context.Context, tx *sql.Tx) (int64, error) {
-	value, err := s.getMeta(ctx, tx, "workspace_revision")
-	if err != nil {
-		return 0, err
-	}
-	if strings.TrimSpace(value) == "" {
-		return 0, nil
-	}
-	revision, err := strconv.ParseInt(value, 10, 64)
-	if err != nil {
-		return 0, fmt.Errorf("parse workspace_revision: %w", err)
-	}
-	return revision, nil
-}
-
-func (s *Store) bumpWorkspaceRevisionTx(ctx context.Context, tx *sql.Tx) (int64, error) {
-	current, err := s.getWorkspaceRevision(ctx, tx)
-	if err != nil {
-		return 0, err
-	}
-	next := current + 1
-	if err := s.setMeta(ctx, tx, "workspace_revision", strconv.FormatInt(next, 10)); err != nil {
-		return 0, err
-	}
-	return next, nil
-}
-
 func (s *Store) getMeta(ctx context.Context, tx *sql.Tx, key string) (string, error) {
 	var row *sql.Row
 	if tx != nil {
@@ -1626,21 +1469,6 @@ func (s *Store) setMeta(ctx context.Context, tx *sql.Tx, key, value string) erro
 	}
 	return nil
 }
-
-func (s *Store) ensureExpectedRevisionTx(ctx context.Context, tx *sql.Tx, expected *int64) error {
-	if expected == nil {
-		return nil
-	}
-	current, err := s.getWorkspaceRevision(ctx, tx)
-	if err != nil {
-		return err
-	}
-	if current != *expected {
-		return StaleRevisionError{Expected: *expected, Actual: current}
-	}
-	return nil
-}
-
 func buildIssueOrderClause(specs []SortSpec) (string, error) {
 	if len(specs) == 0 {
 		return "i.status ASC, i.priority ASC, i.updated_at DESC, i.id ASC", nil

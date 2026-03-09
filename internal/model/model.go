@@ -67,13 +67,12 @@ type IssueDetail struct {
 }
 
 type Export struct {
-	Version           int            `json:"version"`
-	WorkspaceID       string         `json:"workspace_id"`
-	WorkspaceRevision int64          `json:"workspace_revision"`
-	ExportedAt        time.Time      `json:"exported_at"`
-	Issues            []Issue        `json:"issues"`
-	Relations         []Relation     `json:"relations"`
-	Comments          []Comment      `json:"comments"`
-	Labels            []Label        `json:"labels"`
-	History           []IssueHistory `json:"history"`
+	Version     int            `json:"version"`
+	WorkspaceID string         `json:"workspace_id"`
+	ExportedAt  time.Time      `json:"exported_at"`
+	Issues      []Issue        `json:"issues"`
+	Relations   []Relation     `json:"relations"`
+	Comments    []Comment      `json:"comments"`
+	Labels      []Label        `json:"labels"`
+	History     []IssueHistory `json:"history"`
 }

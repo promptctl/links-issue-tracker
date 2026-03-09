@@ -2,6 +2,14 @@
 
 `links` is a worktree-native issue tracker with a flat CLI: `lit`.
 
+## Inspiration and Credit
+
+This project is directly inspired by [beads](https://github.com/steveyegge/beads).
+
+The goal of `links` is to apply the same core idea in this codebase: treat issue tracking as part of the repository workflow so agents and humans can coordinate through a fast local CLI and syncable state.
+
+Most of the credit for the ideas behind this workflow should go to the creator of beads, Steve Yegge.
+
 ## Quickstart
 
 Requirements:
@@ -14,18 +22,25 @@ Install:
 go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 
-Initialize in your repo and install sync automation:
+Initialize in your repo (auto-migrates Beads residue and installs defaults):
 
 ```sh
-lit hooks install
+lit init --json
 git remote -v
 lit sync remote ls --json
+```
+
+If needed, you can run migration directly:
+
+```sh
+lit migrate beads --apply --json
 ```
 
 Create and inspect work:
 
 ```sh
 lit new --title "First task" --type task --priority 2 --json
+lit ready --json
 lit ls --json
 lit show <issue-id> --json
 ```

@@ -5,12 +5,16 @@
 1. Read workspace context:
    - `lit workspace --json`
 2. Find work:
+   - `lit ready --json`
    - `lit ls --query "status:open" --json`
-3. Mutate safely:
-   - include `--expected-revision` on writes
+3. Update issue state as work starts:
+   - `lit comment add <issue-id> --body "Starting: <plan>" --json`
 4. Sync:
    - `lit sync pull ...` before work
-   - `lit sync push ...` after work
+5. Close out:
+   - `lit comment add <issue-id> --body "Done: <summary>" --json`
+   - `lit close <issue-id> --reason "<completion reason>" --json`
+   - `git add -A && git commit -m "<summary>"`
 
 ## Required assumptions for reliable automation
 

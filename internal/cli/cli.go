@@ -2,6 +2,8 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -32,10 +34,37 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 		printUsage(stderr)
 		return nil
 	}
+	if !shouldBypassBeadsPreflight(args) {
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get cwd: %w", err)
+		}
+		ws, resolveErr := workspace.Resolve(cwd)
+		if resolveErr == nil {
+			if preflightErr := requireBeadsMigrationPreflight(ws); preflightErr != nil {
+				return preflightErr
+			}
+		} else if !errors.Is(resolveErr, workspace.ErrNotGitRepo) {
+			return resolveErr
+		}
+	}
 	switch args[0] {
 	case "help", "-h", "--help":
 		printUsage(stdout)
 		return nil
+	case "init":
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get cwd: %w", err)
+		}
+		ws, err := workspace.Resolve(cwd)
+		if err != nil {
+			if errors.Is(err, workspace.ErrNotGitRepo) {
+				return fmt.Errorf("links requires running inside a git repository/worktree")
+			}
+			return err
+		}
+		return runInit(ctx, stdout, ws, args[1:])
 	case "quickstart":
 		return runQuickstart(stdout, args[1:])
 	case "completion":
@@ -53,6 +82,19 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 			return err
 		}
 		return runHooks(stdout, ws, args[1:])
+	case "migrate":
+		cwd, err := os.Getwd()
+		if err != nil {
+			return fmt.Errorf("get cwd: %w", err)
+		}
+		ws, err := workspace.Resolve(cwd)
+		if err != nil {
+			if errors.Is(err, workspace.ErrNotGitRepo) {
+				return fmt.Errorf("links requires running inside a git repository/worktree")
+			}
+			return err
+		}
+		return runMigrate(stdout, ws, args[1:])
 	case "sync":
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -85,12 +127,12 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	switch args[0] {
 	case "new":
 		return runNew(ctx, stdout, ap, args[1:])
+	case "ready":
+		return runReady(ctx, stdout, ap, args[1:])
 	case "ls":
 		return runList(ctx, stdout, ap, args[1:])
 	case "show":
 		return runShow(ctx, stdout, ap, args[1:])
-	case "edit":
-		return runEdit(ctx, stdout, ap, args[1:])
 	case "close":
 		return runTransition(ctx, stdout, ap, args[1:], "close")
 	case "open":
@@ -143,13 +185,12 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
-	expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, IssueType: *issueType, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels), ExpectedRevision: optionalExpectedRevision(fs, expectedRevision),
+		Title: *title, Description: *description, IssueType: *issueType, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
 	})
 	if err != nil {
 		return err
@@ -262,6 +303,48 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	}
 }
 
+func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	assignee := fs.String("assignee", "", "Filter by assignee")
+	limit := fs.Int("limit", 0, "Limit results")
+	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
+	format := fs.String("format", "lines", "Output format: lines|table")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]")
+	}
+	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
+		Status:          "open",
+		Assignee:        strings.TrimSpace(*assignee),
+		IncludeArchived: false,
+		IncludeDeleted:  false,
+		Limit:           *limit,
+		SortBy: []store.SortSpec{
+			{Field: "priority"},
+			{Field: "updated_at", Desc: true},
+		},
+	})
+	if err != nil {
+		return err
+	}
+	if *jsonOut {
+		return writeJSON(stdout, issues)
+	}
+	columns := parseColumns(*columnsExpr)
+	switch strings.ToLower(strings.TrimSpace(*format)) {
+	case "", "lines":
+		return printIssueLines(stdout, issues, columns)
+	case "table":
+		return printIssueTable(stdout, issues, columns)
+	default:
+		return fmt.Errorf("unsupported --format %q", *format)
+	}
+}
+
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
@@ -286,65 +369,6 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	return printIssueDetail(stdout, detail)
 }
 
-func runEdit(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 1)
-	if len(positional) != 1 {
-		return errors.New("usage: lit edit <id> [flags]")
-	}
-	fs := flag.NewFlagSet("edit", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	title := fs.String("title", "", "New title")
-	description := fs.String("description", "", "New description")
-	issueType := fs.String("type", "", "New issue type")
-	priority := fs.Int("priority", -1, "New priority")
-	assignee := fs.String("assignee", "", "New assignee")
-	labels := fs.String("labels", "", "Replace labels with a comma-separated set")
-	clearAssignee := fs.Bool("clear-assignee", false, "Clear assignee")
-	clearLabels := fs.Bool("clear-labels", false, "Remove all labels")
-	expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
-	jsonOut := fs.Bool("json", false, "Output JSON")
-	if err := fs.Parse(flagArgs); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: lit edit <id> [flags]")
-	}
-	visited := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
-	var in store.UpdateIssueInput
-	if visited["title"] {
-		in.Title = title
-	}
-	if visited["description"] {
-		in.Description = description
-	}
-	if visited["type"] {
-		in.IssueType = issueType
-	}
-	if visited["priority"] {
-		in.Priority = priority
-	}
-	if *clearAssignee {
-		empty := ""
-		in.Assignee = &empty
-	} else if visited["assignee"] {
-		in.Assignee = assignee
-	}
-	if *clearLabels {
-		empty := []string{}
-		in.Labels = &empty
-	} else if visited["labels"] {
-		parsed := splitCSV(*labels)
-		in.Labels = &parsed
-	}
-	in.ExpectedRevision = optionalExpectedRevision(fs, expectedRevision)
-	issue, err := ap.Store.UpdateIssue(ctx, positional[0], in)
-	if err != nil {
-		return err
-	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
-}
-
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	if len(positional) != 1 {
@@ -354,7 +378,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	fs.SetOutput(io.Discard)
 	reason := fs.String("reason", "", "Lifecycle transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Lifecycle actor")
-	expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
@@ -363,11 +386,10 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
 	}
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-		IssueID:          positional[0],
-		Action:           action,
-		Reason:           *reason,
-		CreatedBy:        *by,
-		ExpectedRevision: optionalExpectedRevision(fs, expectedRevision),
+		IssueID:   positional[0],
+		Action:    action,
+		Reason:    *reason,
+		CreatedBy: *by,
 	})
 	if err != nil {
 		return err
@@ -387,7 +409,6 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	fs.SetOutput(io.Discard)
 	body := fs.String("body", "", "Comment body")
 	by := fs.String("by", os.Getenv("USER"), "Comment author")
-	expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := fs.Parse(flagArgs); err != nil {
 		return err
@@ -395,7 +416,7 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit comment add <id> --body <text>")
 	}
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
+	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
 	if err != nil {
 		return err
 	}
@@ -420,7 +441,6 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		fs.SetOutput(io.Discard)
 		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
@@ -428,7 +448,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
 		}
-		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
+		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by})
 		if err != nil {
 			return err
 		}
@@ -445,7 +465,6 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		fs := flag.NewFlagSet("dep rm", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
@@ -453,7 +472,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
-		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType, optionalExpectedRevision(fs, expectedRevision)); err != nil {
+		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType); err != nil {
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -506,7 +525,6 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		fs := flag.NewFlagSet("label add", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		by := fs.String("by", os.Getenv("USER"), "Label author")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
@@ -514,7 +532,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
 		}
-		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by, ExpectedRevision: optionalExpectedRevision(fs, expectedRevision)})
+		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
 		if err != nil {
 			return err
 		}
@@ -526,7 +544,6 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 		fs := flag.NewFlagSet("label rm", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
@@ -534,7 +551,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 		}
-		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1], optionalExpectedRevision(fs, expectedRevision))
+		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
 		if err != nil {
 			return err
 		}
@@ -552,21 +569,19 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	case "set":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		if len(positional) != 2 {
-			return errors.New("usage: lit parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]")
+			return errors.New("usage: lit parent set <child-id> <parent-id> [--by <user>] [--json]")
 		}
 		fs := flag.NewFlagSet("parent set", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
 		}
 		rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
-			ChildID:          positional[0],
-			ParentID:         positional[1],
-			CreatedBy:        *by,
-			ExpectedRevision: optionalExpectedRevision(fs, expectedRevision),
+			ChildID:   positional[0],
+			ParentID:  positional[1],
+			CreatedBy: *by,
 		})
 		if err != nil {
 			return err
@@ -579,16 +594,15 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	case "clear":
 		positional, flagArgs := splitArgs(args[1:], 1)
 		if len(positional) != 1 {
-			return errors.New("usage: lit parent clear <child-id> [--expected-revision N] [--json]")
+			return errors.New("usage: lit parent clear <child-id> [--json]")
 		}
 		fs := flag.NewFlagSet("parent clear", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(flagArgs); err != nil {
 			return err
 		}
-		if err := ap.Store.ClearParent(ctx, positional[0], optionalExpectedRevision(fs, expectedRevision)); err != nil {
+		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -701,13 +715,10 @@ func runWorkspace(stdout io.Writer, ap *app.App, args []string) error {
 		"database_path":  ap.Workspace.DatabasePath,
 		"dolt_repo_path": ap.Workspace.DoltRepoPath,
 	}
-	if revision, err := ap.Store.GetWorkspaceRevision(context.Background()); err == nil {
-		payload["workspace_revision"] = strconv.FormatInt(revision, 10)
-	}
 	if *jsonOut {
 		return writeJSON(stdout, payload)
 	}
-	for _, key := range []string{"workspace_id", "workspace_revision", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path"} {
+	for _, key := range []string{"workspace_id", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path"} {
 		if _, err := fmt.Fprintf(stdout, "%s: %s\n", key, payload[key]); err != nil {
 			return err
 		}
@@ -1261,7 +1272,6 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		label := fs.String("label", "", "Label name")
 		by := fs.String("by", os.Getenv("USER"), "Label actor")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(args[2:]); err != nil {
 			return err
@@ -1274,22 +1284,20 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return errors.New("--label is required")
 		}
 		results := map[string]string{}
-		nextExpected := optionalExpectedRevision(fs, expectedRevision)
 		for _, issueID := range issueIDs {
 			switch action {
 			case "add":
 				_, err := ap.Store.AddLabel(ctx, store.AddLabelInput{
-					IssueID:          issueID,
-					Name:             *label,
-					CreatedBy:        *by,
-					ExpectedRevision: nextExpected,
+					IssueID:   issueID,
+					Name:      *label,
+					CreatedBy: *by,
 				})
 				if err != nil {
 					results[issueID] = err.Error()
 					continue
 				}
 			case "rm":
-				_, err := ap.Store.RemoveLabel(ctx, issueID, *label, nextExpected)
+				_, err := ap.Store.RemoveLabel(ctx, issueID, *label)
 				if err != nil {
 					results[issueID] = err.Error()
 					continue
@@ -1298,9 +1306,6 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 				return errors.New("usage: lit bulk label <add|rm> ...")
 			}
 			results[issueID] = "ok"
-			if nextExpected != nil {
-				*nextExpected = *nextExpected + 1
-			}
 		}
 		return printValue(stdout, results, *jsonOut, func(w io.Writer, v any) error {
 			entries := v.(map[string]string)
@@ -1317,7 +1322,6 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
 		by := fs.String("by", os.Getenv("USER"), "Lifecycle actor")
-		expectedRevision := fs.Int64("expected-revision", -1, "Expected workspace revision for optimistic concurrency")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
@@ -1330,23 +1334,18 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return errors.New("--reason is required")
 		}
 		results := map[string]string{}
-		nextExpected := optionalExpectedRevision(fs, expectedRevision)
 		for _, issueID := range issueIDs {
 			_, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-				IssueID:          issueID,
-				Action:           args[0],
-				Reason:           *reason,
-				CreatedBy:        *by,
-				ExpectedRevision: nextExpected,
+				IssueID:   issueID,
+				Action:    args[0],
+				Reason:    *reason,
+				CreatedBy: *by,
 			})
 			if err != nil {
 				results[issueID] = err.Error()
 				continue
 			}
 			results[issueID] = "ok"
-			if nextExpected != nil {
-				*nextExpected = *nextExpected + 1
-			}
 		}
 		return printValue(stdout, results, *jsonOut, func(w io.Writer, v any) error {
 			entries := v.(map[string]string)
@@ -1416,37 +1415,39 @@ func runQuickstart(stdout io.Writer, args []string) error {
 	payload := map[string]any{
 		"summary": "Agent quickstart for links issue tracking",
 		"workflow": []string{
-			"Discover workspace identity and revision with `lit workspace --json`.",
+			"Initialize and auto-migrate with `lit init --json`.",
+			"Discover workspace identity with `lit workspace --json`.",
+			"Migrate legacy Beads wiring explicitly with `lit migrate beads --apply --json` when needed.",
 			"Install git hook automation once with `lit hooks install`.",
-			"List active issues with `lit ls --format lines --json` or narrow with `--query`.",
+			"List ready work with `lit ready --json` (or `lit ls --format lines --json` for full views).",
 			"Create issues with `lit new ...`; use `--type epic` for epics.",
 			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
-			"Mutate safely with `--expected-revision` from `workspace_revision`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
 			"Run health checks with `lit doctor` and repair known corruption with `lit fsck --repair`.",
 			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
 		},
 		"examples": []string{
+			"lit init --json",
+			"lit migrate beads --apply --json",
 			"lit hooks install --json",
 			"lit workspace --json",
+			"lit ready --json",
 			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
 			"lit new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent --json",
 			"lit parent set <issue-id> <parent-issue-id> --json",
 			"lit dep add <issue-id> <dependency-issue-id> --type related-to --json",
-			"lit edit <issue-id> --priority 1 --expected-revision <workspace-revision> --json",
 			"git remote add origin https://github.com/org/repo.git",
 			"lit sync remote ls --json",
 			"lit sync pull --remote origin --branch main --json",
 			"lit sync push --remote origin --branch main --json",
 		},
 		"exit_codes": map[string]int{
-			"ok":             ExitOK,
-			"usage":          ExitUsage,
-			"validation":     ExitValidation,
-			"not_found":      ExitNotFound,
-			"conflict":       ExitConflict,
-			"stale_revision": ExitStaleRevision,
-			"corruption":     ExitCorruption,
+			"ok":         ExitOK,
+			"usage":      ExitUsage,
+			"validation": ExitValidation,
+			"not_found":  ExitNotFound,
+			"conflict":   ExitConflict,
+			"corruption": ExitCorruption,
 		},
 	}
 
@@ -1456,10 +1457,13 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"links agent quickstart",
 			"",
 			"1) Discover context",
+			"   `lit init --json`",
+			"   `lit migrate beads --apply --json`  # for legacy Beads repos",
 			"   `lit hooks install --json`",
 			"   `lit workspace --json`",
 			"",
 			"2) Find work",
+			"   `lit ready --json`",
 			"   `lit ls --format lines --json`",
 			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
 			"",
@@ -1468,8 +1472,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   `lit parent set <child-id> <parent-id> --json`",
 			"   `lit dep add <src-id> <dst-id> --type blocks|related-to|parent-child --json`",
 			"",
-			"4) Safe mutations",
-			"   Read `workspace_revision` and pass `--expected-revision N` on writes.",
+			"4) Mutations",
+			"   Use command outputs directly for follow-up writes.",
 			"",
 			"5) Dolt remote sync",
 			"   Configure remotes with git, then run sync commands.",
@@ -1487,7 +1491,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   `lit backup restore --latest --json`",
 			"   `lit recover --latest-backup --json`",
 			"",
-			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d stale_revision=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitStaleRevision, ExitCorruption),
+			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitCorruption),
 		}
 		if summary, ok := instructions["summary"].(string); ok && strings.TrimSpace(summary) != "" {
 			lines[0] = summary
@@ -1750,23 +1754,6 @@ func parseSortSpecs(input string) ([]store.SortSpec, error) {
 	return out, nil
 }
 
-func optionalExpectedRevision(fs *flag.FlagSet, value *int64) *int64 {
-	if fs.Lookup("expected-revision") == nil {
-		return nil
-	}
-	visited := false
-	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "expected-revision" {
-			visited = true
-		}
-	})
-	if !visited {
-		return nil
-	}
-	out := *value
-	return &out
-}
-
 func syncBasePath(ap *app.App) string {
 	return filepath.Join(ap.Workspace.StorageDir, "last-sync-base.json")
 }
@@ -1785,12 +1772,20 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 	if err != nil {
 		return err
 	}
-	currentRevision, err := ap.Store.GetWorkspaceRevision(ctx)
-	if err != nil {
-		return err
-	}
-	if state.WorkspaceRevision != 0 && currentRevision != state.WorkspaceRevision && !force {
-		return MergeConflictError{Message: fmt.Sprintf("restore conflict: local workspace revision %d has unsynced changes since last sync revision %d", currentRevision, state.WorkspaceRevision)}
+	if state.ContentHash != "" && !force {
+		baseHash, hashErr := syncfile.HashFile(syncBasePath(ap))
+		if hashErr != nil {
+			return hashErr
+		}
+		if baseHash != "" {
+			localHash, localHashErr := hashExport(localExport)
+			if localHashErr != nil {
+				return localHashErr
+			}
+			if localHash != baseHash {
+				return MergeConflictError{Message: "restore conflict: local workspace has unsynced changes since last sync base"}
+			}
+		}
 	}
 	if _, err := backup.Create(ap.Workspace.StorageDir, localExport); err != nil {
 		return err
@@ -1809,10 +1804,19 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 		return err
 	}
 	return ap.Store.RecordSyncState(ctx, store.SyncState{
-		Path:              restorePath,
-		ContentHash:       hash,
-		WorkspaceRevision: targetExport.WorkspaceRevision,
+		Path:        restorePath,
+		ContentHash: hash,
 	})
+}
+
+func hashExport(export model.Export) (string, error) {
+	payload, err := json.MarshalIndent(export, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("marshal export: %w", err)
+	}
+	payload = append(payload, '\n')
+	sum := sha256.Sum256(payload)
+	return strings.ToLower(hex.EncodeToString(sum[:])), nil
 }
 
 type MergeConflictError struct {
@@ -1833,47 +1837,71 @@ func (e CorruptionError) Error() string { return e.Message }
 func printUsage(w io.Writer) {
 	fmt.Fprint(w, `links / lit
 
+Worktree-native issue tracker with Dolt-backed sync.
+
 Usage:
-  lit new --title <title> [--description <text>] [--type task|feature|bug|chore|epic] [--priority 0-4] [--assignee <user>] [--labels a,b] [--expected-revision N] [--json]
-  lit ls [--status open|closed] [--type <type>] [--assignee <user>] [--priority-min N] [--priority-max N] [--search <text>] [--ids a,b] [--labels a,b] [--has-comments] [--include-archived] [--include-deleted] [--updated-after RFC3339] [--updated-before RFC3339] [--query <expr>] [--sort field:asc|desc,...] [--columns id,state,title,...] [--format lines|table] [--limit N] [--json]
-  lit show <id> [--json]
-  lit edit <id> [--title ...] [--description ...] [--type ...] [--priority ...] [--assignee ...|--clear-assignee] [--labels a,b|--clear-labels] [--expected-revision N] [--json]
-  lit close <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit open <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit archive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit delete <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit unarchive <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit restore <id> --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit comment add <id> --body <text> [--by <user>] [--expected-revision N] [--json]
-  lit label add <issue-id> <label> [--by <user>] [--expected-revision N] [--json]
-  lit label rm <issue-id> <label> [--expected-revision N] [--json]
-  lit parent set <child-id> <parent-id> [--by <user>] [--expected-revision N] [--json]
-  lit parent clear <child-id> [--expected-revision N] [--json]
-  lit children <parent-id> [--json]
-  lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to] [--by <user>] [--expected-revision N] [--json]
-  lit dep rm <src-id> <dst-id> [--type blocks|parent-child|related-to] [--expected-revision N] [--json]
-  lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]
-  lit export [--json]
-  lit sync status [--json]
-  lit sync remote ls [--json]
-  lit sync fetch [--remote <name>] [--prune] [--json]
-  lit sync pull [--remote <name>] [--branch <name>] [--json]
-  lit sync push [--remote <name>] [--branch <name>] [--set-upstream] [--force] [--json]
-  lit doctor [--json]
-  lit fsck [--repair] [--json]
-  lit backup create [--keep N] [--json]
-  lit backup list [--json]
-  lit backup restore (--path <snapshot.json> | --latest) [--force] [--json]
-  lit recover (--from-sync <path> | --from-backup <path> | --latest-backup) [--force] [--json]
-  lit bulk label <add|rm> --ids a,b --label <name> [--by <user>] [--expected-revision N] [--json]
-  lit bulk <close|archive> --ids a,b --reason <text> [--by <user>] [--expected-revision N] [--json]
-  lit bulk import --path <export.json> [--force] [--json]
+  lit [command]
+  lit [command] [flags]
+
+Issue Workflow:
+  init           Initialize links in the current repository (auto-migrates Beads residue)
+  ready          List open work ordered by priority and recency
+  new            Create an issue
+  ls             List issues with filters/query/sort
+  show           Show issue details
+  close          Close issue(s)
+  open           Reopen issue(s)
+  archive        Archive issue(s)
+  delete         Soft-delete issue(s)
+  unarchive      Unarchive issue(s)
+  restore        Restore deleted issue(s)
+  comment        Add issue comments
+  label          Add/remove issue labels
+  bulk           Bulk issue operations (label, close, archive, import)
+
+Dependencies & Structure:
+  parent         Manage parent/child links
+  children       List child issues
+  dep            Manage dependency edges
+
+Sync & Data:
+  export         Export workspace snapshot JSON
+  sync           Mirror Dolt data through git remotes
+  backup         Create/list/restore backup snapshots
+  recover        Recover from sync file or backup
+  beads          Import/export from Beads Dolt databases
+
+Setup & Maintenance:
+  workspace      Show workspace metadata
+  hooks          Install git hook automation
+  migrate        Migrate from Beads to links
+  doctor         Health check
+  fsck           Integrity check and optional repair
+
+Guidance & Tooling:
+  quickstart     Agent quickstart workflow
+  completion     Generate shell completion script
+  help           Show this help output
+
+Command Syntax:
+  lit init [--json] [--skip-hooks] [--skip-agents]
+  lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
   lit hooks install [--json]
+  lit migrate beads [--apply] [--json]
   lit quickstart [--json]
   lit completion <bash|zsh|fish>
-  lit beads import --db <path> [--json]
-  lit beads export --db <path> [--json]
   lit workspace [--json]
+  lit sync remote ls [--json]
+  lit sync pull --remote <name> --branch <name> [--json]
+  lit sync push --remote <name> --branch <name> [--set-upstream] [--force] [--json]
+
+Examples:
+  lit init --json
+  lit ready --json
+  lit new --title "Fix renderer race" --type bug --priority 1 --json
+  lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc --json
+
+Use "lit [command] --help" for more information about a command.
 `)
 }
 

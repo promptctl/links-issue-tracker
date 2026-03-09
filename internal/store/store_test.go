@@ -175,7 +175,7 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 		t.Fatalf("updated.Labels = %#v", updated.Labels)
 	}
 
-	labels, err = st.RemoveLabel(ctx, issue.ID, "critical", nil)
+	labels, err = st.RemoveLabel(ctx, issue.ID, "critical")
 	if err != nil {
 		t.Fatalf("RemoveLabel() error = %v", err)
 	}
@@ -202,7 +202,7 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 
 func intPtr(value int) *int { return &value }
 
-func TestWorkspaceRevisionAndReplaceFromExport(t *testing.T) {
+func TestReplaceFromExportAndSyncState(t *testing.T) {
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
@@ -210,31 +210,15 @@ func TestWorkspaceRevisionAndReplaceFromExport(t *testing.T) {
 	}
 	defer st.Close()
 
-	initialRevision, err := st.GetWorkspaceRevision(ctx)
-	if err != nil {
-		t.Fatalf("GetWorkspaceRevision() error = %v", err)
-	}
-	if initialRevision != 0 {
-		t.Fatalf("initialRevision = %d, want 0", initialRevision)
-	}
-
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Renderer cleanup", IssueType: "task", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	afterCreate, err := st.GetWorkspaceRevision(ctx)
-	if err != nil {
-		t.Fatalf("GetWorkspaceRevision() after create error = %v", err)
-	}
-	if afterCreate != 1 {
-		t.Fatalf("afterCreate = %d, want 1", afterCreate)
-	}
 
 	export := model.Export{
-		Version:           1,
-		WorkspaceID:       "foreign-workspace",
-		WorkspaceRevision: 42,
-		ExportedAt:        time.Now().UTC(),
+		Version:     1,
+		WorkspaceID: "foreign-workspace",
+		ExportedAt:  time.Now().UTC(),
 		Issues: []model.Issue{{
 			ID:          "issue-replaced",
 			Title:       "Imported issue",
@@ -277,15 +261,8 @@ func TestWorkspaceRevisionAndReplaceFromExport(t *testing.T) {
 	if len(issues[0].Labels) != 1 || issues[0].Labels[0] != "imported" {
 		t.Fatalf("labels = %#v", issues[0].Labels)
 	}
-	currentRevision, err := st.GetWorkspaceRevision(ctx)
-	if err != nil {
-		t.Fatalf("GetWorkspaceRevision() after replace error = %v", err)
-	}
-	if currentRevision != 42 {
-		t.Fatalf("currentRevision = %d, want 42", currentRevision)
-	}
 
-	state := SyncState{Path: "/tmp/export.json", ContentHash: "abc123", WorkspaceRevision: 42}
+	state := SyncState{Path: "/tmp/export.json", ContentHash: "abc123"}
 	if err := st.RecordSyncState(ctx, state); err != nil {
 		t.Fatalf("RecordSyncState() error = %v", err)
 	}
@@ -294,7 +271,7 @@ func TestWorkspaceRevisionAndReplaceFromExport(t *testing.T) {
 		t.Fatalf("GetSyncState() error = %v", err)
 	}
 	encoded, _ := json.Marshal(loadedState)
-	if string(encoded) == "" || loadedState.Path != state.Path || loadedState.ContentHash != state.ContentHash || loadedState.WorkspaceRevision != state.WorkspaceRevision {
+	if string(encoded) == "" || loadedState.Path != state.Path || loadedState.ContentHash != state.ContentHash {
 		t.Fatalf("loadedState = %#v", loadedState)
 	}
 

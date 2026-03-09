@@ -78,15 +78,14 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	}
 
 	merged := model.Export{
-		Version:           maxInt(local.Version, remote.Version, base.Version),
-		WorkspaceID:       local.WorkspaceID,
-		WorkspaceRevision: maxInt64(local.WorkspaceRevision, remote.WorkspaceRevision, base.WorkspaceRevision) + 1,
-		ExportedAt:        local.ExportedAt,
-		Issues:            mergedIssues,
-		Relations:         mergeRelations(issueSet, local.Relations, remote.Relations),
-		Comments:          mergeComments(issueSet, local.Comments, remote.Comments),
-		Labels:            mergeLabels(issueSet, local.Labels, remote.Labels),
-		History:           mergeHistory(issueSet, local.History, remote.History),
+		Version:     maxInt(local.Version, remote.Version, base.Version),
+		WorkspaceID: local.WorkspaceID,
+		ExportedAt:  local.ExportedAt,
+		Issues:      mergedIssues,
+		Relations:   mergeRelations(issueSet, local.Relations, remote.Relations),
+		Comments:    mergeComments(issueSet, local.Comments, remote.Comments),
+		Labels:      mergeLabels(issueSet, local.Labels, remote.Labels),
+		History:     mergeHistory(issueSet, local.History, remote.History),
 	}
 	return MergeResult{Export: merged, Conflicts: conflicts}
 }
@@ -223,19 +222,6 @@ func mergeHistory(issueSet map[string]struct{}, locals, remotes []model.IssueHis
 func maxInt(values ...int) int {
 	if len(values) == 0 {
 		return 1
-	}
-	max := values[0]
-	for _, value := range values[1:] {
-		if value > max {
-			max = value
-		}
-	}
-	return max
-}
-
-func maxInt64(values ...int64) int64 {
-	if len(values) == 0 {
-		return 0
 	}
 	max := values[0]
 	for _, value := range values[1:] {

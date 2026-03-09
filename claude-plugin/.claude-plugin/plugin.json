@@ -1,0 +1,29 @@
+{
+  "name": "links",
+  "description": "Issue tracker integration for links repositories.",
+  "version": "0.1.0",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "lit quickstart --json"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "lit quickstart --json"
+          }
+        ]
+      }
+    ]
+  }
+}

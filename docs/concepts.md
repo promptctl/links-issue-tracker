@@ -14,10 +14,6 @@ That means all worktrees in the same clone share one up-to-date issue view.
 
 All writes happen through `lit`. You do not edit database state directly.
 
-## Optimistic concurrency with `workspace_revision`
-
-Every successful mutation increments a canonical revision. Mutating commands can pass `--expected-revision` to detect stale writes.
-
 ## Relationships are first-class
 
 Issues can be linked as:

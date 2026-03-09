@@ -5,7 +5,7 @@ _lit_completions() {
   local current prev words cword
   _init_completion || return
 
-  local commands="new ls show edit close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks quickstart completion help"
+  local commands="init ready new ls show close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks migrate quickstart completion help"
   local comment_subcommands="add"
   local label_subcommands="add rm"
   local parent_subcommands="set clear"
@@ -16,6 +16,7 @@ _lit_completions() {
   local bulk_subcommands="label close archive import"
   local beads_subcommands="import export"
   local hooks_subcommands="install"
+  local migrate_subcommands="beads"
 
   case "${prev}" in
     lit)
@@ -64,6 +65,10 @@ _lit_completions() {
       COMPREPLY=( $(compgen -W "${hooks_subcommands}" -- "${current}") )
       return
       ;;
+    migrate)
+      COMPREPLY=( $(compgen -W "${migrate_subcommands}" -- "${current}") )
+      return
+      ;;
     completion)
       COMPREPLY=( $(compgen -W "bash zsh fish" -- "${current}") )
       return
@@ -82,9 +87,10 @@ _lit() {
   local -a commands
   commands=(
     'new:create issue'
+    'init:initialize links and auto-migrate beads'
     'ls:list issues'
     'show:show issue'
-    'edit:edit issue'
+    'ready:list ready issues'
     'close:close issue'
     'open:reopen issue'
     'archive:archive issue'
@@ -106,6 +112,7 @@ _lit() {
     'beads:beads dolt import export'
     'workspace:show workspace info'
     'hooks:install links git hooks'
+    'migrate:adopt lit from beads'
     'quickstart:agent usage guide'
     'completion:emit shell completion'
     'help:show help'
@@ -152,6 +159,9 @@ _lit() {
         hooks)
           _values 'hooks commands' install
           ;;
+        migrate)
+          _values 'migrate commands' beads
+          ;;
         completion)
           _values 'shell' bash zsh fish
           ;;
@@ -164,7 +174,7 @@ _lit "$@"
 `
 
 const fishCompletionScript = `complete -c lit -f
-complete -c lit -n '__fish_use_subcommand' -a 'new ls show edit close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks quickstart completion help'
+complete -c lit -n '__fish_use_subcommand' -a 'init ready new ls show close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks migrate quickstart completion help'
 complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add'
 complete -c lit -n '__fish_seen_subcommand_from label' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from parent' -a 'set clear'
@@ -175,5 +185,6 @@ complete -c lit -n '__fish_seen_subcommand_from backup' -a 'create list restore'
 complete -c lit -n '__fish_seen_subcommand_from bulk' -a 'label close archive import'
 complete -c lit -n '__fish_seen_subcommand_from beads' -a 'import export'
 complete -c lit -n '__fish_seen_subcommand_from hooks' -a 'install'
+complete -c lit -n '__fish_seen_subcommand_from migrate' -a 'beads'
 complete -c lit -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 `

@@ -34,6 +34,9 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 	if !strings.Contains(stdout.String(), "lit hooks install [--json]") {
 		t.Fatalf("help output missing hooks command: %q", stdout.String())
 	}
+	if !strings.Contains(stdout.String(), "lit migrate beads [--apply] [--json]") {
+		t.Fatalf("help output missing migrate command: %q", stdout.String())
+	}
 }
 
 func TestQuickstartOutputsStructuredJSON(t *testing.T) {

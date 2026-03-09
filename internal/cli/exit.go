@@ -8,23 +8,18 @@ import (
 )
 
 const (
-	ExitOK            = 0
-	ExitGeneric       = 1
-	ExitUsage         = 2
-	ExitValidation    = 3
-	ExitNotFound      = 4
-	ExitConflict      = 5
-	ExitStaleRevision = 6
-	ExitCorruption    = 7
+	ExitOK         = 0
+	ExitGeneric    = 1
+	ExitUsage      = 2
+	ExitValidation = 3
+	ExitNotFound   = 4
+	ExitConflict   = 5
+	ExitCorruption = 7
 )
 
 func ExitCode(err error) int {
 	if err == nil {
 		return ExitOK
-	}
-	var stale store.StaleRevisionError
-	if errors.As(err, &stale) {
-		return ExitStaleRevision
 	}
 	var notFound store.NotFoundError
 	if errors.As(err, &notFound) {
@@ -37,6 +32,10 @@ func ExitCode(err error) int {
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
 		return ExitCorruption
+	}
+	var beadsRequired BeadsMigrationRequiredError
+	if errors.As(err, &beadsRequired) {
+		return ExitValidation
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {

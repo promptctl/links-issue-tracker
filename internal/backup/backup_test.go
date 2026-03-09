@@ -13,10 +13,9 @@ func TestCreateListLatestAndPrune(t *testing.T) {
 
 	storageDir := t.TempDir()
 	export := model.Export{
-		Version:           1,
-		WorkspaceID:       "ws-test",
-		WorkspaceRevision: 1,
-		ExportedAt:        time.Now().UTC(),
+		Version:     1,
+		WorkspaceID: "ws-test",
+		ExportedAt:  time.Now().UTC(),
 	}
 
 	first, err := Create(storageDir, export)
@@ -27,13 +26,13 @@ func TestCreateListLatestAndPrune(t *testing.T) {
 		t.Fatalf("Create(first) returned invalid snapshot metadata: %+v", first)
 	}
 
-	export.WorkspaceRevision = 2
+	export.WorkspaceID = "ws-test-2"
 	second, err := Create(storageDir, export)
 	if err != nil {
 		t.Fatalf("Create(second): %v", err)
 	}
 
-	export.WorkspaceRevision = 3
+	export.WorkspaceID = "ws-test-3"
 	third, err := Create(storageDir, export)
 	if err != nil {
 		t.Fatalf("Create(third): %v", err)

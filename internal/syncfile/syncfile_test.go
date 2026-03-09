@@ -11,10 +11,9 @@ import (
 func TestWriteAndReadAtomicExport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "links", "export.json")
 	export := model.Export{
-		Version:           1,
-		WorkspaceID:       "workspace-test",
-		WorkspaceRevision: 7,
-		ExportedAt:        time.Now().UTC(),
+		Version:     1,
+		WorkspaceID: "workspace-test",
+		ExportedAt:  time.Now().UTC(),
 		Issues: []model.Issue{{
 			ID:        "issue-1",
 			Title:     "Renderer cleanup",
@@ -37,7 +36,7 @@ func TestWriteAndReadAtomicExport(t *testing.T) {
 	if hash != readHash {
 		t.Fatalf("hash mismatch %q != %q", hash, readHash)
 	}
-	if readExport.WorkspaceRevision != 7 || len(readExport.Issues) != 1 || readExport.Issues[0].ID != "issue-1" {
+	if len(readExport.Issues) != 1 || readExport.Issues[0].ID != "issue-1" {
 		t.Fatalf("readExport = %#v", readExport)
 	}
 }

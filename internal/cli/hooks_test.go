@@ -31,8 +31,8 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 		t.Fatalf("ReadFile(pre-push) error = %v", err)
 	}
 	text := string(content)
-	if !strings.Contains(text, linksPrePushHookMarker) {
-		t.Fatalf("hook missing marker: %q", text)
+	if !strings.Contains(text, linksHookBeginMarker) || !strings.Contains(text, linksHookEndMarker) {
+		t.Fatalf("hook missing managed section markers: %q", text)
 	}
 	if !strings.Contains(text, "warning: db sync failed") {
 		t.Fatalf("hook missing warning output: %q", text)
@@ -63,21 +63,19 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 		t.Fatalf("runHooksInstall() error = %v", err)
 	}
 
-	legacyPath := filepath.Join(hooksDir, "pre-push.links.user")
-	legacy, err := os.ReadFile(legacyPath)
-	if err != nil {
-		t.Fatalf("ReadFile(pre-push.links.user) error = %v", err)
-	}
-	if string(legacy) != original {
-		t.Fatalf("legacy hook mismatch: got %q want %q", string(legacy), original)
-	}
-
 	newHook, err := os.ReadFile(originalPath)
 	if err != nil {
 		t.Fatalf("ReadFile(new pre-push) error = %v", err)
 	}
-	if !strings.Contains(string(newHook), `"${legacy_hook}" "$@"`) {
-		t.Fatalf("new hook does not chain legacy hook: %q", string(newHook))
+	newHookText := string(newHook)
+	if !strings.Contains(newHookText, "echo custom-pre-push") {
+		t.Fatalf("new hook does not preserve existing logic: %q", newHookText)
+	}
+	if !strings.Contains(newHookText, linksHookBeginMarker) || !strings.Contains(newHookText, linksHookEndMarker) {
+		t.Fatalf("new hook missing links managed section: %q", newHookText)
+	}
+	if _, err := os.Stat(filepath.Join(hooksDir, "pre-push.links.user")); !os.IsNotExist(err) {
+		t.Fatalf("legacy hook file should not be created in marker-managed mode")
 	}
 }
 
