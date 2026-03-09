@@ -56,6 +56,47 @@ type outputModeProvider interface {
 	linksOutputMode() outputMode
 }
 
+type commandHelpEntry struct {
+	Command  string
+	Summary  string
+	Usage    string
+	HumanCmd bool
+}
+
+// [LAW:one-source-of-truth] Command help metadata is centralized here for both top-level and subcommand help rendering.
+var commandHelpCatalog = []commandHelpEntry{
+	{Command: "init", Summary: "Initialize links in the current repository (auto-migrates Beads residue)", Usage: "lit init [--json] [--skip-hooks] [--skip-agents]", HumanCmd: true},
+	{Command: "ready", Summary: "List open work ordered by priority and recency", Usage: "lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]"},
+	{Command: "new", Summary: "Create an issue", Usage: "lit new --title <text> [--description <text>] [--type task|feature|bug|chore|epic] [--priority 0..4] [--assignee <user>] [--labels <csv>] [--json]"},
+	{Command: "ls", Summary: "List issues with filters/query/sort", Usage: "lit ls [--status <status>] [--type <type>] [--query <expr>] [--sort <expr>] [--json]"},
+	{Command: "show", Summary: "Show issue details", Usage: "lit show <id> [--json]"},
+	{Command: "close", Summary: "Close issue(s)", Usage: "lit close <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "open", Summary: "Reopen issue(s)", Usage: "lit open <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "archive", Summary: "Archive issue(s)", Usage: "lit archive <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "delete", Summary: "Soft-delete issue(s)", Usage: "lit delete <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "unarchive", Summary: "Unarchive issue(s)", Usage: "lit unarchive <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "restore", Summary: "Restore deleted issue(s)", Usage: "lit restore <id> --reason <text> [--by <user>] [--json]"},
+	{Command: "comment", Summary: "Add issue comments", Usage: "lit comment add <id> --body <text> [--by <user>] [--json]"},
+	{Command: "label", Summary: "Add/remove issue labels", Usage: "lit label <add|rm> <issue-id> <label> [--by <user>] [--json]"},
+	{Command: "bulk", Summary: "Bulk issue operations (label, close, archive, import)", Usage: "lit bulk <label|close|archive|import> ..."},
+	{Command: "parent", Summary: "Manage parent/child links", Usage: "lit parent <set|clear> ..."},
+	{Command: "children", Summary: "List child issues", Usage: "lit children <parent-id> [--json]"},
+	{Command: "dep", Summary: "Manage dependency edges", Usage: "lit dep <add|rm|ls> ..."},
+	{Command: "export", Summary: "Export workspace snapshot JSON", Usage: "lit export [--json]"},
+	{Command: "sync", Summary: "Mirror Dolt data through git remotes", Usage: "lit sync <status|remote|fetch|pull|push> ..."},
+	{Command: "backup", Summary: "Create/list/restore backup snapshots", Usage: "lit backup <create|list|restore> ..."},
+	{Command: "recover", Summary: "Recover from sync file or backup", Usage: "lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]"},
+	{Command: "beads", Summary: "Import/export from Beads Dolt databases", Usage: "lit beads <import|export> --db <path> [--json]"},
+	{Command: "workspace", Summary: "Show workspace metadata", Usage: "lit workspace [--json]"},
+	{Command: "hooks", Summary: "Install git hook automation", Usage: "lit hooks install [--json]"},
+	{Command: "migrate", Summary: "Migrate from Beads to links", Usage: "lit migrate beads [--apply] [--json]"},
+	{Command: "doctor", Summary: "Health check", Usage: "lit doctor [--json]"},
+	{Command: "fsck", Summary: "Integrity check and optional repair", Usage: "lit fsck [--repair] [--json]"},
+	{Command: "quickstart", Summary: "Agent quickstart workflow", Usage: "lit quickstart [--json]"},
+	{Command: "completion", Summary: "Generate shell completion script", Usage: "lit completion <bash|zsh|fish>"},
+	{Command: "help", Summary: "Show help output", Usage: "lit help [command]"},
+}
+
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	normalizedArgs, resolvedOutputMode, err := parseGlobalOutputMode(args, stdout)
 	if err != nil {
@@ -67,6 +108,9 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	if len(args) == 0 {
 		printUsage(stderr)
 		return nil
+	}
+	if args[0] != "help" && isCommandHelpRequest(args) {
+		return runHelp(stdout, []string{args[0]})
 	}
 	if !shouldBypassBeadsPreflight(args) {
 		cwd, err := os.Getwd()
@@ -84,8 +128,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	}
 	switch args[0] {
 	case "help", "-h", "--help":
-		printUsage(stdout)
-		return nil
+		return runHelp(stdout, args[1:])
 	case "init":
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -1576,6 +1619,57 @@ func runCompletion(stdout io.Writer, args []string) error {
 	}
 }
 
+func runHelp(stdout io.Writer, args []string) error {
+	if len(args) == 0 {
+		printUsage(stdout)
+		return nil
+	}
+	if len(args) != 1 {
+		return errors.New("usage: lit help [command]")
+	}
+	command := strings.TrimSpace(args[0])
+	entry, ok := commandHelpEntryByName(command)
+	if !ok {
+		return fmt.Errorf("unknown command %q", command)
+	}
+	boundary := "Agent-facing operational command. Prefer deterministic machine-readable output (`--json` or `--output json`) in automation."
+	if entry.HumanCmd {
+		boundary = "Human bootstrap command. Run once per repository/worktree setup before autonomous agent operations."
+	}
+	lines := []string{
+		fmt.Sprintf("lit %s", entry.Command),
+		"",
+		entry.Summary,
+		boundary,
+		"",
+		"Usage:",
+		fmt.Sprintf("  %s", entry.Usage),
+	}
+	_, err := fmt.Fprintln(stdout, strings.Join(lines, "\n"))
+	return err
+}
+
+func commandHelpEntryByName(command string) (commandHelpEntry, bool) {
+	for _, entry := range commandHelpCatalog {
+		if entry.Command == command {
+			return entry, true
+		}
+	}
+	return commandHelpEntry{}, false
+}
+
+func isCommandHelpRequest(args []string) bool {
+	if len(args) < 2 {
+		return false
+	}
+	for _, arg := range args[1:] {
+		if arg == "--help" || arg == "-h" {
+			return true
+		}
+	}
+	return false
+}
+
 func runQuickstart(stdout io.Writer, args []string) error {
 	fs := flag.NewFlagSet("quickstart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -2040,8 +2134,10 @@ Global Output Mode:
   --output MODE  Force output mode (auto|text|json)
   LIT_OUTPUT     Environment default when flags are not provided
 
-Issue Workflow:
-  init           Initialize links in the current repository (auto-migrates Beads residue)
+Human Bootstrap Boundary:
+  init           Human-run bootstrap (run once per repo/worktree)
+
+Agent Operations (JSON-first, deterministic):
   ready          List open work ordered by priority and recency
   new            Create an issue
   ls             List issues with filters/query/sort
@@ -2078,7 +2174,7 @@ Setup & Maintenance:
 Guidance & Tooling:
   quickstart     Agent quickstart workflow
   completion     Generate shell completion script
-  help           Show this help output
+  help           Show this help output (supports: lit help <command>)
 
 Command Syntax:
   lit init [--json] [--skip-hooks] [--skip-agents]
@@ -2091,6 +2187,7 @@ Command Syntax:
   lit sync remote ls [--json]
   lit sync pull --remote <name> --branch <name> [--json]
   lit sync push --remote <name> --branch <name> [--set-upstream] [--force] [--json]
+  lit help <command>
 
 Examples:
   lit init --json
@@ -2098,7 +2195,7 @@ Examples:
   lit new --title "Fix renderer race" --type bug --priority 1 --json
   lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc --json
 
-Use "lit [command] --help" for more information about a command.
+Use "lit help <command>" or "lit [command] --help" for command-specific help.
 `)
 }
 
