@@ -11,6 +11,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -28,6 +29,8 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/syncfile"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
+
+var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found on remote`)
 
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
 	if len(args) == 0 {
@@ -808,33 +811,18 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err := fs.Parse(args[1:]); err != nil {
 			return err
 		}
-		commandArgs := []string{"pull", strings.TrimSpace(*remote)}
-		if strings.TrimSpace(*branch) != "" {
-			commandArgs = append(commandArgs, strings.TrimSpace(*branch))
+		remoteName := strings.TrimSpace(*remote)
+		branchName := strings.TrimSpace(*branch)
+		commandArgs := []string{"pull", remoteName}
+		if branchName != "" {
+			commandArgs = append(commandArgs, branchName)
 		}
 		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
-		if err != nil {
-			return err
+		payload, handledErr := buildSyncPullPayload(remoteName, branchName, output, err)
+		if handledErr != nil {
+			return handledErr
 		}
-		payload := map[string]any{
-			"status": "ok",
-			"remote": strings.TrimSpace(*remote),
-			"branch": strings.TrimSpace(*branch),
-			"raw":    output,
-		}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-			p := v.(map[string]any)
-			if strings.TrimSpace(p["raw"].(string)) != "" {
-				_, err := fmt.Fprintln(w, strings.TrimSpace(p["raw"].(string)))
-				return err
-			}
-			if strings.TrimSpace(p["branch"].(string)) != "" {
-				_, err := fmt.Fprintf(w, "pulled %s/%s\n", p["remote"], p["branch"])
-				return err
-			}
-			_, err := fmt.Fprintf(w, "pulled %s\n", p["remote"])
-			return err
-		})
+		return printValue(stdout, payload, *jsonOut, printSyncPullPayload)
 	case "push":
 		fs := flag.NewFlagSet("sync push", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -934,6 +922,87 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		})
 	default:
 		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
+	}
+}
+
+func buildSyncPullPayload(remote string, requestedBranch string, output string, runErr error) (map[string]any, error) {
+	if runErr == nil {
+		return map[string]any{
+			"status": "ok",
+			"remote": remote,
+			"branch": requestedBranch,
+			"raw":    output,
+		}, nil
+	}
+	message := strings.TrimSpace(runErr.Error())
+	missingBranch, matchesMissingBranch := detectMissingRemoteBranch(message, requestedBranch)
+	if !matchesMissingBranch {
+		return nil, runErr
+	}
+	nextCommand := fmt.Sprintf("lit sync push --remote %s --branch %s --set-upstream", remote, missingBranch)
+	retryCommand := fmt.Sprintf("lit sync pull --remote %s --branch %s", remote, missingBranch)
+	// [LAW:dataflow-not-control-flow] Sync pull always returns structured payload; outcome variance lives in status/reason fields.
+	return map[string]any{
+		"status":        "skipped",
+		"reason":        "remote_branch_missing",
+		"remote":        remote,
+		"branch":        missingBranch,
+		"next_command":  nextCommand,
+		"retry_command": retryCommand,
+		"raw":           message,
+	}, nil
+}
+
+func detectMissingRemoteBranch(message string, requestedBranch string) (string, bool) {
+	// [LAW:single-enforcer] Remote-branch-missing classification is centralized here to avoid drift across callsites.
+	normalized := strings.ToLower(strings.TrimSpace(message))
+	if !strings.HasPrefix(normalized, "dolt pull ") {
+		return "", false
+	}
+	if !strings.Contains(normalized, "not found on remote") {
+		return "", false
+	}
+	matches := missingRemoteBranchPattern.FindStringSubmatch(message)
+	branch := strings.TrimSpace(requestedBranch)
+	if len(matches) == 2 && strings.TrimSpace(matches[1]) != "" {
+		branch = strings.TrimSpace(matches[1])
+	}
+	if branch == "" {
+		return "", false
+	}
+	return branch, true
+}
+
+func printSyncPullPayload(w io.Writer, v any) error {
+	payload := v.(map[string]any)
+	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
+	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
+	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
+	switch status {
+	case "skipped":
+		nextCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["next_command"]))
+		retryCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["retry_command"]))
+		_, err := fmt.Fprintf(
+			w,
+			"skipped pull %s/%s: remote branch missing; run `%s`, then retry `%s`\n",
+			remote,
+			branch,
+			nextCommand,
+			retryCommand,
+		)
+		return err
+	default:
+		raw, hasRaw := payload["raw"].(string)
+		if hasRaw && strings.TrimSpace(raw) != "" {
+			_, err := fmt.Fprintln(w, raw)
+			return err
+		}
+		if branch != "" {
+			_, err := fmt.Fprintf(w, "pulled %s/%s\n", remote, branch)
+			return err
+		}
+		_, err := fmt.Fprintf(w, "pulled %s\n", remote)
+		return err
 	}
 }
 
