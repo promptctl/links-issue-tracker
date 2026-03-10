@@ -40,6 +40,16 @@ func TestRunBlocksNonInitCommandsWhenBeadsResidueDetected(t *testing.T) {
 	if !strings.Contains(err.Error(), "lit migrate beads --apply --json") {
 		t.Fatalf("preflight error missing remediation command: %v", err)
 	}
+	if preflightErr.TraceRef == "" {
+		t.Fatal("preflight trace ref missing")
+	}
+	tracePayload, readErr := os.ReadFile(preflightErr.TraceRef)
+	if readErr != nil {
+		t.Fatalf("ReadFile(trace) error = %v", readErr)
+	}
+	if !strings.Contains(string(tracePayload), `"trigger": "startup-preflight"`) {
+		t.Fatalf("trace missing startup-preflight trigger: %s", string(tracePayload))
+	}
 }
 
 func TestShouldBypassBeadsPreflight(t *testing.T) {
@@ -70,18 +80,24 @@ func TestRequireBeadsMigrationPreflight(t *testing.T) {
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	if err := requireBeadsMigrationPreflight(ws); err != nil {
+	if err := requireBeadsMigrationPreflight(ws, []string{"ls"}); err != nil {
 		t.Fatalf("requireBeadsMigrationPreflight() unexpected error with clean workspace: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("beads residue\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(AGENTS.md) error = %v", err)
 	}
-	err = requireBeadsMigrationPreflight(ws)
+	err = requireBeadsMigrationPreflight(ws, []string{"ls"})
 	if err == nil {
 		t.Fatal("requireBeadsMigrationPreflight() unexpectedly succeeded with beads residue")
 	}
 	var preflightErr BeadsMigrationRequiredError
 	if !errors.As(err, &preflightErr) {
 		t.Fatalf("expected BeadsMigrationRequiredError, got %T: %v", err, err)
+	}
+	if preflightErr.BlockedCommand != "lit ls" {
+		t.Fatalf("blocked command = %q, want lit ls", preflightErr.BlockedCommand)
+	}
+	if preflightErr.TraceRef == "" {
+		t.Fatal("trace ref = empty, want trace path")
 	}
 }

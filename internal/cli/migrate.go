@@ -20,14 +20,56 @@ import (
 var beadsSignalRegex = regexp.MustCompile(`(?i)\bbeads\b|(^|[^a-zA-Z0-9_])bd([^a-zA-Z0-9_]|$)|\.beads`)
 
 type BeadsMigrationRequiredError struct {
-	Summary string
+	Summary            string
+	Trigger            string
+	BlockedCommand     string
+	RemediationCommand string
+	TraceRef           string
+	TraceWriteError    string
 }
 
 func (e BeadsMigrationRequiredError) Error() string {
-	if strings.TrimSpace(e.Summary) == "" {
-		return "beads residue detected; run 'lit migrate beads --apply --json' before running other commands"
+	remediationCommand := strings.TrimSpace(e.RemediationCommand)
+	if remediationCommand == "" {
+		remediationCommand = "lit migrate beads --apply --json"
 	}
-	return fmt.Sprintf("beads residue detected (%s); run 'lit migrate beads --apply --json' before running other commands", e.Summary)
+	parts := []string{}
+	if strings.TrimSpace(e.Summary) == "" {
+		parts = append(parts, fmt.Sprintf("beads residue detected; run '%s' before running other commands", remediationCommand))
+	} else {
+		parts = append(parts, fmt.Sprintf("beads residue detected (%s); run '%s' before running other commands", e.Summary, remediationCommand))
+	}
+	if strings.TrimSpace(e.BlockedCommand) != "" {
+		parts = append(parts, fmt.Sprintf("blocked_command=%s", e.BlockedCommand))
+	}
+	if strings.TrimSpace(e.TraceRef) != "" {
+		parts = append(parts, fmt.Sprintf("trace=%s", e.TraceRef))
+	}
+	if strings.TrimSpace(e.TraceWriteError) != "" {
+		parts = append(parts, fmt.Sprintf("trace_error=%s", e.TraceWriteError))
+	}
+	return strings.Join(parts, "; ")
+}
+
+func (e BeadsMigrationRequiredError) ErrorDetails() map[string]any {
+	remediationCommand := strings.TrimSpace(e.RemediationCommand)
+	if remediationCommand == "" {
+		remediationCommand = "lit migrate beads --apply --json"
+	}
+	details := map[string]any{
+		"reason":              "beads_residue_detected",
+		"summary":             strings.TrimSpace(e.Summary),
+		"blocked_command":     strings.TrimSpace(e.BlockedCommand),
+		"remediation_command": remediationCommand,
+		"trigger":             strings.TrimSpace(e.Trigger),
+	}
+	if strings.TrimSpace(e.TraceRef) != "" {
+		details["trace_ref"] = strings.TrimSpace(e.TraceRef)
+	}
+	if strings.TrimSpace(e.TraceWriteError) != "" {
+		details["trace_error"] = strings.TrimSpace(e.TraceWriteError)
+	}
+	return details
 }
 
 type migrateBeadsReport struct {

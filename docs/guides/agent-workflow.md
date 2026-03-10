@@ -22,6 +22,7 @@
 - hooks are installed once (`lit hooks install`)
 - remote names come from Git (`git remote -v`)
 - retries are attempted before escalating user-visible failures
+- automatic traces live under `traces_dir` from `lit workspace --json`; startup preflight and managed hooks both write there
 
 ## Machine-readable mode
 

@@ -126,7 +126,7 @@ func shouldBypassBeadsPreflight(args []string) bool {
 	}
 }
 
-func requireBeadsMigrationPreflight(ws workspace.Info) error {
+func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) error {
 	scan, err := scanBeadsResidue(ws)
 	if err != nil {
 		return err
@@ -134,5 +134,30 @@ func requireBeadsMigrationPreflight(ws workspace.Info) error {
 	if !scan.HasResidue() {
 		return nil
 	}
-	return BeadsMigrationRequiredError{Summary: scan.Summary()}
+	blockedCommand := formatLitCommand(commandArgs)
+	// [LAW:one-source-of-truth] Startup preflight reuses the shared automation trace record instead of inventing a second trace format.
+	traceRef, traceErr := recordAutomationTrace(ws, automationTraceRecord{
+		Trigger:    "startup-preflight",
+		Command:    blockedCommand,
+		SideEffect: "block non-init command execution until beads migration completes",
+		Status:     "blocked",
+		Reason:     "beads residue detected during startup preflight",
+		Metadata: map[string]string{
+			"blocked_command":     blockedCommand,
+			"remediation_command": "lit migrate beads --apply --json",
+			"residue_summary":     scan.Summary(),
+		},
+	})
+	preflightErr := BeadsMigrationRequiredError{
+		Summary:            scan.Summary(),
+		Trigger:            "startup-preflight",
+		BlockedCommand:     blockedCommand,
+		RemediationCommand: "lit migrate beads --apply --json",
+	}
+	if traceErr != nil {
+		preflightErr.TraceWriteError = traceErr.Error()
+		return preflightErr
+	}
+	preflightErr.TraceRef = traceRef.Path
+	return preflightErr
 }

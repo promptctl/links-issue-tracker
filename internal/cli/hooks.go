@@ -56,6 +56,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		"hook":         result.HookPath,
 		"legacy_chain": result.LegacyPath,
 		"changed":      result.Changed,
+		"traces_dir":   automationTraceDir(ws),
 	}
 	return printValue(stdout, payload, jsonOut, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
@@ -182,21 +183,30 @@ if [[ -z "${branches}" ]]; then
   fi
 fi
 
-sync_failed=0
 while read -r branch; do
   if [[ -z "${branch}" ]]; then
     continue
   fi
-  if ! lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
-    sync_failed=1
+  trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
+  if [[ -n "${trace_ref_file}" ]]; then
+    if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
+      LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
+      LIT_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
+      lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
+      trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
+      printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s branch=%s trace=%s); agent should retry lit sync push --remote %s --branch %s\033[0m\n' "${remote_name}" "${branch}" "${trace_ref:-unavailable}" "${remote_name}" "${branch}" >&2
+    fi
+    rm -f "${trace_ref_file}"
+    continue
+  fi
+  if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
+    LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
+    lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
+    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s branch=%s trace=%s); agent should retry lit sync push --remote %s --branch %s\033[0m\n' "${remote_name}" "${branch}" "unavailable" "${remote_name}" "${branch}" >&2
   fi
 done <<HOOK_BRANCHES
 ${branches}
 HOOK_BRANCHES
-
-if [[ "${sync_failed}" -ne 0 ]]; then
-  printf '\033[33m[links] warning: db sync failed; agent should auto-retry lit sync push --remote %s\033[0m\n' "${remote_name}" >&2
-fi
 
 exit 0
 # --- END LINKS INTEGRATION ---

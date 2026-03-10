@@ -54,4 +54,5 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 ## Push automation
 
 `lit hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
-The hook auto-runs `lit sync push` for pushed branches, never blocks the git push, and emits one yellow warning line if DB sync fails.
+The hook auto-runs `lit sync push` for pushed branches, never blocks the git push, and emits a warning that includes the trigger, remote, branch, retry command, and trace path if DB sync fails.
+Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace --json`.

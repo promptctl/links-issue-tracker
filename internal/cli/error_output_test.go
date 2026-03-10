@@ -193,3 +193,30 @@ func TestWriteCommandErrorStartupValidationJSON(t *testing.T) {
 		t.Fatalf("reason = %v, want unsupported_output_mode", errorPayload["reason"])
 	}
 }
+
+func TestBuildCommandErrorPayloadIncludesTypedDetails(t *testing.T) {
+	payload := buildCommandErrorPayload(BeadsMigrationRequiredError{
+		Summary:            "hooks=1",
+		Trigger:            "startup-preflight",
+		BlockedCommand:     "lit ls",
+		RemediationCommand: "lit migrate beads --apply --json",
+		TraceRef:           "/tmp/trace.json",
+		TraceWriteError:    "disk full",
+	})
+
+	if payload.Trigger != "startup-preflight" {
+		t.Fatalf("trigger = %q, want startup-preflight", payload.Trigger)
+	}
+	if payload.BlockedCommand != "lit ls" {
+		t.Fatalf("blocked_command = %q, want lit ls", payload.BlockedCommand)
+	}
+	if payload.TraceRef != "/tmp/trace.json" {
+		t.Fatalf("trace_ref = %q, want /tmp/trace.json", payload.TraceRef)
+	}
+	if payload.RemediationCommand != "lit migrate beads --apply --json" {
+		t.Fatalf("remediation_command = %q", payload.RemediationCommand)
+	}
+	if payload.TraceError != "disk full" {
+		t.Fatalf("trace_error = %q, want disk full", payload.TraceError)
+	}
+}

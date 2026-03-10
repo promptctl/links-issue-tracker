@@ -23,7 +23,8 @@ Before every `lit sync` command, `links` reconciles Dolt remotes from `git remot
 
 - attempts `lit sync push` for pushed branches
 - never blocks `git push`
-- emits one yellow warning line on sync failure
+- emits a yellow warning line with trigger, branch, retry command, and trace path on sync failure
+- writes inspectable automatic-action traces under `$(lit workspace --json | jq -r .traces_dir)`
 
 ## Failure model
 

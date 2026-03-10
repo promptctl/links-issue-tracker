@@ -35,8 +35,14 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, linksHookBeginMarker) || !strings.Contains(text, linksHookEndMarker) {
 		t.Fatalf("hook missing managed section markers: %q", text)
 	}
-	if !strings.Contains(text, "warning: db sync failed") {
+	if !strings.Contains(text, "hook-triggered lit sync push failed") {
 		t.Fatalf("hook missing warning output: %q", text)
+	}
+	if !strings.Contains(text, "LIT_AUTOMATION_TRIGGER=\"git-pre-push\"") {
+		t.Fatalf("hook missing automation trigger env: %q", text)
+	}
+	if !strings.Contains(text, "LIT_AUTOMATION_TRACE_REF_FILE") {
+		t.Fatalf("hook missing trace ref env: %q", text)
 	}
 	if !strings.Contains(text, "exit 0") {
 		t.Fatalf("hook must never block push: %q", text)
@@ -104,6 +110,9 @@ func TestRunHooksViaCLI(t *testing.T) {
 	}
 	if payload["status"] != "installed" {
 		t.Fatalf("status = %v, want installed", payload["status"])
+	}
+	if strings.TrimSpace(payload["traces_dir"].(string)) == "" {
+		t.Fatalf("traces_dir = %v, want non-empty", payload["traces_dir"])
 	}
 }
 
