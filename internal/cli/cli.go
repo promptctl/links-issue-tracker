@@ -37,6 +37,11 @@ var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found 
 
 const outputModeEnvVar = "LIT_OUTPUT"
 
+const (
+	commandLockRetryDelay = 50 * time.Millisecond
+	commandLockStaleAfter = 10 * time.Minute
+)
+
 type outputMode string
 
 const (
@@ -321,7 +326,25 @@ func runWithApp(ctx context.Context, commandArgs []string, run func(*app.App) er
 	if err != nil {
 		return err
 	}
-	ap, err := app.OpenFromWD(ctx)
+	cwd, err := os.Getwd()
+	if err != nil {
+		return fmt.Errorf("get cwd: %w", err)
+	}
+	ws, err := workspace.Resolve(cwd)
+	if err != nil {
+		if errors.Is(err, workspace.ErrNotGitRepo) {
+			return fmt.Errorf("links requires running inside a git repository/worktree")
+		}
+		return err
+	}
+	// [LAW:single-enforcer] CLI acquires a workspace command lock before opening app state so startup and mutation phases cannot overlap across commands.
+	releaseWorkspaceLock, err := acquireWorkspaceCommandLock(ctx, ws.DatabasePath)
+	if err != nil {
+		return err
+	}
+	defer releaseWorkspaceLock()
+
+	ap, err := app.Open(ctx, cwd)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return fmt.Errorf("links requires running inside a git repository/worktree")
@@ -329,6 +352,12 @@ func runWithApp(ctx context.Context, commandArgs []string, run func(*app.App) er
 		return err
 	}
 	defer ap.Close()
+	// [LAW:single-enforcer] Command-level workspace mutation lock is acquired once at CLI dispatch to prevent overlapping write phases.
+	ctx, releaseMutationLock, err := ap.Store.AcquireMutationLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseMutationLock()
 	return run(ap)
 }
 
@@ -404,7 +433,7 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 				return nil, "", parseErr
 			}
 			mode = parsedMode
-			index++
+			index += 2
 		default:
 			if strings.HasPrefix(args[index], "--output=") {
 				parsedMode, parseErr := parseOutputMode(strings.TrimPrefix(args[index], "--output="))
@@ -412,15 +441,18 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 					return nil, "", parseErr
 				}
 				mode = parsedMode
+				index++
 				continue
 			}
-			remaining = append(remaining, args[index])
+			goto done
 		}
 	}
+
+done:
 	if mode == outputModeAuto {
 		mode = detectOutputMode(stdout)
 	}
-	return remaining, mode, nil
+	return args[index:], mode, nil
 }
 
 func parseFlagSet(fs *flag.FlagSet, args []string, helpOutput io.Writer) error {
@@ -446,6 +478,75 @@ func modeFromEnv() (outputMode, error) {
 		return outputModeAuto, nil
 	}
 	return parseOutputMode(raw)
+}
+
+func acquireWorkspaceCommandLock(ctx context.Context, databasePath string) (func(), error) {
+	lockPath := filepath.Join(filepath.Clean(databasePath), ".links-command.lock")
+	for {
+		release, lockErr := tryAcquireCommandLockFile(lockPath)
+		if lockErr == nil {
+			return release, nil
+		}
+		if !errors.Is(lockErr, os.ErrExist) {
+			return nil, fmt.Errorf("acquire workspace command lock: %w", lockErr)
+		}
+		if staleErr := removeStaleCommandLockFile(lockPath, commandLockStaleAfter); staleErr != nil {
+			return nil, fmt.Errorf("acquire workspace command lock: %w", staleErr)
+		}
+		if waitErr := waitForCommandLock(ctx, commandLockRetryDelay); waitErr != nil {
+			return nil, waitErr
+		}
+	}
+}
+
+func tryAcquireCommandLockFile(lockPath string) (func(), error) {
+	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(lockPath)
+		return nil, closeErr
+	}
+	return func() {
+		_ = os.Remove(lockPath)
+	}, nil
+}
+
+func removeStaleCommandLockFile(lockPath string, staleAfter time.Duration) error {
+	info, err := os.Stat(lockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if time.Since(info.ModTime()) <= staleAfter {
+		return nil
+	}
+	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+func waitForCommandLock(ctx context.Context, delay time.Duration) error {
+	timer := time.NewTimer(delay)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func parseOutputMode(raw string) (outputMode, error) {

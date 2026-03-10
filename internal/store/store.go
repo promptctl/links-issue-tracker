@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	_ "github.com/dolthub/driver"
@@ -24,10 +25,26 @@ const (
 	doltDatabaseName = "links"
 )
 
+var ErrTransientManifestReadOnly = errors.New("transient manifest read-only")
+var processCommitMutex sync.Mutex
+
+const (
+	transientManifestRetryMaxAttempts = 12
+	transientManifestRetryBaseDelay   = 50 * time.Millisecond
+	transientManifestRetryMaxDelay    = 1 * time.Second
+	commitLockStaleAfter              = 10 * time.Minute
+)
+
 type Store struct {
-	db          *sql.DB
-	workspaceID string
+	db             *sql.DB
+	workspaceID    string
+	commitLockPath string
 }
+
+type retryOperation func(context.Context) error
+type retryDelayFunc func(attempt int) time.Duration
+type retrySleepFunc func(context.Context, time.Duration) error
+type commitLockContextKey struct{}
 
 type NotFoundError struct {
 	Entity string
@@ -177,8 +194,13 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 	if err != nil {
 		return nil, fmt.Errorf("open dolt: %w", err)
 	}
-	s := &Store{db: db, workspaceID: workspaceID}
-	if err := s.migrate(ctx); err != nil {
+	s := &Store{
+		db:             db,
+		workspaceID:    workspaceID,
+		commitLockPath: filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
+	}
+	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
+	if err := s.withCommitLock(ctx, s.migrate); err != nil {
 		_ = db.Close()
 		return nil, err
 	}
@@ -301,6 +323,11 @@ func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
 }
 
 func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin record sync state tx: %w", err)
@@ -324,6 +351,22 @@ func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
 }
 
 func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Issue, error) {
+	var issue model.Issue
+	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
+		created, createErr := s.createIssueOnce(ctx, in)
+		if createErr != nil {
+			return createErr
+		}
+		issue = created
+		return nil
+	}, transientManifestRetryDelay, waitWithContext)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	return issue, nil
+}
+
+func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, errors.New("title is required")
 	}
@@ -352,6 +395,11 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("begin create issue tx: %w", err)
@@ -645,6 +693,11 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if issue.ClosedAt != nil {
 		closedAt = issue.ClosedAt.Format(time.RFC3339Nano)
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("begin update issue tx: %w", err)
@@ -671,6 +724,22 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 }
 
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
+	var comment model.Comment
+	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
+		created, createErr := s.addCommentOnce(ctx, in)
+		if createErr != nil {
+			return createErr
+		}
+		comment = created
+		return nil
+	}, transientManifestRetryDelay, waitWithContext)
+	if err != nil {
+		return model.Comment{}, err
+	}
+	return comment, nil
+}
+
+func (s *Store) addCommentOnce(ctx context.Context, in AddCommentInput) (model.Comment, error) {
 	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
 		return model.Comment{}, err
 	}
@@ -683,6 +752,11 @@ func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comme
 	if comment.CreatedBy == "" {
 		comment.CreatedBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Comment{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Comment{}, fmt.Errorf("begin add comment tx: %w", err)
@@ -725,6 +799,11 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 	if rel.CreatedBy == "" {
 		rel.CreatedBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Relation{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("begin add relation tx: %w", err)
@@ -748,6 +827,11 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 		sort.Strings(ordered)
 		srcID, dstID = ordered[0], ordered[1]
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin remove relation tx: %w", err)
@@ -839,6 +923,11 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 
 func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 	if repair {
+		ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+		if err != nil {
+			return HealthReport{}, err
+		}
+		defer releaseCommitLock()
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return HealthReport{}, fmt.Errorf("begin fsck repair tx: %w", err)
@@ -885,6 +974,11 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	if in.ClosedAt != nil {
 		closedAt = in.ClosedAt.Format(time.RFC3339Nano)
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin import issue tx: %w", err)
@@ -947,6 +1041,11 @@ func (s *Store) ImportComment(ctx context.Context, in ImportComment) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin import comment tx: %w", err)
@@ -993,6 +1092,11 @@ func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin import relation tx: %w", err)
@@ -1028,6 +1132,11 @@ func (s *Store) ImportLabel(ctx context.Context, in ImportLabel) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin import label tx: %w", err)
@@ -1062,6 +1171,11 @@ func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin add label tx: %w", err)
@@ -1090,6 +1204,11 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 	if err != nil {
 		return nil, err
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin remove label tx: %w", err)
@@ -1120,6 +1239,11 @@ func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []stri
 	if err != nil {
 		return err
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin replace labels tx: %w", err)
@@ -1138,6 +1262,22 @@ func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []stri
 }
 
 func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
+	var issue model.Issue
+	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
+		transitioned, transitionErr := s.transitionIssueOnce(ctx, in)
+		if transitionErr != nil {
+			return transitionErr
+		}
+		issue = transitioned
+		return nil
+	}, transientManifestRetryDelay, waitWithContext)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	return issue, nil
+}
+
+func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
 	issue, err := s.GetIssue(ctx, in.IssueID)
 	if err != nil {
 		return model.Issue{}, err
@@ -1205,6 +1345,11 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", action)
 	}
 	issue.UpdatedAt = now
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("begin transition issue tx: %w", err)
@@ -1224,6 +1369,53 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		return model.Issue{}, err
 	}
 	return issue, nil
+}
+
+func retryTransientManifestReadOnly(ctx context.Context, operation retryOperation, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
+	var lastErr error
+	for attempt := 1; attempt <= transientManifestRetryMaxAttempts; attempt++ {
+		err := classifyTransientManifestError(operation(ctx))
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		if !errors.Is(err, ErrTransientManifestReadOnly) || attempt == transientManifestRetryMaxAttempts {
+			break
+		}
+		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
+			return waitErr
+		}
+	}
+	return lastErr
+}
+
+func transientManifestRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := transientManifestRetryBaseDelay << (attempt - 1)
+	if delay > transientManifestRetryMaxDelay {
+		delay = transientManifestRetryMaxDelay
+	}
+	return delay
+}
+
+func waitWithContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, relType string) ([]model.Relation, error) {
@@ -1260,6 +1452,11 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	if _, err := s.GetIssue(ctx, in.ParentID); err != nil {
 		return model.Relation{}, err
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Relation{}, err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return model.Relation{}, fmt.Errorf("begin set parent tx: %w", err)
@@ -1294,6 +1491,11 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	if _, err := s.GetIssue(ctx, childID); err != nil {
 		return err
 	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin clear parent tx: %w", err)
@@ -1361,6 +1563,11 @@ func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error
 }
 
 func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin replace from export tx: %w", err)
@@ -1866,8 +2073,18 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	if trimmed == "" {
 		trimmed = "links mutation"
 	}
+	// [LAW:single-enforcer] commitWorkingSet is the single mutation boundary that owns transient commit retry behavior.
+	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
+	return s.withCommitLock(ctx, func(ctx context.Context) error {
+		return retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
+			return s.commitWorkingSetOnce(ctx, trimmed)
+		}, transientManifestRetryDelay, waitWithContext)
+	})
+}
+
+func (s *Store) commitWorkingSetOnce(ctx context.Context, message string) error {
 	var commitHash string
-	err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?)`, trimmed).Scan(&commitHash)
+	err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?)`, message).Scan(&commitHash)
 	if err == nil {
 		return nil
 	}
@@ -1875,7 +2092,133 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	if strings.Contains(normalized, "nothing to commit") {
 		return nil
 	}
-	return fmt.Errorf("dolt commit working set: %w", err)
+	return wrapCommitWorkingSetError(err)
+}
+
+func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) error {
+	lockedCtx, release, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer release()
+	return operation(lockedCtx)
+}
+
+func (s *Store) AcquireMutationLock(ctx context.Context) (context.Context, func(), error) {
+	return s.acquireCommitLock(ctx)
+}
+
+func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(), error) {
+	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
+		return ctx, func() {}, nil
+	}
+
+	processCommitMutex.Lock()
+	locked, err := tryAcquireFileLock(s.commitLockPath)
+	for errors.Is(err, os.ErrExist) && !locked {
+		if staleErr := removeStaleCommitLock(s.commitLockPath, commitLockStaleAfter); staleErr != nil {
+			processCommitMutex.Unlock()
+			return ctx, nil, fmt.Errorf("acquire commit lock: %w", staleErr)
+		}
+		if waitErr := waitWithContext(ctx, transientManifestRetryBaseDelay); waitErr != nil {
+			processCommitMutex.Unlock()
+			return ctx, nil, waitErr
+		}
+		locked, err = tryAcquireFileLock(s.commitLockPath)
+	}
+	if err != nil {
+		processCommitMutex.Unlock()
+		return ctx, nil, fmt.Errorf("acquire commit lock: %w", err)
+	}
+	if !locked {
+		processCommitMutex.Unlock()
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctx, nil, ctxErr
+		}
+		return ctx, nil, errors.New("acquire commit lock: lock not acquired")
+	}
+
+	release := func() {
+		_ = os.Remove(s.commitLockPath)
+		processCommitMutex.Unlock()
+	}
+	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
+}
+
+func tryAcquireFileLock(path string) (bool, error) {
+	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return false, err
+	}
+	_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+	if closeErr := file.Close(); closeErr != nil {
+		_ = os.Remove(path)
+		return false, closeErr
+	}
+	return true, nil
+}
+
+func removeStaleCommitLock(path string, staleAfter time.Duration) error {
+	info, err := os.Stat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if time.Since(info.ModTime()) <= staleAfter {
+		return nil
+	}
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
+}
+
+type transientManifestReadOnlyError struct {
+	err error
+}
+
+func (e transientManifestReadOnlyError) Error() string {
+	return e.err.Error()
+}
+
+func (e transientManifestReadOnlyError) Unwrap() error {
+	return e.err
+}
+
+func (e transientManifestReadOnlyError) Is(target error) bool {
+	return target == ErrTransientManifestReadOnly
+}
+
+func wrapCommitWorkingSetError(err error) error {
+	wrapped := fmt.Errorf("dolt commit working set: %w", err)
+	if !isManifestReadOnlyCommitError(err) {
+		return wrapped
+	}
+	// [LAW:one-source-of-truth] Store commit wrapping is the canonical transient classifier for manifest read-only failures.
+	return transientManifestReadOnlyError{err: wrapped}
+}
+
+func classifyTransientManifestError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, ErrTransientManifestReadOnly) {
+		return err
+	}
+	if !isManifestReadOnlyCommitError(err) {
+		return err
+	}
+	return transientManifestReadOnlyError{err: err}
+}
+
+func isManifestReadOnlyCommitError(err error) bool {
+	if err == nil {
+		return false
+	}
+	normalized := strings.ToLower(err.Error())
+	return strings.Contains(normalized, "cannot update manifest") && strings.Contains(normalized, "read only")
 }
 
 func newIssueID(workspaceID string) string {
