@@ -37,7 +37,7 @@ lit sync remote ls --json
 ## 5. Pull/push issue state
 
 ```sh
-lit sync pull --remote origin --branch main
+lit sync pull --remote origin --json
 # ...make lit changes...
 lit sync push --remote origin --branch main
 ```

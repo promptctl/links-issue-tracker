@@ -77,6 +77,47 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	}
 }
 
+func TestDefaultRemoteBranchFromSymbolicRef(t *testing.T) {
+	branch := defaultRemoteBranchFromSymbolicRef("origin", "origin/main")
+	if branch != "main" {
+		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want main", branch)
+	}
+	if got := defaultRemoteBranchFromSymbolicRef("origin", "upstream/main"); got != "" {
+		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want empty", got)
+	}
+}
+
+func TestDefaultRemoteBranchFromLSRemote(t *testing.T) {
+	output := "ref: refs/heads/main\tHEAD\nc0ffee\tHEAD\n"
+	if got := defaultRemoteBranchFromLSRemote(output); got != "main" {
+		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want main", got)
+	}
+	if got := defaultRemoteBranchFromLSRemote("c0ffee\trefs/heads/main\n"); got != "" {
+		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want empty", got)
+	}
+}
+
+func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
+	repo := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "init")
+	run(t, repo, "git", "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+	run(t, repo, "git", "add", "README.md")
+	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	run(t, repo, "git", "init", "--bare", remote)
+	run(t, repo, "git", "remote", "add", "origin", remote)
+	run(t, repo, "git", "push", "-u", "origin", "main")
+	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	got := DefaultRemoteBranch(repo, "origin")
+	if got != "main" {
+		t.Fatalf("DefaultRemoteBranch() = %q, want main", got)
+	}
+}
+
 func run(t *testing.T, dir string, name string, args ...string) {
 	t.Helper()
 	cmd := exec.Command(name, args...)

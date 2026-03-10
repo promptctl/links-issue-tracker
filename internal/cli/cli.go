@@ -1377,19 +1377,19 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		fs := flag.NewFlagSet("sync pull", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		remote := fs.String("remote", "origin", "Remote name")
-		branch := fs.String("branch", "", "Branch name (defaults to current)")
+		branch := fs.String("branch", "", "Branch name (defaults to current, then remote default)")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
 		remoteName := strings.TrimSpace(*remote)
-		branchName := strings.TrimSpace(*branch)
-		commandArgs := []string{"pull", remoteName}
-		if branchName != "" {
-			commandArgs = append(commandArgs, branchName)
+		resolvedBranch, err := resolveSyncPullBranch(ctx, ws, remoteName, strings.TrimSpace(*branch))
+		if err != nil {
+			return err
 		}
+		commandArgs := buildSyncPullCommandArgs(remoteName, resolvedBranch)
 		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
-		payload, handledErr := buildSyncPullPayload(remoteName, branchName, output, err)
+		payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, output, err)
 		if handledErr != nil {
 			return handledErr
 		}
@@ -1504,6 +1504,55 @@ func syncPushBranchLookupArgs(requestedBranch string) []string {
 		return []string{}
 	}
 	return []string{"branch", "--show-current"}
+}
+
+func buildSyncPullCommandArgs(remote string, branch string) []string {
+	commandArgs := []string{"pull", remote}
+	normalizedBranch := strings.TrimSpace(branch)
+	if normalizedBranch == "" {
+		return commandArgs
+	}
+	return append(commandArgs, normalizedBranch)
+}
+
+func syncPullBranchLookupArgs(requestedBranch string) []string {
+	// [LAW:dataflow-not-control-flow] Sync pull always runs branch resolution; inputs choose passthrough vs lookup behavior.
+	if strings.TrimSpace(requestedBranch) != "" {
+		return []string{}
+	}
+	return []string{"branch", "--show-current"}
+}
+
+func resolveSyncPullBranch(ctx context.Context, ws workspace.Info, remote string, requestedBranch string) (string, error) {
+	lookupArgs := syncPullBranchLookupArgs(requestedBranch)
+	currentBranch := ""
+	if len(lookupArgs) > 0 {
+		output, err := doltcli.Run(ctx, ws.DoltRepoPath, lookupArgs...)
+		if err != nil {
+			return "", err
+		}
+		currentBranch = strings.TrimSpace(output)
+	}
+	defaultBranch := resolveSyncPullDefaultBranch(ws.RootDir, remote, requestedBranch, currentBranch)
+	// [LAW:one-source-of-truth] Pull branch selection is computed once from ordered candidates and reused by command execution and payload rendering.
+	return firstNonEmptySyncBranch(requestedBranch, currentBranch, defaultBranch), nil
+}
+
+func resolveSyncPullDefaultBranch(rootDir string, remote string, requestedBranch string, currentBranch string) string {
+	if strings.TrimSpace(requestedBranch) != "" || strings.TrimSpace(currentBranch) != "" {
+		return ""
+	}
+	return strings.TrimSpace(workspace.DefaultRemoteBranch(rootDir, remote))
+}
+
+func firstNonEmptySyncBranch(candidates ...string) string {
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func resolveSyncPushCurrentBranch(ctx context.Context, ws workspace.Info, requestedBranch string) (string, error) {
@@ -2124,7 +2173,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lit dep add <issue-id> <dependency-issue-id> --type related-to --json",
 			"git remote add origin https://github.com/org/repo.git",
 			"lit sync remote ls --json",
-			"lit sync pull --remote origin --branch main --json",
+			"lit sync pull --remote origin --json",
 			"lit sync push --remote origin --branch main --json",
 		},
 		"exit_codes": map[string]int{
@@ -2167,7 +2216,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   `git remote -v`",
 			"   `lit sync remote ls --json`",
 			"   `lit sync fetch --remote origin --json`",
-			"   `lit sync pull --remote origin --branch main --json`",
+			"   `lit sync pull --remote origin --json`",
 			"   `lit sync push --remote origin --branch main --json`",
 			"   If sync warning appears, agent should auto-retry silently before escalating.",
 			"",
@@ -2611,7 +2660,7 @@ Command Syntax:
   lit completion <bash|zsh|fish>
   lit workspace [--json]
   lit sync remote ls [--json]
-  lit sync pull --remote <name> --branch <name> [--json]
+  lit sync pull --remote <name> [--branch <name>] [--json]
   lit sync push --remote <name> --branch <name> [--set-upstream] [--force] [--json]
 
 Examples:

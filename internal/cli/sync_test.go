@@ -137,6 +137,67 @@ func TestSyncPushBranchLookupArgsWithoutRequestedBranch(t *testing.T) {
 	}
 }
 
+func TestBuildSyncPullCommandArgsWithoutBranchUsesDefaultPull(t *testing.T) {
+	got := buildSyncPullCommandArgs("origin", "")
+	want := []string{"pull", "origin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSyncPullCommandArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSyncPullCommandArgsWithBranchUsesExplicitBranch(t *testing.T) {
+	got := buildSyncPullCommandArgs("origin", "main")
+	want := []string{"pull", "origin", "main"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSyncPullCommandArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncPullBranchLookupArgsWithoutRequestedBranch(t *testing.T) {
+	got := syncPullBranchLookupArgs("")
+	want := []string{"branch", "--show-current"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("syncPullBranchLookupArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncPullBranchLookupArgsWithRequestedBranch(t *testing.T) {
+	got := syncPullBranchLookupArgs("release")
+	want := []string{}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("syncPullBranchLookupArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestResolveSyncPullDefaultBranchSkipsRemoteLookupWhenRequestedBranchSet(t *testing.T) {
+	got := resolveSyncPullDefaultBranch("", "origin", "main", "")
+	if got != "" {
+		t.Fatalf("resolveSyncPullDefaultBranch() = %q, want empty", got)
+	}
+}
+
+func TestResolveSyncPullDefaultBranchSkipsRemoteLookupWhenCurrentBranchSet(t *testing.T) {
+	got := resolveSyncPullDefaultBranch("", "origin", "", "feature/test")
+	if got != "" {
+		t.Fatalf("resolveSyncPullDefaultBranch() = %q, want empty", got)
+	}
+}
+
+func TestFirstNonEmptySyncBranchFollowsDeterministicPriority(t *testing.T) {
+	got := firstNonEmptySyncBranch("requested", "current", "default")
+	if got != "requested" {
+		t.Fatalf("firstNonEmptySyncBranch() = %q, want requested", got)
+	}
+	got = firstNonEmptySyncBranch("", "current", "default")
+	if got != "current" {
+		t.Fatalf("firstNonEmptySyncBranch() = %q, want current", got)
+	}
+	got = firstNonEmptySyncBranch("", "", "default")
+	if got != "default" {
+		t.Fatalf("firstNonEmptySyncBranch() = %q, want default", got)
+	}
+}
+
 func TestSyncPushBranchLookupArgsWithRequestedBranch(t *testing.T) {
 	got := syncPushBranchLookupArgs("codex/docs-change-intake-policy")
 	want := []string{"branch", "--show-current"}

@@ -62,7 +62,7 @@ lit label add <issue-id> <label> --json
 lit migrate beads --apply --json
 lit hooks install
 lit sync status --json
-lit sync pull --remote origin --branch main
+lit sync pull --remote origin --json
 lit sync push --remote origin --branch main
 ```
 

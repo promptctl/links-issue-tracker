@@ -25,14 +25,14 @@ lit hooks install
 git remote add origin https://github.com/<org>/<repo>.git
 lit sync remote ls --json
 lit sync fetch --remote origin
-lit sync pull --remote origin --branch main
+lit sync pull --remote origin --json
 ```
 
 ## Daily workflow
 
 ```sh
 lit sync status
-lit sync pull --remote origin --branch main
+lit sync pull --remote origin --json
 # ...work with lit commands...
 lit sync push --remote origin --branch main
 ```
