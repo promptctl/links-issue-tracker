@@ -15,6 +15,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"text/tabwriter"
 	"time"
 
@@ -41,6 +42,8 @@ const (
 	commandLockRetryDelay = 50 * time.Millisecond
 	commandLockStaleAfter = 10 * time.Minute
 )
+
+var commandLockPIDRunning = isCommandLockPIDRunning
 
 type outputMode string
 
@@ -605,7 +608,11 @@ func tryAcquireCommandLockFile(lockPath string) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
 	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(lockPath)
 		return nil, closeErr
@@ -623,13 +630,75 @@ func removeStaleCommandLockFile(lockPath string, staleAfter time.Duration) error
 	if err != nil {
 		return err
 	}
-	if time.Since(info.ModTime()) <= staleAfter {
+	isStaleByAge := time.Since(info.ModTime()) > staleAfter
+	isStaleByOwner, err := commandLockOwnedByDeadProcess(lockPath)
+	if err != nil {
+		return err
+	}
+	if !isStaleByAge && !isStaleByOwner {
 		return nil
 	}
 	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+func commandLockOwnedByDeadProcess(lockPath string) (bool, error) {
+	// [LAW:single-enforcer] Command-lock owner liveness classification is centralized here to avoid divergent stale-lock behavior.
+	pid, hasOwnerPID, err := readCommandLockOwnerPID(lockPath)
+	if err != nil {
+		return false, err
+	}
+	if !hasOwnerPID {
+		return false, nil
+	}
+	running, err := commandLockPIDRunning(pid)
+	if err != nil {
+		return false, err
+	}
+	return !running, nil
+}
+
+func readCommandLockOwnerPID(lockPath string) (int, bool, error) {
+	content, err := os.ReadFile(lockPath)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	pidText := strings.TrimSpace(string(content))
+	if pidText == "" {
+		return 0, false, nil
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return 0, false, nil
+	}
+	return pid, true, nil
+}
+
+func isCommandLockPIDRunning(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false, nil
+	}
+	err = process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	// Unknown probe errors are treated as running to avoid removing an active lock.
+	return true, nil
 }
 
 func waitForCommandLock(ctx context.Context, delay time.Duration) error {

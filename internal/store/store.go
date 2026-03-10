@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/dolthub/driver"
@@ -27,6 +29,7 @@ const (
 
 var ErrTransientManifestReadOnly = errors.New("transient manifest read-only")
 var processCommitMutex sync.Mutex
+var commitLockPIDRunning = isCommitLockPIDRunning
 
 const (
 	transientManifestRetryMaxAttempts = 12
@@ -2372,7 +2375,11 @@ func tryAcquireFileLock(path string) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
+	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return false, err
+	}
 	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(path)
 		return false, closeErr
@@ -2388,13 +2395,75 @@ func removeStaleCommitLock(path string, staleAfter time.Duration) error {
 	if err != nil {
 		return err
 	}
-	if time.Since(info.ModTime()) <= staleAfter {
+	isStaleByAge := time.Since(info.ModTime()) > staleAfter
+	isStaleByOwner, err := commitLockOwnedByDeadProcess(path)
+	if err != nil {
+		return err
+	}
+	if !isStaleByAge && !isStaleByOwner {
 		return nil
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+func commitLockOwnedByDeadProcess(path string) (bool, error) {
+	// [LAW:single-enforcer] Commit-lock owner liveness classification is centralized here to keep stale-lock handling deterministic.
+	pid, hasOwnerPID, err := readCommitLockOwnerPID(path)
+	if err != nil {
+		return false, err
+	}
+	if !hasOwnerPID {
+		return false, nil
+	}
+	running, err := commitLockPIDRunning(pid)
+	if err != nil {
+		return false, err
+	}
+	return !running, nil
+}
+
+func readCommitLockOwnerPID(path string) (int, bool, error) {
+	content, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, err
+	}
+	pidText := strings.TrimSpace(string(content))
+	if pidText == "" {
+		return 0, false, nil
+	}
+	pid, err := strconv.Atoi(pidText)
+	if err != nil || pid <= 0 {
+		return 0, false, nil
+	}
+	return pid, true, nil
+}
+
+func isCommitLockPIDRunning(pid int) (bool, error) {
+	if pid <= 0 {
+		return false, nil
+	}
+	process, err := os.FindProcess(pid)
+	if err != nil {
+		return false, nil
+	}
+	err = process.Signal(syscall.Signal(0))
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
+		return false, nil
+	}
+	if errors.Is(err, syscall.EPERM) {
+		return true, nil
+	}
+	// Unknown probe errors are treated as running to avoid removing an active lock.
+	return true, nil
 }
 
 type transientManifestReadOnlyError struct {
