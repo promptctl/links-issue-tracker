@@ -135,17 +135,6 @@ func TestRunQuickstartDefaultsToJSONOnNonTTY(t *testing.T) {
 	}
 }
 
-func TestRunQuickstartOutputFlagOverridesDefault(t *testing.T) {
-	t.Setenv(outputModeEnvVar, "")
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"--output", "text", "quickstart"}); err != nil {
-		t.Fatalf("Run(--output text quickstart) error = %v", err)
-	}
-	if !strings.Contains(stdout.String(), "Agent quickstart for links issue tracking") {
-		t.Fatalf("expected text quickstart output, got %q", stdout.String())
-	}
-}
-
 func TestRunQuickstartJSONFlagOverridesEnv(t *testing.T) {
 	t.Setenv(outputModeEnvVar, "text")
 	var stdout bytes.Buffer

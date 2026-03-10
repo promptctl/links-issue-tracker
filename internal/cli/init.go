@@ -28,7 +28,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {

@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,8 +98,12 @@ func TestRunHooksViaCLI(t *testing.T) {
 	if err := Run(context.Background(), &stdout, &stdout, []string{"hooks", "install", "--json"}); err != nil {
 		t.Fatalf("Run(hooks install --json) error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), `"status": "installed"`) {
-		t.Fatalf("unexpected hooks install output: %q", stdout.String())
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(hooks install output) error = %v", err)
+	}
+	if payload["status"] != "installed" {
+		t.Fatalf("status = %v, want installed", payload["status"])
 	}
 }
 

@@ -174,7 +174,7 @@ func runMigrateBeads(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs.SetOutput(io.Discard)
 	applyChanges := fs.Bool("apply", false, "Apply migration changes (default: dry-run)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
-	if err := fs.Parse(args); err != nil {
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
