@@ -47,6 +47,14 @@ func TestRunReadyReturnsOnlyOpenIssues(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(openB) error = %v", err)
 	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+		IssueID:   openB.ID,
+		Action:    "start",
+		Reason:    "claimed",
+		CreatedBy: "agent",
+	}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
 
 	closed, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:     "Already done",
@@ -75,12 +83,11 @@ func TestRunReadyReturnsOnlyOpenIssues(t *testing.T) {
 		t.Fatalf("json.Unmarshal(ready output) error = %v", err)
 	}
 
-	if len(got) != 2 {
-		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
+	if len(got) != 1 {
+		t.Fatalf("len(got) = %d, want 1; got=%#v", len(got), got)
 	}
 	want := map[string]struct{}{
 		openA.ID: {},
-		openB.ID: {},
 	}
 	for _, issue := range got {
 		if _, ok := want[issue.ID]; !ok {

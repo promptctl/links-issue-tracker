@@ -238,7 +238,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			closed_at VARCHAR(64) NULL,
 			archived_at VARCHAR(64) NULL,
 			deleted_at VARCHAR(64) NULL,
-			CHECK(status IN ('open','closed')),
+			CHECK(status IN ('open','in_progress','closed')),
 			CHECK(priority >= 0 AND priority <= 4),
 			CHECK(issue_type IN ('task','feature','bug','chore','epic'))
 		);`,
@@ -293,6 +293,9 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 	}
+	if err := s.ensureUnifiedStatusSchema(ctx); err != nil {
+		return err
+	}
 	if _, err := s.db.ExecContext(ctx,
 		`INSERT INTO meta(meta_key, meta_value) VALUES ('workspace_id', ?)
 		 ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`, s.workspaceID); err != nil {
@@ -306,6 +309,129 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	return nil
+}
+
+type issueCheckConstraint struct {
+	name   string
+	clause string
+}
+
+func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) error {
+	// [LAW:one-source-of-truth] `status` is the canonical workflow state; legacy split-state data is merged here.
+	hasLegacyWorkStatus, err := s.tableHasColumn(ctx, "issues", "work_status")
+	if err != nil {
+		return err
+	}
+	if hasLegacyWorkStatus {
+		if _, err := s.db.ExecContext(ctx, `UPDATE issues
+			SET status = CASE
+				WHEN work_status = 'done' THEN 'closed'
+				WHEN work_status = 'in-progress' AND status <> 'closed' THEN 'in_progress'
+				ELSE status
+			END`); err != nil {
+			return fmt.Errorf("merge legacy work_status into status: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'`); err != nil {
+		return fmt.Errorf("normalize legacy in-progress status: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'open' WHERE status = 'todo'`); err != nil {
+		return fmt.Errorf("normalize legacy todo status: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'closed' WHERE status = 'done'`); err != nil {
+		return fmt.Errorf("normalize legacy done status: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'open' WHERE status NOT IN ('open','in_progress','closed')`); err != nil {
+		return fmt.Errorf("normalize invalid status: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'closed' WHERE closed_at IS NOT NULL AND status <> 'closed'`); err != nil {
+		return fmt.Errorf("normalize closed_at status: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET closed_at = NULL WHERE status <> 'closed'`); err != nil {
+		return fmt.Errorf("normalize non-closed closed_at: %w", err)
+	}
+	if err := s.ensureStatusConstraint(ctx); err != nil {
+		return err
+	}
+	if hasLegacyWorkStatus {
+		if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues DROP COLUMN work_status`); err != nil {
+			return fmt.Errorf("drop legacy work_status column: %w", err)
+		}
+	}
+	return nil
+}
+
+func (s *Store) ensureStatusConstraint(ctx context.Context) error {
+	checks, err := s.listIssueStatusCheckConstraints(ctx)
+	if err != nil {
+		return err
+	}
+	if hasCanonicalStatusConstraint(checks) {
+		return nil
+	}
+	for _, constraint := range checks {
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE issues DROP CHECK `"+strings.ReplaceAll(constraint.name, "`", "``")+"`"); err != nil {
+			return fmt.Errorf("drop status check %s: %w", constraint.name, err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (status IN ('open','in_progress','closed'))`); err != nil {
+		return fmt.Errorf("add canonical status check: %w", err)
+	}
+	return nil
+}
+
+func (s *Store) listIssueStatusCheckConstraints(ctx context.Context) ([]issueCheckConstraint, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT tc.constraint_name, cc.check_clause
+		FROM information_schema.table_constraints tc
+		JOIN information_schema.check_constraints cc
+		  ON tc.constraint_schema = cc.constraint_schema
+		 AND tc.constraint_name = cc.constraint_name
+		WHERE tc.table_schema = DATABASE()
+		  AND tc.table_name = 'issues'
+		  AND tc.constraint_type = 'CHECK'`)
+	if err != nil {
+		return nil, fmt.Errorf("query issue check constraints: %w", err)
+	}
+	defer rows.Close()
+	out := []issueCheckConstraint{}
+	for rows.Next() {
+		var constraint issueCheckConstraint
+		if err := rows.Scan(&constraint.name, &constraint.clause); err != nil {
+			return nil, fmt.Errorf("scan issue check constraint: %w", err)
+		}
+		normalized := normalizeConstraintClause(constraint.clause)
+		if strings.Contains(normalized, "statusin(") {
+			out = append(out, constraint)
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate issue check constraints: %w", err)
+	}
+	return out, nil
+}
+
+func hasCanonicalStatusConstraint(constraints []issueCheckConstraint) bool {
+	if len(constraints) != 1 {
+		return false
+	}
+	return strings.Contains(normalizeConstraintClause(constraints[0].clause), "statusin('open','in_progress','closed')")
+}
+
+func normalizeConstraintClause(clause string) string {
+	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "`", "")
+	return strings.ToLower(replacer.Replace(clause))
+}
+
+func (s *Store) tableHasColumn(ctx context.Context, tableName string, columnName string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)
+		FROM information_schema.columns
+		WHERE table_schema = DATABASE()
+		  AND table_name = ?
+		  AND column_name = ?`, tableName, columnName).Scan(&count); err != nil {
+		return false, fmt.Errorf("query table column %s.%s: %w", tableName, columnName, err)
+	}
+	return count > 0, nil
 }
 
 func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
@@ -439,8 +565,12 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 		where = append(where, "i.deleted_at IS NULL")
 	}
 	if filter.Status != "" {
+		status, err := normalizeStatus(filter.Status)
+		if err != nil {
+			return nil, err
+		}
 		where = append(where, "i.status = ?")
-		args = append(args, filter.Status)
+		args = append(args, status)
 	}
 	if filter.IssueType != "" {
 		where = append(where, "i.issue_type = ?")
@@ -960,9 +1090,9 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	if err := validatePriority(in.Priority); err != nil {
 		return err
 	}
-	status := strings.TrimSpace(in.Status)
-	if status != "open" && status != "closed" {
-		return errors.New("status must be open or closed")
+	status, err := normalizeStatus(in.Status)
+	if err != nil {
+		return err
 	}
 	if strings.TrimSpace(in.ID) == "" {
 		return errors.New("issue id is required")
@@ -1291,6 +1421,12 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 	if actor == "" {
 		actor = "unknown"
 	}
+	switch action {
+	case "start":
+		return s.transitionStatusAtomic(ctx, issue, actor, reason, action, "open", "in_progress")
+	case "done":
+		return s.transitionStatusAtomic(ctx, issue, actor, reason, action, "in_progress", "closed")
+	}
 	now := time.Now().UTC()
 	fromStatus := issue.Status
 	toStatus := issue.Status
@@ -1311,6 +1447,9 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 		}
 		if issue.Status == "open" {
 			return model.Issue{}, errors.New("issue is already open")
+		}
+		if issue.Status != "closed" {
+			return model.Issue{}, errors.New("issue is not closed")
 		}
 		issue.Status = "open"
 		issue.ClosedAt = nil
@@ -1369,6 +1508,70 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 		return model.Issue{}, err
 	}
 	return issue, nil
+}
+
+func (s *Store) transitionStatusAtomic(ctx context.Context, issue model.Issue, actor string, reason string, action string, fromStatus string, toStatus string) (model.Issue, error) {
+	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
+		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
+	}
+	now := time.Now().UTC()
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	defer releaseCommitLock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return model.Issue{}, fmt.Errorf("begin transition issue tx: %w", err)
+	}
+	defer tx.Rollback()
+	var closedAt any
+	if toStatus == "closed" {
+		closedAt = now.Format(time.RFC3339Nano)
+	}
+	// [LAW:dataflow-not-control-flow] Claim/done transitions always execute one guarded write; contention is modeled by affected row count.
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
+		toStatus, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
+	if err != nil {
+		return model.Issue{}, fmt.Errorf("update issue status: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return model.Issue{}, fmt.Errorf("read status transition result: %w", err)
+	}
+	if affected == 0 {
+		currentStatus, lookupErr := currentStatusTx(ctx, tx, issue.ID)
+		if lookupErr != nil {
+			return model.Issue{}, lookupErr
+		}
+		return model.Issue{}, fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
+	}
+	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
+		return model.Issue{}, err
+	}
+	if err := tx.Commit(); err != nil {
+		return model.Issue{}, fmt.Errorf("commit transition issue: %w", err)
+	}
+	if err := s.commitWorkingSet(ctx, "transition issue"); err != nil {
+		return model.Issue{}, err
+	}
+	issue.Status = toStatus
+	issue.UpdatedAt = now
+	if toStatus == "closed" {
+		issue.ClosedAt = &now
+	}
+	return issue, nil
+}
+
+func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
+	var status string
+	if err := tx.QueryRowContext(ctx, `SELECT status FROM issues WHERE id = ?`, issueID).Scan(&status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return "", NotFoundError{Entity: "issue", ID: issueID}
+		}
+		return "", fmt.Errorf("read issue status: %w", err)
+	}
+	return status, nil
 }
 
 func retryTransientManifestReadOnly(ctx context.Context, operation retryOperation, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
@@ -1583,9 +1786,13 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 		if issue.ClosedAt != nil {
 			closedAt = issue.ClosedAt.Format(time.RFC3339Nano)
 		}
+		status, err := normalizeStatus(issue.Status)
+		if err != nil {
+			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.IssueType, issue.Assignee, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, issue.Assignee, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 	}
@@ -1988,6 +2195,21 @@ func validatePriority(priority int) error {
 		return errors.New("priority must be between 0 and 4")
 	}
 	return nil
+}
+
+func normalizeStatus(status string) (string, error) {
+	normalized := strings.TrimSpace(strings.ToLower(status))
+	if normalized == "in-progress" {
+		normalized = "in_progress"
+	}
+	switch normalized {
+	case "":
+		return "open", nil
+	case "open", "in_progress", "closed":
+		return normalized, nil
+	default:
+		return "", errors.New("status must be open, in_progress, or closed")
+	}
 }
 
 func canonicalizeLabels(labels []string) ([]string, error) {

@@ -168,6 +168,16 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runShow(ctx, stdout, ap, args)
 		})
 	})
+	addGroupedPassthrough(root, "operations", "start", "Claim issue work", func(args []string) error {
+		return runWithApp(ctx, append([]string{"start"}, args...), func(ap *app.App) error {
+			return runTransition(ctx, stdout, ap, args, "start")
+		})
+	})
+	addGroupedPassthrough(root, "operations", "done", "Mark claimed work complete", func(args []string) error {
+		return runWithApp(ctx, append([]string{"done"}, args...), func(ap *app.App) error {
+			return runTransition(ctx, stdout, ap, args, "done")
+		})
+	})
 	addGroupedPassthrough(root, "operations", "close", "Close issue(s)", func(args []string) error {
 		return runWithApp(ctx, append([]string{"close"}, args...), func(ap *app.App) error {
 			return runTransition(ctx, stdout, ap, args, "close")
@@ -598,7 +608,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	status := fs.String("status", "", "Filter by status")
+	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
 	issueType := fs.String("type", "", "Filter by issue type")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	priorityMin := fs.Int("priority-min", -1, "Minimum priority 0..4")
@@ -611,7 +621,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:open type:task priority<=2 has:comments text")
+	queryExpr := fs.String("query", "", "Query language: status:in_progress type:task priority<=2 has:comments text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. priority:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
@@ -1924,7 +1934,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"Discover workspace identity with `lit workspace --json`.",
 			"Migrate legacy Beads wiring explicitly with `lit migrate beads --apply --json` when needed.",
 			"Install git hook automation once with `lit hooks install`.",
-			"List ready work with `lit ready --json` (or `lit ls --format lines --json` for full views).",
+			"List ready work with `lit ready --json` (or `lit ls --query \"status:open\" --json`).",
 			"Create issues with `lit new ...`; use `--type epic` for epics.",
 			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
@@ -1937,6 +1947,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lit hooks install --json",
 			"lit workspace --json",
 			"lit ready --json",
+			"lit start <issue-id> --reason \"claim\" --json",
+			"lit done <issue-id> --reason \"completed\" --json",
 			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
 			"lit new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent --json",
 			"lit parent set <issue-id> <parent-issue-id> --json",
@@ -1969,6 +1981,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"",
 			"2) Find work",
 			"   `lit ready --json`",
+			"   `lit start <issue-id> --reason \"claim\" --json`",
 			"   `lit ls --format lines --json`",
 			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
 			"",
@@ -2382,6 +2395,8 @@ Issue Workflow:
   new            Create an issue
   ls             List issues with filters/query/sort
   show           Show issue details
+  start          Claim work (open -> in_progress)
+  done           Mark work complete (in_progress -> closed)
   close          Close issue(s)
   open           Reopen issue(s)
   archive        Archive issue(s)
@@ -2419,6 +2434,8 @@ Guidance & Tooling:
 Command Syntax:
   lit init [--json] [--skip-hooks] [--skip-agents]
   lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
+  lit start <id> --reason <text> [--by <user>] [--json]
+  lit done <id> --reason <text> [--by <user>] [--json]
   lit hooks install [--json]
   lit migrate beads [--apply] [--json]
   lit quickstart [--json]
@@ -2431,6 +2448,8 @@ Command Syntax:
 Examples:
   lit init --json
   lit ready --json
+  lit start <issue-id> --reason "claim" --json
+  lit done <issue-id> --reason "completed" --json
   lit new --title "Fix renderer race" --type bug --priority 1 --json
   lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc --json
 

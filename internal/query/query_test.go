@@ -5,11 +5,11 @@ import (
 )
 
 func TestParseBuildsFilterFromQueryExpression(t *testing.T) {
-	result, err := Parse(`status:open type:task assignee:bmf priority<=2 has:comments updated>=2026-03-07T10:00:00Z "render contract" id:issue-123 label:renderer`)
+	result, err := Parse(`status:in-progress type:task assignee:bmf priority<=2 has:comments updated>=2026-03-07T10:00:00Z "render contract" id:issue-123 label:renderer`)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if result.Filter.Status != "open" {
+	if result.Filter.Status != "in_progress" {
 		t.Fatalf("Status = %q", result.Filter.Status)
 	}
 	if result.Filter.IssueType != "task" {
@@ -49,5 +49,11 @@ func TestMergeRejectsConflictingScalarFilters(t *testing.T) {
 	}
 	if _, err := Merge(base.Filter, incoming.Filter); err == nil {
 		t.Fatal("expected conflict error")
+	}
+}
+
+func TestParseRejectsInvalidStatus(t *testing.T) {
+	if _, err := Parse(`status:todo`); err == nil {
+		t.Fatal("expected invalid status error")
 	}
 }
