@@ -104,3 +104,43 @@ func TestPrintSyncPullPayloadSkippedText(t *testing.T) {
 		t.Fatalf("missing retry command in text: %q", text)
 	}
 }
+
+func TestBuildSyncPushCommandArgsWithoutBranchUsesDefaultPush(t *testing.T) {
+	got := buildSyncPushCommandArgs("origin", "", "main", false, false)
+	want := []string{"push", "origin"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSyncPushCommandArgsBuildsCurrentToRequestedRefspec(t *testing.T) {
+	got := buildSyncPushCommandArgs("origin", "codex/docs-change-intake-policy", "main", true, false)
+	want := []string{"push", "-u", "origin", "main:codex/docs-change-intake-policy"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestBuildSyncPushCommandArgsFallsBackWhenCurrentBranchMissing(t *testing.T) {
+	got := buildSyncPushCommandArgs("origin", "feature/local-only", "", false, true)
+	want := []string{"push", "--force", "origin", "feature/local-only"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncPushBranchLookupArgsWithoutRequestedBranch(t *testing.T) {
+	got := syncPushBranchLookupArgs("")
+	want := []string{}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("syncPushBranchLookupArgs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestSyncPushBranchLookupArgsWithRequestedBranch(t *testing.T) {
+	got := syncPushBranchLookupArgs("codex/docs-change-intake-policy")
+	want := []string{"branch", "--show-current"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("syncPushBranchLookupArgs() = %#v, want %#v", got, want)
+	}
+}

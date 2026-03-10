@@ -1228,25 +1228,27 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
-		commandArgs := []string{"push"}
-		if *setUpstream {
-			commandArgs = append(commandArgs, "-u")
+		remoteName := strings.TrimSpace(*remote)
+		requestedBranch := strings.TrimSpace(*branch)
+		currentBranch, err := resolveSyncPushCurrentBranch(ctx, ws, requestedBranch)
+		if err != nil {
+			return err
 		}
-		if *force {
-			commandArgs = append(commandArgs, "--force")
-		}
-		commandArgs = append(commandArgs, strings.TrimSpace(*remote))
-		if strings.TrimSpace(*branch) != "" {
-			commandArgs = append(commandArgs, strings.TrimSpace(*branch))
-		}
+		commandArgs := buildSyncPushCommandArgs(
+			remoteName,
+			requestedBranch,
+			currentBranch,
+			*setUpstream,
+			*force,
+		)
 		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
 		if err != nil {
 			return err
 		}
 		payload := map[string]any{
 			"status": "ok",
-			"remote": strings.TrimSpace(*remote),
-			"branch": strings.TrimSpace(*branch),
+			"remote": remoteName,
+			"branch": requestedBranch,
 			"raw":    output,
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
@@ -1317,6 +1319,26 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	default:
 		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
+}
+
+func syncPushBranchLookupArgs(requestedBranch string) []string {
+	// [LAW:dataflow-not-control-flow] Sync push always runs this stage; branch data selects no-op vs lookup inputs.
+	if strings.TrimSpace(requestedBranch) == "" {
+		return []string{}
+	}
+	return []string{"branch", "--show-current"}
+}
+
+func resolveSyncPushCurrentBranch(ctx context.Context, ws workspace.Info, requestedBranch string) (string, error) {
+	lookupArgs := syncPushBranchLookupArgs(requestedBranch)
+	if len(lookupArgs) == 0 {
+		return "", nil
+	}
+	currentBranch, err := doltcli.Run(ctx, ws.DoltRepoPath, lookupArgs...)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(currentBranch), nil
 }
 
 func buildSyncPullPayload(remote string, requestedBranch string, output string, runErr error) (map[string]any, error) {
@@ -1398,6 +1420,26 @@ func printSyncPullPayload(w io.Writer, v any) error {
 		_, err := fmt.Fprintf(w, "pulled %s\n", remote)
 		return err
 	}
+}
+
+func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBranch string, setUpstream bool, force bool) []string {
+	// [LAW:one-source-of-truth] Push source always comes from the current Dolt branch; requested branch is a remote projection target.
+	commandArgs := []string{"push"}
+	if setUpstream {
+		commandArgs = append(commandArgs, "-u")
+	}
+	if force {
+		commandArgs = append(commandArgs, "--force")
+	}
+	commandArgs = append(commandArgs, remote)
+	if requestedBranch == "" {
+		return commandArgs
+	}
+	if currentBranch == "" {
+		return append(commandArgs, requestedBranch)
+	}
+	refspec := fmt.Sprintf("%s:%s", currentBranch, requestedBranch)
+	return append(commandArgs, refspec)
 }
 
 type remoteSyncChanges struct {
