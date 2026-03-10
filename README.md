@@ -19,6 +19,12 @@ Requirements:
 Install:
 
 ```sh
+./scripts/install.sh
+```
+
+Install from outside a checkout:
+
+```sh
 go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 

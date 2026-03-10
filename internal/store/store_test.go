@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
@@ -414,4 +416,50 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if len(closedIssues) != 1 || closedIssues[0].ID != issue.ID {
 		t.Fatalf("closedIssues = %#v", closedIssues)
 	}
+}
+
+func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() initial error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() initial error = %v", err)
+	}
+
+	repoPath := filepath.Join(doltRoot, "links")
+	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log before reopen error = %v", err)
+	}
+
+	st, err = Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() reopen error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() reopen error = %v", err)
+	}
+
+	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log after reopen error = %v", err)
+	}
+
+	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
+		t.Fatalf("startup reopen created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+}
+
+func countNonEmptyLines(input string) int {
+	count := 0
+	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
+		if strings.TrimSpace(line) != "" {
+			count++
+		}
+	}
+	return count
 }

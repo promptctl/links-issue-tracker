@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
 func TestRemoveStaleCommandLockFileRemovesDeadOwnerImmediately(t *testing.T) {
@@ -113,5 +115,50 @@ func TestAcquireWorkspaceCommandLockReclaimsDeadOwner(t *testing.T) {
 
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+}
+
+func TestRunWithWorkspaceBlocksOnWorkspaceCommandLock(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+
+	lockCtx, cancelLock := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancelLock()
+	release, err := acquireWorkspaceCommandLock(lockCtx, ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("acquireWorkspaceCommandLock() error = %v", err)
+	}
+	defer release()
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir(repo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	commandCtx, cancelCommand := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancelCommand()
+
+	called := false
+	err = runWithWorkspace(commandCtx, []string{"sync", "status"}, false, func(workspace.Info) error {
+		called = true
+		return nil
+	})
+	if err == nil {
+		t.Fatal("runWithWorkspace() error = nil, want lock wait failure")
+	}
+	if commandCtx.Err() == nil {
+		t.Fatalf("runWithWorkspace() error = %v, want context timeout", err)
+	}
+	if called {
+		t.Fatal("runWithWorkspace() entered command body while lock was held")
 	}
 }
