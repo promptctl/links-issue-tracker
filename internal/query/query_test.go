@@ -5,7 +5,7 @@ import (
 )
 
 func TestParseBuildsFilterFromQueryExpression(t *testing.T) {
-	result, err := Parse(`status:in-progress type:task assignee:bmf priority<=2 has:comments updated>=2026-03-07T10:00:00Z "render contract" id:issue-123 label:renderer`)
+	result, err := Parse(`status:in_progress type:task assignee:bmf priority<=2 has:comments updated>=2026-03-07T10:00:00Z "render contract" id:issue-123 label:renderer`)
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -49,6 +49,16 @@ func TestMergeRejectsConflictingScalarFilters(t *testing.T) {
 	}
 	if _, err := Merge(base.Filter, incoming.Filter); err == nil {
 		t.Fatal("expected conflict error")
+	}
+}
+
+func TestStatusAliasInProgressNormalizesToBeadsValue(t *testing.T) {
+	result, err := Parse(`status:in-progress`)
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if result.Filter.Status != "in_progress" {
+		t.Fatalf("Status = %q, want in_progress", result.Filter.Status)
 	}
 }
 

@@ -48,7 +48,7 @@ Create and inspect work:
 lit new --title "First task" --type task --priority 2 --json
 lit ready --json
 lit start <issue-id> --reason "claim" --json
-lit done <issue-id> --reason "implemented" --json
+lit done <issue-id> --reason "completed" --json
 lit ls --json
 lit show <issue-id> --json
 ```

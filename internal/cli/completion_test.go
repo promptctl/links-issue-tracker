@@ -4,9 +4,42 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
+func normalizeWhitespace(input string) string {
+	return strings.Join(strings.Fields(input), " ")
+}
+
+func TestCompletionScriptsRender(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		var stdout bytes.Buffer
+		if err := runCompletion(&stdout, []string{shell}); err != nil {
+			t.Fatalf("runCompletion(%q) error = %v", shell, err)
+		}
+		if !strings.Contains(stdout.String(), "lit") {
+			t.Fatalf("completion output for %q missing lit command name: %q", shell, stdout.String())
+		}
+	}
+}
+
+func TestRunHelpIncludesCompletion(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
+		t.Fatalf("Run(help) error = %v", err)
+	}
+	help := normalizeWhitespace(stdout.String())
+	if !strings.Contains(help, "completion Generate shell completion script") {
+		t.Fatalf("help output missing completion command: %q", help)
+	}
+	if !strings.Contains(help, "quickstart Agent quickstart workflow") {
+		t.Fatalf("help output missing quickstart command: %q", help)
+	}
+	if !strings.Contains(help, "ready List open work") {
+		t.Fatalf("help output missing ready command: %q", help)
+	}
+}
 func TestQuickstartOutputsStructuredJSON(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--json"}); err != nil {

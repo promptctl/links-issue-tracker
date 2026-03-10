@@ -320,21 +320,7 @@ type issueCheckConstraint struct {
 }
 
 func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) error {
-	// [LAW:one-source-of-truth] `status` is the canonical workflow state; legacy split-state data is merged here.
-	hasLegacyWorkStatus, err := s.tableHasColumn(ctx, "issues", "work_status")
-	if err != nil {
-		return err
-	}
-	if hasLegacyWorkStatus {
-		if _, err := s.db.ExecContext(ctx, `UPDATE issues
-			SET status = CASE
-				WHEN work_status = 'done' THEN 'closed'
-				WHEN work_status = 'in-progress' AND status <> 'closed' THEN 'in_progress'
-				ELSE status
-			END`); err != nil {
-			return fmt.Errorf("merge legacy work_status into status: %w", err)
-		}
-	}
+	// [LAW:one-source-of-truth] `status` is the canonical workflow state.
 	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'`); err != nil {
 		return fmt.Errorf("normalize legacy in-progress status: %w", err)
 	}
@@ -355,11 +341,6 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) error {
 	}
 	if err := s.ensureStatusConstraint(ctx); err != nil {
 		return err
-	}
-	if hasLegacyWorkStatus {
-		if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues DROP COLUMN work_status`); err != nil {
-			return fmt.Errorf("drop legacy work_status column: %w", err)
-		}
 	}
 	return nil
 }
@@ -424,19 +405,6 @@ func normalizeConstraintClause(clause string) string {
 	replacer := strings.NewReplacer(" ", "", "\t", "", "\n", "", "`", "")
 	return strings.ToLower(replacer.Replace(clause))
 }
-
-func (s *Store) tableHasColumn(ctx context.Context, tableName string, columnName string) (bool, error) {
-	var count int
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*)
-		FROM information_schema.columns
-		WHERE table_schema = DATABASE()
-		  AND table_name = ?
-		  AND column_name = ?`, tableName, columnName).Scan(&count); err != nil {
-		return false, fmt.Errorf("query table column %s.%s: %w", tableName, columnName, err)
-	}
-	return count > 0, nil
-}
-
 func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
 	state := SyncState{}
 	var err error
@@ -1623,7 +1591,6 @@ func waitWithContext(ctx context.Context, duration time.Duration) error {
 		return nil
 	}
 }
-
 func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, relType string) ([]model.Relation, error) {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
 		return nil, err
@@ -2200,19 +2167,30 @@ func validatePriority(priority int) error {
 	return nil
 }
 
-func normalizeStatus(status string) (string, error) {
+func NormalizeStatusToken(status string) (string, error) {
 	normalized := strings.TrimSpace(strings.ToLower(status))
 	if normalized == "in-progress" {
 		normalized = "in_progress"
 	}
 	switch normalized {
-	case "":
-		return "open", nil
 	case "open", "in_progress", "closed":
 		return normalized, nil
+	case "":
+		return "", nil
 	default:
 		return "", errors.New("status must be open, in_progress, or closed")
 	}
+}
+
+func normalizeStatus(status string) (string, error) {
+	normalized, err := NormalizeStatusToken(status)
+	if err != nil {
+		return "", err
+	}
+	if normalized == "" {
+		return "open", nil
+	}
+	return normalized, nil
 }
 
 func canonicalizeLabels(labels []string) ([]string, error) {
@@ -2285,7 +2263,7 @@ func buildDoltDSN(doltRootDir, workspaceID string, includeDatabase bool) string 
 func execIgnoreAlreadyExists(ctx context.Context, db *sql.DB, stmt string) error {
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		normalized := strings.ToLower(err.Error())
-		if strings.Contains(normalized, "already exists") {
+		if strings.Contains(normalized, "already exists") || strings.Contains(normalized, "duplicate column") || strings.Contains(normalized, "duplicate key name") {
 			return nil
 		}
 		return fmt.Errorf("migrate schema: %w", err)

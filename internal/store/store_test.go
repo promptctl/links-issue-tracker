@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"encoding/json"
 	"path/filepath"
 	"testing"
@@ -357,7 +356,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	}
 	defer st.Close()
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Claimable task", IssueType: "task", Priority: 1})
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Claim me", IssueType: "task", Priority: 2})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -414,64 +413,5 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	}
 	if len(closedIssues) != 1 || closedIssues[0].ID != issue.ID {
 		t.Fatalf("closedIssues = %#v", closedIssues)
-	}
-}
-
-func TestMigrateDropsLegacyWorkStatusColumn(t *testing.T) {
-	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
-
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Legacy state issue", IssueType: "task", Priority: 1})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close() error = %v", err)
-	}
-
-	db, err := sql.Open(doltDriverName, buildDoltDSN(doltRoot, "test-workspace-id", true))
-	if err != nil {
-		t.Fatalf("sql.Open() error = %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `ALTER TABLE issues ADD COLUMN work_status VARCHAR(32) NOT NULL DEFAULT 'todo'`); err != nil {
-		_ = db.Close()
-		t.Fatalf("ALTER TABLE add work_status error = %v", err)
-	}
-	if _, err := db.ExecContext(ctx, `UPDATE issues SET work_status = 'in-progress' WHERE id = ?`, issue.ID); err != nil {
-		_ = db.Close()
-		t.Fatalf("UPDATE legacy work_status error = %v", err)
-	}
-	if err := db.Close(); err != nil {
-		t.Fatalf("legacy db close error = %v", err)
-	}
-
-	st, err = Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() after legacy column error = %v", err)
-	}
-	defer st.Close()
-
-	migrated, err := st.GetIssue(ctx, issue.ID)
-	if err != nil {
-		t.Fatalf("GetIssue() error = %v", err)
-	}
-	if migrated.Status != "in_progress" {
-		t.Fatalf("migrated.Status = %q, want in_progress", migrated.Status)
-	}
-
-	var columnCount int
-	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*)
-		FROM information_schema.columns
-		WHERE table_schema = DATABASE()
-		  AND table_name = 'issues'
-		  AND column_name = 'work_status'`).Scan(&columnCount); err != nil {
-		t.Fatalf("query work_status column count error = %v", err)
-	}
-	if columnCount != 0 {
-		t.Fatalf("work_status column still exists (count=%d)", columnCount)
 	}
 }
