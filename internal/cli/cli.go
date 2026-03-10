@@ -63,7 +63,6 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	}
 	args = normalizedArgs
 	stdout = outputModeWriter{Writer: stdout, mode: resolvedOutputMode}
-
 	if len(args) == 0 {
 		printUsage(stderr)
 		return nil
@@ -218,11 +217,26 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 	}
 	index := 0
 	for index < len(args) {
-		switch args[index] {
-		case "--json":
+		switch {
+		case args[index] == "--":
+			index++
+			goto done
+		case args[index] == "--json":
 			mode = outputModeJSON
 			index++
-		case "--output":
+		case strings.HasPrefix(args[index], "--json="):
+			jsonValue := strings.TrimSpace(strings.TrimPrefix(args[index], "--json="))
+			parsed, parseErr := strconv.ParseBool(jsonValue)
+			if parseErr != nil {
+				return nil, "", fmt.Errorf("invalid --json value %q (expected true|false)", jsonValue)
+			}
+			if parsed {
+				mode = outputModeJSON
+			} else {
+				mode = outputModeText
+			}
+			index++
+		case args[index] == "--output":
 			if index+1 >= len(args) {
 				return nil, "", errors.New("usage: lit [--output auto|text|json] [--json] [command]")
 			}
@@ -2029,6 +2043,12 @@ func printUsage(w io.Writer) {
 	fmt.Fprint(w, `links / lit
 
 Worktree-native issue tracker with Dolt-backed sync.
+
+Output:
+  --output auto|json|text     Output mode for commands that support structured output.
+  --json                      Shorthand for --output json.
+  Precedence: --output > --json > LIT_OUTPUT > auto
+  Auto behavior: TTY -> text, non-TTY -> json
 
 Usage:
   lit [--output auto|text|json] [--json] [command]
