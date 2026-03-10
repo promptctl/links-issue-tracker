@@ -27,6 +27,13 @@ Output mode defaults to `auto`:
 - non-TTY sessions emit JSON
 - `--json` remains an explicit JSON shorthand for script compatibility
 - `--output auto|text|json` and `LIT_OUTPUT` control overrides
+- failure output in JSON mode uses a stable envelope:
+  - `error.code` (`usage|validation|not_found|conflict|corruption|generic`)
+  - `error.reason`
+  - `error.remediation`
+  - `error.trace_ref`
+  - `error.exit_code`
+  - `error.message`
 
 Initialize in your repo (auto-migrates Beads residue and installs defaults):
 
