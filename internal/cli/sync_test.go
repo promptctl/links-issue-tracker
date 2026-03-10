@@ -121,9 +121,9 @@ func TestBuildSyncPushCommandArgsBuildsCurrentToRequestedRefspec(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPushCommandArgsFallsBackWhenCurrentBranchMissing(t *testing.T) {
+func TestBuildSyncPushCommandArgsUsesHeadWhenCurrentBranchMissing(t *testing.T) {
 	got := buildSyncPushCommandArgs("origin", "feature/local-only", "", false, true)
-	want := []string{"push", "--force", "origin", "feature/local-only"}
+	want := []string{"push", "--force", "origin", "HEAD:feature/local-only"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
 	}

@@ -1445,10 +1445,12 @@ func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBran
 	if requestedBranch == "" {
 		return commandArgs
 	}
-	if currentBranch == "" {
-		return append(commandArgs, requestedBranch)
+	sourceRef := strings.TrimSpace(currentBranch)
+	if sourceRef == "" {
+		// [LAW:dataflow-not-control-flow] Empty branch-name output maps to a deterministic source ref (`HEAD`) instead of changing push stage behavior.
+		sourceRef = "HEAD"
 	}
-	refspec := fmt.Sprintf("%s:%s", currentBranch, requestedBranch)
+	refspec := fmt.Sprintf("%s:%s", sourceRef, requestedBranch)
 	return append(commandArgs, refspec)
 }
 
