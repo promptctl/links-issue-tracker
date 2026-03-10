@@ -223,6 +223,7 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 func (s *Store) Close() error { return s.db.Close() }
 
 func (s *Store) migrate(ctx context.Context) error {
+	changed := false
 	schema := []string{
 		`CREATE TABLE meta (
 			meta_key VARCHAR(191) PRIMARY KEY,
@@ -292,22 +293,31 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE INDEX idx_issue_history_issue_created ON issue_history(issue_id, created_at);`,
 	}
 	for _, stmt := range schema {
-		if err := execIgnoreAlreadyExists(ctx, s.db, stmt); err != nil {
+		stmtChanged, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
+		if err != nil {
 			return err
 		}
+		changed = changed || stmtChanged
 	}
-	if err := s.ensureUnifiedStatusSchema(ctx); err != nil {
+	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
+	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT INTO meta(meta_key, meta_value) VALUES ('workspace_id', ?)
-		 ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`, s.workspaceID); err != nil {
-		return fmt.Errorf("store workspace_id: %w", err)
+	changed = changed || statusChanged
+	workspaceChanged, err := s.ensureMetaValue(ctx, "workspace_id", s.workspaceID)
+	if err != nil {
+		return err
 	}
-	if _, err := s.db.ExecContext(ctx,
-		`INSERT IGNORE INTO meta(meta_key, meta_value) VALUES ('schema_version', '1')`); err != nil {
-		return fmt.Errorf("store schema_version: %w", err)
+	changed = changed || workspaceChanged
+	schemaVersionChanged, err := s.ensureMetaValue(ctx, "schema_version", "1")
+	if err != nil {
+		return err
 	}
+	changed = changed || schemaVersionChanged
+	if !changed {
+		return nil
+	}
+	// [LAW:dataflow-not-control-flow] Startup migration always runs the same reconciliation stages; only the derived `changed` value selects commit input.
 	if err := s.commitWorkingSet(ctx, "Initialize links schema"); err != nil {
 		return err
 	}
@@ -319,49 +329,77 @@ type issueCheckConstraint struct {
 	clause string
 }
 
-func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) error {
+func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
 	// [LAW:one-source-of-truth] `status` is the canonical workflow state.
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'`); err != nil {
-		return fmt.Errorf("normalize legacy in-progress status: %w", err)
+	changed := false
+	legacyStatusUpdates := []struct {
+		probe   string
+		stmt    string
+		context string
+	}{
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE status = 'in-progress'`,
+			stmt:    `UPDATE issues SET status = 'in_progress' WHERE status = 'in-progress'`,
+			context: "normalize legacy in-progress status",
+		},
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE status = 'todo'`,
+			stmt:    `UPDATE issues SET status = 'open' WHERE status = 'todo'`,
+			context: "normalize legacy todo status",
+		},
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE status = 'done'`,
+			stmt:    `UPDATE issues SET status = 'closed' WHERE status = 'done'`,
+			context: "normalize legacy done status",
+		},
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE status NOT IN ('open','in_progress','closed')`,
+			stmt:    `UPDATE issues SET status = 'open' WHERE status NOT IN ('open','in_progress','closed')`,
+			context: "normalize invalid status",
+		},
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE closed_at IS NOT NULL AND status <> 'closed'`,
+			stmt:    `UPDATE issues SET status = 'closed' WHERE closed_at IS NOT NULL AND status <> 'closed'`,
+			context: "normalize closed_at status",
+		},
+		{
+			probe:   `SELECT COUNT(*) FROM issues WHERE status <> 'closed' AND closed_at IS NOT NULL`,
+			stmt:    `UPDATE issues SET closed_at = NULL WHERE status <> 'closed'`,
+			context: "normalize non-closed closed_at",
+		},
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'open' WHERE status = 'todo'`); err != nil {
-		return fmt.Errorf("normalize legacy todo status: %w", err)
+	for _, update := range legacyStatusUpdates {
+		updateChanged, err := s.execReconciliationUpdate(ctx, update.probe, update.stmt, update.context)
+		if err != nil {
+			return false, err
+		}
+		changed = changed || updateChanged
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'closed' WHERE status = 'done'`); err != nil {
-		return fmt.Errorf("normalize legacy done status: %w", err)
+	constraintChanged, err := s.ensureStatusConstraint(ctx)
+	if err != nil {
+		return false, err
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'open' WHERE status NOT IN ('open','in_progress','closed')`); err != nil {
-		return fmt.Errorf("normalize invalid status: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET status = 'closed' WHERE closed_at IS NOT NULL AND status <> 'closed'`); err != nil {
-		return fmt.Errorf("normalize closed_at status: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE issues SET closed_at = NULL WHERE status <> 'closed'`); err != nil {
-		return fmt.Errorf("normalize non-closed closed_at: %w", err)
-	}
-	if err := s.ensureStatusConstraint(ctx); err != nil {
-		return err
-	}
-	return nil
+	changed = changed || constraintChanged
+	return changed, nil
 }
 
-func (s *Store) ensureStatusConstraint(ctx context.Context) error {
+func (s *Store) ensureStatusConstraint(ctx context.Context) (bool, error) {
 	checks, err := s.listIssueStatusCheckConstraints(ctx)
 	if err != nil {
-		return err
+		return false, err
 	}
 	if hasCanonicalStatusConstraint(checks) {
-		return nil
+		return false, nil
 	}
 	for _, constraint := range checks {
 		if _, err := s.db.ExecContext(ctx, "ALTER TABLE issues DROP CHECK `"+strings.ReplaceAll(constraint.name, "`", "``")+"`"); err != nil {
-			return fmt.Errorf("drop status check %s: %w", constraint.name, err)
+			return false, fmt.Errorf("drop status check %s: %w", constraint.name, err)
 		}
 	}
 	if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (status IN ('open','in_progress','closed'))`); err != nil {
-		return fmt.Errorf("add canonical status check: %w", err)
+		return false, fmt.Errorf("add canonical status check: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Store) listIssueStatusCheckConstraints(ctx context.Context) ([]issueCheckConstraint, error) {
@@ -1853,6 +1891,35 @@ func (s *Store) setMeta(ctx context.Context, tx *sql.Tx, key, value string) erro
 	}
 	return nil
 }
+
+func (s *Store) ensureMetaValue(ctx context.Context, key, value string) (bool, error) {
+	current, err := s.getMeta(ctx, nil, key)
+	if err != nil {
+		return false, err
+	}
+	if current == value {
+		return false, nil
+	}
+	if err := s.setMeta(ctx, nil, key, value); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) execReconciliationUpdate(ctx context.Context, probe string, stmt string, contextLabel string) (bool, error) {
+	var count int
+	if err := s.db.QueryRowContext(ctx, probe).Scan(&count); err != nil {
+		return false, fmt.Errorf("%s: probe rows: %w", contextLabel, err)
+	}
+	if count == 0 {
+		return false, nil
+	}
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		return false, fmt.Errorf("%s: %w", contextLabel, err)
+	}
+	return true, nil
+}
+
 func buildIssueOrderClause(specs []SortSpec) (string, error) {
 	if len(specs) == 0 {
 		return "i.status ASC, i.priority ASC, i.updated_at DESC, i.id ASC", nil
@@ -2260,15 +2327,15 @@ func buildDoltDSN(doltRootDir, workspaceID string, includeDatabase bool) string 
 	return "file://" + filepath.ToSlash(filepath.Clean(doltRootDir)) + "?" + query.Encode()
 }
 
-func execIgnoreAlreadyExists(ctx context.Context, db *sql.DB, stmt string) error {
+func execIgnoreAlreadyExists(ctx context.Context, db *sql.DB, stmt string) (bool, error) {
 	if _, err := db.ExecContext(ctx, stmt); err != nil {
 		normalized := strings.ToLower(err.Error())
 		if strings.Contains(normalized, "already exists") || strings.Contains(normalized, "duplicate column") || strings.Contains(normalized, "duplicate key name") {
-			return nil
+			return false, nil
 		}
-		return fmt.Errorf("migrate schema: %w", err)
+		return false, fmt.Errorf("migrate schema: %w", err)
 	}
-	return nil
+	return true, nil
 }
 
 func (s *Store) commitWorkingSet(ctx context.Context, message string) error {

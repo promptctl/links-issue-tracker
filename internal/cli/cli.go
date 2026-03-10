@@ -271,8 +271,8 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		})
 	})
 	addGroupedPassthrough(root, "maintenance", "workspace", "Show workspace metadata", func(args []string) error {
-		return runWithApp(ctx, append([]string{"workspace"}, args...), func(_ context.Context, ap *app.App) error {
-			return runWorkspace(stdout, ap, args)
+		return runWithWorkspace(ctx, append([]string{"workspace"}, args...), false, func(ws workspace.Info) error {
+			return runWorkspace(stdout, ws, args)
 		})
 	})
 	addGroupedPassthrough(root, "maintenance", "doctor", "Health check", func(args []string) error {
@@ -410,15 +410,17 @@ func runWithWorkspace(ctx context.Context, commandArgs []string, requireDoltRead
 			return err
 		}
 	}
-	if requireDoltReady {
-		if _, err := doltcli.RequireMinimumVersion(ctx, ws.RootDir, doltcli.MinSupportedVersion); err != nil {
-			return err
+	return withWorkspaceCommandLock(ctx, ws, func() error {
+		if requireDoltReady {
+			if _, err := doltcli.RequireMinimumVersion(ctx, ws.RootDir, doltcli.MinSupportedVersion); err != nil {
+				return err
+			}
+			if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
+				return err
+			}
 		}
-		if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
-			return err
-		}
-	}
-	return run(ws)
+		return run(ws)
+	})
 }
 
 func runWithApp(ctx context.Context, commandArgs []string, run func(context.Context, *app.App) error) error {
@@ -437,28 +439,33 @@ func runWithApp(ctx context.Context, commandArgs []string, run func(context.Cont
 		}
 		return err
 	}
-	// [LAW:single-enforcer] CLI acquires a workspace command lock before opening app state so startup and mutation phases cannot overlap across commands.
+	return withWorkspaceCommandLock(ctx, ws, func() error {
+		ap, err := app.Open(ctx, cwd)
+		if err != nil {
+			if errors.Is(err, workspace.ErrNotGitRepo) {
+				return fmt.Errorf("links requires running inside a git repository/worktree")
+			}
+			return err
+		}
+		defer ap.Close()
+		// [LAW:single-enforcer] Command-level workspace mutation lock is acquired once at CLI dispatch to prevent overlapping write phases.
+		ctx, releaseMutationLock, err := ap.Store.AcquireMutationLock(ctx)
+		if err != nil {
+			return err
+		}
+		defer releaseMutationLock()
+		return run(ctx, ap)
+	})
+}
+
+func withWorkspaceCommandLock(ctx context.Context, ws workspace.Info, run func() error) error {
+	// [LAW:single-enforcer] The CLI workspace command lock is the single cross-command gate for access to the shared clone database.
 	releaseWorkspaceLock, err := acquireWorkspaceCommandLock(ctx, ws.DatabasePath)
 	if err != nil {
 		return err
 	}
 	defer releaseWorkspaceLock()
-
-	ap, err := app.Open(ctx, cwd)
-	if err != nil {
-		if errors.Is(err, workspace.ErrNotGitRepo) {
-			return fmt.Errorf("links requires running inside a git repository/worktree")
-		}
-		return err
-	}
-	defer ap.Close()
-	// [LAW:single-enforcer] Command-level workspace mutation lock is acquired once at CLI dispatch to prevent overlapping write phases.
-	ctx, releaseMutationLock, err := ap.Store.AcquireMutationLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseMutationLock()
-	return run(ctx, ap)
+	return run()
 }
 
 func enforceBeadsPreflight(commandArgs []string) (workspace.Info, bool, error) {
@@ -1268,7 +1275,7 @@ func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	}
 }
 
-func runWorkspace(stdout io.Writer, ap *app.App, args []string) error {
+func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := flag.NewFlagSet("workspace", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -1276,11 +1283,11 @@ func runWorkspace(stdout io.Writer, ap *app.App, args []string) error {
 		return err
 	}
 	payload := map[string]string{
-		"workspace_id":   ap.Workspace.WorkspaceID,
-		"git_common_dir": ap.Workspace.GitCommonDir,
-		"storage_dir":    ap.Workspace.StorageDir,
-		"database_path":  ap.Workspace.DatabasePath,
-		"dolt_repo_path": ap.Workspace.DoltRepoPath,
+		"workspace_id":   ws.WorkspaceID,
+		"git_common_dir": ws.GitCommonDir,
+		"storage_dir":    ws.StorageDir,
+		"database_path":  ws.DatabasePath,
+		"dolt_repo_path": ws.DoltRepoPath,
 	}
 	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, payload)
