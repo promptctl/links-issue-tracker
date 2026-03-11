@@ -149,6 +149,8 @@ func commandErrorReason(err error) string {
 		return "unsupported_output_mode"
 	case strings.Contains(message, "cannot update manifest") && strings.Contains(message, "read only"):
 		return "manifest_read_only"
+	case strings.Contains(message, "no upstream branch"):
+		return "missing_upstream_branch"
 	case strings.Contains(message, "requires running inside a git repository"):
 		return "outside_git_workspace"
 	default:
@@ -176,6 +178,8 @@ func commandErrorRemediation(reason string) string {
 		return "Run `lit fsck --repair --json` and retry."
 	case "manifest_read_only":
 		return "Retry once. If the error persists, run `lit doctor --json` and `lit fsck --repair --json`."
+	case "missing_upstream_branch":
+		return "Run `lit sync push --set-upstream --json` to establish upstream tracking, then retry."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	default:

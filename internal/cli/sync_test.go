@@ -263,6 +263,77 @@ func TestBuildSyncPushCommandArgsForceUsesSyncBranchRefspec(t *testing.T) {
 	}
 }
 
+func TestRunSyncPushWithUpstreamRecoveryRetriesMissingUpstreamBranch(t *testing.T) {
+	calls := make([][]string, 0, 2)
+	runner := func(_ context.Context, _ string, args ...string) (string, error) {
+		calls = append(calls, append([]string(nil), args...))
+		if len(calls) == 1 {
+			return "", errors.New("dolt push origin HEAD:main: fatal: The current branch main has no upstream branch")
+		}
+		return "Everything up-to-date", nil
+	}
+
+	result := runSyncPushWithUpstreamRecovery(
+		context.Background(),
+		"/tmp/dolt-repo",
+		"origin",
+		"main",
+		false,
+		false,
+		runner,
+	)
+
+	if result.err != nil {
+		t.Fatalf("runSyncPushWithUpstreamRecovery() error = %v, want nil", result.err)
+	}
+	if !result.recoveredUpstream {
+		t.Fatal("runSyncPushWithUpstreamRecovery() should report recoveredUpstream=true")
+	}
+	if !result.setUpstream {
+		t.Fatal("runSyncPushWithUpstreamRecovery() should set setUpstream=true after recovery")
+	}
+	if !reflect.DeepEqual(result.commandArgs, []string{"push", "-u", "origin", "HEAD:main"}) {
+		t.Fatalf("commandArgs = %#v, want upstream-enabled push args", result.commandArgs)
+	}
+	if len(calls) != 2 {
+		t.Fatalf("run call count = %d, want 2", len(calls))
+	}
+	if !reflect.DeepEqual(calls[0], []string{"push", "origin", "HEAD:main"}) {
+		t.Fatalf("first call args = %#v, want plain push args", calls[0])
+	}
+	if !reflect.DeepEqual(calls[1], []string{"push", "-u", "origin", "HEAD:main"}) {
+		t.Fatalf("second call args = %#v, want upstream recovery args", calls[1])
+	}
+}
+
+func TestRunSyncPushWithUpstreamRecoveryDoesNotRetryWhenSetUpstreamAlreadyRequested(t *testing.T) {
+	calls := 0
+	runner := func(_ context.Context, _ string, _ ...string) (string, error) {
+		calls++
+		return "", errors.New("dolt push -u origin HEAD:main: fatal: The current branch main has no upstream branch")
+	}
+
+	result := runSyncPushWithUpstreamRecovery(
+		context.Background(),
+		"/tmp/dolt-repo",
+		"origin",
+		"main",
+		true,
+		false,
+		runner,
+	)
+
+	if result.err == nil {
+		t.Fatal("runSyncPushWithUpstreamRecovery() err = nil, want error")
+	}
+	if result.recoveredUpstream {
+		t.Fatal("runSyncPushWithUpstreamRecovery() recoveredUpstream = true, want false")
+	}
+	if calls != 1 {
+		t.Fatalf("run call count = %d, want 1", calls)
+	}
+}
+
 func TestBuildSyncPullCommandArgsWithoutBranchUsesDefaultPull(t *testing.T) {
 	got := buildSyncPullCommandArgs("origin", "")
 	want := []string{"pull", "origin"}

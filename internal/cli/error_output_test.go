@@ -43,6 +43,18 @@ func TestBuildCommandErrorPayloadPreflightRemediation(t *testing.T) {
 	}
 }
 
+func TestBuildCommandErrorPayloadMissingUpstreamBranch(t *testing.T) {
+	err := errors.New("dolt push origin HEAD:main: fatal: The current branch main has no upstream branch")
+	payload := buildCommandErrorPayload(err)
+
+	if payload.Reason != "missing_upstream_branch" {
+		t.Fatalf("reason = %q, want missing_upstream_branch", payload.Reason)
+	}
+	if !strings.Contains(payload.Remediation, "lit sync push --set-upstream --json") {
+		t.Fatalf("unexpected remediation: %q", payload.Remediation)
+	}
+}
+
 func TestBuildCommandErrorPayloadNotFound(t *testing.T) {
 	err := store.NotFoundError{Entity: "issue", ID: "lit-abc"}
 	payload := buildCommandErrorPayload(err)

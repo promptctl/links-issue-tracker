@@ -1611,17 +1611,25 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err != nil {
 			return err
 		}
-		commandArgs := buildSyncPushCommandArgs(
+		pushResult := runSyncPushWithUpstreamRecovery(
+			ctx,
+			ws.DoltRepoPath,
 			remoteName,
 			syncBranch,
 			*setUpstream,
 			*force,
+			runDoltSyncCommand,
 		)
-		output, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, commandArgs...)
+		output := pushResult.output
+		err = pushResult.err
+		commandArgs := pushResult.commandArgs
 		traceMetadata := map[string]string{
 			"remote":       remoteName,
 			"sync_branch":  syncBranch,
 			"dolt_command": strings.Join(append([]string{"dolt"}, commandArgs...), " "),
+		}
+		if pushResult.recoveredUpstream {
+			traceMetadata["upstream_recovery"] = "applied"
 		}
 		traceStatus := "ok"
 		traceReason := "managed automation requested sync push"
@@ -1631,7 +1639,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			traceMetadata["error"] = err.Error()
 		}
 		litCommandArgs := []string{"sync", "push", "--remote", remoteName}
-		if *setUpstream {
+		if pushResult.setUpstream {
 			litCommandArgs = append(litCommandArgs, "--set-upstream")
 		}
 		if *force {
@@ -1938,6 +1946,45 @@ func buildSyncPushCommandArgs(remote string, syncBranch string, setUpstream bool
 	}
 	refspec := fmt.Sprintf("HEAD:%s", normalizedSyncBranch)
 	return append(commandArgs, refspec)
+}
+
+type syncPushResult struct {
+	output            string
+	err               error
+	commandArgs       []string
+	setUpstream       bool
+	recoveredUpstream bool
+}
+
+func runSyncPushWithUpstreamRecovery(
+	ctx context.Context,
+	repoPath string,
+	remoteName string,
+	syncBranch string,
+	setUpstream bool,
+	force bool,
+	runDolt func(context.Context, string, ...string) (string, error),
+) syncPushResult {
+	primaryArgs := buildSyncPushCommandArgs(remoteName, syncBranch, setUpstream, force)
+	primaryOutput, primaryErr := runDolt(ctx, repoPath, primaryArgs...)
+	// [LAW:dataflow-not-control-flow] Sync push always flows through the same execution pipeline; retry is derived from error data.
+	if primaryErr == nil || setUpstream || commandErrorReason(primaryErr) != "missing_upstream_branch" {
+		return syncPushResult{
+			output:      primaryOutput,
+			err:         primaryErr,
+			commandArgs: primaryArgs,
+			setUpstream: setUpstream,
+		}
+	}
+	recoveryArgs := buildSyncPushCommandArgs(remoteName, syncBranch, true, force)
+	recoveryOutput, recoveryErr := runDolt(ctx, repoPath, recoveryArgs...)
+	return syncPushResult{
+		output:            recoveryOutput,
+		err:               recoveryErr,
+		commandArgs:       recoveryArgs,
+		setUpstream:       true,
+		recoveredUpstream: recoveryErr == nil,
+	}
 }
 
 type errorDetailer interface {
