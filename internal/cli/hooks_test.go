@@ -35,8 +35,20 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, linksHookBeginMarker) || !strings.Contains(text, linksHookEndMarker) {
 		t.Fatalf("hook missing managed section markers: %q", text)
 	}
-	if !strings.Contains(text, "hook-triggered lit sync push failed") {
-		t.Fatalf("hook missing warning output: %q", text)
+	if !strings.Contains(text, "hook_sync_push_failed") {
+		t.Fatalf("hook missing structured failure event: %q", text)
+	}
+	if !strings.Contains(text, "hook_sync_push_nonblocking") {
+		t.Fatalf("hook missing structured non-blocking event: %q", text)
+	}
+	if !strings.Contains(text, "extract_json_string_field") {
+		t.Fatalf("hook missing machine-readable json field extraction helper: %q", text)
+	}
+	if !strings.Contains(text, "lit sync push --remote \"${remote_name}\" --json") {
+		t.Fatalf("hook must invoke sync push in json mode for deterministic remediation parsing: %q", text)
+	}
+	if !strings.Contains(text, "retry_command=\"lit sync push --remote ${remote_name} --json\"") {
+		t.Fatalf("hook missing deterministic retry command: %q", text)
 	}
 	if !strings.Contains(text, "LIT_AUTOMATION_TRIGGER=\"git-pre-push\"") {
 		t.Fatalf("hook missing automation trigger env: %q", text)

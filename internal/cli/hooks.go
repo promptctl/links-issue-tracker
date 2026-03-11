@@ -152,6 +152,7 @@ func renderLinksPrePushHookSection() string {
 set -u
 
 remote_name="${1:-origin}"
+retry_command="lit sync push --remote ${remote_name} --json"
 
 hook_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 legacy_hook="${hook_dir}/pre-push.links.user"
@@ -160,22 +161,85 @@ if [[ -x "${legacy_hook}" ]]; then
   "${legacy_hook}" "$@" || true
 fi
 
+trace_reason_from_file() {
+  local trace_path="${1:-}"
+  if [[ -z "${trace_path}" || ! -f "${trace_path}" ]]; then
+    return 1
+  fi
+  local reason_line
+  reason_line="$(grep -m1 '"reason"' "${trace_path}" 2>/dev/null || true)"
+  if [[ -z "${reason_line}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${reason_line}" | sed -E 's/^[[:space:]]*"reason":[[:space:]]*"([^"]*)".*/\1/'
+}
+
+extract_json_string_field() {
+  local field_name="${1:-}"
+  local json_path="${2:-}"
+  if [[ -z "${field_name}" || -z "${json_path}" || ! -f "${json_path}" ]]; then
+    return 1
+  fi
+  local field_line
+  field_line="$(grep -m1 "\"${field_name}\"" "${json_path}" 2>/dev/null || true)"
+  if [[ -z "${field_line}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${field_line}" | sed -E "s/.*\"${field_name}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/"
+}
+
+emit_sync_failure_notice() {
+  local reason_code="${1:-command_failed}"
+  local trace_ref="${2:-unavailable}"
+  local level="warning"
+  local color='\033[33m'
+  local event_name="hook_sync_push_failed"
+  if [[ "${reason_code}" == "manifest_read_only" ]]; then
+    level="info"
+    color='\033[36m'
+    event_name="hook_sync_push_nonblocking"
+  fi
+  printf "${color}[links] %s: %s trigger=git-pre-push remote=%s reason=%s trace=%s retry_command=%q\033[0m\n" "${level}" "${event_name}" "${remote_name}" "${reason_code}" "${trace_ref}" "${retry_command}" >&2
+}
+
 trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
+sync_output_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-output.XXXXXX" 2>/dev/null || true)"
+sync_failed=0
+trace_ref="unavailable"
 if [[ -n "${trace_ref_file}" ]]; then
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
     LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
     LIT_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
-    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
+    lit sync push --remote "${remote_name}" --json >"${sync_output_file:-/dev/null}" 2>&1; then
+    sync_failed=1
     trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
-    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "${trace_ref:-unavailable}" "${remote_name}" >&2
+    trace_ref="${trace_ref:-unavailable}"
   fi
   rm -f "${trace_ref_file}"
 else
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
     LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
-    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
-    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "unavailable" "${remote_name}" >&2
+    lit sync push --remote "${remote_name}" --json >"${sync_output_file:-/dev/null}" 2>&1; then
+    sync_failed=1
   fi
+fi
+
+if [[ "${sync_failed}" == "1" ]]; then
+  reason_code="$(extract_json_string_field "reason" "${sync_output_file}" || true)"
+  reason_code="${reason_code:-command_failed}"
+  output_trace_ref="$(extract_json_string_field "trace_ref" "${sync_output_file}" || true)"
+  if [[ "${trace_ref}" == "unavailable" && -n "${output_trace_ref}" ]]; then
+    trace_ref="${output_trace_ref}"
+  fi
+  trace_reason="$(trace_reason_from_file "${trace_ref}" || true)"
+  if [[ "${trace_reason}" == *"cannot update manifest"* && "${trace_reason}" == *"read only"* ]]; then
+    reason_code="manifest_read_only"
+  fi
+  emit_sync_failure_notice "${reason_code}" "${trace_ref}"
+fi
+
+if [[ -n "${sync_output_file}" ]]; then
+  rm -f "${sync_output_file}"
 fi
 
 exit 0
