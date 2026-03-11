@@ -454,6 +454,39 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	}
 }
 
+func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() initial error = %v", err)
+	}
+	if err := st.setMeta(ctx, nil, "schema_version", "2"); err != nil {
+		t.Fatalf("setMeta(schema_version) error = %v", err)
+	}
+	if err := st.commitWorkingSet(ctx, "set schema version"); err != nil {
+		t.Fatalf("commitWorkingSet() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() initial error = %v", err)
+	}
+
+	st, err = Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() reopen error = %v", err)
+	}
+	defer st.Close()
+
+	got, err := st.getMeta(ctx, nil, "schema_version")
+	if err != nil {
+		t.Fatalf("getMeta(schema_version) error = %v", err)
+	}
+	if got != "2" {
+		t.Fatalf("schema_version = %q, want 2", got)
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {

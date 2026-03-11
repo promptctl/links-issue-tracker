@@ -309,7 +309,7 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || workspaceChanged
-	schemaVersionChanged, err := s.ensureMetaValue(ctx, "schema_version", "1")
+	schemaVersionChanged, err := s.ensureMetaDefault(ctx, "schema_version", "1")
 	if err != nil {
 		return err
 	}
@@ -1900,6 +1900,21 @@ func (s *Store) ensureMetaValue(ctx context.Context, key, value string) (bool, e
 	if current == value {
 		return false, nil
 	}
+	if err := s.setMeta(ctx, nil, key, value); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func (s *Store) ensureMetaDefault(ctx context.Context, key, value string) (bool, error) {
+	current, err := s.getMeta(ctx, nil, key)
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(current) != "" {
+		return false, nil
+	}
+	// [LAW:one-source-of-truth] Schema-version writes preserve the recorded version as the canonical migration state once it exists.
 	if err := s.setMeta(ctx, nil, key, value); err != nil {
 		return false, err
 	}
