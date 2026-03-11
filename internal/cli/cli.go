@@ -9,7 +9,9 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -40,8 +42,9 @@ const outputModeEnvVar = "LIT_OUTPUT"
 const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 
 const (
-	commandLockRetryDelay = 50 * time.Millisecond
-	commandLockStaleAfter = 10 * time.Minute
+	commandLockRetryDelay             = 50 * time.Millisecond
+	commandLockStaleAfter             = 10 * time.Minute
+	syncManifestReadOnlyRetryAttempts = 2
 )
 
 var commandLockPIDRunning = isCommandLockPIDRunning
@@ -1501,7 +1504,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if *prune {
 			commandArgs = append(commandArgs, "--prune")
 		}
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, commandArgs...)
 		if err != nil {
 			return err
 		}
@@ -1553,7 +1556,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		}
 		commandArgs := buildSyncPullCommandArgs(remoteName, resolvedBranch)
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, commandArgs...)
 		payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, output, err)
 		if handledErr != nil {
 			return handledErr
@@ -1598,7 +1601,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			*setUpstream,
 			*force,
 		)
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, commandArgs...)
 		traceMetadata := map[string]string{
 			"remote":       remoteName,
 			"sync_branch":  syncBranch,
@@ -1959,17 +1962,17 @@ func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncS
 	for _, remote := range gitRemotes {
 		currentURL, exists := doltByName[remote.Name]
 		if !exists {
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
+			if _, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
 				return remoteSyncState{}, err
 			}
 			changes.Added = append(changes.Added, remote.Name)
 			continue
 		}
 		if !sameRemoteURL(currentURL, remote.URL) {
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "remove", remote.Name); err != nil {
+			if _, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, "remote", "remove", remote.Name); err != nil {
 				return remoteSyncState{}, err
 			}
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
+			if _, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
 				return remoteSyncState{}, err
 			}
 			changes.Updated = append(changes.Updated, remote.Name)
@@ -1979,7 +1982,7 @@ func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncS
 		if _, keep := gitByName[name]; keep {
 			continue
 		}
-		if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "remove", name); err != nil {
+		if _, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, "remote", "remove", name); err != nil {
 			return remoteSyncState{}, err
 		}
 		changes.Removed = append(changes.Removed, name)
@@ -2035,7 +2038,68 @@ func sameRemoteURL(left, right string) bool {
 func normalizeRemoteURL(input string) string {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimPrefix(trimmed, "git+")
-	return trimmed
+	if trimmed == "" {
+		return ""
+	}
+	// [LAW:one-source-of-truth] Remote URL comparison uses one canonical normalizer so sync reconciliation decisions do not drift across URL spellings.
+	trimmed = normalizeSCPLikeRemoteURL(trimmed)
+	parsed, err := url.Parse(trimmed)
+	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
+		return trimmed
+	}
+	parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
+	parsed.Host = strings.ToLower(strings.TrimSpace(parsed.Host))
+	parsed.Path = normalizeRemotePath(parsed.Path)
+	return parsed.String()
+}
+
+func normalizeSCPLikeRemoteURL(input string) string {
+	if strings.Contains(input, "://") {
+		return input
+	}
+	separator := scpHostPathSeparator(input)
+	if separator <= 0 {
+		return input
+	}
+	hostPart := strings.TrimSpace(input[:separator])
+	pathPart := strings.TrimSpace(input[separator+1:])
+	if hostPart == "" || pathPart == "" || strings.Contains(hostPart, "/") {
+		return input
+	}
+	if strings.HasPrefix(pathPart, "/") {
+		return "ssh://" + hostPart + pathPart
+	}
+	return "ssh://" + hostPart + "/" + pathPart
+}
+
+func scpHostPathSeparator(input string) int {
+	separator := -1
+	inBrackets := false
+	for index, character := range input {
+		switch character {
+		case '[':
+			inBrackets = true
+		case ']':
+			inBrackets = false
+		case ':':
+			if !inBrackets {
+				separator = index
+				return separator
+			}
+		}
+	}
+	return separator
+}
+
+func normalizeRemotePath(input string) string {
+	if strings.TrimSpace(input) == "" {
+		return ""
+	}
+	cleaned := path.Clean(strings.TrimSpace(input))
+	if strings.HasPrefix(input, "/") && !strings.HasPrefix(cleaned, "/") {
+		cleaned = "/" + cleaned
+	}
+	return cleaned
 }
 
 func parseDoltRemoteVerbose(output string) []map[string]string {
@@ -2061,6 +2125,28 @@ func parseDoltRemoteVerbose(output string) []map[string]string {
 		remotes = append(remotes, entry)
 	}
 	return remotes
+}
+
+func runDoltSyncCommand(ctx context.Context, repoPath string, commandArgs ...string) (string, error) {
+	return runWithManifestReadOnlyRetry(ctx, func(ctx context.Context) (string, error) {
+		return doltcli.Run(ctx, repoPath, commandArgs...)
+	})
+}
+
+func runWithManifestReadOnlyRetry(ctx context.Context, run func(context.Context) (string, error)) (string, error) {
+	var output string
+	var err error
+	// [LAW:dataflow-not-control-flow] Sync mutation commands always pass through the same retry pipeline; retry behavior depends on error data, not callsite branching.
+	for attempt := 1; attempt <= syncManifestReadOnlyRetryAttempts; attempt++ {
+		output, err = run(ctx)
+		if err == nil {
+			return output, nil
+		}
+		if commandErrorReason(err) != "manifest_read_only" || attempt == syncManifestReadOnlyRetryAttempts {
+			return output, err
+		}
+	}
+	return output, err
 }
 
 func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

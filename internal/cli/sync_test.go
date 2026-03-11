@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"reflect"
 	"strings"
@@ -46,6 +47,30 @@ func TestMapGitRemotesByName(t *testing.T) {
 func TestSameRemoteURLIgnoresGitPrefix(t *testing.T) {
 	if !sameRemoteURL("https://github.com/a/repo.git", "git+https://github.com/a/repo.git") {
 		t.Fatal("expected URL comparison to ignore git+ prefix")
+	}
+}
+
+func TestSameRemoteURLTreatsSCPLikeAndSSHFormsAsEqual(t *testing.T) {
+	left := "git@github.com:brandon-fryslie/links-issue-tracker.git"
+	right := "git+ssh://git@github.com/./brandon-fryslie/links-issue-tracker.git"
+	if !sameRemoteURL(left, right) {
+		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
+	}
+}
+
+func TestSameRemoteURLDetectsDifferentRemotePaths(t *testing.T) {
+	left := "git@github.com:brandon-fryslie/links-issue-tracker.git"
+	right := "git+ssh://git@github.com/./brandon-fryslie/another.git"
+	if sameRemoteURL(left, right) {
+		t.Fatalf("sameRemoteURL(%q, %q) = true, want false", left, right)
+	}
+}
+
+func TestSameRemoteURLSupportsBracketedIPv6SCPLikeHosts(t *testing.T) {
+	left := "git@[fe80::1]:brandon-fryslie/links-issue-tracker.git"
+	right := "ssh://git@[fe80::1]/brandon-fryslie/links-issue-tracker.git"
+	if !sameRemoteURL(left, right) {
+		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
 	}
 }
 
@@ -326,5 +351,39 @@ func TestResolveSyncBranchErrorsWhenDefaultBranchUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), debugSyncBranchEnvVar) {
 		t.Fatalf("error = %q, want mention of %s", err.Error(), debugSyncBranchEnvVar)
+	}
+}
+
+func TestRunWithManifestReadOnlyRetryRetriesOnce(t *testing.T) {
+	attempts := 0
+	output, err := runWithManifestReadOnlyRetry(context.Background(), func(context.Context) (string, error) {
+		attempts++
+		if attempts == 1 {
+			return "", errors.New("cannot update manifest: database is read only")
+		}
+		return "ok", nil
+	})
+	if err != nil {
+		t.Fatalf("runWithManifestReadOnlyRetry() error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2", attempts)
+	}
+	if output != "ok" {
+		t.Fatalf("output = %q, want ok", output)
+	}
+}
+
+func TestRunWithManifestReadOnlyRetryDoesNotRetryOtherErrors(t *testing.T) {
+	attempts := 0
+	_, err := runWithManifestReadOnlyRetry(context.Background(), func(context.Context) (string, error) {
+		attempts++
+		return "", errors.New("fatal: network unavailable")
+	})
+	if err == nil {
+		t.Fatal("runWithManifestReadOnlyRetry() error = nil, want non-manifest error")
+	}
+	if attempts != 1 {
+		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
