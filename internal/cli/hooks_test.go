@@ -44,6 +44,21 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, "extract_json_string_field") {
 		t.Fatalf("hook missing machine-readable json field extraction helper: %q", text)
 	}
+	if !strings.Contains(text, "classify_sync_failure_reason") {
+		t.Fatalf("hook missing failure reason classifier: %q", text)
+	}
+	if !strings.Contains(text, "missing_upstream_branch") {
+		t.Fatalf("hook missing upstream-branch failure classification: %q", text)
+	}
+	if !strings.Contains(text, "write_fallback_hook_trace") {
+		t.Fatalf("hook missing fallback trace artifact writer: %q", text)
+	}
+	if !strings.Contains(text, "build_failure_remediation_command") {
+		t.Fatalf("hook missing remediation command builder: %q", text)
+	}
+	if !strings.Contains(text, "lit sync push --remote ${remote_name} --set-upstream --json") {
+		t.Fatalf("hook missing upstream remediation command guidance: %q", text)
+	}
 	if !strings.Contains(text, "recover_with_dolt_push") {
 		t.Fatalf("hook missing direct dolt recovery function: %q", text)
 	}
@@ -56,8 +71,14 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, "lit sync push --remote \"${remote_name}\" --json") {
 		t.Fatalf("hook must invoke sync push in json mode for deterministic remediation parsing: %q", text)
 	}
-	if !strings.Contains(text, "retry_command=\"lit sync push --remote ${remote_name} --json\"") {
-		t.Fatalf("hook missing deterministic retry command: %q", text)
+	if strings.Contains(text, "trace_ref=\"unavailable\"") {
+		t.Fatalf("hook must not rely on unavailable trace placeholders: %q", text)
+	}
+	if strings.Contains(text, "reason_code=\"${reason_code:-command_failed}\"") {
+		t.Fatalf("hook must not default to reason=command_failed placeholders: %q", text)
+	}
+	if strings.Contains(text, "retry_command=\"lit sync push --remote ${remote_name} --json\"") {
+		t.Fatalf("hook should avoid redundant retry-only hints in diagnostics: %q", text)
 	}
 	if !strings.Contains(text, "LIT_AUTOMATION_TRIGGER=\"git-pre-push\"") {
 		t.Fatalf("hook missing automation trigger env: %q", text)

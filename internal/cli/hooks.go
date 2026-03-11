@@ -152,7 +152,6 @@ func renderLinksPrePushHookSection() string {
 set -u
 
 remote_name="${1:-origin}"
-retry_command="lit sync push --remote ${remote_name} --json"
 
 hook_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
 legacy_hook="${hook_dir}/pre-push.links.user"
@@ -161,17 +160,11 @@ if [[ -x "${legacy_hook}" ]]; then
   "${legacy_hook}" "$@" || true
 fi
 
-trace_reason_from_file() {
-  local trace_path="${1:-}"
-  if [[ -z "${trace_path}" || ! -f "${trace_path}" ]]; then
-    return 1
-  fi
-  local reason_line
-  reason_line="$(grep -m1 '"reason"' "${trace_path}" 2>/dev/null || true)"
-  if [[ -z "${reason_line}" ]]; then
-    return 1
-  fi
-  printf '%s\n' "${reason_line}" | sed -E 's/^[[:space:]]*"reason":[[:space:]]*"([^"]*)".*/\1/'
+normalize_single_line() {
+  local value="${1:-}"
+  value="$(printf '%s' "${value}" | tr '\r\n\t' ' ' | sed -E 's/[[:space:]]+/ /g; s/^ +//; s/ +$//')"
+  # Keep failure detail terse so hook output remains scan-friendly.
+  printf '%.220s' "${value}"
 }
 
 extract_json_string_field() {
@@ -188,17 +181,152 @@ extract_json_string_field() {
   printf '%s\n' "${field_line}" | sed -E "s/.*\"${field_name}\"[[:space:]]*:[[:space:]]*\"([^\"]*)\".*/\1/"
 }
 
+read_sync_output_summary() {
+  local output_path="${1:-}"
+  if [[ -z "${output_path}" || ! -f "${output_path}" ]]; then
+    return 1
+  fi
+  local summary
+  summary="$(LC_ALL=C tr -d '\r\b' < "${output_path}" | sed -E 's/[[:cntrl:]]/ /g' | awk 'NF { print; exit }')"
+  if [[ -z "${summary}" ]]; then
+    return 1
+  fi
+  normalize_single_line "${summary}"
+}
+
+first_non_empty_value() {
+  for candidate in "$@"; do
+    local normalized
+    normalized="$(normalize_single_line "${candidate}")"
+    if [[ -n "${normalized}" ]]; then
+      printf '%s\n' "${normalized}"
+      return 0
+    fi
+  done
+  return 1
+}
+
+classify_sync_failure_reason() {
+  local detail_text
+  detail_text="$(normalize_single_line "${1:-}")"
+  local lowered
+  lowered="$(printf '%s' "${detail_text}" | tr '[:upper:]' '[:lower:]')"
+  if [[ "${lowered}" == *"cannot update manifest"* && "${lowered}" == *"read only"* ]]; then
+    printf '%s\n' "manifest_read_only"
+    return 0
+  fi
+  if [[ "${lowered}" == *"no upstream branch"* ]]; then
+    printf '%s\n' "missing_upstream_branch"
+    return 0
+  fi
+  if [[ "${lowered}" == *"requires running inside a git repository"* ]]; then
+    printf '%s\n' "outside_git_workspace"
+    return 0
+  fi
+  if [[ "${lowered}" == *"unknown command"* ]]; then
+    printf '%s\n' "unknown_command"
+    return 0
+  fi
+  return 1
+}
+
+build_failure_remediation_command() {
+  local reason_code
+  reason_code="$(normalize_single_line "${1:-}")"
+  case "${reason_code}" in
+    manifest_read_only)
+      printf '%s\n' "lit doctor --json && lit fsck --repair --json && lit sync push --remote ${remote_name} --json"
+      return 0
+      ;;
+    missing_upstream_branch)
+      printf '%s\n' "lit sync push --remote ${remote_name} --set-upstream --json"
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+write_fallback_hook_trace() {
+  local output_path="${1:-}"
+  local reason_code
+  reason_code="$(normalize_single_line "${2:-}")"
+  local detail_text
+  detail_text="$(normalize_single_line "${3:-}")"
+  if [[ -z "${output_path}" || ! -f "${output_path}" ]]; then
+    return 1
+  fi
+  local git_common_dir
+  git_common_dir="$(cd -- "${hook_dir}/.." && pwd)"
+  local trace_dir
+  trace_dir="${git_common_dir}/links/traces/hooks"
+  if ! mkdir -p "${trace_dir}" >/dev/null 2>&1; then
+    return 1
+  fi
+  local safe_remote
+  safe_remote="$(printf '%s' "${remote_name}" | sed -E 's/[^[:alnum:]_.-]+/-/g')"
+  local trace_path
+  trace_path="${trace_dir}/$(date -u +%Y%m%dT%H%M%SZ)-git-pre-push-${safe_remote}.log"
+  {
+    printf 'trigger=git-pre-push\n'
+    printf 'remote=%s\n' "${remote_name}"
+    if [[ -n "${reason_code}" ]]; then
+      printf 'reason=%s\n' "${reason_code}"
+    fi
+    if [[ -n "${detail_text}" ]]; then
+      printf 'detail=%s\n' "${detail_text}"
+    fi
+    printf '\n'
+    cat "${output_path}"
+  } > "${trace_path}" || return 1
+  printf '%s\n' "${trace_path}"
+}
+
 emit_sync_failure_notice() {
-  local reason_code="${1:-command_failed}"
-  local trace_ref="${2:-unavailable}"
-  printf '\033[33m[links] warning: hook_sync_push_failed trigger=git-pre-push remote=%s reason=%s trace=%s retry_command=%q\033[0m\n' "${remote_name}" "${reason_code}" "${trace_ref}" "${retry_command}" >&2
+  local reason_code
+  reason_code="$(normalize_single_line "${1:-}")"
+  local trace_ref
+  trace_ref="$(normalize_single_line "${2:-}")"
+  local detail_text
+  detail_text="$(normalize_single_line "${3:-}")"
+  local remediation_command
+  remediation_command="$(normalize_single_line "${4:-}")"
+  local reason_fragment=""
+  local trace_fragment=""
+  local detail_fragment=""
+  local remediation_fragment=""
+  if [[ -n "${reason_code}" ]]; then
+    reason_fragment=" reason=${reason_code}"
+  fi
+  if [[ -n "${trace_ref}" ]]; then
+    trace_fragment=" trace=$(printf '%q' "${trace_ref}")"
+  fi
+  if [[ -n "${detail_text}" ]]; then
+    detail_fragment=" detail=$(printf '%q' "${detail_text}")"
+  fi
+  if [[ -n "${remediation_command}" ]]; then
+    remediation_fragment=" remediation_command=$(printf '%q' "${remediation_command}")"
+  fi
+  printf '\033[33m[links] warning: hook_sync_push_failed trigger=git-pre-push remote=%s%s%s%s%s\033[0m\n' "${remote_name}" "${reason_fragment}" "${trace_fragment}" "${detail_fragment}" "${remediation_fragment}" >&2
 }
 
 emit_sync_recovery_notice() {
-  local reason_code="${1:-manifest_read_only}"
-  local trace_ref="${2:-unavailable}"
-  local recovery_command="${3:-unavailable}"
-  printf '\033[36m[links] info: hook_sync_push_recovered trigger=git-pre-push remote=%s reason=%s trace=%s recovery_command=%q\033[0m\n' "${remote_name}" "${reason_code}" "${trace_ref}" "${recovery_command}" >&2
+  local reason_code
+  reason_code="$(normalize_single_line "${1:-}")"
+  local trace_ref
+  trace_ref="$(normalize_single_line "${2:-}")"
+  local recovery_command
+  recovery_command="$(normalize_single_line "${3:-}")"
+  local trace_fragment=""
+  local recovery_fragment=""
+  if [[ -n "${trace_ref}" ]]; then
+    trace_fragment=" trace=$(printf '%q' "${trace_ref}")"
+  fi
+  if [[ -n "${recovery_command}" ]]; then
+    recovery_fragment=" recovery_command=$(printf '%q' "${recovery_command}")"
+  fi
+  printf '\033[36m[links] info: hook_sync_push_recovered trigger=git-pre-push remote=%s reason=%s%s%s\033[0m\n' "${remote_name}" "${reason_code}" "${trace_fragment}" "${recovery_fragment}" >&2
 }
 
 resolve_dolt_sync_branch() {
@@ -247,17 +375,16 @@ recover_with_dolt_push() {
 trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
 sync_output_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-output.XXXXXX" 2>/dev/null || true)"
 sync_failed=0
-trace_ref="unavailable"
-recovered_sync_command="unavailable"
+trace_ref=""
+recovered_sync_command=""
 if [[ -n "${trace_ref_file}" ]]; then
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
     LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
     LIT_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
     lit sync push --remote "${remote_name}" --json >"${sync_output_file:-/dev/null}" 2>&1; then
     sync_failed=1
-    trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
-    trace_ref="${trace_ref:-unavailable}"
   fi
+  trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
   rm -f "${trace_ref_file}"
 else
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
@@ -269,14 +396,25 @@ fi
 
 if [[ "${sync_failed}" == "1" ]]; then
   reason_code="$(extract_json_string_field "reason" "${sync_output_file}" || true)"
-  reason_code="${reason_code:-command_failed}"
+  reason_code="$(normalize_single_line "${reason_code}")"
+  if [[ "${reason_code}" == "command_failed" ]]; then
+    reason_code=""
+  fi
   output_trace_ref="$(extract_json_string_field "trace_ref" "${sync_output_file}" || true)"
-  if [[ "${trace_ref}" == "unavailable" && -n "${output_trace_ref}" ]]; then
+  output_trace_ref="$(normalize_single_line "${output_trace_ref}")"
+  trace_ref="$(normalize_single_line "${trace_ref}")"
+  if [[ -z "${trace_ref}" && -n "${output_trace_ref}" ]]; then
     trace_ref="${output_trace_ref}"
   fi
-  trace_reason="$(trace_reason_from_file "${trace_ref}" || true)"
-  if [[ "${trace_reason}" == *"cannot update manifest"* && "${trace_reason}" == *"read only"* ]]; then
-    reason_code="manifest_read_only"
+  json_message="$(extract_json_string_field "message" "${sync_output_file}" || true)"
+  output_summary="$(read_sync_output_summary "${sync_output_file}" || true)"
+  failure_detail="$(first_non_empty_value "${json_message}" "${output_summary}" || true)"
+  if [[ -z "${reason_code}" ]]; then
+    reason_code="$(classify_sync_failure_reason "${failure_detail}" || true)"
+  fi
+  if [[ -z "${trace_ref}" ]]; then
+    trace_ref="$(write_fallback_hook_trace "${sync_output_file}" "${reason_code}" "${failure_detail}" || true)"
+    trace_ref="$(normalize_single_line "${trace_ref}")"
   fi
   if [[ "${reason_code}" == "manifest_read_only" ]]; then
     if recover_with_dolt_push; then
@@ -284,8 +422,9 @@ if [[ "${sync_failed}" == "1" ]]; then
       reason_code=""
     fi
   fi
-  if [[ -n "${reason_code}" ]]; then
-    emit_sync_failure_notice "${reason_code}" "${trace_ref}"
+  if [[ -n "${reason_code}" || -n "${failure_detail}" || -n "${trace_ref}" ]]; then
+    remediation_command="$(build_failure_remediation_command "${reason_code}" || true)"
+    emit_sync_failure_notice "${reason_code}" "${trace_ref}" "${failure_detail}" "${remediation_command}"
   fi
 fi
 
