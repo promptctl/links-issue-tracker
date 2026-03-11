@@ -37,6 +37,23 @@ type GitRemote struct {
 	URL  string `json:"url"`
 }
 
+func UpstreamRemote(cwd string) string {
+	upstreamRef, _ := gitOutput(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+	return upstreamRemoteFromRef(upstreamRef)
+}
+
+func DefaultRemoteBranch(cwd string, remote string) string {
+	remoteName := normalizeRemoteName(remote)
+	symbolicRefOutput, _ := gitOutput(cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
+	symbolicBranch := strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
+	if symbolicBranch != "" {
+		return symbolicBranch
+	}
+	lsRemoteOutput, _ := gitOutput(cwd, "ls-remote", "--symref", remoteName, "HEAD")
+	// [LAW:one-source-of-truth] Branch resolution follows one deterministic candidate chain: local remote HEAD, then remote HEAD advertisement.
+	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput))
+}
+
 func Resolve(cwd string) (Info, error) {
 	rootDir, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -80,6 +97,55 @@ func gitOutput(cwd string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+func normalizeRemoteName(remote string) string {
+	trimmed := strings.TrimSpace(remote)
+	if trimmed == "" {
+		return "origin"
+	}
+	return trimmed
+}
+
+func defaultRemoteBranchFromSymbolicRef(remote string, symbolicRef string) string {
+	ref := strings.TrimSpace(symbolicRef)
+	prefix := strings.TrimSpace(remote) + "/"
+	if !strings.HasPrefix(ref, prefix) {
+		return ""
+	}
+	return strings.TrimSpace(strings.TrimPrefix(ref, prefix))
+}
+
+func defaultRemoteBranchFromLSRemote(output string) string {
+	for _, line := range strings.Split(strings.TrimSpace(output), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if !strings.HasPrefix(trimmed, "ref: refs/heads/") || !strings.HasSuffix(trimmed, "\tHEAD") {
+			continue
+		}
+		branch := strings.TrimPrefix(trimmed, "ref: refs/heads/")
+		branch = strings.TrimSuffix(branch, "\tHEAD")
+		return strings.TrimSpace(branch)
+	}
+	return ""
+}
+
+func upstreamRemoteFromRef(ref string) string {
+	trimmed := strings.TrimSpace(ref)
+	parts := strings.SplitN(trimmed, "/", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.TrimSpace(parts[0])
+}
+
+func firstNonEmptyTrimmed(values ...string) string {
+	for _, value := range values {
+		trimmed := strings.TrimSpace(value)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
 }
 
 func GitRemotes(cwd string) ([]GitRemote, error) {

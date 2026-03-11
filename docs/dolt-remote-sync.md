@@ -24,26 +24,42 @@ $(git rev-parse --git-common-dir)/links/dolt
 lit hooks install
 git remote add origin https://github.com/<org>/<repo>.git
 lit sync remote ls --json
-lit sync fetch --remote origin
-lit sync pull --remote origin --branch main
+lit sync fetch
+lit sync pull --json
 ```
 
 ## Daily workflow
 
 ```sh
 lit sync status
-lit sync pull --remote origin --branch main
+lit sync pull --json
 # ...work with lit commands...
-lit sync push --remote origin --branch main
+lit sync push --json
 ```
 
 ## Commands
 
 - `lit sync status [--json]`
 - `lit sync remote ls [--json]`
-- `lit sync fetch [--remote <name>] [--prune] [--json]`
-- `lit sync pull [--remote <name>] [--branch <name>] [--json]`
-- `lit sync push [--remote <name>] [--branch <name>] [--set-upstream] [--force] [--json]`
+- `lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]`
+- `lit sync pull [--remote <name>] [--verbose] [--json]`
+- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]`
+
+Sync branch selection:
+
+- default: repository default branch from the configured remote
+- debug override: set `LINKS_DEBUG_DOLT_SYNC_BRANCH=<branch>`
+
+Sync remote selection for pull/push when `--remote` is omitted:
+
+- branch upstream remote (when configured)
+- otherwise, the single configured Git remote
+- if no eligible remote exists, sync pull/push return `status=skipped` and do not run Dolt sync side effects
+
+Text output behavior:
+
+- default output is terse and hides remote-specific details
+- use `--verbose` to include remote/branch details in text output
 
 Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `git remote -v` fetch URLs:
 
@@ -54,5 +70,5 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 ## Push automation
 
 `lit hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
-The hook auto-runs `lit sync push` for pushed branches, never blocks the git push, and emits a warning that includes the trigger, remote, branch, retry command, and trace path if DB sync fails.
+The hook auto-runs one canonical `lit sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
 Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace --json`.

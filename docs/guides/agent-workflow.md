@@ -12,7 +12,7 @@
    - `lit start <issue-id> --reason "claim" --json`
    - `lit comment add <issue-id> --body "Starting: <plan>" --json`
 4. Sync:
-   - `lit sync pull ...` before work
+   - `lit sync pull --json` before work
 5. Close out:
    - `lit done <issue-id> --reason "<completion summary>" --json`
    - `lit comment add <issue-id> --body "Done: <summary>" --json`
@@ -22,6 +22,7 @@
 
 - hooks are installed once (`lit hooks install`)
 - remote names come from Git (`git remote -v`)
+- sync targets the remote default branch (override only with `LINKS_DEBUG_DOLT_SYNC_BRANCH`)
 - retries are attempted before escalating user-visible failures
 - automatic traces live under `traces_dir` from `lit workspace --json`; startup preflight and managed hooks both write there
 

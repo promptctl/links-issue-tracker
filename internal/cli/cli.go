@@ -37,6 +37,7 @@ import (
 var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found on remote`)
 
 const outputModeEnvVar = "LIT_OUTPUT"
+const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 
 const (
 	commandLockRetryDelay = 50 * time.Millisecond
@@ -1491,6 +1492,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		fs.SetOutput(io.Discard)
 		remote := fs.String("remote", "origin", "Remote name")
 		prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
+		verbose := fs.Bool("verbose", false, "Include detailed remote output")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
@@ -1510,6 +1512,10 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			p := v.(map[string]any)
+			if !*verbose {
+				_, err := fmt.Fprintln(w, "fetched")
+				return err
+			}
 			if strings.TrimSpace(p["raw"].(string)) != "" {
 				_, err := fmt.Fprintln(w, strings.TrimSpace(p["raw"].(string)))
 				return err
@@ -1520,52 +1526,82 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	case "pull":
 		fs := flag.NewFlagSet("sync pull", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		remote := fs.String("remote", "origin", "Remote name")
-		branch := fs.String("branch", "", "Branch name (defaults to current)")
+		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
+		verbose := fs.Bool("verbose", false, "Include detailed remote output")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
-		remoteName := strings.TrimSpace(*remote)
-		branchName := strings.TrimSpace(*branch)
-		commandArgs := []string{"pull", remoteName}
-		if branchName != "" {
-			commandArgs = append(commandArgs, branchName)
+		remoteName := resolveSyncRemote(
+			strings.TrimSpace(*remote),
+			workspace.UpstreamRemote(ws.RootDir),
+			syncState.gitRemotes,
+		)
+		if remoteName == "" {
+			payload := map[string]any{
+				"status": "skipped",
+				"reason": "no_sync_remote",
+				"raw":    "no upstream remote and no single configured remote; skipping sync pull",
+			}
+			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+				return printSyncPullPayload(w, v, *verbose)
+			})
 		}
+		resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+		if err != nil {
+			return err
+		}
+		commandArgs := buildSyncPullCommandArgs(remoteName, resolvedBranch)
 		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
-		payload, handledErr := buildSyncPullPayload(remoteName, branchName, output, err)
+		payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, output, err)
 		if handledErr != nil {
 			return handledErr
 		}
-		return printValue(stdout, payload, *jsonOut, printSyncPullPayload)
+		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+			return printSyncPullPayload(w, v, *verbose)
+		})
 	case "push":
 		fs := flag.NewFlagSet("sync push", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		remote := fs.String("remote", "origin", "Remote name")
-		branch := fs.String("branch", "", "Branch name (defaults to current)")
+		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 		setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
 		force := fs.Bool("force", false, "Pass --force to dolt push")
+		verbose := fs.Bool("verbose", false, "Include detailed remote output")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
-		remoteName := strings.TrimSpace(*remote)
-		requestedBranch := strings.TrimSpace(*branch)
-		currentBranch, err := resolveSyncPushCurrentBranch(ctx, ws, requestedBranch)
+		remoteName := resolveSyncRemote(
+			strings.TrimSpace(*remote),
+			workspace.UpstreamRemote(ws.RootDir),
+			syncState.gitRemotes,
+		)
+		if remoteName == "" {
+			payload := map[string]any{
+				"status": "skipped",
+				"reason": "no_sync_remote",
+				"raw":    "no upstream remote and no single configured remote; skipping sync push",
+			}
+			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+				return printSyncPushPayload(w, v, *verbose)
+			})
+		}
+		syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
 		if err != nil {
 			return err
 		}
 		commandArgs := buildSyncPushCommandArgs(
 			remoteName,
-			requestedBranch,
-			currentBranch,
+			syncBranch,
 			*setUpstream,
 			*force,
 		)
 		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
 		traceMetadata := map[string]string{
 			"remote":       remoteName,
-			"branch":       requestedBranch,
+			"sync_branch":  syncBranch,
 			"dolt_command": strings.Join(append([]string{"dolt"}, commandArgs...), " "),
 		}
 		traceStatus := "ok"
@@ -1576,9 +1612,6 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			traceMetadata["error"] = err.Error()
 		}
 		litCommandArgs := []string{"sync", "push", "--remote", remoteName}
-		if requestedBranch != "" {
-			litCommandArgs = append(litCommandArgs, "--branch", requestedBranch)
-		}
 		if *setUpstream {
 			litCommandArgs = append(litCommandArgs, "--set-upstream")
 		}
@@ -1600,7 +1633,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		payload := map[string]any{
 			"status": "ok",
 			"remote": remoteName,
-			"branch": requestedBranch,
+			"branch": syncBranch,
 			"raw":    output,
 		}
 		if traceRef != nil {
@@ -1610,17 +1643,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			payload["trace_error"] = traceRecordErr.Error()
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-			p := v.(map[string]any)
-			if strings.TrimSpace(p["raw"].(string)) != "" {
-				_, err := fmt.Fprintln(w, strings.TrimSpace(p["raw"].(string)))
-				return err
-			}
-			if strings.TrimSpace(p["branch"].(string)) != "" {
-				_, err := fmt.Fprintf(w, "pushed %s/%s\n", p["remote"], p["branch"])
-				return err
-			}
-			_, err := fmt.Fprintf(w, "pushed %s\n", p["remote"])
-			return err
+			return printSyncPushPayload(w, v, *verbose)
 		})
 	case "status":
 		fs := flag.NewFlagSet("sync status", flag.ContinueOnError)
@@ -1679,24 +1702,74 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	}
 }
 
-func syncPushBranchLookupArgs(requestedBranch string) []string {
-	// [LAW:dataflow-not-control-flow] Sync push always runs this stage; branch data selects no-op vs lookup inputs.
-	if strings.TrimSpace(requestedBranch) == "" {
-		return []string{}
+func buildSyncPullCommandArgs(remote string, branch string) []string {
+	commandArgs := []string{"pull", remote}
+	normalizedBranch := strings.TrimSpace(branch)
+	if normalizedBranch == "" {
+		return commandArgs
 	}
-	return []string{"branch", "--show-current"}
+	return append(commandArgs, normalizedBranch)
 }
 
-func resolveSyncPushCurrentBranch(ctx context.Context, ws workspace.Info, requestedBranch string) (string, error) {
-	lookupArgs := syncPushBranchLookupArgs(requestedBranch)
-	if len(lookupArgs) == 0 {
-		return "", nil
+func firstNonEmptySyncBranch(candidates ...string) string {
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed != "" {
+			return trimmed
+		}
 	}
-	currentBranch, err := doltcli.Run(ctx, ws.DoltRepoPath, lookupArgs...)
-	if err != nil {
-		return "", err
+	return ""
+}
+
+func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) string {
+	singleRemote := ""
+	if len(gitRemotes) == 1 {
+		singleRemote = strings.TrimSpace(gitRemotes[0].Name)
 	}
-	return strings.TrimSpace(currentBranch), nil
+	validatedUpstreamRemote := strings.TrimSpace(upstreamRemote)
+	if !syncRemoteExists(validatedUpstreamRemote, gitRemotes) {
+		validatedUpstreamRemote = ""
+	}
+	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
+	return firstNonEmptySyncRemote(requestedRemote, validatedUpstreamRemote, singleRemote)
+}
+
+func firstNonEmptySyncRemote(candidates ...string) string {
+	for _, candidate := range candidates {
+		trimmed := strings.TrimSpace(candidate)
+		if trimmed != "" {
+			return trimmed
+		}
+	}
+	return ""
+}
+
+func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
+	normalizedName := strings.TrimSpace(name)
+	if normalizedName == "" {
+		return false
+	}
+	for _, remote := range gitRemotes {
+		if strings.TrimSpace(remote.Name) == normalizedName {
+			return true
+		}
+	}
+	return false
+}
+
+func resolveSyncBranch(rootDir string, remote string) (string, error) {
+	debugOverride := strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar))
+	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(rootDir, remote))
+	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
+	resolvedBranch := firstNonEmptySyncBranch(debugOverride, defaultBranch)
+	if resolvedBranch == "" {
+		return "", fmt.Errorf(
+			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
+			strings.TrimSpace(remote),
+			debugSyncBranchEnvVar,
+		)
+	}
+	return resolvedBranch, nil
 }
 
 func buildSyncPullPayload(remote string, requestedBranch string, output string, runErr error) (map[string]any, error) {
@@ -1713,8 +1786,8 @@ func buildSyncPullPayload(remote string, requestedBranch string, output string, 
 	if !matchesMissingBranch {
 		return nil, runErr
 	}
-	nextCommand := fmt.Sprintf("lit sync push --remote %s --branch %s --set-upstream", remote, missingBranch)
-	retryCommand := fmt.Sprintf("lit sync pull --remote %s --branch %s", remote, missingBranch)
+	nextCommand := fmt.Sprintf("lit sync push --remote %s --set-upstream", remote)
+	retryCommand := fmt.Sprintf("lit sync pull --remote %s", remote)
 	// [LAW:dataflow-not-control-flow] Sync pull always returns structured payload; outcome variance lives in status/reason fields.
 	return map[string]any{
 		"status":        "skipped",
@@ -1747,15 +1820,32 @@ func detectMissingRemoteBranch(message string, requestedBranch string) (string, 
 	return branch, true
 }
 
-func printSyncPullPayload(w io.Writer, v any) error {
+func printSyncPullPayload(w io.Writer, v any, verbose bool) error {
 	payload := v.(map[string]any)
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
 	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
 	switch status {
 	case "skipped":
+		reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))
+		if reason == "no_sync_remote" {
+			if !verbose {
+				return nil
+			}
+			_, err := fmt.Fprintln(w, "skipped sync pull: no eligible git remote")
+			return err
+		}
 		nextCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["next_command"]))
 		retryCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["retry_command"]))
+		if !verbose {
+			_, err := fmt.Fprintf(
+				w,
+				"sync pull skipped; run `%s`, then retry `%s`\n",
+				nextCommand,
+				retryCommand,
+			)
+			return err
+		}
 		_, err := fmt.Fprintf(
 			w,
 			"skipped pull %s/%s: remote branch missing; run `%s`, then retry `%s`\n",
@@ -1767,6 +1857,10 @@ func printSyncPullPayload(w io.Writer, v any) error {
 		return err
 	default:
 		raw, hasRaw := payload["raw"].(string)
+		if !verbose {
+			_, err := fmt.Fprintln(w, "pulled")
+			return err
+		}
 		if hasRaw && strings.TrimSpace(raw) != "" {
 			_, err := fmt.Fprintln(w, raw)
 			return err
@@ -1780,8 +1874,37 @@ func printSyncPullPayload(w io.Writer, v any) error {
 	}
 }
 
-func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBranch string, setUpstream bool, force bool) []string {
-	// [LAW:one-source-of-truth] Push source always comes from the current Dolt branch; requested branch is a remote projection target.
+func printSyncPushPayload(w io.Writer, v any, verbose bool) error {
+	payload := v.(map[string]any)
+	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
+	raw, hasRaw := payload["raw"].(string)
+	if !verbose && status == "skipped" {
+		return nil
+	}
+	if !verbose {
+		_, err := fmt.Fprintln(w, "pushed")
+		return err
+	}
+	if hasRaw && strings.TrimSpace(raw) != "" {
+		_, err := fmt.Fprintln(w, strings.TrimSpace(raw))
+		return err
+	}
+	if status == "skipped" {
+		_, err := fmt.Fprintln(w, "skipped sync push: no eligible git remote")
+		return err
+	}
+	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
+	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
+	if branch != "" {
+		_, err := fmt.Fprintf(w, "pushed %s/%s\n", remote, branch)
+		return err
+	}
+	_, err := fmt.Fprintf(w, "pushed %s\n", remote)
+	return err
+}
+
+func buildSyncPushCommandArgs(remote string, syncBranch string, setUpstream bool, force bool) []string {
+	// [LAW:one-source-of-truth] Sync pushes always target one canonical remote branch instead of caller-selected branch variants.
 	commandArgs := []string{"push"}
 	if setUpstream {
 		commandArgs = append(commandArgs, "-u")
@@ -1790,15 +1913,11 @@ func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBran
 		commandArgs = append(commandArgs, "--force")
 	}
 	commandArgs = append(commandArgs, remote)
-	if requestedBranch == "" {
+	normalizedSyncBranch := strings.TrimSpace(syncBranch)
+	if normalizedSyncBranch == "" {
 		return commandArgs
 	}
-	sourceRef := strings.TrimSpace(currentBranch)
-	if sourceRef == "" {
-		// [LAW:dataflow-not-control-flow] Empty branch-name output maps to a deterministic source ref (`HEAD`) instead of changing push stage behavior.
-		sourceRef = "HEAD"
-	}
-	refspec := fmt.Sprintf("%s:%s", sourceRef, requestedBranch)
+	refspec := fmt.Sprintf("HEAD:%s", normalizedSyncBranch)
 	return append(commandArgs, refspec)
 }
 
@@ -2310,8 +2429,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lit dep add <issue-id> <dependency-issue-id> --type related-to --json",
 			"git remote add origin https://github.com/org/repo.git",
 			"lit sync remote ls --json",
-			"lit sync pull --remote origin --branch main --json",
-			"lit sync push --remote origin --branch main --json",
+			"lit sync pull --json",
+			"lit sync push --json",
 		},
 		"exit_codes": map[string]int{
 			"ok":         ExitOK,
@@ -2353,9 +2472,9 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   Configure remotes with git, then run sync commands.",
 			"   `git remote -v`",
 			"   `lit sync remote ls --json`",
-			"   `lit sync fetch --remote origin --json`",
-			"   `lit sync pull --remote origin --branch main --json`",
-			"   `lit sync push --remote origin --branch main --json`",
+			"   `lit sync fetch --json`",
+			"   `lit sync pull --json`",
+			"   `lit sync push --json`",
 			"   If sync warning appears, agent should auto-retry silently before escalating.",
 			"",
 			"6) Integrity and recovery",
@@ -2745,6 +2864,14 @@ Global Output Mode:
   --output MODE  Force output mode (auto|text|json)
   LIT_OUTPUT     Environment default when flags are not provided
 
+Sync Branch:
+  default        remote default branch (resolved from git remote HEAD)
+  debug override LINKS_DEBUG_DOLT_SYNC_BRANCH
+
+Sync Remote (pull/push):
+  default        upstream remote, else single configured remote
+  no match       skip sync without Dolt side effects
+
 Issue Workflow:
   init           Initialize links in the current repository (auto-migrates Beads residue)
   ready          List open work ordered by priority and recency
@@ -2800,8 +2927,9 @@ Command Syntax:
   lit completion <bash|zsh|fish>
   lit workspace [--json]
   lit sync remote ls [--json]
-  lit sync pull --remote <name> --branch <name> [--json]
-  lit sync push --remote <name> --branch <name> [--set-upstream] [--force] [--json]
+  lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]
+  lit sync pull [--remote <name>] [--verbose] [--json]
+  lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]
 
 Examples:
   lit init --json

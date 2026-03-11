@@ -69,11 +69,11 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 
 	traceRef, err := maybeRecordAutomatedCommandTrace(
 		ws,
-		"lit sync push --remote origin --branch codex/test",
+		"lit sync push --remote origin",
 		"mirror Dolt data to the configured git remote",
 		"ok",
 		"",
-		map[string]string{"branch": "codex/test", "remote": "origin"},
+		map[string]string{"remote": "origin", "sync_branch": "master"},
 	)
 	if err != nil {
 		t.Fatalf("maybeRecordAutomatedCommandTrace() error = %v", err)

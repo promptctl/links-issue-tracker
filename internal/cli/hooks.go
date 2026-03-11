@@ -160,53 +160,23 @@ if [[ -x "${legacy_hook}" ]]; then
   "${legacy_hook}" "$@" || true
 fi
 
-branches=""
-while read -r local_ref local_sha remote_ref remote_sha; do
-  branch="${local_ref#refs/heads/}"
-  if [[ -z "${branch}" || "${branch}" == "${local_ref}" ]]; then
-    continue
-  fi
-  if ! printf '%s\n' "${branches}" | grep -Fqx "${branch}"; then
-    if [[ -z "${branches}" ]]; then
-      branches="${branch}"
-    else
-      branches="${branches}
-${branch}"
-    fi
-  fi
-done
-
-if [[ -z "${branches}" ]]; then
-  current_branch="$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-  if [[ -n "${current_branch}" && "${current_branch}" != "HEAD" ]]; then
-    branches="${current_branch}"
-  fi
-fi
-
-while read -r branch; do
-  if [[ -z "${branch}" ]]; then
-    continue
-  fi
-  trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
-  if [[ -n "${trace_ref_file}" ]]; then
-    if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
-      LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
-      LIT_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
-      lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
-      trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
-      printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s branch=%s trace=%s); agent should retry lit sync push --remote %s --branch %s\033[0m\n' "${remote_name}" "${branch}" "${trace_ref:-unavailable}" "${remote_name}" "${branch}" >&2
-    fi
-    rm -f "${trace_ref_file}"
-    continue
-  fi
+trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
+if [[ -n "${trace_ref_file}" ]]; then
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
     LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
-    lit sync push --remote "${remote_name}" --branch "${branch}" >/dev/null 2>&1; then
-    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s branch=%s trace=%s); agent should retry lit sync push --remote %s --branch %s\033[0m\n' "${remote_name}" "${branch}" "unavailable" "${remote_name}" "${branch}" >&2
+    LIT_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
+    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
+    trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
+    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "${trace_ref:-unavailable}" "${remote_name}" >&2
   fi
-done <<HOOK_BRANCHES
-${branches}
-HOOK_BRANCHES
+  rm -f "${trace_ref_file}"
+else
+  if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
+    LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
+    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
+    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "unavailable" "${remote_name}" >&2
+  fi
+fi
 
 exit 0
 # --- END LINKS INTEGRATION ---

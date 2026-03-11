@@ -21,9 +21,9 @@ Before every `lit sync` command, `links` reconciles Dolt remotes from `git remot
 
 `lit hooks install` installs a shared `pre-push` hook that:
 
-- attempts `lit sync push` for pushed branches
+- attempts one canonical `lit sync push` per git push
 - never blocks `git push`
-- emits a yellow warning line with trigger, branch, retry command, and trace path on sync failure
+- emits a yellow warning line with trigger, remote, retry command, and trace path on sync failure
 - writes inspectable automatic-action traces under `$(lit workspace --json | jq -r .traces_dir)`
 
 ## Failure model

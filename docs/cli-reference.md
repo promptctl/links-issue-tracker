@@ -78,9 +78,17 @@ lit label add <issue-id> <label> --json
 lit migrate beads --apply --json
 lit hooks install
 lit sync status --json
-lit sync pull --remote origin --branch main
-lit sync push --remote origin --branch main
+lit sync pull --json
+lit sync push --json
+# add --verbose for remote/branch details in text mode
 ```
+
+Debug override:
+
+- `LINKS_DEBUG_DOLT_SYNC_BRANCH=<branch>` forces `lit sync pull` and `lit sync push` to target that branch.
+- when `--remote` is omitted, `lit sync pull` / `lit sync push` use upstream remote first, then the single configured remote.
+- when no eligible remote exists, pull/push return `status=skipped` and do not attempt Dolt sync side effects.
+- text output is intentionally terse by default; pass `--verbose` to show remote details.
 
 ### Health and recovery
 
