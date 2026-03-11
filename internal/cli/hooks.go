@@ -191,21 +191,64 @@ extract_json_string_field() {
 emit_sync_failure_notice() {
   local reason_code="${1:-command_failed}"
   local trace_ref="${2:-unavailable}"
-  local level="warning"
-  local color='\033[33m'
-  local event_name="hook_sync_push_failed"
-  if [[ "${reason_code}" == "manifest_read_only" ]]; then
-    level="info"
-    color='\033[36m'
-    event_name="hook_sync_push_nonblocking"
+  printf '\033[33m[links] warning: hook_sync_push_failed trigger=git-pre-push remote=%s reason=%s trace=%s retry_command=%q\033[0m\n' "${remote_name}" "${reason_code}" "${trace_ref}" "${retry_command}" >&2
+}
+
+emit_sync_recovery_notice() {
+  local reason_code="${1:-manifest_read_only}"
+  local trace_ref="${2:-unavailable}"
+  local recovery_command="${3:-unavailable}"
+  printf '\033[36m[links] info: hook_sync_push_recovered trigger=git-pre-push remote=%s reason=%s trace=%s recovery_command=%q\033[0m\n' "${remote_name}" "${reason_code}" "${trace_ref}" "${recovery_command}" >&2
+}
+
+resolve_dolt_sync_branch() {
+  local symbolic_ref
+  symbolic_ref="$(git symbolic-ref --quiet --short "refs/remotes/${remote_name}/HEAD" 2>/dev/null || true)"
+  if [[ -n "${symbolic_ref}" ]]; then
+    printf '%s\n' "${symbolic_ref#${remote_name}/}"
+    return 0
   fi
-  printf "${color}[links] %s: %s trigger=git-pre-push remote=%s reason=%s trace=%s retry_command=%q\033[0m\n" "${level}" "${event_name}" "${remote_name}" "${reason_code}" "${trace_ref}" "${retry_command}" >&2
+  local advertised_head
+  advertised_head="$(git ls-remote --symref "${remote_name}" HEAD 2>/dev/null | grep -m1 '^ref: refs/heads/' || true)"
+  if [[ -z "${advertised_head}" ]]; then
+    return 1
+  fi
+  printf '%s\n' "${advertised_head}" | sed -E 's#^ref: refs/heads/([^[:space:]]+)[[:space:]]+HEAD$#\1#'
+}
+
+recover_with_dolt_push() {
+  local git_common_dir
+  git_common_dir="$(cd -- "${hook_dir}/.." && pwd)"
+  local dolt_repo_path
+  dolt_repo_path="${git_common_dir}/links/dolt/links"
+  if [[ ! -d "${dolt_repo_path}" ]]; then
+    return 1
+  fi
+  if ! command -v dolt >/dev/null 2>&1; then
+    return 1
+  fi
+  local sync_branch
+  sync_branch="$(resolve_dolt_sync_branch || true)"
+  if [[ -z "${sync_branch}" ]]; then
+    return 1
+  fi
+  recovered_sync_command="(cd ${dolt_repo_path} && dolt push ${remote_name} HEAD:${sync_branch})"
+  for recovery_attempt in 1 2 3; do
+    if (cd "${dolt_repo_path}" && dolt push "${remote_name}" "HEAD:${sync_branch}") >/dev/null 2>&1; then
+      return 0
+    fi
+    if [[ "${recovery_attempt}" != "3" ]]; then
+      sleep 1
+    fi
+  done
+  return 1
 }
 
 trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
 sync_output_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-output.XXXXXX" 2>/dev/null || true)"
 sync_failed=0
 trace_ref="unavailable"
+recovered_sync_command="unavailable"
 if [[ -n "${trace_ref_file}" ]]; then
   if ! LIT_AUTOMATION_TRIGGER="git-pre-push" \
     LIT_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
@@ -235,7 +278,15 @@ if [[ "${sync_failed}" == "1" ]]; then
   if [[ "${trace_reason}" == *"cannot update manifest"* && "${trace_reason}" == *"read only"* ]]; then
     reason_code="manifest_read_only"
   fi
+  if [[ "${reason_code}" == "manifest_read_only" ]]; then
+    if recover_with_dolt_push; then
+      emit_sync_recovery_notice "${reason_code}" "${trace_ref}" "${recovered_sync_command}"
+      reason_code=""
+    fi
+  fi
+  if [[ -n "${reason_code}" ]]; then
   emit_sync_failure_notice "${reason_code}" "${trace_ref}"
+  fi
 fi
 
 if [[ -n "${sync_output_file}" ]]; then

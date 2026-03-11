@@ -38,11 +38,20 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, "hook_sync_push_failed") {
 		t.Fatalf("hook missing structured failure event: %q", text)
 	}
-	if !strings.Contains(text, "hook_sync_push_nonblocking") {
-		t.Fatalf("hook missing structured non-blocking event: %q", text)
+	if !strings.Contains(text, "hook_sync_push_recovered") {
+		t.Fatalf("hook missing structured recovery event: %q", text)
 	}
 	if !strings.Contains(text, "extract_json_string_field") {
 		t.Fatalf("hook missing machine-readable json field extraction helper: %q", text)
+	}
+	if !strings.Contains(text, "recover_with_dolt_push") {
+		t.Fatalf("hook missing direct dolt recovery function: %q", text)
+	}
+	if !strings.Contains(text, "(cd \"${dolt_repo_path}\" && dolt push \"${remote_name}\" \"HEAD:${sync_branch}\")") {
+		t.Fatalf("hook missing deterministic dolt recovery push command: %q", text)
+	}
+	if !strings.Contains(text, "for recovery_attempt in 1 2 3; do") {
+		t.Fatalf("hook missing retry loop for direct dolt recovery push: %q", text)
 	}
 	if !strings.Contains(text, "lit sync push --remote \"${remote_name}\" --json") {
 		t.Fatalf("hook must invoke sync push in json mode for deterministic remediation parsing: %q", text)
