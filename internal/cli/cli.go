@@ -1611,25 +1611,18 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err != nil {
 			return err
 		}
-		pushResult := runSyncPushWithUpstreamRecovery(
-			ctx,
-			ws.DoltRepoPath,
+		// [LAW:dataflow-not-control-flow] Sync push runs one deterministic path from resolved remote+branch state; retries are not encoded in control flow.
+		commandArgs := buildSyncPushCommandArgs(
 			remoteName,
 			syncBranch,
 			*setUpstream,
 			*force,
-			runDoltSyncCommand,
 		)
-		output := pushResult.output
-		err = pushResult.err
-		commandArgs := pushResult.commandArgs
+		output, err := runDoltSyncCommand(ctx, ws.DoltRepoPath, commandArgs...)
 		traceMetadata := map[string]string{
 			"remote":       remoteName,
 			"sync_branch":  syncBranch,
 			"dolt_command": strings.Join(append([]string{"dolt"}, commandArgs...), " "),
-		}
-		if pushResult.recoveredUpstream {
-			traceMetadata["upstream_recovery"] = "applied"
 		}
 		traceStatus := "ok"
 		traceReason := "managed automation requested sync push"
@@ -1639,7 +1632,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			traceMetadata["error"] = err.Error()
 		}
 		litCommandArgs := []string{"sync", "push", "--remote", remoteName}
-		if pushResult.setUpstream {
+		if *setUpstream {
 			litCommandArgs = append(litCommandArgs, "--set-upstream")
 		}
 		if *force {
@@ -1749,6 +1742,14 @@ func firstNonEmptySyncBranch(candidates ...string) string {
 }
 
 func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) string {
+	validatedRequestedRemote := strings.TrimSpace(requestedRemote)
+	if validatedRequestedRemote != "" {
+		// [LAW:one-source-of-truth] Hook-triggered sync must target the explicit push remote when it exists.
+		if syncRemoteExists(validatedRequestedRemote, gitRemotes) {
+			return validatedRequestedRemote
+		}
+		return ""
+	}
 	singleRemote := ""
 	if len(gitRemotes) == 1 {
 		singleRemote = strings.TrimSpace(gitRemotes[0].Name)
@@ -1758,7 +1759,7 @@ func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes
 		validatedUpstreamRemote = ""
 	}
 	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
-	return firstNonEmptySyncRemote(requestedRemote, validatedUpstreamRemote, singleRemote)
+	return firstNonEmptySyncRemote(validatedUpstreamRemote, singleRemote)
 }
 
 func firstNonEmptySyncRemote(candidates ...string) string {
@@ -1946,45 +1947,6 @@ func buildSyncPushCommandArgs(remote string, syncBranch string, setUpstream bool
 	}
 	refspec := fmt.Sprintf("HEAD:%s", normalizedSyncBranch)
 	return append(commandArgs, refspec)
-}
-
-type syncPushResult struct {
-	output            string
-	err               error
-	commandArgs       []string
-	setUpstream       bool
-	recoveredUpstream bool
-}
-
-func runSyncPushWithUpstreamRecovery(
-	ctx context.Context,
-	repoPath string,
-	remoteName string,
-	syncBranch string,
-	setUpstream bool,
-	force bool,
-	runDolt func(context.Context, string, ...string) (string, error),
-) syncPushResult {
-	primaryArgs := buildSyncPushCommandArgs(remoteName, syncBranch, setUpstream, force)
-	primaryOutput, primaryErr := runDolt(ctx, repoPath, primaryArgs...)
-	// [LAW:dataflow-not-control-flow] Sync push always flows through the same execution pipeline; retry is derived from error data.
-	if primaryErr == nil || setUpstream || commandErrorReason(primaryErr) != "missing_upstream_branch" {
-		return syncPushResult{
-			output:      primaryOutput,
-			err:         primaryErr,
-			commandArgs: primaryArgs,
-			setUpstream: setUpstream,
-		}
-	}
-	recoveryArgs := buildSyncPushCommandArgs(remoteName, syncBranch, true, force)
-	recoveryOutput, recoveryErr := runDolt(ctx, repoPath, recoveryArgs...)
-	return syncPushResult{
-		output:            recoveryOutput,
-		err:               recoveryErr,
-		commandArgs:       recoveryArgs,
-		setUpstream:       true,
-		recoveredUpstream: recoveryErr == nil,
-	}
 }
 
 type errorDetailer interface {
