@@ -296,6 +296,11 @@ emit_sync_failure_notice() {
   local trace_fragment=""
   local detail_fragment=""
   local remediation_fragment=""
+  # [LAW:single-enforcer] this emitter is the single boundary for failure warning output.
+  # [LAW:errors] suppress non-actionable warnings when we have no typed reason.
+  if [[ -z "${reason_code}" ]]; then
+    return 0
+  fi
   if [[ -n "${reason_code}" ]]; then
     reason_fragment=" reason=${reason_code}"
   fi
@@ -422,8 +427,8 @@ if [[ "${sync_failed}" == "1" ]]; then
       reason_code=""
     fi
   fi
-  if [[ -n "${reason_code}" || -n "${failure_detail}" || -n "${trace_ref}" ]]; then
-    remediation_command="$(build_failure_remediation_command "${reason_code}" || true)"
+  remediation_command="$(build_failure_remediation_command "${reason_code}" || true)"
+  if [[ -n "${reason_code}" ]]; then
     emit_sync_failure_notice "${reason_code}" "${trace_ref}" "${failure_detail}" "${remediation_command}"
   fi
 fi

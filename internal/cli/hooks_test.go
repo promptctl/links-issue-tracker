@@ -77,6 +77,15 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if strings.Contains(text, "reason_code=\"${reason_code:-command_failed}\"") {
 		t.Fatalf("hook must not default to reason=command_failed placeholders: %q", text)
 	}
+	if strings.Contains(text, "if [[ -n \"${reason_code}\" || -n \"${failure_detail}\" || -n \"${trace_ref}\" ]]; then") {
+		t.Fatalf("hook must not emit warnings from detail/trace without a typed reason: %q", text)
+	}
+	if !strings.Contains(text, "if [[ -z \"${reason_code}\" ]]; then") {
+		t.Fatalf("hook failure emitter must no-op when reason code is empty: %q", text)
+	}
+	if !strings.Contains(text, "if [[ -n \"${reason_code}\" ]]; then\n    emit_sync_failure_notice") {
+		t.Fatalf("hook must only emit failure warning when reason code is present: %q", text)
+	}
 	if strings.Contains(text, "retry_command=\"lit sync push --remote ${remote_name} --json\"") {
 		t.Fatalf("hook should avoid redundant retry-only hints in diagnostics: %q", text)
 	}
