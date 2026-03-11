@@ -515,10 +515,16 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 
 func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMode, error) {
 	// [LAW:single-enforcer] Global output precedence (--output/--json/env/auto) is enforced exactly once at CLI entry.
-	mode, err := modeFromEnv()
+	envMode, err := modeFromEnv()
 	if err != nil {
 		return nil, "", err
 	}
+	// [LAW:one-source-of-truth] Resolve output mode from collected flag values in one place so precedence cannot drift by parse order.
+	mode := envMode
+	hasJSONOverride := false
+	hasOutputOverride := false
+	jsonMode := outputModeJSON
+	outputOverrideMode := outputModeAuto
 	index := 0
 	for index < len(args) {
 		switch {
@@ -526,7 +532,8 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 			index++
 			goto done
 		case args[index] == "--json":
-			mode = outputModeJSON
+			hasJSONOverride = true
+			jsonMode = outputModeJSON
 			index++
 		case strings.HasPrefix(args[index], "--json="):
 			jsonValue := strings.TrimSpace(strings.TrimPrefix(args[index], "--json="))
@@ -535,10 +542,11 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 				return nil, "", fmt.Errorf("invalid --json value %q (expected true|false)", jsonValue)
 			}
 			if parsed {
-				mode = outputModeJSON
+				jsonMode = outputModeJSON
 			} else {
-				mode = outputModeText
+				jsonMode = outputModeText
 			}
+			hasJSONOverride = true
 			index++
 		case args[index] == "--output":
 			if index+1 >= len(args) {
@@ -548,7 +556,8 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 			if parseErr != nil {
 				return nil, "", parseErr
 			}
-			mode = parsedMode
+			outputOverrideMode = parsedMode
+			hasOutputOverride = true
 			index += 2
 		default:
 			if strings.HasPrefix(args[index], "--output=") {
@@ -556,7 +565,8 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 				if parseErr != nil {
 					return nil, "", parseErr
 				}
-				mode = parsedMode
+				outputOverrideMode = parsedMode
+				hasOutputOverride = true
 				index++
 				continue
 			}
@@ -565,6 +575,12 @@ func parseGlobalOutputMode(args []string, stdout io.Writer) ([]string, outputMod
 	}
 
 done:
+	if hasJSONOverride {
+		mode = jsonMode
+	}
+	if hasOutputOverride {
+		mode = outputOverrideMode
+	}
 	if mode == outputModeAuto {
 		mode = detectOutputMode(stdout)
 	}

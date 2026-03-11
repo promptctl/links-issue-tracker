@@ -25,6 +25,13 @@ func TestParseGlobalOutputMode(t *testing.T) {
 			wantMode:  outputModeText,
 		},
 		{
+			name:      "output precedence is stable regardless of flag order",
+			envOutput: "text",
+			args:      []string{"--output", "text", "--json", "quickstart"},
+			wantArgs:  []string{"quickstart"},
+			wantMode:  outputModeText,
+		},
+		{
 			name:      "json false sets text mode",
 			envOutput: "json",
 			args:      []string{"--json=false", "quickstart"},
@@ -51,6 +58,13 @@ func TestParseGlobalOutputMode(t *testing.T) {
 			args:      []string{"new", "--title", "--output"},
 			wantArgs:  []string{"new", "--title", "--output"},
 			wantMode:  outputModeText,
+		},
+		{
+			name:      "last json flag wins within json precedence tier",
+			envOutput: "text",
+			args:      []string{"--json=false", "--json=true", "quickstart"},
+			wantArgs:  []string{"quickstart"},
+			wantMode:  outputModeJSON,
 		},
 	}
 
