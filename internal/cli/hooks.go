@@ -232,7 +232,7 @@ recover_with_dolt_push() {
   if [[ -z "${sync_branch}" ]]; then
     return 1
   fi
-  recovered_sync_command="(cd ${dolt_repo_path} && dolt push ${remote_name} HEAD:${sync_branch})"
+  recovered_sync_command="(cd \"${dolt_repo_path}\" && dolt push \"${remote_name}\" \"HEAD:${sync_branch}\")"
   for recovery_attempt in 1 2 3; do
     if (cd "${dolt_repo_path}" && dolt push "${remote_name}" "HEAD:${sync_branch}") >/dev/null 2>&1; then
       return 0
@@ -285,7 +285,7 @@ if [[ "${sync_failed}" == "1" ]]; then
     fi
   fi
   if [[ -n "${reason_code}" ]]; then
-  emit_sync_failure_notice "${reason_code}" "${trace_ref}"
+    emit_sync_failure_notice "${reason_code}" "${trace_ref}"
   fi
 fi
 
