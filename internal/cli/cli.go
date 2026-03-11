@@ -39,8 +39,6 @@ var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found 
 const outputModeEnvVar = "LIT_OUTPUT"
 
 const (
-	commandLockRetryDelay = 50 * time.Millisecond
-	commandLockStaleAfter = 10 * time.Minute
 	// [LAW:no-mode-explosion] Sync preflight retry behavior is bounded to a fixed small policy.
 	syncManifestRetryMaxAttempts = 12
 	syncManifestRetryBaseDelay   = 50 * time.Millisecond
@@ -335,20 +333,6 @@ func runWithApp(ctx context.Context, commandArgs []string, run func(*app.App) er
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
-	ws, err := workspace.Resolve(cwd)
-	if err != nil {
-		if errors.Is(err, workspace.ErrNotGitRepo) {
-			return fmt.Errorf("links requires running inside a git repository/worktree")
-		}
-		return err
-	}
-	// [LAW:single-enforcer] CLI acquires a workspace command lock before opening app state so startup and mutation phases cannot overlap across commands.
-	releaseWorkspaceLock, err := acquireWorkspaceCommandLock(ctx, ws.DatabasePath)
-	if err != nil {
-		return err
-	}
-	defer releaseWorkspaceLock()
-
 	ap, err := app.Open(ctx, cwd)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
@@ -357,12 +341,6 @@ func runWithApp(ctx context.Context, commandArgs []string, run func(*app.App) er
 		return err
 	}
 	defer ap.Close()
-	// [LAW:single-enforcer] Command-level workspace mutation lock is acquired once at CLI dispatch to prevent overlapping write phases.
-	ctx, releaseMutationLock, err := ap.Store.AcquireMutationLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseMutationLock()
 	return run(ap)
 }
 
@@ -485,75 +463,6 @@ func modeFromEnv() (outputMode, error) {
 	return parseOutputMode(raw)
 }
 
-func acquireWorkspaceCommandLock(ctx context.Context, databasePath string) (func(), error) {
-	lockPath := filepath.Join(filepath.Clean(databasePath), ".links-command.lock")
-	for {
-		release, lockErr := tryAcquireCommandLockFile(lockPath)
-		if lockErr == nil {
-			return release, nil
-		}
-		if !errors.Is(lockErr, os.ErrExist) {
-			return nil, fmt.Errorf("acquire workspace command lock: %w", lockErr)
-		}
-		if staleErr := removeStaleCommandLockFile(lockPath, commandLockStaleAfter); staleErr != nil {
-			return nil, fmt.Errorf("acquire workspace command lock: %w", staleErr)
-		}
-		if waitErr := waitForCommandLock(ctx, commandLockRetryDelay); waitErr != nil {
-			return nil, waitErr
-		}
-	}
-}
-
-func tryAcquireCommandLockFile(lockPath string) (func(), error) {
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return nil, err
-	}
-	_, _ = fmt.Fprintf(file, "%d\n", os.Getpid())
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(lockPath)
-		return nil, closeErr
-	}
-	return func() {
-		_ = os.Remove(lockPath)
-	}, nil
-}
-
-func removeStaleCommandLockFile(lockPath string, staleAfter time.Duration) error {
-	info, err := os.Stat(lockPath)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if time.Since(info.ModTime()) <= staleAfter {
-		return nil
-	}
-	if err := os.Remove(lockPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-func waitForCommandLock(ctx context.Context, delay time.Duration) error {
-	timer := time.NewTimer(delay)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
-
 func parseOutputMode(raw string) (outputMode, error) {
 	switch strings.TrimSpace(strings.ToLower(raw)) {
 	case string(outputModeAuto):
@@ -595,6 +504,9 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		Title: *title, Description: *description, IssueType: *issueType, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
 	})
 	if err != nil {
+		if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+			return queueErr
+		}
 		return err
 	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
@@ -794,9 +706,16 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		CreatedBy: *by,
 	})
 	if err != nil {
+		if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+			return queueErr
+		}
 		return err
 	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+func writeQueuedMutationResponse(stdout io.Writer, jsonOut bool, mutationErr error) (bool, error) {
+	return false, nil
 }
 
 func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -820,6 +739,9 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	}
 	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
 	if err != nil {
+		if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+			return queueErr
+		}
 		return err
 	}
 	return printValue(stdout, comment, *jsonOut, func(w io.Writer, v any) error {
@@ -852,6 +774,9 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		}
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by})
 		if err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, rel, *jsonOut, func(w io.Writer, v any) error {
@@ -875,6 +800,9 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
 		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType); err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -936,6 +864,9 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
 		if err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, labels, *jsonOut, printLabels)
@@ -955,6 +886,9 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
 		if err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, labels, *jsonOut, printLabels)
@@ -986,6 +920,9 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			CreatedBy: *by,
 		})
 		if err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, rel, *jsonOut, func(w io.Writer, v any) error {
@@ -1005,6 +942,9 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return errors.New("usage: lit parent clear <child-id> [--json]")
 		}
 		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
+			if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+				return queueErr
+			}
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -1764,6 +1704,9 @@ func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	}
 	report, err := ap.Store.Fsck(ctx, *repair)
 	if err != nil {
+		if handled, queueErr := writeQueuedMutationResponse(stdout, *jsonOut, err); handled {
+			return queueErr
+		}
 		return err
 	}
 	if shouldWriteJSON(stdout, *jsonOut) {

@@ -9,8 +9,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	_ "github.com/dolthub/driver"
@@ -2105,10 +2107,6 @@ func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) er
 	return operation(lockedCtx)
 }
 
-func (s *Store) AcquireMutationLock(ctx context.Context) (context.Context, func(), error) {
-	return s.acquireCommitLock(ctx)
-}
-
 func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(), error) {
 	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
 		return ctx, func() {}, nil
@@ -2168,12 +2166,48 @@ func removeStaleCommitLock(path string, staleAfter time.Duration) error {
 		return err
 	}
 	if time.Since(info.ModTime()) <= staleAfter {
-		return nil
+		running, knownOwner, runErr := commitLockOwnerRunning(path)
+		if runErr != nil {
+			return runErr
+		}
+		if !knownOwner || running {
+			return nil
+		}
 	}
 	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
 	return nil
+}
+
+func commitLockOwnerRunning(path string) (running bool, knownOwner bool, err error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, false, nil
+	}
+	if err != nil {
+		return false, false, err
+	}
+	pidValue := strings.TrimSpace(string(raw))
+	if pidValue == "" {
+		return false, false, nil
+	}
+	pid, err := strconv.Atoi(pidValue)
+	if err != nil || pid <= 0 {
+		return false, false, nil
+	}
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return false, true, nil
+	}
+	signalErr := proc.Signal(syscall.Signal(0))
+	if signalErr == nil || errors.Is(signalErr, syscall.EPERM) {
+		return true, true, nil
+	}
+	if errors.Is(signalErr, os.ErrProcessDone) || errors.Is(signalErr, syscall.ESRCH) {
+		return false, true, nil
+	}
+	return false, true, signalErr
 }
 
 type transientManifestReadOnlyError struct {
