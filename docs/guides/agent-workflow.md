@@ -6,12 +6,15 @@
    - `lit workspace --json`
 2. Find work:
    - `lit ready --json`
+   - `lit ls --query "status:open type:task" --sort priority:asc,updated_at:asc --json`
    - `lit ls --query "status:open" --json`
-3. Update issue state as work starts:
+3. Choose priority by impact/urgency when creating new work:
+   - `lit new --title "..." --type task --priority <0..4> --json`
+4. Update issue state as work starts:
    - `lit comment add <issue-id> --body "Starting: <plan>" --json`
-4. Sync:
+5. Sync:
    - `lit sync pull ...` before work
-5. Close out:
+6. Close out:
    - `lit comment add <issue-id> --body "Done: <summary>" --json`
    - `lit close <issue-id> --reason "<completion reason>" --json`
    - `git add -A && git commit -m "<summary>"`

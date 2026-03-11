@@ -47,9 +47,12 @@ Create and inspect work:
 ```sh
 lit new --title "First task" --type task --priority 2 --json
 lit ready --json
+lit ls --query "status:open type:task" --sort priority:asc,updated_at:asc --json
 lit ls --json
 lit show <issue-id> --json
 ```
+
+When creating new issues, choose `--priority` by impact and urgency; do not default to P1.
 
 Push/pull DB changes through Dolt remotes mirrored from Git remotes:
 

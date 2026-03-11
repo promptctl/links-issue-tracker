@@ -612,7 +612,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
 	queryExpr := fs.String("query", "", "Query language: status:open type:task priority<=2 has:comments text")
-	sortExpr := fs.String("sort", "", "Sort fields, e.g. priority:asc,updated_at:desc")
+	sortExpr := fs.String("sort", "", "Sort fields, e.g. priority:asc,updated_at:asc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
@@ -1903,7 +1903,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"Migrate legacy Beads wiring explicitly with `lit migrate beads --apply --json` when needed.",
 			"Install git hook automation once with `lit hooks install`.",
 			"List ready work with `lit ready --json` (or `lit ls --format lines --json` for full views).",
-			"Create issues with `lit new ...`; use `--type epic` for epics.",
+			"Create issues with `lit new ...`; use `--type epic` for epics and set `--priority` by impact/urgency (not a default P1).",
 			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
 			"Run health checks with `lit doctor` and repair known corruption with `lit fsck --repair`.",
@@ -1915,8 +1915,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lit hooks install --json",
 			"lit workspace --json",
 			"lit ready --json",
-			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
-			"lit new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent --json",
+			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:asc --json",
+			"lit new --title \"Fix renderer race\" --type bug --priority 2 --labels renderer,urgent --json",
 			"lit parent set <issue-id> <parent-issue-id> --json",
 			"lit dep add <issue-id> <dependency-issue-id> --type related-to --json",
 			"git remote add origin https://github.com/org/repo.git",
@@ -1948,7 +1948,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"2) Find work",
 			"   `lit ready --json`",
 			"   `lit ls --format lines --json`",
-			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
+			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:asc --json`",
 			"",
 			"3) Create and relate issues/epics",
 			"   `lit new --title \"...\" --type task|bug|feature|chore|epic --json`",
@@ -2356,7 +2356,7 @@ Global Output Mode:
 
 Issue Workflow:
   init           Initialize links in the current repository (auto-migrates Beads residue)
-  ready          List open work ordered by priority and recency
+  ready          List open work ordered by priority and oldest-first updates
   new            Create an issue
   ls             List issues with filters/query/sort
   show           Show issue details
@@ -2409,8 +2409,8 @@ Command Syntax:
 Examples:
   lit init --json
   lit ready --json
-  lit new --title "Fix renderer race" --type bug --priority 1 --json
-  lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc --json
+  lit new --title "Fix renderer race" --type bug --priority 2 --json
+  lit ls --query "status:open type:task" --sort priority:asc,updated_at:asc --json
 
 Use "lit [command] --help" for more information about a command.
 `)

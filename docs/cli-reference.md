@@ -32,9 +32,12 @@ Command-local `--json` remains supported for existing scripts.
 ```sh
 lit new --title "..." --type task --priority 2 --json
 lit ready --json
+lit ls --query "status:open type:task" --sort priority:asc,updated_at:asc --json
 lit ls --json
 lit show <issue-id> --json
 ```
+
+Choose `--priority` from impact/urgency (0..4); do not default all new work to P1.
 
 ### Lifecycle
 
