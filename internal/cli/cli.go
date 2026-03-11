@@ -9,6 +9,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -40,6 +41,10 @@ const outputModeEnvVar = "LIT_OUTPUT"
 const (
 	commandLockRetryDelay = 50 * time.Millisecond
 	commandLockStaleAfter = 10 * time.Minute
+	// [LAW:no-mode-explosion] Sync preflight retry behavior is bounded to a fixed small policy.
+	syncManifestRetryMaxAttempts = 12
+	syncManifestRetryBaseDelay   = 50 * time.Millisecond
+	syncManifestRetryMaxDelay    = 1 * time.Second
 )
 
 type outputMode string
@@ -144,7 +149,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		})
 	})
 	addGroupedPassthrough(root, "data", "sync", "Mirror Dolt data through git remotes", func(args []string) error {
-		return runWithWorkspace(ctx, append([]string{"sync"}, args...), true, func(ws workspace.Info) error {
+		return runWithWorkspace(ctx, append([]string{"sync"}, args...), false, func(ws workspace.Info) error {
 			return runSync(ctx, stdout, ws, args)
 		})
 	})
@@ -1127,12 +1132,16 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	if len(args) == 0 {
 		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
-	syncState, err := syncDoltRemotesFromGit(ctx, ws)
-	if err != nil {
+	// [LAW:single-enforcer] Sync validates Dolt runtime readiness here and avoids store write probes that can interfere with remote sync commands.
+	if _, err := doltcli.RequireMinimumVersion(ctx, ws.RootDir, doltcli.MinSupportedVersion); err != nil {
 		return err
 	}
 	switch args[0] {
 	case "remote":
+		syncState, err := syncDoltRemotesFromGit(ctx, ws)
+		if err != nil {
+			return err
+		}
 		if len(args) < 2 {
 			return errors.New("usage: lit sync remote ls [--json]")
 		}
@@ -1153,12 +1162,13 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 				p := v.(map[string]any)
 				_, err := fmt.Fprintf(
 					w,
-					"git=%d dolt=%d added=%d updated=%d removed=%d\n",
+					"git=%d dolt=%d added=%d updated=%d removed=%d warnings=%d\n",
 					len(p["git_remotes"].([]workspace.GitRemote)),
 					len(p["dolt_remotes"].([]map[string]string)),
 					len(syncState.changes.Added),
 					len(syncState.changes.Updated),
 					len(syncState.changes.Removed),
+					len(syncState.changes.Warnings),
 				)
 				return err
 			})
@@ -1166,6 +1176,10 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return errors.New("usage: lit sync remote ls [--json]")
 		}
 	case "fetch":
+		preflightWarning, err := preflightSyncDoltRemotes(ctx, ws)
+		if err != nil {
+			return err
+		}
 		fs := flag.NewFlagSet("sync fetch", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		remote := fs.String("remote", "origin", "Remote name")
@@ -1178,7 +1192,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if *prune {
 			commandArgs = append(commandArgs, "--prune")
 		}
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, commandArgs...)
 		if err != nil {
 			return err
 		}
@@ -1187,8 +1201,16 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			"remote": strings.TrimSpace(*remote),
 			"raw":    output,
 		}
+		if preflightWarning != "" {
+			payload["warning"] = preflightWarning
+		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			p := v.(map[string]any)
+			if warning := strings.TrimSpace(fmt.Sprintf("%v", p["warning"])); warning != "" {
+				if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
+					return err
+				}
+			}
 			if strings.TrimSpace(p["raw"].(string)) != "" {
 				_, err := fmt.Fprintln(w, strings.TrimSpace(p["raw"].(string)))
 				return err
@@ -1197,6 +1219,10 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		})
 	case "pull":
+		preflightWarning, err := preflightSyncDoltRemotes(ctx, ws)
+		if err != nil {
+			return err
+		}
 		fs := flag.NewFlagSet("sync pull", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		remote := fs.String("remote", "origin", "Remote name")
@@ -1211,13 +1237,20 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if branchName != "" {
 			commandArgs = append(commandArgs, branchName)
 		}
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, commandArgs...)
 		payload, handledErr := buildSyncPullPayload(remoteName, branchName, output, err)
 		if handledErr != nil {
 			return handledErr
 		}
+		if preflightWarning != "" {
+			payload["warning"] = preflightWarning
+		}
 		return printValue(stdout, payload, *jsonOut, printSyncPullPayload)
 	case "push":
+		preflightWarning, err := preflightSyncDoltRemotes(ctx, ws)
+		if err != nil {
+			return err
+		}
 		fs := flag.NewFlagSet("sync push", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		remote := fs.String("remote", "origin", "Remote name")
@@ -1239,7 +1272,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			*setUpstream,
 			*force,
 		)
-		output, err := doltcli.Run(ctx, ws.DoltRepoPath, commandArgs...)
+		output, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, commandArgs...)
 		if err != nil {
 			return err
 		}
@@ -1249,8 +1282,16 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			"branch": strings.TrimSpace(*branch),
 			"raw":    output,
 		}
+		if preflightWarning != "" {
+			payload["warning"] = preflightWarning
+		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			p := v.(map[string]any)
+			if warning := strings.TrimSpace(fmt.Sprintf("%v", p["warning"])); warning != "" {
+				if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
+					return err
+				}
+			}
 			if strings.TrimSpace(p["raw"].(string)) != "" {
 				_, err := fmt.Fprintln(w, strings.TrimSpace(p["raw"].(string)))
 				return err
@@ -1263,6 +1304,27 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		})
 	case "status":
+		syncState, syncErr := syncDoltRemotesFromGit(ctx, ws)
+		if syncErr != nil {
+			if !doltcli.IsManifestReadOnlyError(syncErr) {
+				return syncErr
+			}
+			gitRemotes, gitErr := workspace.GitRemotes(ws.RootDir)
+			if gitErr != nil {
+				return fmt.Errorf("read git remotes: %w", gitErr)
+			}
+			syncState = remoteSyncState{
+				gitRemotes: gitRemotes,
+				changes: remoteSyncChanges{
+					Added:   []string{},
+					Updated: []string{},
+					Removed: []string{},
+					Warnings: []string{
+						fmt.Sprintf("remote preflight sync skipped: %v", syncErr),
+					},
+				},
+			}
+		}
 		fs := flag.NewFlagSet("sync status", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		jsonOut := fs.Bool("json", false, "Output JSON")
@@ -1300,17 +1362,19 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			p := v.(map[string]any)
+			changes := p["changes"].(remoteSyncChanges)
 			_, err := fmt.Fprintf(
 				w,
-				"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
+				"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d warnings=%d\n",
 				p["dolt_version"],
 				p["branch"],
 				p["head"],
 				len(p["git_remotes"].([]workspace.GitRemote)),
 				len(p["dolt_remotes"].([]map[string]string)),
-				len(syncState.changes.Added),
-				len(syncState.changes.Updated),
-				len(syncState.changes.Removed),
+				len(changes.Added),
+				len(changes.Updated),
+				len(changes.Removed),
+				len(changes.Warnings),
 			)
 			return err
 		})
@@ -1372,6 +1436,12 @@ func printSyncPullPayload(w io.Writer, v any) error {
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
 	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
+	warning := strings.TrimSpace(fmt.Sprintf("%v", payload["warning"]))
+	if warning != "" {
+		if _, err := fmt.Fprintf(w, "warning: %s\n", warning); err != nil {
+			return err
+		}
+	}
 	switch status {
 	case "skipped":
 		nextCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["next_command"]))
@@ -1400,6 +1470,18 @@ func printSyncPullPayload(w io.Writer, v any) error {
 	}
 }
 
+func preflightSyncDoltRemotes(ctx context.Context, ws workspace.Info) (string, error) {
+	_, err := syncDoltRemotesFromGit(ctx, ws)
+	if err == nil {
+		return "", nil
+	}
+	if doltcli.IsManifestReadOnlyError(err) {
+		// [LAW:one-source-of-truth] exception: keep operating against canonical existing remotes when Dolt preflight writes are temporarily unavailable.
+		return fmt.Sprintf("remote preflight sync skipped: %v", err), nil
+	}
+	return "", err
+}
+
 func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBranch string, setUpstream bool, force bool) []string {
 	// [LAW:one-source-of-truth] Push source always comes from the current Dolt branch; requested branch is a remote projection target.
 	commandArgs := []string{"push"}
@@ -1421,9 +1503,10 @@ func buildSyncPushCommandArgs(remote string, requestedBranch string, currentBran
 }
 
 type remoteSyncChanges struct {
-	Added   []string `json:"added"`
-	Updated []string `json:"updated"`
-	Removed []string `json:"removed"`
+	Added    []string `json:"added"`
+	Updated  []string `json:"updated"`
+	Removed  []string `json:"removed"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 type remoteSyncState struct {
@@ -1432,12 +1515,75 @@ type remoteSyncState struct {
 	changes     remoteSyncChanges
 }
 
+func runDoltSyncCommandWithRetry(ctx context.Context, repoPath string, args ...string) (string, error) {
+	return retryDoltManifestReadOnly(
+		ctx,
+		func() (string, error) {
+			return doltcli.Run(ctx, repoPath, args...)
+		},
+		syncManifestRetryDelay,
+		waitWithContext,
+	)
+}
+
+func retryDoltManifestReadOnly(
+	ctx context.Context,
+	operation func() (string, error),
+	delayForAttempt func(int) time.Duration,
+	sleep func(context.Context, time.Duration) error,
+) (string, error) {
+	var output string
+	var lastErr error
+	for attempt := 1; attempt <= syncManifestRetryMaxAttempts; attempt++ {
+		output, lastErr = operation()
+		if lastErr == nil {
+			return output, nil
+		}
+		if !doltcli.IsManifestReadOnlyError(lastErr) || attempt == syncManifestRetryMaxAttempts {
+			break
+		}
+		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
+			return "", waitErr
+		}
+	}
+	return output, lastErr
+}
+
+func syncManifestRetryDelay(attempt int) time.Duration {
+	if attempt < 1 {
+		attempt = 1
+	}
+	delay := syncManifestRetryBaseDelay << (attempt - 1)
+	if delay > syncManifestRetryMaxDelay {
+		delay = syncManifestRetryMaxDelay
+	}
+	return delay
+}
+
+func waitWithContext(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
 func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncState, error) {
 	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}
-	doltOutput, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "-v")
+	doltOutput, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "-v")
 	if err != nil {
 		return remoteSyncState{}, err
 	}
@@ -1446,25 +1592,26 @@ func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncS
 	doltByName := mapRemotesByName(doltRemotes)
 
 	changes := remoteSyncChanges{
-		Added:   []string{},
-		Updated: []string{},
-		Removed: []string{},
+		Added:    []string{},
+		Updated:  []string{},
+		Removed:  []string{},
+		Warnings: []string{},
 	}
 
 	for _, remote := range gitRemotes {
 		currentURL, exists := doltByName[remote.Name]
 		if !exists {
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
+			if _, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
 				return remoteSyncState{}, err
 			}
 			changes.Added = append(changes.Added, remote.Name)
 			continue
 		}
 		if !sameRemoteURL(currentURL, remote.URL) {
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "remove", remote.Name); err != nil {
+			if _, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "remove", remote.Name); err != nil {
 				return remoteSyncState{}, err
 			}
-			if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
+			if _, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "add", remote.Name, remote.URL); err != nil {
 				return remoteSyncState{}, err
 			}
 			changes.Updated = append(changes.Updated, remote.Name)
@@ -1474,7 +1621,12 @@ func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncS
 		if _, keep := gitByName[name]; keep {
 			continue
 		}
-		if _, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "remove", name); err != nil {
+		if _, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "remove", name); err != nil {
+			if doltcli.IsManifestReadOnlyError(err) {
+				// [LAW:one-source-of-truth] exception: stale remote cleanup is best-effort when Dolt manifest writes are transiently unavailable.
+				changes.Warnings = append(changes.Warnings, fmt.Sprintf("skipped stale dolt remote cleanup for %s: %v", name, err))
+				continue
+			}
 			return remoteSyncState{}, err
 		}
 		changes.Removed = append(changes.Removed, name)
@@ -1482,8 +1634,9 @@ func syncDoltRemotesFromGit(ctx context.Context, ws workspace.Info) (remoteSyncS
 	sort.Strings(changes.Added)
 	sort.Strings(changes.Updated)
 	sort.Strings(changes.Removed)
+	sort.Strings(changes.Warnings)
 
-	finalOutput, err := doltcli.Run(ctx, ws.DoltRepoPath, "remote", "-v")
+	finalOutput, err := runDoltSyncCommandWithRetry(ctx, ws.DoltRepoPath, "remote", "-v")
 	if err != nil {
 		return remoteSyncState{}, err
 	}
@@ -1530,7 +1683,23 @@ func sameRemoteURL(left, right string) bool {
 func normalizeRemoteURL(input string) string {
 	trimmed := strings.TrimSpace(input)
 	trimmed = strings.TrimPrefix(trimmed, "git+")
-	return trimmed
+	if strings.Contains(trimmed, "@") && strings.Contains(trimmed, ":") && !strings.Contains(trimmed, "://") {
+		parts := strings.SplitN(trimmed, ":", 2)
+		if len(parts) == 2 && strings.TrimSpace(parts[0]) != "" && strings.TrimSpace(parts[1]) != "" {
+			trimmed = "ssh://" + strings.TrimSpace(parts[0]) + "/" + strings.TrimSpace(parts[1])
+		}
+	}
+	parsed, err := url.Parse(trimmed)
+	if err != nil || strings.TrimSpace(parsed.Scheme) == "" || strings.TrimSpace(parsed.Host) == "" {
+		return trimmed
+	}
+	canonicalPath := strings.TrimSpace(parsed.Path)
+	canonicalPath = strings.TrimPrefix(canonicalPath, "/./")
+	canonicalPath = strings.TrimSuffix(canonicalPath, "/")
+	if !strings.HasPrefix(canonicalPath, "/") {
+		canonicalPath = "/" + canonicalPath
+	}
+	return fmt.Sprintf("%s://%s%s", strings.ToLower(parsed.Scheme), strings.ToLower(parsed.Host), canonicalPath)
 }
 
 func parseDoltRemoteVerbose(output string) []map[string]string {

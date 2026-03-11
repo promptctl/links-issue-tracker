@@ -49,6 +49,15 @@ func TestSameRemoteURLIgnoresGitPrefix(t *testing.T) {
 	}
 }
 
+func TestSameRemoteURLTreatsSSHFormatsAsEquivalent(t *testing.T) {
+	if !sameRemoteURL(
+		"git@github.com:brandon-fryslie/links-issue-tracker.git",
+		"git+ssh://git@github.com/./brandon-fryslie/links-issue-tracker.git",
+	) {
+		t.Fatal("expected SSH shorthand and URL forms to compare equal")
+	}
+}
+
 func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
 	runErr := errors.New(`dolt pull origin feature/local-only: branch "feature/local-only" not found on remote`)
 	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)

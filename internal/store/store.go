@@ -17,6 +17,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
@@ -2214,11 +2215,8 @@ func classifyTransientManifestError(err error) error {
 }
 
 func isManifestReadOnlyCommitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	normalized := strings.ToLower(err.Error())
-	return strings.Contains(normalized, "cannot update manifest") && strings.Contains(normalized, "read only")
+	// [LAW:single-enforcer] Shared Dolt error classification avoids drift across CLI/store boundaries.
+	return doltcli.IsManifestReadOnlyError(err)
 }
 
 func newIssueID(workspaceID string) string {
