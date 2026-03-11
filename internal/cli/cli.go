@@ -180,6 +180,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runShow(commandCtx, stdout, ap, args)
 		})
 	})
+	addGroupedPassthrough(root, "operations", "update", "Update issue fields", func(args []string) error {
+		return runWithApp(ctx, append([]string{"update"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runUpdate(commandCtx, stdout, ap, args)
+		})
+	})
 	addGroupedPassthrough(root, "operations", "start", "Claim issue work", func(args []string) error {
 		return runWithApp(ctx, append([]string{"start"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runTransition(commandCtx, stdout, ap, args, "start")
@@ -941,6 +946,144 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return writeJSON(stdout, detail)
 	}
 	return printIssueDetail(stdout, detail)
+}
+
+type statusTransitionKey struct {
+	From string
+	To   string
+}
+
+var updateStatusTransitionActions = map[statusTransitionKey]string{
+	{From: "open", To: "in_progress"}:   "start",
+	{From: "in_progress", To: "closed"}: "done",
+	{From: "open", To: "closed"}:        "close",
+	{From: "closed", To: "open"}:        "reopen",
+	{From: "closed", To: "in_progress"}: "reopen+start",
+	{From: "in_progress", To: "open"}:   "done+reopen",
+}
+
+func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	title := fs.String("title", "", "Issue title")
+	description := fs.String("description", "", "Issue description")
+	issueType := fs.String("type", "", "Issue type: task|feature|bug|chore|epic")
+	priority := fs.Int("priority", 0, "Priority 0..4 (lower is more important)")
+	assignee := fs.String("assignee", "", "Assignee")
+	labels := fs.String("labels", "", "Comma-separated labels")
+	status := fs.String("status", "", "Status: open|in_progress|closed")
+	reason := fs.String("reason", "", "Status transition reason")
+	by := fs.String("by", os.Getenv("USER"), "Status transition actor")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+	}
+	visited := map[string]bool{}
+	fs.Visit(func(flag *flag.Flag) { visited[flag.Name] = true })
+	if visited["reason"] && !visited["status"] {
+		return errors.New("--reason requires --status")
+	}
+	if visited["by"] && !visited["status"] {
+		return errors.New("--by requires --status")
+	}
+	mutatesFields := visited["title"] || visited["description"] || visited["type"] || visited["priority"] || visited["assignee"] || visited["labels"]
+	mutatesStatus := visited["status"]
+	if !mutatesFields && !mutatesStatus {
+		return errors.New("lit update requires at least one field flag")
+	}
+
+	issueID := positional[0]
+	var issue model.Issue
+
+	if mutatesStatus {
+		targetStatus, err := store.NormalizeStatusToken(*status)
+		if err != nil {
+			return err
+		}
+		if targetStatus == "" {
+			return errors.New("--status requires a non-empty value")
+		}
+		current, err := ap.Store.GetIssue(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		// [LAW:one-source-of-truth] Status changes are normalized to canonical lifecycle transitions instead of writing status directly.
+		actions, err := statusTransitionActionsForUpdate(current.Status, targetStatus)
+		if err != nil {
+			return err
+		}
+		transitionReason := strings.TrimSpace(*reason)
+		if transitionReason == "" {
+			transitionReason = fmt.Sprintf("status update via lit update: %s -> %s", current.Status, targetStatus)
+		}
+		issue = current
+		// [LAW:dataflow-not-control-flow] Transition execution order is fixed; data determines whether action slice is empty.
+		for _, action := range actions {
+			transitioned, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+				IssueID:   issueID,
+				Action:    action,
+				Reason:    transitionReason,
+				CreatedBy: *by,
+			})
+			if err != nil {
+				return err
+			}
+			issue = transitioned
+		}
+	}
+
+	if mutatesFields {
+		update := store.UpdateIssueInput{}
+		if visited["title"] {
+			value := *title
+			update.Title = &value
+		}
+		if visited["description"] {
+			value := *description
+			update.Description = &value
+		}
+		if visited["type"] {
+			value := *issueType
+			update.IssueType = &value
+		}
+		if visited["priority"] {
+			value := *priority
+			update.Priority = &value
+		}
+		if visited["assignee"] {
+			value := *assignee
+			update.Assignee = &value
+		}
+		if visited["labels"] {
+			value := splitCSV(*labels)
+			update.Labels = &value
+		}
+		updated, err := ap.Store.UpdateIssue(ctx, issueID, update)
+		if err != nil {
+			return err
+		}
+		issue = updated
+	}
+
+	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]string, error) {
+	if fromStatus == toStatus {
+		return nil, nil
+	}
+	action, exists := updateStatusTransitionActions[statusTransitionKey{From: fromStatus, To: toStatus}]
+	if !exists {
+		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
+	}
+	return strings.Split(action, "+"), nil
 }
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
@@ -2158,6 +2301,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lit hooks install --json",
 			"lit workspace --json",
 			"lit ready --json",
+			"lit update <issue-id> --status in_progress --json",
 			"lit start <issue-id> --reason \"claim\" --json",
 			"lit done <issue-id> --reason \"completed\" --json",
 			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json",
@@ -2192,6 +2336,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"",
 			"2) Find work",
 			"   `lit ready --json`",
+			"   `lit update <issue-id> --status in_progress --json`",
 			"   `lit start <issue-id> --reason \"claim\" --json`",
 			"   `lit ls --format lines --json`",
 			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc --json`",
@@ -2606,6 +2751,7 @@ Issue Workflow:
   new            Create an issue
   ls             List issues with filters/query/sort
   show           Show issue details
+  update         Update issue fields
   start          Claim work (open -> in_progress)
   done           Mark work complete (in_progress -> closed)
   close          Close issue(s)
@@ -2645,6 +2791,7 @@ Guidance & Tooling:
 Command Syntax:
   lit init [--json] [--skip-hooks] [--skip-agents]
   lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
+  lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
   lit start <id> --reason <text> [--by <user>] [--json]
   lit done <id> --reason <text> [--by <user>] [--json]
   lit hooks install [--json]
@@ -2659,6 +2806,7 @@ Command Syntax:
 Examples:
   lit init --json
   lit ready --json
+  lit update <issue-id> --status in_progress --json
   lit start <issue-id> --reason "claim" --json
   lit done <issue-id> --reason "completed" --json
   lit new --title "Fix renderer race" --type bug --priority 1 --json

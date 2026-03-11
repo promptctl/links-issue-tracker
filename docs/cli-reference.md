@@ -49,12 +49,19 @@ lit show <issue-id> --json
 ### Lifecycle
 
 ```sh
+lit update <issue-id> --status in_progress --json
 lit start <issue-id> --reason "claim" --json
 lit done <issue-id> --reason "implemented" --json
 lit close <issue-id> --reason "..." --json
 lit open <issue-id> --reason "..." --json
 lit archive <issue-id> --reason "..." --json
 lit delete <issue-id> --reason "..." --json
+```
+
+`lit update` also supports field edits in one command:
+
+```sh
+lit update <issue-id> --title "..." --priority 1 --assignee "alice" --labels api,urgent --json
 ```
 
 ### Relationships and labels

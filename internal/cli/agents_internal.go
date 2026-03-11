@@ -38,7 +38,8 @@ Work acquisition:
 1. Use the issue ID already assigned in context when present.
 2. Check current ready work with `+"`lit ready --json`"+`.
 3. If no issue exists for the task, create one with `+"`lit new ... --json`"+`.
-4. Record work start with `+"`lit comment add <issue-id> --body \"Starting: <plan>\" --json`"+`.
+4. Mark work in progress with `+"`lit update <issue-id> --status in_progress --json`"+` (or `+"`lit start ... --json`"+`).
+5. Record work start with `+"`lit comment add <issue-id> --body \"Starting: <plan>\" --json`"+`.
 
 Execution:
 - Prefer `+"`--json`"+` on reads and writes.

@@ -8,6 +8,7 @@
    - `lit ready --json`
    - `lit ls --query "status:open" --json`
 3. Update issue state as work starts:
+   - `lit update <issue-id> --status in_progress --json`
    - `lit start <issue-id> --reason "claim" --json`
    - `lit comment add <issue-id> --body "Starting: <plan>" --json`
 4. Sync:
