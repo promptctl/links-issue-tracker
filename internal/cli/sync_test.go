@@ -302,6 +302,14 @@ func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
 	}
 }
 
+func TestResolveSyncRemotePreservesUnknownRequestedRemote(t *testing.T) {
+	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
+	got := resolveSyncRemote("fork", "upstream", remotes)
+	if got != "fork" {
+		t.Fatalf("resolveSyncRemote() = %q, want fork", got)
+	}
+}
+
 func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
 	got := resolveSyncRemote("", "upstream", remotes)

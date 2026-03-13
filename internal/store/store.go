@@ -39,9 +39,13 @@ const (
 )
 
 type Store struct {
-	db             *sql.DB
-	workspaceID    string
-	commitLockPath string
+	db              *sql.DB
+	workspaceID     string
+	commitLockPath  string
+	queuePath       string
+	queueOffsetPath string
+	queueLockPath   string
+	telemetryDir    string
 }
 
 type retryOperation func(context.Context) error
@@ -198,9 +202,13 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 		return nil, fmt.Errorf("open dolt: %w", err)
 	}
 	s := &Store{
-		db:             db,
-		workspaceID:    workspaceID,
-		commitLockPath: filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
+		db:              db,
+		workspaceID:     workspaceID,
+		commitLockPath:  filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
+		queuePath:       filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.jsonl"),
+		queueOffsetPath: filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.offset"),
+		queueLockPath:   filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.lock"),
+		telemetryDir:    filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	if err := s.withCommitLock(ctx, s.migrate); err != nil {
@@ -2387,10 +2395,6 @@ func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) er
 	}
 	defer release()
 	return operation(lockedCtx)
-}
-
-func (s *Store) AcquireMutationLock(ctx context.Context) (context.Context, func(), error) {
-	return s.acquireCommitLock(ctx)
 }
 
 func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(), error) {
