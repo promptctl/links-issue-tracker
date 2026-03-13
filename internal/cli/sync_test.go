@@ -296,23 +296,29 @@ func TestFirstNonEmptySyncBranchFollowsDeterministicPriority(t *testing.T) {
 
 func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got := resolveSyncRemote("origin", "upstream", remotes)
+	got, err := resolveSyncRemote("origin", "upstream", remotes)
+	if err != nil {
+		t.Fatalf("resolveSyncRemote() error = %v", err)
+	}
 	if got != "origin" {
 		t.Fatalf("resolveSyncRemote() = %q, want origin", got)
 	}
 }
 
-func TestResolveSyncRemotePreservesUnknownRequestedRemote(t *testing.T) {
+func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got := resolveSyncRemote("fork", "upstream", remotes)
-	if got != "fork" {
-		t.Fatalf("resolveSyncRemote() = %q, want fork", got)
+	_, err := resolveSyncRemote("fork", "upstream", remotes)
+	if err == nil {
+		t.Fatal("resolveSyncRemote() error = nil, want error for unknown requested remote")
 	}
 }
 
 func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got := resolveSyncRemote("", "upstream", remotes)
+	got, err := resolveSyncRemote("", "upstream", remotes)
+	if err != nil {
+		t.Fatalf("resolveSyncRemote() error = %v", err)
+	}
 	if got != "upstream" {
 		t.Fatalf("resolveSyncRemote() = %q, want upstream", got)
 	}
@@ -320,7 +326,10 @@ func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 
 func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}}
-	got := resolveSyncRemote("", "", remotes)
+	got, err := resolveSyncRemote("", "", remotes)
+	if err != nil {
+		t.Fatalf("resolveSyncRemote() error = %v", err)
+	}
 	if got != "origin" {
 		t.Fatalf("resolveSyncRemote() = %q, want origin", got)
 	}
@@ -328,14 +337,21 @@ func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
 
 func TestResolveSyncRemoteIgnoresUnknownUpstreamRemote(t *testing.T) {
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
-	got := resolveSyncRemote("", "missing", remotes)
+	got, err := resolveSyncRemote("", "missing", remotes)
+	if err != nil {
+		t.Fatalf("resolveSyncRemote() error = %v", err)
+	}
 	if got != "" {
 		t.Fatalf("resolveSyncRemote() = %q, want empty", got)
 	}
 }
 
 func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
-	if got := resolveSyncRemote("", "", nil); got != "" {
+	got, err := resolveSyncRemote("", "", nil)
+	if err != nil {
+		t.Fatalf("resolveSyncRemote() error = %v", err)
+	}
+	if got != "" {
 		t.Fatalf("resolveSyncRemote() = %q, want empty", got)
 	}
 }

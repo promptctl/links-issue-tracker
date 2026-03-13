@@ -1385,11 +1385,14 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
-		remoteName := resolveSyncRemote(
+		remoteName, remoteErr := resolveSyncRemote(
 			strings.TrimSpace(*remote),
 			workspace.UpstreamRemote(ws.RootDir),
 			syncState.gitRemotes,
 		)
+		if remoteErr != nil {
+			return remoteErr
+		}
 		if remoteName == "" {
 			payload := map[string]any{
 				"status": "skipped",
@@ -1425,11 +1428,14 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
 		}
-		remoteName := resolveSyncRemote(
+		remoteName, remoteErr := resolveSyncRemote(
 			strings.TrimSpace(*remote),
 			workspace.UpstreamRemote(ws.RootDir),
 			syncState.gitRemotes,
 		)
+		if remoteErr != nil {
+			return remoteErr
+		}
 		if remoteName == "" {
 			payload := map[string]any{
 				"status": "skipped",
@@ -1445,6 +1451,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if err != nil {
 			return err
 		}
+		// [LAW:dataflow-not-control-flow] Sync push runs one deterministic path from resolved remote+branch state; retries are not encoded in control flow.
 		commandArgs := buildSyncPushCommandArgs(
 			remoteName,
 			syncBranch,
@@ -1574,11 +1581,14 @@ func firstNonEmptySyncBranch(candidates ...string) string {
 	return ""
 }
 
-func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) string {
+func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {
 	validatedRequestedRemote := strings.TrimSpace(requestedRemote)
 	if validatedRequestedRemote != "" {
-		// [LAW:one-source-of-truth] Explicit CLI remote is canonical for sync pull/push remote targeting.
-		return validatedRequestedRemote
+		// [LAW:no-silent-fallbacks] Explicit remote that doesn't exist is a configuration error, not a skip condition.
+		if !syncRemoteExists(validatedRequestedRemote, gitRemotes) {
+			return "", fmt.Errorf("requested remote %q not found in configured git remotes", validatedRequestedRemote)
+		}
+		return validatedRequestedRemote, nil
 	}
 	singleRemote := ""
 	if len(gitRemotes) == 1 {
@@ -1589,7 +1599,7 @@ func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes
 		validatedUpstreamRemote = ""
 	}
 	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
-	return firstNonEmptySyncRemote(validatedUpstreamRemote, singleRemote)
+	return firstNonEmptySyncRemote(validatedUpstreamRemote, singleRemote), nil
 }
 
 func firstNonEmptySyncRemote(candidates ...string) string {
