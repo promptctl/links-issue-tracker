@@ -22,6 +22,8 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/backup"
+	"github.com/bmf/links-issue-tracker/internal/beads"
+	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/merge"
 	"github.com/bmf/links-issue-tracker/internal/model"
@@ -729,12 +731,16 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if fs.NArg() != 0 {
 		return errors.New("usage: lnks ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]")
 	}
+	cfg, err := config.Load(ap.Workspace.RootDir)
+	if err != nil {
+		return err
+	}
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
 		Status:          "open",
 		Assignee:        strings.TrimSpace(*assignee),
 		IncludeArchived: false,
 		IncludeDeleted:  false,
-		Limit:           *limit,
+		Limit:           0,
 		SortBy: []store.SortSpec{
 			{Field: "priority"},
 			{Field: "updated_at", Desc: true},
@@ -743,18 +749,17 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err != nil {
 		return err
 	}
+	ready, notReady, err := deriveReadySections(ctx, ap.Store, issues, cfg.Ready.RequiredFields)
+	if err != nil {
+		return err
+	}
+	ready, notReady = applyReadyLimit(ready, notReady, *limit)
 	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, issues)
+		return writeJSON(stdout, readyCommandOutput{Ready: ready, NotReady: notReady})
 	}
+	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	columns := parseColumns(*columnsExpr)
-	switch strings.ToLower(strings.TrimSpace(*format)) {
-	case "", "lines":
-		return printIssueLines(stdout, issues, columns)
-	case "table":
-		return printIssueTable(stdout, issues, columns)
-	default:
-		return fmt.Errorf("unsupported --format %q", *format)
-	}
+	return printReadySections(stdout, formatMode, columns, ready, notReady)
 }
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -946,7 +951,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
-
 
 func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 || args[0] != "add" {
