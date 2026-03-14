@@ -58,7 +58,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 
 	if scan.HasResidue() {
 		// [LAW:single-enforcer] init reuses migration engine; cleanup policy is not reimplemented locally.
-		migration, migrateErr := migrateBeadsWithOptions(ws, true, migrateApplyOptions{InstallHooks: false, InstallAgents: false}, &scan)
+		migration, migrateErr := migrateBeadsWithOptions(ctx, ws, true, migrateApplyOptions{InstallHooks: false, InstallAgents: false}, &scan)
 		if migrateErr != nil {
 			return migrateErr
 		}
@@ -113,16 +113,10 @@ func shouldBypassBeadsPreflight(args []string) bool {
 		return true
 	}
 	switch args[0] {
-	case "help", "-h", "--help", "completion", "init":
+	case "help", "-h", "--help", "completion", "init", "migrate":
 		return true
 	default:
-		if args[0] != "migrate" {
-			return false
-		}
-		if len(args) < 2 {
-			return false
-		}
-		return args[1] == "beads"
+		return false
 	}
 }
 

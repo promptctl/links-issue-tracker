@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"flag"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/beads"
+	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
@@ -25,15 +28,21 @@ type BeadsMigrationRequiredError struct {
 
 func (e BeadsMigrationRequiredError) Error() string {
 	if strings.TrimSpace(e.Summary) == "" {
-		return "beads residue detected; run 'lit migrate beads --apply --json' before running other commands"
+		return "beads residue detected; run 'lit migrate --apply --json' before running other commands"
 	}
-	return fmt.Sprintf("beads residue detected (%s); run 'lit migrate beads --apply --json' before running other commands", e.Summary)
+	return fmt.Sprintf("beads residue detected (%s); run 'lit migrate --apply --json' before running other commands", e.Summary)
 }
 
 type migrateBeadsReport struct {
 	Mode                string   `json:"mode"`
 	Applied             bool     `json:"applied"`
 	ResidueDetected     bool     `json:"residue_detected"`
+	DataImported        bool     `json:"data_imported"`
+	ImportSource        string   `json:"import_source,omitempty"`
+	ImportIssues        int      `json:"import_issues"`
+	ImportRelations     int      `json:"import_relations"`
+	ImportComments      int      `json:"import_comments"`
+	ImportLabels        int      `json:"import_labels"`
 	HooksDir            string   `json:"hooks_dir"`
 	HookFilesScanned    int      `json:"hook_files_scanned"`
 	BeadsHookFiles      []string `json:"beads_hook_files"`
@@ -157,31 +166,27 @@ var repoLocalBeadsConfigFiles = []string{
 	"claude-plugin/.claude-plugin/plugin.json",
 }
 
-func runMigrate(stdout io.Writer, ws workspace.Info, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
-	}
-	switch args[0] {
-	case "beads":
-		return runMigrateBeads(stdout, ws, args[1:])
-	default:
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
-	}
-}
-
-func runMigrateBeads(stdout io.Writer, ws workspace.Info, args []string) error {
-	fs := flag.NewFlagSet("migrate beads", flag.ContinueOnError)
+func runMigrate(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	applyChanges := fs.Bool("apply", false, "Apply migration changes (default: dry-run)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
+	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
+	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
+		return errors.New("usage: lit migrate [--apply] [--json] [--skip-hooks] [--skip-agents]")
 	}
 
-	report, err := migrateBeads(ws, *applyChanges)
+	report, err := migrateBeadsWithOptions(
+		ctx,
+		ws,
+		*applyChanges,
+		migrateApplyOptions{InstallHooks: !*skipHooks, InstallAgents: !*skipAgents},
+		nil,
+	)
 	if err != nil {
 		return err
 	}
@@ -189,12 +194,13 @@ func runMigrateBeads(stdout io.Writer, ws workspace.Info, args []string) error {
 		r := v.(migrateBeadsReport)
 		_, printErr := fmt.Fprintf(
 			w,
-			"mode=%s scanned=%d beads_hooks=%d modified=%d removed=%d agents_updated=%t lit_hook_installed=%t\n",
+			"mode=%s scanned=%d beads_hooks=%d modified=%d removed=%d data_imported=%t agents_updated=%t lit_hook_installed=%t\n",
 			r.Mode,
 			r.HookFilesScanned,
 			len(r.BeadsHookFiles),
 			len(r.HookFilesModified),
 			len(r.HookFilesRemoved),
+			r.DataImported,
 			r.AgentsUpdated,
 			r.LitHookInstalled,
 		)
@@ -202,12 +208,7 @@ func runMigrateBeads(stdout io.Writer, ws workspace.Info, args []string) error {
 	})
 }
 
-func migrateBeads(ws workspace.Info, applyChanges bool) (migrateBeadsReport, error) {
-	// [LAW:single-enforcer] migrateBeadsWithOptions owns all migration side effects for both `migrate` and `init`.
-	return migrateBeadsWithOptions(ws, applyChanges, migrateApplyOptions{InstallHooks: true, InstallAgents: true}, nil)
-}
-
-func migrateBeadsWithOptions(ws workspace.Info, applyChanges bool, options migrateApplyOptions, preScanned *beadsResidueScan) (migrateBeadsReport, error) {
+func migrateBeadsWithOptions(ctx context.Context, ws workspace.Info, applyChanges bool, options migrateApplyOptions, preScanned *beadsResidueScan) (migrateBeadsReport, error) {
 	mode := "dry-run"
 	if applyChanges {
 		mode = "apply"
@@ -243,13 +244,36 @@ func migrateBeadsWithOptions(ws workspace.Info, applyChanges bool, options migra
 	for _, plan := range scan.ConfigPlans {
 		report.ConfigFilesDetected = append(report.ConfigFilesDetected, plan.Path)
 	}
+	beadsDataPath, hasBeadsDataPath, beadsDataPathErr := detectBeadsDataPath(ws.RootDir)
+	if beadsDataPathErr != nil {
+		return report, beadsDataPathErr
+	}
+	if hasBeadsDataPath {
+		report.ImportSource = beadsDataPath
+	}
 
 	if !applyChanges {
 		report.Notes = append(report.Notes, "dry-run: no files modified; rerun with --apply")
 		if options.InstallHooks || options.InstallAgents {
 			report.Notes = append(report.Notes, "dry-run: lit setup stages skipped")
 		}
+		if hasBeadsDataPath {
+			report.Notes = append(report.Notes, "dry-run: beads issue data import skipped")
+		}
 		return report, nil
+	}
+
+	if hasBeadsDataPath {
+		// [LAW:one-source-of-truth] Reuse the canonical beads importer so migrate and beads import apply identical translation rules.
+		importSummary, importErr := importBeadsData(ctx, ws, beadsDataPath)
+		if importErr != nil {
+			return report, importErr
+		}
+		report.DataImported = true
+		report.ImportIssues = importSummary.Issues
+		report.ImportRelations = importSummary.Relations
+		report.ImportComments = importSummary.Comments
+		report.ImportLabels = importSummary.Labels
 	}
 
 	targets := scan.backupTargets()
@@ -562,6 +586,61 @@ func createMigrationBackup(ws workspace.Info, paths []string) (string, error) {
 		return "", fmt.Errorf("write backup manifest: %w", err)
 	}
 	return backupDir, nil
+}
+
+func detectBeadsDataPath(rootDir string) (string, bool, error) {
+	path := filepath.Join(rootDir, ".beads")
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("stat beads data path %s: %w", path, err)
+	}
+	if !info.IsDir() {
+		return "", false, nil
+	}
+	candidates := []string{
+		filepath.Join(path, ".dolt"),
+		filepath.Join(path, "beads", ".dolt"),
+	}
+	entries, readErr := os.ReadDir(path)
+	if readErr != nil {
+		return "", false, fmt.Errorf("read beads data path %s: %w", path, readErr)
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		candidates = append(candidates, filepath.Join(path, entry.Name(), ".dolt"))
+	}
+
+	for _, candidate := range candidates {
+		doltInfo, doltErr := os.Stat(candidate)
+		if doltErr != nil {
+			if errors.Is(doltErr, os.ErrNotExist) {
+				continue
+			}
+			return "", false, fmt.Errorf("stat beads dolt dir %s: %w", candidate, doltErr)
+		}
+		if doltInfo.IsDir() {
+			return path, true, nil
+		}
+	}
+	return "", false, nil
+}
+
+func importBeadsData(ctx context.Context, ws workspace.Info, beadsPath string) (beads.Summary, error) {
+	st, err := store.Open(ctx, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		return beads.Summary{}, fmt.Errorf("open links store for beads import: %w", err)
+	}
+	defer st.Close()
+	summary, importErr := beads.Import(ctx, st, beadsPath)
+	if importErr != nil {
+		return beads.Summary{}, fmt.Errorf("import beads data from %s: %w", beadsPath, importErr)
+	}
+	return summary, nil
 }
 
 func copyPath(src string, dst string) error {

@@ -37,7 +37,7 @@ func TestRunBlocksNonInitCommandsWhenBeadsResidueDetected(t *testing.T) {
 	if !errors.As(err, &preflightErr) {
 		t.Fatalf("expected BeadsMigrationRequiredError, got %T: %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "lit migrate beads --apply --json") {
+	if !strings.Contains(err.Error(), "lit migrate --apply --json") {
 		t.Fatalf("preflight error missing remediation command: %v", err)
 	}
 }
@@ -50,9 +50,8 @@ func TestShouldBypassBeadsPreflight(t *testing.T) {
 		{args: []string{"help"}, want: true},
 		{args: []string{"completion", "bash"}, want: true},
 		{args: []string{"init"}, want: true},
-		{args: []string{"migrate", "beads"}, want: true},
-		{args: []string{"migrate"}, want: false},
-		{args: []string{"migrate", "other"}, want: false},
+		{args: []string{"migrate"}, want: true},
+		{args: []string{"migrate", "--apply"}, want: true},
 		{args: []string{"ls"}, want: false},
 	}
 	for _, tc := range cases {

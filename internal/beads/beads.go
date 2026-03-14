@@ -316,7 +316,8 @@ func resolveDoltTarget(inputPath string) (string, string, error) {
 	}
 	base := filepath.Base(clean)
 	ext := filepath.Ext(base)
-	if ext != "" {
+	isHiddenDirName := strings.HasPrefix(base, ".") && strings.Count(base, ".") == 1
+	if ext != "" && !isHiddenDirName {
 		rootDir := filepath.Dir(clean)
 		dbName := normalizeDatabaseName(strings.TrimSuffix(base, ext))
 		if dbName == "" {

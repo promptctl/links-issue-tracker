@@ -45,7 +45,7 @@ lit sync remote ls --json
 If needed, you can run migration directly:
 
 ```sh
-lit migrate beads --apply --json
+lit migrate --apply --json
 ```
 
 Create and inspect work:
