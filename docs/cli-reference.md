@@ -75,7 +75,7 @@ lnks label add <issue-id> <label> --json
 ### Sync and automation
 
 ```sh
-lnks migrate beads --apply --json
+lnks migrate --apply --json
 lnks hooks install
 lnks sync status --json
 lnks sync pull --json

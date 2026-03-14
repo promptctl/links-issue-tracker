@@ -50,7 +50,7 @@ lnks sync remote ls --json
 If needed, you can run migration directly:
 
 ```sh
-lnks migrate beads --apply --json
+lnks migrate --apply --json
 ```
 
 Create and inspect work:

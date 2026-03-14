@@ -8,9 +8,13 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/bmf/links-issue-tracker/internal/beads"
+	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
-func TestMigrateBeadsDryRunDoesNotModifyFiles(t *testing.T) {
+func TestMigrateDryRunDoesNotModifyFiles(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	hookPath := filepath.Join(repo, ".git", "hooks", "pre-push")
@@ -32,8 +36,8 @@ func TestMigrateBeadsDryRunDoesNotModifyFiles(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"migrate", "beads", "--json"}); err != nil {
-		t.Fatalf("Run(migrate beads --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"migrate", "--json"}); err != nil {
+		t.Fatalf("Run(migrate --json) error = %v", err)
 	}
 
 	var payload map[string]any
@@ -60,7 +64,7 @@ func TestMigrateBeadsDryRunDoesNotModifyFiles(t *testing.T) {
 	}
 }
 
-func TestMigrateBeadsApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
+func TestMigrateApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	hookPath := filepath.Join(repo, ".git", "hooks", "pre-push")
@@ -94,8 +98,8 @@ func TestMigrateBeadsApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"migrate", "beads", "--apply", "--json"}); err != nil {
-		t.Fatalf("Run(migrate beads --apply --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"migrate", "--apply", "--json"}); err != nil {
+		t.Fatalf("Run(migrate --apply --json) error = %v", err)
 	}
 
 	var payload map[string]any
@@ -145,6 +149,113 @@ func TestMigrateBeadsApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".claude", "settings.json")); !os.IsNotExist(err) {
 		t.Fatalf(".claude/settings.json should be removed when only beads residue remains, stat error: %v", err)
+	}
+}
+
+func TestMigrateApplyImportsBeadsIssueData(t *testing.T) {
+	ctx := context.Background()
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	sourceStore, err := store.Open(ctx, filepath.Join(t.TempDir(), "source-links"), "workspace-source")
+	if err != nil {
+		t.Fatalf("store.Open(source) error = %v", err)
+	}
+	t.Cleanup(func() { _ = sourceStore.Close() })
+
+	created, err := sourceStore.CreateIssue(ctx, store.CreateIssueInput{
+		Title:       "Imported from beads",
+		Description: "beads payload",
+		IssueType:   "bug",
+		Priority:    1,
+		Assignee:    "bmf",
+		Labels:      []string{"legacy"},
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := sourceStore.AddComment(ctx, store.AddCommentInput{
+		IssueID:   created.ID,
+		Body:      "migration comment",
+		CreatedBy: "bmf",
+	}); err != nil {
+		t.Fatalf("AddComment() error = %v", err)
+	}
+
+	beadsPath := filepath.Join(repo, ".beads")
+	exportSummary, err := beads.Export(ctx, sourceStore, filepath.Join(beadsPath, "beads.db"))
+	if err != nil {
+		t.Fatalf("beads.Export() error = %v", err)
+	}
+	if exportSummary.Issues != 1 || exportSummary.Comments != 1 {
+		t.Fatalf("exportSummary = %#v", exportSummary)
+	}
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir(repo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	var stdout bytes.Buffer
+	if err := Run(ctx, &stdout, &stdout, []string{"migrate", "--apply", "--json"}); err != nil {
+		t.Fatalf("Run(migrate --apply --json) error = %v", err)
+	}
+
+	var payload map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	if payload["data_imported"] != true {
+		t.Fatalf("data_imported = %v, want true", payload["data_imported"])
+	}
+	importSource, ok := payload["import_source"].(string)
+	if !ok {
+		t.Fatalf("import_source = %v, want string", payload["import_source"])
+	}
+	normalizePath := func(path string) string {
+		return strings.TrimPrefix(filepath.Clean(path), "/private")
+	}
+	resolvedImportSource := normalizePath(importSource)
+	resolvedBeadsPath := normalizePath(beadsPath)
+	if resolvedImportSource != resolvedBeadsPath {
+		t.Fatalf("import_source = %q, want %q", importSource, beadsPath)
+	}
+	if issuesCount, ok := payload["import_issues"].(float64); !ok || int(issuesCount) != 1 {
+		t.Fatalf("import_issues = %v, want 1", payload["import_issues"])
+	}
+	if commentsCount, ok := payload["import_comments"].(float64); !ok || int(commentsCount) != 1 {
+		t.Fatalf("import_comments = %v, want 1", payload["import_comments"])
+	}
+
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	destStore, err := store.Open(ctx, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("store.Open(dest) error = %v", err)
+	}
+	t.Cleanup(func() { _ = destStore.Close() })
+
+	imported, err := destStore.GetIssueDetail(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if imported.Issue.Title != created.Title {
+		t.Fatalf("imported title = %q, want %q", imported.Issue.Title, created.Title)
+	}
+	if len(imported.Comments) != 1 || imported.Comments[0].Body != "migration comment" {
+		t.Fatalf("imported comments = %#v", imported.Comments)
+	}
+	if len(imported.Issue.Labels) != 1 || imported.Issue.Labels[0] != "legacy" {
+		t.Fatalf("imported labels = %#v", imported.Issue.Labels)
+	}
+	if _, err := os.Stat(beadsPath); !os.IsNotExist(err) {
+		t.Fatalf(".beads should be removed after migrate apply, stat error: %v", err)
 	}
 }
 

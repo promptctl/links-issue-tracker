@@ -22,7 +22,6 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/backup"
-	"github.com/bmf/links-issue-tracker/internal/beads"
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/merge"
 	"github.com/bmf/links-issue-tracker/internal/model"
@@ -144,11 +143,8 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		})
 	})
 	addGroupedPassthrough(root, "maintenance", "migrate", "Migrate from Beads to links", func(args []string) error {
-		if err := validateMigrateCommandPath(args); err != nil {
-			return err
-		}
 		return runWithWorkspace(ctx, append([]string{"migrate"}, args...), false, func(ws workspace.Info) error {
-			return runMigrate(stdout, ws, args)
+			return runMigrate(ctx, stdout, ws, args)
 		})
 	})
 	addGroupedPassthrough(root, "data", "sync", "Mirror Dolt data through git remotes", func(args []string) error {
@@ -266,14 +262,6 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runExport(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "data", "beads", "Import/export Beads databases", func(args []string) error {
-		if err := validateBeadsCommandPath(args); err != nil {
-			return err
-		}
-		return runWithApp(ctx, append([]string{"beads"}, args...), func(commandCtx context.Context, ap *app.App) error {
-			return runBeads(commandCtx, stdout, ap, args)
-		})
-	})
 	addGroupedPassthrough(root, "maintenance", "workspace", "Show workspace metadata", func(args []string) error {
 		return runWithWorkspace(ctx, append([]string{"workspace"}, args...), false, func(ws workspace.Info) error {
 			return runWorkspace(stdout, ws, args)
@@ -365,10 +353,6 @@ func validateHooksCommandPath(args []string) error {
 	return validateNestedCommandPath(args, "usage: lnks hooks install [--json]", "install")
 }
 
-func validateMigrateCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks migrate beads [--apply] [--json]", "beads")
-}
-
 func validateSyncCommandPath(args []string) error {
 	return validateNestedCommandPath(args, "usage: lnks sync <status|remote|fetch|pull|push> ...", "status", "remote", "fetch", "pull", "push")
 }
@@ -387,10 +371,6 @@ func validateParentCommandPath(args []string) error {
 
 func validateDepCommandPath(args []string) error {
 	return validateNestedCommandPath(args, "usage: lnks dep <add|rm|ls> ...", "add", "rm", "ls")
-}
-
-func validateBeadsCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks beads <import|export> --db <path> [--json]", "import", "export")
 }
 
 func validateBackupCommandPath(args []string) error {
@@ -1220,56 +1200,6 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	return printValue(stdout, export, *jsonOut, func(w io.Writer, _ any) error {
 		return writeJSON(w, export)
 	})
-}
-
-func runBeads(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lnks beads <import|export> --db <path> [--json]")
-	}
-	switch args[0] {
-	case "import":
-		fs := flag.NewFlagSet("beads import", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		dbPath := fs.String("db", "", "Path to beads Dolt root/database")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		if strings.TrimSpace(*dbPath) == "" {
-			return errors.New("usage: lnks beads import --db <path> [--json]")
-		}
-		summary, err := beads.Import(ctx, ap.Store, *dbPath)
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, summary, *jsonOut, func(w io.Writer, v any) error {
-			s := v.(beads.Summary)
-			_, err := fmt.Fprintf(w, "imported issues=%d relations=%d comments=%d labels=%d\n", s.Issues, s.Relations, s.Comments, s.Labels)
-			return err
-		})
-	case "export":
-		fs := flag.NewFlagSet("beads export", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		dbPath := fs.String("db", "", "Path to beads Dolt root/database")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		if strings.TrimSpace(*dbPath) == "" {
-			return errors.New("usage: lnks beads export --db <path> [--json]")
-		}
-		summary, err := beads.Export(ctx, ap.Store, *dbPath)
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, summary, *jsonOut, func(w io.Writer, v any) error {
-			s := v.(beads.Summary)
-			_, err := fmt.Fprintf(w, "exported issues=%d relations=%d comments=%d labels=%d\n", s.Issues, s.Relations, s.Comments, s.Labels)
-			return err
-		})
-	default:
-		return errors.New("usage: lnks beads <import|export> --db <path> [--json]")
-	}
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
@@ -2356,7 +2286,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		"workflow": []string{
 			"Initialize and auto-migrate with `lnks init --json`.",
 			"Discover workspace identity with `lnks workspace --json`.",
-			"Migrate legacy Beads wiring explicitly with `lnks migrate beads --apply --json` when needed.",
+			"Migrate legacy Beads data/wiring explicitly with `lnks migrate --apply --json` when needed.",
 			"Install git hook automation once with `lnks hooks install`.",
 			"List ready work with `lnks ready --json` (or `lnks ls --query \"status:open\" --json`).",
 			"Create issues with `lnks new ...`; use `--type epic` for epics.",
@@ -2367,7 +2297,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		},
 		"examples": []string{
 			"lnks init --json",
-			"lnks migrate beads --apply --json",
+			"lnks migrate --apply --json",
 			"lnks hooks install --json",
 			"lnks workspace --json",
 			"lnks ready --json",
@@ -2400,7 +2330,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"",
 			"1) Discover context",
 			"   `lnks init --json`",
-			"   `lnks migrate beads --apply --json`  # for legacy Beads repos",
+			"   `lnks migrate --apply --json`  # for legacy Beads repos",
 			"   `lnks hooks install --json`",
 			"   `lnks workspace --json`",
 			"",
@@ -2852,7 +2782,6 @@ Sync & Data:
   sync           Mirror Dolt data through git remotes
   backup         Create/list/restore backup snapshots
   recover        Recover from sync file or backup
-  beads          Import/export from Beads Dolt databases
 
 Setup & Maintenance:
   workspace      Show workspace metadata
@@ -2873,7 +2802,7 @@ Command Syntax:
   lnks start <id> --reason <text> [--by <user>] [--json]
   lnks done <id> --reason <text> [--by <user>] [--json]
   lnks hooks install [--json]
-  lnks migrate beads [--apply] [--json]
+  lnks migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
   lnks quickstart [--json]
   lnks completion <bash|zsh|fish>
   lnks workspace [--json]

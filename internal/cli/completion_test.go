@@ -24,6 +24,26 @@ func TestCompletionScriptsRender(t *testing.T) {
 	}
 }
 
+func TestCompletionScriptsIncludeUpdateCommand(t *testing.T) {
+	cases := []struct {
+		shell string
+		want  string
+	}{
+		{shell: "bash", want: "show update start"},
+		{shell: "zsh", want: "'update:update issue fields'"},
+		{shell: "fish", want: "show update start"},
+	}
+	for _, tc := range cases {
+		var stdout bytes.Buffer
+		if err := runCompletion(&stdout, []string{tc.shell}); err != nil {
+			t.Fatalf("runCompletion(%q) error = %v", tc.shell, err)
+		}
+		if !strings.Contains(stdout.String(), tc.want) {
+			t.Fatalf("%s completion missing update marker %q", tc.shell, tc.want)
+		}
+	}
+}
+
 func TestRunHelpIncludesCompletion(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {

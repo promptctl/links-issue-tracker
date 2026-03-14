@@ -11,7 +11,7 @@ lnks workspace --json
 If this repository used Beads before, run the migration once:
 
 ```sh
-lnks migrate beads --apply --json
+lnks migrate --apply --json
 ```
 
 ## 2. Create your first issue
