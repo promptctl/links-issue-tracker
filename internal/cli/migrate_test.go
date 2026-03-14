@@ -14,7 +14,7 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
-func TestMigrateBeadsDryRunDoesNotModifyFiles(t *testing.T) {
+func TestMigrateDryRunDoesNotModifyFiles(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	hookPath := filepath.Join(repo, ".git", "hooks", "pre-push")
@@ -64,7 +64,7 @@ func TestMigrateBeadsDryRunDoesNotModifyFiles(t *testing.T) {
 	}
 }
 
-func TestMigrateBeadsApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
+func TestMigrateApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	hookPath := filepath.Join(repo, ".git", "hooks", "pre-push")

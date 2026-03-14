@@ -13,13 +13,13 @@ import (
 )
 
 type initReport struct {
-	Status       string              `json:"status"`
-	WorkspaceID  string              `json:"workspace_id"`
-	DatabasePath string              `json:"database_path"`
-	Migrated     bool                `json:"migrated"`
-	Migration    *migrateBeadsReport `json:"migration,omitempty"`
-	Hooks        string              `json:"hooks"`
-	Agents       string              `json:"agents"`
+	Status       string         `json:"status"`
+	WorkspaceID  string         `json:"workspace_id"`
+	DatabasePath string         `json:"database_path"`
+	Migrated     bool           `json:"migrated"`
+	Migration    *migrateReport `json:"migration,omitempty"`
+	Hooks        string         `json:"hooks"`
+	Agents       string         `json:"agents"`
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -58,7 +58,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 
 	if scan.HasResidue() {
 		// [LAW:single-enforcer] init reuses migration engine; cleanup policy is not reimplemented locally.
-		migration, migrateErr := migrateBeadsWithOptions(ctx, ws, true, migrateApplyOptions{InstallHooks: false, InstallAgents: false}, &scan)
+		migration, migrateErr := runMigrationWithOptions(ctx, ws, true, migrateApplyOptions{InstallHooks: false, InstallAgents: false}, &scan)
 		if migrateErr != nil {
 			return migrateErr
 		}
