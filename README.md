@@ -1,6 +1,6 @@
 # links
 
-`links` is a worktree-native issue tracker with a flat CLI: `lit`.
+`links` is a worktree-native issue tracker with a flat CLI: `lnks`.
 
 ## Inspiration and Credit
 
@@ -25,14 +25,12 @@ Install:
 Install from outside a checkout:
 
 ```sh
-go install github.com/bmf/links-issue-tracker/cmd/lit@latest
+go install github.com/bmf/links-issue-tracker/cmd/lnks@latest
 ```
 
-Output mode defaults to `auto`:
-- TTY sessions emit text
-- non-TTY sessions emit JSON
+Output is auto-detected (text on TTY, JSON in pipes). Override with `--json`, `--output text|json`, or `LNKS_OUTPUT=text|json`.
+
 - `--json` remains an explicit JSON shorthand for script compatibility
-- `--output auto|text|json` and `LIT_OUTPUT` control overrides
 - failure output in JSON mode uses a stable envelope:
   - `error.code` (`usage|validation|not_found|conflict|corruption|generic`)
   - `error.reason`
@@ -44,48 +42,48 @@ Output mode defaults to `auto`:
 Initialize in your repo (auto-migrates Beads residue and installs defaults):
 
 ```sh
-lit init --json
+lnks init --json
 git remote -v
-lit sync remote ls --json
+lnks sync remote ls --json
 ```
 
 If needed, you can run migration directly:
 
 ```sh
-lit migrate beads --apply --json
+lnks migrate beads --apply --json
 ```
 
 Create and inspect work:
 
 ```sh
-lit new --title "First task" --type task --priority 2 --json
-lit ready --json
-lit update <issue-id> --status in_progress --json
-lit start <issue-id> --reason "claim" --json
-lit done <issue-id> --reason "completed" --json
-lit ls --json
-lit show <issue-id> --json
+lnks new --title "First task" --type task --priority 2 --json
+lnks ready --json
+lnks update <issue-id> --status in_progress --json
+lnks start <issue-id> --reason "claim" --json
+lnks done <issue-id> --reason "completed" --json
+lnks ls --json
+lnks show <issue-id> --json
 ```
 
 Push/pull DB changes through Dolt remotes mirrored from Git remotes:
 
 ```sh
-lit sync pull --json
-# ...make lit changes...
-lit sync push --json
+lnks sync pull --json
+# ...make lnks changes...
+lnks sync push --json
 ```
 
 Useful commands:
 
 ```sh
-lit quickstart --json
-lit workspace --json
-lit doctor --json
+lnks quickstart --json
+lnks workspace --json
+lnks doctor --json
 ```
 
 ## More docs
 
 - Docs index (recommended start): [docs/index.md](docs/index.md)
 - Sync and remote behavior: [docs/dolt-remote-sync.md](docs/dolt-remote-sync.md)
-- Full command reference: `lit help`
-- Agent-focused workflow: `lit quickstart` / `lit quickstart --json`
+- Full command reference: `lnks help`
+- Agent-focused workflow: `lnks quickstart` / `lnks quickstart --json`

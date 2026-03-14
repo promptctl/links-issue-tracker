@@ -38,7 +38,7 @@ func TestBuildCommandErrorPayloadPreflightRemediation(t *testing.T) {
 	if payload.Reason != "beads_migration_required" {
 		t.Fatalf("reason = %q, want beads_migration_required", payload.Reason)
 	}
-	if !strings.Contains(payload.Remediation, "lit migrate beads --apply --json") {
+	if !strings.Contains(payload.Remediation, "lnks migrate beads --apply --json") {
 		t.Fatalf("unexpected remediation: %q", payload.Remediation)
 	}
 }

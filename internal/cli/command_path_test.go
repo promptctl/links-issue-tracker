@@ -24,11 +24,11 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{args: []string{"comment"}, wantErr: "usage: lit comment add <id> --body <text>"},
-		{args: []string{"label", "--help"}, wantErr: "usage: lit label <add|rm> ..."},
-		{args: []string{"dep", "unknown"}, wantErr: "usage: lit dep <add|rm|ls> ..."},
-		{args: []string{"sync", "unknown"}, wantErr: "usage: lit sync <status|remote|fetch|pull|push> ..."},
-		{args: []string{"hooks"}, wantErr: "usage: lit hooks install [--json]"},
+		{args: []string{"comment"}, wantErr: "usage: lnks comment add <id> --body <text>"},
+		{args: []string{"label", "--help"}, wantErr: "usage: lnks label <add|rm> ..."},
+		{args: []string{"dep", "unknown"}, wantErr: "usage: lnks dep <add|rm|ls> ..."},
+		{args: []string{"sync", "unknown"}, wantErr: "usage: lnks sync <status|remote|fetch|pull|push> ..."},
+		{args: []string{"hooks"}, wantErr: "usage: lnks hooks install [--json]"},
 	}
 
 	for _, tc := range cases {
@@ -106,7 +106,7 @@ func TestRunNestedHelpAfterValidSubcommandPassesThrough(t *testing.T) {
 	if !strings.Contains(output, "Usage of dep add:") {
 		t.Fatalf("help output = %q, want dep add help text", output)
 	}
-	if strings.Contains(output, "usage: lit dep <add|rm|ls> ...") {
+	if strings.Contains(output, "usage: lnks dep <add|rm|ls> ...") {
 		t.Fatalf("help output unexpectedly returned top-level dep usage: %q", output)
 	}
 }

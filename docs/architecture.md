@@ -15,16 +15,16 @@ This keeps local state durable and auditable after every mutation.
 
 Sync uses Dolt remotes, but remote configuration comes from Git remotes.
 
-Before every `lit sync` command, `links` reconciles Dolt remotes from `git remote -v` fetch URLs.
+Before every `lnks sync` command, `links` reconciles Dolt remotes from `git remote -v` fetch URLs.
 
 ## Automation model
 
-`lit hooks install` installs a shared `pre-push` hook that:
+`lnks hooks install` installs a shared `pre-push` hook that:
 
-- attempts one canonical `lit sync push` per git push
+- attempts one canonical `lnks sync push` per git push
 - never blocks `git push`
 - emits a yellow warning line with trigger, remote, retry command, and trace path on sync failure
-- writes inspectable automatic-action traces under `$(lit workspace --json | jq -r .traces_dir)`
+- writes inspectable automatic-action traces under `$(lnks workspace --json | jq -r .traces_dir)`
 
 ## Failure model
 

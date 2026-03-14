@@ -3,28 +3,28 @@
 ## Baseline loop
 
 1. Read workspace context:
-   - `lit workspace --json`
+   - `lnks workspace --json`
 2. Find work:
-   - `lit ready --json`
-   - `lit ls --query "status:open" --json`
+   - `lnks ready --json`
+   - `lnks ls --query "status:open" --json`
 3. Update issue state as work starts:
-   - `lit update <issue-id> --status in_progress --json`
-   - `lit start <issue-id> --reason "claim" --json`
-   - `lit comment add <issue-id> --body "Starting: <plan>" --json`
+   - `lnks update <issue-id> --status in_progress --json`
+   - `lnks start <issue-id> --reason "claim" --json`
+   - `lnks comment add <issue-id> --body "Starting: <plan>" --json`
 4. Sync:
-   - `lit sync pull --json` before work
+   - `lnks sync pull --json` before work
 5. Close out:
-   - `lit done <issue-id> --reason "<completion summary>" --json`
-   - `lit comment add <issue-id> --body "Done: <summary>" --json`
+   - `lnks done <issue-id> --reason "<completion summary>" --json`
+   - `lnks comment add <issue-id> --body "Done: <summary>" --json`
    - `git add -A && git commit -m "<summary>"`
 
 ## Required assumptions for reliable automation
 
-- hooks are installed once (`lit hooks install`)
+- hooks are installed once (`lnks hooks install`)
 - remote names come from Git (`git remote -v`)
 - sync targets the remote default branch (override only with `LINKS_DEBUG_DOLT_SYNC_BRANCH`)
 - retries are attempted before escalating user-visible failures
-- automatic traces live under `traces_dir` from `lit workspace --json`; startup preflight and managed hooks both write there
+- automatic traces live under `traces_dir` from `lnks workspace --json`; startup preflight and managed hooks both write there
 
 ## Machine-readable mode
 

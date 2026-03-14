@@ -31,7 +31,7 @@ type BeadsMigrationRequiredError struct {
 func (e BeadsMigrationRequiredError) Error() string {
 	remediationCommand := strings.TrimSpace(e.RemediationCommand)
 	if remediationCommand == "" {
-		remediationCommand = "lit migrate beads --apply --json"
+		remediationCommand = "lnks migrate beads --apply --json"
 	}
 	parts := []string{}
 	if strings.TrimSpace(e.Summary) == "" {
@@ -54,7 +54,7 @@ func (e BeadsMigrationRequiredError) Error() string {
 func (e BeadsMigrationRequiredError) ErrorDetails() map[string]any {
 	remediationCommand := strings.TrimSpace(e.RemediationCommand)
 	if remediationCommand == "" {
-		remediationCommand = "lit migrate beads --apply --json"
+		remediationCommand = "lnks migrate beads --apply --json"
 	}
 	details := map[string]any{
 		"reason":              "beads_residue_detected",
@@ -201,13 +201,13 @@ var repoLocalBeadsConfigFiles = []string{
 
 func runMigrate(stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
+		return errors.New("usage: lnks migrate beads [--apply] [--json]")
 	}
 	switch args[0] {
 	case "beads":
 		return runMigrateBeads(stdout, ws, args[1:])
 	default:
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
+		return errors.New("usage: lnks migrate beads [--apply] [--json]")
 	}
 }
 
@@ -220,7 +220,7 @@ func runMigrateBeads(stdout io.Writer, ws workspace.Info, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit migrate beads [--apply] [--json]")
+		return errors.New("usage: lnks migrate beads [--apply] [--json]")
 	}
 
 	report, err := migrateBeads(ws, *applyChanges)
@@ -289,7 +289,7 @@ func migrateBeadsWithOptions(ws workspace.Info, applyChanges bool, options migra
 	if !applyChanges {
 		report.Notes = append(report.Notes, "dry-run: no files modified; rerun with --apply")
 		if options.InstallHooks || options.InstallAgents {
-			report.Notes = append(report.Notes, "dry-run: lit setup stages skipped")
+			report.Notes = append(report.Notes, "dry-run: lnks setup stages skipped")
 		}
 		return report, nil
 	}

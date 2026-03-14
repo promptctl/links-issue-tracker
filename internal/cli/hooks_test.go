@@ -35,13 +35,13 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	if !strings.Contains(text, linksHookBeginMarker) || !strings.Contains(text, linksHookEndMarker) {
 		t.Fatalf("hook missing managed section markers: %q", text)
 	}
-	if !strings.Contains(text, "hook-triggered lit sync push failed") {
+	if !strings.Contains(text, "hook-triggered lnks sync push failed") {
 		t.Fatalf("hook missing warning output: %q", text)
 	}
-	if !strings.Contains(text, "LIT_AUTOMATION_TRIGGER=\"git-pre-push\"") {
+	if !strings.Contains(text, "LNKS_AUTOMATION_TRIGGER=\"git-pre-push\"") {
 		t.Fatalf("hook missing automation trigger env: %q", text)
 	}
-	if !strings.Contains(text, "LIT_AUTOMATION_TRACE_REF_FILE") {
+	if !strings.Contains(text, "LNKS_AUTOMATION_TRACE_REF_FILE") {
 		t.Fatalf("hook missing trace ref env: %q", text)
 	}
 	if !strings.Contains(text, "exit 0") {

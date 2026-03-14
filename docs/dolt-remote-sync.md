@@ -16,34 +16,34 @@ The Links Dolt database is shared across all worktrees in the same clone:
 $(git rev-parse --git-common-dir)/links/dolt
 ```
 
-`lit sync` commands run in the current repo/worktree root and operate on that database.
+`lnks sync` commands run in the current repo/worktree root and operate on that database.
 
 ## Typical setup
 
 ```sh
-lit hooks install
+lnks hooks install
 git remote add origin https://github.com/<org>/<repo>.git
-lit sync remote ls --json
-lit sync fetch
-lit sync pull --json
+lnks sync remote ls --json
+lnks sync fetch
+lnks sync pull --json
 ```
 
 ## Daily workflow
 
 ```sh
-lit sync status
-lit sync pull --json
-# ...work with lit commands...
-lit sync push --json
+lnks sync status
+lnks sync pull --json
+# ...work with lnks commands...
+lnks sync push --json
 ```
 
 ## Commands
 
-- `lit sync status [--json]`
-- `lit sync remote ls [--json]`
-- `lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]`
-- `lit sync pull [--remote <name>] [--verbose] [--json]`
-- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]`
+- `lnks sync status [--json]`
+- `lnks sync remote ls [--json]`
+- `lnks sync fetch [--remote <name>] [--prune] [--verbose] [--json]`
+- `lnks sync pull [--remote <name>] [--verbose] [--json]`
+- `lnks sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]`
 
 Sync branch selection:
 
@@ -61,7 +61,7 @@ Text output behavior:
 - default output is terse and hides remote-specific details
 - use `--verbose` to include remote/branch details in text output
 
-Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `git remote -v` fetch URLs:
+Before each `lnks sync` command, `lnks` reconciles Dolt remotes to exactly match `git remote -v` fetch URLs:
 
 - add missing Dolt remotes
 - update changed remote URLs
@@ -69,6 +69,6 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 
 ## Push automation
 
-`lit hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
-The hook auto-runs one canonical `lit sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
-Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace --json`.
+`lnks hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
+The hook auto-runs one canonical `lnks sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
+Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lnks workspace --json`.

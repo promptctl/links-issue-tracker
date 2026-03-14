@@ -13,9 +13,9 @@ import (
 )
 
 const (
-	automationTriggerEnvVar      = "LIT_AUTOMATION_TRIGGER"
-	automationReasonEnvVar       = "LIT_AUTOMATION_REASON"
-	automationTraceRefFileEnvVar = "LIT_AUTOMATION_TRACE_REF_FILE"
+	automationTriggerEnvVar      = "LNKS_AUTOMATION_TRIGGER"
+	automationReasonEnvVar       = "LNKS_AUTOMATION_REASON"
+	automationTraceRefFileEnvVar = "LNKS_AUTOMATION_TRACE_REF_FILE"
 )
 
 var nonTraceSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
@@ -133,8 +133,8 @@ func recordAutomationTrace(ws workspace.Info, record automationTraceRecord) (aut
 	return automationTraceRef{}, fmt.Errorf("create automation trace: too many id collisions")
 }
 
-func formatLitCommand(args []string) string {
-	parts := []string{"lit"}
+func formatCommand(args []string) string {
+	parts := []string{"lnks"}
 	for _, arg := range args {
 		trimmed := strings.TrimSpace(arg)
 		if trimmed == "" {

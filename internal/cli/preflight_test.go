@@ -37,7 +37,7 @@ func TestRunBlocksNonInitCommandsWhenBeadsResidueDetected(t *testing.T) {
 	if !errors.As(err, &preflightErr) {
 		t.Fatalf("expected BeadsMigrationRequiredError, got %T: %v", err, err)
 	}
-	if !strings.Contains(err.Error(), "lit migrate beads --apply --json") {
+	if !strings.Contains(err.Error(), "lnks migrate beads --apply --json") {
 		t.Fatalf("preflight error missing remediation command: %v", err)
 	}
 	if preflightErr.TraceRef == "" {
@@ -94,8 +94,8 @@ func TestRequireBeadsMigrationPreflight(t *testing.T) {
 	if !errors.As(err, &preflightErr) {
 		t.Fatalf("expected BeadsMigrationRequiredError, got %T: %v", err, err)
 	}
-	if preflightErr.BlockedCommand != "lit ls" {
-		t.Fatalf("blocked command = %q, want lit ls", preflightErr.BlockedCommand)
+	if preflightErr.BlockedCommand != "lnks ls" {
+		t.Fatalf("blocked command = %q, want lnks ls", preflightErr.BlockedCommand)
 	}
 	if preflightErr.TraceRef == "" {
 		t.Fatal("trace ref = empty, want trace path")

@@ -1,7 +1,7 @@
 package cli
 
-const bashCompletionScript = `# bash completion for lit
-_lit_completions() {
+const bashCompletionScript = `# bash completion for lnks
+_lnks_completions() {
   local current prev words cword
   _init_completion || return
 
@@ -19,7 +19,7 @@ _lit_completions() {
   local migrate_subcommands="beads"
 
   case "${prev}" in
-    lit)
+    lnks)
       COMPREPLY=( $(compgen -W "${commands}" -- "${current}") )
       return
       ;;
@@ -78,12 +78,12 @@ _lit_completions() {
   COMPREPLY=( $(compgen -W "${commands}" -- "${current}") )
 }
 
-complete -F _lit_completions lit
+complete -F _lnks_completions lnks
 `
 
-const zshCompletionScript = `#compdef lit
+const zshCompletionScript = `#compdef lnks
 
-_lit() {
+_lnks() {
   local -a commands
   commands=(
     'new:create issue'
@@ -115,7 +115,7 @@ _lit() {
     'beads:beads dolt import export'
     'workspace:show workspace info'
     'hooks:install links git hooks'
-    'migrate:adopt lit from beads'
+    'migrate:adopt lnks from beads'
     'quickstart:agent usage guide'
     'completion:emit shell completion'
     'help:show help'
@@ -173,21 +173,21 @@ _lit() {
   esac
 }
 
-_lit "$@"
+_lnks "$@"
 `
 
-const fishCompletionScript = `complete -c lit -f
-complete -c lit -n '__fish_use_subcommand' -a 'init ready new ls show update start done close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks migrate quickstart completion help'
-complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add'
-complete -c lit -n '__fish_seen_subcommand_from label' -a 'add rm'
-complete -c lit -n '__fish_seen_subcommand_from parent' -a 'set clear'
-complete -c lit -n '__fish_seen_subcommand_from dep' -a 'add rm ls'
-complete -c lit -n '__fish_seen_subcommand_from sync' -a 'status remote fetch pull push'
-complete -c lit -n '__fish_seen_subcommand_from remote' -a 'ls'
-complete -c lit -n '__fish_seen_subcommand_from backup' -a 'create list restore'
-complete -c lit -n '__fish_seen_subcommand_from bulk' -a 'label close archive import'
-complete -c lit -n '__fish_seen_subcommand_from beads' -a 'import export'
-complete -c lit -n '__fish_seen_subcommand_from hooks' -a 'install'
-complete -c lit -n '__fish_seen_subcommand_from migrate' -a 'beads'
-complete -c lit -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
+const fishCompletionScript = `complete -c lnks -f
+complete -c lnks -n '__fish_use_subcommand' -a 'init ready new ls show update start done close open archive delete unarchive restore comment label parent children dep export sync doctor fsck backup recover bulk beads workspace hooks migrate quickstart completion help'
+complete -c lnks -n '__fish_seen_subcommand_from comment' -a 'add'
+complete -c lnks -n '__fish_seen_subcommand_from label' -a 'add rm'
+complete -c lnks -n '__fish_seen_subcommand_from parent' -a 'set clear'
+complete -c lnks -n '__fish_seen_subcommand_from dep' -a 'add rm ls'
+complete -c lnks -n '__fish_seen_subcommand_from sync' -a 'status remote fetch pull push'
+complete -c lnks -n '__fish_seen_subcommand_from remote' -a 'ls'
+complete -c lnks -n '__fish_seen_subcommand_from backup' -a 'create list restore'
+complete -c lnks -n '__fish_seen_subcommand_from bulk' -a 'label close archive import'
+complete -c lnks -n '__fish_seen_subcommand_from beads' -a 'import export'
+complete -c lnks -n '__fish_seen_subcommand_from hooks' -a 'install'
+complete -c lnks -n '__fish_seen_subcommand_from migrate' -a 'beads'
+complete -c lnks -n '__fish_seen_subcommand_from completion' -a 'bash zsh fish'
 `

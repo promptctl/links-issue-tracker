@@ -13,13 +13,13 @@ Upgrade Dolt to `>= 1.81.10`.
 The hook is warn-only and never blocks push. The warning includes `trigger=git-pre-push`, the remote, and a `trace=` path under the workspace `traces_dir`. Retry manually:
 
 ```sh
-lit sync push
+lnks sync push
 ```
 
 Then check status:
 
 ```sh
-lit sync status --json
+lnks sync status --json
 ```
 
 ## Integrity errors
@@ -27,8 +27,8 @@ lit sync status --json
 Run:
 
 ```sh
-lit doctor --json
-lit fsck --repair --json
+lnks doctor --json
+lnks fsck --repair --json
 ```
 
 ## Startup preflight blocked by Beads residue
@@ -40,6 +40,6 @@ When a non-`init` command is blocked by startup preflight, the error includes th
 Use backups:
 
 ```sh
-lit backup list --json
-lit backup restore --latest --json
+lnks backup list --json
+lnks backup restore --latest --json
 ```

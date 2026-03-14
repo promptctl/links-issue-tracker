@@ -48,7 +48,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	if last.Action != "start" {
 		t.Fatalf("last.Action = %q, want start", last.Action)
 	}
-	if !strings.Contains(last.Reason, "status update via lit update") {
+	if !strings.Contains(last.Reason, "status update via lnks update") {
 		t.Fatalf("last.Reason = %q, want default update reason", last.Reason)
 	}
 }

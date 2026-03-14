@@ -32,7 +32,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit init [--json] [--skip-hooks] [--skip-agents]")
+		return errors.New("usage: lnks init [--json] [--skip-hooks] [--skip-agents]")
 	}
 
 	if _, err := doltcli.RequireMinimumVersion(ctx, ws.RootDir, doltcli.MinSupportedVersion); err != nil {
@@ -134,7 +134,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 	if !scan.HasResidue() {
 		return nil
 	}
-	blockedCommand := formatLitCommand(commandArgs)
+	blockedCommand := formatCommand(commandArgs)
 	// [LAW:one-source-of-truth] Startup preflight reuses the shared automation trace record instead of inventing a second trace format.
 	traceRef, traceErr := recordAutomationTrace(ws, automationTraceRecord{
 		Trigger:    "startup-preflight",
@@ -144,7 +144,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Reason:     "beads residue detected during startup preflight",
 		Metadata: map[string]string{
 			"blocked_command":     blockedCommand,
-			"remediation_command": "lit migrate beads --apply --json",
+			"remediation_command": "lnks migrate beads --apply --json",
 			"residue_summary":     scan.Summary(),
 		},
 	})
@@ -152,7 +152,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Summary:            scan.Summary(),
 		Trigger:            "startup-preflight",
 		BlockedCommand:     blockedCommand,
-		RemediationCommand: "lit migrate beads --apply --json",
+		RemediationCommand: "lnks migrate beads --apply --json",
 	}
 	if traceErr != nil {
 		preflightErr.TraceWriteError = traceErr.Error()
