@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
@@ -35,9 +34,6 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return errors.New("usage: lnks init [--json] [--skip-hooks] [--skip-agents]")
 	}
 
-	if _, err := doltcli.RequireMinimumVersion(ctx, ws.RootDir, doltcli.MinSupportedVersion); err != nil {
-		return err
-	}
 	if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
 		return err
 	}
@@ -138,7 +134,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Reason:     "beads residue detected during startup preflight",
 		Metadata: map[string]string{
 			"blocked_command":     blockedCommand,
-				"remediation_command": "lnks migrate --apply --json",
+			"remediation_command": "lnks migrate --apply --json",
 			"residue_summary":     scan.Summary(),
 		},
 	})
@@ -146,7 +142,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Summary:            scan.Summary(),
 		Trigger:            "startup-preflight",
 		BlockedCommand:     blockedCommand,
-			RemediationCommand: "lnks migrate --apply --json",
+		RemediationCommand: "lnks migrate --apply --json",
 	}
 	if traceErr != nil {
 		preflightErr.TraceWriteError = traceErr.Error()

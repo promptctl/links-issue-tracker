@@ -197,22 +197,13 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 	if err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	db, err := sql.Open(doltDriverName, buildDoltDSN(doltRootDir, workspaceID, true))
+	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
-		return nil, fmt.Errorf("open dolt: %w", err)
-	}
-	s := &Store{
-		db:              db,
-		workspaceID:     workspaceID,
-		commitLockPath:  filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
-		queuePath:       filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.jsonl"),
-		queueOffsetPath: filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.offset"),
-		queueLockPath:   filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.lock"),
-		telemetryDir:    filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
+		return nil, err
 	}
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	if err := s.withCommitLock(ctx, s.migrate); err != nil {
-		_ = db.Close()
+		_ = s.db.Close()
 		return nil, err
 	}
 	return s, nil
@@ -228,7 +219,34 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
 }
 
-func (s *Store) Close() error { return s.db.Close() }
+func (s *Store) Close() error {
+	err := s.db.Close()
+	// [LAW:single-enforcer] Benign driver shutdown cancellation is normalized at the Store boundary so callers see one close contract.
+	if errors.Is(err, context.Canceled) {
+		return nil
+	}
+	return err
+}
+
+func openStoreConnection(doltRootDir string, workspaceID string) (*Store, error) {
+	db, err := sql.Open(doltDriverName, buildDoltDSN(doltRootDir, workspaceID, true))
+	if err != nil {
+		return nil, fmt.Errorf("open dolt: %w", err)
+	}
+	// [LAW:single-enforcer] Each Store owns one embedded Dolt SQL connection so the process cannot self-conflict through the database/sql pool.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	return &Store{
+		db:              db,
+		workspaceID:     workspaceID,
+		commitLockPath:  filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
+		queuePath:       filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.jsonl"),
+		queueOffsetPath: filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.offset"),
+		queueLockPath:   filepath.Join(filepath.Clean(doltRootDir), ".links-mutation-queue.lock"),
+		telemetryDir:    filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
+	}, nil
+}
 
 func (s *Store) migrate(ctx context.Context) error {
 	changed := false

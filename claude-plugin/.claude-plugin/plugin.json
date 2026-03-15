@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "lnks quickstart --json"
+            "command": "lnks quickstart"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "lnks quickstart --json"
+            "command": "lnks quickstart"
           }
         ]
       }

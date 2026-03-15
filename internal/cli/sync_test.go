@@ -2,22 +2,20 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
-func TestMapRemotesByNamePrefersFetchScope(t *testing.T) {
-	entries := []map[string]string{
-		{"name": "origin", "url": "ssh://push.example/repo.git", "scope": "push"},
-		{"name": "origin", "url": "https://fetch.example/repo.git", "scope": "fetch"},
-		{"name": "upstream", "url": "https://upstream.example/repo.git"},
+func TestMapRemotesByName(t *testing.T) {
+	entries := []store.SyncRemote{
+		{Name: "origin", URL: "https://fetch.example/repo.git"},
+		{Name: "upstream", URL: "https://upstream.example/repo.git"},
 	}
-
 	got := mapRemotesByName(entries)
 	want := map[string]string{
 		"origin":   "https://fetch.example/repo.git",
@@ -74,8 +72,24 @@ func TestSameRemoteURLSupportsBracketedIPv6SCPLikeHosts(t *testing.T) {
 	}
 }
 
+func TestSyncRemoteURLPrefixesGitHTTPSRemotes(t *testing.T) {
+	got := syncRemoteURL("https://github.com/org/repo.git")
+	want := "git+https://github.com/org/repo.git"
+	if got != want {
+		t.Fatalf("syncRemoteURL() = %q, want %q", got, want)
+	}
+}
+
+func TestSyncRemoteURLPrefixesSCPLikeGitRemotes(t *testing.T) {
+	got := syncRemoteURL("git@github.com:org/repo.git")
+	want := "git+ssh://git@github.com/org/repo.git"
+	if got != want {
+		t.Fatalf("syncRemoteURL() = %q, want %q", got, want)
+	}
+}
+
 func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
-	runErr := errors.New(`dolt pull origin feature/local-only: branch "feature/local-only" not found on remote`)
+	runErr := errors.New(`branch "feature/local-only" not found on remote`)
 	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)
 	if err != nil {
 		t.Fatalf("buildSyncPullPayload() error = %v", err)
@@ -239,46 +253,6 @@ func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	}
 }
 
-func TestBuildSyncPushCommandArgsWithoutSyncBranchUsesDefaultPush(t *testing.T) {
-	got := buildSyncPushCommandArgs("origin", "", false, false)
-	want := []string{"push", "origin"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestBuildSyncPushCommandArgsBuildsHeadToSyncBranchRefspec(t *testing.T) {
-	got := buildSyncPushCommandArgs("origin", "main", true, false)
-	want := []string{"push", "-u", "origin", "HEAD:main"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestBuildSyncPushCommandArgsForceUsesSyncBranchRefspec(t *testing.T) {
-	got := buildSyncPushCommandArgs("origin", "feature/local-only", false, true)
-	want := []string{"push", "--force", "origin", "HEAD:feature/local-only"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildSyncPushCommandArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestBuildSyncPullCommandArgsWithoutBranchUsesDefaultPull(t *testing.T) {
-	got := buildSyncPullCommandArgs("origin", "")
-	want := []string{"pull", "origin"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildSyncPullCommandArgs() = %#v, want %#v", got, want)
-	}
-}
-
-func TestBuildSyncPullCommandArgsWithBranchUsesExplicitBranch(t *testing.T) {
-	got := buildSyncPullCommandArgs("origin", "main")
-	want := []string{"pull", "origin", "main"}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("buildSyncPullCommandArgs() = %#v, want %#v", got, want)
-	}
-}
-
 func TestFirstNonEmptySyncBranchFollowsDeterministicPriority(t *testing.T) {
 	got := firstNonEmptySyncBranch("debug", "default")
 	if got != "debug" {
@@ -291,6 +265,27 @@ func TestFirstNonEmptySyncBranchFollowsDeterministicPriority(t *testing.T) {
 	got = firstNonEmptySyncBranch("", "")
 	if got != "" {
 		t.Fatalf("firstNonEmptySyncBranch() = %q, want empty", got)
+	}
+}
+
+func TestBuildRemoteSyncChanges(t *testing.T) {
+	gitRemotes := []workspace.GitRemote{
+		{Name: "origin", URL: "https://example.com/new-origin.git"},
+		{Name: "upstream", URL: "https://example.com/upstream.git"},
+	}
+	doltRemotes := []store.SyncRemote{
+		{Name: "origin", URL: "https://example.com/old-origin.git"},
+		{Name: "fork", URL: "https://example.com/fork.git"},
+	}
+
+	got := buildRemoteSyncChanges(gitRemotes, doltRemotes)
+	want := remoteSyncChanges{
+		Added:   []string{"upstream"},
+		Updated: []string{"origin"},
+		Removed: []string{"fork"},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("buildRemoteSyncChanges() = %#v, want %#v", got, want)
 	}
 }
 
@@ -375,39 +370,5 @@ func TestResolveSyncBranchErrorsWhenDefaultBranchUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), debugSyncBranchEnvVar) {
 		t.Fatalf("error = %q, want mention of %s", err.Error(), debugSyncBranchEnvVar)
-	}
-}
-
-func TestRunWithManifestReadOnlyRetryRetriesOnce(t *testing.T) {
-	attempts := 0
-	output, err := runWithManifestReadOnlyRetry(context.Background(), func(context.Context) (string, error) {
-		attempts++
-		if attempts == 1 {
-			return "", errors.New("cannot update manifest: database is read only")
-		}
-		return "ok", nil
-	})
-	if err != nil {
-		t.Fatalf("runWithManifestReadOnlyRetry() error = %v", err)
-	}
-	if attempts != 2 {
-		t.Fatalf("attempts = %d, want 2", attempts)
-	}
-	if output != "ok" {
-		t.Fatalf("output = %q, want ok", output)
-	}
-}
-
-func TestRunWithManifestReadOnlyRetryDoesNotRetryOtherErrors(t *testing.T) {
-	attempts := 0
-	_, err := runWithManifestReadOnlyRetry(context.Background(), func(context.Context) (string, error) {
-		attempts++
-		return "", errors.New("fatal: network unavailable")
-	})
-	if err == nil {
-		t.Fatal("runWithManifestReadOnlyRetry() error = nil, want non-manifest error")
-	}
-	if attempts != 1 {
-		t.Fatalf("attempts = %d, want 1", attempts)
 	}
 }
