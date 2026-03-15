@@ -20,9 +20,9 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/annotation"
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/backup"
-	"github.com/bmf/links-issue-tracker/internal/beads"
 	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/merge"
@@ -749,17 +749,25 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err != nil {
 		return err
 	}
-	ready, notReady, err := deriveReadySections(ctx, ap.Store, issues, cfg.Ready.RequiredFields)
+	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
 	if err != nil {
 		return err
 	}
-	ready, notReady = applyReadyLimit(ready, notReady, *limit)
+	annotated, err := annotation.Annotate(ctx, issues,
+		fieldAnnotator,
+		newBlockerAnnotator(ap.Store),
+	)
+	if err != nil {
+		return err
+	}
+	sortByReadiness(annotated)
+	annotated = applyLimit(annotated, *limit)
 	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, readyCommandOutput{Ready: ready, NotReady: notReady})
+		return writeJSON(stdout, annotated)
 	}
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	columns := parseColumns(*columnsExpr)
-	return printReadySections(stdout, formatMode, columns, ready, notReady)
+	return printReadyOutput(stdout, formatMode, columns, annotated)
 }
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

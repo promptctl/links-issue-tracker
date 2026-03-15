@@ -5,66 +5,107 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"reflect"
 	"sort"
 	"strings"
 	"text/tabwriter"
 
+	"github.com/bmf/links-issue-tracker/internal/annotation"
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
 
-type notReadyIssue struct {
-	Issue  model.Issue `json:"issue"`
-	Reason string      `json:"reason"`
+// readyBlockingKinds defines which annotation kinds block readiness.
+// [LAW:one-source-of-truth] Single definition of what "blocks readiness" for the ready command.
+var readyBlockingKinds = []annotation.Kind{
+	annotation.MissingField,
+	annotation.BlockedBy,
 }
 
-type readyCommandOutput struct {
-	Ready    []model.Issue   `json:"ready"`
-	NotReady []notReadyIssue `json:"not_ready"`
+func isReadyBlocked(annotations []annotation.Annotation) bool {
+	return annotation.HasAny(annotations, readyBlockingKinds...)
 }
 
-func deriveReadySections(ctx context.Context, st *store.Store, issues []model.Issue, requiredFields []string) ([]model.Issue, []notReadyIssue, error) {
-	ready := make([]model.Issue, 0, len(issues))
-	notReady := make([]notReadyIssue, 0, len(issues))
-	for _, issue := range issues {
-		reason, err := deriveNotReadyReason(ctx, st, issue, requiredFields)
-		if err != nil {
-			return nil, nil, err
-		}
-		if reason == "" {
-			ready = append(ready, issue)
-			continue
-		}
-		notReady = append(notReady, notReadyIssue{Issue: issue, Reason: reason})
-	}
-	return ready, notReady, nil
-}
-
-func deriveNotReadyReason(ctx context.Context, st *store.Store, issue model.Issue, requiredFields []string) (string, error) {
-	reasons := make([]string, 0, len(requiredFields)+1)
-	fields, err := issueFieldValues(issue)
-	if err != nil {
-		return "", err
-	}
+// newFieldAnnotator validates requiredFields against model.Issue JSON fields,
+// then returns an annotator that checks those fields on each issue.
+func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
+	validFields := issueJSONFieldNames()
 	for _, field := range requiredFields {
-		value, ok := fields[field]
-		if !ok {
-			reasons = append(reasons, fmt.Sprintf("Field %s not found", field))
+		if _, ok := validFields[field]; !ok {
+			return nil, fmt.Errorf("required field %q does not exist on issue", field)
+		}
+	}
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		fields, err := issueFieldValues(issue)
+		if err != nil {
+			return nil, err
+		}
+		var annotations []annotation.Annotation
+		for _, field := range requiredFields {
+			if !isRequiredFieldSet(fields[field]) {
+				annotations = append(annotations, annotation.Annotation{
+					Kind:    annotation.MissingField,
+					Message: field,
+				})
+			}
+		}
+		return annotations, nil
+	}, nil
+}
+
+// newBlockerAnnotator returns an annotator that checks open dependency blockers.
+func newBlockerAnnotator(st *store.Store) annotation.Annotator {
+	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
+	// empty blockers list means no annotations, not a skipped operation.
+	return func(ctx context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		detail, err := st.GetIssueDetail(ctx, issue.ID)
+		if err != nil {
+			return nil, err
+		}
+		blockers := openDependencyIDs(detail.DependsOn)
+		annotations := make([]annotation.Annotation, len(blockers))
+		for i, id := range blockers {
+			annotations[i] = annotation.Annotation{
+				Kind:    annotation.BlockedBy,
+				Message: id,
+			}
+		}
+		return annotations, nil
+	}
+}
+
+func issueJSONFieldNames() map[string]struct{} {
+	// [LAW:one-source-of-truth] model.Issue JSON tags are the canonical ready-field schema.
+	issueType := reflect.TypeOf(model.Issue{})
+	fields := make(map[string]struct{}, issueType.NumField())
+	for i := 0; i < issueType.NumField(); i++ {
+		field := issueType.Field(i)
+		if !field.IsExported() {
 			continue
 		}
-		if !isRequiredFieldSet(value) {
-			reasons = append(reasons, fmt.Sprintf("Field %s not set", field))
+		name := issueJSONFieldName(field)
+		if name == "" {
+			continue
 		}
+		fields[name] = struct{}{}
 	}
-	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue and yields data-driven readiness.
-	detail, err := st.GetIssueDetail(ctx, issue.ID)
-	if err != nil {
-		return "", err
+	return fields
+}
+
+func issueJSONFieldName(field reflect.StructField) string {
+	tag, ok := field.Tag.Lookup("json")
+	if !ok {
+		return field.Name
 	}
-	if blockers := openDependencyIDs(detail.DependsOn); len(blockers) > 0 {
-		reasons = append(reasons, fmt.Sprintf("Blocked by ticket %s", blockers[0]))
+	name, _, _ := strings.Cut(tag, ",")
+	switch name {
+	case "":
+		return field.Name
+	case "-":
+		return ""
+	default:
+		return name
 	}
-	return strings.Join(reasons, "; "), nil
 }
 
 func issueFieldValues(issue model.Issue) (map[string]any, error) {
@@ -105,25 +146,58 @@ func openDependencyIDs(dependsOn []model.Issue) []string {
 	return blockers
 }
 
-func applyReadyLimit(ready []model.Issue, notReady []notReadyIssue, limit int) ([]model.Issue, []notReadyIssue) {
-	if limit <= 0 {
-		return ready, notReady
-	}
-	if len(ready) >= limit {
-		return ready[:limit], []notReadyIssue{}
-	}
-	remaining := limit - len(ready)
-	if len(notReady) > remaining {
-		return ready, notReady[:remaining]
-	}
-	return ready, notReady
+// sortByReadiness places issues without blocking annotations first,
+// preserving the original store ordering within each group.
+func sortByReadiness(issues []annotation.AnnotatedIssue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		iBlocked := isReadyBlocked(issues[i].Annotations)
+		jBlocked := isReadyBlocked(issues[j].Annotations)
+		return !iBlocked && jBlocked
+	})
 }
 
-func printReadySections(w io.Writer, format string, columns []string, ready []model.Issue, notReady []notReadyIssue) error {
+func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.AnnotatedIssue {
+	if limit <= 0 || len(issues) <= limit {
+		return issues
+	}
+	return issues[:limit]
+}
+
+// readyBlockReason formats blocking annotations as a human-readable reason string.
+// Only includes annotations whose Kind is in readyBlockingKinds.
+func readyBlockReason(annotations []annotation.Annotation) string {
+	reasons := make([]string, 0, len(annotations))
+	for _, a := range annotations {
+		if !annotation.HasAny([]annotation.Annotation{a}, readyBlockingKinds...) {
+			continue
+		}
+		switch a.Kind {
+		case annotation.MissingField:
+			reasons = append(reasons, fmt.Sprintf("Field %s not set", a.Message))
+		case annotation.BlockedBy:
+			reasons = append(reasons, fmt.Sprintf("Blocked by ticket %s", a.Message))
+		}
+	}
+	return strings.Join(reasons, "; ")
+}
+
+// printReadyOutput prints annotated issues in Ready / Not Ready sections.
+// The partition is derived from the isReadyBlocked predicate at the render boundary.
+func printReadyOutput(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
+	resolved := resolveColumns(columns)
+	var ready, blocked []annotation.AnnotatedIssue
+	for i := range issues {
+		if isReadyBlocked(issues[i].Annotations) {
+			blocked = append(blocked, issues[i])
+		} else {
+			ready = append(ready, issues[i])
+		}
+	}
+
 	if _, err := fmt.Fprintln(w, "Ready"); err != nil {
 		return err
 	}
-	if err := printReadySectionRows(w, format, columns, ready); err != nil {
+	if err := printAnnotatedRows(w, format, resolved, ready); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintln(w); err != nil {
@@ -132,60 +206,63 @@ func printReadySections(w io.Writer, format string, columns []string, ready []mo
 	if _, err := fmt.Fprintln(w, "Not Ready"); err != nil {
 		return err
 	}
-	return printNotReadySectionRows(w, format, columns, notReady)
+	return printAnnotatedRows(w, format, resolved, blocked)
 }
 
-func printReadySectionRows(w io.Writer, format string, columns []string, ready []model.Issue) error {
-	if len(ready) == 0 {
+func printAnnotatedRows(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
+	if len(issues) == 0 {
 		_, err := fmt.Fprintln(w, "(none)")
 		return err
 	}
+	hasReasons := false
+	for _, issue := range issues {
+		if readyBlockReason(issue.Annotations) != "" {
+			hasReasons = true
+			break
+		}
+	}
 	switch format {
 	case "", "lines":
-		return printIssueLines(w, ready, columns)
+		return printAnnotatedLines(w, issues, columns, hasReasons)
 	case "table":
-		return printIssueTable(w, ready, columns)
+		return printAnnotatedTable(w, issues, columns, hasReasons)
 	default:
 		return fmt.Errorf("unsupported --format %q", format)
 	}
 }
 
-func printNotReadySectionRows(w io.Writer, format string, columns []string, notReady []notReadyIssue) error {
-	if len(notReady) == 0 {
-		_, err := fmt.Fprintln(w, "(none)")
-		return err
-	}
-	switch format {
-	case "", "lines":
-		return printNotReadyLines(w, notReady, columns)
-	case "table":
-		return printNotReadyTable(w, notReady, columns)
-	default:
-		return fmt.Errorf("unsupported --format %q", format)
-	}
-}
-
-func printNotReadyLines(w io.Writer, issues []notReadyIssue, columns []string) error {
-	resolved := resolveColumns(columns)
+func printAnnotatedLines(w io.Writer, issues []annotation.AnnotatedIssue, columns []string, hasReasons bool) error {
 	for _, entry := range issues {
-		base := formatIssueColumns(entry.Issue, resolved, " | ")
-		if _, err := fmt.Fprintf(w, "%s | %s\n", base, entry.Reason); err != nil {
+		line := formatIssueColumns(entry.Issue, columns, " | ")
+		if hasReasons {
+			if reason := readyBlockReason(entry.Annotations); reason != "" {
+				line += " | " + reason
+			}
+		}
+		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func printNotReadyTable(w io.Writer, issues []notReadyIssue, columns []string) error {
-	resolved := resolveColumns(columns)
-	headers := append(append([]string{}, resolved...), "reason")
+func printAnnotatedTable(w io.Writer, issues []annotation.AnnotatedIssue, columns []string, hasReasons bool) error {
+	headers := append([]string{}, columns...)
+	if hasReasons {
+		headers = append(headers, "reason")
+	}
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(headers, "\t"))); err != nil {
 		return err
 	}
 	for _, entry := range issues {
-		base := formatIssueColumns(entry.Issue, resolved, "\t")
-		if _, err := fmt.Fprintf(tw, "%s\t%s\n", base, entry.Reason); err != nil {
+		line := formatIssueColumns(entry.Issue, columns, "\t")
+		if hasReasons {
+			if reason := readyBlockReason(entry.Annotations); reason != "" {
+				line += "\t" + reason
+			}
+		}
+		if _, err := fmt.Fprintln(tw, line); err != nil {
 			return err
 		}
 	}
