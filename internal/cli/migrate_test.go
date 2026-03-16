@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/beads"
+	"github.com/bmf/links-issue-tracker/internal/legacydolt"
 	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
@@ -183,9 +183,9 @@ func TestMigrateApplyImportsBeadsIssueData(t *testing.T) {
 	}
 
 	beadsPath := filepath.Join(repo, ".beads")
-	exportSummary, err := beads.Export(ctx, sourceStore, filepath.Join(beadsPath, "beads.db"))
+	exportSummary, err := legacydolt.Export(ctx, sourceStore, filepath.Join(beadsPath, "beads.db"))
 	if err != nil {
-		t.Fatalf("beads.Export() error = %v", err)
+		t.Fatalf("legacydolt.Export() error = %v", err)
 	}
 	if exportSummary.Issues != 1 || exportSummary.Comments != 1 {
 		t.Fatalf("exportSummary = %#v", exportSummary)

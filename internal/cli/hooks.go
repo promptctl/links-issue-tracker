@@ -22,6 +22,8 @@ type hookInstallResult struct {
 	HookPath   string
 	LegacyPath string
 	Changed    bool
+	Managed    bool
+	Reason     string
 }
 
 func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
@@ -56,6 +58,8 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		"hook":         result.HookPath,
 		"legacy_chain": result.LegacyPath,
 		"changed":      result.Changed,
+		"managed":      result.Managed,
+		"reason":       result.Reason,
 		"traces_dir":   automationTraceDir(ws),
 	}
 	return printValue(stdout, payload, jsonOut, func(w io.Writer, v any) error {
@@ -85,7 +89,7 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 		if writeErr := os.WriteFile(hookPath, []byte(updated), mode); writeErr != nil {
 			return hookInstallResult{}, fmt.Errorf("write pre-push hook: %w", writeErr)
 		}
-		return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true}, nil
+		return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true, Managed: true}, nil
 	}
 
 	if info, statErr := os.Stat(hookPath); statErr == nil {
@@ -120,19 +124,25 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 	} else {
 		if !isBashCompatible(existingStr) {
 			// Do not insert a bash-specific managed section into a non-bash hook; that could break git pushes.
-			return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: false}, nil
+			return hookInstallResult{
+				HookPath:   hookPath,
+				LegacyPath: detectLegacyHookPath(legacyPath),
+				Changed:    false,
+				Managed:    false,
+				Reason:     "incompatible",
+			}, nil
 		}
 		var changed bool
 		updated, changed = upsertManagedSection(existingStr, section, linksHookBeginMarker, linksHookEndMarker)
 		if !changed {
-			return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: false}, nil
+			return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: false, Managed: true}, nil
 		}
 	}
 
 	if err := os.WriteFile(hookPath, []byte(updated), mode); err != nil {
 		return hookInstallResult{}, fmt.Errorf("write pre-push hook: %w", err)
 	}
-	return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true}, nil
+	return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true, Managed: true}, nil
 }
 
 func detectLegacyHookPath(path string) string {

@@ -9,7 +9,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "lnks quickstart"
+            "command": "lnks quickstart --refresh"
           }
         ]
       }
@@ -20,7 +20,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "lnks quickstart"
+            "command": "lnks quickstart --refresh"
           }
         ]
       }

@@ -76,7 +76,7 @@ lnks sync push --json
 Useful commands:
 
 ```sh
-lnks quickstart --json
+lnks quickstart --refresh --json
 lnks workspace --json
 lnks doctor --json
 ```
@@ -86,4 +86,4 @@ lnks doctor --json
 - Docs index (recommended start): [docs/index.md](docs/index.md)
 - Sync and remote behavior: [docs/dolt-remote-sync.md](docs/dolt-remote-sync.md)
 - Full command reference: `lnks help`
-- Agent-focused workflow: `lnks quickstart` / `lnks quickstart --json`
+- Agent-focused workflow: `lnks quickstart --refresh` / `lnks quickstart --refresh --json`

@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/beads"
+	"github.com/bmf/links-issue-tracker/internal/legacydolt"
 	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
@@ -315,7 +315,7 @@ func runMigrationWithOptions(ctx context.Context, ws workspace.Info, applyChange
 	}
 
 	if hasBeadsDataPath {
-		// [LAW:one-source-of-truth] Reuse the canonical beads importer so migrate and beads import apply identical translation rules.
+		// [LAW:one-source-of-truth] Reuse the canonical legacy importer so migrate paths share one translation boundary.
 		importSummary, importErr := importBeadsData(ctx, ws, beadsDataPath)
 		if importErr != nil {
 			return report, importErr
@@ -672,15 +672,15 @@ func detectBeadsDataPath(rootDir string) (string, bool, error) {
 	return "", false, nil
 }
 
-func importBeadsData(ctx context.Context, ws workspace.Info, beadsPath string) (beads.Summary, error) {
+func importBeadsData(ctx context.Context, ws workspace.Info, beadsPath string) (legacydolt.Summary, error) {
 	st, err := store.Open(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		return beads.Summary{}, fmt.Errorf("open links store for beads import: %w", err)
+		return legacydolt.Summary{}, fmt.Errorf("open links store for beads import: %w", err)
 	}
 	defer st.Close()
-	summary, importErr := beads.Import(ctx, st, beadsPath)
+	summary, importErr := legacydolt.Import(ctx, st, beadsPath)
 	if importErr != nil {
-		return beads.Summary{}, fmt.Errorf("import beads data from %s: %w", beadsPath, importErr)
+		return legacydolt.Summary{}, fmt.Errorf("import beads data from %s: %w", beadsPath, importErr)
 	}
 	return summary, nil
 }

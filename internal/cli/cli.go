@@ -2272,17 +2272,19 @@ func runQuickstart(stdout io.Writer, args []string) error {
 	fs := flag.NewFlagSet("quickstart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "Output JSON")
+	refresh := fs.Bool("refresh", false, "Refresh managed repo assets")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks quickstart [--json]")
+		return errors.New("usage: lnks quickstart [--json] [--refresh]")
 	}
 
 	payload := map[string]any{
 		"summary": "Agent quickstart for links issue tracking",
 		"workflow": []string{
 			"Initialize and auto-migrate with `lnks init`.",
+			"Refresh managed repo assets with `lnks quickstart --refresh`.",
 			"Discover workspace identity with `lnks workspace`.",
 			"Migrate legacy Beads data/wiring explicitly with `lnks migrate --apply` when needed.",
 			"Install git hook automation once with `lnks hooks install`.",
@@ -2295,6 +2297,7 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		},
 		"examples": []string{
 			"lnks init",
+			"lnks quickstart --refresh",
 			"lnks migrate --apply",
 			"lnks hooks install",
 			"lnks workspace",
@@ -2320,6 +2323,18 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"corruption": ExitCorruption,
 		},
 	}
+	if *refresh {
+		// [LAW:single-enforcer] Quickstart refresh resolves the workspace once and delegates all file rewrites to the managed asset writers.
+		ws, err := workspace.Resolve(".")
+		if err != nil {
+			return err
+		}
+		refreshReport, err := refreshQuickstartManagedAssets(ws)
+		if err != nil {
+			return err
+		}
+		payload["refresh"] = refreshReport
+	}
 
 	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 		instructions := v.(map[string]any)
@@ -2328,8 +2343,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"",
 			"1) Discover context",
 			"   `lnks init`",
+			"   `lnks quickstart --refresh`",
 			"   `lnks migrate --apply`  # for legacy Beads repos",
-			"   `lnks hooks install`",
 			"   `lnks workspace`",
 			"",
 			"2) Find work",
@@ -2357,16 +2372,22 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   If sync warning appears, agent should auto-retry silently before escalating.",
 			"",
 			"6) Integrity and recovery",
-			"   `lnks doctor --json`",
-			"   `lnks fsck --repair --json`",
-			"   `lnks backup create --json`",
-			"   `lnks backup restore --latest --json`",
-			"   `lnks recover --latest-backup --json`",
+			"   `lnks doctor`",
+			"   `lnks fsck --repair`",
+			"   `lnks backup create`",
+			"   `lnks backup restore --latest`",
+			"   `lnks recover --latest-backup`",
 			"",
 			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitCorruption),
 		}
 		if summary, ok := instructions["summary"].(string); ok && strings.TrimSpace(summary) != "" {
 			lines[0] = summary
+		}
+		if refreshReport, ok := instructions["refresh"].(quickstartRefreshReport); ok {
+			lines = append(lines[:1], append([]string{
+				fmt.Sprintf("refresh %s", formatQuickstartRefreshSummary(refreshReport)),
+				"",
+			}, lines[1:]...)...)
 		}
 		_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
 		return err
@@ -2801,7 +2822,7 @@ Command Syntax:
   lnks done <id> --reason <text> [--by <user>] [--json]
   lnks hooks install [--json]
   lnks migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
-  lnks quickstart [--json]
+  lnks quickstart [--json] [--refresh]
   lnks completion <bash|zsh|fish>
   lnks workspace [--json]
   lnks sync remote ls [--json]
