@@ -3,6 +3,8 @@ package store
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -484,6 +486,59 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 	}
 	if got != "2" {
 		t.Fatalf("schema_version = %q, want 2", got)
+	}
+}
+
+func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() initial error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() initial error = %v", err)
+	}
+
+	repoPath := filepath.Join(doltRoot, "links")
+	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log before read-open error = %v", err)
+	}
+
+	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v", err)
+	}
+	if _, err := readStore.ListIssues(ctx, ListIssuesFilter{}); err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if err := readStore.Close(); err != nil {
+		t.Fatalf("Close() read error = %v", err)
+	}
+
+	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log after read-open error = %v", err)
+	}
+
+	if countNonEmptyLines(afterLog) != countNonEmptyLines(beforeLog) {
+		t.Fatalf("read-open created extra commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+}
+
+func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		_ = readStore.Close()
+		t.Fatal("OpenForRead() error = nil, want missing database failure")
+	}
+	if _, err := os.Stat(filepath.Join(doltRoot, "links")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("repo path stat error = %v, want not exist", err)
 	}
 }
 
