@@ -6,7 +6,7 @@
 lnks workspace --json
 ```
 
-`--json` is optional in non-interactive runs because default output mode is `auto` (TTY -> text, non-TTY -> JSON). Keep `--json` in scripts for explicit compatibility.
+Use `--json` when you need machine-readable output. Without it, `lnks` always prints standard text.
 
 If this repository used Beads before, run the migration once:
 

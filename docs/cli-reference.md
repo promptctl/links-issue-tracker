@@ -8,13 +8,12 @@ lnks help
 
 ## Global output mode
 
-`lnks` resolves output mode in one place with deterministic precedence:
+`lnks` resolves output mode in one place:
 
-1. global flags before the command (`--output auto|text|json` and `--json`, last flag wins)
-2. `LNKS_OUTPUT` environment default
-3. automatic fallback (`text` on TTY, `json` otherwise)
+1. exact `--json` enables JSON output
+2. otherwise output stays in text mode
 
-Command-local `--json` remains supported for existing scripts.
+Command-local `--json` remains supported for scripts and tool integrations.
 
 When output mode resolves to JSON, failures emit a stable envelope:
 
@@ -29,12 +28,11 @@ When output mode resolves to JSON, failures emit a stable envelope:
 
 ### Output mode
 
-- Default mode is `auto`.
-- `auto` renders text in terminals and JSON in non-interactive contexts.
-- `--json` remains supported as shorthand for JSON mode.
-- `--output auto|json|text` overrides everything else.
-- Precedence is deterministic: `--output` > `--json` > `LNKS_OUTPUT` > auto.
-- Migration expectation: existing scripts should keep using `--json` (or set `LNKS_OUTPUT=json`) for explicit machine-readable output.
+- Default mode is text.
+- `--json` is the only supported output-mode flag.
+- `--output` is no longer supported.
+- `--json=false` is rejected; omit `--json` when you want text output.
+- Existing scripts should keep using `--json` for explicit machine-readable output.
 
 ### Create/list/show
 

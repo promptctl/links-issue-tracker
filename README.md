@@ -28,9 +28,9 @@ Install from outside a checkout:
 go install github.com/bmf/links-issue-tracker/cmd/lnks@latest
 ```
 
-Output is auto-detected (text on TTY, JSON in pipes). Override with `--json`, `--output text|json`, or `LNKS_OUTPUT=text|json`.
+Output is standard text by default. Add `--json` when you need machine-readable JSON.
 
-- `--json` remains an explicit JSON shorthand for script compatibility
+- `--json` is the only output-mode flag
 - failure output in JSON mode uses a stable envelope:
   - `error.code` (`usage|validation|not_found|conflict|corruption|generic`)
   - `error.reason`

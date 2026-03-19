@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strconv"
 	"strings"
 
 	"github.com/bmf/links-issue-tracker/internal/store"
@@ -66,41 +65,22 @@ func buildCommandErrorPayload(err error) commandErrorPayload {
 func shouldEmitJSONError(args []string, stdout io.Writer) bool {
 	// [LAW:one-source-of-truth] Error-output format follows the same global output precedence resolver as normal command output.
 	_, mode, err := parseGlobalOutputMode(args, stdout)
-	if mode == outputModeJSON {
-		return true
-	}
-	if explicitJSON, hasExplicitJSON := explicitJSONErrorRequest(args); hasExplicitJSON {
-		return explicitJSON
-	}
 	if err == nil {
-		return false
+		return mode == outputModeJSON || explicitJSONErrorRequest(args)
 	}
-	return detectOutputMode(stdout) == outputModeJSON
+	return explicitJSONErrorRequest(args)
 }
 
-func explicitJSONErrorRequest(args []string) (bool, bool) {
-	explicitJSON := false
-	hasExplicitJSON := false
+func explicitJSONErrorRequest(args []string) bool {
 	for index := 0; index < len(args); index++ {
 		switch {
 		case args[index] == "--":
-			return explicitJSON, hasExplicitJSON
+			return false
 		case args[index] == "--json":
-			explicitJSON = true
-			hasExplicitJSON = true
-		case strings.HasPrefix(args[index], "--json="):
-			jsonValue := strings.TrimSpace(strings.TrimPrefix(args[index], "--json="))
-			parsed, parseErr := strconv.ParseBool(jsonValue)
-			if parseErr != nil {
-				explicitJSON = true
-				hasExplicitJSON = true
-				continue
-			}
-			explicitJSON = parsed
-			hasExplicitJSON = true
+			return true
 		}
 	}
-	return explicitJSON, hasExplicitJSON
+	return false
 }
 
 func commandErrorCode(exitCode int) string {
@@ -143,10 +123,9 @@ func commandErrorReason(err error) string {
 		return "unknown_command"
 	case strings.HasPrefix(message, "usage:"):
 		return "usage_error"
-	case strings.Contains(message, "invalid --json value"):
-		return "invalid_json_flag"
-	case strings.Contains(message, "unsupported output mode"):
-		return "unsupported_output_mode"
+	case strings.Contains(message, "--output is no longer supported"),
+		strings.Contains(message, "flag provided but not defined: -output"):
+		return "unsupported_output_flag"
 	case strings.Contains(message, "cannot update manifest") && strings.Contains(message, "read only"):
 		return "manifest_read_only"
 	case strings.Contains(message, "requires running inside a git repository"):
@@ -164,10 +143,8 @@ func commandErrorRemediation(reason string) string {
 		return "Run `lnks --help` (or `lnks help <command>`) to select a supported command path."
 	case "usage_error":
 		return "Run the command with `--help` and retry with valid arguments."
-	case "invalid_json_flag":
-		return "Use `--json`, `--json=true`, or `--json=false`."
-	case "unsupported_output_mode":
-		return "Use `--output auto`, `--output text`, or `--output json`."
+	case "unsupported_output_flag":
+		return "Remove `--output`. Use `--json` for JSON output or omit it for text output."
 	case "entity_not_found":
 		return "Verify the target ID exists with `lnks ls --json` or `lnks show <id> --json`."
 	case "merge_conflict":
