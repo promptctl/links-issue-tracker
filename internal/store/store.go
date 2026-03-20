@@ -191,6 +191,17 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 	if err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
+	return openExistingStore(ctx, doltRootDir, workspaceID)
+}
+
+func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+	return openExistingStore(ctx, doltRootDir, workspaceID)
+}
+
+func openExistingStore(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
+		return nil, err
+	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
@@ -201,14 +212,6 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 		return nil, err
 	}
 	return s, nil
-}
-
-func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
-	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return nil, err
-	}
-	// [LAW:single-enforcer] Startup writes remain owned by writable Open so read paths never auto-create or migrate at this boundary.
-	return openStoreConnection(doltRootDir, workspaceID)
 }
 
 func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) error {

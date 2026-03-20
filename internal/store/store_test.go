@@ -680,6 +680,98 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
+func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	if err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() error = %v", err)
+	}
+	seed, err := openStoreConnection(doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("openStoreConnection() error = %v", err)
+	}
+	legacySchema := []string{
+		`CREATE TABLE meta (
+			meta_key VARCHAR(191) PRIMARY KEY,
+			meta_value TEXT NOT NULL
+		);`,
+		`CREATE TABLE issues (
+			id VARCHAR(191) PRIMARY KEY,
+			title TEXT NOT NULL,
+			description TEXT NOT NULL,
+			status VARCHAR(32) NOT NULL,
+			priority INT NOT NULL,
+			issue_type VARCHAR(32) NOT NULL,
+			assignee TEXT NOT NULL,
+			created_at VARCHAR(64) NOT NULL,
+			updated_at VARCHAR(64) NOT NULL,
+			closed_at VARCHAR(64) NULL,
+			archived_at VARCHAR(64) NULL,
+			deleted_at VARCHAR(64) NULL
+		);`,
+	}
+	for _, stmt := range legacySchema {
+		if _, err := seed.db.ExecContext(ctx, stmt); err != nil {
+			t.Fatalf("seed legacy schema error = %v", err)
+		}
+	}
+	if _, err := seed.db.ExecContext(
+		ctx,
+		`INSERT INTO issues (
+			id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"test-1", "Legacy task", "old schema row", "open", 2, "task", "", time.Now().UTC().Format(time.RFC3339Nano), time.Now().UTC().Format(time.RFC3339Nano), nil, nil, nil,
+	); err != nil {
+		t.Fatalf("seed legacy issue error = %v", err)
+	}
+	if err := seed.commitWorkingSet(ctx, "seed legacy schema"); err != nil {
+		t.Fatalf("commitWorkingSet() error = %v", err)
+	}
+	if err := seed.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("seed.Close() error = %v", err)
+	}
+
+	repoPath := filepath.Join(doltRoot, "links")
+	beforeLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log before read-open migration error = %v", err)
+	}
+
+	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v", err)
+	}
+	defer readStore.Close()
+
+	issues, err := readStore.ListIssues(ctx, ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() after read-open migration error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("len(issues) = %d, want 1", len(issues))
+	}
+	if issues[0].Topic != "misc" {
+		t.Fatalf("issues[0].Topic = %q, want misc", issues[0].Topic)
+	}
+
+	got, err := readStore.getMeta(ctx, nil, "schema_version")
+	if err != nil {
+		t.Fatalf("getMeta(schema_version) error = %v", err)
+	}
+	if got != "1" {
+		t.Fatalf("schema_version = %q, want 1", got)
+	}
+
+	afterLog, err := doltcli.Run(ctx, repoPath, "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log after read-open migration error = %v", err)
+	}
+	if countNonEmptyLines(afterLog) <= countNonEmptyLines(beforeLog) {
+		t.Fatalf("read-open migration did not create startup commit:\nbefore:\n%s\nafter:\n%s", beforeLog, afterLog)
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
