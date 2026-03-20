@@ -11,6 +11,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/issueid"
 	"github.com/google/uuid"
 )
 
@@ -18,6 +19,7 @@ var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
 
 type Config struct {
 	WorkspaceID string    `json:"workspace_id"`
+	IssuePrefix string    `json:"issue_prefix"`
 	CreatedAt   time.Time `json:"created_at"`
 	Version     int       `json:"schema_version"`
 }
@@ -30,6 +32,7 @@ type Info struct {
 	DatabasePath string
 	DoltRepoPath string
 	WorkspaceID  string
+	IssuePrefix  string
 }
 
 type GitRemote struct {
@@ -74,7 +77,7 @@ func Resolve(cwd string) (Info, error) {
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
 	}
-	cfg, err := loadOrCreateConfig(configPath)
+	cfg, err := loadOrCreateConfig(rootDir, configPath)
 	if err != nil {
 		return Info{}, err
 	}
@@ -86,6 +89,7 @@ func Resolve(cwd string) (Info, error) {
 		DatabasePath: databasePath,
 		DoltRepoPath: doltRepoPath,
 		WorkspaceID:  cfg.WorkspaceID,
+		IssuePrefix:  cfg.IssuePrefix,
 	}, nil
 }
 
@@ -180,7 +184,19 @@ func GitRemotes(cwd string) ([]GitRemote, error) {
 	return remotes, nil
 }
 
-func loadOrCreateConfig(path string) (Config, error) {
+func loadOrCreateConfig(rootDir string, path string) (Config, error) {
+	writeConfig := func(cfg Config) (Config, error) {
+		payload, err := json.MarshalIndent(cfg, "", "  ")
+		if err != nil {
+			return Config{}, fmt.Errorf("marshal workspace config: %w", err)
+		}
+		payload = append(payload, '\n')
+		if err := os.WriteFile(path, payload, 0o644); err != nil {
+			return Config{}, fmt.Errorf("write workspace config: %w", err)
+		}
+		return cfg, nil
+	}
+
 	payload, err := os.ReadFile(path)
 	if err == nil {
 		var cfg Config
@@ -189,6 +205,22 @@ func loadOrCreateConfig(path string) (Config, error) {
 		}
 		if cfg.WorkspaceID == "" {
 			return Config{}, errors.New("workspace config missing workspace_id")
+		}
+		if strings.TrimSpace(cfg.IssuePrefix) == "" {
+			derivedPrefix, err := deriveIssuePrefix(rootDir)
+			if err != nil {
+				return Config{}, err
+			}
+			cfg.IssuePrefix = derivedPrefix
+			return writeConfig(cfg)
+		}
+		normalizedPrefix, err := issueid.NormalizeConfiguredPrefix(cfg.IssuePrefix)
+		if err != nil {
+			return Config{}, fmt.Errorf("invalid issue_prefix: %w", err)
+		}
+		if normalizedPrefix != cfg.IssuePrefix {
+			cfg.IssuePrefix = normalizedPrefix
+			return writeConfig(cfg)
 		}
 		return cfg, nil
 	}
@@ -200,13 +232,28 @@ func loadOrCreateConfig(path string) (Config, error) {
 		CreatedAt:   time.Now().UTC(),
 		Version:     1,
 	}
-	payload, err = json.MarshalIndent(cfg, "", "  ")
+	cfg.IssuePrefix, err = deriveIssuePrefix(rootDir)
 	if err != nil {
-		return Config{}, fmt.Errorf("marshal workspace config: %w", err)
+		return Config{}, err
 	}
-	payload = append(payload, '\n')
-	if err := os.WriteFile(path, payload, 0o644); err != nil {
-		return Config{}, fmt.Errorf("write workspace config: %w", err)
+	return writeConfig(cfg)
+}
+
+func deriveIssuePrefix(rootDir string) (string, error) {
+	base := issueid.NormalizeSlug(filepath.Base(rootDir))
+	if base == "" {
+		return "", fmt.Errorf("derive issue_prefix: repository name %q does not contain at least %d normalized characters", filepath.Base(rootDir), issueid.PrefixMinLength)
 	}
-	return cfg, nil
+	parts := strings.Split(base, "-")
+	for _, part := range parts {
+		candidate, err := issueid.NormalizeConfiguredPrefix(part)
+		if err == nil && candidate != "" {
+			return candidate, nil
+		}
+	}
+	candidate, err := issueid.NormalizeConfiguredPrefix(base)
+	if err != nil || candidate == "" {
+		return "", fmt.Errorf("derive issue_prefix: repository name %q does not produce a valid prefix", filepath.Base(rootDir))
+	}
+	return candidate, nil
 }

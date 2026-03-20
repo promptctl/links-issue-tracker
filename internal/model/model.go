@@ -11,6 +11,7 @@ type Issue struct {
 	Status      string     `json:"status"`
 	Priority    int        `json:"priority"`
 	IssueType   string     `json:"issue_type"`
+	Topic       string     `json:"topic"`
 	Assignee    string     `json:"assignee,omitempty"`
 	Labels      []string   `json:"labels"`
 	CreatedAt   time.Time  `json:"created_at"`

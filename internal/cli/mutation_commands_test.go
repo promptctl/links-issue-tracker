@@ -49,7 +49,7 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 		t.Fatalf("Run(init --skip-hooks --skip-agents --json) error = %v", err)
 	}
 
-	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--type", "task", "--priority", "4", "--json"}, 10*time.Second)
+	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "4", "--json"}, 10*time.Second)
 	if err != nil {
 		t.Fatalf("Run(new --json) error = %v", err)
 	}

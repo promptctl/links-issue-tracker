@@ -162,10 +162,14 @@ func TestMigrateApplyImportsBeadsIssueData(t *testing.T) {
 		t.Fatalf("store.Open(source) error = %v", err)
 	}
 	t.Cleanup(func() { _ = sourceStore.Close() })
+	if err := sourceStore.EnsureIssuePrefix(ctx, "source"); err != nil {
+		t.Fatalf("EnsureIssuePrefix(source) error = %v", err)
+	}
 
 	created, err := sourceStore.CreateIssue(ctx, store.CreateIssueInput{
 		Title:       "Imported from beads",
 		Description: "beads payload",
+		Topic:       "legacy",
 		IssueType:   "bug",
 		Priority:    1,
 		Assignee:    "bmf",

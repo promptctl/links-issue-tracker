@@ -67,7 +67,7 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 	done := make(chan error, 1)
 	go func() {
 		var stdout bytes.Buffer
-		done <- Run(context.Background(), &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--json"})
+		done <- Run(context.Background(), &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--json"})
 	}()
 
 	select {

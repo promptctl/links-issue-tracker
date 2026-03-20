@@ -17,6 +17,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 
 	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:     "Update status",
+		Topic:     "status",
 		IssueType: "task",
 		Priority:  2,
 	})
@@ -59,6 +60,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 
 	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:     "Update fields",
+		Topic:     "fields",
 		IssueType: "task",
 		Priority:  3,
 	})
@@ -92,6 +94,7 @@ func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 
 	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:     "Validation",
+		Topic:     "validation",
 		IssueType: "task",
 		Priority:  2,
 	})
@@ -115,6 +118,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 
 	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:     "Empty status",
+		Topic:     "status",
 		IssueType: "task",
 		Priority:  2,
 	})

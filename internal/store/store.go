@@ -71,6 +71,7 @@ type ImportIssue struct {
 	Status      string
 	Priority    int
 	IssueType   string
+	Topic       string
 	Assignee    string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -105,6 +106,8 @@ type CreateIssueInput struct {
 	Title       string
 	Description string
 	IssueType   string
+	Topic       string
+	ParentID    string
 	Priority    int
 	Assignee    string
 	Labels      []string
@@ -265,6 +268,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			status VARCHAR(32) NOT NULL,
 			priority INT NOT NULL,
 			issue_type VARCHAR(32) NOT NULL,
+			topic VARCHAR(191) NOT NULL,
 			assignee TEXT NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			updated_at VARCHAR(64) NOT NULL,
@@ -328,11 +332,21 @@ func (s *Store) migrate(ctx context.Context) error {
 		}
 		changed = changed || stmtChanged
 	}
+	topicColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`)
+	if err != nil {
+		return err
+	}
+	changed = changed || topicColumnChanged
 	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
 	if err != nil {
 		return err
 	}
 	changed = changed || statusChanged
+	topicChanged, err := s.ensureIssueTopics(ctx)
+	if err != nil {
+		return err
+	}
+	changed = changed || topicChanged
 	workspaceChanged, err := s.ensureMetaValue(ctx, "workspace_id", s.workspaceID)
 	if err != nil {
 		return err
@@ -410,6 +424,16 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
 	}
 	changed = changed || constraintChanged
 	return changed, nil
+}
+
+func (s *Store) ensureIssueTopics(ctx context.Context) (bool, error) {
+	// [LAW:single-enforcer] Legacy topic repair happens in one SQL reconciliation stage instead of a second Go defaulting path.
+	return s.execReconciliationUpdate(
+		ctx,
+		`SELECT 1 FROM issues WHERE TRIM(COALESCE(topic, '')) = '' LIMIT 1`,
+		`UPDATE issues SET topic = 'misc' WHERE TRIM(COALESCE(topic, '')) = ''`,
+		"backfill legacy issue topics",
+	)
 }
 
 func (s *Store) ensureStatusConstraint(ctx context.Context) (bool, error) {
@@ -547,13 +571,18 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 	if err != nil {
 		return model.Issue{}, err
 	}
+	topic, err := normalizeIssueTopicForCreate(in.Topic)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	createdBy := "links"
 	issue := model.Issue{
-		ID:          newIssueID(s.workspaceID),
 		Title:       strings.TrimSpace(in.Title),
 		Description: strings.TrimSpace(in.Description),
 		Status:      "open",
 		Priority:    priority,
 		IssueType:   issueType,
+		Topic:       topic,
 		Assignee:    strings.TrimSpace(in.Assignee),
 		Labels:      labels,
 		CreatedAt:   now,
@@ -569,18 +598,41 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 		return model.Issue{}, fmt.Errorf("begin create issue tx: %w", err)
 	}
 	defer tx.Rollback()
+	parentID := strings.TrimSpace(in.ParentID)
+	if parentID != "" {
+		if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, parentID).Scan(new(string)); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return model.Issue{}, NotFoundError{Entity: "issue", ID: parentID}
+			}
+			return model.Issue{}, fmt.Errorf("lookup parent issue %q: %w", parentID, err)
+		}
+	}
+	prefix, err := s.issuePrefixForTx(ctx, tx)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
-		id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
-		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.IssueType,
+		id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+		issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.IssueType, issue.Topic,
 		issue.Assignee, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano))
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("insert issue: %w", err)
 	}
-	if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
+	if parentID != "" {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`,
+			issue.ID, parentID, issue.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+			return model.Issue{}, fmt.Errorf("insert parent relation: %w", err)
+		}
+	}
+	if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
 		return model.Issue{}, err
 	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", "links"); err != nil {
+	if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", createdBy); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -593,7 +645,7 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 }
 
 func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error) {
-	query := `SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type, i.assignee, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at FROM issues i`
+	query := `SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at FROM issues i`
 	var where []string
 	var args []any
 	if !filter.IncludeArchived {
@@ -670,9 +722,9 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 		if trimmed == "" {
 			continue
 		}
-		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ?)")
+		where = append(where, "(LOWER(i.title) LIKE ? OR LOWER(i.description) LIKE ? OR LOWER(i.topic) LIKE ?)")
 		like := "%" + trimmed + "%"
-		args = append(args, like, like)
+		args = append(args, like, like, like)
 	}
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
@@ -801,7 +853,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id = ?`, id)
 	issue, err := scanIssue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1153,14 +1205,15 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	}
 	defer tx.Rollback()
 	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+			id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, NULL, NULL)
 		ON DUPLICATE KEY UPDATE
 			title = VALUES(title),
 			description = VALUES(description),
 			status = VALUES(status),
 			priority = VALUES(priority),
 			issue_type = VALUES(issue_type),
+			topic = VALUES(topic),
 			assignee = VALUES(assignee),
 			created_at = VALUES(created_at),
 			updated_at = VALUES(updated_at),
@@ -1171,6 +1224,7 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 		status,
 		in.Priority,
 		issueType,
+		normalizeIssueSlug(in.Topic),
 		strings.TrimSpace(in.Assignee),
 		in.CreatedAt.Format(time.RFC3339Nano),
 		in.UpdatedAt.Format(time.RFC3339Nano),
@@ -1762,7 +1816,7 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issu
 	if _, err := s.GetIssue(ctx, parentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type, i.assignee, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
+	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		WHERE r.type = 'parent-child' AND r.dst_id = ?
@@ -1802,6 +1856,23 @@ func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error
 	return labels, rows.Err()
 }
 
+func (s *Store) ListTopics(ctx context.Context) ([]string, error) {
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT topic FROM issues WHERE deleted_at IS NULL AND topic <> '' ORDER BY topic ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("list topics: %w", err)
+	}
+	defer rows.Close()
+	topics := []string{}
+	for rows.Next() {
+		var topic string
+		if err := rows.Scan(&topic); err != nil {
+			return nil, err
+		}
+		topics = append(topics, topic)
+	}
+	return topics, rows.Err()
+}
+
 func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {
 	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
 	if err != nil {
@@ -1827,9 +1898,9 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 		if err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, issue.Assignee, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, created_at, updated_at, closed_at, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?)`,
+			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, normalizeIssueSlug(issue.Topic), issue.Assignee, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 	}
@@ -1974,6 +2045,7 @@ func buildIssueOrderClause(specs []SortSpec) (string, error) {
 		"status":     "i.status",
 		"priority":   "i.priority",
 		"type":       "i.issue_type",
+		"topic":      "i.topic",
 		"assignee":   "i.assignee",
 		"created_at": "i.created_at",
 		"updated_at": "i.updated_at",
@@ -2160,7 +2232,7 @@ func scanIssue(row issueScanner) (model.Issue, error) {
 	var issue model.Issue
 	var createdAt, updatedAt string
 	var closedAt, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority, &issue.IssueType, &issue.Assignee, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority, &issue.IssueType, &issue.Topic, &issue.Assignee, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
 		return model.Issue{}, err
 	}
 	var err error
@@ -2640,9 +2712,4 @@ func isManifestReadOnlyCommitError(err error) bool {
 	}
 	normalized := strings.ToLower(err.Error())
 	return strings.Contains(normalized, "cannot update manifest") && strings.Contains(normalized, "read only")
-}
-
-func newIssueID(workspaceID string) string {
-	prefix := strings.SplitN(workspaceID, "-", 2)[0]
-	return fmt.Sprintf("lit-%s-%s", prefix, uuid.NewString()[:8])
 }

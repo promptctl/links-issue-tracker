@@ -125,8 +125,8 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		})
 	})
 	addGroupedPassthrough(root, "guidance", "quickstart", "Agent quickstart workflow", func(args []string) error {
-		return runWithPreflight(append([]string{"quickstart"}, args...), func() error {
-			return runQuickstart(stdout, args)
+		return runWithWorkspace(append([]string{"quickstart"}, args...), func(ws workspace.Info) error {
+			return runQuickstart(ctx, stdout, ws, args)
 		})
 	})
 	addGroupedPassthrough(root, "guidance", "completion", "Generate shell completion script", func(args []string) error {
@@ -532,6 +532,8 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
+	topic := fs.String("topic", "", "Required immutable issue topic slug")
+	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
 	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
@@ -540,7 +542,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, IssueType: *issueType, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
+		Title: *title, Description: *description, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
 	})
 	if err != nil {
 		return err
@@ -1159,6 +1161,7 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	}
 	payload := map[string]string{
 		"workspace_id":   ws.WorkspaceID,
+		"issue_prefix":   ws.IssuePrefix,
 		"git_common_dir": ws.GitCommonDir,
 		"storage_dir":    ws.StorageDir,
 		"database_path":  ws.DatabasePath,
@@ -1168,7 +1171,7 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	if shouldWriteJSON(stdout, *jsonOut) {
 		return writeJSON(stdout, payload)
 	}
-	for _, key := range []string{"workspace_id", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
+	for _, key := range []string{"workspace_id", "issue_prefix", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
 		if _, err := fmt.Fprintf(stdout, "%s: %s\n", key, payload[key]); err != nil {
 			return err
 		}
@@ -2186,7 +2189,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 	}
 }
 
-func runQuickstart(stdout io.Writer, args []string) error {
+func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := flag.NewFlagSet("quickstart", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -2198,8 +2201,20 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		return errors.New("usage: lnks quickstart [--json] [--refresh]")
 	}
 
+	topics := []string{}
+	readStore, err := store.OpenForRead(ctx, ws.DatabasePath, ws.WorkspaceID)
+	if err == nil {
+		topics, err = readStore.ListTopics(ctx)
+		_ = readStore.Close()
+		if err != nil {
+			topics = []string{}
+		}
+	}
+
 	payload := map[string]any{
-		"summary": "Agent quickstart for links issue tracking",
+		"summary":      "Agent quickstart for links issue tracking",
+		"issue_prefix": ws.IssuePrefix,
+		"topics":       topics,
 		"workflow": []string{
 			"Initialize and auto-migrate with `lnks init`.",
 			"Refresh managed repo assets with `lnks quickstart --refresh`.",
@@ -2207,6 +2222,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"Migrate legacy Beads data/wiring explicitly with `lnks migrate --apply` when needed.",
 			"Install git hook automation once with `lnks hooks install`.",
 			"List ready work with `lnks ready` (or `lnks ls --query \"status:open\"`).",
+			"Create a concise immutable one-word topic, reuse an existing topic when possible, and pass it with `lnks new --topic <topic> ...`.",
+			"Use `lnks new --parent <issue-id> ...` when creating a child issue so the ID becomes `parentID.<n>`.",
 			"Create issues with `lnks new ...`; use `--type epic` for epics.",
 			"Connect issues using `lnks parent set` and `lnks dep add --type related-to|blocks`.",
 			"Configure remotes with `git remote`; `lnks sync` mirrors those remotes into Dolt automatically.",
@@ -2224,7 +2241,8 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"lnks start <issue-id> --reason \"claim\"",
 			"lnks done <issue-id> --reason \"completed\"",
 			"lnks ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc",
-			"lnks new --title \"Fix renderer race\" --type bug --priority 1 --labels renderer,urgent",
+			"lnks new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
+			"lnks new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
 			"lnks parent set <issue-id> <parent-issue-id>",
 			"lnks dep add <issue-id> <dependency-issue-id> --type related-to",
 			"git remote add origin https://github.com/org/repo.git",
@@ -2273,7 +2291,10 @@ func runQuickstart(stdout io.Writer, args []string) error {
 			"   `lnks ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc`",
 			"",
 			"3) Create and relate issues/epics",
-			"   `lnks new --title \"...\" --type task|bug|feature|chore|epic`",
+			fmt.Sprintf("   project prefix: `%s`", ws.IssuePrefix),
+			"   choose or reuse a concise one-word topic and pass `--topic <topic>`",
+			"   `lnks new --title \"...\" --topic <topic> --type task|bug|feature|chore|epic`",
+			"   `lnks new --title \"...\" --topic <topic> --parent <parent-id> --type task`",
 			"   `lnks parent set <child-id> <parent-id>`",
 			"   `lnks dep add <src-id> <dst-id> --type blocks|related-to|parent-child`",
 			"",
@@ -2300,6 +2321,16 @@ func runQuickstart(stdout io.Writer, args []string) error {
 		}
 		if summary, ok := instructions["summary"].(string); ok && strings.TrimSpace(summary) != "" {
 			lines[0] = summary
+		}
+		if quickstartTopics, ok := instructions["topics"].([]string); ok && len(quickstartTopics) > 0 {
+			for index, line := range lines {
+				if strings.HasPrefix(line, "   project prefix: ") {
+					lines = append(lines[:index+1], append([]string{
+						fmt.Sprintf("   existing topics: %s", strings.Join(quickstartTopics, ", ")),
+					}, lines[index+1:]...)...)
+					break
+				}
+			}
 		}
 		if refreshReport, ok := instructions["refresh"].(quickstartRefreshReport); ok {
 			lines = append(lines[:1], append([]string{
@@ -2343,7 +2374,7 @@ func printValue(w io.Writer, v any, jsonOut bool, textFn func(io.Writer, any) er
 
 func printIssueSummary(w io.Writer, v any) error {
 	issue := v.(model.Issue)
-	_, err := fmt.Fprintf(w, "%s [%s/%s/P%d] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Priority, issue.Title, formatLabels(issue.Labels))
+	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/P%d] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
 	return err
 }
 
@@ -2373,7 +2404,7 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []string) error 
 
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\nstatus: %s\ntype: %s\npriority: %d\nassignee: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.Status, issue.IssueType, issue.Priority, emptyDash(issue.Assignee), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\nstatus: %s\ntype: %s\ntopic: %s\npriority: %d\nassignee: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.Status, issue.IssueType, issue.Topic, issue.Priority, emptyDash(issue.Assignee), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
 		return err
 	}
 	if issue.Description != "" {
@@ -2446,6 +2477,8 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string) s
 			values = append(values, formatIssueState(issue))
 		case "type":
 			values = append(values, issue.IssueType)
+		case "topic":
+			values = append(values, issue.Topic)
 		case "priority":
 			values = append(values, strconv.Itoa(issue.Priority))
 		case "title":
@@ -2466,10 +2499,10 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string) s
 func resolveColumns(columns []string) []string {
 	if len(columns) == 0 {
 		// [LAW:dataflow-not-control-flow] Default listing still flows through the same projection path.
-		return []string{"id", "state", "title"}
+		return []string{"id", "state", "topic", "title"}
 	}
 	valid := map[string]struct{}{
-		"id": {}, "state": {}, "type": {}, "priority": {}, "title": {}, "assignee": {}, "labels": {}, "updated_at": {}, "created_at": {},
+		"id": {}, "state": {}, "type": {}, "topic": {}, "priority": {}, "title": {}, "assignee": {}, "labels": {}, "updated_at": {}, "created_at": {},
 	}
 	out := make([]string, 0, len(columns))
 	for _, column := range columns {
@@ -2482,7 +2515,7 @@ func resolveColumns(columns []string) []string {
 		}
 	}
 	if len(out) == 0 {
-		return []string{"id", "state", "title"}
+		return []string{"id", "state", "topic", "title"}
 	}
 	return out
 }

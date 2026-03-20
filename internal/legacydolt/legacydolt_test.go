@@ -15,6 +15,9 @@ func TestImportFromBeadsDolt(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
+	if err := st.EnsureIssuePrefix(ctx, "links"); err != nil {
+		t.Fatalf("EnsureIssuePrefix() error = %v", err)
+	}
 
 	beadsDBPath := filepath.Join(t.TempDir(), "beads.db")
 	beadsDB, _, err := openDoltDatabase(ctx, beadsDBPath, true)
@@ -111,12 +114,15 @@ func TestExportToBeadsDolt(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
+	if err := st.EnsureIssuePrefix(ctx, "links"); err != nil {
+		t.Fatalf("EnsureIssuePrefix() error = %v", err)
+	}
 
-	epic, err := st.CreateIssue(ctx, store.CreateIssueInput{Title: "Renderer cleanup", IssueType: "epic", Priority: 1, Assignee: "bmf"})
+	epic, err := st.CreateIssue(ctx, store.CreateIssueInput{Title: "Renderer cleanup", Topic: "renderer", IssueType: "epic", Priority: 1, Assignee: "bmf"})
 	if err != nil {
 		t.Fatalf("CreateIssue epic error = %v", err)
 	}
-	task, err := st.CreateIssue(ctx, store.CreateIssueInput{Title: "Move pass validation", IssueType: "task", Priority: 2})
+	task, err := st.CreateIssue(ctx, store.CreateIssueInput{Title: "Move pass validation", Topic: "renderer", IssueType: "task", Priority: 2})
 	if err != nil {
 		t.Fatalf("CreateIssue task error = %v", err)
 	}

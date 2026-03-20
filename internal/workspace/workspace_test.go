@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,9 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	}
 	if info.WorkspaceID == "" {
 		t.Fatal("expected workspace ID")
+	}
+	if info.IssuePrefix == "" {
+		t.Fatal("expected issue prefix")
 	}
 	if _, err := os.Stat(info.ConfigPath); err != nil {
 		t.Fatalf("config file missing: %v", err)
@@ -43,6 +47,9 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if info2.WorkspaceID != info.WorkspaceID {
 		t.Fatalf("workspace ID changed: %q != %q", info2.WorkspaceID, info.WorkspaceID)
 	}
+	if info2.IssuePrefix != info.IssuePrefix {
+		t.Fatalf("issue prefix changed: %q != %q", info2.IssuePrefix, info.IssuePrefix)
+	}
 }
 
 func TestResolveFailsOutsideGit(t *testing.T) {
@@ -52,6 +59,41 @@ func TestResolveFailsOutsideGit(t *testing.T) {
 	}
 	if err != ErrNotGitRepo {
 		t.Fatalf("err = %v, want %v", err, ErrNotGitRepo)
+	}
+}
+
+func TestResolveNormalizesConfiguredIssuePrefix(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+
+	info, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() initial error = %v", err)
+	}
+
+	payload, err := os.ReadFile(info.ConfigPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		t.Fatalf("json.Unmarshal(config) error = %v", err)
+	}
+	cfg.IssuePrefix = "Renderer Platform Team"
+	updated, err := json.Marshal(cfg)
+	if err != nil {
+		t.Fatalf("json.Marshal(config) error = %v", err)
+	}
+	if err := os.WriteFile(info.ConfigPath, updated, 0o644); err != nil {
+		t.Fatalf("WriteFile(config) error = %v", err)
+	}
+
+	info, err = Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() normalized error = %v", err)
+	}
+	if info.IssuePrefix != "renderer-pla" {
+		t.Fatalf("IssuePrefix = %q, want renderer-pla", info.IssuePrefix)
 	}
 }
 
