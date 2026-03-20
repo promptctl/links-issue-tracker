@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"io/fs"
@@ -209,8 +208,7 @@ var repoLocalBeadsConfigFiles = []string{
 }
 
 func runMigrate(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	fs := flag.NewFlagSet("migrate", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("migrate")
 	applyChanges := fs.Bool("apply", false, "Apply migration changes (default: dry-run)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")

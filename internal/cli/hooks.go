@@ -39,12 +39,12 @@ func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
 }
 
 func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
-	jsonOut := false
-	for _, arg := range args {
-		if arg == "--json" {
-			jsonOut = true
-			continue
-		}
+	fs := newCobraFlagSet("hooks install")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
 		return errors.New("usage: lit hooks install [--json]")
 	}
 
@@ -62,7 +62,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		"reason":       result.Reason,
 		"traces_dir":   automationTraceDir(ws),
 	}
-	return printValue(stdout, payload, jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
 		_, printErr := fmt.Fprintf(w, "installed %s\n", p["hook"])
 		return printErr

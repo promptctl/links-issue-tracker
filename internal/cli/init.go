@@ -3,7 +3,6 @@ package cli
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 
@@ -22,8 +21,7 @@ type initReport struct {
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("init")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")

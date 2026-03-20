@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"net/url"
@@ -31,6 +30,7 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/syncfile"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 )
 
 var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found on remote`)
@@ -55,6 +55,8 @@ const (
 	appAccessRead  appAccessMode = "read"
 	appAccessWrite appAccessMode = "write"
 )
+
+var errHelpHandled = errors.New("help handled")
 
 func (w outputModeWriter) linksOutputMode() outputMode {
 	return w.mode
@@ -82,7 +84,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 	err = root.ExecuteContext(ctx)
-	if errors.Is(err, flag.ErrHelp) {
+	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) {
 		return nil
 	}
 	return err
@@ -509,15 +511,80 @@ done:
 	return args[index:], mode, nil
 }
 
-func parseFlagSet(fs *flag.FlagSet, args []string, helpOutput io.Writer) error {
+type cobraFlagSet struct {
+	cmd *cobra.Command
+}
+
+func newCobraFlagSet(use string) *cobraFlagSet {
+	cmd := &cobra.Command{
+		Use:           use,
+		SilenceErrors: true,
+		SilenceUsage:  true,
+	}
+	cmd.InitDefaultHelpFlag()
+	cmd.SetOut(io.Discard)
+	cmd.SetErr(io.Discard)
+	cmd.Flags().SetOutput(io.Discard)
+	return &cobraFlagSet{cmd: cmd}
+}
+
+func (fs *cobraFlagSet) SetOutput(w io.Writer) {
+	fs.cmd.SetOut(w)
+	fs.cmd.SetErr(w)
+	fs.cmd.Flags().SetOutput(w)
+}
+
+func (fs *cobraFlagSet) Parse(args []string) error {
+	return fs.cmd.ParseFlags(args)
+}
+
+func (fs *cobraFlagSet) String(name string, value string, usage string) *string {
+	return fs.cmd.Flags().String(name, value, usage)
+}
+
+func (fs *cobraFlagSet) Bool(name string, value bool, usage string) *bool {
+	return fs.cmd.Flags().Bool(name, value, usage)
+}
+
+func (fs *cobraFlagSet) Int(name string, value int, usage string) *int {
+	return fs.cmd.Flags().Int(name, value, usage)
+}
+
+func (fs *cobraFlagSet) NArg() int {
+	return fs.cmd.Flags().NArg()
+}
+
+func (fs *cobraFlagSet) Visit(fn func(*pflag.Flag)) {
+	fs.cmd.Flags().Visit(fn)
+}
+
+func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
+	fs.SetOutput(helpOutput)
+	if _, writeErr := fmt.Fprintf(helpOutput, "Usage of %s:\n", fs.cmd.Use); writeErr != nil {
+		return writeErr
+	}
+	fs.cmd.Flags().PrintDefaults()
+	return nil
+}
+
+func parseFlagSet(fs *cobraFlagSet, args []string, helpOutput io.Writer) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			// [LAW:single-enforcer] Flag help rendering is normalized in one parser path.
-			fs.SetOutput(helpOutput)
-			fs.Usage()
+		if errors.Is(err, pflag.ErrHelp) {
+			// [LAW:single-enforcer] Flag help rendering is normalized in one Cobra parser path.
+			if helpErr := fs.printHelp(helpOutput); helpErr != nil {
+				return helpErr
+			}
+			return errHelpHandled
 		}
 		return err
+	}
+	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
+		// [LAW:single-enforcer] Parsed help flags follow the same Cobra help rendering path as explicit help errors.
+		if helpErr := fs.printHelp(helpOutput); helpErr != nil {
+			return helpErr
+		}
+		return errHelpHandled
 	}
 	return nil
 }
@@ -527,8 +594,7 @@ func unsupportedOutputFlagError() error {
 }
 
 func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("new", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
@@ -551,8 +617,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 }
 
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("ls", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("ls")
 	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
 	issueType := fs.String("type", "", "Filter by issue type")
 	assignee := fs.String("assignee", "", "Filter by assignee")
@@ -576,7 +641,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	visited := map[string]bool{}
-	fs.Visit(func(f *flag.Flag) { visited[f.Name] = true })
+	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
 	filter := store.ListIssuesFilter{
 		Status:          strings.TrimSpace(*status),
 		IssueType:       strings.TrimSpace(*issueType),
@@ -656,8 +721,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 }
 
 func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("ready", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("ready")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
@@ -710,8 +774,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
-	fs := flag.NewFlagSet("show", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("show")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
@@ -748,8 +811,7 @@ var updateStatusTransitionActions = map[statusTransitionKey]string{
 
 func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
-	fs := flag.NewFlagSet("update", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("update")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
 	issueType := fs.String("type", "", "Issue type: task|feature|bug|chore|epic")
@@ -770,7 +832,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	visited := map[string]bool{}
-	fs.Visit(func(flag *flag.Flag) { visited[flag.Name] = true })
+	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
 	if visited["reason"] && !visited["status"] {
 		return errors.New("--reason requires --status")
 	}
@@ -872,8 +934,7 @@ func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]str
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	positional, flagArgs := splitArgs(args, 1)
-	fs := flag.NewFlagSet(action, flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Transition actor")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -903,8 +964,7 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	positional, flagArgs := splitArgs(args[1:], 1)
-	fs := flag.NewFlagSet("comment add", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
 	by := fs.String("by", os.Getenv("USER"), "Comment author")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -935,8 +995,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	switch args[0] {
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := flag.NewFlagSet("dep add", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("dep add")
 		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
 		jsonOut := fs.Bool("json", false, "Output JSON")
@@ -960,8 +1019,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		})
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := flag.NewFlagSet("dep rm", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("dep rm")
 		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -982,8 +1040,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		})
 	case "ls":
 		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := flag.NewFlagSet("dep ls", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("dep ls")
 		relType := fs.String("type", "", "Filter relation type")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -1020,8 +1077,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	switch args[0] {
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := flag.NewFlagSet("label add", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("label add")
 		by := fs.String("by", os.Getenv("USER"), "Label author")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -1040,8 +1096,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return printValue(stdout, labels, *jsonOut, printLabels)
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := flag.NewFlagSet("label rm", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("label rm")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
@@ -1069,8 +1124,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	switch args[0] {
 	case "set":
 		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := flag.NewFlagSet("parent set", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("parent set")
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -1094,8 +1148,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		})
 	case "clear":
 		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := flag.NewFlagSet("parent clear", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("parent clear")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
@@ -1117,8 +1170,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
-	fs := flag.NewFlagSet("children", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("children")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
@@ -1137,8 +1189,7 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 }
 
 func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("export", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("export")
 	jsonOut := fs.Bool("json", true, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
@@ -1153,8 +1204,7 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
-	fs := flag.NewFlagSet("workspace", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("workspace")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
@@ -1196,8 +1246,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 		switch args[1] {
 		case "ls":
-			fs := flag.NewFlagSet("sync remote ls", flag.ContinueOnError)
-			fs.SetOutput(io.Discard)
+			fs := newCobraFlagSet("sync remote ls")
 			jsonOut := fs.Bool("json", false, "Output JSON")
 			if err := parseFlagSet(fs, args[2:], stdout); err != nil {
 				return err
@@ -1228,8 +1277,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return errors.New("usage: lit sync remote ls [--json]")
 		}
 	case "fetch":
-		fs := flag.NewFlagSet("sync fetch", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("sync fetch")
 		remote := fs.String("remote", "origin", "Remote name")
 		prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
 		verbose := fs.Bool("verbose", false, "Include detailed remote output")
@@ -1259,8 +1307,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		})
 	case "pull":
-		fs := flag.NewFlagSet("sync pull", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("sync pull")
 		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 		verbose := fs.Bool("verbose", false, "Include detailed remote output")
 		jsonOut := fs.Bool("json", false, "Output JSON")
@@ -1303,8 +1350,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return printSyncPullPayload(w, v, *verbose)
 		})
 	case "push":
-		fs := flag.NewFlagSet("sync push", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("sync push")
 		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 		setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
 		force := fs.Bool("force", false, "Pass --force to dolt push")
@@ -1392,8 +1438,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return printSyncPushPayload(w, v, *verbose)
 		})
 	case "status":
-		fs := flag.NewFlagSet("sync status", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("sync status")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
@@ -1864,8 +1909,7 @@ func normalizeRemotePath(input string) string {
 }
 
 func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("doctor")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
@@ -1891,8 +1935,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("fsck", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("fsck")
 	repair := fs.Bool("repair", false, "Attempt safe repairs")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
@@ -1924,8 +1967,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	switch args[0] {
 	case "create":
-		fs := flag.NewFlagSet("backup create", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("backup create")
 		keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
@@ -1948,8 +1990,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		})
 	case "list":
-		fs := flag.NewFlagSet("backup list", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("backup list")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 			return err
@@ -1968,8 +2009,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return nil
 		})
 	case "restore":
-		fs := flag.NewFlagSet("backup restore", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("backup restore")
 		path := fs.String("path", "", "Backup snapshot path")
 		latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 		force := fs.Bool("force", false, "Force restore over unsynced state")
@@ -2006,8 +2046,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := flag.NewFlagSet("recover", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("recover")
 	fromSync := fs.String("from-sync", "", "Restore from sync file")
 	fromBackup := fs.String("from-backup", "", "Restore from backup snapshot")
 	latestBackup := fs.Bool("latest-backup", false, "Restore from latest backup snapshot")
@@ -2055,8 +2094,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return errors.New("usage: lit bulk label <add|rm> ...")
 		}
 		action := args[1]
-		fs := flag.NewFlagSet("bulk label", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("bulk label")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		label := fs.String("label", "", "Label name")
 		by := fs.String("by", os.Getenv("USER"), "Label actor")
@@ -2105,8 +2143,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return nil
 		})
 	case "close", "archive":
-		fs := flag.NewFlagSet("bulk transition", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("bulk transition")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
 		by := fs.String("by", os.Getenv("USER"), "Lifecycle actor")
@@ -2145,8 +2182,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return nil
 		})
 	case "import":
-		fs := flag.NewFlagSet("bulk import", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
+		fs := newCobraFlagSet("bulk import")
 		path := fs.String("path", "", "Path to JSON export")
 		force := fs.Bool("force", false, "Force import over unsynced local state")
 		jsonOut := fs.Bool("json", false, "Output JSON")
@@ -2190,8 +2226,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 }
 
 func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	fs := flag.NewFlagSet("quickstart", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
+	fs := newCobraFlagSet("quickstart")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	refresh := fs.Bool("refresh", false, "Refresh managed repo assets")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
