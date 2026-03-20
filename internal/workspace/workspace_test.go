@@ -78,21 +78,21 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 }
 
 func TestDefaultRemoteBranchFromSymbolicRef(t *testing.T) {
-	branch := defaultRemoteBranchFromSymbolicRef("origin", "origin/main")
-	if branch != "main" {
-		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want main", branch)
+	branch := defaultRemoteBranchFromSymbolicRef("origin", "origin/master")
+	if branch != "master" {
+		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want master", branch)
 	}
-	if got := defaultRemoteBranchFromSymbolicRef("origin", "upstream/main"); got != "" {
+	if got := defaultRemoteBranchFromSymbolicRef("origin", "upstream/master"); got != "" {
 		t.Fatalf("defaultRemoteBranchFromSymbolicRef() = %q, want empty", got)
 	}
 }
 
 func TestDefaultRemoteBranchFromLSRemote(t *testing.T) {
-	output := "ref: refs/heads/main\tHEAD\nc0ffee\tHEAD\n"
-	if got := defaultRemoteBranchFromLSRemote(output); got != "main" {
-		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want main", got)
+	output := "ref: refs/heads/master\tHEAD\nc0ffee\tHEAD\n"
+	if got := defaultRemoteBranchFromLSRemote(output); got != "master" {
+		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want master", got)
 	}
-	if got := defaultRemoteBranchFromLSRemote("c0ffee\trefs/heads/main\n"); got != "" {
+	if got := defaultRemoteBranchFromLSRemote("c0ffee\trefs/heads/master\n"); got != "" {
 		t.Fatalf("defaultRemoteBranchFromLSRemote() = %q, want empty", got)
 	}
 }
@@ -101,7 +101,7 @@ func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
 	repo := t.TempDir()
 	remote := filepath.Join(t.TempDir(), "remote.git")
 	run(t, repo, "git", "init")
-	run(t, repo, "git", "checkout", "-b", "main")
+	run(t, repo, "git", "checkout", "-b", "master")
 	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(README.md) error = %v", err)
 	}
@@ -109,23 +109,23 @@ func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
 	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
 	run(t, repo, "git", "init", "--bare", remote)
 	run(t, repo, "git", "remote", "add", "origin", remote)
-	run(t, repo, "git", "push", "-u", "origin", "main")
-	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+	run(t, repo, "git", "push", "-u", "origin", "master")
+	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/master")
 
 	got := DefaultRemoteBranch(repo, "origin")
-	if got != "main" {
-		t.Fatalf("DefaultRemoteBranch() = %q, want main", got)
+	if got != "master" {
+		t.Fatalf("DefaultRemoteBranch() = %q, want master", got)
 	}
 }
 
 func TestUpstreamRemoteFromRef(t *testing.T) {
-	if got := upstreamRemoteFromRef("origin/main"); got != "origin" {
+	if got := upstreamRemoteFromRef("origin/master"); got != "origin" {
 		t.Fatalf("upstreamRemoteFromRef() = %q, want origin", got)
 	}
 	if got := upstreamRemoteFromRef("upstream/master"); got != "upstream" {
 		t.Fatalf("upstreamRemoteFromRef() = %q, want upstream", got)
 	}
-	if got := upstreamRemoteFromRef("main"); got != "" {
+	if got := upstreamRemoteFromRef("master"); got != "" {
 		t.Fatalf("upstreamRemoteFromRef() = %q, want empty", got)
 	}
 }

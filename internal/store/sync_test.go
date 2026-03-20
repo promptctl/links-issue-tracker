@@ -2,6 +2,10 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -62,8 +66,48 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("dolt status after sync open error = %v", err)
 	}
-	if !strings.Contains(status, "On branch main") {
+	if !strings.Contains(status, "On branch master") {
 		t.Fatalf("unexpected dolt status output after sync open: %q", status)
+	}
+}
+
+func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
+		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
+	}
+
+	bootstrap, err := sql.Open(doltDriverName, buildDoltDSN(doltRoot, "test-workspace-id", false))
+	if err != nil {
+		t.Fatalf("sql.Open() bootstrap error = %v", err)
+	}
+	if _, err := bootstrap.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
+		t.Fatalf("bootstrap create database error = %v", err)
+	}
+	if err := bootstrap.Close(); err != nil && !errors.Is(err, context.Canceled) {
+		t.Fatalf("bootstrap close error = %v", err)
+	}
+
+	repoPath := filepath.Join(doltRoot, "links")
+	statusBefore, err := doltcli.Run(ctx, repoPath, "status")
+	if err != nil {
+		t.Fatalf("dolt status before EnsureDatabase error = %v", err)
+	}
+	if strings.Contains(statusBefore, "On branch master") {
+		t.Fatalf("unexpected dolt status before EnsureDatabase: %q", statusBefore)
+	}
+
+	if err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() error = %v", err)
+	}
+
+	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
+	if err != nil {
+		t.Fatalf("dolt status after EnsureDatabase error = %v", err)
+	}
+	if !strings.Contains(statusAfter, "On branch master") {
+		t.Fatalf("unexpected dolt status after EnsureDatabase: %q", statusAfter)
 	}
 }
 
@@ -151,7 +195,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name: "pull requires remote",
 			run: func() error {
-				_, err := syncStore.SyncPull(ctx, "   ", "main")
+				_, err := syncStore.SyncPull(ctx, "   ", "master")
 				return err
 			},
 			wantErr: "remote is required",
@@ -159,7 +203,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 		{
 			name: "push requires remote",
 			run: func() error {
-				_, err := syncStore.SyncPush(ctx, "   ", "main", false, false)
+				_, err := syncStore.SyncPush(ctx, "   ", "master", false, false)
 				return err
 			},
 			wantErr: "remote is required",

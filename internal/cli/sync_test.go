@@ -110,8 +110,8 @@ func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) 
 }
 
 func TestBuildSyncPullPayloadReturnsErrorForNonMatchingFailure(t *testing.T) {
-	runErr := errors.New("dolt pull origin main: fatal: network unavailable")
-	_, err := buildSyncPullPayload("origin", "main", "", runErr)
+	runErr := errors.New("dolt pull origin master: fatal: network unavailable")
+	_, err := buildSyncPullPayload("origin", "master", "", runErr)
 	if err == nil {
 		t.Fatal("expected error for non-matching pull failure")
 	}
@@ -225,7 +225,7 @@ func TestPrintSyncPullPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	payload := map[string]any{
 		"status": "ok",
 		"remote": "origin",
-		"branch": "main",
+		"branch": "master",
 		"raw":    "From origin",
 	}
 	var out bytes.Buffer
@@ -241,7 +241,7 @@ func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	payload := map[string]any{
 		"status": "ok",
 		"remote": "origin",
-		"branch": "main",
+		"branch": "master",
 		"raw":    "Pushing to origin",
 	}
 	var out bytes.Buffer

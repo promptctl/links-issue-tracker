@@ -2353,6 +2353,51 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
 		return fmt.Errorf("create dolt database: %w", err)
 	}
+	db, err = sql.Open(doltDriverName, buildDoltDSN(root, workspaceID, true))
+	if err != nil {
+		return fmt.Errorf("open dolt bootstrap database: %w", err)
+	}
+	defer db.Close()
+	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
+		return err
+	}
+	return nil
+}
+
+func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
+	activeBranch := ""
+	if err := db.QueryRowContext(ctx, `SELECT active_branch()`).Scan(&activeBranch); err != nil {
+		return fmt.Errorf("query dolt active branch: %w", err)
+	}
+	rows, err := db.QueryContext(ctx, `SELECT name FROM dolt_branches ORDER BY name`)
+	if err != nil {
+		return fmt.Errorf("query dolt branches: %w", err)
+	}
+	defer rows.Close()
+	hasMaster := false
+	branchCount := 0
+	for rows.Next() {
+		var branchName string
+		if err := rows.Scan(&branchName); err != nil {
+			return fmt.Errorf("scan dolt branch: %w", err)
+		}
+		hasMaster = hasMaster || branchName == "master"
+		branchCount++
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate dolt branches: %w", err)
+	}
+	if activeBranch == "master" || hasMaster || branchCount != 1 {
+		return nil
+	}
+	// [LAW:one-source-of-truth] Embedded bootstrap normalizes the initial Dolt branch name at database creation time so callers do not re-encode branch-policy drift.
+	renameQuery := fmt.Sprintf(
+		"CALL DOLT_BRANCH('-m', '%s', 'master')",
+		strings.ReplaceAll(activeBranch, "'", "''"),
+	)
+	if _, err := db.ExecContext(ctx, renameQuery); err != nil {
+		return fmt.Errorf("rename dolt default branch to master: %w", err)
+	}
 	return nil
 }
 
