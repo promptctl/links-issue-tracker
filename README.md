@@ -1,6 +1,6 @@
 # links
 
-`links` is a worktree-native issue tracker with a flat CLI: `lnks`.
+`links` is a worktree-native issue tracker with a flat CLI: `lit`.
 
 ## Inspiration and Credit
 
@@ -25,7 +25,7 @@ Install:
 Install from outside a checkout:
 
 ```sh
-go install github.com/bmf/links-issue-tracker/cmd/lnks@latest
+go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 
 Output is standard text by default. Add `--json` when you need machine-readable JSON.
@@ -42,48 +42,48 @@ Output is standard text by default. Add `--json` when you need machine-readable 
 Initialize in your repo (auto-migrates Beads residue and installs defaults):
 
 ```sh
-lnks init --json
+lit init --json
 git remote -v
-lnks sync remote ls --json
+lit sync remote ls --json
 ```
 
 If needed, you can run migration directly:
 
 ```sh
-lnks migrate --apply --json
+lit migrate --apply --json
 ```
 
 Create and inspect work:
 
 ```sh
-lnks new --title "First task" --type task --priority 2 --json
-lnks ready --json
-lnks update <issue-id> --status in_progress --json
-lnks start <issue-id> --reason "claim" --json
-lnks done <issue-id> --reason "completed" --json
-lnks ls --json
-lnks show <issue-id> --json
+lit new --title "First task" --type task --priority 2 --json
+lit ready --json
+lit update <issue-id> --status in_progress --json
+lit start <issue-id> --reason "claim" --json
+lit done <issue-id> --reason "completed" --json
+lit ls --json
+lit show <issue-id> --json
 ```
 
 Push/pull DB changes through Dolt remotes mirrored from Git remotes:
 
 ```sh
-lnks sync pull --json
-# ...make lnks changes...
-lnks sync push --json
+lit sync pull --json
+# ...make lit changes...
+lit sync push --json
 ```
 
 Useful commands:
 
 ```sh
-lnks quickstart --refresh --json
-lnks workspace --json
-lnks doctor --json
+lit quickstart --refresh --json
+lit workspace --json
+lit doctor --json
 ```
 
 ## More docs
 
 - Docs index (recommended start): [docs/index.md](docs/index.md)
 - Sync and remote behavior: [docs/dolt-remote-sync.md](docs/dolt-remote-sync.md)
-- Full command reference: `lnks help`
-- Agent-focused workflow: `lnks quickstart --refresh` / `lnks quickstart --refresh --json`
+- Full command reference: `lit help`
+- Agent-focused workflow: `lit quickstart --refresh` / `lit quickstart --refresh --json`

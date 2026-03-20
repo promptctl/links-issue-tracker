@@ -18,8 +18,8 @@ func TestCompletionScriptsRender(t *testing.T) {
 		if err := runCompletion(&stdout, []string{shell}); err != nil {
 			t.Fatalf("runCompletion(%q) error = %v", shell, err)
 		}
-		if !strings.Contains(stdout.String(), "lnks") {
-			t.Fatalf("completion output for %q missing lnks command name: %q", shell, stdout.String())
+		if !strings.Contains(stdout.String(), "lit") {
+			t.Fatalf("completion output for %q missing lit command name: %q", shell, stdout.String())
 		}
 	}
 }

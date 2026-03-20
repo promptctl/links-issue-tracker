@@ -104,7 +104,7 @@ func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) 
 		t.Fatalf("branch = %v, want feature/local-only", payload["branch"])
 	}
 	nextCommand := payload["next_command"].(string)
-	if !strings.Contains(nextCommand, "lnks sync push --remote origin --set-upstream") {
+	if !strings.Contains(nextCommand, "lit sync push --remote origin --set-upstream") {
 		t.Fatalf("next_command missing deterministic remediation: %q", nextCommand)
 	}
 }

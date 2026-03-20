@@ -33,7 +33,7 @@ Then retry:
 
 ```sh
 go test ./internal/cli -run TestQuickstartOutputsStructuredJSON -count=1
-go build -buildvcs=false ./cmd/lnks
+go build -buildvcs=false ./cmd/lit
 ```
 
 ## Sync warning on push hook
@@ -41,13 +41,13 @@ go build -buildvcs=false ./cmd/lnks
 The hook is warn-only and never blocks push. The warning includes `trigger=git-pre-push`, the remote, and a `trace=` path under the workspace `traces_dir`. Retry manually:
 
 ```sh
-lnks sync push
+lit sync push
 ```
 
 Then check status:
 
 ```sh
-lnks sync status --json
+lit sync status --json
 ```
 
 ## Integrity errors
@@ -55,8 +55,8 @@ lnks sync status --json
 Run:
 
 ```sh
-lnks doctor --json
-lnks fsck --repair --json
+lit doctor --json
+lit fsck --repair --json
 ```
 
 ## Startup preflight blocked by Beads residue
@@ -68,6 +68,6 @@ When a non-`init` command is blocked by startup preflight, the error includes th
 Use backups:
 
 ```sh
-lnks backup list --json
-lnks backup restore --latest --json
+lit backup list --json
+lit backup restore --latest --json
 ```

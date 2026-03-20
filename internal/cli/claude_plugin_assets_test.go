@@ -71,8 +71,8 @@ func TestClaudePluginAssetsUseQuickstartHooks(t *testing.T) {
 		if events[0].Hooks[0].Type != "command" {
 			t.Fatalf("%s hook type = %q, want command", event, events[0].Hooks[0].Type)
 		}
-		if events[0].Hooks[0].Command != "lnks quickstart --refresh" {
-			t.Fatalf("%s hook command = %q, want lnks quickstart --refresh", event, events[0].Hooks[0].Command)
+		if events[0].Hooks[0].Command != "lit quickstart --refresh" {
+			t.Fatalf("%s hook command = %q, want lit quickstart --refresh", event, events[0].Hooks[0].Command)
 		}
 	}
 }

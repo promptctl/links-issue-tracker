@@ -31,7 +31,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks init [--json] [--skip-hooks] [--skip-agents]")
+		return errors.New("usage: lit init [--json] [--skip-hooks] [--skip-agents]")
 	}
 
 	if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
@@ -134,7 +134,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Reason:     "beads residue detected during startup preflight",
 		Metadata: map[string]string{
 			"blocked_command":     blockedCommand,
-			"remediation_command": "lnks migrate --apply --json",
+			"remediation_command": "lit migrate --apply --json",
 			"residue_summary":     scan.Summary(),
 		},
 	})
@@ -142,7 +142,7 @@ func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) err
 		Summary:            scan.Summary(),
 		Trigger:            "startup-preflight",
 		BlockedCommand:     blockedCommand,
-		RemediationCommand: "lnks migrate --apply --json",
+		RemediationCommand: "lit migrate --apply --json",
 	}
 	if traceErr != nil {
 		preflightErr.TraceWriteError = traceErr.Error()

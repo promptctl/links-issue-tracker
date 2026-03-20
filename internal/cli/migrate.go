@@ -34,7 +34,7 @@ type BeadsMigrationRequiredError struct {
 func (e BeadsMigrationRequiredError) Error() string {
 	remediationCommand := strings.TrimSpace(e.RemediationCommand)
 	if remediationCommand == "" {
-		remediationCommand = "lnks migrate --apply --json"
+		remediationCommand = "lit migrate --apply --json"
 	}
 	parts := []string{}
 	if strings.TrimSpace(e.Summary) == "" {
@@ -57,7 +57,7 @@ func (e BeadsMigrationRequiredError) Error() string {
 func (e BeadsMigrationRequiredError) ErrorDetails() map[string]any {
 	remediationCommand := strings.TrimSpace(e.RemediationCommand)
 	if remediationCommand == "" {
-		remediationCommand = "lnks migrate --apply --json"
+		remediationCommand = "lit migrate --apply --json"
 	}
 	details := map[string]any{
 		"reason":              "beads_residue_detected",
@@ -219,7 +219,7 @@ func runMigrate(ctx context.Context, stdout io.Writer, ws workspace.Info, args [
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks migrate [--apply] [--json] [--skip-hooks] [--skip-agents]")
+		return errors.New("usage: lit migrate [--apply] [--json] [--skip-hooks] [--skip-agents]")
 	}
 
 	report, err := runMigrationWithOptions(
@@ -297,7 +297,7 @@ func runMigrationWithOptions(ctx context.Context, ws workspace.Info, applyChange
 	if !applyChanges {
 		report.Notes = append(report.Notes, "dry-run: no files modified; rerun with --apply")
 		if options.InstallHooks || options.InstallAgents {
-			report.Notes = append(report.Notes, "dry-run: lnks setup stages skipped")
+			report.Notes = append(report.Notes, "dry-run: lit setup stages skipped")
 		}
 		if hasBeadsDataPath {
 			report.Notes = append(report.Notes, "dry-run: beads issue data import skipped")

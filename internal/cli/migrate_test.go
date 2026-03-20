@@ -141,8 +141,8 @@ func TestMigrateApplyRewritesAgentsAndInstallsLitHook(t *testing.T) {
 	if strings.Contains(strings.ToLower(string(agentsContent)), "beads") {
 		t.Fatalf("AGENTS.md still contains beads: %q", string(agentsContent))
 	}
-	if !strings.Contains(string(agentsContent), "lnks") {
-		t.Fatalf("AGENTS.md missing lnks replacement: %q", string(agentsContent))
+	if !strings.Contains(string(agentsContent), "lit") {
+		t.Fatalf("AGENTS.md missing lit replacement: %q", string(agentsContent))
 	}
 	if _, err := os.Stat(filepath.Join(repo, ".beads")); !os.IsNotExist(err) {
 		t.Fatalf(".beads should be removed, stat error: %v", err)

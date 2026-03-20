@@ -138,25 +138,25 @@ func commandErrorReason(err error) string {
 func commandErrorRemediation(reason string) string {
 	switch reason {
 	case "beads_migration_required":
-		return "Run `lnks migrate beads --apply --json` before retrying the command."
+		return "Run `lit migrate --apply --json` before retrying the command."
 	case "unknown_command":
-		return "Run `lnks --help` (or `lnks help <command>`) to select a supported command path."
+		return "Run `lit --help` (or `lit help <command>`) to select a supported command path."
 	case "usage_error":
 		return "Run the command with `--help` and retry with valid arguments."
 	case "unsupported_output_flag":
 		return "Remove `--output`. Use `--json` for JSON output or omit it for text output."
 	case "entity_not_found":
-		return "Verify the target ID exists with `lnks ls --json` or `lnks show <id> --json`."
+		return "Verify the target ID exists with `lit ls --json` or `lit show <id> --json`."
 	case "merge_conflict":
 		return "Sync and retry after resolving conflicts."
 	case "corruption_detected":
-		return "Run `lnks fsck --repair --json` and retry."
+		return "Run `lit fsck --repair --json` and retry."
 	case "manifest_read_only":
-		return "Retry once. If the error persists, run `lnks doctor --json` and `lnks fsck --repair --json`."
+		return "Retry once. If the error persists, run `lit doctor --json` and `lit fsck --repair --json`."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	default:
-		return "Retry the command. If it still fails, run `lnks doctor --json` for diagnostics."
+		return "Retry the command. If it still fails, run `lit doctor --json` for diagnostics."
 	}
 }
 

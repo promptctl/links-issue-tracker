@@ -134,7 +134,7 @@ func recordAutomationTrace(ws workspace.Info, record automationTraceRecord) (aut
 }
 
 func formatCommand(args []string) string {
-	parts := []string{"lnks"}
+	parts := []string{"lit"}
 	for _, arg := range args {
 		trimmed := strings.TrimSpace(arg)
 		if trimmed == "" {

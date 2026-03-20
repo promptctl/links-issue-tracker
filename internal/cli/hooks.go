@@ -28,13 +28,13 @@ type hookInstallResult struct {
 
 func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 	switch args[0] {
 	case "install":
 		return runHooksInstall(stdout, ws, args[1:])
 	default:
-		return errors.New("usage: lnks hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 }
 
@@ -45,7 +45,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 			jsonOut = true
 			continue
 		}
-		return errors.New("usage: lnks hooks install [--json]")
+		return errors.New("usage: lit hooks install [--json]")
 	}
 
 	result, err := installHooks(ws)
@@ -175,16 +175,16 @@ if [[ -n "${trace_ref_file}" ]]; then
   if ! LNKS_AUTOMATION_TRIGGER="git-pre-push" \
     LNKS_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
     LNKS_AUTOMATION_TRACE_REF_FILE="${trace_ref_file}" \
-    lnks sync push --remote "${remote_name}" >/dev/null 2>&1; then
+    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
     trace_ref="$(cat "${trace_ref_file}" 2>/dev/null || true)"
-    printf '\033[33m[links] warning: hook-triggered lnks sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lnks sync push --remote %s\033[0m\n' "${remote_name}" "${trace_ref:-unavailable}" "${remote_name}" >&2
+    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "${trace_ref:-unavailable}" "${remote_name}" >&2
   fi
   rm -f "${trace_ref_file}"
 else
   if ! LNKS_AUTOMATION_TRIGGER="git-pre-push" \
     LNKS_AUTOMATION_REASON="git push triggered the managed pre-push sync" \
-    lnks sync push --remote "${remote_name}" >/dev/null 2>&1; then
-    printf '\033[33m[links] warning: hook-triggered lnks sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lnks sync push --remote %s\033[0m\n' "${remote_name}" "unavailable" "${remote_name}" >&2
+    lit sync push --remote "${remote_name}" >/dev/null 2>&1; then
+    printf '\033[33m[links] warning: hook-triggered lit sync push failed (trigger=git-pre-push remote=%s trace=%s); agent should retry lit sync push --remote %s\033[0m\n' "${remote_name}" "unavailable" "${remote_name}" >&2
   fi
 fi
 

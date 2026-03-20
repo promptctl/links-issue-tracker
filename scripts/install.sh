@@ -4,10 +4,10 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go install ./cmd/lnks
+GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go install ./cmd/lit
 
-# Backward-compat symlink: lit → lnks (deprecated, removal: 2026-09-01)
+# `lnks` remains as a compatibility entrypoint for local projects still referencing it.
 GOBIN="${GOBIN:-$(go env GOBIN)}"
 GOBIN="${GOBIN:-$(go env GOPATH | cut -d: -f1)/bin}"
-ln -sf "${GOBIN}/lnks" "${GOBIN}/lit"
-echo "Installed lnks (lit symlink created for backward compatibility, will be removed 2026-09-01)"
+ln -sf "${GOBIN}/lit" "${GOBIN}/lnks"
+echo "Installed lit (lnks symlink created for compatibility)"

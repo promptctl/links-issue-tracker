@@ -31,7 +31,7 @@ jobs:
           dolt version
 
       - name: Build
-        run: go build ./cmd/lnks
+        run: go build ./cmd/lit
 
       - name: Test
         run: go test ./...

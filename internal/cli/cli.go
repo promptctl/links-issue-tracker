@@ -90,7 +90,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 
 func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use:   "lnks",
+		Use:   "lit",
 		Short: "Worktree-native issue tracker",
 		Long: strings.Join([]string{
 			"Worktree-native issue tracker with Dolt-backed sync.",
@@ -356,35 +356,35 @@ func validateNestedCommandPath(args []string, usage string, commands ...string) 
 }
 
 func validateHooksCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks hooks install [--json]", "install")
+	return validateNestedCommandPath(args, "usage: lit hooks install [--json]", "install")
 }
 
 func validateSyncCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks sync <status|remote|fetch|pull|push> ...", "status", "remote", "fetch", "pull", "push")
+	return validateNestedCommandPath(args, "usage: lit sync <status|remote|fetch|pull|push> ...", "status", "remote", "fetch", "pull", "push")
 }
 
 func validateCommentCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks comment add <id> --body <text>", "add")
+	return validateNestedCommandPath(args, "usage: lit comment add <id> --body <text>", "add")
 }
 
 func validateLabelCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks label <add|rm> ...", "add", "rm")
+	return validateNestedCommandPath(args, "usage: lit label <add|rm> ...", "add", "rm")
 }
 
 func validateParentCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks parent <set|clear> ...", "set", "clear")
+	return validateNestedCommandPath(args, "usage: lit parent <set|clear> ...", "set", "clear")
 }
 
 func validateDepCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks dep <add|rm|ls> ...", "add", "rm", "ls")
+	return validateNestedCommandPath(args, "usage: lit dep <add|rm|ls> ...", "add", "rm", "ls")
 }
 
 func validateBackupCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks backup <create|list|restore> ...", "create", "list", "restore")
+	return validateNestedCommandPath(args, "usage: lit backup <create|list|restore> ...", "create", "list", "restore")
 }
 
 func validateBulkCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lnks bulk <label|close|archive|import> ...", "label", "close", "archive", "import")
+	return validateNestedCommandPath(args, "usage: lit bulk <label|close|archive|import> ...", "label", "close", "archive", "import")
 }
 
 func runWithWorkspace(commandArgs []string, run func(workspace.Info) error) error {
@@ -667,7 +667,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]")
+		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]")
 	}
 	cfg, err := config.Load(ap.Workspace.RootDir)
 	if err != nil {
@@ -717,10 +717,10 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lnks show <id>")
+		return errors.New("usage: lit show <id>")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks show <id>")
+		return errors.New("usage: lit show <id>")
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 	if err != nil {
@@ -764,10 +764,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lnks update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *flag.Flag) { visited[flag.Name] = true })
@@ -780,7 +780,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	mutatesFields := visited["title"] || visited["description"] || visited["type"] || visited["priority"] || visited["assignee"] || visited["labels"]
 	mutatesStatus := visited["status"]
 	if !mutatesFields && !mutatesStatus {
-		return errors.New("lnks update requires at least one field flag")
+		return errors.New("lit update requires at least one field flag")
 	}
 
 	issueID := positional[0]
@@ -805,7 +805,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		}
 		transitionReason := strings.TrimSpace(*reason)
 		if transitionReason == "" {
-			transitionReason = fmt.Sprintf("status update via lnks update: %s -> %s", current.Status, targetStatus)
+			transitionReason = fmt.Sprintf("status update via lit update: %s -> %s", current.Status, targetStatus)
 		}
 		issue = current
 		// [LAW:dataflow-not-control-flow] Transition execution order is fixed; data determines whether action slice is empty.
@@ -865,7 +865,7 @@ func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]str
 	}
 	action, exists := updateStatusTransitionActions[statusTransitionKey{From: fromStatus, To: toStatus}]
 	if !exists {
-		return nil, fmt.Errorf("unsupported status transition %q -> %q for lnks update", fromStatus, toStatus)
+		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
 	}
 	return strings.Split(action, "+"), nil
 }
@@ -881,10 +881,10 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: lnks %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lnks %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
 	}
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 		IssueID:   positional[0],
@@ -900,7 +900,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 || args[0] != "add" {
-		return errors.New("usage: lnks comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	positional, flagArgs := splitArgs(args[1:], 1)
 	fs := flag.NewFlagSet("comment add", flag.ContinueOnError)
@@ -912,10 +912,10 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lnks comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks comment add <id> --body <text>")
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
 	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
 	if err != nil {
@@ -930,7 +930,7 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 
 func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks dep <add|rm> ...")
+		return errors.New("usage: lit dep <add|rm> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -944,10 +944,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lnks dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lnks dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
 		}
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by})
 		if err != nil {
@@ -968,10 +968,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lnks dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lnks dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
 		}
 		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType); err != nil {
 			return err
@@ -990,10 +990,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if len(positional) != 1 {
-			return errors.New("usage: lnks dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lnks dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
 		}
 		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], *relType)
 		if err != nil {
@@ -1009,13 +1009,13 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return nil
 		})
 	default:
-		return errors.New("usage: lnks dep <add|rm|ls> ...")
+		return errors.New("usage: lit dep <add|rm|ls> ...")
 	}
 }
 
 func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks label <add|rm> ...")
+		return errors.New("usage: lit label <add|rm> ...")
 	}
 	switch args[0] {
 	case "add":
@@ -1028,10 +1028,10 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lnks label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lnks label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
 		}
 		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
 		if err != nil {
@@ -1047,10 +1047,10 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lnks label rm <issue-id> <label> [--json]")
+			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lnks label rm <issue-id> <label> [--json]")
+			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 		}
 		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
 		if err != nil {
@@ -1058,13 +1058,13 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 		return printValue(stdout, labels, *jsonOut, printLabels)
 	default:
-		return errors.New("usage: lnks label <add|rm> ...")
+		return errors.New("usage: lit label <add|rm> ...")
 	}
 }
 
 func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks parent <set|clear> ...")
+		return errors.New("usage: lit parent <set|clear> ...")
 	}
 	switch args[0] {
 	case "set":
@@ -1077,7 +1077,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lnks parent set <child-id> <parent-id> [--by <user>] [--json]")
+			return errors.New("usage: lit parent set <child-id> <parent-id> [--by <user>] [--json]")
 		}
 		rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
 			ChildID:   positional[0],
@@ -1101,7 +1101,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		}
 		if len(positional) != 1 {
-			return errors.New("usage: lnks parent clear <child-id> [--json]")
+			return errors.New("usage: lit parent clear <child-id> [--json]")
 		}
 		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
 			return err
@@ -1111,7 +1111,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		})
 	default:
-		return errors.New("usage: lnks parent <set|clear> ...")
+		return errors.New("usage: lit parent <set|clear> ...")
 	}
 }
 
@@ -1124,7 +1124,7 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lnks children <parent-id> [--json]")
+		return errors.New("usage: lit children <parent-id> [--json]")
 	}
 	children, err := ap.Store.ListChildren(ctx, positional[0])
 	if err != nil {
@@ -1181,7 +1181,7 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 
 func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks sync <status|remote|fetch|pull|push> ...")
+		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
 	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
@@ -1192,7 +1192,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	switch args[0] {
 	case "remote":
 		if len(args) < 2 {
-			return errors.New("usage: lnks sync remote ls [--json]")
+			return errors.New("usage: lit sync remote ls [--json]")
 		}
 		switch args[1] {
 		case "ls":
@@ -1225,7 +1225,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 				return err
 			})
 		default:
-			return errors.New("usage: lnks sync remote ls [--json]")
+			return errors.New("usage: lit sync remote ls [--json]")
 		}
 	case "fetch":
 		fs := flag.NewFlagSet("sync fetch", flag.ContinueOnError)
@@ -1438,7 +1438,7 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 			return err
 		})
 	default:
-		return errors.New("usage: lnks sync <status|remote|fetch|pull|push> ...")
+		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
 }
 
@@ -1525,8 +1525,8 @@ func buildSyncPullPayload(remote string, requestedBranch string, output string, 
 	if !matchesMissingBranch {
 		return nil, runErr
 	}
-	nextCommand := fmt.Sprintf("lnks sync push --remote %s --set-upstream", remote)
-	retryCommand := fmt.Sprintf("lnks sync pull --remote %s", remote)
+	nextCommand := fmt.Sprintf("lit sync push --remote %s --set-upstream", remote)
+	retryCommand := fmt.Sprintf("lit sync pull --remote %s", remote)
 	// [LAW:dataflow-not-control-flow] Sync pull always returns structured payload; outcome variance lives in status/reason fields.
 	return map[string]any{
 		"status":        "skipped",
@@ -1920,7 +1920,7 @@ func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 
 func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks backup <create|list|restore> ...")
+		return errors.New("usage: lit backup <create|list|restore> ...")
 	}
 	switch args[0] {
 	case "create":
@@ -1989,7 +1989,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			restorePath = latestSnapshot.Path
 		}
 		if restorePath == "" {
-			return errors.New("usage: lnks backup restore --path <snapshot.json> [--force] [--json] or --latest")
+			return errors.New("usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest")
 		}
 		if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 			return err
@@ -2001,7 +2001,7 @@ func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		})
 	default:
-		return errors.New("usage: lnks backup <create|list|restore> ...")
+		return errors.New("usage: lit backup <create|list|restore> ...")
 	}
 }
 
@@ -2032,7 +2032,7 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		}
 		restorePath = latest.Path
 	default:
-		return errors.New("usage: lnks recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]")
+		return errors.New("usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]")
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
@@ -2047,12 +2047,12 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 
 func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: lnks bulk <label|close|archive|import> ...")
+		return errors.New("usage: lit bulk <label|close|archive|import> ...")
 	}
 	switch args[0] {
 	case "label":
 		if len(args) < 2 {
-			return errors.New("usage: lnks bulk label <add|rm> ...")
+			return errors.New("usage: lit bulk label <add|rm> ...")
 		}
 		action := args[1]
 		fs := flag.NewFlagSet("bulk label", flag.ContinueOnError)
@@ -2091,7 +2091,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 					continue
 				}
 			default:
-				return errors.New("usage: lnks bulk label <add|rm> ...")
+				return errors.New("usage: lit bulk label <add|rm> ...")
 			}
 			results[issueID] = "ok"
 		}
@@ -2166,13 +2166,13 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return err
 		})
 	default:
-		return errors.New("usage: lnks bulk <label|close|archive|import> ...")
+		return errors.New("usage: lit bulk <label|close|archive|import> ...")
 	}
 }
 
 func runCompletion(stdout io.Writer, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: lnks completion <bash|zsh|fish>")
+		return errors.New("usage: lit completion <bash|zsh|fish>")
 	}
 	switch args[0] {
 	case "bash":
@@ -2185,7 +2185,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 		_, err := io.WriteString(stdout, fishCompletionScript)
 		return err
 	default:
-		return errors.New("usage: lnks completion <bash|zsh|fish>")
+		return errors.New("usage: lit completion <bash|zsh|fish>")
 	}
 }
 
@@ -2198,7 +2198,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lnks quickstart [--json] [--refresh]")
+		return errors.New("usage: lit quickstart [--json] [--refresh]")
 	}
 
 	topics := []string{}
@@ -2216,39 +2216,39 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		"issue_prefix": ws.IssuePrefix,
 		"topics":       topics,
 		"workflow": []string{
-			"Initialize and auto-migrate with `lnks init`.",
-			"Refresh managed repo assets with `lnks quickstart --refresh`.",
-			"Discover workspace identity with `lnks workspace`.",
-			"Migrate legacy Beads data/wiring explicitly with `lnks migrate --apply` when needed.",
-			"Install git hook automation once with `lnks hooks install`.",
-			"List ready work with `lnks ready` (or `lnks ls --query \"status:open\"`).",
-			"Create a concise immutable one-word topic, reuse an existing topic when possible, and pass it with `lnks new --topic <topic> ...`.",
-			"Use `lnks new --parent <issue-id> ...` when creating a child issue so the ID becomes `parentID.<n>`.",
-			"Create issues with `lnks new ...`; use `--type epic` for epics.",
-			"Connect issues using `lnks parent set` and `lnks dep add --type related-to|blocks`.",
-			"Configure remotes with `git remote`; `lnks sync` mirrors those remotes into Dolt automatically.",
-			"Run health checks with `lnks doctor` and repair known corruption with `lnks fsck --repair`.",
-			"Snapshot and rollback using `lnks backup create`, `lnks backup restore`, or `lnks recover`.",
+			"Initialize and auto-migrate with `lit init`.",
+			"Refresh managed repo assets with `lit quickstart --refresh`.",
+			"Discover workspace identity with `lit workspace`.",
+			"Migrate legacy Beads data/wiring explicitly with `lit migrate --apply` when needed.",
+			"Install git hook automation once with `lit hooks install`.",
+			"List ready work with `lit ready` (or `lit ls --query \"status:open\"`).",
+			"Create a concise immutable one-word topic, reuse an existing topic when possible, and pass it with `lit new --topic <topic> ...`.",
+			"Use `lit new --parent <issue-id> ...` when creating a child issue so the ID becomes `parentID.<n>`.",
+			"Create issues with `lit new ...`; use `--type epic` for epics.",
+			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
+			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
+			"Run health checks with `lit doctor` and repair known corruption with `lit fsck --repair`.",
+			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
 		},
 		"examples": []string{
-			"lnks init",
-			"lnks quickstart --refresh",
-			"lnks migrate --apply",
-			"lnks hooks install",
-			"lnks workspace",
-			"lnks ready",
-			"lnks update <issue-id> --status in_progress",
-			"lnks start <issue-id> --reason \"claim\"",
-			"lnks done <issue-id> --reason \"completed\"",
-			"lnks ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc",
-			"lnks new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
-			"lnks new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
-			"lnks parent set <issue-id> <parent-issue-id>",
-			"lnks dep add <issue-id> <dependency-issue-id> --type related-to",
+			"lit init",
+			"lit quickstart --refresh",
+			"lit migrate --apply",
+			"lit hooks install",
+			"lit workspace",
+			"lit ready",
+			"lit update <issue-id> --status in_progress",
+			"lit start <issue-id> --reason \"claim\"",
+			"lit done <issue-id> --reason \"completed\"",
+			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc",
+			"lit new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
+			"lit new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
+			"lit parent set <issue-id> <parent-issue-id>",
+			"lit dep add <issue-id> <dependency-issue-id> --type related-to",
 			"git remote add origin https://github.com/org/repo.git",
-			"lnks sync remote ls",
-			"lnks sync pull",
-			"lnks sync push",
+			"lit sync remote ls",
+			"lit sync pull",
+			"lit sync push",
 		},
 		"exit_codes": map[string]int{
 			"ok":         ExitOK,
@@ -2278,25 +2278,25 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"links agent quickstart",
 			"",
 			"1) Discover context",
-			"   `lnks init`",
-			"   `lnks quickstart --refresh`",
-			"   `lnks migrate --apply`  # for legacy Beads repos",
-			"   `lnks workspace`",
+			"   `lit init`",
+			"   `lit quickstart --refresh`",
+			"   `lit migrate --apply`  # for legacy Beads repos",
+			"   `lit workspace`",
 			"",
 			"2) Find work",
-			"   `lnks ready`",
-			"   `lnks update <issue-id> --status in_progress`",
-			"   `lnks start <issue-id> --reason \"claim\"`",
-			"   `lnks ls --format lines`",
-			"   `lnks ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc`",
+			"   `lit ready`",
+			"   `lit update <issue-id> --status in_progress`",
+			"   `lit start <issue-id> --reason \"claim\"`",
+			"   `lit ls --format lines`",
+			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc`",
 			"",
 			"3) Create and relate issues/epics",
 			fmt.Sprintf("   project prefix: `%s`", ws.IssuePrefix),
 			"   choose or reuse a concise one-word topic and pass `--topic <topic>`",
-			"   `lnks new --title \"...\" --topic <topic> --type task|bug|feature|chore|epic`",
-			"   `lnks new --title \"...\" --topic <topic> --parent <parent-id> --type task`",
-			"   `lnks parent set <child-id> <parent-id>`",
-			"   `lnks dep add <src-id> <dst-id> --type blocks|related-to|parent-child`",
+			"   `lit new --title \"...\" --topic <topic> --type task|bug|feature|chore|epic`",
+			"   `lit new --title \"...\" --topic <topic> --parent <parent-id> --type task`",
+			"   `lit parent set <child-id> <parent-id>`",
+			"   `lit dep add <src-id> <dst-id> --type blocks|related-to|parent-child`",
 			"",
 			"4) Mutations",
 			"   Use command outputs directly for follow-up writes.",
@@ -2304,18 +2304,18 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"5) Dolt remote sync",
 			"   Configure remotes with git, then run sync commands.",
 			"   `git remote -v`",
-			"   `lnks sync remote ls`",
-			"   `lnks sync fetch`",
-			"   `lnks sync pull`",
-			"   `lnks sync push`",
+			"   `lit sync remote ls`",
+			"   `lit sync fetch`",
+			"   `lit sync pull`",
+			"   `lit sync push`",
 			"   If sync warning appears, agent should auto-retry silently before escalating.",
 			"",
 			"6) Integrity and recovery",
-			"   `lnks doctor`",
-			"   `lnks fsck --repair`",
-			"   `lnks backup create`",
-			"   `lnks backup restore --latest`",
-			"   `lnks recover --latest-backup`",
+			"   `lit doctor`",
+			"   `lit fsck --repair`",
+			"   `lit backup create`",
+			"   `lit backup restore --latest`",
+			"   `lit recover --latest-backup`",
 			"",
 			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitCorruption),
 		}
@@ -2695,7 +2695,7 @@ type CorruptionError struct {
 func (e CorruptionError) Error() string { return e.Message }
 
 func printUsage(w io.Writer) {
-	fmt.Fprint(w, `links / lnks
+	fmt.Fprint(w, `links / lit
 
 Worktree-native issue tracker with Dolt-backed sync.
 
@@ -2704,8 +2704,8 @@ Output:
   --json                      Output machine-readable JSON.
 
 Usage:
-  lnks [--json] [command]
-  lnks [--json] [command] [flags]
+  lit [--json] [command]
+  lit [--json] [command] [flags]
 
 Sync Branch:
   default        remote default branch (resolved from git remote HEAD)
@@ -2758,31 +2758,31 @@ Guidance & Tooling:
   help           Show this help output
 
 Command Syntax:
-  lnks init [--json] [--skip-hooks] [--skip-agents]
-  lnks ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
-  lnks update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
-  lnks start <id> --reason <text> [--by <user>] [--json]
-  lnks done <id> --reason <text> [--by <user>] [--json]
-  lnks hooks install [--json]
-  lnks migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
-  lnks quickstart [--json] [--refresh]
-  lnks completion <bash|zsh|fish>
-  lnks workspace [--json]
-  lnks sync remote ls [--json]
-  lnks sync fetch [--remote <name>] [--prune] [--verbose] [--json]
-  lnks sync pull [--remote <name>] [--verbose] [--json]
-  lnks sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]
+  lit init [--json] [--skip-hooks] [--skip-agents]
+  lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
+  lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
+  lit start <id> --reason <text> [--by <user>] [--json]
+  lit done <id> --reason <text> [--by <user>] [--json]
+  lit hooks install [--json]
+  lit migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
+  lit quickstart [--json] [--refresh]
+  lit completion <bash|zsh|fish>
+  lit workspace [--json]
+  lit sync remote ls [--json]
+  lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]
+  lit sync pull [--remote <name>] [--verbose] [--json]
+  lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]
 
 Examples:
-  lnks init
-  lnks ready
-  lnks update <issue-id> --status in_progress
-  lnks start <issue-id> --reason "claim"
-  lnks done <issue-id> --reason "completed"
-  lnks new --title "Fix renderer race" --type bug --priority 1
-  lnks ls --query "status:open type:task" --sort priority:asc,updated_at:desc
+  lit init
+  lit ready
+  lit update <issue-id> --status in_progress
+  lit start <issue-id> --reason "claim"
+  lit done <issue-id> --reason "completed"
+  lit new --title "Fix renderer race" --type bug --priority 1
+  lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc
 
-Use "lnks [command] --help" for more information about a command.
+Use "lit [command] --help" for more information about a command.
 `)
 }
 

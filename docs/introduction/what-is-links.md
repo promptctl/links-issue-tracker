@@ -8,7 +8,7 @@ The design goal is simple:
 - keep sync explicit and deterministic
 - keep automation predictable for agents
 
-`links` uses Dolt as its storage backend so every issue mutation becomes a committed database change. You work with issues through one CLI (`lnks`) and sync those DB commits through your existing Git remotes.
+`links` uses Dolt as its storage backend so every issue mutation becomes a committed database change. You work with issues through one CLI (`lit`) and sync those DB commits through your existing Git remotes.
 
 If you already think in Git workflows, `links` keeps that mental model:
 

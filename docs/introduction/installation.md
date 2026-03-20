@@ -6,7 +6,7 @@
 - Dolt CLI `>= 1.81.10`
 - Go toolchain (for `go install`)
 
-## Install `lnks`
+## Install `lit`
 
 ```sh
 ./scripts/install.sh
@@ -15,7 +15,7 @@
 Install from outside a checkout:
 
 ```sh
-go install github.com/bmf/links-issue-tracker/cmd/lnks@latest
+go install github.com/bmf/links-issue-tracker/cmd/lit@latest
 ```
 
 ### macOS Homebrew note
@@ -35,15 +35,15 @@ go env -w CGO_LDFLAGS="-L${ICU_PREFIX}/lib -L${ZSTD_PREFIX}/lib"
 ## Enable shell completion (optional)
 
 ```sh
-lnks completion bash > ~/.local/share/bash-completion/completions/lnks
-lnks completion zsh > ~/.zfunc/_lnks
-lnks completion fish > ~/.config/fish/completions/lnks.fish
+lit completion bash > ~/.local/share/bash-completion/completions/lit
+lit completion zsh > ~/.zfunc/_lit
+lit completion fish > ~/.config/fish/completions/lit.fish
 ```
 
 ## Install sync automation once per clone
 
 ```sh
-lnks hooks install
+lit hooks install
 ```
 
 This installs a shared `pre-push` hook in your clone's common Git dir so all worktrees inherit the same behavior.
