@@ -184,8 +184,9 @@ func readyBlockReason(annotations []annotation.Annotation) string {
 	return strings.Join(reasons, "; ")
 }
 
-// printReadyOutput prints annotated issues in Ready / Not Ready sections.
-// The partition is derived from the isReadyBlocked predicate at the render boundary.
+// printReadyOutput prints ready issues in full, then a count-by-reason summary
+// for blocked issues. Blocked tickets are not listed individually — only the
+// aggregate counts matter for deciding what to work on next.
 func printReadyOutput(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
 	resolved := resolveColumns(columns)
 	var ready, blocked []annotation.AnnotatedIssue
@@ -203,16 +204,47 @@ func printReadyOutput(w io.Writer, format string, columns []string, issues []ann
 	if err := printAnnotatedRows(w, format, resolved, ready); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, "Not Ready"); err != nil {
-		return err
-	}
-	if err := printAnnotatedRows(w, format, resolved, blocked); err != nil {
+	if err := printBlockedSummary(w, blocked); err != nil {
 		return err
 	}
 	return printPriorityInversions(w, issues)
+}
+
+// printBlockedSummary prints a compact count-by-reason summary of blocked issues.
+func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error {
+	if len(blocked) == 0 {
+		return nil
+	}
+	// Count issues per blocking reason kind. An issue with multiple blocking
+	// kinds counts once per kind.
+	counts := map[annotation.Kind]int{}
+	for _, issue := range blocked {
+		seen := map[annotation.Kind]bool{}
+		for _, a := range issue.Annotations {
+			if !annotation.HasAny([]annotation.Annotation{a}, readyBlockingKinds...) {
+				continue
+			}
+			if seen[a.Kind] {
+				continue
+			}
+			seen[a.Kind] = true
+			counts[a.Kind]++
+		}
+	}
+	if _, err := fmt.Fprintf(w, "\nBlocked (%d):\n", len(blocked)); err != nil {
+		return err
+	}
+	// Print in a stable order based on readyBlockingKinds.
+	for _, kind := range readyBlockingKinds {
+		n, ok := counts[kind]
+		if !ok {
+			continue
+		}
+		if _, err := fmt.Fprintf(w, "  %d: Blocked by %s\n", n, kind.String()); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func printAnnotatedRows(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {

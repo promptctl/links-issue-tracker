@@ -280,7 +280,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 	}
 }
 
-func TestRunReadyTextOutputIncludesNotReadySectionAndReason(t *testing.T) {
+func TestRunReadyTextOutputShowsBlockedSummary(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("description")
 
@@ -302,11 +302,30 @@ func TestRunReadyTextOutputIncludesNotReadySectionAndReason(t *testing.T) {
 	if !strings.Contains(text, "Ready\n") {
 		t.Fatalf("ready output missing Ready section header: %q", text)
 	}
-	if !strings.Contains(text, "\nNot Ready\n") {
-		t.Fatalf("ready output missing Not Ready section header: %q", text)
+	if strings.Contains(text, "Not Ready") {
+		t.Fatalf("ready output should not contain old 'Not Ready' section: %q", text)
 	}
-	if !strings.Contains(text, "Field description not set") {
-		t.Fatalf("ready output missing not-ready reason: %q", text)
+	if !strings.Contains(text, "Blocked (1):") {
+		t.Fatalf("ready output missing blocked summary: %q", text)
+	}
+	if !strings.Contains(text, "Blocked by missing_field") {
+		t.Fatalf("ready output missing blocked reason label: %q", text)
+	}
+}
+
+func TestRunReadyTextOutputNoBlockedSectionWhenAllReady(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	h.createIssue(store.CreateIssueInput{
+		Title:     "All good",
+		Topic:     "good",
+		IssueType: "task",
+		Priority:  1,
+	})
+
+	text := h.runReadyText()
+	if strings.Contains(text, "Blocked") {
+		t.Fatalf("ready output should not show blocked section when all tickets are ready: %q", text)
 	}
 }
 

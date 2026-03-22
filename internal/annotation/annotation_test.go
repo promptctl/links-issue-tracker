@@ -13,8 +13,8 @@ func TestKindStringReturnsKey(t *testing.T) {
 	if MissingField.String() != "missing_field" {
 		t.Fatalf("MissingField.String() = %q, want missing_field", MissingField.String())
 	}
-	if BlockedBy.String() != "blocked_by" {
-		t.Fatalf("BlockedBy.String() = %q, want blocked_by", BlockedBy.String())
+	if BlockedBy.String() != "open_dependency" {
+		t.Fatalf("BlockedBy.String() = %q, want open_dependency", BlockedBy.String())
 	}
 }
 
@@ -85,8 +85,8 @@ func TestAnnotateRunsAllAnnotators(t *testing.T) {
 	if len(result[1].Annotations) != 1 {
 		t.Fatalf("result[1].Annotations = %d, want 1", len(result[1].Annotations))
 	}
-	if result[1].Annotations[0].Kind.String() != "blocked_by" {
-		t.Fatalf("result[1].Annotations[0].Kind = %q, want blocked_by", result[1].Annotations[0].Kind.String())
+	if result[1].Annotations[0].Kind.String() != "open_dependency" {
+		t.Fatalf("result[1].Annotations[0].Kind = %q, want open_dependency", result[1].Annotations[0].Kind.String())
 	}
 }
 
