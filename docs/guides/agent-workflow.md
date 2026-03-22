@@ -5,8 +5,10 @@
 1. Read workspace context:
    - `lit workspace --json`
 2. Find work:
-   - `lit ready --json`
-   - `lit ls --query "status:open" --json`
+   - `lit ready --json` — this is the **only** correct source for work selection.
+   - Do NOT fall back to `lit ls` if `lit ready` fails. The two commands have different semantics: `lit ready` filters by readiness (required fields, unblocked dependencies) and orders by readiness then priority. `lit ls` returns all matching issues with no readiness filtering. A silent fallback from one to the other changes what the agent works on without any signal that something went wrong.
+   - If `lit ready` fails or returns empty, **stop and report the error**. Do not improvise a replacement query.
+   - Do NOT extract bare ID lists (e.g., `jq -r '.[].id'`) and feed them to an agent. The full `--json` output contains priority, status, annotations, and readiness information that agents need to make informed decisions about what to work on and why. Stripping that context turns a rich work queue into an opaque list where ordering mistakes are invisible.
 3. Update issue state as work starts:
    - `lit update <issue-id> --status in_progress --json`
    - `lit start <issue-id> --reason "claim" --json`

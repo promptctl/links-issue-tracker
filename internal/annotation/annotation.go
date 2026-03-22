@@ -50,16 +50,19 @@ func (k *Kind) UnmarshalJSON(data []byte) error {
 }
 
 var (
-	missingFieldDef = &kindDef{key: "missing_field"}
-	blockedByDef    = &kindDef{key: "blocked_by"}
+	missingFieldDef     = &kindDef{key: "missing_field"}
+	blockedByDef        = &kindDef{key: "blocked_by"}
+	priorityInversionDef = &kindDef{key: "priority_inversion"}
 
-	MissingField = Kind{def: missingFieldDef} // a required field is empty or unset
-	BlockedBy    = Kind{def: blockedByDef}    // issue depends on an open ticket
+	MissingField      = Kind{def: missingFieldDef}      // a required field is empty or unset
+	BlockedBy         = Kind{def: blockedByDef}          // issue depends on an open ticket
+	PriorityInversion = Kind{def: priorityInversionDef}  // blocker has worse priority than dependent
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	kindRegistry = map[string]Kind{
-		missingFieldDef.key: MissingField,
-		blockedByDef.key:    BlockedBy,
+		missingFieldDef.key:      MissingField,
+		blockedByDef.key:         BlockedBy,
+		priorityInversionDef.key: PriorityInversion,
 	}
 )
 

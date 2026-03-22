@@ -310,6 +310,258 @@ func TestRunReadyTextOutputIncludesNotReadySectionAndReason(t *testing.T) {
 	}
 }
 
+func TestRunReadyAnnotatesPriorityInversion(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	// highPri (P1) depends on lowPri (P4) — that's an inversion.
+	lowPri := h.createIssue(store.CreateIssueInput{
+		Title:     "Low priority blocker",
+		Topic:     "low",
+		IssueType: "task",
+		Priority:  4,
+	})
+	highPri := h.createIssue(store.CreateIssueInput{
+		Title:     "High priority dependent",
+		Topic:     "high",
+		IssueType: "task",
+		Priority:  1,
+	})
+	h.addBlocks(highPri.ID, lowPri.ID)
+
+	got := h.runReadyJSON()
+
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2", len(got))
+	}
+	// Find the high-priority dependent (it should have PriorityInversion).
+	var highEntry annotation.AnnotatedIssue
+	for _, entry := range got {
+		if entry.ID == highPri.ID {
+			highEntry = entry
+			break
+		}
+	}
+	if highEntry.ID == "" {
+		t.Fatal("high priority issue not found in output")
+	}
+	inv, ok := findAnnotation(highEntry.Annotations, annotation.PriorityInversion)
+	if !ok {
+		t.Fatalf("high priority issue missing priority_inversion annotation: %#v", highEntry.Annotations)
+	}
+	if !strings.Contains(inv.Message, lowPri.ID) {
+		t.Fatalf("priority_inversion message = %q, want to contain %q", inv.Message, lowPri.ID)
+	}
+}
+
+func TestRunReadyNoPriorityInversionWhenBlockerIsHigherPriority(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	// lowPri (P4) depends on highPri (P1) — no inversion.
+	highPri := h.createIssue(store.CreateIssueInput{
+		Title:     "High priority blocker",
+		Topic:     "high",
+		IssueType: "task",
+		Priority:  1,
+	})
+	lowPri := h.createIssue(store.CreateIssueInput{
+		Title:     "Low priority dependent",
+		Topic:     "low",
+		IssueType: "task",
+		Priority:  4,
+	})
+	h.addBlocks(lowPri.ID, highPri.ID)
+
+	got := h.runReadyJSON()
+
+	for _, entry := range got {
+		if entry.ID == lowPri.ID {
+			if _, ok := findAnnotation(entry.Annotations, annotation.PriorityInversion); ok {
+				t.Fatalf("low priority dependent should NOT have priority_inversion: %#v", entry.Annotations)
+			}
+			return
+		}
+	}
+	t.Fatal("low priority issue not found in output")
+}
+
+func TestRunReadyTextOutputShowsPriorityInversions(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	lowPri := h.createIssue(store.CreateIssueInput{
+		Title:     "Low priority blocker",
+		Topic:     "low",
+		IssueType: "task",
+		Priority:  4,
+	})
+	highPri := h.createIssue(store.CreateIssueInput{
+		Title:     "High priority dependent",
+		Topic:     "high",
+		IssueType: "task",
+		Priority:  1,
+	})
+	h.addBlocks(highPri.ID, lowPri.ID)
+
+	text := h.runReadyText()
+	if !strings.Contains(text, "Priority inversions") {
+		t.Fatalf("text output missing priority inversions section: %q", text)
+	}
+	if !strings.Contains(text, highPri.ID) {
+		t.Fatalf("text output missing high priority issue ID: %q", text)
+	}
+	if !strings.Contains(text, "blocker is lower priority") {
+		t.Fatalf("text output missing inversion explanation: %q", text)
+	}
+}
+
+func TestFixPriorityPullForwardPromotesBlockers(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	lowPri := h.createIssue(store.CreateIssueInput{
+		Title:     "Low priority blocker",
+		Topic:     "low",
+		IssueType: "task",
+		Priority:  4,
+	})
+	highPri := h.createIssue(store.CreateIssueInput{
+		Title:     "High priority dependent",
+		Topic:     "high",
+		IssueType: "task",
+		Priority:  1,
+	})
+	h.addBlocks(highPri.ID, lowPri.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{highPri.ID, "--pull-forward", "--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("len(changes) = %d, want 1", len(changes))
+	}
+	if changes[0].ID != lowPri.ID {
+		t.Fatalf("changes[0].ID = %q, want %q", changes[0].ID, lowPri.ID)
+	}
+	if changes[0].OldPriority != 4 {
+		t.Fatalf("changes[0].OldPriority = %d, want 4", changes[0].OldPriority)
+	}
+	if changes[0].NewPriority != 1 {
+		t.Fatalf("changes[0].NewPriority = %d, want 1", changes[0].NewPriority)
+	}
+	// Verify the blocker was actually updated in the store.
+	updated, err := h.ap.Store.GetIssue(h.ctx, lowPri.ID)
+	if err != nil {
+		t.Fatalf("GetIssue error = %v", err)
+	}
+	if updated.Priority != 1 {
+		t.Fatalf("blocker priority after fix = %d, want 1", updated.Priority)
+	}
+}
+
+func TestFixPriorityPushBackDemotesDependent(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	lowPri := h.createIssue(store.CreateIssueInput{
+		Title:     "Low priority blocker",
+		Topic:     "low",
+		IssueType: "task",
+		Priority:  4,
+	})
+	highPri := h.createIssue(store.CreateIssueInput{
+		Title:     "High priority dependent",
+		Topic:     "high",
+		IssueType: "task",
+		Priority:  1,
+	})
+	h.addBlocks(highPri.ID, lowPri.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{highPri.ID, "--push-back", "--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("len(changes) = %d, want 1", len(changes))
+	}
+	if changes[0].ID != highPri.ID {
+		t.Fatalf("changes[0].ID = %q, want %q", changes[0].ID, highPri.ID)
+	}
+	if changes[0].OldPriority != 1 {
+		t.Fatalf("changes[0].OldPriority = %d, want 1", changes[0].OldPriority)
+	}
+	if changes[0].NewPriority != 4 {
+		t.Fatalf("changes[0].NewPriority = %d, want 4", changes[0].NewPriority)
+	}
+}
+
+func TestFixPriorityPullForwardWalksTransitiveChain(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	// C(P1) depends on B(P3) depends on A(P4) — both A and B should promote to P1.
+	a := h.createIssue(store.CreateIssueInput{
+		Title: "A", Topic: "aaa", IssueType: "task", Priority: 4,
+	})
+	b := h.createIssue(store.CreateIssueInput{
+		Title: "B", Topic: "bbb", IssueType: "task", Priority: 3,
+	})
+	c := h.createIssue(store.CreateIssueInput{
+		Title: "C", Topic: "ccc", IssueType: "task", Priority: 1,
+	})
+	h.addBlocks(c.ID, b.ID)
+	h.addBlocks(b.ID, a.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{c.ID, "--pull-forward", "--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("len(changes) = %d, want 2; changes=%#v", len(changes), changes)
+	}
+	// Both should now be P1.
+	for _, c := range changes {
+		if c.NewPriority != 1 {
+			t.Fatalf("change %s: NewPriority = %d, want 1", c.ID, c.NewPriority)
+		}
+	}
+}
+
+func TestFixPriorityNoInversion(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
+	})
+	dependent := h.createIssue(store.CreateIssueInput{
+		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 3,
+	})
+	h.addBlocks(dependent.ID, blocker.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{dependent.ID, "--pull-forward", "--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("len(changes) = %d, want 0 (no inversion)", len(changes))
+	}
+}
+
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")

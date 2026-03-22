@@ -41,10 +41,11 @@ Session bootstrap (every session / after compaction):
 
 Work acquisition:
 1. Use the issue ID already assigned in context when present.
-2. Check current ready work with `+"`lit ready`"+`.
-3. Create or claim an issue only when the work needs tracking. Do not create tickets for trivial drive-by edits like one-line doc fixes that will be resolved immediately.
-4. For tracked work, mark it in progress with `+"`lit update <issue-id> --status in_progress`"+` (or `+"`lit start ...`"+`).
-5. For tracked work, record work start with `+"`lit comment add <issue-id> --body \"Starting: <plan>\"`"+`.
+2. Check current ready work with `+"`lit ready`"+`. This is the only correct source for work selection — do NOT fall back to `+"`lit ls`"+` or other queries if it fails. If `+"`lit ready`"+` fails or returns empty, stop and report the error.
+3. Do NOT extract bare ID lists from `+"`--json`"+` output and discard the rest. The full output contains priority, status, annotations, and readiness context that you need to make informed decisions. Stripping it to a list of IDs loses the information that distinguishes "ready high-priority work" from "everything open."
+4. Create or claim an issue only when the work needs tracking. Do not create tickets for trivial drive-by edits like one-line doc fixes that will be resolved immediately.
+5. For tracked work, mark it in progress with `+"`lit update <issue-id> --status in_progress`"+` (or `+"`lit start ...`"+`).
+6. For tracked work, record work start with `+"`lit comment add <issue-id> --body \"Starting: <plan>\"`"+`.
 
 Execution:
 - Keep structure current with `+"`lit parent`"+` / `+"`lit dep`"+` / `+"`lit label`"+` / `+"`lit comment`"+`.

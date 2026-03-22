@@ -943,6 +943,44 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	return issue, nil
 }
 
+// PriorityUpdate describes a single issue priority change for batch operations.
+type PriorityUpdate struct {
+	ID          string
+	NewPriority int
+}
+
+// UpdatePriorities applies multiple priority changes in a single transaction and commit.
+func (s *Store) UpdatePriorities(ctx context.Context, updates []PriorityUpdate) error {
+	if len(updates) == 0 {
+		return nil
+	}
+	for _, u := range updates {
+		if err := validatePriority(u.NewPriority); err != nil {
+			return err
+		}
+	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin batch priority tx: %w", err)
+	}
+	defer tx.Rollback()
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	for _, u := range updates {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?`, u.NewPriority, now, u.ID); err != nil {
+			return fmt.Errorf("update priority for %s: %w", u.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit batch priority: %w", err)
+	}
+	return s.commitWorkingSet(ctx, "fix-priority: batch update")
+}
+
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
 	var comment model.Comment
 	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {

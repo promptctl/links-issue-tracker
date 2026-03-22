@@ -53,7 +53,8 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 	}, nil
 }
 
-// newBlockerAnnotator returns an annotator that checks open dependency blockers.
+// newBlockerAnnotator returns an annotator that checks open dependency blockers
+// and flags priority inversions where a blocker has worse priority than the dependent.
 func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
@@ -62,12 +63,25 @@ func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 		if err != nil {
 			return nil, err
 		}
-		blockers := openDependencyIDs(detail.DependsOn)
-		annotations := make([]annotation.Annotation, len(blockers))
-		for i, id := range blockers {
-			annotations[i] = annotation.Annotation{
+		// Collect open blockers and sort by ID for stable annotation ordering.
+		var openDeps []model.Issue
+		for _, dep := range detail.DependsOn {
+			if dep.Status != "closed" {
+				openDeps = append(openDeps, dep)
+			}
+		}
+		sort.Slice(openDeps, func(i, j int) bool { return openDeps[i].ID < openDeps[j].ID })
+		var annotations []annotation.Annotation
+		for _, dep := range openDeps {
+			annotations = append(annotations, annotation.Annotation{
 				Kind:    annotation.BlockedBy,
-				Message: id,
+				Message: dep.ID,
+			})
+			if dep.Priority > issue.Priority {
+				annotations = append(annotations, annotation.Annotation{
+					Kind:    annotation.PriorityInversion,
+					Message: fmt.Sprintf("%s (priority %d)", dep.ID, dep.Priority),
+				})
 			}
 		}
 		return annotations, nil
@@ -135,17 +149,6 @@ func isRequiredFieldSet(value any) bool {
 	}
 }
 
-func openDependencyIDs(dependsOn []model.Issue) []string {
-	blockers := make([]string, 0, len(dependsOn))
-	for _, dependency := range dependsOn {
-		if dependency.Status != "closed" {
-			blockers = append(blockers, dependency.ID)
-		}
-	}
-	sort.Strings(blockers)
-	return blockers
-}
-
 // sortByReadiness places issues without blocking annotations first,
 // preserving the original store ordering within each group.
 func sortByReadiness(issues []annotation.AnnotatedIssue) {
@@ -206,7 +209,10 @@ func printReadyOutput(w io.Writer, format string, columns []string, issues []ann
 	if _, err := fmt.Fprintln(w, "Not Ready"); err != nil {
 		return err
 	}
-	return printAnnotatedRows(w, format, resolved, blocked)
+	if err := printAnnotatedRows(w, format, resolved, blocked); err != nil {
+		return err
+	}
+	return printPriorityInversions(w, issues)
 }
 
 func printAnnotatedRows(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
@@ -268,3 +274,41 @@ func printAnnotatedTable(w io.Writer, issues []annotation.AnnotatedIssue, column
 	}
 	return tw.Flush()
 }
+
+// printPriorityInversions prints a summary of priority inversions found across all issues.
+func printPriorityInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
+	type inversion struct {
+		issueID   string
+		issuePri  int
+		blockerID string
+	}
+	var inversions []inversion
+	for _, issue := range issues {
+		for _, a := range issue.Annotations {
+			if a.Kind != annotation.PriorityInversion {
+				continue
+			}
+			inversions = append(inversions, inversion{
+				issueID:   issue.ID,
+				issuePri:  issue.Priority,
+				blockerID: a.Message,
+			})
+		}
+	}
+	if len(inversions) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(w, "Priority inversions (%d):\n", len(inversions)); err != nil {
+		return err
+	}
+	for _, inv := range inversions {
+		if _, err := fmt.Fprintf(w, "  %s (P%d) blocked by %s — blocker is lower priority\n", inv.issueID, inv.issuePri, inv.blockerID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
