@@ -276,9 +276,9 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	after := now.Add(time.Hour)
 	hasComments := true
 	issues, err := st.ListIssues(ctx, ListIssuesFilter{
-		Status:        "open",
-		IssueType:     "task",
-		Assignee:      "bmf",
+		Statuses:      []string{"open"},
+		IssueTypes:    []string{"task"},
+		Assignees:     []string{"bmf"},
 		PriorityMax:   intPtr(2),
 		SearchTerms:   []string{"renderer", "draw prep"},
 		IDs:           []string{issueA.ID, issueB.ID},
@@ -541,7 +541,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("done = %#v, want closed with ClosedAt", done)
 	}
 
-	openIssues, err := st.ListIssues(ctx, ListIssuesFilter{Status: "open"})
+	openIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []string{"open"}})
 	if err != nil {
 		t.Fatalf("ListIssues(open) error = %v", err)
 	}
@@ -549,7 +549,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("openIssues = %#v, want empty", openIssues)
 	}
 
-	closedIssues, err := st.ListIssues(ctx, ListIssuesFilter{Status: "closed"})
+	closedIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []string{"closed"}})
 	if err != nil {
 		t.Fatalf("ListIssues(closed) error = %v", err)
 	}

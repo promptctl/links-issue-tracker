@@ -29,24 +29,17 @@ func Parse(input string) (ParseResult, error) {
 
 func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.ListIssuesFilter, error) {
 	filter := base
-	baseStatus, err := normalizeQueryStatus(filter.Status)
+	normalizedBase, err := normalizeQueryStatuses(filter.Statuses)
 	if err != nil {
 		return store.ListIssuesFilter{}, err
 	}
-	incomingStatus, err := normalizeQueryStatus(incoming.Status)
+	normalizedIncoming, err := normalizeQueryStatuses(incoming.Statuses)
 	if err != nil {
 		return store.ListIssuesFilter{}, err
 	}
-	filter.Status = baseStatus
-	if err := mergeStringField("status", &filter.Status, incomingStatus); err != nil {
-		return store.ListIssuesFilter{}, err
-	}
-	if err := mergeStringField("type", &filter.IssueType, incoming.IssueType); err != nil {
-		return store.ListIssuesFilter{}, err
-	}
-	if err := mergeStringField("assignee", &filter.Assignee, incoming.Assignee); err != nil {
-		return store.ListIssuesFilter{}, err
-	}
+	filter.Statuses = mergeSlice(normalizedBase, normalizedIncoming)
+	filter.IssueTypes = mergeSlice(filter.IssueTypes, incoming.IssueTypes)
+	filter.Assignees = mergeSlice(filter.Assignees, incoming.Assignees)
 	filter.SearchTerms = append(filter.SearchTerms, incoming.SearchTerms...)
 	filter.IDs = append(filter.IDs, incoming.IDs...)
 	filter.LabelsAll = append(filter.LabelsAll, incoming.LabelsAll...)
@@ -78,11 +71,18 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 		if err != nil {
 			return err
 		}
-		return mergeStringField("status", &filter.Status, status)
+		filter.Statuses = append(filter.Statuses, status)
+		return nil
 	case strings.HasPrefix(term, "type:"):
-		return mergeStringField("type", &filter.IssueType, strings.TrimPrefix(term, "type:"))
+		t := strings.TrimSpace(strings.TrimPrefix(term, "type:"))
+		if t == "" {
+			return nil
+		}
+		filter.IssueTypes = append(filter.IssueTypes, t)
+		return nil
 	case strings.HasPrefix(term, "assignee:"):
-		return mergeStringField("assignee", &filter.Assignee, strings.TrimPrefix(term, "assignee:"))
+		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
+		return nil
 	case strings.HasPrefix(term, "id:"):
 		filter.IDs = append(filter.IDs, strings.TrimSpace(strings.TrimPrefix(term, "id:")))
 		return nil
@@ -118,6 +118,38 @@ func normalizeQueryStatus(input string) (string, error) {
 		return "", nil
 	}
 	return normalized, nil
+}
+
+func normalizeQueryStatuses(statuses []string) ([]string, error) {
+	result := make([]string, 0, len(statuses))
+	for _, s := range statuses {
+		normalized, err := normalizeQueryStatus(s)
+		if err != nil {
+			return nil, err
+		}
+		if normalized != "" {
+			result = append(result, normalized)
+		}
+	}
+	return result, nil
+}
+
+func mergeSlice(base, incoming []string) []string {
+	if len(incoming) == 0 {
+		return base
+	}
+	seen := make(map[string]bool, len(base))
+	for _, v := range base {
+		seen[v] = true
+	}
+	result := append([]string{}, base...)
+	for _, v := range incoming {
+		if !seen[v] {
+			result = append(result, v)
+			seen[v] = true
+		}
+	}
+	return result
 }
 
 func applyPriority(filter *store.ListIssuesFilter, expr string) error {
@@ -225,17 +257,6 @@ func validateFilter(filter store.ListIssuesFilter) error {
 	return nil
 }
 
-func mergeStringField(name string, dst *string, incoming string) error {
-	incoming = strings.TrimSpace(incoming)
-	if incoming == "" {
-		return nil
-	}
-	if *dst != "" && *dst != incoming {
-		return fmt.Errorf("conflicting %s filters %q and %q", name, *dst, incoming)
-	}
-	*dst = incoming
-	return nil
-}
 
 func mergeIntPointer(name string, dst **int, incoming *int) error {
 	if incoming == nil {

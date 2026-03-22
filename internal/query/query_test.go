@@ -9,14 +9,14 @@ func TestParseBuildsFilterFromQueryExpression(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if result.Filter.Status != "in_progress" {
-		t.Fatalf("Status = %q", result.Filter.Status)
+	if len(result.Filter.Statuses) != 1 || result.Filter.Statuses[0] != "in_progress" {
+		t.Fatalf("Statuses = %q", result.Filter.Statuses)
 	}
-	if result.Filter.IssueType != "task" {
-		t.Fatalf("IssueType = %q", result.Filter.IssueType)
+	if len(result.Filter.IssueTypes) != 1 || result.Filter.IssueTypes[0] != "task" {
+		t.Fatalf("IssueTypes = %q", result.Filter.IssueTypes)
 	}
-	if result.Filter.Assignee != "bmf" {
-		t.Fatalf("Assignee = %q", result.Filter.Assignee)
+	if len(result.Filter.Assignees) != 1 || result.Filter.Assignees[0] != "bmf" {
+		t.Fatalf("Assignees = %q", result.Filter.Assignees)
 	}
 	if result.Filter.PriorityMax == nil || *result.Filter.PriorityMax != 2 {
 		t.Fatalf("PriorityMax = %#v", result.Filter.PriorityMax)
@@ -38,7 +38,7 @@ func TestParseBuildsFilterFromQueryExpression(t *testing.T) {
 	}
 }
 
-func TestMergeRejectsConflictingScalarFilters(t *testing.T) {
+func TestMergeMultipleStatusesCombines(t *testing.T) {
 	base, err := Parse(`status:open`)
 	if err != nil {
 		t.Fatalf("Parse(base) error = %v", err)
@@ -47,8 +47,12 @@ func TestMergeRejectsConflictingScalarFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse(incoming) error = %v", err)
 	}
-	if _, err := Merge(base.Filter, incoming.Filter); err == nil {
-		t.Fatal("expected conflict error")
+	merged, err := Merge(base.Filter, incoming.Filter)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	if len(merged.Statuses) != 2 {
+		t.Fatalf("Statuses = %q, want [open closed]", merged.Statuses)
 	}
 }
 
@@ -57,8 +61,8 @@ func TestStatusAliasInProgressNormalizesToBeadsValue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	if result.Filter.Status != "in_progress" {
-		t.Fatalf("Status = %q, want in_progress", result.Filter.Status)
+	if len(result.Filter.Statuses) != 1 || result.Filter.Statuses[0] != "in_progress" {
+		t.Fatalf("Statuses = %q, want [in_progress]", result.Filter.Statuses)
 	}
 }
 

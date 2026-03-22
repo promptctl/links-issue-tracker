@@ -648,9 +648,9 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	visited := map[string]bool{}
 	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
 	filter := store.ListIssuesFilter{
-		Status:          strings.TrimSpace(*status),
-		IssueType:       strings.TrimSpace(*issueType),
-		Assignee:        strings.TrimSpace(*assignee),
+		Statuses:        toSlice(strings.TrimSpace(*status)),
+		IssueTypes:      toSlice(strings.TrimSpace(*issueType)),
+		Assignees:       toSlice(strings.TrimSpace(*assignee)),
 		IncludeArchived: *includeArchived,
 		IncludeDeleted:  *includeDeleted,
 		Limit:           *limit,
@@ -711,18 +711,19 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, issues)
-	}
 	columns := parseColumns(*columnsExpr)
-	switch strings.ToLower(strings.TrimSpace(*format)) {
-	case "", "lines":
-		return printIssueLines(stdout, issues, columns)
-	case "table":
-		return printIssueTable(stdout, issues, columns)
-	default:
-		return fmt.Errorf("unsupported --format %q", *format)
-	}
+	formatMode := strings.ToLower(strings.TrimSpace(*format))
+	return printValue(stdout, issues, *jsonOut, func(w io.Writer, v any) error {
+		list := v.([]model.Issue)
+		switch formatMode {
+		case "", "lines":
+			return printIssueLines(w, list, columns)
+		case "table":
+			return printIssueTable(w, list, columns)
+		default:
+			return fmt.Errorf("unsupported --format %q", formatMode)
+		}
+	})
 }
 
 func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -743,8 +744,8 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
-		Status:          "open",
-		Assignee:        strings.TrimSpace(*assignee),
+		Statuses:        []string{"open", "in_progress"},
+		Assignees:       toSlice(strings.TrimSpace(*assignee)),
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
@@ -763,18 +764,18 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
 		newBlockerAnnotator(ap.Store),
+		newOrphanedAnnotator(24*time.Hour),
 	)
 	if err != nil {
 		return err
 	}
 	sortByReadiness(annotated)
 	annotated = applyLimit(annotated, *limit)
-	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, annotated)
-	}
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	columns := parseColumns(*columnsExpr)
-	return printReadyOutput(stdout, formatMode, columns, annotated)
+	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
+		return printReadyOutput(w, formatMode, columns, v.([]annotation.AnnotatedIssue))
+	})
 }
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -794,10 +795,9 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, detail)
-	}
-	return printIssueDetail(stdout, detail)
+	return printValue(stdout, detail, *jsonOut, func(w io.Writer, v any) error {
+		return printIssueDetail(w, v.(model.IssueDetail))
+	})
 }
 
 type statusTransitionKey struct {
@@ -1187,15 +1187,13 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, children)
-	}
-	return printIssueLines(stdout, children, []string{"id", "state", "title"})
+	return printValue(stdout, children, *jsonOut, func(w io.Writer, v any) error {
+		return printIssueLines(w, v.([]model.Issue), []string{"id", "state", "title"})
+	})
 }
 
 func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("export")
-	jsonOut := fs.Bool("json", true, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1203,9 +1201,8 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, export, *jsonOut, func(w io.Writer, _ any) error {
-		return writeJSON(w, export)
-	})
+	// Export is JSON-only — there is no text representation of a full database export.
+	return writeJSON(stdout, export)
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
@@ -1223,15 +1220,15 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 		"dolt_repo_path": ws.DoltRepoPath,
 		"traces_dir":     automationTraceDir(ws),
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		return writeJSON(stdout, payload)
-	}
-	for _, key := range []string{"workspace_id", "issue_prefix", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
-		if _, err := fmt.Fprintf(stdout, "%s: %s\n", key, payload[key]); err != nil {
-			return err
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		p := v.(map[string]string)
+		for _, key := range []string{"workspace_id", "issue_prefix", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
+			if _, err := fmt.Fprintf(w, "%s: %s\n", key, p[key]); err != nil {
+				return err
+			}
 		}
-	}
-	return nil
+		return nil
+	})
 }
 
 func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -1923,14 +1920,12 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		if err := writeJSON(stdout, report); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows); err != nil {
-			return err
-		}
+	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
+		r := v.(store.HealthReport)
+		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows)
+		return err
+	}); err != nil {
+		return err
 	}
 	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
 	if len(report.Errors) > 0 {
@@ -1950,14 +1945,13 @@ func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	if shouldWriteJSON(stdout, *jsonOut) {
-		if err := writeJSON(stdout, report); err != nil {
-			return err
-		}
-	} else {
-		if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d repair=%t\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, *repair); err != nil {
-			return err
-		}
+	doRepair := *repair
+	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
+		r := v.(store.HealthReport)
+		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d repair=%t\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, doRepair)
+		return err
+	}); err != nil {
+		return err
 	}
 	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
 	if len(report.Errors) > 0 {
@@ -2389,14 +2383,6 @@ func writeJSON(w io.Writer, v any) error {
 	return enc.Encode(v)
 }
 
-func shouldWriteJSON(w io.Writer, jsonOut bool) bool {
-	if jsonOut {
-		return true
-	}
-	// [LAW:one-source-of-truth] Writer-bound output mode is the canonical default signal for format selection.
-	return outputModeFromWriter(w) == outputModeJSON
-}
-
 func outputModeFromWriter(w io.Writer) outputMode {
 	provider, ok := w.(outputModeProvider)
 	if !ok {
@@ -2405,11 +2391,22 @@ func outputModeFromWriter(w io.Writer) outputMode {
 	return provider.linksOutputMode()
 }
 
+// printValue is the single enforcer for output format selection.
+// [LAW:single-enforcer] Commands with both JSON and text modes go through this function
+// to guarantee that both paths receive the same data. JSON-only commands (e.g., export)
+// may call writeJSON directly since there is no text path to diverge from.
 func printValue(w io.Writer, v any, jsonOut bool, textFn func(io.Writer, any) error) error {
-	if shouldWriteJSON(w, jsonOut) {
+	if jsonOut || outputModeFromWriter(w) == outputModeJSON {
 		return writeJSON(w, v)
 	}
 	return textFn(w, v)
+}
+
+func toSlice(s string) []string {
+	if s == "" {
+		return nil
+	}
+	return []string{s}
 }
 
 func printIssueSummary(w io.Writer, v any) error {

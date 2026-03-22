@@ -34,11 +34,10 @@ func runFixPriority(ctx context.Context, stdout io.Writer, ap *app.App, args []s
 		return err
 	}
 
-	writeJSON := shouldWriteJSON(stdout, *jsonOut)
 	if *pushBack {
-		return fixPriorityPushBack(ctx, stdout, ap, issue, writeJSON)
+		return fixPriorityPushBack(ctx, stdout, ap, issue, *jsonOut)
 	}
-	return fixPriorityPullForward(ctx, stdout, ap, issue, writeJSON)
+	return fixPriorityPullForward(ctx, stdout, ap, issue, *jsonOut)
 }
 
 type priorityChange struct {

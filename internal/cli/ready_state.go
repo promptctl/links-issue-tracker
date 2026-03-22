@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"text/tabwriter"
+	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/annotation"
 	"github.com/bmf/links-issue-tracker/internal/model"
@@ -85,6 +86,24 @@ func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 			}
 		}
 		return annotations, nil
+	}
+}
+
+// newOrphanedAnnotator returns an annotator that flags in_progress issues
+// with no update in the given threshold as orphaned.
+func newOrphanedAnnotator(threshold time.Duration) annotation.Annotator {
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		if issue.Status != "in_progress" {
+			return nil, nil
+		}
+		age := time.Since(issue.UpdatedAt)
+		if age < threshold {
+			return nil, nil
+		}
+		return []annotation.Annotation{{
+			Kind:    annotation.Orphaned,
+			Message: fmt.Sprintf("in_progress for %s with no update", age.Truncate(time.Minute)),
+		}}, nil
 	}
 }
 
@@ -184,16 +203,19 @@ func readyBlockReason(annotations []annotation.Annotation) string {
 	return strings.Join(reasons, "; ")
 }
 
-// printReadyOutput prints ready issues in full, then a count-by-reason summary
-// for blocked issues. Blocked tickets are not listed individually — only the
-// aggregate counts matter for deciding what to work on next.
+// printReadyOutput partitions annotated issues into in-progress, ready, and blocked
+// sections. In-progress issues are shown first (they represent active/possibly orphaned
+// work), then ready issues, then a count-by-reason summary for blocked issues.
 func printReadyOutput(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
 	resolved := resolveColumns(columns)
-	var ready, blocked []annotation.AnnotatedIssue
+	var inProgress, ready, blocked []annotation.AnnotatedIssue
 	for i := range issues {
-		if isReadyBlocked(issues[i].Annotations) {
+		switch {
+		case issues[i].Status == "in_progress":
+			inProgress = append(inProgress, issues[i])
+		case isReadyBlocked(issues[i].Annotations):
 			blocked = append(blocked, issues[i])
-		} else {
+		default:
 			ready = append(ready, issues[i])
 		}
 	}
@@ -204,10 +226,56 @@ func printReadyOutput(w io.Writer, format string, columns []string, issues []ann
 	if err := printAnnotatedRows(w, format, resolved, ready); err != nil {
 		return err
 	}
+	if err := printInProgressSection(w, format, resolved, inProgress); err != nil {
+		return err
+	}
 	if err := printBlockedSummary(w, blocked); err != nil {
 		return err
 	}
 	return printPriorityInversions(w, issues)
+}
+
+func printInProgressSection(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
+	if len(issues) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w, "\nIn Progress"); err != nil {
+		return err
+	}
+	switch format {
+	case "table":
+		tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
+		headerCols := append(append([]string{}, columns...), "LAST UPDATE")
+		if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(headerCols, "\t"))); err != nil {
+			return err
+		}
+		for _, entry := range issues {
+			base := formatIssueColumns(entry.Issue, columns, "\t")
+			suffix := inProgressSuffix(entry)
+			if _, err := fmt.Fprintln(tw, base+"\t"+suffix); err != nil {
+				return err
+			}
+		}
+		return tw.Flush()
+	default:
+		for _, entry := range issues {
+			line := formatIssueColumns(entry.Issue, columns, " | ")
+			line += " | Last Update: " + inProgressSuffix(entry)
+			if _, err := fmt.Fprintln(w, line); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
+func inProgressSuffix(entry annotation.AnnotatedIssue) string {
+	age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
+	suffix := fmt.Sprintf("%s", age)
+	if annotation.HasAny(entry.Annotations, annotation.Orphaned) {
+		suffix += " (ORPHANED)"
+	}
+	return suffix
 }
 
 // printBlockedSummary prints a compact count-by-reason summary of blocked issues.
