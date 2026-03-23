@@ -207,8 +207,17 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	// [LAW:single-enforcer] Startup writes remain owned by writable Open so read paths never auto-create or migrate at this boundary.
-	return openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
+	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
+	if err := s.withCommitLock(ctx, s.migrate); err != nil {
+		_ = s.db.Close()
+		return nil, err
+	}
+	return s, nil
 }
 
 func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) error {

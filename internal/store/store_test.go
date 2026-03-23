@@ -680,6 +680,58 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
+func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Create the database without running migration.
+	if err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+		t.Fatalf("EnsureDatabase() error = %v", err)
+	}
+	seed, err := openStoreConnection(doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("openStoreConnection() error = %v", err)
+	}
+	// Create a bare issues table missing the topic column to simulate a stale schema.
+	_, err = seed.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issues (
+		id VARCHAR(191) PRIMARY KEY,
+		title TEXT NOT NULL,
+		description TEXT NOT NULL,
+		status VARCHAR(32) NOT NULL,
+		priority INT NOT NULL,
+		issue_type VARCHAR(32) NOT NULL,
+		assignee TEXT NOT NULL,
+		created_at VARCHAR(64) NOT NULL,
+		updated_at VARCHAR(64) NOT NULL,
+		closed_at VARCHAR(64) NULL,
+		archived_at VARCHAR(64) NULL,
+		deleted_at VARCHAR(64) NULL
+	)`)
+	if err != nil {
+		t.Fatalf("create stale schema error = %v", err)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatalf("seed Close() error = %v", err)
+	}
+
+	// OpenForRead should auto-migrate and add the missing topic column.
+	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v", err)
+	}
+	defer readStore.Close()
+
+	// Verify migration ran by checking the topic column exists.
+	var topicExists int
+	err = readStore.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'topic'`).Scan(&topicExists)
+	if err != nil {
+		t.Fatalf("check topic column error = %v", err)
+	}
+	if topicExists == 0 {
+		t.Fatal("OpenForRead did not auto-migrate: topic column missing")
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
