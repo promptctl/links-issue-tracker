@@ -2344,6 +2344,10 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		annotated, annotateErr := annotateOpenIssuesForReady(ctx, readStore, ws.RootDir, "")
 		if annotateErr == nil {
 			payload["not_ready"] = summarizeNotReadyIssuesByType(annotated)
+		} else {
+			payload["not_ready"] = map[string]any{
+				"error": annotateErr.Error(),
+			}
 		}
 		_ = readStore.Close()
 	}
@@ -2372,12 +2376,12 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 				"",
 			)
 		}
-		if summary, ok := instructions["not_ready"].(notReadySummary); ok {
+		if notReady, ok := instructions["not_ready"].(notReadySummary); ok {
 			lines = append(lines,
 				"Not Ready",
-				fmt.Sprintf("   total: %d", summary.Total),
+				fmt.Sprintf("   total: %d", notReady.Total),
 			)
-			for _, issueType := range summary.ByIssueType {
+			for _, issueType := range notReady.ByIssueType {
 				lines = append(lines, fmt.Sprintf("   %s: %d", issueType.IssueType, issueType.Count))
 			}
 			lines = append(lines, "")

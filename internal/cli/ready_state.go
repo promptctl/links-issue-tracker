@@ -56,22 +56,12 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
 // and flags rank inversions where a dependency is ranked below the dependent.
-func newBlockerAnnotator(st *store.Store) annotation.Annotator {
+// blockersByIssue is pre-fetched via Store.ListOpenBlockersForIssues to avoid N+1 queries.
+func newBlockerAnnotator(blockersByIssue map[string][]model.Issue) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
-	return func(ctx context.Context, issue model.Issue) ([]annotation.Annotation, error) {
-		detail, err := st.GetIssueDetail(ctx, issue.ID)
-		if err != nil {
-			return nil, err
-		}
-		// Collect open blockers and sort by ID for stable annotation ordering.
-		var openDeps []model.Issue
-		for _, dep := range detail.DependsOn {
-			if dep.Status != "closed" {
-				openDeps = append(openDeps, dep)
-			}
-		}
-		sort.Slice(openDeps, func(i, j int) bool { return openDeps[i].ID < openDeps[j].ID })
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		openDeps := blockersByIssue[issue.ID]
 		var annotations []annotation.Annotation
 		for _, dep := range openDeps {
 			annotations = append(annotations, annotation.Annotation{
@@ -211,9 +201,17 @@ func annotateOpenIssuesForReady(ctx context.Context, st *store.Store, rootDir st
 	if err != nil {
 		return nil, err
 	}
+	issueIDs := make([]string, len(issues))
+	for i, issue := range issues {
+		issueIDs[i] = issue.ID
+	}
+	blockersByIssue, err := st.ListOpenBlockersForIssues(ctx, issueIDs)
+	if err != nil {
+		return nil, err
+	}
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
-		newBlockerAnnotator(st),
+		newBlockerAnnotator(blockersByIssue),
 		newOrphanedAnnotator(24*time.Hour),
 	)
 	if err != nil {

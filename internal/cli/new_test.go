@@ -108,7 +108,7 @@ func TestRunQuickstartIncludesNotReadyCountsByIssueType(t *testing.T) {
 		Priority:    1,
 		Description: "blocked by dependency",
 	})
-	h.addBlocks(blocked.ID, blocker.ID)
+	h.addDependency(blocked.ID, blocker.ID)
 	h.createIssue(store.CreateIssueInput{
 		Title:     "Missing description",
 		Topic:     "docs",
@@ -159,7 +159,7 @@ func TestRunQuickstartTextShowsNotReadyCounts(t *testing.T) {
 		Priority:    1,
 		Description: "blocked by dependency",
 	})
-	h.addBlocks(blocked.ID, blocker.ID)
+	h.addDependency(blocked.ID, blocker.ID)
 	h.createIssue(store.CreateIssueInput{
 		Title:     "Missing description",
 		Topic:     "docs",

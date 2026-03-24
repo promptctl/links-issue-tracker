@@ -2460,6 +2460,67 @@ func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Rela
 	}
 	return rels, rows.Err()
 }
+
+// ListOpenBlockersForIssues returns all open blockers for the given issue IDs in a single query.
+// The result is keyed by the dependent issue ID.
+func (s *Store) ListOpenBlockersForIssues(ctx context.Context, issueIDs []string) (map[string][]model.Issue, error) {
+	if len(issueIDs) == 0 {
+		return map[string][]model.Issue{}, nil
+	}
+	placeholders := make([]string, len(issueIDs))
+	args := make([]any, 0, len(issueIDs))
+	for i, id := range issueIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	inClause := strings.Join(placeholders, ",")
+	// Find issues that are blocked: relations where src_id is in our set, type is 'blocks',
+	// and the blocker (dst_id) is not closed.
+	query := fmt.Sprintf(`
+		SELECT r.src_id, i.id, i.title, i.description, i.status, i.priority, i.issue_type,
+			i.topic, i.assignee, i.item_rank, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
+		FROM relations r
+		JOIN issues i ON i.id = r.dst_id
+		WHERE r.type = 'blocks' AND r.src_id IN (%s) AND i.status <> 'closed'
+		ORDER BY r.src_id, i.id
+	`, inClause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list open blockers: %w", err)
+	}
+	defer rows.Close()
+	result := map[string][]model.Issue{}
+	for rows.Next() {
+		var srcID string
+		var issue model.Issue
+		var createdAt, updatedAt string
+		var closedAt, archivedAt, deletedAt *string
+		if err := rows.Scan(
+			&srcID,
+			&issue.ID, &issue.Title, &issue.Description, &issue.Status, &issue.Priority, &issue.IssueType,
+			&issue.Topic, &issue.Assignee, &issue.Rank, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt,
+		); err != nil {
+			return nil, err
+		}
+		issue.CreatedAt, _ = time.Parse(time.RFC3339Nano, createdAt)
+		issue.UpdatedAt, _ = time.Parse(time.RFC3339Nano, updatedAt)
+		if closedAt != nil {
+			t, _ := time.Parse(time.RFC3339Nano, *closedAt)
+			issue.ClosedAt = &t
+		}
+		if archivedAt != nil {
+			t, _ := time.Parse(time.RFC3339Nano, *archivedAt)
+			issue.ArchivedAt = &t
+		}
+		if deletedAt != nil {
+			t, _ := time.Parse(time.RFC3339Nano, *deletedAt)
+			issue.DeletedAt = &t
+		}
+		result[srcID] = append(result[srcID], issue)
+	}
+	return result, rows.Err()
+}
+
 func (s *Store) getMeta(ctx context.Context, tx *sql.Tx, key string) (string, error) {
 	var row *sql.Row
 	if tx != nil {
