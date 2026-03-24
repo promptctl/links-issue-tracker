@@ -22,7 +22,6 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/annotation"
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/backup"
-	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/merge"
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/query"
@@ -735,35 +734,10 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]")
 	}
-	cfg, err := config.Load(ap.Workspace.RootDir)
+	annotated, err := annotateOpenIssuesForReady(ctx, ap.Store, ap.Workspace.RootDir, *assignee)
 	if err != nil {
 		return err
 	}
-	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
-	// needed — the store default is item_rank ASC.
-	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
-		Statuses:        []string{"open", "in_progress"},
-		Assignees:       toSlice(strings.TrimSpace(*assignee)),
-		IncludeArchived: false,
-		IncludeDeleted:  false,
-		Limit:           0,
-	})
-	if err != nil {
-		return err
-	}
-	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
-	if err != nil {
-		return err
-	}
-	annotated, err := annotation.Annotate(ctx, issues,
-		fieldAnnotator,
-		newBlockerAnnotator(ap.Store),
-		newOrphanedAnnotator(24*time.Hour),
-	)
-	if err != nil {
-		return err
-	}
-	sortByReadiness(annotated)
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
 	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
@@ -2312,7 +2286,6 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 	readStore, err := store.OpenForRead(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err == nil {
 		topics, err = readStore.ListTopics(ctx)
-		_ = readStore.Close()
 		if err != nil {
 			topics = []string{}
 		}
@@ -2366,6 +2339,14 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"corruption": ExitCorruption,
 		},
 	}
+	if readStore != nil {
+		// [LAW:one-source-of-truth] Quickstart reuses the ready annotation pipeline instead of reimplementing readiness rules.
+		annotated, annotateErr := annotateOpenIssuesForReady(ctx, readStore, ws.RootDir, "")
+		if annotateErr == nil {
+			payload["not_ready"] = summarizeNotReadyIssuesByType(annotated)
+		}
+		_ = readStore.Close()
+	}
 	if *refresh {
 		// [LAW:single-enforcer] Quickstart refresh resolves the workspace once and delegates all file rewrites to the managed asset writers.
 		ws, err := workspace.Resolve(".")
@@ -2381,9 +2362,30 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 
 	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 		instructions := v.(map[string]any)
-		lines := []string{
-			"links agent quickstart",
-			"",
+		lines := []string{"links agent quickstart"}
+		if summary, ok := instructions["summary"].(string); ok && strings.TrimSpace(summary) != "" {
+			lines[0] = summary
+		}
+		if refreshReport, ok := instructions["refresh"].(quickstartRefreshReport); ok {
+			lines = append(lines,
+				fmt.Sprintf("refresh %s", formatQuickstartRefreshSummary(refreshReport)),
+				"",
+			)
+		}
+		if summary, ok := instructions["not_ready"].(notReadySummary); ok {
+			lines = append(lines,
+				"Not Ready",
+				fmt.Sprintf("   total: %d", summary.Total),
+			)
+			for _, issueType := range summary.ByIssueType {
+				lines = append(lines, fmt.Sprintf("   %s: %d", issueType.IssueType, issueType.Count))
+			}
+			lines = append(lines, "")
+		}
+		if lines[len(lines)-1] != "" {
+			lines = append(lines, "")
+		}
+		lines = append(lines,
 			"1) Discover context",
 			"   `lit init`",
 			"   `lit quickstart --refresh`",
@@ -2425,10 +2427,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"   `lit recover --latest-backup`",
 			"",
 			fmt.Sprintf("Exit codes: ok=%d usage=%d validation=%d not_found=%d conflict=%d corruption=%d", ExitOK, ExitUsage, ExitValidation, ExitNotFound, ExitConflict, ExitCorruption),
-		}
-		if summary, ok := instructions["summary"].(string); ok && strings.TrimSpace(summary) != "" {
-			lines[0] = summary
-		}
+		)
 		if quickstartTopics, ok := instructions["topics"].([]string); ok && len(quickstartTopics) > 0 {
 			for index, line := range lines {
 				if strings.HasPrefix(line, "   project prefix: ") {
@@ -2438,12 +2437,6 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 					break
 				}
 			}
-		}
-		if refreshReport, ok := instructions["refresh"].(quickstartRefreshReport); ok {
-			lines = append(lines[:1], append([]string{
-				fmt.Sprintf("refresh %s", formatQuickstartRefreshSummary(refreshReport)),
-				"",
-			}, lines[1:]...)...)
 		}
 		_, err := fmt.Fprintln(w, strings.Join(lines, "\n"))
 		return err

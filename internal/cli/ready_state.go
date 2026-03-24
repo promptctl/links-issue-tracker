@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/annotation"
+	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
@@ -176,6 +177,77 @@ func sortByReadiness(issues []annotation.AnnotatedIssue) {
 		jBlocked := isReadyBlocked(issues[j].Annotations)
 		return !iBlocked && jBlocked
 	})
+}
+
+type issueTypeCount struct {
+	IssueType string `json:"issue_type"`
+	Count     int    `json:"count"`
+}
+
+type notReadySummary struct {
+	Total       int              `json:"total"`
+	ByIssueType []issueTypeCount `json:"by_issue_type"`
+}
+
+func annotateOpenIssuesForReady(ctx context.Context, st *store.Store, rootDir string, assignee string) ([]annotation.AnnotatedIssue, error) {
+	// [LAW:one-source-of-truth] Ready and quickstart both derive readiness from the same annotated open-issue pipeline.
+	cfg, err := config.Load(rootDir)
+	if err != nil {
+		return nil, err
+	}
+	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
+	// needed — the store default is item_rank ASC.
+	issues, err := st.ListIssues(ctx, store.ListIssuesFilter{
+		Statuses:        []string{"open", "in_progress"},
+		Assignees:       toSlice(strings.TrimSpace(assignee)),
+		IncludeArchived: false,
+		IncludeDeleted:  false,
+		Limit:           0,
+	})
+	if err != nil {
+		return nil, err
+	}
+	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
+	if err != nil {
+		return nil, err
+	}
+	annotated, err := annotation.Annotate(ctx, issues,
+		fieldAnnotator,
+		newBlockerAnnotator(st),
+		newOrphanedAnnotator(24*time.Hour),
+	)
+	if err != nil {
+		return nil, err
+	}
+	sortByReadiness(annotated)
+	return annotated, nil
+}
+
+func summarizeNotReadyIssuesByType(issues []annotation.AnnotatedIssue) notReadySummary {
+	typeCounts := map[string]int{}
+	total := 0
+	for _, issue := range issues {
+		if isReadyBlocked(issue.Annotations) {
+			total++
+			typeCounts[issue.IssueType]++
+		}
+	}
+	issueTypes := make([]string, 0, len(typeCounts))
+	for issueType := range typeCounts {
+		issueTypes = append(issueTypes, issueType)
+	}
+	sort.Strings(issueTypes)
+	byIssueType := make([]issueTypeCount, len(issueTypes))
+	for i, issueType := range issueTypes {
+		byIssueType[i] = issueTypeCount{
+			IssueType: issueType,
+			Count:     typeCounts[issueType],
+		}
+	}
+	return notReadySummary{
+		Total:       total,
+		ByIssueType: byIssueType,
+	}
 }
 
 func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.AnnotatedIssue {
