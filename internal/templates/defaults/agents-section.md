@@ -1,5 +1,3 @@
-# AGENTS
-
 <!-- BEGIN LINKS INTEGRATION -->
 ## links Agent-Native Workflow
 

@@ -41,8 +41,8 @@ const (
 	projectConfigPathEnv = "LIT_CONFIG_PROJECT_PATH"
 )
 
-// configDir returns the directory where the config file lives.
-func configDir() string {
+// ConfigDir returns the canonical directory where global config and templates live.
+func ConfigDir() string {
 	if xdg := os.Getenv("XDG_CONFIG_HOME"); xdg != "" {
 		return filepath.Join(xdg, "links-issue-tracker")
 	}
@@ -95,7 +95,7 @@ func globalConfigPath() string {
 	if override := strings.TrimSpace(os.Getenv(globalConfigPathEnv)); override != "" {
 		return override
 	}
-	dir := configDir()
+	dir := ConfigDir()
 	if dir == "" {
 		return ""
 	}
