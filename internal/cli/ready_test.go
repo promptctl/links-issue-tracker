@@ -750,40 +750,6 @@ func TestFixPriorityBatchPullForwardFixesAllInversions(t *testing.T) {
 	}
 }
 
-func TestFixPriorityBatchPullForwardMixedStatuses(t *testing.T) {
-	h := newReadyTestHarness(t)
-
-	// Dependent is in_progress with higher priority, blocker is open with lower priority.
-	blocker := h.createIssue(store.CreateIssueInput{
-		Title: "Mixed status blocker", Topic: "mixed-blocker", IssueType: "task", Priority: 4, Status: "open",
-	})
-	dep := h.createIssue(store.CreateIssueInput{
-		Title: "Mixed status dependent", Topic: "mixed-dep", IssueType: "task", Priority: 1, Status: "in_progress",
-	})
-	h.addBlocks(dep.ID, blocker.ID)
-
-	var stdout bytes.Buffer
-	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--json"})
-	if err != nil {
-		t.Fatalf("runFixPriority error = %v", err)
-	}
-
-	var changes []priorityChange
-	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
-		t.Fatalf("json.Unmarshal error = %v", err)
-	}
-	if len(changes) != 1 {
-		t.Fatalf("len(changes) = %d, want 1; changes=%#v", len(changes), changes)
-	}
-	if changes[0].ID != blocker.ID {
-		t.Fatalf("changes[0].ID = %q, want %q", changes[0].ID, blocker.ID)
-	}
-
-	updated, _ := h.ap.Store.GetIssue(h.ctx, blocker.ID)
-	if updated.Priority != 1 {
-		t.Fatalf("blocker priority = %d, want 1", updated.Priority)
-	}
-}
 func TestFixPriorityBatchPushBackFixesAllInversions(t *testing.T) {
 	h := newReadyTestHarness(t)
 

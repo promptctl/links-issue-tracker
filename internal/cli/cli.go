@@ -180,6 +180,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runUpdate(commandCtx, stdout, ap, args)
 		})
 	})
+	addGroupedPassthrough(root, "operations", "rank", "Reorder an issue's rank", func(args []string) error {
+		return runWithApp(ctx, appAccessWrite, append([]string{"rank"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runRank(commandCtx, stdout, ap, args)
+		})
+	})
 	addGroupedPassthrough(root, "operations", "fix-priority", "Fix priority inversions", func(args []string) error {
 		return runWithApp(ctx, appAccessWrite, append([]string{"fix-priority"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runFixPriority(commandCtx, stdout, ap, args)
@@ -921,6 +926,60 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		issue = updated
 	}
 
+	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("rank")
+	_ = fs.Bool("top", false, "Move to highest rank")
+	_ = fs.Bool("bottom", false, "Move to lowest rank")
+	above := fs.String("above", "", "Rank above this issue ID")
+	below := fs.String("below", "", "Rank below this issue ID")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit rank <id> --top|--bottom|--above <id>|--below <id>")
+	}
+	visited := map[string]bool{}
+	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
+	modeCount := 0
+	if visited["top"] {
+		modeCount++
+	}
+	if visited["bottom"] {
+		modeCount++
+	}
+	if visited["above"] {
+		modeCount++
+	}
+	if visited["below"] {
+		modeCount++
+	}
+	if modeCount != 1 {
+		return errors.New("exactly one of --top, --bottom, --above, --below is required")
+	}
+	issueID := positional[0]
+	var err error
+	switch {
+	case visited["top"]:
+		err = ap.Store.RankToTop(ctx, issueID)
+	case visited["bottom"]:
+		err = ap.Store.RankToBottom(ctx, issueID)
+	case visited["above"]:
+		err = ap.Store.RankAbove(ctx, issueID, *above)
+	case visited["below"]:
+		err = ap.Store.RankBelow(ctx, issueID, *below)
+	}
+	if err != nil {
+		return err
+	}
+	issue, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
