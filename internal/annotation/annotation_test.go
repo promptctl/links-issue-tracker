@@ -13,8 +13,8 @@ func TestKindStringReturnsKey(t *testing.T) {
 	if MissingField.String() != "missing_field" {
 		t.Fatalf("MissingField.String() = %q, want missing_field", MissingField.String())
 	}
-	if BlockedBy.String() != "open_dependency" {
-		t.Fatalf("BlockedBy.String() = %q, want open_dependency", BlockedBy.String())
+	if OpenDependency.String() != "open_dependency" {
+		t.Fatalf("OpenDependency.String() = %q, want open_dependency", OpenDependency.String())
 	}
 }
 
@@ -67,7 +67,7 @@ func TestAnnotateRunsAllAnnotators(t *testing.T) {
 		return nil, nil
 	}
 	alwaysAnnotates := func(_ context.Context, _ model.Issue) ([]Annotation, error) {
-		return []Annotation{{Kind: BlockedBy, Message: "lit-xyz"}}, nil
+		return []Annotation{{Kind: OpenDependency, Message: "lit-xyz"}}, nil
 	}
 
 	result, err := Annotate(ctx, issues, descChecker, alwaysAnnotates)
@@ -160,12 +160,12 @@ func TestAnnotatedIssueJSONShape(t *testing.T) {
 func TestHasAnyMatchesKind(t *testing.T) {
 	annotations := []Annotation{
 		{Kind: MissingField, Message: "description"},
-		{Kind: BlockedBy, Message: "lit-xyz"},
+		{Kind: OpenDependency, Message: "lit-xyz"},
 	}
-	if !HasAny(annotations, BlockedBy) {
-		t.Fatal("HasAny should match BlockedBy")
+	if !HasAny(annotations, OpenDependency) {
+		t.Fatal("HasAny should match OpenDependency")
 	}
-	if !HasAny(annotations, MissingField, BlockedBy) {
+	if !HasAny(annotations, MissingField, OpenDependency) {
 		t.Fatal("HasAny should match with multiple kinds")
 	}
 }
@@ -174,8 +174,8 @@ func TestHasAnyNoMatch(t *testing.T) {
 	annotations := []Annotation{
 		{Kind: MissingField, Message: "description"},
 	}
-	if HasAny(annotations, BlockedBy) {
-		t.Fatal("HasAny should not match BlockedBy when only MissingField present")
+	if HasAny(annotations, OpenDependency) {
+		t.Fatal("HasAny should not match OpenDependency when only MissingField present")
 	}
 }
 

@@ -885,16 +885,19 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	for _, rel := range relations {
 		switch rel.Type {
 		case "blocks":
+			// blocks convention: src_id=dependent, dst_id=dependency.
 			if rel.SrcID == id {
+				// This issue is the dependent; DstID is what it depends on.
 				dep, err := s.GetIssue(ctx, rel.DstID)
 				if err == nil {
 					detail.DependsOn = append(detail.DependsOn, dep)
 				}
 			}
 			if rel.DstID == id {
-				blocked, err := s.GetIssue(ctx, rel.SrcID)
+				// This issue is the dependency; SrcID depends on it.
+				dependent, err := s.GetIssue(ctx, rel.SrcID)
 				if err == nil {
-					detail.Blocks = append(detail.Blocks, blocked)
+					detail.Blocks = append(detail.Blocks, dependent)
 				}
 			}
 		case "parent-child":

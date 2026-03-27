@@ -51,12 +51,12 @@ func (k *Kind) UnmarshalJSON(data []byte) error {
 
 var (
 	missingFieldDef  = &kindDef{key: "missing_field"}
-	blockedByDef     = &kindDef{key: "open_dependency"}
+	openDependencyDef = &kindDef{key: "open_dependency"}
 	rankInversionDef = &kindDef{key: "rank_inversion"}
 	orphanedDef      = &kindDef{key: "orphaned"}
 
-	MissingField  = Kind{def: missingFieldDef}  // a required field is empty or unset
-	BlockedBy     = Kind{def: blockedByDef}      // issue depends on an open ticket
+	MissingField   = Kind{def: missingFieldDef}  // a required field is empty or unset
+	OpenDependency = Kind{def: openDependencyDef}  // issue depends on an open ticket
 	RankInversion = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
 	Orphaned      = Kind{def: orphanedDef}       // in_progress with no update for 24h+
 
@@ -65,8 +65,8 @@ var (
 	// the rename to "open_dependency".
 	kindRegistry = map[string]Kind{
 		missingFieldDef.key:  MissingField,
-		blockedByDef.key:     BlockedBy,
-		"blocked_by":         BlockedBy,
+		openDependencyDef.key: OpenDependency,
+		"blocked_by":         OpenDependency,
 		rankInversionDef.key: RankInversion,
 		orphanedDef.key:      Orphaned,
 	}
