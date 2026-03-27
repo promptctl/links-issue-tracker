@@ -731,13 +731,12 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	format := fs.String("format", "lines", "Output format: lines|table")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]")
+		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]")
 	}
 	cfg, err := config.Load(ap.Workspace.RootDir)
 	if err != nil {
@@ -771,10 +770,9 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	}
 	sortByReadiness(annotated)
 	annotated = applyLimit(annotated, *limit)
-	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	columns := parseColumns(*columnsExpr)
 	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
-		return printReadyOutput(w, formatMode, columns, v.([]annotation.AnnotatedIssue))
+		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})
 }
 
@@ -2796,7 +2794,7 @@ Guidance & Tooling:
 
 Command Syntax:
   lit init [--json] [--skip-hooks] [--skip-agents]
-  lit ready [--assignee <user>] [--limit N] [--format lines|table] [--columns ...] [--json]
+  lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]
   lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
   lit start <id> --reason <text> [--by <user>] [--json]
   lit done <id> --reason <text> [--by <user>] [--json]

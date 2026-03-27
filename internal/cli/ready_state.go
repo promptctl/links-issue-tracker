@@ -8,7 +8,6 @@ import (
 	"reflect"
 	"sort"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/annotation"
@@ -185,28 +184,51 @@ func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.Anno
 	return issues[:limit]
 }
 
-// readyBlockReason formats blocking annotations as a human-readable reason string.
-// Only includes annotations whose Kind is in readyBlockingKinds.
-func readyBlockReason(annotations []annotation.Annotation) string {
-	reasons := make([]string, 0, len(annotations))
-	for _, a := range annotations {
-		if !annotation.HasAny([]annotation.Annotation{a}, readyBlockingKinds...) {
-			continue
-		}
-		switch a.Kind {
-		case annotation.MissingField:
-			reasons = append(reasons, fmt.Sprintf("Field %s not set", a.Message))
-		case annotation.BlockedBy:
-			reasons = append(reasons, fmt.Sprintf("Blocked by ticket %s", a.Message))
+
+// readyPreamble is printed before the ready list to give agents context about
+// how to interpret and act on the backlog.
+// [LAW:one-source-of-truth] Single definition of ready preamble text.
+const readyPreamble = `This is the backlog. Pick the top item, but read every item so you understand the context.
+Dependencies explain the WHY behind what you are building.
+Design for the consumers who will use what you build. A poor foundation becomes
+an immediate liability. Downstream tickets are your real acceptance criteria —
+not just "does this work in isolation" but "does this set up the next layer for
+success." Structure your implementation to make downstream tickets trivially easy,
+even if the ticket doesn't specify it (but only if it aligns with the ticket).`
+
+const readyMaxItems = 10
+
+// buildUnblocksMap derives a reverse dependency index from BlockedBy annotations.
+// For each blocker ID, it returns the IDs of open issues that depend on it.
+// [LAW:dataflow-not-control-flow] The map is derived from existing annotation data;
+// no extra store queries needed.
+func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
+	m := make(map[string][]string)
+	for _, issue := range issues {
+		for _, a := range issue.Annotations {
+			if a.Kind == annotation.BlockedBy {
+				m[a.Message] = append(m[a.Message], issue.ID)
+			}
 		}
 	}
-	return strings.Join(reasons, "; ")
+	return m
+}
+
+// blockedByIDs extracts the IDs of open dependencies from an issue's annotations.
+func blockedByIDs(annotations []annotation.Annotation) []string {
+	var ids []string
+	for _, a := range annotations {
+		if a.Kind == annotation.BlockedBy {
+			ids = append(ids, a.Message)
+		}
+	}
+	return ids
 }
 
 // printReadyOutput partitions annotated issues into in-progress, ready, and blocked
-// sections. In-progress issues are shown first (they represent active/possibly orphaned
-// work), then ready issues, then a count-by-reason summary for blocked issues.
-func printReadyOutput(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
+// sections. Ready issues are shown with a preamble and inline dependency context,
+// followed by in-progress work, then a count-by-reason summary for blocked issues.
+func printReadyOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
 	resolved := resolveColumns(columns)
 	var inProgress, ready, blocked []annotation.AnnotatedIssue
 	for i := range issues {
@@ -220,13 +242,12 @@ func printReadyOutput(w io.Writer, format string, columns []string, issues []ann
 		}
 	}
 
-	if _, err := fmt.Fprintln(w, "Ready"); err != nil {
+	unblocksMap := buildUnblocksMap(issues)
+
+	if err := printReadySection(w, resolved, ready, unblocksMap); err != nil {
 		return err
 	}
-	if err := printAnnotatedRows(w, format, resolved, ready); err != nil {
-		return err
-	}
-	if err := printInProgressSection(w, format, resolved, inProgress); err != nil {
+	if err := printInProgressSection(w, resolved, inProgress); err != nil {
 		return err
 	}
 	if err := printBlockedSummary(w, blocked); err != nil {
@@ -235,38 +256,84 @@ func printReadyOutput(w io.Writer, format string, columns []string, issues []ann
 	return printPriorityInversions(w, issues)
 }
 
-func printInProgressSection(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
+// printReadySection prints the preamble, separator, and numbered ready items
+// with inline dependency info. Caps output at readyMaxItems.
+func printReadySection(w io.Writer, columns []string, ready []annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+	if _, err := fmt.Fprintln(w, readyPreamble); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w, strings.Repeat("─", 80)); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
+
+	display := ready
+	if len(display) > readyMaxItems {
+		display = display[:readyMaxItems]
+	}
+
+	if len(display) == 0 {
+		_, err := fmt.Fprintln(w, "(none ready)")
+		return err
+	}
+
+	// [LAW:dataflow-not-control-flow] Every ready issue flows through the same
+	// numbered-line + dependency rendering path. Empty dependency slices produce
+	// no output lines, not skipped operations.
+	for i, entry := range display {
+		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  "))
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+		if err := printInlineDeps(w, entry, unblocksMap); err != nil {
+			return err
+		}
+	}
+
+	if len(ready) > readyMaxItems {
+		if _, err := fmt.Fprintf(w, "\n(%d more ready tickets not shown)\n", len(ready)-readyMaxItems); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printInlineDeps prints "blocked by:" and "unblocks:" lines indented under a ready item.
+func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+	const indent = "    "
+	blockers := blockedByIDs(entry.Annotations)
+	unblocks := unblocksMap[entry.ID]
+
+	if len(blockers) > 0 {
+		if _, err := fmt.Fprintf(w, "%sblocked by: %s\n", indent, strings.Join(blockers, ", ")); err != nil {
+			return err
+		}
+	}
+	if len(unblocks) > 0 {
+		if _, err := fmt.Fprintf(w, "%sunblocks: %s\n", indent, strings.Join(unblocks, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func printInProgressSection(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
 	if len(issues) == 0 {
 		return nil
 	}
 	if _, err := fmt.Fprintln(w, "\nIn Progress"); err != nil {
 		return err
 	}
-	switch format {
-	case "table":
-		tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
-		headerCols := append(append([]string{}, columns...), "LAST UPDATE")
-		if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(headerCols, "\t"))); err != nil {
+	for _, entry := range issues {
+		line := formatIssueColumns(entry.Issue, columns, " | ")
+		line += " | Last Update: " + inProgressSuffix(entry)
+		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
-		for _, entry := range issues {
-			base := formatIssueColumns(entry.Issue, columns, "\t")
-			suffix := inProgressSuffix(entry)
-			if _, err := fmt.Fprintln(tw, base+"\t"+suffix); err != nil {
-				return err
-			}
-		}
-		return tw.Flush()
-	default:
-		for _, entry := range issues {
-			line := formatIssueColumns(entry.Issue, columns, " | ")
-			line += " | Last Update: " + inProgressSuffix(entry)
-			if _, err := fmt.Fprintln(w, line); err != nil {
-				return err
-			}
-		}
-		return nil
 	}
+	return nil
 }
 
 func inProgressSuffix(entry annotation.AnnotatedIssue) string {
@@ -315,65 +382,6 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 	return nil
 }
 
-func printAnnotatedRows(w io.Writer, format string, columns []string, issues []annotation.AnnotatedIssue) error {
-	if len(issues) == 0 {
-		_, err := fmt.Fprintln(w, "(none)")
-		return err
-	}
-	hasReasons := false
-	for _, issue := range issues {
-		if readyBlockReason(issue.Annotations) != "" {
-			hasReasons = true
-			break
-		}
-	}
-	switch format {
-	case "", "lines":
-		return printAnnotatedLines(w, issues, columns, hasReasons)
-	case "table":
-		return printAnnotatedTable(w, issues, columns, hasReasons)
-	default:
-		return fmt.Errorf("unsupported --format %q", format)
-	}
-}
-
-func printAnnotatedLines(w io.Writer, issues []annotation.AnnotatedIssue, columns []string, hasReasons bool) error {
-	for _, entry := range issues {
-		line := formatIssueColumns(entry.Issue, columns, " | ")
-		if hasReasons {
-			if reason := readyBlockReason(entry.Annotations); reason != "" {
-				line += " | " + reason
-			}
-		}
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
-func printAnnotatedTable(w io.Writer, issues []annotation.AnnotatedIssue, columns []string, hasReasons bool) error {
-	headers := append([]string{}, columns...)
-	if hasReasons {
-		headers = append(headers, "reason")
-	}
-	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(headers, "\t"))); err != nil {
-		return err
-	}
-	for _, entry := range issues {
-		line := formatIssueColumns(entry.Issue, columns, "\t")
-		if hasReasons {
-			if reason := readyBlockReason(entry.Annotations); reason != "" {
-				line += "\t" + reason
-			}
-		}
-		if _, err := fmt.Fprintln(tw, line); err != nil {
-			return err
-		}
-	}
-	return tw.Flush()
-}
 
 // printPriorityInversions prints a summary of priority inversions found across all issues.
 func printPriorityInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {

@@ -477,6 +477,90 @@ func TestRunReadyTextOutputShowsPriorityInversions(t *testing.T) {
 	}
 }
 
+func TestRunReadyTextOutputIncludesPreamble(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	h.createIssue(store.CreateIssueInput{
+		Title:     "Some task",
+		Topic:     "task",
+		IssueType: "task",
+		Priority:  1,
+	})
+
+	text := h.runReadyText()
+	if !strings.Contains(text, "This is the backlog") {
+		t.Fatal("text output missing preamble")
+	}
+	if !strings.Contains(text, "─") {
+		t.Fatal("text output missing separator line")
+	}
+}
+
+func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	a := h.createIssue(store.CreateIssueInput{
+		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1,
+	})
+	b := h.createIssue(store.CreateIssueInput{
+		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 2,
+	})
+
+	text := h.runReadyText()
+	aIdx := strings.Index(text, a.ID)
+	bIdx := strings.Index(text, b.ID)
+	if aIdx < 0 || bIdx < 0 {
+		t.Fatalf("expected both issue IDs in output, got: %s", text)
+	}
+	if aIdx > bIdx {
+		t.Fatal("higher priority issue should appear before lower priority")
+	}
+	if !strings.Contains(text, " 1. ") || !strings.Contains(text, " 2. ") {
+		t.Fatal("expected numbered items in output")
+	}
+}
+
+func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
+	})
+	dependent := h.createIssue(store.CreateIssueInput{
+		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 2,
+	})
+	h.addBlocks(dependent.ID, blocker.ID)
+
+	text := h.runReadyText()
+	if !strings.Contains(text, "unblocks: "+dependent.ID) {
+		t.Fatalf("expected unblocks line for blocker, got: %s", text)
+	}
+}
+
+func TestRunReadyTextOutputCapsAt10(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	for i := 0; i < 12; i++ {
+		h.createIssue(store.CreateIssueInput{
+			Title:     fmt.Sprintf("Task %d", i),
+			Topic:     fmt.Sprintf("topic-%02d", i),
+			IssueType: "task",
+			Priority:  i % 5,
+		})
+	}
+
+	text := h.runReadyText()
+	if !strings.Contains(text, "10. ") {
+		t.Fatal("expected 10th numbered item")
+	}
+	if strings.Contains(text, "11. ") {
+		t.Fatal("should not show 11th numbered item")
+	}
+	if !strings.Contains(text, "2 more ready tickets not shown") {
+		t.Fatalf("expected overflow message, got: %s", text)
+	}
+}
+
 func TestFixPriorityPullForwardPromotesBlockers(t *testing.T) {
 	h := newReadyTestHarness(t)
 
