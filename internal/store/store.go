@@ -1374,10 +1374,50 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	if err := rows.Err(); err != nil {
 		return 0, fmt.Errorf("fix rank inversions: rows: %w", err)
 	}
+	if len(inversions) == 0 {
+		return 0, nil
+	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("fix rank inversions: acquire lock: %w", err)
+	}
+	defer releaseCommitLock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, fmt.Errorf("fix rank inversions: begin tx: %w", err)
+	}
+	defer tx.Rollback()
 	for _, inv := range inversions {
-		if err := s.RankAbove(ctx, inv.depID, inv.dependentID); err != nil {
-			return 0, fmt.Errorf("fix rank inversions: rank %s above %s: %w", inv.depID, inv.dependentID, err)
+		// Place the dependency just above the dependent by computing a rank
+		// between the dependent's predecessor and the dependent itself.
+		var targetRank string
+		if err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE id = ?", inv.dependentID).Scan(&targetRank); err != nil {
+			return 0, fmt.Errorf("fix rank inversions: read target rank %s: %w", inv.dependentID, err)
 		}
+		var aboveRank sql.NullString
+		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", targetRank, inv.depID).Scan(&aboveRank)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return 0, fmt.Errorf("fix rank inversions: query neighbor: %w", err)
+		}
+		var newRank string
+		if !aboveRank.Valid || aboveRank.String == "" {
+			newRank = rank.Before(targetRank)
+		} else {
+			newRank, err = rank.Midpoint(aboveRank.String, targetRank)
+			if err != nil {
+				return 0, fmt.Errorf("fix rank inversions: midpoint: %w", err)
+			}
+		}
+		now := time.Now().UTC().Format(time.RFC3339Nano)
+		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, inv.depID); err != nil {
+			return 0, fmt.Errorf("fix rank inversions: update %s: %w", inv.depID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, fmt.Errorf("fix rank inversions: commit: %w", err)
+	}
+	if err := s.commitWorkingSet(ctx, "fix rank inversions"); err != nil {
+		return 0, err
 	}
 	return len(inversions), nil
 }
@@ -1577,8 +1617,8 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue history rows: %d", report.OrphanHistoryRows))
 	}
-	// Rank inversions: blocks relations where the dependency (src) is ranked
-	// below the dependent (dst) among non-closed issues.
+	// Rank inversions: blocks relations where the dependency (dst) is ranked
+	// below the dependent (src) among non-closed issues.
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations r
 		JOIN issues src ON src.id = r.src_id
 		JOIN issues dst ON dst.id = r.dst_id

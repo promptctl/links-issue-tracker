@@ -436,6 +436,7 @@ func resolveDoctorAccessMode(args []string) appAccessMode {
 	cmd := &cobra.Command{Use: "doctor"}
 	fix := cmd.Flags().String("fix", "", "")
 	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
+	cmd.Flags().Bool("json", false, "")
 	if err := cmd.ParseFlags(args); err != nil {
 		return appAccessWrite
 	}
@@ -2002,12 +2003,14 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		if *fix != "all" {
 			fixNames = splitCSV(*fix)
 		}
+		// [LAW:dataflow-not-control-flow] Fix progress always writes to stderr
+		// so stdout remains clean for the JSON report when --json is set.
 		for _, name := range fixNames {
 			fn, ok := doctorFixes[name]
 			if !ok {
 				return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
 			}
-			if err := fn(ctx, stdout, ap); err != nil {
+			if err := fn(ctx, os.Stderr, ap); err != nil {
 				return err
 			}
 		}

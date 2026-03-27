@@ -87,6 +87,28 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	return repo, ws
 }
 
+func TestResolveDoctorAccessMode(t *testing.T) {
+	cases := []struct {
+		name string
+		args []string
+		want appAccessMode
+	}{
+		{name: "no flags defaults to read", args: nil, want: appAccessRead},
+		{name: "json only is read", args: []string{"--json"}, want: appAccessRead},
+		{name: "fix all implies write", args: []string{"--fix"}, want: appAccessWrite},
+		{name: "fix named implies write", args: []string{"--fix", "rank"}, want: appAccessWrite},
+		{name: "fix with json implies write", args: []string{"--fix", "--json"}, want: appAccessWrite},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := resolveDoctorAccessMode(tc.args)
+			if got != tc.want {
+				t.Fatalf("resolveDoctorAccessMode(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
