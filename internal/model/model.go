@@ -63,7 +63,7 @@ type IssueDetail struct {
 	Children  []Issue        `json:"children"`
 	DependsOn []Issue        `json:"depends_on"`
 	Related   []Issue        `json:"related"`
-	BlockedBy []Issue        `json:"blocked_by"`
+	Blocks    []Issue        `json:"blocks"`
 	Parent    *Issue         `json:"parent,omitempty"`
 	History   []IssueHistory `json:"history"`
 }

@@ -5,7 +5,7 @@ _lit_completions() {
   local current prev words cword
   _init_completion || return
 
-  local commands="init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctorbackup recover bulk workspace hooks migrate quickstart completion help"
+  local commands="init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctor backup recover bulk workspace hooks migrate quickstart completion help"
   local comment_subcommands="add"
   local label_subcommands="add rm"
   local parent_subcommands="set clear"
@@ -161,7 +161,7 @@ _lit "$@"
 `
 
 const fishCompletionScript = `complete -c lit -f
-complete -c lit -n '__fish_use_subcommand' -a 'init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctorbackup recover bulk workspace hooks migrate quickstart completion help'
+complete -c lit -n '__fish_use_subcommand' -a 'init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctor backup recover bulk workspace hooks migrate quickstart completion help'
 complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add'
 complete -c lit -n '__fish_seen_subcommand_from label' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from parent' -a 'set clear'

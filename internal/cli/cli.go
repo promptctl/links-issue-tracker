@@ -436,6 +436,7 @@ func resolveDoctorAccessMode(args []string) appAccessMode {
 	cmd := &cobra.Command{Use: "doctor"}
 	fix := cmd.Flags().String("fix", "", "")
 	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
+	cmd.Flags().Bool("json", false, "")
 	if err := cmd.ParseFlags(args); err != nil {
 		return appAccessWrite
 	}
@@ -1054,10 +1055,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <issue-id> <depends-on-id> [--type blocks|parent-child|related-to]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep add <src-id> <dst-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <issue-id> <depends-on-id> [--type blocks|parent-child|related-to]")
 		}
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by})
 		if err != nil {
@@ -1065,7 +1066,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		}
 		return printValue(stdout, rel, *jsonOut, func(w io.Writer, v any) error {
 			r := v.(model.Relation)
-			_, err := fmt.Fprintf(w, "%s --%s--> %s\n", r.SrcID, r.Type, r.DstID)
+			_, err := fmt.Fprintf(w, "%s --depends-on--> %s\n", r.SrcID, r.DstID)
 			return err
 		})
 	case "rm":
@@ -1077,10 +1078,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <issue-id> <depends-on-id> [--type ...]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep rm <src-id> <dst-id> [--type ...]")
+			return errors.New("usage: lit dep rm <issue-id> <depends-on-id> [--type ...]")
 		}
 		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType); err != nil {
 			return err
@@ -1110,7 +1111,7 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		return printValue(stdout, relations, *jsonOut, func(w io.Writer, v any) error {
 			list := v.([]model.Relation)
 			for _, rel := range list {
-				if _, err := fmt.Fprintf(w, "%s --%s--> %s\n", rel.SrcID, rel.Type, rel.DstID); err != nil {
+				if _, err := fmt.Fprintf(w, "%s --depends-on--> %s\n", rel.SrcID, rel.DstID); err != nil {
 					return err
 				}
 			}
@@ -2002,12 +2003,14 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		if *fix != "all" {
 			fixNames = splitCSV(*fix)
 		}
+		// [LAW:dataflow-not-control-flow] Fix progress always writes to stderr
+		// so stdout remains clean for the JSON report when --json is set.
 		for _, name := range fixNames {
 			fn, ok := doctorFixes[name]
 			if !ok {
 				return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
 			}
-			if err := fn(ctx, stdout, ap); err != nil {
+			if err := fn(ctx, os.Stderr, ap); err != nil {
 				return err
 			}
 		}
@@ -2329,7 +2332,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"Create a concise immutable one-word topic, reuse an existing topic when possible, and pass it with `lit new --topic <topic> ...`.",
 			"Use `lit new --parent <issue-id> ...` when creating a child issue so the ID becomes `parentID.<n>`.",
 			"Create issues with `lit new ...`; use `--type epic` for epics.",
-			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
+			"Connect issues using `lit parent set` and `lit dep add <issue> <depends-on> --type blocks|related-to`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
 			"Run health checks with `lit doctor` and repair issues with `lit doctor --fix`.",
 			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
@@ -2348,7 +2351,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"lit new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
 			"lit new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
 			"lit parent set <issue-id> <parent-issue-id>",
-			"lit dep add <issue-id> <dependency-issue-id> --type related-to",
+			"lit dep add <issue-id> <depends-on-id> --type related-to",
 			"git remote add origin https://github.com/org/repo.git",
 			"lit sync remote ls",
 			"lit sync pull",
@@ -2400,7 +2403,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"   `lit new --title \"...\" --topic <topic> --type task|bug|feature|chore|epic`",
 			"   `lit new --title \"...\" --topic <topic> --parent <parent-id> --type task`",
 			"   `lit parent set <child-id> <parent-id>`",
-			"   `lit dep add <src-id> <dst-id> --type blocks|related-to|parent-child`",
+			"   `lit dep add <issue-id> <depends-on-id> --type blocks|related-to|parent-child`",
 			"",
 			"4) Mutations",
 			"   Use command outputs directly for follow-up writes.",
@@ -2530,7 +2533,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "depends_on", detail.DependsOn); err != nil {
 		return err
 	}
-	if err := printIssueGroup(w, "blocked_by", detail.BlockedBy); err != nil {
+	if err := printIssueGroup(w, "blocks", detail.Blocks); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {

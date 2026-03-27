@@ -110,11 +110,13 @@ func (h readyTestHarness) backdateUpdatedAt(issueID string, age time.Duration) {
 	}
 }
 
-func (h readyTestHarness) addBlocks(srcID, dstID string) {
+// addDependency creates a "blocks" relation: dependent depends on dependency.
+// In the relation table: SrcID=dependent, DstID=dependency.
+func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.AddRelation(h.ctx, store.AddRelationInput{
-		SrcID:     srcID,
-		DstID:     dstID,
+		SrcID:     dependentID,
+		DstID:     dependencyID,
 		Type:      "blocks",
 		CreatedBy: "agent",
 	}); err != nil {
@@ -177,7 +179,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 		Priority:  1,
 		Assignee:  "bob",
 	})
-	h.addBlocks(openB.ID, openA.ID)
+	h.addDependency(openB.ID, openA.ID)
 
 	closed := h.createIssue(store.CreateIssueInput{
 		Title:     "Already done",
@@ -204,12 +206,12 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	if got[1].ID != openB.ID {
 		t.Fatalf("got[1].ID = %q, want %q", got[1].ID, openB.ID)
 	}
-	blocker, ok := findAnnotation(got[1].Annotations, annotation.BlockedBy)
+	blocker, ok := findAnnotation(got[1].Annotations, annotation.OpenDependency)
 	if !ok {
-		t.Fatalf("got[1] missing blocked_by annotation: %#v", got[1].Annotations)
+		t.Fatalf("got[1] missing open_dependency annotation: %#v", got[1].Annotations)
 	}
 	if blocker.Message != openA.ID {
-		t.Fatalf("blocked_by message = %q, want %q", blocker.Message, openA.ID)
+		t.Fatalf("open_dependency message = %q, want %q", blocker.Message, openA.ID)
 	}
 }
 
@@ -395,7 +397,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 		Priority:  4,
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
-	h.addBlocks(first.ID, second.ID)
+	h.addDependency(first.ID, second.ID)
 
 	got := h.runReadyJSON()
 
@@ -439,7 +441,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 		Priority:  4,
 	})
 	// second depends on first — first (dependency) ranked above second → no inversion.
-	h.addBlocks(second.ID, first.ID)
+	h.addDependency(second.ID, first.ID)
 
 	got := h.runReadyJSON()
 
@@ -470,7 +472,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 		Priority:  4,
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
-	h.addBlocks(first.ID, second.ID)
+	h.addDependency(first.ID, second.ID)
 
 	text := h.runReadyText()
 	if !strings.Contains(text, "rank inversion") {
@@ -533,7 +535,7 @@ func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
 	dependent := h.createIssue(store.CreateIssueInput{
 		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 2,
 	})
-	h.addBlocks(dependent.ID, blocker.ID)
+	h.addDependency(dependent.ID, blocker.ID)
 
 	text := h.runReadyText()
 	if !strings.Contains(text, "unblocks: "+dependent.ID) {

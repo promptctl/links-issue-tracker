@@ -19,7 +19,7 @@ import (
 // [LAW:one-source-of-truth] Single definition of what "blocks readiness" for the ready command.
 var readyBlockingKinds = []annotation.Kind{
 	annotation.MissingField,
-	annotation.BlockedBy,
+	annotation.OpenDependency,
 }
 
 func isReadyBlocked(annotations []annotation.Annotation) bool {
@@ -74,7 +74,7 @@ func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 		var annotations []annotation.Annotation
 		for _, dep := range openDeps {
 			annotations = append(annotations, annotation.Annotation{
-				Kind:    annotation.BlockedBy,
+				Kind:    annotation.OpenDependency,
 				Message: dep.ID,
 			})
 			// Rank inversion: dependency should be ranked above (lower rank) the dependent.
@@ -199,15 +199,15 @@ even if the ticket doesn't specify it (but only if it aligns with the ticket).`
 
 const readyMaxItems = 10
 
-// buildUnblocksMap derives a reverse dependency index from BlockedBy annotations.
-// For each blocker ID, it returns the IDs of open issues that depend on it.
+// buildUnblocksMap derives a reverse dependency index from OpenDependency annotations.
+// For each dependency ID, it returns the IDs of open issues that depend on it.
 // [LAW:dataflow-not-control-flow] The map is derived from existing annotation data;
 // no extra store queries needed.
 func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	m := make(map[string][]string)
 	for _, issue := range issues {
 		for _, a := range issue.Annotations {
-			if a.Kind == annotation.BlockedBy {
+			if a.Kind == annotation.OpenDependency {
 				m[a.Message] = append(m[a.Message], issue.ID)
 			}
 		}
@@ -215,11 +215,11 @@ func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	return m
 }
 
-// blockedByIDs extracts the IDs of open dependencies from an issue's annotations.
-func blockedByIDs(annotations []annotation.Annotation) []string {
+// dependencyIDs extracts the IDs of open dependencies from an issue's annotations.
+func dependencyIDs(annotations []annotation.Annotation) []string {
 	var ids []string
 	for _, a := range annotations {
-		if a.Kind == annotation.BlockedBy {
+		if a.Kind == annotation.OpenDependency {
 			ids = append(ids, a.Message)
 		}
 	}
@@ -301,14 +301,14 @@ func printReadySection(w io.Writer, columns []string, ready []annotation.Annotat
 	return nil
 }
 
-// printInlineDeps prints "blocked by:" and "unblocks:" lines indented under a ready item.
+// printInlineDeps prints "depends on:" and "unblocks:" lines indented under a ready item.
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
 	const indent = "    "
-	blockers := blockedByIDs(entry.Annotations)
+	deps := dependencyIDs(entry.Annotations)
 	unblocks := unblocksMap[entry.ID]
 
-	if len(blockers) > 0 {
-		if _, err := fmt.Fprintf(w, "%sblocked by: %s\n", indent, strings.Join(blockers, ", ")); err != nil {
+	if len(deps) > 0 {
+		if _, err := fmt.Fprintf(w, "%sdepends on: %s\n", indent, strings.Join(deps, ", ")); err != nil {
 			return err
 		}
 	}
@@ -376,7 +376,7 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 		if !ok {
 			continue
 		}
-		if _, err := fmt.Fprintf(w, "  %d: Blocked by %s\n", n, kind.String()); err != nil {
+		if _, err := fmt.Fprintf(w, "  %d: %s\n", n, kind.String()); err != nil {
 			return err
 		}
 	}
