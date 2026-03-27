@@ -2530,7 +2530,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "depends_on", detail.DependsOn); err != nil {
 		return err
 	}
-	if err := printIssueGroup(w, "blocked_by", detail.BlockedBy); err != nil {
+	if err := printIssueGroup(w, "blocks", detail.Blocks); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {

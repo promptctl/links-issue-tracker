@@ -880,7 +880,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Children:  []model.Issue{},
 		DependsOn: []model.Issue{},
 		Related:   []model.Issue{},
-		BlockedBy: []model.Issue{},
+		Blocks: []model.Issue{},
 	}
 	for _, rel := range relations {
 		switch rel.Type {
@@ -894,7 +894,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			if rel.DstID == id {
 				blocked, err := s.GetIssue(ctx, rel.SrcID)
 				if err == nil {
-					detail.BlockedBy = append(detail.BlockedBy, blocked)
+					detail.Blocks = append(detail.Blocks, blocked)
 				}
 			}
 		case "parent-child":
@@ -936,11 +936,11 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		return model.IssueDetail{}, err
 	}
 	detail.Related = labeled
-	labeled, err = s.attachLabels(ctx, detail.BlockedBy)
+	labeled, err = s.attachLabels(ctx, detail.Blocks)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	detail.BlockedBy = labeled
+	detail.Blocks = labeled
 	if detail.Parent != nil {
 		parentIssues, err := s.attachLabels(ctx, []model.Issue{*detail.Parent})
 		if err != nil {
