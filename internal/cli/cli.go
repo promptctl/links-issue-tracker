@@ -180,9 +180,9 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runUpdate(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "operations", "fix-priority", "Fix priority inversions", func(args []string) error {
-		return runWithApp(ctx, appAccessWrite, append([]string{"fix-priority"}, args...), func(commandCtx context.Context, ap *app.App) error {
-			return runFixPriority(commandCtx, stdout, ap, args)
+	addGroupedPassthrough(root, "operations", "rank", "Reorder an issue's rank", func(args []string) error {
+		return runWithApp(ctx, appAccessWrite, append([]string{"rank"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runRank(commandCtx, stdout, ap, args)
 		})
 	})
 	addGroupedPassthrough(root, "operations", "start", "Claim issue work", func(args []string) error {
@@ -277,13 +277,8 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		})
 	})
 	addGroupedPassthrough(root, "maintenance", "doctor", "Health check", func(args []string) error {
-		return runWithApp(ctx, appAccessRead, append([]string{"doctor"}, args...), func(commandCtx context.Context, ap *app.App) error {
+		return runWithApp(ctx, resolveDoctorAccessMode(args), append([]string{"doctor"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runDoctor(commandCtx, stdout, ap, args)
-		})
-	})
-	addGroupedPassthrough(root, "maintenance", "fsck", "Integrity check and optional repair", func(args []string) error {
-		return runWithApp(ctx, resolveFsckAccessMode(args), append([]string{"fsck"}, args...), func(commandCtx context.Context, ap *app.App) error {
-			return runFsck(commandCtx, stdout, ap, args)
 		})
 	})
 	addGroupedPassthrough(root, "data", "backup", "Backup snapshot operations", func(args []string) error {
@@ -437,18 +432,19 @@ func runWithApp(ctx context.Context, accessMode appAccessMode, commandArgs []str
 	return run(ctx, ap)
 }
 
-func resolveFsckAccessMode(args []string) appAccessMode {
-	cmd := &cobra.Command{Use: "fsck"}
-	repair := false
-	cmd.Flags().BoolVar(&repair, "repair", false, "Attempt safe repairs")
+func resolveDoctorAccessMode(args []string) appAccessMode {
+	cmd := &cobra.Command{Use: "doctor"}
+	fix := cmd.Flags().String("fix", "", "")
+	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	if err := cmd.ParseFlags(args); err != nil {
 		return appAccessWrite
 	}
-	if repair {
+	if *fix != "" {
 		return appAccessWrite
 	}
 	return appAccessRead
 }
+
 
 func enforceBeadsPreflight(commandArgs []string) (workspace.Info, bool, error) {
 	if shouldBypassBeadsPreflight(commandArgs) {
@@ -742,16 +738,14 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err != nil {
 		return err
 	}
+	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
+	// needed — the store default is item_rank ASC.
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
 		Statuses:        []string{"open", "in_progress"},
 		Assignees:       toSlice(strings.TrimSpace(*assignee)),
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
-		SortBy: []store.SortSpec{
-			{Field: "priority"},
-			{Field: "updated_at", Desc: true},
-		},
 	})
 	if err != nil {
 		return err
@@ -921,6 +915,60 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		issue = updated
 	}
 
+	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("rank")
+	_ = fs.Bool("top", false, "Move to highest rank")
+	_ = fs.Bool("bottom", false, "Move to lowest rank")
+	above := fs.String("above", "", "Rank above this issue ID")
+	below := fs.String("below", "", "Rank below this issue ID")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit rank <id> --top|--bottom|--above <id>|--below <id>")
+	}
+	visited := map[string]bool{}
+	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
+	modeCount := 0
+	if visited["top"] {
+		modeCount++
+	}
+	if visited["bottom"] {
+		modeCount++
+	}
+	if visited["above"] {
+		modeCount++
+	}
+	if visited["below"] {
+		modeCount++
+	}
+	if modeCount != 1 {
+		return errors.New("exactly one of --top, --bottom, --above, --below is required")
+	}
+	issueID := positional[0]
+	var err error
+	switch {
+	case visited["top"]:
+		err = ap.Store.RankToTop(ctx, issueID)
+	case visited["bottom"]:
+		err = ap.Store.RankToBottom(ctx, issueID)
+	case visited["above"]:
+		err = ap.Store.RankAbove(ctx, issueID, *above)
+	case visited["below"]:
+		err = ap.Store.RankBelow(ctx, issueID, *below)
+	}
+	if err != nil {
+		return err
+	}
+	issue, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
@@ -1908,11 +1956,61 @@ func normalizeRemotePath(input string) string {
 	return cleaned
 }
 
+func allDoctorFixNames() []string {
+	names := make([]string, 0, len(doctorFixes))
+	for k := range doctorFixes {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// doctorFixes is the registry of available doctor fixes.
+// [LAW:one-source-of-truth] This map is the single authority for valid fix names.
+var doctorFixes = map[string]func(context.Context, io.Writer, *app.App) error{
+	"integrity": func(ctx context.Context, w io.Writer, ap *app.App) error {
+		report, err := ap.Store.Fsck(ctx, true)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(w, "Integrity repair: foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d\n",
+			report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows)
+		return err
+	},
+	"rank": func(ctx context.Context, w io.Writer, ap *app.App) error {
+		fixed, err := ap.Store.FixRankInversions(ctx)
+		if err != nil {
+			return err
+		}
+		if fixed > 0 {
+			_, err = fmt.Fprintf(w, "Fixed %d rank inversion(s).\n", fixed)
+		}
+		return err
+	},
+}
+
 func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("doctor")
+	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
+	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
+	}
+	if *fix != "" {
+		fixNames := allDoctorFixNames()
+		if *fix != "all" {
+			fixNames = splitCSV(*fix)
+		}
+		for _, name := range fixNames {
+			fn, ok := doctorFixes[name]
+			if !ok {
+				return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
+			}
+			if err := fn(ctx, stdout, ap); err != nil {
+				return err
+			}
+		}
 	}
 	report, err := ap.Store.Doctor(ctx)
 	if err != nil {
@@ -1920,33 +2018,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
 		r := v.(store.HealthReport)
-		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows)
-		return err
-	}); err != nil {
-		return err
-	}
-	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
-	if len(report.Errors) > 0 {
-		return CorruptionError{Message: strings.Join(report.Errors, "; ")}
-	}
-	return nil
-}
-
-func runFsck(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("fsck")
-	repair := fs.Bool("repair", false, "Attempt safe repairs")
-	jsonOut := fs.Bool("json", false, "Output JSON")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	report, err := ap.Store.Fsck(ctx, *repair)
-	if err != nil {
-		return err
-	}
-	doRepair := *repair
-	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
-		r := v.(store.HealthReport)
-		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d repair=%t\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, doRepair)
+		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
 		return err
 	}); err != nil {
 		return err
@@ -2259,7 +2331,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"Create issues with `lit new ...`; use `--type epic` for epics.",
 			"Connect issues using `lit parent set` and `lit dep add --type related-to|blocks`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
-			"Run health checks with `lit doctor` and repair known corruption with `lit fsck --repair`.",
+			"Run health checks with `lit doctor` and repair issues with `lit doctor --fix`.",
 			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
 		},
 		"examples": []string{
@@ -2344,7 +2416,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"",
 			"6) Integrity and recovery",
 			"   `lit doctor`",
-			"   `lit fsck --repair`",
+			"   `lit doctor --fix`",
 			"   `lit backup create`",
 			"   `lit backup restore --latest`",
 			"   `lit recover --latest-backup`",
@@ -2784,8 +2856,7 @@ Setup & Maintenance:
   workspace      Show workspace metadata
   hooks          Install git hook automation
   migrate        Migrate from Beads to links
-  doctor         Health check
-  fsck           Integrity check and optional repair
+  doctor         Health check and repair
 
 Guidance & Tooling:
   quickstart     Agent quickstart workflow

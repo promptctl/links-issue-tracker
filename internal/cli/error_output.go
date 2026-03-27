@@ -150,9 +150,9 @@ func commandErrorRemediation(reason string) string {
 	case "merge_conflict":
 		return "Sync and retry after resolving conflicts."
 	case "corruption_detected":
-		return "Run `lit fsck --repair --json` and retry."
+		return "Run `lit doctor --fix integrity` and retry."
 	case "manifest_read_only":
-		return "Retry once. If the error persists, run `lit doctor --json` and `lit fsck --repair --json`."
+		return "Retry once. If the error persists, run `lit doctor --fix`."
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	default:

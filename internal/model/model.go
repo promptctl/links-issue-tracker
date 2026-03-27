@@ -13,6 +13,7 @@ type Issue struct {
 	IssueType   string     `json:"issue_type"`
 	Topic       string     `json:"topic"`
 	Assignee    string     `json:"assignee,omitempty"`
+	Rank        string     `json:"rank"`
 	Labels      []string   `json:"labels"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
