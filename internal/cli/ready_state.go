@@ -54,7 +54,7 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 }
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
-// and flags priority inversions where a blocker has worse priority than the dependent.
+// and flags rank inversions where a dependency is ranked below the dependent.
 func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
@@ -77,10 +77,11 @@ func newBlockerAnnotator(st *store.Store) annotation.Annotator {
 				Kind:    annotation.BlockedBy,
 				Message: dep.ID,
 			})
-			if dep.Priority > issue.Priority {
+			// Rank inversion: dependency should be ranked above (lower rank) the dependent.
+			if dep.Rank > issue.Rank {
 				annotations = append(annotations, annotation.Annotation{
-					Kind:    annotation.PriorityInversion,
-					Message: fmt.Sprintf("%s (priority %d)", dep.ID, dep.Priority),
+					Kind:    annotation.RankInversion,
+					Message: dep.ID,
 				})
 			}
 		}
@@ -253,7 +254,7 @@ func printReadyOutput(w io.Writer, columns []string, issues []annotation.Annotat
 	if err := printBlockedSummary(w, blocked); err != nil {
 		return err
 	}
-	return printPriorityInversions(w, issues)
+	return printRankInversions(w, issues)
 }
 
 // printReadySection prints the preamble, separator, and numbered ready items
@@ -383,40 +384,21 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 }
 
 
-// printPriorityInversions prints a summary of priority inversions found across all issues.
-func printPriorityInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
-	type inversion struct {
-		issueID   string
-		issuePri  int
-		blockerID string
-	}
-	var inversions []inversion
+// printRankInversions prints a count-only warning when dependencies are ranked
+// below the issues they block, with instructions to fix.
+func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
+	count := 0
 	for _, issue := range issues {
 		for _, a := range issue.Annotations {
-			if a.Kind != annotation.PriorityInversion {
-				continue
+			if a.Kind == annotation.RankInversion {
+				count++
 			}
-			inversions = append(inversions, inversion{
-				issueID:   issue.ID,
-				issuePri:  issue.Priority,
-				blockerID: a.Message,
-			})
 		}
 	}
-	if len(inversions) == 0 {
+	if count == 0 {
 		return nil
 	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintf(w, "Priority inversions (%d):\n", len(inversions)); err != nil {
-		return err
-	}
-	for _, inv := range inversions {
-		if _, err := fmt.Fprintf(w, "  %s (P%d) blocked by %s — blocker is lower priority\n", inv.issueID, inv.issuePri, inv.blockerID); err != nil {
-			return err
-		}
-	}
-	return nil
+	_, err := fmt.Fprintf(w, "\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair.\n", count)
+	return err
 }
 

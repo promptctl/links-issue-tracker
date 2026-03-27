@@ -29,10 +29,10 @@ func TestCompletionScriptsIncludeUpdateCommand(t *testing.T) {
 		shell string
 		want  string
 	}{
-		{shell: "bash", want: "show update fix-priority start"},
+		{shell: "bash", want: "show update rank start"},
 		{shell: "zsh", want: "'update:update issue fields'"},
-		{shell: "zsh", want: "fix-priority"},
-		{shell: "fish", want: "show update fix-priority start"},
+		{shell: "zsh", want: "'rank:reorder"},
+		{shell: "fish", want: "show update rank start"},
 	}
 	for _, tc := range cases {
 		var stdout bytes.Buffer

@@ -50,25 +50,25 @@ func (k *Kind) UnmarshalJSON(data []byte) error {
 }
 
 var (
-	missingFieldDef      = &kindDef{key: "missing_field"}
-	blockedByDef         = &kindDef{key: "open_dependency"}
-	priorityInversionDef = &kindDef{key: "priority_inversion"}
-	orphanedDef          = &kindDef{key: "orphaned"}
+	missingFieldDef  = &kindDef{key: "missing_field"}
+	blockedByDef     = &kindDef{key: "open_dependency"}
+	rankInversionDef = &kindDef{key: "rank_inversion"}
+	orphanedDef      = &kindDef{key: "orphaned"}
 
-	MissingField      = Kind{def: missingFieldDef}      // a required field is empty or unset
-	BlockedBy         = Kind{def: blockedByDef}          // issue depends on an open ticket
-	PriorityInversion = Kind{def: priorityInversionDef}  // blocker has worse priority than dependent
-	Orphaned          = Kind{def: orphanedDef}           // in_progress with no update for 24h+
+	MissingField  = Kind{def: missingFieldDef}  // a required field is empty or unset
+	BlockedBy     = Kind{def: blockedByDef}      // issue depends on an open ticket
+	RankInversion = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
+	Orphaned      = Kind{def: orphanedDef}       // in_progress with no update for 24h+
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	// "blocked_by" is a deserialization alias for backwards compatibility after
 	// the rename to "open_dependency".
 	kindRegistry = map[string]Kind{
-		missingFieldDef.key:      MissingField,
-		blockedByDef.key:         BlockedBy,
-		"blocked_by":             BlockedBy,
-		priorityInversionDef.key: PriorityInversion,
-		orphanedDef.key:          Orphaned,
+		missingFieldDef.key:  MissingField,
+		blockedByDef.key:     BlockedBy,
+		"blocked_by":         BlockedBy,
+		rankInversionDef.key: RankInversion,
+		orphanedDef.key:      Orphaned,
 	}
 )
 

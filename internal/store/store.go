@@ -185,6 +185,7 @@ type HealthReport struct {
 	ForeignKeyIssues   int      `json:"foreign_key_issues"`
 	InvalidRelatedRows int      `json:"invalid_related_rows"`
 	OrphanHistoryRows  int      `json:"orphan_history_rows"`
+	RankInversions     int      `json:"rank_inversions"`
 	Errors             []string `json:"errors"`
 	Warnings           []string `json:"warnings"`
 }
@@ -1041,43 +1042,6 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	return issue, nil
 }
 
-// PriorityUpdate describes a single issue priority change for batch operations.
-type PriorityUpdate struct {
-	ID          string
-	NewPriority int
-}
-
-// UpdatePriorities applies multiple priority changes in a single transaction and commit.
-func (s *Store) UpdatePriorities(ctx context.Context, updates []PriorityUpdate) error {
-	if len(updates) == 0 {
-		return nil
-	}
-	for _, u := range updates {
-		if err := validatePriority(u.NewPriority); err != nil {
-			return err
-		}
-	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin batch priority tx: %w", err)
-	}
-	defer tx.Rollback()
-	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for _, u := range updates {
-		if _, err := tx.ExecContext(ctx, `UPDATE issues SET priority = ?, updated_at = ? WHERE id = ?`, u.NewPriority, now, u.ID); err != nil {
-			return fmt.Errorf("update priority for %s: %w", u.ID, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit batch priority: %w", err)
-	}
-	return s.commitWorkingSet(ctx, "fix-priority: batch update")
-}
 
 // RankToTop moves an issue to rank above all other issues.
 func (s *Store) RankToTop(ctx context.Context, issueID string) error {
@@ -1373,6 +1337,48 @@ func (s *Store) smoothRanksIfNeeded(ctx context.Context, triggerRank string) err
 	return s.commitWorkingSet(ctx, "smooth ranks")
 }
 
+// FixRankInversions finds all blocks relations where the dependency is ranked
+// below the dependent and ranks each dependency above its dependent. Returns
+// the number of inversions fixed.
+func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
+	// Query all inverted blocks relations among non-closed issues.
+	// In blocks relations: src_id is the dependent, dst_id is the dependency (blocker).
+	// A rank inversion is when the dependency (dst) is ranked below the dependent (src).
+	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, r.src_id
+		FROM relations r
+		JOIN issues src ON src.id = r.src_id
+		JOIN issues dst ON dst.id = r.dst_id
+		WHERE r.type = 'blocks'
+		AND src.status != 'closed' AND dst.status != 'closed'
+		AND dst.item_rank > src.item_rank
+		ORDER BY src.item_rank ASC`)
+	if err != nil {
+		return 0, fmt.Errorf("fix rank inversions: query: %w", err)
+	}
+	defer rows.Close()
+	type inversion struct {
+		depID       string // the dependency/blocker (should be ranked above)
+		dependentID string // the dependent (src in blocks relation)
+	}
+	var inversions []inversion
+	for rows.Next() {
+		var inv inversion
+		if err := rows.Scan(&inv.depID, &inv.dependentID); err != nil {
+			return 0, fmt.Errorf("fix rank inversions: scan: %w", err)
+		}
+		inversions = append(inversions, inv)
+	}
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("fix rank inversions: rows: %w", err)
+	}
+	for _, inv := range inversions {
+		if err := s.RankAbove(ctx, inv.depID, inv.dependentID); err != nil {
+			return 0, fmt.Errorf("fix rank inversions: rank %s above %s: %w", inv.depID, inv.dependentID, err)
+		}
+	}
+	return len(inversions), nil
+}
+
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
 	var comment model.Comment
 	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
@@ -1567,6 +1573,19 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	}
 	if report.OrphanHistoryRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue history rows: %d", report.OrphanHistoryRows))
+	}
+	// Rank inversions: blocks relations where the dependency (src) is ranked
+	// below the dependent (dst) among non-closed issues.
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations r
+		JOIN issues src ON src.id = r.src_id
+		JOIN issues dst ON dst.id = r.dst_id
+		WHERE r.type = 'blocks'
+		AND src.status != 'closed' AND dst.status != 'closed'
+		AND dst.item_rank > src.item_rank`).Scan(&report.RankInversions); err != nil {
+		return report, fmt.Errorf("count rank inversions: %w", err)
+	}
+	if report.RankInversions > 0 {
+		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
 	return report, nil
 }

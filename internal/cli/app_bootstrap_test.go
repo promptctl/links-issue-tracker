@@ -14,37 +14,6 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
-func TestResolveFsckAccessMode(t *testing.T) {
-	testCases := []struct {
-		name string
-		args []string
-		want appAccessMode
-	}{
-		{
-			name: "default is read only",
-			args: []string{},
-			want: appAccessRead,
-		},
-		{
-			name: "fsck repair is writable",
-			args: []string{"--repair"},
-			want: appAccessWrite,
-		},
-		{
-			name: "invalid flag falls back to writable",
-			args: []string{"--repair=nope"},
-			want: appAccessWrite,
-		},
-	}
-
-	for _, tc := range testCases {
-		got := resolveFsckAccessMode(tc.args)
-		if got != tc.want {
-			t.Fatalf("%s access mode = %q, want %q", tc.name, got, tc.want)
-		}
-	}
-}
-
 func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 
