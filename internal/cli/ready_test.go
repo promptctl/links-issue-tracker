@@ -707,6 +707,187 @@ func TestFixPriorityNoInversion(t *testing.T) {
 	}
 }
 
+func TestFixPriorityBatchPullForwardFixesAllInversions(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	// Two independent dependency chains with inversions.
+	blockerA := h.createIssue(store.CreateIssueInput{
+		Title: "Blocker A", Topic: "blocker-a", IssueType: "task", Priority: 4,
+	})
+	depA := h.createIssue(store.CreateIssueInput{
+		Title: "Dependent A", Topic: "dep-a", IssueType: "task", Priority: 1,
+	})
+	h.addBlocks(depA.ID, blockerA.ID)
+
+	blockerB := h.createIssue(store.CreateIssueInput{
+		Title: "Blocker B", Topic: "blocker-b", IssueType: "task", Priority: 3,
+	})
+	depB := h.createIssue(store.CreateIssueInput{
+		Title: "Dependent B", Topic: "dep-b", IssueType: "task", Priority: 2,
+	})
+	h.addBlocks(depB.ID, blockerB.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("len(changes) = %d, want 2; changes=%#v", len(changes), changes)
+	}
+
+	updatedA, _ := h.ap.Store.GetIssue(h.ctx, blockerA.ID)
+	if updatedA.Priority != 1 {
+		t.Fatalf("blockerA priority = %d, want 1", updatedA.Priority)
+	}
+	updatedB, _ := h.ap.Store.GetIssue(h.ctx, blockerB.ID)
+	if updatedB.Priority != 2 {
+		t.Fatalf("blockerB priority = %d, want 2", updatedB.Priority)
+	}
+}
+
+func TestFixPriorityBatchPullForwardMixedStatuses(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	// Dependent is in_progress with higher priority, blocker is open with lower priority.
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Mixed status blocker", Topic: "mixed-blocker", IssueType: "task", Priority: 4, Status: "open",
+	})
+	dep := h.createIssue(store.CreateIssueInput{
+		Title: "Mixed status dependent", Topic: "mixed-dep", IssueType: "task", Priority: 1, Status: "in_progress",
+	})
+	h.addBlocks(dep.ID, blocker.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("len(changes) = %d, want 1; changes=%#v", len(changes), changes)
+	}
+	if changes[0].ID != blocker.ID {
+		t.Fatalf("changes[0].ID = %q, want %q", changes[0].ID, blocker.ID)
+	}
+
+	updated, _ := h.ap.Store.GetIssue(h.ctx, blocker.ID)
+	if updated.Priority != 1 {
+		t.Fatalf("blocker priority = %d, want 1", updated.Priority)
+	}
+}
+func TestFixPriorityBatchPushBackFixesAllInversions(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Low pri blocker", Topic: "lpb", IssueType: "task", Priority: 4,
+	})
+	dep := h.createIssue(store.CreateIssueInput{
+		Title: "High pri dep", Topic: "hpd", IssueType: "task", Priority: 1,
+	})
+	h.addBlocks(dep.ID, blocker.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--push-back", "--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("len(changes) = %d, want 1", len(changes))
+	}
+	if changes[0].ID != dep.ID {
+		t.Fatalf("changes[0].ID = %q, want %q", changes[0].ID, dep.ID)
+	}
+
+	updated, _ := h.ap.Store.GetIssue(h.ctx, dep.ID)
+	if updated.Priority != 4 {
+		t.Fatalf("dep priority = %d, want 4", updated.Priority)
+	}
+}
+
+func TestFixPriorityBatchNoInversions(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Good blocker", Topic: "good-blocker", IssueType: "task", Priority: 1,
+	})
+	dep := h.createIssue(store.CreateIssueInput{
+		Title: "Good dep", Topic: "good-dep", IssueType: "task", Priority: 3,
+	})
+	h.addBlocks(dep.ID, blocker.ID)
+
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("len(changes) = %d, want 0", len(changes))
+	}
+}
+
+func TestFixPriorityBothFlagsError(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	err := runFixPriority(h.ctx, &bytes.Buffer{}, h.ap, []string{"--pull-forward", "--push-back"})
+	if err == nil {
+		t.Fatal("expected error for both flags")
+	}
+	if !strings.Contains(err.Error(), "at most one") {
+		t.Fatalf("error = %q, want 'at most one' message", err.Error())
+	}
+}
+
+func TestFixPriorityDefaultsPullForward(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	blocker := h.createIssue(store.CreateIssueInput{
+		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 4,
+	})
+	dep := h.createIssue(store.CreateIssueInput{
+		Title: "Dep", Topic: "dep", IssueType: "task", Priority: 1,
+	})
+	h.addBlocks(dep.ID, blocker.ID)
+
+	// No flags at all — should default to pull-forward.
+	var stdout bytes.Buffer
+	err := runFixPriority(h.ctx, &stdout, h.ap, []string{"--json"})
+	if err != nil {
+		t.Fatalf("runFixPriority error = %v", err)
+	}
+	var changes []priorityChange
+	if err := json.Unmarshal(stdout.Bytes(), &changes); err != nil {
+		t.Fatalf("json.Unmarshal error = %v", err)
+	}
+	// Pull-forward promotes the blocker, not the dependent.
+	if len(changes) != 1 {
+		t.Fatalf("len(changes) = %d, want 1", len(changes))
+	}
+	if changes[0].ID != blocker.ID {
+		t.Fatalf("changes[0].ID = %q, want %q (blocker promoted)", changes[0].ID, blocker.ID)
+	}
+	updated, _ := h.ap.Store.GetIssue(h.ctx, blocker.ID)
+	if updated.Priority != 1 {
+		t.Fatalf("blocker priority = %d, want 1", updated.Priority)
+	}
+}
+
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")

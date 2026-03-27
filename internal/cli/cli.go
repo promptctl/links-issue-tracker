@@ -180,7 +180,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runUpdate(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "operations", "fix-priority", "Fix priority inversion on an issue", func(args []string) error {
+	addGroupedPassthrough(root, "operations", "fix-priority", "Fix priority inversions", func(args []string) error {
 		return runWithApp(ctx, appAccessWrite, append([]string{"fix-priority"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runFixPriority(commandCtx, stdout, ap, args)
 		})

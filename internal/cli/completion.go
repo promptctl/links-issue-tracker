@@ -81,7 +81,7 @@ _lit() {
     'ls:list issues'
     'show:show issue'
     'update:update issue fields'
-    'fix-priority:fix priority inversion on an issue'
+    'fix-priority:fix priority inversions'
     'ready:list ready issues'
     'start:claim issue (open->in_progress)'
     'done:mark issue closed (in_progress->closed)'
