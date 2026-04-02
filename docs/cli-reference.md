@@ -66,6 +66,7 @@ lit update <issue-id> --title "..." --priority 1 --assignee "alice" --labels api
 
 ```sh
 lit parent set <child-id> <parent-id> --json
+lit dep add <blocker-id> <blocked-id> --type blocks --json
 lit dep add <src-id> <dst-id> --type related-to --json
 lit label add <issue-id> <label> --json
 ```

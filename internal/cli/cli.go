@@ -1048,42 +1048,45 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("dep add")
-		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit dep add <issue-id> <depends-on-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep add <issue-id> <depends-on-id> [--type blocks|parent-child|related-to]")
+			return errors.New("usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]")
 		}
-		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: positional[0], DstID: positional[1], Type: *relType, CreatedBy: *by})
+		srcID, dstID := depStoreEndpoints(*relType, positional[0], positional[1])
+		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: *relType, CreatedBy: *by})
 		if err != nil {
 			return err
 		}
-		return printValue(stdout, rel, *jsonOut, func(w io.Writer, v any) error {
+		cliRel := depRelationForCLI(rel)
+		return printValue(stdout, cliRel, *jsonOut, func(w io.Writer, v any) error {
 			r := v.(model.Relation)
-			_, err := fmt.Fprintf(w, "%s --depends-on--> %s\n", r.SrcID, r.DstID)
+			_, err := fmt.Fprintln(w, depRelationLine(r))
 			return err
 		})
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("dep rm")
-		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit dep rm <issue-id> <depends-on-id> [--type ...]")
+			return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep rm <issue-id> <depends-on-id> [--type ...]")
+			return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
 		}
-		if err := ap.Store.RemoveRelation(ctx, positional[0], positional[1], *relType); err != nil {
+		srcID, dstID := depStoreEndpoints(*relType, positional[0], positional[1])
+		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, *relType); err != nil {
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -1108,10 +1111,14 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if err != nil {
 			return err
 		}
-		return printValue(stdout, relations, *jsonOut, func(w io.Writer, v any) error {
+		cliRelations := make([]model.Relation, 0, len(relations))
+		for _, rel := range relations {
+			cliRelations = append(cliRelations, depRelationForCLI(rel))
+		}
+		return printValue(stdout, cliRelations, *jsonOut, func(w io.Writer, v any) error {
 			list := v.([]model.Relation)
 			for _, rel := range list {
-				if _, err := fmt.Fprintf(w, "%s --depends-on--> %s\n", rel.SrcID, rel.DstID); err != nil {
+				if _, err := fmt.Fprintln(w, depRelationLine(rel)); err != nil {
 					return err
 				}
 			}
@@ -1119,6 +1126,36 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		})
 	default:
 		return errors.New("usage: lit dep <add|rm|ls> ...")
+	}
+}
+
+func depStoreEndpoints(relType, fromID, toID string) (string, string) {
+	// [LAW:single-enforcer] CLI-to-store orientation normalization for dep commands is centralized in one function.
+	// [LAW:one-source-of-truth] Store keeps one canonical blocks encoding (dependent -> dependency); CLI maps from human order.
+	if strings.TrimSpace(relType) == "blocks" {
+		return toID, fromID
+	}
+	return fromID, toID
+}
+
+func depRelationForCLI(rel model.Relation) model.Relation {
+	if strings.TrimSpace(rel.Type) != "blocks" {
+		return rel
+	}
+	rel.SrcID, rel.DstID = rel.DstID, rel.SrcID
+	return rel
+}
+
+func depRelationLine(rel model.Relation) string {
+	switch strings.TrimSpace(rel.Type) {
+	case "blocks":
+		return fmt.Sprintf("%s --blocks--> %s", rel.SrcID, rel.DstID)
+	case "parent-child":
+		return fmt.Sprintf("%s --child-of--> %s", rel.SrcID, rel.DstID)
+	case "related-to":
+		return fmt.Sprintf("%s --related-to--> %s", rel.SrcID, rel.DstID)
+	default:
+		return fmt.Sprintf("%s --depends-on--> %s", rel.SrcID, rel.DstID)
 	}
 }
 
@@ -2332,7 +2369,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"Create a concise immutable one-word topic, reuse an existing topic when possible, and pass it with `lit new --topic <topic> ...`.",
 			"Use `lit new --parent <issue-id> ...` when creating a child issue so the ID becomes `parentID.<n>`.",
 			"Create issues with `lit new ...`; use `--type epic` for epics.",
-			"Connect issues using `lit parent set` and `lit dep add <issue> <depends-on> --type blocks|related-to`.",
+			"Connect issues using `lit parent set`, `lit dep add <blocker> <blocked> --type blocks`, and `lit dep add <issue> <peer> --type related-to`.",
 			"Configure remotes with `git remote`; `lit sync` mirrors those remotes into Dolt automatically.",
 			"Run health checks with `lit doctor` and repair issues with `lit doctor --fix`.",
 			"Snapshot and rollback using `lit backup create`, `lit backup restore`, or `lit recover`.",
@@ -2351,7 +2388,8 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"lit new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
 			"lit new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
 			"lit parent set <issue-id> <parent-issue-id>",
-			"lit dep add <issue-id> <depends-on-id> --type related-to",
+			"lit dep add <blocker-id> <blocked-id> --type blocks",
+			"lit dep add <issue-id> <peer-id> --type related-to",
 			"git remote add origin https://github.com/org/repo.git",
 			"lit sync remote ls",
 			"lit sync pull",
@@ -2403,7 +2441,9 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"   `lit new --title \"...\" --topic <topic> --type task|bug|feature|chore|epic`",
 			"   `lit new --title \"...\" --topic <topic> --parent <parent-id> --type task`",
 			"   `lit parent set <child-id> <parent-id>`",
-			"   `lit dep add <issue-id> <depends-on-id> --type blocks|related-to|parent-child`",
+			"   `lit dep add <blocker-id> <blocked-id> --type blocks`",
+			"   `lit dep add <issue-id> <peer-id> --type related-to`",
+			"   `lit dep add <child-id> <parent-id> --type parent-child`",
 			"",
 			"4) Mutations",
 			"   Use command outputs directly for follow-up writes.",
