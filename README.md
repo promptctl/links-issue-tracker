@@ -57,7 +57,7 @@ Create and inspect work:
 
 ```sh
 lit new --title "First task" --type task --priority 2 --json
-lit ready --json
+lit ready
 lit update <issue-id> --status in_progress --json
 lit start <issue-id> --reason "claim" --json
 lit done <issue-id> --reason "completed" --json

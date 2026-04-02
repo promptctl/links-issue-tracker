@@ -38,7 +38,7 @@ When output mode resolves to JSON, failures emit a stable envelope:
 
 ```sh
 lit new --title "..." --type task --priority 2 --json
-lit ready --json
+lit ready
 lit ls --query "status:open" --json
 lit ls --json
 lit show <issue-id> --json
