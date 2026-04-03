@@ -2021,7 +2021,7 @@ var doctorFixes = map[string]func(context.Context, io.Writer, *app.App) error{
 			return err
 		}
 		if fixed > 0 {
-			_, err = fmt.Fprintf(w, "Fixed %d rank inversion(s).\n", fixed)
+			_, err = fmt.Fprintf(w, "Re-ranked %d dependency issue(s) to repair rank order.\n", fixed)
 		}
 		return err
 	},

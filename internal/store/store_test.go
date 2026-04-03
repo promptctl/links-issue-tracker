@@ -85,6 +85,144 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	}
 }
 
+func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	dependentA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependent A", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependentA) error = %v", err)
+	}
+	dependentB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependent B", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependentB) error = %v", err)
+	}
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Shared blocker", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(blocker) error = %v", err)
+	}
+
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependentA.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(A blocks blocker) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependentB.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(B blocks blocker) error = %v", err)
+	}
+
+	before, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(before) error = %v", err)
+	}
+	if before.RankInversions != 2 {
+		t.Fatalf("Doctor(before).RankInversions = %d, want 2", before.RankInversions)
+	}
+
+	fixed, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions() error = %v", err)
+	}
+	if fixed != 1 {
+		t.Fatalf("FixRankInversions() fixed = %d, want 1 (one dependency issue reranked)", fixed)
+	}
+
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(after) error = %v", err)
+	}
+	if after.RankInversions != 0 {
+		t.Fatalf("Doctor(after).RankInversions = %d, want 0", after.RankInversions)
+	}
+}
+
+func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependent) error = %v", err)
+	}
+	upstream, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Upstream blocker", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(upstream) error = %v", err)
+	}
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Middle blocker", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(blocker) error = %v", err)
+	}
+
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: blocker.ID, DstID: upstream.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(blocker blocks upstream) error = %v", err)
+	}
+
+	before, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(before) error = %v", err)
+	}
+	if before.RankInversions != 1 {
+		t.Fatalf("Doctor(before).RankInversions = %d, want 1", before.RankInversions)
+	}
+
+	fixed, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions() error = %v", err)
+	}
+	if fixed < 1 {
+		t.Fatalf("FixRankInversions() fixed = %d, want >= 1", fixed)
+	}
+
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(after) error = %v", err)
+	}
+	if after.RankInversions != 0 {
+		t.Fatalf("Doctor(after).RankInversions = %d, want 0", after.RankInversions)
+	}
+}
+
+func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependent) error = %v", err)
+	}
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocker", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(blocker) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:   blocker.ID,
+		Action:    "delete",
+		Reason:    "removed",
+		CreatedBy: "tester",
+	}); err != nil {
+		t.Fatalf("TransitionIssue(delete blocker) error = %v", err)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if report.RankInversions != 0 {
+		t.Fatalf("Doctor().RankInversions = %d, want 0 for deleted issues", report.RankInversions)
+	}
+	fixed, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions() error = %v", err)
+	}
+	if fixed != 0 {
+		t.Fatalf("FixRankInversions() fixed = %d, want 0 for deleted issues", fixed)
+	}
+}
+
 func TestStoreRejectsInvalidIssueType(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

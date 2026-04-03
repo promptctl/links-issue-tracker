@@ -880,7 +880,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Children:  []model.Issue{},
 		DependsOn: []model.Issue{},
 		Related:   []model.Issue{},
-		Blocks: []model.Issue{},
+		Blocks:    []model.Issue{},
 	}
 	for _, rel := range relations {
 		switch rel.Type {
@@ -1044,7 +1044,6 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	}
 	return issue, nil
 }
-
 
 // RankToTop moves an issue to rank above all other issues.
 func (s *Store) RankToTop(ctx context.Context, issueID string) error {
@@ -1226,21 +1225,11 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) error {
 // smoothing threshold and, if so, re-spaces a local window of items around the
 // insertion point. This keeps rank strings short with O(SmoothingWindow) cost
 // instead of a full O(n) rebalance.
-func (s *Store) smoothRanksIfNeeded(ctx context.Context, triggerRank string) error {
+func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) error {
 	if len(triggerRank) < rank.SmoothingThreshold {
 		return nil
 	}
 	half := rank.SmoothingWindow / 2
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin smooth tx: %w", err)
-	}
-	defer tx.Rollback()
 
 	// Collect the window: up to half items at or below the trigger, plus
 	// up to half items above it.
@@ -1334,48 +1323,74 @@ func (s *Store) smoothRanksIfNeeded(ctx context.Context, triggerRank string) err
 			}
 		}
 	}
+	return nil
+}
+
+func (s *Store) smoothRanksIfNeeded(ctx context.Context, triggerRank string) error {
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin smooth tx: %w", err)
+	}
+	defer tx.Rollback()
+	if err := smoothRanksIfNeededTx(ctx, tx, triggerRank); err != nil {
+		return err
+	}
 	if err := tx.Commit(); err != nil {
 		return fmt.Errorf("commit smooth: %w", err)
 	}
 	return s.commitWorkingSet(ctx, "smooth ranks")
 }
 
+// [LAW:one-source-of-truth] Rank inversion detection uses one shared relation clause for both counting and remediation.
+const rankInversionsRelationClause = `FROM relations r
+	JOIN issues src ON src.id = r.src_id
+	JOIN issues dst ON dst.id = r.dst_id
+	WHERE r.type = 'blocks'
+	AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
+	AND src.status != 'closed' AND dst.status != 'closed'
+	AND dst.item_rank > src.item_rank`
+
+type rankInversion struct {
+	depID       string // the dependency/blocker (should be ranked above)
+	dependentID string // the dependent (src in blocks relation)
+}
+
 // FixRankInversions finds all blocks relations where the dependency is ranked
 // below the dependent and ranks each dependency above its dependent. Returns
-// the number of inversions fixed.
+// the number of dependency issues that were re-ranked.
 func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
-	// Query all inverted blocks relations among non-closed issues.
-	// In blocks relations: src_id is the dependent, dst_id is the dependency (blocker).
-	// A rank inversion is when the dependency (dst) is ranked below the dependent (src).
-	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, r.src_id
-		FROM relations r
-		JOIN issues src ON src.id = r.src_id
-		JOIN issues dst ON dst.id = r.dst_id
-		WHERE r.type = 'blocks'
-		AND src.status != 'closed' AND dst.status != 'closed'
-		AND dst.item_rank > src.item_rank
-		ORDER BY src.item_rank ASC`)
-	if err != nil {
-		return 0, fmt.Errorf("fix rank inversions: query: %w", err)
-	}
-	defer rows.Close()
-	type inversion struct {
-		depID       string // the dependency/blocker (should be ranked above)
-		dependentID string // the dependent (src in blocks relation)
-	}
-	var inversions []inversion
-	for rows.Next() {
-		var inv inversion
-		if err := rows.Scan(&inv.depID, &inv.dependentID); err != nil {
-			return 0, fmt.Errorf("fix rank inversions: scan: %w", err)
+	loadInversions := func(ctx context.Context, tx *sql.Tx) ([]rankInversion, error) {
+		// In blocks relations: src_id is the dependent, dst_id is the dependency (blocker).
+		// A rank inversion is when the dependency (dst) is ranked below the dependent (src).
+		rows, err := tx.QueryContext(ctx, `SELECT r.dst_id, r.src_id `+rankInversionsRelationClause+` ORDER BY src.item_rank ASC`)
+		if err != nil {
+			return nil, fmt.Errorf("query: %w", err)
 		}
-		inversions = append(inversions, inv)
+		defer rows.Close()
+		inversions := make([]rankInversion, 0)
+		for rows.Next() {
+			var inv rankInversion
+			if err := rows.Scan(&inv.depID, &inv.dependentID); err != nil {
+				return nil, fmt.Errorf("scan: %w", err)
+			}
+			inversions = append(inversions, inv)
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("rows: %w", err)
+		}
+		return inversions, nil
 	}
-	if err := rows.Err(); err != nil {
-		return 0, fmt.Errorf("fix rank inversions: rows: %w", err)
-	}
-	if len(inversions) == 0 {
-		return 0, nil
+	serializeInversions := func(inversions []rankInversion) string {
+		parts := make([]string, 0, len(inversions))
+		for _, inv := range inversions {
+			parts = append(parts, inv.depID+"<-"+inv.dependentID)
+		}
+		return strings.Join(parts, "|")
 	}
 	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
 	if err != nil {
@@ -1387,31 +1402,68 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("fix rank inversions: begin tx: %w", err)
 	}
 	defer tx.Rollback()
-	for _, inv := range inversions {
-		// Place the dependency just above the dependent by computing a rank
-		// between the dependent's predecessor and the dependent itself.
-		var targetRank string
-		if err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE id = ?", inv.dependentID).Scan(&targetRank); err != nil {
-			return 0, fmt.Errorf("fix rank inversions: read target rank %s: %w", inv.dependentID, err)
+	rerankedCount := 0
+	seenSnapshots := map[string]struct{}{}
+	for {
+		inversions, err := loadInversions(ctx, tx)
+		if err != nil {
+			return 0, fmt.Errorf("fix rank inversions: %w", err)
 		}
-		var aboveRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", targetRank, inv.depID).Scan(&aboveRank)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return 0, fmt.Errorf("fix rank inversions: query neighbor: %w", err)
+		if len(inversions) == 0 {
+			break
 		}
-		var newRank string
-		if !aboveRank.Valid || aboveRank.String == "" {
-			newRank = rank.Before(targetRank)
-		} else {
-			newRank, err = rank.Midpoint(aboveRank.String, targetRank)
-			if err != nil {
-				return 0, fmt.Errorf("fix rank inversions: midpoint: %w", err)
+		snapshot := serializeInversions(inversions)
+		if _, seen := seenSnapshots[snapshot]; seen {
+			return 0, fmt.Errorf("fix rank inversions: unable to converge in one run; remaining inversions=%d", len(inversions))
+		}
+		seenSnapshots[snapshot] = struct{}{}
+
+		// [LAW:dataflow-not-control-flow] Every pass applies one deterministic update per dependency;
+		// selected target dependents come from ordered inversion data rather than branch-specific handling.
+		targets := make([]rankInversion, 0, len(inversions))
+		seenDeps := map[string]struct{}{}
+		for _, inv := range inversions {
+			if _, seen := seenDeps[inv.depID]; seen {
+				continue
 			}
+			seenDeps[inv.depID] = struct{}{}
+			targets = append(targets, inv)
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, inv.depID); err != nil {
-			return 0, fmt.Errorf("fix rank inversions: update %s: %w", inv.depID, err)
+		for _, target := range targets {
+			// Place the dependency just above the highest-priority dependent by
+			// computing a rank between the dependent's predecessor and the dependent itself.
+			var targetRank string
+			if err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE id = ?", target.dependentID).Scan(&targetRank); err != nil {
+				return 0, fmt.Errorf("fix rank inversions: read target rank %s: %w", target.dependentID, err)
+			}
+			var aboveRank sql.NullString
+			err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", targetRank, target.depID).Scan(&aboveRank)
+			if err != nil {
+				if !errors.Is(err, sql.ErrNoRows) {
+					return 0, fmt.Errorf("fix rank inversions: query neighbor: %w", err)
+				}
+			}
+			var newRank string
+			if !aboveRank.Valid || aboveRank.String == "" {
+				newRank = rank.Before(targetRank)
+			} else {
+				newRank, err = rank.Midpoint(aboveRank.String, targetRank)
+				if err != nil {
+					return 0, fmt.Errorf("fix rank inversions: midpoint: %w", err)
+				}
+			}
+			now := time.Now().UTC().Format(time.RFC3339Nano)
+			if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, target.depID); err != nil {
+				return 0, fmt.Errorf("fix rank inversions: update %s: %w", target.depID, err)
+			}
+			if err := smoothRanksIfNeededTx(ctx, tx, newRank); err != nil {
+				return 0, fmt.Errorf("fix rank inversions: smooth ranks: %w", err)
+			}
+			rerankedCount++
 		}
+	}
+	if rerankedCount == 0 {
+		return 0, nil
 	}
 	if err := tx.Commit(); err != nil {
 		return 0, fmt.Errorf("fix rank inversions: commit: %w", err)
@@ -1419,7 +1471,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	if err := s.commitWorkingSet(ctx, "fix rank inversions"); err != nil {
 		return 0, err
 	}
-	return len(inversions), nil
+	return rerankedCount, nil
 }
 
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
@@ -1619,12 +1671,7 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	}
 	// Rank inversions: blocks relations where the dependency (dst) is ranked
 	// below the dependent (src) among non-closed issues.
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM relations r
-		JOIN issues src ON src.id = r.src_id
-		JOIN issues dst ON dst.id = r.dst_id
-		WHERE r.type = 'blocks'
-		AND src.status != 'closed' AND dst.status != 'closed'
-		AND dst.item_rank > src.item_rank`).Scan(&report.RankInversions); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) `+rankInversionsRelationClause).Scan(&report.RankInversions); err != nil {
 		return report, fmt.Errorf("count rank inversions: %w", err)
 	}
 	if report.RankInversions > 0 {
