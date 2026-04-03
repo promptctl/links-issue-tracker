@@ -30,6 +30,12 @@ jobs:
           sudo bash install-dolt.sh
           dolt version
 
+      - name: Verify install disables VCS stamping
+        run: grep -q -- "-buildvcs=false" scripts/install.sh
+
+      - name: Install lit via repo script
+        run: bash scripts/install.sh
+
       - name: Build
         run: go build ./cmd/lit
 

@@ -7,6 +7,8 @@ package rank
 
 import (
 	"errors"
+	"fmt"
+	"math/big"
 	"strings"
 )
 
@@ -18,6 +20,11 @@ const base = len(alphabet) // 62
 
 // charIndex maps each alphabet byte to its ordinal position.
 var charIndex [256]int
+
+var (
+	bigBase = big.NewInt(int64(base))
+	bigOne  = big.NewInt(1)
+)
 
 func init() {
 	for i := range charIndex {
@@ -98,7 +105,12 @@ const SmoothingWindow = 32
 
 // SpacedRanks returns n evenly-spaced rank strings that span the full keyspace.
 func SpacedRanks(n int) []string {
-	return spacedRanks(n, "", "")
+	ranks, err := spacedRanks(n, "", "")
+	if err != nil {
+		// [LAW:one-source-of-truth] empty bounds are the canonical full keyspace; this path must stay valid.
+		panic(fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err))
+	}
+	return ranks
 }
 
 // SpacedRanksBetween returns n evenly-spaced rank strings between lower and
@@ -111,93 +123,138 @@ func SpacedRanksBetween(lower, upper string, n int) ([]string, error) {
 	if lower != "" && upper != "" && lower >= upper {
 		return nil, errors.New("rank: lower must be less than upper")
 	}
-	return spacedRanks(n, lower, upper), nil
+	return spacedRanks(n, lower, upper)
 }
 
-func spacedRanks(n int, lower, upper string) []string {
+func spacedRanks(n int, lower, upper string) ([]string, error) {
+	// [LAW:single-enforcer] Size validation lives at the shared spacing boundary so all callers get identical behavior.
+	if n < 0 {
+		return nil, errors.New("rank: n must be non-negative")
+	}
 	if n == 0 {
-		return nil
+		return nil, nil
 	}
 	// Find the minimum string length that fits n items with comfortable spacing.
 	const minGap = 16
+	denominator := big.NewInt(int64(n + 1))
+	minGapBig := big.NewInt(minGap)
 	maxLen := len(lower)
 	if len(upper) > maxLen {
 		maxLen = len(upper)
 	}
 	for length := maxLen + 1; ; length++ {
-		lo := lowerBoundInt(lower, length)
-		hi := upperBoundInt(upper, length)
-		span := hi - lo
-		if span <= 0 {
+		lo, err := lowerBoundInt(lower, length)
+		if err != nil {
+			return nil, err
+		}
+		hi, err := upperBoundInt(upper, length)
+		if err != nil {
+			return nil, err
+		}
+		span := new(big.Int).Sub(hi, lo)
+		if span.Sign() <= 0 {
 			continue
 		}
-		if span/(n+1) >= minGap {
-			step := span / (n + 1)
-			out := make([]string, n)
-			for i := range out {
-				out[i] = encodeBase62(lo+step*(i+1), length)
-			}
-			return out
+		step := new(big.Int).Div(span, denominator)
+		if step.Cmp(minGapBig) < 0 {
+			continue
 		}
+		out := make([]string, n)
+		for i := range out {
+			offset := new(big.Int).Mul(step, big.NewInt(int64(i+1)))
+			value := new(big.Int).Add(lo, offset)
+			encoded, err := encodeBase62(value, length)
+			if err != nil {
+				return nil, err
+			}
+			out[i] = encoded
+		}
+		return out, nil
 	}
 }
 
 // lowerBoundInt returns the first integer value at the given string length
 // that is strictly greater than s. Empty s means the absolute minimum (0).
-func lowerBoundInt(s string, length int) int {
+func lowerBoundInt(s string, length int) (*big.Int, error) {
 	if s == "" {
-		return 0
+		return big.NewInt(0), nil
 	}
-	v := stringToInt(s, length)
+	v, err := stringToInt(s, length)
+	if err != nil {
+		return nil, err
+	}
 	if len(s) >= length {
-		return v + 1 // need strictly greater
+		return new(big.Int).Add(v, bigOne), nil // need strictly greater
 	}
-	return v // padding already makes it > s
+	return v, nil // padding already makes it > s
 }
 
 // upperBoundInt returns the last integer value at the given string length
 // that is strictly less than s. Empty s means the absolute maximum.
-func upperBoundInt(s string, length int) int {
+func upperBoundInt(s string, length int) (*big.Int, error) {
 	if s == "" {
-		return pow62(length)
+		return pow62(length), nil
 	}
 	// stringToInt pads with '0' (index 0). When len(s) < length, the padded
 	// value is the first length-char string starting with s, which is > s.
 	// When len(s) == length, the padded value equals s exactly.
 	// In both cases, we want strictly less than s, so subtract 1.
-	return stringToInt(s, length) - 1
+	v, err := stringToInt(s, length)
+	if err != nil {
+		return nil, err
+	}
+	if v.Sign() == 0 {
+		return nil, errors.New("rank: upper bound too low to generate spaced ranks")
+	}
+	return new(big.Int).Sub(v, bigOne), nil
 }
 
 // stringToInt converts a rank string to an integer, padding with '0' (index 0)
 // on the right to reach the target length.
-func stringToInt(s string, length int) int {
-	v := 0
+func stringToInt(s string, length int) (*big.Int, error) {
+	v := big.NewInt(0)
 	for i := 0; i < length; i++ {
-		v *= base
+		v.Mul(v, bigBase)
 		if i < len(s) {
-			v += charIndex[s[i]]
+			idx := charIndex[s[i]]
+			if idx < 0 {
+				return nil, errors.New("rank: invalid character in bounds")
+			}
+			v.Add(v, big.NewInt(int64(idx)))
 		}
 		// else: pad with 0 (index of '0' in alphabet)
 	}
-	return v
+	return v, nil
 }
 
-func pow62(n int) int {
-	v := 1
+func pow62(n int) *big.Int {
+	v := big.NewInt(1)
 	for i := 0; i < n; i++ {
-		v *= base
+		v.Mul(v, bigBase)
 	}
 	return v
 }
 
 // encodeBase62 encodes value as a fixed-width base-62 string of the given length.
-func encodeBase62(value int, length int) string {
-	buf := make([]byte, length)
-	for i := length - 1; i >= 0; i-- {
-		buf[i] = alphabet[value%base]
-		value /= base
+func encodeBase62(value *big.Int, length int) (string, error) {
+	if value.Sign() < 0 {
+		return "", errors.New("rank: cannot encode negative value")
 	}
-	return string(buf)
+	buf := make([]byte, length)
+	quotient := new(big.Int).Set(value)
+	remainder := new(big.Int)
+	for i := length - 1; i >= 0; i-- {
+		quotient.QuoRem(quotient, bigBase, remainder)
+		idx := int(remainder.Int64())
+		if idx < 0 || idx >= base {
+			return "", errors.New("rank: base62 remainder out of range")
+		}
+		buf[i] = alphabet[idx]
+	}
+	if quotient.Sign() != 0 {
+		return "", errors.New("rank: value does not fit fixed-width encoding")
+	}
+	return string(buf), nil
 }
 
 // Before returns a rank that sorts before the given rank.

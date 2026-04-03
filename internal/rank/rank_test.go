@@ -1,6 +1,7 @@
 package rank
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -318,5 +319,56 @@ func TestSpacedRanksBetweenAllowsFurtherMidpoints(t *testing.T) {
 		if mid <= ranks[i-1] || mid >= ranks[i] {
 			t.Fatalf("midpoint ordering violated")
 		}
+	}
+}
+
+func TestSpacedRanksBetweenLongLowerBound(t *testing.T) {
+	// [LAW:dataflow-not-control-flow] Long bounds are valid input data; spacing must adapt without control-flow panics.
+	lower := strings.Repeat("z", 11)
+	ranks, err := SpacedRanksBetween(lower, "", 32)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(ranks) != 32 {
+		t.Fatalf("got %d ranks, want 32", len(ranks))
+	}
+	for i, r := range ranks {
+		if r <= lower {
+			t.Fatalf("rank[%d] = %q, not above lower bound %q", i, r, lower)
+		}
+	}
+	for i := 1; i < len(ranks); i++ {
+		if ranks[i] <= ranks[i-1] {
+			t.Fatalf("ordering violated at %d: %q <= %q", i, ranks[i], ranks[i-1])
+		}
+	}
+}
+
+func TestSpacedRanksBetweenRejectsNegativeN(t *testing.T) {
+	_, err := SpacedRanksBetween("", "", -1)
+	if err == nil {
+		t.Fatal("expected error for negative n")
+	}
+	if !strings.Contains(err.Error(), "non-negative") {
+		t.Fatalf("error = %q, want non-negative validation", err)
+	}
+}
+
+func TestSpacedRanksPanicsOnNegativeN(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatal("expected panic for negative n")
+		}
+	}()
+	_ = SpacedRanks(-1)
+}
+
+func TestSpacedRanksBetweenRejectsZeroUpperBound(t *testing.T) {
+	_, err := SpacedRanksBetween("", "0", 1)
+	if err == nil {
+		t.Fatal("expected error for zero upper bound")
+	}
+	if !strings.Contains(err.Error(), "upper bound too low") {
+		t.Fatalf("error = %q, want upper-bound validation", err)
 	}
 }
