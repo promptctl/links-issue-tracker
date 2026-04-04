@@ -160,12 +160,12 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runNew(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "operations", "ready", "List open work", func(args []string) error {
+	addGroupedPassthrough(root, "operations", "ready", "List open work by readiness and rank", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"ready"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runReady(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "operations", "ls", "List issues", func(args []string) error {
+	addGroupedPassthrough(root, "operations", "ls", "List issues (rank by default)", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"ls"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runList(commandCtx, stdout, ap, args)
 		})
@@ -249,7 +249,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runParent(commandCtx, stdout, ap, args)
 		})
 	})
-	addGroupedPassthrough(root, "structure", "children", "List child issues", func(args []string) error {
+	addGroupedPassthrough(root, "structure", "children", "List child issues by rank", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"children"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runChildren(commandCtx, stdout, ap, args)
 		})
@@ -446,7 +446,6 @@ func resolveDoctorAccessMode(args []string) appAccessMode {
 	return appAccessRead
 }
 
-
 func enforceBeadsPreflight(commandArgs []string) (workspace.Info, bool, error) {
 	if shouldBypassBeadsPreflight(commandArgs) {
 		return workspace.Info{}, false, nil
@@ -634,7 +633,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
 	queryExpr := fs.String("query", "", "Query language: status:in_progress type:task priority<=2 has:comments text")
-	sortExpr := fs.String("sort", "", "Sort fields, e.g. priority:asc,updated_at:desc")
+	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
@@ -2384,7 +2383,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"lit update <issue-id> --status in_progress",
 			"lit start <issue-id> --reason \"claim\"",
 			"lit done <issue-id> --reason \"completed\"",
-			"lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc",
+			"lit ls --query \"status:open type:task\"",
 			"lit new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
 			"lit new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
 			"lit parent set <issue-id> <parent-issue-id>",
@@ -2433,7 +2432,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"   `lit update <issue-id> --status in_progress`",
 			"   `lit start <issue-id> --reason \"claim\"`",
 			"   `lit ls --format lines`",
-			"   `lit ls --query \"status:open type:task\" --sort priority:asc,updated_at:desc`",
+			"   `lit ls --query \"status:open type:task\"`",
 			"",
 			"3) Create and relate issues/epics",
 			fmt.Sprintf("   project prefix: `%s`", ws.IssuePrefix),
@@ -2867,7 +2866,7 @@ Sync Remote (pull/push):
 
 Issue Workflow:
   init           Initialize links in the current repository (auto-migrates Beads residue)
-  ready          List open work ordered by priority and recency
+  ready          List open work ordered by readiness, then rank
   new            Create an issue
   ls             List issues with filters/query/sort
   show           Show issue details
@@ -2929,7 +2928,7 @@ Examples:
   lit start <issue-id> --reason "claim"
   lit done <issue-id> --reason "completed"
   lit new --title "Fix renderer race" --type bug --priority 1
-  lit ls --query "status:open type:task" --sort priority:asc,updated_at:desc
+  lit ls --query "status:open type:task"
 
 Use "lit [command] --help" for more information about a command.
 `)

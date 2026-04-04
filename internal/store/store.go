@@ -929,21 +929,25 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		return model.IssueDetail{}, err
 	}
 	detail.Children = labeled
+	sortIssuesByRank(detail.Children)
 	labeled, err = s.attachLabels(ctx, detail.DependsOn)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
 	detail.DependsOn = labeled
+	sortIssuesByRank(detail.DependsOn)
 	labeled, err = s.attachLabels(ctx, detail.Related)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
 	detail.Related = labeled
+	sortIssuesByRank(detail.Related)
 	labeled, err = s.attachLabels(ctx, detail.Blocks)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
 	detail.Blocks = labeled
+	sortIssuesByRank(detail.Blocks)
 	if detail.Parent != nil {
 		parentIssues, err := s.attachLabels(ctx, []model.Issue{*detail.Parent})
 		if err != nil {
@@ -2368,7 +2372,7 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issu
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		WHERE r.type = 'parent-child' AND r.dst_id = ?
-		ORDER BY i.updated_at DESC`, parentID)
+		ORDER BY i.item_rank ASC, i.id ASC`, parentID)
 	if err != nil {
 		return nil, fmt.Errorf("list children: %w", err)
 	}
@@ -2615,6 +2619,17 @@ func buildIssueOrderClause(specs []SortSpec) (string, error) {
 	}
 	order = append(order, "i.id ASC")
 	return strings.Join(order, ", "), nil
+}
+
+func sortIssuesByRank(issues []model.Issue) {
+	// [LAW:one-source-of-truth] Rank is the canonical default ordering for
+	// derived issue groups assembled outside the list query path.
+	sort.SliceStable(issues, func(i, j int) bool {
+		if issues[i].Rank == issues[j].Rank {
+			return issues[i].ID < issues[j].ID
+		}
+		return issues[i].Rank < issues[j].Rank
+	})
 }
 
 func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {

@@ -30,6 +30,14 @@ func openIssueStore(t *testing.T, ctx context.Context) *Store {
 	return st
 }
 
+func issueIDs(issues []model.Issue) []string {
+	ids := make([]string, 0, len(issues))
+	for _, issue := range issues {
+		ids = append(ids, issue.ID)
+	}
+	return ids
+}
+
 func TestStoreCreateEpicAndRelations(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -430,6 +438,122 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	}
 	if len(issues) != 1 || issues[0].ID != issueA.ID {
 		t.Fatalf("issues = %#v", issues)
+	}
+}
+
+func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	parent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Parent", Topic: "tree", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(parent) error = %v", err)
+	}
+	childA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child A", Topic: "tree", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(childA) error = %v", err)
+	}
+	childB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child B", Topic: "tree", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(childB) error = %v", err)
+	}
+	if _, err := st.SetParent(ctx, SetParentInput{ChildID: childA.ID, ParentID: parent.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(childA) error = %v", err)
+	}
+	if _, err := st.SetParent(ctx, SetParentInput{ChildID: childB.ID, ParentID: parent.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(childB) error = %v", err)
+	}
+
+	children, err := st.ListChildren(ctx, parent.ID)
+	if err != nil {
+		t.Fatalf("ListChildren() error = %v", err)
+	}
+	if got, want := issueIDs(children), []string{childA.ID, childB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("ListChildren() ids = %#v, want %#v", got, want)
+	}
+}
+
+func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	main, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Main", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(main) error = %v", err)
+	}
+	depA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependency A", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(depA) error = %v", err)
+	}
+	depB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependency B", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(depB) error = %v", err)
+	}
+	blockedA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocked A", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(blockedA) error = %v", err)
+	}
+	blockedB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocked B", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(blockedB) error = %v", err)
+	}
+	childA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child A", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(childA) error = %v", err)
+	}
+	childB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child B", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(childB) error = %v", err)
+	}
+	relatedA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Related A", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(relatedA) error = %v", err)
+	}
+	relatedB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Related B", Topic: "order", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(relatedB) error = %v", err)
+	}
+
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: main.ID, DstID: depB.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(main->depB) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: main.ID, DstID: depA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(main->depA) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: blockedB.ID, DstID: main.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(blockedB->main) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: blockedA.ID, DstID: main.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(blockedA->main) error = %v", err)
+	}
+	if _, err := st.SetParent(ctx, SetParentInput{ChildID: childB.ID, ParentID: main.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(childB) error = %v", err)
+	}
+	if _, err := st.SetParent(ctx, SetParentInput{ChildID: childA.ID, ParentID: main.ID, CreatedBy: "tester"}); err != nil {
+		t.Fatalf("SetParent(childA) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: main.ID, DstID: relatedB.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(main<->relatedB) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: main.ID, DstID: relatedA.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(main<->relatedA) error = %v", err)
+	}
+
+	detail, err := st.GetIssueDetail(ctx, main.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if got, want := issueIDs(detail.DependsOn), []string{depA.ID, depB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("DependsOn ids = %#v, want %#v", got, want)
+	}
+	if got, want := issueIDs(detail.Blocks), []string{blockedA.ID, blockedB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Blocks ids = %#v, want %#v", got, want)
+	}
+	if got, want := issueIDs(detail.Children), []string{childA.ID, childB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Children ids = %#v, want %#v", got, want)
+	}
+	if got, want := issueIDs(detail.Related), []string{relatedA.ID, relatedB.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Related ids = %#v, want %#v", got, want)
 	}
 }
 

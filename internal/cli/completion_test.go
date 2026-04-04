@@ -61,6 +61,24 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 		t.Fatalf("help output missing ready command: %q", help)
 	}
 }
+
+func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
+		t.Fatalf("Run(help) error = %v", err)
+	}
+	help := normalizeWhitespace(stdout.String())
+	if !strings.Contains(help, "ready List open work by readiness and rank") {
+		t.Fatalf("help output missing rank-based ready description: %q", help)
+	}
+	if !strings.Contains(help, "ls List issues (rank by default)") {
+		t.Fatalf("help output missing default rank ls description: %q", help)
+	}
+	if !strings.Contains(help, "children List child issues by rank") {
+		t.Fatalf("help output missing rank-based children description: %q", help)
+	}
+}
+
 func TestQuickstartOutputsStructuredJSON(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--json"}); err != nil {
@@ -76,5 +94,19 @@ func TestQuickstartOutputsStructuredJSON(t *testing.T) {
 	}
 	if _, ok := payload["workflow"]; !ok {
 		t.Fatalf("quickstart payload missing workflow: %#v", payload)
+	}
+}
+
+func TestQuickstartTextDocumentsRankOrderingDefaults(t *testing.T) {
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart"}); err != nil {
+		t.Fatalf("Run(quickstart) error = %v", err)
+	}
+	text := stdout.String()
+	if !strings.Contains(text, "`lit ls --query \"status:open type:task\"`") {
+		t.Fatalf("quickstart text missing default rank ls example: %q", text)
+	}
+	if strings.Contains(text, "--sort priority:asc,updated_at:desc") {
+		t.Fatalf("quickstart text still advertises legacy priority sort: %q", text)
 	}
 }
