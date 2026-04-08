@@ -993,10 +993,10 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lit %s <id> --reason <text>", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
 	}
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 		IssueID:   positional[0],
@@ -2263,9 +2263,6 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		if len(issueIDs) == 0 {
 			return errors.New("--ids is required")
 		}
-		if strings.TrimSpace(*reason) == "" {
-			return errors.New("--reason is required")
-		}
 		results := map[string]string{}
 		for _, issueID := range issueIDs {
 			_, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
@@ -2381,8 +2378,8 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"lit workspace",
 			"lit ready",
 			"lit update <issue-id> --status in_progress",
-			"lit start <issue-id> --reason \"claim\"",
-			"lit done <issue-id> --reason \"completed\"",
+			"lit start <issue-id>",
+			"lit done <issue-id>",
 			"lit ls --query \"status:open type:task\"",
 			"lit new --title \"Fix renderer race\" --topic renderer --type bug --priority 1 --labels renderer,urgent",
 			"lit new --title \"Tighten race reproducer\" --topic renderer --type task --parent <issue-id>",
@@ -2430,7 +2427,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 			"2) Find work",
 			"   `lit ready`",
 			"   `lit update <issue-id> --status in_progress`",
-			"   `lit start <issue-id> --reason \"claim\"`",
+			"   `lit start <issue-id>`",
 			"   `lit ls --format lines`",
 			"   `lit ls --query \"status:open type:task\"`",
 			"",
@@ -2909,8 +2906,8 @@ Command Syntax:
   lit init [--json] [--skip-hooks] [--skip-agents]
   lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]
   lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
-  lit start <id> --reason <text> [--by <user>] [--json]
-  lit done <id> --reason <text> [--by <user>] [--json]
+  lit start <id> [--reason <text>] [--by <user>] [--json]
+  lit done <id> [--reason <text>] [--by <user>] [--json]
   lit hooks install [--json]
   lit migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
   lit quickstart [--json] [--refresh]
@@ -2925,8 +2922,8 @@ Examples:
   lit init
   lit ready
   lit update <issue-id> --status in_progress
-  lit start <issue-id> --reason "claim"
-  lit done <issue-id> --reason "completed"
+  lit start <issue-id>
+  lit done <issue-id>
   lit new --title "Fix renderer race" --type bug --priority 1
   lit ls --query "status:open type:task"
 

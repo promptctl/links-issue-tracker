@@ -2058,9 +2058,6 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 	}
 	action := strings.TrimSpace(in.Action)
 	reason := strings.TrimSpace(in.Reason)
-	if reason == "" {
-		return model.Issue{}, errors.New("reason is required")
-	}
 	actor := strings.TrimSpace(in.CreatedBy)
 	if actor == "" {
 		actor = "unknown"

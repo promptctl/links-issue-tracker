@@ -756,6 +756,33 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	}
 }
 
+func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "No reason needed", Topic: "triage", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "close", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(close, empty reason) error = %v", err)
+	}
+	if closed.Status != "closed" {
+		t.Fatalf("closed.Status = %q, want closed", closed.Status)
+	}
+	detail, err := st.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if len(detail.History) != 2 {
+		t.Fatalf("history = %#v", detail.History)
+	}
+	if detail.History[1].Action != "close" || detail.History[1].Reason != "" {
+		t.Fatalf("history[1] = %#v (want action=close reason=\"\")", detail.History[1])
+	}
+}
+
 func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
