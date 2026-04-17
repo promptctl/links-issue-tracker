@@ -703,6 +703,12 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return err
 		}
 	}
+	// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
+	// around ListIssues. When the user hasn't narrowed by status (via --status or
+	// --query status:...), exclude closed issues so `lit ls` shows active work.
+	if len(filter.Statuses) == 0 {
+		filter.Statuses = []string{"open", "in_progress"}
+	}
 	issues, err := ap.Store.ListIssues(ctx, filter)
 	if err != nil {
 		return err
