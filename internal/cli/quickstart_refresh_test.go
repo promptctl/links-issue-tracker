@@ -3,9 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/bmf/links-issue-tracker/internal/workspace"
@@ -40,13 +40,9 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	first := runQuickstartRefreshJSON(t)
-	refresh := decodeQuickstartRefresh(t, first)
-	if refresh["agents"].(map[string]any)["status"] != "updated" {
-		t.Fatalf("agents refresh status = %v, want updated", refresh["agents"])
-	}
-	if refresh["hooks"].(map[string]any)["status"] != "updated" {
-		t.Fatalf("hooks refresh status = %v, want updated", refresh["hooks"])
+	first := runQuickstartRefresh(t)
+	if !strings.Contains(first, "refresh hooks=updated agents=updated") {
+		t.Fatalf("quickstart refresh output = %q, want updated summary", first)
 	}
 
 	firstAgents, err := os.ReadFile(agentsPath)
@@ -57,13 +53,9 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 		t.Fatal("quickstart --refresh should rewrite AGENTS.md")
 	}
 
-	second := runQuickstartRefreshJSON(t)
-	secondRefresh := decodeQuickstartRefresh(t, second)
-	if secondRefresh["agents"].(map[string]any)["status"] != "unchanged" {
-		t.Fatalf("second agents refresh status = %v, want unchanged", secondRefresh["agents"])
-	}
-	if secondRefresh["hooks"].(map[string]any)["status"] != "unchanged" {
-		t.Fatalf("second hooks refresh status = %v, want unchanged", secondRefresh["hooks"])
+	second := runQuickstartRefresh(t)
+	if !strings.Contains(second, "refresh hooks=unchanged agents=unchanged") {
+		t.Fatalf("second quickstart refresh output = %q, want unchanged summary", second)
 	}
 
 	secondAgents, err := os.ReadFile(agentsPath)
@@ -100,37 +92,17 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	refresh := decodeQuickstartRefresh(t, runQuickstartRefreshJSON(t))
-	hooks := refresh["hooks"].(map[string]any)
-	if hooks["status"] != "skipped" {
-		t.Fatalf("hooks refresh status = %v, want skipped", hooks)
-	}
-	if hooks["managed"] != false {
-		t.Fatalf("hooks managed = %v, want false", hooks["managed"])
-	}
-	if hooks["reason"] != "incompatible" {
-		t.Fatalf("hooks reason = %v, want incompatible", hooks["reason"])
+	output := runQuickstartRefresh(t)
+	if !strings.Contains(output, "refresh hooks=skipped(incompatible)") {
+		t.Fatalf("quickstart refresh output = %q, want skipped(incompatible)", output)
 	}
 }
 
-func runQuickstartRefreshJSON(t *testing.T) map[string]any {
+func runQuickstartRefresh(t *testing.T) string {
 	t.Helper()
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--refresh", "--json"}); err != nil {
-		t.Fatalf("Run(quickstart --refresh --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--refresh"}); err != nil {
+		t.Fatalf("Run(quickstart --refresh) error = %v", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal(quickstart refresh output) error = %v", err)
-	}
-	return payload
-}
-
-func decodeQuickstartRefresh(t *testing.T, payload map[string]any) map[string]any {
-	t.Helper()
-	refresh, ok := payload["refresh"].(map[string]any)
-	if !ok {
-		t.Fatalf("quickstart payload missing refresh report: %#v", payload)
-	}
-	return refresh
+	return stdout.String()
 }

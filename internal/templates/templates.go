@@ -16,6 +16,7 @@ import (
 const (
 	AgentsSectionTemplateName = "agents-section.md"
 	PrePushHookTemplateName   = "pre-push-hook.sh"
+	QuickstartTemplateName    = "quickstart.md"
 )
 
 var (
@@ -25,6 +26,7 @@ var (
 	defaultTemplateNames = []string{
 		AgentsSectionTemplateName,
 		PrePushHookTemplateName,
+		QuickstartTemplateName,
 	}
 )
 

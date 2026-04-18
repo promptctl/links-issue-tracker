@@ -39,7 +39,8 @@ func ExitCode(err error) int {
 	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
-	case strings.HasPrefix(message, "usage:"):
+	case strings.HasPrefix(message, "usage:"),
+		strings.HasPrefix(message, "unknown flag"):
 		return ExitUsage
 	case strings.Contains(message, "required"),
 		strings.Contains(message, "must be"),

@@ -31,6 +31,29 @@ func TestLoadResetsMissingGlobalTemplate(t *testing.T) {
 	}
 }
 
+func TestLoadResetsMissingGlobalQuickstartTemplate(t *testing.T) {
+	xdgRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
+
+	workspaceRoot := t.TempDir()
+	content, err := Load(QuickstartTemplateName, workspaceRoot)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !strings.Contains(content, "Agent quickstart for links issue tracking") {
+		t.Fatalf("loaded quickstart template missing summary: %q", content)
+	}
+
+	globalPath := filepath.Join(xdgRoot, "links-issue-tracker", "templates", QuickstartTemplateName)
+	globalContent, err := os.ReadFile(globalPath)
+	if err != nil {
+		t.Fatalf("ReadFile(global template) error = %v", err)
+	}
+	if len(globalContent) == 0 {
+		t.Fatal("global quickstart template should be reset to non-empty default")
+	}
+}
+
 func TestLoadResetsInvalidGlobalTemplateWhenEmpty(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
@@ -222,7 +245,7 @@ func TestSeedGlobalDefaultsCreatesDirAndFiles(t *testing.T) {
 		t.Fatalf("SeedGlobalDefaults() error = %v", err)
 	}
 
-	for _, name := range []string{AgentsSectionTemplateName, PrePushHookTemplateName} {
+	for _, name := range []string{AgentsSectionTemplateName, PrePushHookTemplateName, QuickstartTemplateName} {
 		path := filepath.Join(templatesDir, name)
 		content, err := os.ReadFile(path)
 		if err != nil {

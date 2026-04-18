@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -55,18 +54,29 @@ func TestRunQuickstartDefaultsToTextOnNonTTY(t *testing.T) {
 	if strings.Contains(stdout.String(), "\"summary\"") {
 		t.Fatalf("quickstart default output should be text: %q", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Agent quickstart for links issue tracking") {
-		t.Fatalf("quickstart text output missing summary: %q", stdout.String())
+	if strings.TrimSpace(stdout.String()) == "" {
+		t.Fatal("quickstart text output is empty")
 	}
 }
 
-func TestRunQuickstartJSONFlagEnablesJSON(t *testing.T) {
+func TestRunQuickstartRejectsJSONOutput(t *testing.T) {
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"--json", "quickstart"}); err != nil {
-		t.Fatalf("Run(--json quickstart) error = %v", err)
+	err := Run(context.Background(), &stdout, &stdout, []string{"--json", "quickstart"})
+	if err == nil {
+		t.Fatal("Run(--json quickstart) unexpectedly succeeded")
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("expected json output when --json is set: %v", err)
+	if got := ExitCode(err); got != ExitUsage {
+		t.Fatalf("ExitCode(--json quickstart) = %d, want %d", got, ExitUsage)
+	}
+}
+
+func TestRunQuickstartRejectsCommandLocalJSONFlag(t *testing.T) {
+	var stdout bytes.Buffer
+	err := Run(context.Background(), &stdout, &stdout, []string{"quickstart", "--json"})
+	if err == nil {
+		t.Fatal("Run(quickstart --json) unexpectedly succeeded")
+	}
+	if got := ExitCode(err); got != ExitUsage {
+		t.Fatalf("ExitCode(quickstart --json) = %d, want %d", got, ExitUsage)
 	}
 }
