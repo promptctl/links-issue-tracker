@@ -6,7 +6,7 @@ Agent quickstart for links issue tracking
    `lit ready`
    `lit ls [--query "status:open type:task"] [--sort priority:asc,updated_at:desc]`
    `lit show <issue-id>`
-   `lit start <issue-id> [--reason "claim"]`
+   `lit start <issue-id>`
 
 2) Create tickets
    `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic`
@@ -26,8 +26,8 @@ Agent quickstart for links issue tracking
    `lit comment add <issue-id> --body "Starting: <plan>"`
 
 5) Closeout
-   `lit done <issue-id> --reason "completed"`
-   `lit close <issue-id> --reason "completed"`
+   `lit done <issue-id>`
+   `lit close <issue-id>`
    `git add -A && git commit -m "<summary>"`
 
 6) Health
