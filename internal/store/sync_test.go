@@ -217,6 +217,48 @@ func TestSyncRemoteValidation(t *testing.T) {
 	}
 }
 
+func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	if err := st.EnsureIssuePrefix(ctx, "test"); err != nil {
+		t.Fatalf("EnsureIssuePrefix() error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	if err := syncStore.SyncCompact(ctx); err != nil {
+		t.Fatalf("SyncCompact() error = %v", err)
+	}
+	if err := syncStore.SyncCompact(ctx); err != nil {
+		t.Fatalf("second SyncCompact() error = %v", err)
+	}
+
+	got, err := syncStore.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() after compact error = %v", err)
+	}
+	if got.Title != "gc target" {
+		t.Fatalf("GetIssue() after compact title = %q, want %q", got.Title, "gc target")
+	}
+}
+
 func TestValidateEmbeddedSyncSupportAcceptsRequiredVersions(t *testing.T) {
 	err := validateEmbeddedSyncSupport(map[string]string{
 		"github.com/dolthub/dolt/go": minEmbeddedDoltVersion,

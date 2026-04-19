@@ -161,6 +161,23 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 	return result, nil
 }
 
+// compactWithinLock runs DOLT_GC and rotates the connection. The caller must
+// already hold the commit lock; SyncCompact and SyncPush both compose over
+// this helper so the compact step has one implementation regardless of whether
+// it runs as a standalone mutation or as the first step of a larger one.
+func (s *Store) compactWithinLock(ctx context.Context) error {
+	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC"); err != nil {
+		return fmt.Errorf("compact dolt store: %w", err)
+	}
+	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
+	return s.reconnect()
+}
+
+func (s *Store) SyncCompact(ctx context.Context) error {
+	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
+	return s.runSyncMutation(ctx, s.compactWithinLock)
+}
+
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
@@ -181,6 +198,11 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 
 	var result SyncPushResult
 	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
+		// [LAW:dataflow-not-control-flow] Every push unconditionally compacts first; gc decides what to reclaim from store state, not a caller-supplied gate.
+		// [LAW:single-enforcer] Compact + push run under one commit-lock acquisition so no other mutation can interleave between GC and push.
+		if err := s.compactWithinLock(ctx); err != nil {
+			return err
+		}
 		query := buildProcedureCall("DOLT_PUSH", len(args))
 		var message sql.NullString
 		err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
