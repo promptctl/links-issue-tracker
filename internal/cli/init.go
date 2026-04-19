@@ -7,7 +7,6 @@ import (
 	"io"
 
 	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/templates"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
@@ -34,9 +33,6 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	}
 
 	if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
-		return err
-	}
-	if err := templates.SeedGlobalDefaults(); err != nil {
 		return err
 	}
 

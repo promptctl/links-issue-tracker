@@ -26,7 +26,7 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 	if hookErr != nil {
 		return quickstartRefreshReport{}, hookErr
 	}
-	agentsResult, agentsErr := rewriteLinksAgentsFile(ws.RootDir)
+	agentsResult, agentsErr := ensureLinksAgentsSection(ws.RootDir)
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
 	}
