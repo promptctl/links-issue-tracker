@@ -13,18 +13,16 @@ import (
 )
 
 const (
-	linksPrePushHookMarker = "# links-hook: pre-push v1" // legacy marker
 	// [LAW:one-source-of-truth] Only the section between these markers is owned by links.
 	linksHookBeginMarker = "# --- BEGIN LINKS INTEGRATION ---"
 	linksHookEndMarker   = "# --- END LINKS INTEGRATION ---"
 )
 
 type hookInstallResult struct {
-	HookPath   string
-	LegacyPath string
-	Changed    bool
-	Managed    bool
-	Reason     string
+	HookPath string
+	Changed  bool
+	Managed  bool
+	Reason   string
 }
 
 func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
@@ -55,13 +53,12 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 	}
 
 	payload := map[string]any{
-		"status":       "installed",
-		"hook":         result.HookPath,
-		"legacy_chain": result.LegacyPath,
-		"changed":      result.Changed,
-		"managed":      result.Managed,
-		"reason":       result.Reason,
-		"traces_dir":   automationTraceDir(ws),
+		"status":     "installed",
+		"hook":       result.HookPath,
+		"changed":    result.Changed,
+		"managed":    result.Managed,
+		"reason":     result.Reason,
+		"traces_dir": automationTraceDir(ws),
 	}
 	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
@@ -73,7 +70,6 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 func installHooks(ws workspace.Info) (hookInstallResult, error) {
 	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
 	hookPath := filepath.Join(hooksDir, "pre-push")
-	legacyPath := filepath.Join(hooksDir, "pre-push.links.user")
 	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
 		return hookInstallResult{}, fmt.Errorf("create hooks dir: %w", err)
 	}
@@ -87,13 +83,13 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 		return hookInstallResult{}, fmt.Errorf("read existing pre-push hook: %w", err)
 	}
 
-	updated := renderLinksPrePushHookFile(section)
 	mode := os.FileMode(0o755)
 	if errors.Is(err, os.ErrNotExist) {
+		updated := "#!/usr/bin/env bash\n" + section
 		if writeErr := os.WriteFile(hookPath, []byte(updated), mode); writeErr != nil {
 			return hookInstallResult{}, fmt.Errorf("write pre-push hook: %w", writeErr)
 		}
-		return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true, Managed: true}, nil
+		return hookInstallResult{HookPath: hookPath, Changed: true, Managed: true}, nil
 	}
 
 	if info, statErr := os.Stat(hookPath); statErr == nil {
@@ -115,49 +111,28 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 			firstLine = strings.TrimSpace(script[:firstLineEnd])
 		}
 		if !strings.HasPrefix(firstLine, "#!") {
-			// No explicit interpreter; assume not bash-compatible to avoid breaking the hook.
 			return false
 		}
-		// Only treat hooks that explicitly mention bash as compatible with the managed bash section.
 		return strings.Contains(firstLine, "bash")
 	}
 
-	// [LAW:single-enforcer] hook install owns all managed-hook rewrites, including legacy conversion.
-	if strings.Contains(existingStr, linksPrePushHookMarker) && !strings.Contains(existingStr, linksHookBeginMarker) {
-		updated = renderLinksPrePushHookFile(section)
-	} else {
-		if !isBashCompatible(existingStr) {
-			// Do not insert a bash-specific managed section into a non-bash hook; that could break git pushes.
-			return hookInstallResult{
-				HookPath:   hookPath,
-				LegacyPath: detectLegacyHookPath(legacyPath),
-				Changed:    false,
-				Managed:    false,
-				Reason:     "incompatible",
-			}, nil
-		}
-		var changed bool
-		updated, changed = upsertManagedSection(existingStr, section, linksHookBeginMarker, linksHookEndMarker)
-		if !changed {
-			return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: false, Managed: true}, nil
-		}
+	if !isBashCompatible(existingStr) {
+		return hookInstallResult{
+			HookPath: hookPath,
+			Changed:  false,
+			Managed:  false,
+			Reason:   "incompatible",
+		}, nil
+	}
+	updated, changed := upsertManagedSection(existingStr, section, linksHookBeginMarker, linksHookEndMarker)
+	if !changed {
+		return hookInstallResult{HookPath: hookPath, Changed: false, Managed: true}, nil
 	}
 
 	if err := os.WriteFile(hookPath, []byte(updated), mode); err != nil {
 		return hookInstallResult{}, fmt.Errorf("write pre-push hook: %w", err)
 	}
-	return hookInstallResult{HookPath: hookPath, LegacyPath: detectLegacyHookPath(legacyPath), Changed: true, Managed: true}, nil
-}
-
-func detectLegacyHookPath(path string) string {
-	if _, err := os.Stat(path); err == nil {
-		return path
-	}
-	return ""
-}
-
-func renderLinksPrePushHookFile(section string) string {
-	return "#!/usr/bin/env bash\n" + section
+	return hookInstallResult{HookPath: hookPath, Changed: true, Managed: true}, nil
 }
 
 func renderLinksPrePushHookSection(workspaceRoot string) (string, error) {

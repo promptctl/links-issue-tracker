@@ -81,9 +81,6 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	if !strings.Contains(newHookText, linksHookBeginMarker) || !strings.Contains(newHookText, linksHookEndMarker) {
 		t.Fatalf("new hook missing links managed section: %q", newHookText)
 	}
-	if _, err := os.Stat(filepath.Join(hooksDir, "pre-push.links.user")); !os.IsNotExist(err) {
-		t.Fatalf("legacy hook file should not be created in marker-managed mode")
-	}
 }
 
 func TestRunHooksViaCLI(t *testing.T) {

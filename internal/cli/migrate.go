@@ -102,7 +102,6 @@ type migrateReport struct {
 	BackupPath          string   `json:"backup_path,omitempty"`
 	LitHookInstalled    bool     `json:"lit_hook_installed"`
 	LitHookPath         string   `json:"lit_hook_path,omitempty"`
-	LitLegacyChainPath  string   `json:"lit_legacy_chain_path,omitempty"`
 	Notes               []string `json:"notes,omitempty"`
 }
 
@@ -345,7 +344,6 @@ func runMigrationWithOptions(ctx context.Context, ws workspace.Info, applyChange
 		}
 		report.LitHookInstalled = true
 		report.LitHookPath = hookResult.HookPath
-		report.LitLegacyChainPath = hookResult.LegacyPath
 	}
 	if options.InstallAgents {
 		agentsResult, agentsErr := ensureLinksAgentsSection(ws.RootDir)

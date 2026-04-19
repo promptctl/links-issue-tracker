@@ -3,13 +3,6 @@ set -u
 
 remote_name="${1:-origin}"
 
-hook_dir="$(cd -- "$(dirname -- "$0")" && pwd)"
-legacy_hook="${hook_dir}/pre-push.links.user"
-
-if [[ -x "${legacy_hook}" ]]; then
-  "${legacy_hook}" "$@" || true
-fi
-
 trace_ref_file="$(mktemp "${TMPDIR:-/tmp}/links-pre-push-trace.XXXXXX" 2>/dev/null || true)"
 if [[ -n "${trace_ref_file}" ]]; then
   if ! LNKS_AUTOMATION_TRIGGER="git-pre-push" \
