@@ -45,6 +45,15 @@ func UpstreamRemote(cwd string) string {
 	return upstreamRemoteFromRef(upstreamRef)
 }
 
+func RemoteHasRefs(cwd string, remote string) (bool, error) {
+	remoteName := normalizeRemoteName(remote)
+	output, err := gitOutput(cwd, "ls-remote", remoteName)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
 func DefaultRemoteBranch(cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
 	symbolicRefOutput, _ := gitOutput(cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")

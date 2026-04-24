@@ -1,6 +1,6 @@
 # links
 
-`links` is a worktree-native issue tracker with a flat CLI: `lit`.
+`links-issue-tracker` (`lit`) is a tool that allows your agents to track work. Inspired by `beads` but designed to be reliable with a minimal surface area.
 
 ## Inspiration and Credit
 

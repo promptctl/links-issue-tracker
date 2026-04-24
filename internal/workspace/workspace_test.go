@@ -160,6 +160,58 @@ func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
 	}
 }
 
+func TestRemoteHasRefsReturnsFalseForEmptyBareRemote(t *testing.T) {
+	repo := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "init")
+	run(t, repo, "git", "init", "--bare", remote)
+	run(t, repo, "git", "remote", "add", "origin", remote)
+
+	hasRefs, err := RemoteHasRefs(repo, "origin")
+	if err != nil {
+		t.Fatalf("RemoteHasRefs() error = %v, want nil for empty bare remote", err)
+	}
+	if hasRefs {
+		t.Fatalf("RemoteHasRefs() = true, want false for empty bare remote")
+	}
+}
+
+func TestRemoteHasRefsReturnsTrueForPopulatedRemote(t *testing.T) {
+	repo := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "init")
+	run(t, repo, "git", "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+	run(t, repo, "git", "add", "README.md")
+	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	run(t, repo, "git", "init", "--bare", remote)
+	run(t, repo, "git", "remote", "add", "origin", remote)
+	run(t, repo, "git", "push", "-u", "origin", "master")
+
+	hasRefs, err := RemoteHasRefs(repo, "origin")
+	if err != nil {
+		t.Fatalf("RemoteHasRefs() error = %v, want nil for populated remote", err)
+	}
+	if !hasRefs {
+		t.Fatalf("RemoteHasRefs() = false, want true for populated remote")
+	}
+}
+
+func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+
+	hasRefs, err := RemoteHasRefs(repo, "does-not-exist")
+	if err == nil {
+		t.Fatalf("RemoteHasRefs() error = nil, want error for unknown remote (got hasRefs=%v)", hasRefs)
+	}
+	if hasRefs {
+		t.Fatalf("RemoteHasRefs() = true, want false alongside error")
+	}
+}
+
 func TestUpstreamRemoteFromRef(t *testing.T) {
 	if got := upstreamRemoteFromRef("origin/master"); got != "origin" {
 		t.Fatalf("upstreamRemoteFromRef() = %q, want origin", got)

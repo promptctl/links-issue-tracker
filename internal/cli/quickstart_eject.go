@@ -18,15 +18,17 @@ type ejectResult struct {
 }
 
 // ejectTemplates writes the embedded default(s) for the selected templates to
-// their global override paths. When force is false the operation is atomic:
-// if any target already exists, nothing is written and every conflict is
-// reported. With force=true, every target is (over)written.
+// their global override paths. When force is false, any pre-existing target
+// aborts the entire write phase atomically and every conflict is reported.
+// With force=true, every target is (over)written. Per-target write failures
+// (permission, disk, etc.) can leave partial state; each result's Changed
+// field reflects whether that specific target was successfully written.
 func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 	names, err := resolveEjectSelection(selection)
 	if err != nil {
 		return nil, err
 	}
-	// [LAW:dataflow-not-control-flow] Plan every target first (same operations, same order, every invocation); the write phase runs only when the plan is entirely clean, so the observable state is all-or-nothing.
+	// [LAW:dataflow-not-control-flow] Plan every target first (same operations, same order, every invocation); the write phase runs only when the plan is entirely clean, so pre-existing conflicts block every write.
 	plans := make([]ejectResult, 0, len(names))
 	hasConflict := false
 	for _, name := range names {
@@ -40,12 +42,6 @@ func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 		}
 	}
 	if hasConflict {
-		// Atomic abort: Changed must stay a truthful "was written" signal.
-		for i := range plans {
-			if plans[i].Skipped == "" {
-				plans[i].Changed = false
-			}
-		}
 		return plans, nil
 	}
 	for i := range plans {
@@ -63,13 +59,13 @@ func planEject(name string, force bool) (ejectResult, error) {
 	}
 	if _, statErr := os.Stat(path); statErr == nil {
 		if !force {
-			return ejectResult{Name: name, Path: path, Changed: false, Skipped: "exists"}, nil
+			return ejectResult{Name: name, Path: path, Skipped: "exists"}, nil
 		}
-		return ejectResult{Name: name, Path: path, Changed: true}, nil
+		return ejectResult{Name: name, Path: path}, nil
 	} else if !os.IsNotExist(statErr) {
 		return ejectResult{}, fmt.Errorf("eject %s: stat %s: %w", name, path, statErr)
 	}
-	return ejectResult{Name: name, Path: path, Changed: true}, nil
+	return ejectResult{Name: name, Path: path}, nil
 }
 
 func writeEject(plan *ejectResult) error {
@@ -83,6 +79,7 @@ func writeEject(plan *ejectResult) error {
 	if err := os.WriteFile(plan.Path, content, 0o644); err != nil {
 		return fmt.Errorf("eject %s: write %s: %w", plan.Name, plan.Path, err)
 	}
+	plan.Changed = true
 	return nil
 }
 

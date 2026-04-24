@@ -221,6 +221,49 @@ func TestPrintSyncPushPayloadNoRemoteSkippedVerboseText(t *testing.T) {
 	}
 }
 
+func TestPrintSyncPushPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+	payload := map[string]any{
+		"status": "skipped",
+		"reason": "remote_empty",
+		"remote": "origin",
+		"raw":    firstPushSkipMessage,
+	}
+	var out bytes.Buffer
+	if err := printSyncPushPayload(&out, payload, false); err != nil {
+		t.Fatalf("printSyncPushPayload() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "first push") {
+		t.Fatalf("printSyncPushPayload() = %q, want first-push message", got)
+	}
+	if !strings.Contains(got, "ONLY") {
+		t.Fatalf("printSyncPushPayload() = %q, want emphasis that skip is only valid on first push", got)
+	}
+	if !strings.Contains(got, "do NOT ignore") && !strings.Contains(got, "something is wrong") {
+		t.Fatalf("printSyncPushPayload() = %q, want warning that non-initial skips are a problem", got)
+	}
+}
+
+func TestPrintSyncPullPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+	payload := map[string]any{
+		"status": "skipped",
+		"reason": "remote_empty",
+		"remote": "origin",
+		"raw":    firstPushSkipMessage,
+	}
+	var out bytes.Buffer
+	if err := printSyncPullPayload(&out, payload, false); err != nil {
+		t.Fatalf("printSyncPullPayload() error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "first push") {
+		t.Fatalf("printSyncPullPayload() = %q, want first-push message", got)
+	}
+	if !strings.Contains(got, "ONLY") {
+		t.Fatalf("printSyncPullPayload() = %q, want emphasis that skip is only valid on first push", got)
+	}
+}
+
 func TestPrintSyncPullPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
 	payload := map[string]any{
 		"status": "ok",

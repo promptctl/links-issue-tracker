@@ -1,5 +1,5 @@
 site_name: links
-site_description: Worktree-native issue tracking with Dolt-backed sync
+site_description: Agent-native issue tracker
 site_url: https://github.com/brandon-fryslie/links-issue-tracker
 repo_url: https://github.com/brandon-fryslie/links-issue-tracker
 repo_name: brandon-fryslie/links-issue-tracker
