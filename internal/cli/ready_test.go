@@ -567,6 +567,52 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 	}
 }
 
+// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.1)
+// Epics are never workable entries in `ready`: the data boundary excludes
+// them, so downstream annotation / sort / render code never sees them.
+func TestRunReadyExcludesEpics(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	epic := h.createIssue(store.CreateIssueInput{
+		Title:     "Epic container",
+		Topic:     "epic-topic",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	leafTask := h.createIssue(store.CreateIssueInput{
+		Title:     "Leaf task under epic",
+		Topic:     "epic-topic",
+		IssueType: "task",
+		Priority:  1,
+		ParentID:  epic.ID,
+	})
+	standaloneBug := h.createIssue(store.CreateIssueInput{
+		Title:     "Standalone bug",
+		Topic:     "bug-topic",
+		IssueType: "bug",
+		Priority:  1,
+	})
+
+	got := h.runReadyJSON()
+
+	gotIDs := make(map[string]bool, len(got))
+	for _, entry := range got {
+		gotIDs[entry.ID] = true
+		if entry.IssueType == "epic" {
+			t.Errorf("ready returned epic %q; epics should be filtered out", entry.ID)
+		}
+	}
+	if !gotIDs[leafTask.ID] {
+		t.Errorf("ready missing leaf task %q; got=%v", leafTask.ID, gotIDs)
+	}
+	if !gotIDs[standaloneBug.ID] {
+		t.Errorf("ready missing standalone bug %q; got=%v", standaloneBug.ID, gotIDs)
+	}
+	if gotIDs[epic.ID] {
+		t.Errorf("ready included epic %q; want excluded", epic.ID)
+	}
+}
+
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")

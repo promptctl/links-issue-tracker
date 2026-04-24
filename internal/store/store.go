@@ -93,21 +93,22 @@ type SortSpec struct {
 }
 
 type ListIssuesFilter struct {
-	Statuses        []string
-	IssueTypes      []string
-	Assignees       []string
-	PriorityMin     *int
-	PriorityMax     *int
-	SearchTerms     []string
-	IDs             []string
-	HasComments     *bool
-	LabelsAll       []string
-	UpdatedAfter    *time.Time
-	UpdatedBefore   *time.Time
-	IncludeArchived bool
-	IncludeDeleted  bool
-	SortBy          []SortSpec
-	Limit           int
+	Statuses          []string
+	IssueTypes        []string
+	ExcludeIssueTypes []string
+	Assignees         []string
+	PriorityMin       *int
+	PriorityMax       *int
+	SearchTerms       []string
+	IDs               []string
+	HasComments       *bool
+	LabelsAll         []string
+	UpdatedAfter      *time.Time
+	UpdatedBefore     *time.Time
+	IncludeArchived   bool
+	IncludeDeleted    bool
+	SortBy            []SortSpec
+	Limit             int
 }
 
 type AddCommentInput struct {
@@ -424,6 +425,23 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 		}
 		if len(placeholders) > 0 {
 			where = append(where, "i.issue_type IN ("+strings.Join(placeholders, ",")+")")
+		}
+	}
+	if len(filter.ExcludeIssueTypes) > 0 {
+		// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
+		// filter above; keeping both at the store boundary means one definition
+		// of "which types qualify" regardless of caller.
+		var placeholders []string
+		for _, t := range filter.ExcludeIssueTypes {
+			trimmed := strings.TrimSpace(t)
+			if trimmed == "" {
+				continue
+			}
+			placeholders = append(placeholders, "?")
+			args = append(args, trimmed)
+		}
+		if len(placeholders) > 0 {
+			where = append(where, "i.issue_type NOT IN ("+strings.Join(placeholders, ",")+")")
 		}
 	}
 	if len(filter.Assignees) > 0 {

@@ -706,11 +706,16 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
-		Statuses:        []string{"open", "in_progress"},
-		Assignees:       toSlice(strings.TrimSpace(*assignee)),
-		IncludeArchived: false,
-		IncludeDeleted:  false,
-		Limit:           0,
+		Statuses: []string{"open", "in_progress"},
+		// [LAW:dataflow-not-control-flow] Epics never enter the ready pipeline;
+		// agents can't `lit start` a container, so surfacing one would force
+		// prose-driven drill rules to translate epic->child. Filter at the data
+		// boundary instead. (links-agent-epic-model-uew.1)
+		ExcludeIssueTypes: []string{"epic"},
+		Assignees:         toSlice(strings.TrimSpace(*assignee)),
+		IncludeArchived:   false,
+		IncludeDeleted:    false,
+		Limit:             0,
 	})
 	if err != nil {
 		return err
