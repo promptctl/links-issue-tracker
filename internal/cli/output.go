@@ -46,13 +46,22 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\nstatus: %s\ntype: %s\ntopic: %s\npriority: %d\nassignee: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.Status, issue.IssueType, issue.Topic, issue.Priority, emptyDash(issue.Assignee), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
 		return err
 	}
-	if issue.Description != "" {
-		if _, err := fmt.Fprintf(w, "\ndescription:\n%s\n", issue.Description); err != nil {
-			return err
-		}
-	}
+	// [LAW:dataflow-not-control-flow] Parent block precedes the leaf description
+	// so an agent reading top-to-bottom encounters containing context before
+	// the specific leaf details. When the parent has a description, it inlines
+	// indented under the parent line. (links-agent-epic-model-uew.3)
 	if detail.Parent != nil {
 		if _, err := fmt.Fprintf(w, "\nparent:\n- %s %s\n", detail.Parent.ID, detail.Parent.Title); err != nil {
+			return err
+		}
+		if detail.Parent.Description != "" {
+			if _, err := fmt.Fprintf(w, "%s\n", indentLines(detail.Parent.Description, "  ")); err != nil {
+				return err
+			}
+		}
+	}
+	if issue.Description != "" {
+		if _, err := fmt.Fprintf(w, "\ndescription:\n%s\n", issue.Description); err != nil {
 			return err
 		}
 	}
@@ -199,4 +208,15 @@ func formatIssueState(issue model.Issue) string {
 
 func parseColumns(input string) []string {
 	return splitCSV(strings.ToLower(input))
+}
+
+// indentLines prefixes every line of s with prefix, preserving internal line
+// breaks. Trailing newlines are stripped so callers that append their own "\n"
+// (e.g., via Fprintf) do not produce a stray prefix-only line at the end.
+func indentLines(s, prefix string) string {
+	lines := strings.Split(strings.TrimRight(s, "\n"), "\n")
+	for i, line := range lines {
+		lines[i] = prefix + line
+	}
+	return strings.Join(lines, "\n")
 }
