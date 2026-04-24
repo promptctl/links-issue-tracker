@@ -613,6 +613,85 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 	}
 }
 
+// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.2)
+// Each ready row carries its parent epic inline when the parent is type=epic,
+// so an agent scanning ready knows which epic they'd be joining before they
+// claim a leaf. Rows without an epic parent get no ParentEpic field.
+func TestRunReadyCarriesParentEpic(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	epic := h.createIssue(store.CreateIssueInput{
+		Title:     "Integrate foo subsystem end-to-end",
+		Topic:     "epic-topic",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	leaf := h.createIssue(store.CreateIssueInput{
+		Title:     "Wire up the frobnicator",
+		Topic:     "epic-topic",
+		IssueType: "task",
+		Priority:  1,
+		ParentID:  epic.ID,
+	})
+	standalone := h.createIssue(store.CreateIssueInput{
+		Title:     "Standalone bug",
+		Topic:     "bug-topic",
+		IssueType: "bug",
+		Priority:  1,
+	})
+	nonEpicParent := h.createIssue(store.CreateIssueInput{
+		Title:     "Parent feature",
+		Topic:     "feat-topic",
+		IssueType: "feature",
+		Priority:  1,
+	})
+	childOfFeature := h.createIssue(store.CreateIssueInput{
+		Title:     "Feature subtask",
+		Topic:     "feat-topic",
+		IssueType: "task",
+		Priority:  1,
+		ParentID:  nonEpicParent.ID,
+	})
+
+	got := h.runReadyJSON()
+
+	byID := make(map[string]annotation.AnnotatedIssue, len(got))
+	for _, entry := range got {
+		byID[entry.ID] = entry
+	}
+
+	leafRow, ok := byID[leaf.ID]
+	if !ok {
+		t.Fatalf("leaf %q missing from ready output", leaf.ID)
+	}
+	if leafRow.ParentEpic == nil {
+		t.Fatalf("leaf row missing ParentEpic; want {ID=%q Title=%q}", epic.ID, epic.Title)
+	}
+	if leafRow.ParentEpic.ID != epic.ID {
+		t.Errorf("ParentEpic.ID = %q, want %q", leafRow.ParentEpic.ID, epic.ID)
+	}
+	if leafRow.ParentEpic.Title != epic.Title {
+		t.Errorf("ParentEpic.Title = %q, want %q", leafRow.ParentEpic.Title, epic.Title)
+	}
+
+	if standaloneRow, ok := byID[standalone.ID]; !ok {
+		t.Errorf("standalone %q missing from ready output", standalone.ID)
+	} else if standaloneRow.ParentEpic != nil {
+		t.Errorf("standalone row has ParentEpic=%+v; want nil", standaloneRow.ParentEpic)
+	}
+
+	if featureChildRow, ok := byID[childOfFeature.ID]; !ok {
+		t.Errorf("feature child %q missing from ready output", childOfFeature.ID)
+	} else if featureChildRow.ParentEpic != nil {
+		t.Errorf("feature-child row has ParentEpic=%+v; want nil (parent is non-epic)", featureChildRow.ParentEpic)
+	}
+
+	text := h.runReadyText()
+	if !strings.Contains(text, "epic: "+epic.ID+"  "+epic.Title) {
+		t.Errorf("text output missing 'epic: %s  %s' line; output:\n%s", epic.ID, epic.Title, text)
+	}
+}
+
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")

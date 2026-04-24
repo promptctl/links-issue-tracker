@@ -50,25 +50,25 @@ func (k *Kind) UnmarshalJSON(data []byte) error {
 }
 
 var (
-	missingFieldDef  = &kindDef{key: "missing_field"}
+	missingFieldDef   = &kindDef{key: "missing_field"}
 	openDependencyDef = &kindDef{key: "open_dependency"}
-	rankInversionDef = &kindDef{key: "rank_inversion"}
-	orphanedDef      = &kindDef{key: "orphaned"}
+	rankInversionDef  = &kindDef{key: "rank_inversion"}
+	orphanedDef       = &kindDef{key: "orphaned"}
 
-	MissingField   = Kind{def: missingFieldDef}  // a required field is empty or unset
-	OpenDependency = Kind{def: openDependencyDef}  // issue depends on an open ticket
-	RankInversion = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
-	Orphaned      = Kind{def: orphanedDef}       // in_progress with no update for 24h+
+	MissingField   = Kind{def: missingFieldDef}   // a required field is empty or unset
+	OpenDependency = Kind{def: openDependencyDef} // issue depends on an open ticket
+	RankInversion  = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
+	Orphaned       = Kind{def: orphanedDef}       // in_progress with no update for 24h+
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	// "blocked_by" is a deserialization alias for backwards compatibility after
 	// the rename to "open_dependency".
 	kindRegistry = map[string]Kind{
-		missingFieldDef.key:  MissingField,
+		missingFieldDef.key:   MissingField,
 		openDependencyDef.key: OpenDependency,
-		"blocked_by":         OpenDependency,
-		rankInversionDef.key: RankInversion,
-		orphanedDef.key:      Orphaned,
+		"blocked_by":          OpenDependency,
+		rankInversionDef.key:  RankInversion,
+		orphanedDef.key:       Orphaned,
 	}
 )
 
@@ -83,12 +83,22 @@ type Annotation struct {
 	Message string `json:"message"`
 }
 
+// ParentEpicRef identifies an issue's containing epic by id and title.
+// Present only when the issue has a parent AND the parent is type=epic —
+// the single most important context for an agent deciding which leaf to
+// claim (links-agent-epic-model-uew.2).
+type ParentEpicRef struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
 // AnnotatedIssue pairs an issue with its computed annotations.
 // [LAW:one-type-per-behavior] All issues flow through this single type regardless
 // of what annotations they carry. Consumers interpret annotations via predicates.
 type AnnotatedIssue struct {
 	model.Issue
-	Annotations []Annotation `json:"annotations"`
+	Annotations []Annotation   `json:"annotations"`
+	ParentEpic  *ParentEpicRef `json:"parent_epic,omitempty"`
 }
 
 // Annotator computes annotations for a single issue.

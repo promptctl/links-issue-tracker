@@ -53,16 +53,33 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 	}, nil
 }
 
-// newBlockerAnnotator returns an annotator that checks open dependency blockers
-// and flags rank inversions where a dependency is ranked below the dependent.
-func newBlockerAnnotator(st *store.Store) annotation.Annotator {
-	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
-	// empty blockers list means no annotations, not a skipped operation.
-	return func(ctx context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+// fetchIssueDetails fetches IssueDetail for every listed issue into a map.
+// [LAW:single-enforcer] One pre-pass is the single source of per-row detail
+// data for the ready pipeline; both annotation and enrichment read from it.
+// [LAW:dataflow-not-control-flow] The fetch is unconditional and happens
+// once; downstream stages are pure map lookups over the result.
+func fetchIssueDetails(ctx context.Context, st *store.Store, issues []model.Issue) (map[string]model.IssueDetail, error) {
+	details := make(map[string]model.IssueDetail, len(issues))
+	for _, issue := range issues {
 		detail, err := st.GetIssueDetail(ctx, issue.ID)
 		if err != nil {
 			return nil, err
 		}
+		details[issue.ID] = detail
+	}
+	return details, nil
+}
+
+// newBlockerAnnotator returns an annotator that checks open dependency blockers
+// and flags rank inversions where a dependency is ranked below the dependent.
+// The annotator is pure: it reads from the shared details map rather than
+// fetching from the store, so fetch cost is paid once upstream in
+// fetchIssueDetails.
+func newBlockerAnnotator(details map[string]model.IssueDetail) annotation.Annotator {
+	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
+	// empty blockers list means no annotations, not a skipped operation.
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		detail := details[issue.ID]
 		// Collect open blockers and sort by ID for stable annotation ordering.
 		var openDeps []model.Issue
 		for _, dep := range detail.DependsOn {
@@ -168,6 +185,25 @@ func isRequiredFieldSet(value any) bool {
 	}
 }
 
+// enrichWithParentEpic populates ParentEpic on every row whose parent is
+// type=epic. Rows with no parent or a non-epic parent get nil — the omitempty
+// tag drops them from JSON output and the renderer skips them.
+// [LAW:dataflow-not-control-flow] Every row flows through the same lookup;
+// variability lives in whether the parent exists and its type, not in whether
+// the enrichment step runs. (links-agent-epic-model-uew.2)
+func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
+	for i := range rows {
+		detail := details[rows[i].ID]
+		if detail.Parent == nil || detail.Parent.IssueType != "epic" {
+			continue
+		}
+		rows[i].ParentEpic = &annotation.ParentEpicRef{
+			ID:    detail.Parent.ID,
+			Title: detail.Parent.Title,
+		}
+	}
+}
+
 // sortByReadiness places issues without blocking annotations first,
 // preserving the original store ordering within each group.
 func sortByReadiness(issues []annotation.AnnotatedIssue) {
@@ -184,7 +220,6 @@ func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.Anno
 	}
 	return issues[:limit]
 }
-
 
 // readyPreamble is printed before the ready list to give agents context about
 // how to interpret and act on the backlog.
@@ -307,6 +342,11 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap m
 	deps := dependencyIDs(entry.Annotations)
 	unblocks := unblocksMap[entry.ID]
 
+	if entry.ParentEpic != nil {
+		if _, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, entry.ParentEpic.ID, entry.ParentEpic.Title); err != nil {
+			return err
+		}
+	}
 	if len(deps) > 0 {
 		if _, err := fmt.Fprintf(w, "%sdepends on: %s\n", indent, strings.Join(deps, ", ")); err != nil {
 			return err
@@ -383,7 +423,6 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 	return nil
 }
 
-
 // printRankInversions prints a count-only warning when dependencies are ranked
 // below the issues they block, with instructions to fix.
 func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
@@ -401,4 +440,3 @@ func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error 
 	_, err := fmt.Fprintf(w, "\nWarning: %d rank inversion(s) — dependencies ranked below their dependents. Run `lit doctor --fix` to repair. <agent-instructions>Run it yourself, do NOT ask the user — it is idempotent and safe.</agent-instructions>\n", count)
 	return err
 }
-
