@@ -692,6 +692,65 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 	}
 }
 
+// [LAW:dataflow-not-control-flow] (links-agent-epic-model-uew.4)
+// Leaves sort by (effective_epic_rank, own_rank), so all leaves under epic A
+// appear before any leaves under epic B when A ranks higher than B — even
+// when the leaves were created in interleaved order and their own ranks
+// alternate between epics.
+func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	epicA := h.createIssue(store.CreateIssueInput{
+		Title:     "Epic A",
+		Topic:     "epic-a",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	epicB := h.createIssue(store.CreateIssueInput{
+		Title:     "Epic B",
+		Topic:     "epic-b",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	leafA1 := h.createIssue(store.CreateIssueInput{
+		Title:     "A.1",
+		Topic:     "epic-a",
+		IssueType: "task",
+		ParentID:  epicA.ID,
+		Priority:  1,
+	})
+	leafB1 := h.createIssue(store.CreateIssueInput{
+		Title:     "B.1",
+		Topic:     "epic-b",
+		IssueType: "task",
+		ParentID:  epicB.ID,
+		Priority:  1,
+	})
+	leafA2 := h.createIssue(store.CreateIssueInput{
+		Title:     "A.2",
+		Topic:     "epic-a",
+		IssueType: "task",
+		ParentID:  epicA.ID,
+		Priority:  1,
+	})
+
+	got := h.runReadyJSON()
+
+	gotIDs := make([]string, len(got))
+	for i, entry := range got {
+		gotIDs[i] = entry.ID
+	}
+	want := []string{leafA1.ID, leafA2.ID, leafB1.ID}
+	if len(gotIDs) != len(want) {
+		t.Fatalf("ready returned %d rows, want %d; ids=%v", len(gotIDs), len(want), gotIDs)
+	}
+	for i := range want {
+		if gotIDs[i] != want[i] {
+			t.Errorf("ready row %d = %q, want %q; full order=%v", i, gotIDs[i], want[i], gotIDs)
+		}
+	}
+}
+
 func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")

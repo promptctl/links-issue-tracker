@@ -740,6 +740,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err != nil {
 		return err
 	}
+	sortByCompositeRank(annotated, details)
 	sortByReadiness(annotated)
 	annotated = applyLimit(annotated, *limit)
 	enrichWithParentEpic(annotated, details)
