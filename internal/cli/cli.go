@@ -149,6 +149,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runReady(commandCtx, stdout, ap, args)
 		})
 	})
+	addGroupedPassthrough(root, "operations", "next", "Print the next workable leaf to lit start", func(args []string) error {
+		return runWithApp(ctx, appAccessRead, append([]string{"next"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runNext(commandCtx, stdout, ap, args)
+		})
+	})
 	addGroupedPassthrough(root, "operations", "ls", "List issues (rank by default)", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"ls"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runList(commandCtx, stdout, ap, args)
@@ -699,34 +704,49 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]")
 	}
-	cfg, err := config.Load(ap.Workspace.RootDir)
+	annotated, _, err := gatherReadyAnnotated(ctx, ap, *assignee)
 	if err != nil {
 		return err
+	}
+	annotated = applyLimit(annotated, *limit)
+	columns := parseColumns(*columnsExpr)
+	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
+		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
+	})
+}
+
+// gatherReadyAnnotated runs the shared ready pipeline: list workable leaves,
+// fetch details, annotate, sort by composite rank then readiness, enrich with
+// parent epic refs. Returns the prepared rows and the details map so callers
+// that need extra row context (e.g. `lit next --continue`) avoid a second
+// fetch round-trip.
+// [LAW:single-enforcer] Both `lit ready` and `lit next` read from this single
+// pipeline so their "what is workable, in what order" model cannot drift.
+func gatherReadyAnnotated(ctx context.Context, ap *app.App, assignee string) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
+	cfg, err := config.Load(ap.Workspace.RootDir)
+	if err != nil {
+		return nil, nil, err
 	}
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
 		Statuses:        []string{"open", "in_progress"},
-		Assignees:       toSlice(strings.TrimSpace(*assignee)),
+		Assignees:       toSlice(strings.TrimSpace(assignee)),
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
 	})
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	issues = filterWorkableIssues(issues)
 	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
-	// [LAW:single-enforcer] One pre-pass fetches per-row detail for the whole
-	// ready pipeline; both annotation and enrichment read from this map,
-	// eliminating the duplicate GetIssueDetail traffic that landed when
-	// enrichWithParentEpic was introduced alongside newBlockerAnnotator.
 	details, err := fetchIssueDetails(ctx, ap.Store, issues)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
@@ -734,16 +754,45 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		newOrphanedAnnotator(24*time.Hour),
 	)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	sortByCompositeRank(annotated, details)
 	sortByReadiness(annotated)
-	annotated = applyLimit(annotated, *limit)
 	enrichWithParentEpic(annotated, details)
-	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
-		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
-	})
+	return annotated, details, nil
+}
+
+// runNext returns exactly one workable leaf — the next thing the agent should
+// `lit start`. Identical pipeline to `lit ready`; the only differences are the
+// optional --continue bias and that the output is a single row instead of the
+// sectioned backlog.
+// (links-agent-epic-model-uew.6)
+func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("next")
+	assignee := fs.String("assignee", "", "Filter by assignee")
+	continueFlag := fs.Bool("continue", false, "Bias toward leaves under in-progress epics")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit next [--continue] [--assignee <user>] [--json]")
+	}
+	annotated, details, err := gatherReadyAnnotated(ctx, ap, *assignee)
+	if err != nil {
+		return err
+	}
+	// [LAW:dataflow-not-control-flow] --continue is one extra stable sort over the
+	// same data; it does not change which rows are workable, only the order in
+	// which we look for one to claim.
+	if *continueFlag {
+		sortByContinueBias(annotated, details)
+	}
+	next, ok := pickFirstReady(annotated)
+	if !ok {
+		return errors.New("no ready work")
+	}
+	return printValue(stdout, next, *jsonOut, printNextSummary)
 }
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
