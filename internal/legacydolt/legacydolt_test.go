@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
 
@@ -102,7 +103,7 @@ func TestImportFromBeadsDolt(t *testing.T) {
 	if len(detail.Issue.Labels) != 1 || detail.Issue.Labels[0] != "renderer" {
 		t.Fatalf("detail.Issue.Labels = %#v", detail.Issue.Labels)
 	}
-	if detail.Issue.Status != "closed" || detail.Issue.ClosedAt == nil {
+	if detail.Issue.State() != model.StateClosed || detail.Issue.ClosedAtValue() == nil {
 		t.Fatalf("detail.Issue = %#v", detail.Issue)
 	}
 }

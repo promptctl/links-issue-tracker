@@ -244,11 +244,11 @@ func Export(ctx context.Context, st *store.Store, beadsDBPath string) (Summary, 
 	summary := Summary{}
 	for _, issue := range export.Issues {
 		var closedAt any
-		if issue.ClosedAt != nil {
-			closedAt = issue.ClosedAt.Format(time.RFC3339Nano)
+		if value := issue.ClosedAtValue(); value != nil {
+			closedAt = value.Format(time.RFC3339Nano)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, assignee, created_at, updated_at, closed_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, issue.ID, issue.Title, issue.Description, issue.Status, issue.Priority, issue.IssueType, nullIfEmpty(issue.Assignee), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt); err != nil {
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, issue.ID, issue.Title, issue.Description, issue.StatusValue(), issue.Priority, issue.IssueType, nullIfEmpty(issue.AssigneeValue()), issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt); err != nil {
 			return Summary{}, fmt.Errorf("export issue %s: %w", issue.ID, err)
 		}
 		summary.Issues++

@@ -217,7 +217,7 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issu
 		return nil, fmt.Errorf("list children: %w", err)
 	}
 	defer rows.Close()
-	children := []model.Issue{}
+	children := []issueRow{}
 	for rows.Next() {
 		issue, err := scanIssue(rows)
 		if err != nil {
@@ -228,5 +228,5 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issu
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	return s.attachLabels(ctx, children)
+	return s.hydrateIssues(ctx, children)
 }

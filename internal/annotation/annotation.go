@@ -101,6 +101,40 @@ type AnnotatedIssue struct {
 	ParentEpic  *ParentEpicRef `json:"parent_epic,omitempty"`
 }
 
+func (a AnnotatedIssue) MarshalJSON() ([]byte, error) {
+	var payload map[string]any
+	issueData, err := json.Marshal(a.Issue)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(issueData, &payload); err != nil {
+		return nil, err
+	}
+	payload["annotations"] = a.Annotations
+	if a.ParentEpic != nil {
+		payload["parent_epic"] = a.ParentEpic
+	}
+	return json.Marshal(payload)
+}
+
+func (a *AnnotatedIssue) UnmarshalJSON(data []byte) error {
+	var issue model.Issue
+	if err := json.Unmarshal(data, &issue); err != nil {
+		return err
+	}
+	var payload struct {
+		Annotations []Annotation   `json:"annotations"`
+		ParentEpic  *ParentEpicRef `json:"parent_epic"`
+	}
+	if err := json.Unmarshal(data, &payload); err != nil {
+		return err
+	}
+	a.Issue = issue
+	a.Annotations = payload.Annotations
+	a.ParentEpic = payload.ParentEpic
+	return nil
+}
+
 // Annotator computes annotations for a single issue.
 type Annotator func(ctx context.Context, issue model.Issue) ([]Annotation, error)
 

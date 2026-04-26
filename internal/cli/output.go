@@ -43,8 +43,20 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []string) error 
 
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\nstatus: %s\ntype: %s\ntopic: %s\npriority: %d\nassignee: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.Status, issue.IssueType, issue.Topic, issue.Priority, emptyDash(issue.Assignee), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %d\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
 		return err
+	}
+	caps := issue.Capabilities()
+	if caps.Status != nil {
+		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(caps.Status.Assignee)); err != nil {
+			return err
+		}
+	}
+	if caps.Status == nil {
+		progress := issue.Progress()
+		if _, err := fmt.Fprintf(w, "progress: %d/%d closed (open: %d, in_progress: %d, closed: %d)\n", progress.Closed, progress.Total, progress.Open, progress.InProgress, progress.Closed); err != nil {
+			return err
+		}
 	}
 	// [LAW:dataflow-not-control-flow] Parent block precedes the leaf description
 	// so an agent reading top-to-bottom encounters containing context before
@@ -132,7 +144,7 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string) s
 		case "title":
 			values = append(values, issue.Title)
 		case "assignee":
-			values = append(values, emptyDash(issue.Assignee))
+			values = append(values, emptyDash(issue.AssigneeValue()))
 		case "labels":
 			values = append(values, emptyDash(strings.Join(issue.Labels, ",")))
 		case "updated_at":
@@ -196,7 +208,11 @@ func formatOptionalTime(value *time.Time) string {
 }
 
 func formatIssueState(issue model.Issue) string {
-	parts := []string{issue.Status}
+	state := issue.StatusValue()
+	if state == "" {
+		state = string(issue.State())
+	}
+	parts := []string{state}
 	if issue.ArchivedAt != nil {
 		parts = append(parts, "archived")
 	}

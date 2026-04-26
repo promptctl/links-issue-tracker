@@ -123,11 +123,16 @@ func TestAnnotateAnnotatorError(t *testing.T) {
 }
 
 func TestAnnotatedIssueJSONShape(t *testing.T) {
+	issue, err := model.HydrateOwnedStatus(model.Issue{
+		ID:        "lit-abc",
+		Title:     "Test issue",
+		IssueType: "task",
+	}, model.StatusView{Value: model.StateOpen})
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+	}
 	ai := AnnotatedIssue{
-		Issue: model.Issue{
-			ID:    "lit-abc",
-			Title: "Test issue",
-		},
+		Issue: issue,
 		Annotations: []Annotation{
 			{Kind: MissingField, Message: "description"},
 		},

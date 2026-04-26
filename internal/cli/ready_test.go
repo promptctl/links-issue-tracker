@@ -238,8 +238,8 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1; got=%#v", len(got), got)
 	}
-	if got[0].Assignee != "alice" {
-		t.Fatalf("got[0].Assignee = %q, want alice", got[0].Assignee)
+	if got[0].AssigneeValue() != "alice" {
+		t.Fatalf("got[0].AssigneeValue() = %q, want alice", got[0].AssigneeValue())
 	}
 }
 
@@ -316,8 +316,8 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 	if got[0].ID != issue.ID {
 		t.Fatalf("got[0].ID = %q, want %q", got[0].ID, issue.ID)
 	}
-	if got[0].Status != "in_progress" {
-		t.Fatalf("got[0].Status = %q, want in_progress", got[0].Status)
+	if got[0].State() != model.StateInProgress {
+		t.Fatalf("got[0].State() = %q, want in_progress", got[0].State())
 	}
 }
 

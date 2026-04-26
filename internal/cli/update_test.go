@@ -11,6 +11,104 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
 
+func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:     "Epic container",
+		Topic:     "lifecycle",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:     "Leaf work",
+		Topic:     "lifecycle",
+		IssueType: "task",
+		Priority:  2,
+		ParentID:  epic.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{epic.ID}, "start")
+	if err == nil {
+		t.Fatal("runTransition(start epic) returned nil; want refusal")
+	}
+	if !strings.Contains(err.Error(), "no start action available") {
+		t.Fatalf("runTransition(start epic) error = %q, want no start action available", err.Error())
+	}
+	stdout.Reset()
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--json"}, "start"); err != nil {
+		t.Fatalf("runTransition(start leaf) error = %v", err)
+	}
+	var started model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
+		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	}
+	if started.State() != model.StateInProgress {
+		t.Fatalf("started.State() = %q, want in_progress", started.State())
+	}
+}
+
+func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:     "Epic container",
+		Topic:     "show",
+		IssueType: "epic",
+		Priority:  1,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:     "Open child",
+		Topic:     "show",
+		IssueType: "task",
+		Priority:  2,
+		ParentID:  epic.ID,
+	}); err != nil {
+		t.Fatalf("CreateIssue(open child) error = %v", err)
+	}
+	closedChild, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:     "Closed child",
+		Topic:     "show",
+		IssueType: "task",
+		Priority:  2,
+		ParentID:  epic.ID,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(closed child) error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(done) error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runShow(ctx, &stdout, ap, []string{epic.ID, "--json"}); err != nil {
+		t.Fatalf("runShow(epic --json) error = %v", err)
+	}
+	var payload struct {
+		Issue map[string]json.RawMessage `json:"issue"`
+	}
+	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
+		t.Fatalf("json.Unmarshal(show output) error = %v", err)
+	}
+	if _, ok := payload.Issue["status"]; ok {
+		t.Fatalf("epic JSON issue has status field: %s", stdout.String())
+	}
+	if _, ok := payload.Issue["progress"]; ok {
+		t.Fatalf("epic JSON issue has progress field: %s", stdout.String())
+	}
+}
+
 func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -34,8 +132,8 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
 		t.Fatalf("json.Unmarshal(update output) error = %v", err)
 	}
-	if updated.Status != "in_progress" {
-		t.Fatalf("updated.Status = %q, want in_progress", updated.Status)
+	if updated.State() != model.StateInProgress {
+		t.Fatalf("updated.State() = %q, want in_progress", updated.State())
 	}
 
 	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
@@ -80,8 +178,8 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	if updated.Priority != 1 {
 		t.Fatalf("updated.Priority = %d, want 1", updated.Priority)
 	}
-	if updated.Assignee != "alice" {
-		t.Fatalf("updated.Assignee = %q, want alice", updated.Assignee)
+	if updated.AssigneeValue() != "alice" {
+		t.Fatalf("updated.AssigneeValue() = %q, want alice", updated.AssigneeValue())
 	}
 	if len(updated.Labels) != 2 || updated.Labels[0] != "api" || updated.Labels[1] != "urgent" {
 		t.Fatalf("updated.Labels = %#v, want [api urgent]", updated.Labels)

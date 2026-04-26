@@ -187,7 +187,12 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 	if err := ap.Store.ReplaceFromExport(ctx, targetExport); err != nil {
 		return err
 	}
-	if _, err := syncfile.WriteAtomic(syncBasePath(ap), targetExport); err != nil {
+	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
+	restoredExport, err := ap.Store.Export(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := syncfile.WriteAtomic(syncBasePath(ap), restoredExport); err != nil {
 		return err
 	}
 	hash, err := syncfile.HashFile(restorePath)
@@ -201,6 +206,11 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 }
 
 func hashExport(export model.Export) (string, error) {
+	for _, issue := range export.Issues {
+		if !issue.IsHydrated() {
+			return "", fmt.Errorf("hash export: issue %s is not hydrated", issue.ID)
+		}
+	}
 	payload, err := json.MarshalIndent(export, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal export: %w", err)

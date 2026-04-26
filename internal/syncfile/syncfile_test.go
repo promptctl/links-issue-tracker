@@ -8,22 +8,30 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
+func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.Issue {
+	t.Helper()
+	hydrated, err := model.HydrateOwnedStatus(issue, model.StatusView{Value: status})
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+	}
+	return hydrated
+}
+
 func TestWriteAndReadAtomicExport(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "links", "export.json")
 	export := model.Export{
 		Version:     1,
 		WorkspaceID: "workspace-test",
 		ExportedAt:  time.Now().UTC(),
-		Issues: []model.Issue{{
+		Issues: []model.Issue{issueWithStatus(t, model.Issue{
 			ID:        "issue-1",
 			Title:     "Renderer cleanup",
-			Status:    "open",
 			Priority:  1,
 			IssueType: "task",
 			Labels:    []string{"renderer"},
 			CreatedAt: time.Now().UTC(),
 			UpdatedAt: time.Now().UTC(),
-		}},
+		}, model.StateOpen)},
 	}
 	hash, err := WriteAtomic(path, export)
 	if err != nil {

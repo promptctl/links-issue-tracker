@@ -1,8 +1,9 @@
 package merge
 
 import (
-	"encoding/json"
+	"reflect"
 	"sort"
+	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
@@ -132,9 +133,46 @@ func issueEqual(left *model.Issue, right *model.Issue) bool {
 	if left == nil || right == nil {
 		return false
 	}
-	leftEncoded, _ := json.Marshal(left)
-	rightEncoded, _ := json.Marshal(right)
-	return string(leftEncoded) == string(rightEncoded)
+	return reflect.DeepEqual(issueProjectionFrom(*left), issueProjectionFrom(*right))
+}
+
+type issueProjection struct {
+	ID          string
+	Title       string
+	Description string
+	Status      string
+	Priority    int
+	IssueType   string
+	Topic       string
+	Assignee    string
+	Rank        string
+	Labels      []string
+	CreatedAt   time.Time
+	UpdatedAt   time.Time
+	ClosedAt    *time.Time
+	ArchivedAt  *time.Time
+	DeletedAt   *time.Time
+}
+
+func issueProjectionFrom(issue model.Issue) issueProjection {
+	// [LAW:one-source-of-truth] Merge equality compares the same lossless issue data that the sync wire owns, without depending on lifecycle-derived JSON fields.
+	return issueProjection{
+		ID:          issue.ID,
+		Title:       issue.Title,
+		Description: issue.Description,
+		Status:      issue.StatusValue(),
+		Priority:    issue.Priority,
+		IssueType:   issue.IssueType,
+		Topic:       issue.Topic,
+		Assignee:    issue.AssigneeValue(),
+		Rank:        issue.Rank,
+		Labels:      append([]string{}, issue.Labels...),
+		CreatedAt:   issue.CreatedAt,
+		UpdatedAt:   issue.UpdatedAt,
+		ClosedAt:    issue.ClosedAtValue(),
+		ArchivedAt:  issue.ArchivedAt,
+		DeletedAt:   issue.DeletedAt,
+	}
 }
 
 func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relation) []model.Relation {

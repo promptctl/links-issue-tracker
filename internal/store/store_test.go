@@ -38,6 +38,15 @@ func issueIDs(issues []model.Issue) []string {
 	return ids
 }
 
+func containsIssueID(issues []model.Issue, id string) bool {
+	for _, issue := range issues {
+		if issue.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
 func TestStoreCreateEpicAndRelations(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -90,6 +99,131 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	}
 	if len(export.Issues) != 3 {
 		t.Fatalf("issues len = %d, want 3", len(export.Issues))
+	}
+}
+
+func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Container", Topic: "life", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	openLeaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Open leaf", Topic: "life", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(open leaf) error = %v", err)
+	}
+	closedLeaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Closed leaf", Topic: "life", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(closed leaf) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(done) error = %v", err)
+	}
+	leaf, err := st.GetIssue(ctx, openLeaf.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(open leaf) error = %v", err)
+	}
+	if leaf.Capabilities().Status == nil {
+		t.Fatalf("leaf Capabilities().Status = nil, want owned status")
+	}
+	loadedEpic, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(epic) error = %v", err)
+	}
+	if loadedEpic.Capabilities().Status != nil {
+		t.Fatalf("epic Capabilities().Status = %#v, want nil", loadedEpic.Capabilities().Status)
+	}
+	progress := loadedEpic.Progress()
+	if progress.Open != 1 || progress.Closed != 1 || progress.Total != 2 {
+		t.Fatalf("epic Progress() = %#v, want open=1 closed=1 total=2", progress)
+	}
+	issues, err := st.ListIssues(ctx, ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if !containsIssueID(issues, epic.ID) {
+		t.Fatalf("ListIssues() ids=%v, want epic %s included", issueIDs(issues), epic.ID)
+	}
+}
+
+// Epic state is derived from children; ListIssues filters by that derived state
+// rather than the dead i.status DB column. This regression test pins the three
+// epic shapes against the canonical default and explicit status filters.
+func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	openEpic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "All open", Topic: "derived", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(openEpic) error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Open child", Topic: "derived", IssueType: "task", Priority: 2, ParentID: openEpic.ID}); err != nil {
+		t.Fatalf("CreateIssue(openEpic child) error = %v", err)
+	}
+
+	mixedEpic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Mixed children", Topic: "derived", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(mixedEpic) error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Mixed open", Topic: "derived", IssueType: "task", Priority: 2, ParentID: mixedEpic.ID}); err != nil {
+		t.Fatalf("CreateIssue(mixedEpic open child) error = %v", err)
+	}
+	mixedClosedChild, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Mixed closed", Topic: "derived", IssueType: "task", Priority: 2, ParentID: mixedEpic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(mixedEpic closed child) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(mixed closed start) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(mixed closed done) error = %v", err)
+	}
+
+	closedEpic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "All closed", Topic: "derived", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(closedEpic) error = %v", err)
+	}
+	closedChild, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Closed child", Topic: "derived", IssueType: "task", Priority: 2, ParentID: closedEpic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(closedEpic child) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(closed child start) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(closed child done) error = %v", err)
+	}
+
+	cases := []struct {
+		name     string
+		statuses []string
+		want     map[string]bool
+	}{
+		{name: "default open+in_progress", statuses: []string{"open", "in_progress"}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "open only", statuses: []string{"open"}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: false, closedEpic.ID: false}},
+		{name: "in_progress only", statuses: []string{"in_progress"}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "closed only", statuses: []string{"closed"}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: false, closedEpic.ID: true}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			issues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: tc.statuses, IssueTypes: []string{"epic"}})
+			if err != nil {
+				t.Fatalf("ListIssues(%v) error = %v", tc.statuses, err)
+			}
+			got := map[string]bool{}
+			for _, issue := range issues {
+				got[issue.ID] = true
+			}
+			for id, expect := range tc.want {
+				if got[id] != expect {
+					t.Fatalf("ListIssues(%v) epic %s present=%v, want %v (got ids=%v)", tc.statuses, id, got[id], expect, issueIDs(issues))
+				}
+			}
+		})
 	}
 }
 
@@ -618,6 +752,15 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 
 func intPtr(value int) *int { return &value }
 
+func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.Issue {
+	t.Helper()
+	hydrated, err := model.HydrateOwnedStatus(issue, model.StatusView{Value: status})
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+	}
+	return hydrated
+}
+
 func TestReplaceFromExportAndSyncState(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -631,17 +774,16 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 		Version:     1,
 		WorkspaceID: "foreign-workspace",
 		ExportedAt:  time.Now().UTC(),
-		Issues: []model.Issue{{
+		Issues: []model.Issue{issueWithStatus(t, model.Issue{
 			ID:          "issue-replaced",
 			Title:       "Imported issue",
 			Description: "from file sync",
-			Status:      "open",
 			Priority:    2,
 			IssueType:   "task",
 			Labels:      []string{"imported"},
 			CreatedAt:   time.Now().UTC(),
 			UpdatedAt:   time.Now().UTC(),
-		}},
+		}, model.StateOpen)},
 		Labels: []model.Label{{
 			IssueID:   "issue-replaced",
 			Name:      "imported",
@@ -704,14 +846,14 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
-	if closed.Status != "closed" || closed.ClosedAt == nil {
+	if closed.State() != model.StateClosed || closed.ClosedAtValue() == nil {
 		t.Fatalf("closed = %#v", closed)
 	}
 	reopened, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "reopen", Reason: "follow-up work", CreatedBy: "tester"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(reopen) error = %v", err)
 	}
-	if reopened.Status != "open" || reopened.ClosedAt != nil {
+	if reopened.State() != model.StateOpen || reopened.ClosedAtValue() != nil {
 		t.Fatalf("reopened = %#v", reopened)
 	}
 	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "archive", Reason: "inactive", CreatedBy: "tester"})
@@ -768,8 +910,8 @@ func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(close, empty reason) error = %v", err)
 	}
-	if closed.Status != "closed" {
-		t.Fatalf("closed.Status = %q, want closed", closed.Status)
+	if closed.State() != model.StateClosed {
+		t.Fatalf("closed.State() = %q, want closed", closed.State())
 	}
 	detail, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {
@@ -791,8 +933,8 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if issue.Status != "open" {
-		t.Fatalf("issue.Status = %q, want open", issue.Status)
+	if issue.State() != model.StateOpen {
+		t.Fatalf("issue.State() = %q, want open", issue.State())
 	}
 
 	started, err := st.TransitionIssue(ctx, TransitionIssueInput{
@@ -804,8 +946,8 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
-	if started.Status != "in_progress" {
-		t.Fatalf("started.Status = %q, want in_progress", started.Status)
+	if started.State() != model.StateInProgress {
+		t.Fatalf("started.State() = %q, want in_progress", started.State())
 	}
 
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
@@ -826,7 +968,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(done) error = %v", err)
 	}
-	if done.Status != "closed" || done.ClosedAt == nil {
+	if done.State() != model.StateClosed || done.ClosedAtValue() == nil {
 		t.Fatalf("done = %#v, want closed with ClosedAt", done)
 	}
 
@@ -1018,6 +1160,314 @@ func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
 	}
 	if topicExists == 0 {
 		t.Fatal("OpenForRead did not auto-migrate: topic column missing")
+	}
+}
+
+func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	root, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Root epic", Topic: "life", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(root) error = %v", err)
+	}
+	sub, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Sub epic", Topic: "life", IssueType: "epic", Priority: 1, ParentID: root.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(sub) error = %v", err)
+	}
+	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Leaf", Topic: "life", IssueType: "task", Priority: 2, ParentID: sub.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: leaf.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(close) error = %v", err)
+	}
+
+	children, err := st.ListChildren(ctx, root.ID)
+	if err != nil {
+		t.Fatalf("ListChildren() error = %v", err)
+	}
+	if len(children) != 1 || children[0].ID != sub.ID {
+		t.Fatalf("children = %#v, want sub epic %s", children, sub.ID)
+	}
+	progress := children[0].Progress()
+	if !children[0].IsContainer() || progress.Closed != 1 || progress.Total != 1 {
+		t.Fatalf("sub epic container/progress = %v/%#v, want closed 1 total 1", children[0].IsContainer(), progress)
+	}
+}
+
+func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	parent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Parent epic", Topic: "detail", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(parent) error = %v", err)
+	}
+	subject, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Subject", Topic: "detail", IssueType: "task", Priority: 2, ParentID: parent.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(subject) error = %v", err)
+	}
+	dependency, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependency epic", Topic: "detail", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependency) error = %v", err)
+	}
+	dependencyLeaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependency leaf", Topic: "detail", IssueType: "task", Priority: 2, ParentID: dependency.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependency leaf) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: dependencyLeaf.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(close dependency leaf) error = %v", err)
+	}
+	related, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Related epic", Topic: "detail", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(related) error = %v", err)
+	}
+	blocked, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocked by subject", Topic: "detail", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(blocked) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: subject.ID, DstID: dependency.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(depends on epic) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: subject.ID, DstID: related.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(related epic) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: blocked.ID, DstID: subject.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(blocked) error = %v", err)
+	}
+
+	detail, err := st.GetIssueDetail(ctx, subject.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Parent == nil || !detail.Parent.IsContainer() {
+		t.Fatalf("parent = %#v, want hydrated container", detail.Parent)
+	}
+	if len(detail.DependsOn) != 1 || !detail.DependsOn[0].IsContainer() || detail.DependsOn[0].State() != model.StateClosed {
+		t.Fatalf("DependsOn = %#v, want closed hydrated epic", detail.DependsOn)
+	}
+	if len(detail.Related) != 1 || !detail.Related[0].IsContainer() {
+		t.Fatalf("Related = %#v, want hydrated epic", detail.Related)
+	}
+	if len(detail.Blocks) != 1 || detail.Blocks[0].Capabilities().Status == nil {
+		t.Fatalf("Blocks = %#v, want hydrated leaf", detail.Blocks)
+	}
+	if len(detail.DependsOn) > 0 && detail.DependsOn[0].Labels == nil {
+		t.Fatalf("DependsOn[0].Labels = nil, want hydrated label slice")
+	}
+	if detail.Parent != nil && detail.Parent.Labels == nil {
+		t.Fatalf("Parent.Labels = nil, want hydrated label slice")
+	}
+}
+
+func TestEpicAsDependencyDerivedState(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Leaf", Topic: "dep", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Epic dep", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Epic child", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(close) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: leaf.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(blocks) error = %v", err)
+	}
+	detail, err := st.GetIssueDetail(ctx, leaf.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if len(detail.DependsOn) != 1 || detail.DependsOn[0].State() != model.StateClosed {
+		t.Fatalf("DependsOn = %#v, want epic dependency with closed derived state", detail.DependsOn)
+	}
+}
+
+func TestSyncRoundTripIncludingEpic(t *testing.T) {
+	ctx := context.Background()
+	source := openIssueStore(t, ctx)
+	epic, err := source.CreateIssue(ctx, CreateIssueInput{Title: "Sync epic", Topic: "sync", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	child, err := source.CreateIssue(ctx, CreateIssueInput{Title: "Sync leaf", Topic: "sync", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	if _, err := source.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(close) error = %v", err)
+	}
+	before, err := source.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(before) error = %v", err)
+	}
+	export, err := source.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	data, err := json.Marshal(export)
+	if err != nil {
+		t.Fatalf("Marshal(export) error = %v", err)
+	}
+	var decoded model.Export
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal(export) error = %v", err)
+	}
+	target := openIssueStore(t, ctx)
+	if err := target.ReplaceFromExport(ctx, decoded); err != nil {
+		t.Fatalf("ReplaceFromExport() error = %v", err)
+	}
+	after, err := target.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(after) error = %v", err)
+	}
+	if after.Progress() != before.Progress() {
+		t.Fatalf("round-trip progress = %#v, want %#v", after.Progress(), before.Progress())
+	}
+}
+
+func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Close me", Topic: "life", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close"); err != nil {
+		t.Fatalf("writeStatusTransition(first) error = %v", err)
+	}
+	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close")
+	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
+		t.Fatalf("writeStatusTransition(second) error = %v, want close conflict", err)
+	}
+}
+
+func TestArchiveReturnsHydratedIssue(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Archive epic", Topic: "life", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child", Topic: "life", IssueType: "task", Priority: 2, ParentID: epic.ID}); err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	}
+	progress := archived.Progress()
+	if archived.ArchivedAt == nil || !archived.IsContainer() || progress.Total != 1 {
+		t.Fatalf("archived issue = archived_at:%v container:%v progress:%#v, want hydrated archived epic", archived.ArchivedAt, archived.IsContainer(), progress)
+	}
+}
+
+func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Archived snapshot", Topic: "life", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Archived child", Topic: "life", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "archive", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(archive child) error = %v", err)
+	}
+	activeEpic, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(active epic) error = %v", err)
+	}
+	if progress := activeEpic.Progress(); progress.Total != 0 {
+		t.Fatalf("active epic Progress() = %#v, want archived child excluded", progress)
+	}
+	archivedEpic, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(archive epic) error = %v", err)
+	}
+	if progress := archivedEpic.Progress(); progress.Total != 1 || progress.Open != 1 {
+		t.Fatalf("archived epic Progress() = %#v, want archived child snapshot included", progress)
+	}
+}
+
+func TestReopenClearsClosedAt(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Reopen me", Topic: "life", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "close", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(close) error = %v", err)
+	}
+	if closed.ClosedAtValue() == nil {
+		t.Fatalf("ClosedAtValue() = nil after close")
+	}
+	reopened, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "reopen", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(reopen) error = %v", err)
+	}
+	if reopened.StatusValue() != string(model.StateOpen) || reopened.ClosedAtValue() != nil {
+		t.Fatalf("reopened status/closed_at = %q/%#v, want open/nil", reopened.StatusValue(), reopened.ClosedAtValue())
+	}
+	loaded, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if loaded.ClosedAtValue() != nil {
+		t.Fatalf("loaded ClosedAtValue() = %#v, want nil", loaded.ClosedAtValue())
+	}
+}
+
+func TestExportRefusesUnhydratedIssue(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	hydrated, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Hydrated", Topic: "life", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if len(export.Issues) == 0 || export.Issues[0].ID != hydrated.ID {
+		t.Fatalf("Export() returned %#v, want hydrated issue", export.Issues)
+	}
+	export.Issues = append(export.Issues, model.Issue{ID: "unhydrated-x", IssueType: "task"})
+	if _, err := json.MarshalIndent(export, "", "  "); err == nil {
+		t.Fatalf("MarshalIndent of export with unhydrated issue did not error")
+	}
+}
+
+func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Archive me", Topic: "life", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	}
+	if archived.ArchivedAt == nil {
+		t.Fatalf("archived issue has nil ArchivedAt")
+	}
+	_, err = st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	if err == nil || err.Error() != "issue is already archived" {
+		t.Fatalf("re-archive error = %v, want already archived", err)
 	}
 }
 

@@ -83,7 +83,7 @@ func newBlockerAnnotator(details map[string]model.IssueDetail) annotation.Annota
 		// Collect open blockers and sort by ID for stable annotation ordering.
 		var openDeps []model.Issue
 		for _, dep := range detail.DependsOn {
-			if dep.Status != "closed" {
+			if dep.State() != model.StateClosed {
 				openDeps = append(openDeps, dep)
 			}
 		}
@@ -110,7 +110,7 @@ func newBlockerAnnotator(details map[string]model.IssueDetail) annotation.Annota
 // with no update in the given threshold as orphaned.
 func newOrphanedAnnotator(threshold time.Duration) annotation.Annotator {
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
-		if issue.Status != "in_progress" {
+		if issue.State() != model.StateInProgress {
 			return nil, nil
 		}
 		age := time.Since(issue.UpdatedAt)
@@ -139,6 +139,9 @@ func issueJSONFieldNames() map[string]struct{} {
 		}
 		fields[name] = struct{}{}
 	}
+	fields["status"] = struct{}{}
+	fields["assignee"] = struct{}{}
+	fields["closed_at"] = struct{}{}
 	return fields
 }
 
@@ -194,7 +197,7 @@ func isRequiredFieldSet(value any) bool {
 func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
 	for i := range rows {
 		detail := details[rows[i].ID]
-		if detail.Parent == nil || detail.Parent.IssueType != "epic" {
+		if detail.Parent == nil || !detail.Parent.IsContainer() {
 			continue
 		}
 		rows[i].ParentEpic = &annotation.ParentEpicRef{
@@ -216,7 +219,7 @@ func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]m
 func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
 	epicRank := func(issue model.Issue) string {
 		parent := details[issue.ID].Parent
-		if parent != nil && parent.IssueType == "epic" {
+		if parent != nil && parent.IsContainer() {
 			return parent.Rank
 		}
 		return issue.Rank
@@ -295,7 +298,7 @@ func printReadyOutput(w io.Writer, columns []string, issues []annotation.Annotat
 	var inProgress, ready, blocked []annotation.AnnotatedIssue
 	for i := range issues {
 		switch {
-		case issues[i].Status == "in_progress":
+		case issues[i].State() == model.StateInProgress:
 			inProgress = append(inProgress, issues[i])
 		case isReadyBlocked(issues[i].Annotations):
 			blocked = append(blocked, issues[i])

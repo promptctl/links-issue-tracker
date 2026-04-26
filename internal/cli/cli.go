@@ -706,20 +706,16 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
 	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
-		Statuses: []string{"open", "in_progress"},
-		// [LAW:dataflow-not-control-flow] Epics never enter the ready pipeline;
-		// agents can't `lit start` a container, so surfacing one would force
-		// prose-driven drill rules to translate epic->child. Filter at the data
-		// boundary instead. (links-agent-epic-model-uew.1)
-		ExcludeIssueTypes: []string{"epic"},
-		Assignees:         toSlice(strings.TrimSpace(*assignee)),
-		IncludeArchived:   false,
-		IncludeDeleted:    false,
-		Limit:             0,
+		Statuses:        []string{"open", "in_progress"},
+		Assignees:       toSlice(strings.TrimSpace(*assignee)),
+		IncludeArchived: false,
+		IncludeDeleted:  false,
+		Limit:           0,
 	})
 	if err != nil {
 		return err
 	}
+	issues = filterWorkableIssues(issues)
 	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
 	if err != nil {
 		return err
@@ -838,13 +834,14 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		}
 		// [LAW:one-source-of-truth] Status changes are normalized to canonical lifecycle transitions instead of writing status directly.
-		actions, err := statusTransitionActionsForUpdate(current.Status, targetStatus)
+		currentStatus := current.StatusValue()
+		actions, err := statusTransitionActionsForUpdate(currentStatus, targetStatus)
 		if err != nil {
 			return err
 		}
 		transitionReason := strings.TrimSpace(*reason)
 		if transitionReason == "" {
-			transitionReason = fmt.Sprintf("status update via lit update: %s -> %s", current.Status, targetStatus)
+			transitionReason = fmt.Sprintf("status update via lit update: %s -> %s", currentStatus, targetStatus)
 		}
 		issue = current
 		// [LAW:dataflow-not-control-flow] Transition execution order is fixed; data determines whether action slice is empty.
@@ -961,6 +958,17 @@ func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]str
 		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
 	}
 	return strings.Split(action, "+"), nil
+}
+
+func filterWorkableIssues(issues []model.Issue) []model.Issue {
+	filtered := make([]model.Issue, 0, len(issues))
+	for _, issue := range issues {
+		status := issue.Capabilities().Status
+		if status != nil && status.Value != model.StateClosed {
+			filtered = append(filtered, issue)
+		}
+	}
+	return filtered
 }
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {

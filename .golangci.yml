@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # [LAW:single-enforcer] lifecycle internals are enforced at the model package boundary instead of by caller convention.
+        lifecycle-boundary:
+          list-mode: lax
+          files:
+            - "!**/internal/model/**"
+          deny:
+            - pkg: "github.com/bmf/links-issue-tracker/internal/model/lifecycle"
+              desc: "lifecycle internals are owned by internal/model; use model hydration and capability APIs"

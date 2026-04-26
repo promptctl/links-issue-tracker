@@ -81,6 +81,11 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
+	for _, issue := range issues {
+		if !issue.IsHydrated() {
+			return model.Export{}, fmt.Errorf("export: issue %s is not hydrated; refusing to write a partial wire format", issue.ID)
+		}
+	}
 	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, History: history}, nil
 }
 
@@ -402,16 +407,21 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 	}
 	for _, issue := range export.Issues {
 		var closedAt any
-		if issue.ClosedAt != nil {
-			closedAt = issue.ClosedAt.Format(time.RFC3339Nano)
+		if value := issue.ClosedAtValue(); value != nil {
+			closedAt = value.Format(time.RFC3339Nano)
 		}
-		status, err := normalizeStatus(issue.Status)
+		statusValue := issue.StatusValue()
+		if model.IsContainerType(issue.IssueType) && statusValue == "" {
+			// [LAW:one-source-of-truth] Container status storage is a row default only; hydrated reads derive container state from child relations.
+			statusValue = string(model.StateOpen)
+		}
+		status, err := normalizeStatus(statusValue)
 		if err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, normalizeIssueSlug(issue.Topic), issue.Assignee, issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, normalizeIssueSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 	}
