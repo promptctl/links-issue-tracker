@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"os"
@@ -1289,6 +1290,142 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 	}
 	if len(detail.DependsOn) != 1 || detail.DependsOn[0].State() != model.StateClosed {
 		t.Fatalf("DependsOn = %#v, want epic dependency with closed derived state", detail.DependsOn)
+	}
+}
+
+// (links-agent-epic-model-uew.7) After the schema cleanup, container rows
+// persist NULL in the status column instead of the invented "open". The
+// dead-data write is gone; any future code that reads i.status on an epic
+// will get NULL and fail loudly instead of silently lying.
+func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Container", Topic: "schema", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Leaf", Topic: "schema", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	var epicStatus, leafStatus sql.NullString
+	if err := st.db.QueryRowContext(ctx, "SELECT status FROM issues WHERE id = ?", epic.ID).Scan(&epicStatus); err != nil {
+		t.Fatalf("query epic status error = %v", err)
+	}
+	if err := st.db.QueryRowContext(ctx, "SELECT status FROM issues WHERE id = ?", leaf.ID).Scan(&leafStatus); err != nil {
+		t.Fatalf("query leaf status error = %v", err)
+	}
+	if epicStatus.Valid {
+		t.Fatalf("epic.status = %q (Valid=true), want NULL", epicStatus.String)
+	}
+	if !leafStatus.Valid || leafStatus.String != string(model.StateOpen) {
+		t.Fatalf("leaf.status = %#v, want Valid open", leafStatus)
+	}
+}
+
+// (links-agent-epic-model-uew.7) Container ↔ non-container IssueType changes
+// would orphan the lifecycle expression: an epic carries an AllOf lifecycle
+// that derives state from children, and a leaf carries an OwnedStatus carrying
+// status/assignee/closed_at. Crossing that boundary via UpdateIssue would
+// either drop the leaf's status or leave AllOf attached to a row whose schema
+// requires owned status. Refused at the trust boundary instead of patched up
+// downstream with an invented default.
+func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Container", Topic: "schema", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Leaf", Topic: "schema", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	taskType := "task"
+	if _, err := st.UpdateIssue(ctx, epic.ID, UpdateIssueInput{IssueType: &taskType}); err == nil {
+		t.Fatal("UpdateIssue(epic -> task) succeeded; container ↔ leaf type changes must be refused")
+	}
+	epicType := "epic"
+	if _, err := st.UpdateIssue(ctx, leaf.ID, UpdateIssueInput{IssueType: &epicType}); err == nil {
+		t.Fatal("UpdateIssue(task -> epic) succeeded; container ↔ leaf type changes must be refused")
+	}
+	bugType := "bug"
+	if _, err := st.UpdateIssue(ctx, leaf.ID, UpdateIssueInput{IssueType: &bugType}); err != nil {
+		t.Fatalf("UpdateIssue(task -> bug) error = %v; same-kind type changes must remain legal", err)
+	}
+}
+
+// (links-agent-epic-model-uew.7) ensureStatusConstraint compares Dolt's
+// reported CHECK clause against canonicalStatusCheckClause. If Dolt's
+// normalization ever drifts from ours, the comparison would silently fail and
+// every Open() would drop+re-add the constraint, producing a fresh schema
+// commit each time. This test pins migration idempotence at the observable
+// boundary — the Dolt commit log — so any future drift is loud.
+func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+	commitsBefore, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log before reopen error = %v", err)
+	}
+	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(second) error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close(second) error = %v", err)
+	}
+	commitsAfter, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
+	if err != nil {
+		t.Fatalf("dolt log after reopen error = %v", err)
+	}
+	if countNonEmptyLines(commitsAfter) != countNonEmptyLines(commitsBefore) {
+		t.Fatalf("migration produced extra commit on second Open():\nbefore:\n%s\nafter:\n%s", commitsBefore, commitsAfter)
+	}
+}
+
+// (links-agent-epic-model-uew.7) The CHECK constraint encodes the invariant
+// at the schema level: any attempt to write a non-NULL status on an epic row
+// is rejected at INSERT time, mechanically — no future code path can quietly
+// re-introduce the dead-data lie.
+func TestSchemaRejectsEpicWithNonNullStatus(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	err := st.ExecRawForTest(ctx,
+		`INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"test-illegal-epic", "Illegal", "", "open", 1, "epic", "schema", "", "ZZZ", now, now,
+	)
+	if err == nil {
+		t.Fatal("INSERT epic with status='open' succeeded; CHECK constraint should reject it")
+	}
+}
+
+// The other half of the CHECK invariant: leaf rows must carry a non-NULL
+// status. `status IN (...)` against NULL evaluates to NULL, and MySQL/Dolt
+// CHECK treats NULL as not-violated — so without an explicit `status IS NOT
+// NULL` term in the canonical clause, a leaf row with NULL status would slip
+// through. This test pins the schema-level rejection so any future drift in
+// Dolt's CHECK-NULL semantics or in the clause itself fails loudly.
+func TestSchemaRejectsLeafWithNullStatus(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	err := st.ExecRawForTest(ctx,
+		`INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		"test-illegal-leaf", "Illegal", "", nil, 1, "task", "schema", "", "ZZZ", now, now,
+	)
+	if err == nil {
+		t.Fatal("INSERT task with status=NULL succeeded; CHECK constraint should reject it")
 	}
 }
 

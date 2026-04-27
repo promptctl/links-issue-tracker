@@ -179,7 +179,7 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	if err := validatePriority(in.Priority); err != nil {
 		return err
 	}
-	status, err := normalizeStatus(in.Status)
+	status, err := statusForStorageRaw(issueType, in.Status)
 	if err != nil {
 		return err
 	}
@@ -410,15 +410,10 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 		if value := issue.ClosedAtValue(); value != nil {
 			closedAt = value.Format(time.RFC3339Nano)
 		}
-		statusValue := issue.StatusValue()
-		if model.IsContainerType(issue.IssueType) && statusValue == "" {
-			// [LAW:one-source-of-truth] Container status storage is a row default only; hydrated reads derive container state from child relations.
-			statusValue = string(model.StateOpen)
-		}
-		status, err := normalizeStatus(statusValue)
-		if err != nil {
-			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
-		}
+		// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
+		// decision; the import path inherits it instead of inventing its own
+		// default for containers.
+		status := statusForStorage(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
 			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, normalizeIssueSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {

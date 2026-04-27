@@ -10,18 +10,22 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/rank"
 )
 
-func (s *Store) migrate(ctx context.Context) error {
-	changed := false
-	schema := []string{
-		`CREATE TABLE meta (
-			meta_key VARCHAR(191) PRIMARY KEY,
-			meta_value TEXT NOT NULL
-		);`,
-		`CREATE TABLE issues (
+// canonicalStatusCheckClause encodes the invariant that container rows store
+// NULL status (state is derived from children) and leaf rows carry one of the
+// known states. Single source of truth used by both the fresh-table CREATE
+// (via createIssuesTableStmt) and the upgrade-path ALTER (ensureStatusConstraint)
+// so they cannot diverge. The leaf branch carries an explicit `status IS NOT
+// NULL`: `IN (...)` against NULL evaluates to NULL, and MySQL/Dolt CHECK
+// treats NULL as not-violated, so without this clause a leaf row with NULL
+// status would slip through the very constraint it is supposed to forbid.
+const canonicalStatusCheckClause = `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
+
+func createIssuesTableStmt() string {
+	return fmt.Sprintf(`CREATE TABLE issues (
 			id VARCHAR(191) PRIMARY KEY,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
-			status VARCHAR(32) NOT NULL,
+			status VARCHAR(32) NULL,
 			priority INT NOT NULL,
 			issue_type VARCHAR(32) NOT NULL,
 			topic VARCHAR(191) NOT NULL,
@@ -31,10 +35,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			closed_at VARCHAR(64) NULL,
 			archived_at VARCHAR(64) NULL,
 			deleted_at VARCHAR(64) NULL,
-			CHECK(status IN ('open','in_progress','closed')),
+			CHECK(%s),
 			CHECK(priority >= 0 AND priority <= 4),
 			CHECK(issue_type IN ('task','feature','bug','chore','epic'))
+		);`, canonicalStatusCheckClause)
+}
+
+func (s *Store) migrate(ctx context.Context) error {
+	changed := false
+	schema := []string{
+		`CREATE TABLE meta (
+			meta_key VARCHAR(191) PRIMARY KEY,
+			meta_value TEXT NOT NULL
 		);`,
+		createIssuesTableStmt(),
 		`CREATE TABLE relations (
 			src_id VARCHAR(191) NOT NULL,
 			dst_id VARCHAR(191) NOT NULL,
@@ -144,8 +158,18 @@ type issueCheckConstraint struct {
 }
 
 func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
-	// [LAW:one-source-of-truth] `status` is the canonical workflow state.
+	// [LAW:one-source-of-truth] `status` is the canonical workflow state for
+	// non-container issues. Containers derive state from children and store NULL.
 	changed := false
+	// Existing workspaces created before status was nullable still have the
+	// column declared NOT NULL. Relax it before any backfill that needs to
+	// write NULL. Dolt rejects MODIFY on a column that already matches, so
+	// the helper swallows "already" errors via execIgnoreAlreadyExists.
+	relaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues MODIFY status VARCHAR(32) NULL`)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || relaxedChanged
 	legacyStatusUpdates := []struct {
 		probe   string
 		stmt    string
@@ -180,6 +204,15 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
 			probe:   `SELECT 1 FROM issues WHERE status <> 'closed' AND closed_at IS NOT NULL LIMIT 1`,
 			stmt:    `UPDATE issues SET closed_at = NULL WHERE status <> 'closed'`,
 			context: "normalize non-closed closed_at",
+		},
+		{
+			// [LAW:one-source-of-truth] Containers derive state from children;
+			// any persisted status on an epic row is dead data left over from
+			// the pre-derivation schema. NULL it so the column stops lying and
+			// future readers that touch i.status on an epic fail loudly.
+			probe:   `SELECT 1 FROM issues WHERE issue_type IN ('epic') AND status IS NOT NULL LIMIT 1`,
+			stmt:    `UPDATE issues SET status = NULL WHERE issue_type IN ('epic')`,
+			context: "null out container status",
 		},
 	}
 	for _, update := range legacyStatusUpdates {
@@ -253,7 +286,7 @@ func (s *Store) ensureStatusConstraint(ctx context.Context) (bool, error) {
 			return false, fmt.Errorf("drop status check %s: %w", constraint.name, err)
 		}
 	}
-	if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (status IN ('open','in_progress','closed'))`); err != nil {
+	if _, err := s.db.ExecContext(ctx, `ALTER TABLE issues ADD CONSTRAINT issues_status_check CHECK (`+canonicalStatusCheckClause+`)`); err != nil {
 		return false, fmt.Errorf("add canonical status check: %w", err)
 	}
 	return true, nil
@@ -293,7 +326,14 @@ func hasCanonicalStatusConstraint(constraints []issueCheckConstraint) bool {
 	if len(constraints) != 1 {
 		return false
 	}
-	return strings.Contains(normalizeConstraintClause(constraints[0].clause), "statusin('open','in_progress','closed')")
+	// Dolt's information_schema.check_clauses may report the clause with or
+	// without an outer wrapping pair of parentheses depending on how the
+	// constraint was added. Tolerate either side wrapping the other so the
+	// migration stays idempotent across normalization differences. Drift past
+	// this is caught by TestMigrationIsIdempotentOnSecondOpen.
+	actual := normalizeConstraintClause(constraints[0].clause)
+	expected := normalizeConstraintClause(canonicalStatusCheckClause)
+	return strings.Contains(actual, expected) || strings.Contains(expected, actual)
 }
 
 func normalizeConstraintClause(clause string) string {
