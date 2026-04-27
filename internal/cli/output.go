@@ -55,7 +55,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		}
 	} else {
 		progress := issue.Progress()
-		if _, err := fmt.Fprintf(w, "progress: %d/%d closed (open: %d, in_progress: %d, closed: %d)\n", progress.Closed, progress.Total, progress.Open, progress.InProgress, progress.Closed); err != nil {
+		if _, err := fmt.Fprintf(w, "children: %d closed, %d in_progress, %d open (%d total)\n", progress.Closed, progress.InProgress, progress.Open, progress.Total); err != nil {
 			return err
 		}
 	}
@@ -121,7 +121,10 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		return err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintf(w, "- %s %s\n", issue.ID, issue.Title); err != nil {
+		// State() is shape-agnostic: leaves return their owned status,
+		// containers return state derived from children. The agent reads the
+		// referenced issue's state inline without a second 'lit show'.
+		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", issue.ID, issue.State(), issue.Title); err != nil {
 			return err
 		}
 	}
