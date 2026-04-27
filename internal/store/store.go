@@ -988,14 +988,16 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 }
 
 func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
-	var status string
+	// status column is nullable since #79 (containers store NULL); the scan target
+	// must match the column shape, not the subset of rows this caller expects.
+	var status sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM issues WHERE id = ?`, issueID).Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
 			return "", NotFoundError{Entity: "issue", ID: issueID}
 		}
 		return "", fmt.Errorf("read issue status: %w", err)
 	}
-	return status, nil
+	return status.String, nil
 }
 
 func retryTransientManifestReadOnly(ctx context.Context, operation retryOperation, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
