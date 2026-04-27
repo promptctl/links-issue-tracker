@@ -46,13 +46,14 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %d\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
 		return err
 	}
-	caps := issue.Capabilities()
-	if caps.Status != nil {
+	// [LAW:dataflow-not-control-flow] Capability presence is the type-encoded
+	// answer to leaf-vs-container; the printer dispatches once on that single
+	// shape signal rather than asking IsContainer or comparing issue types.
+	if caps := issue.Capabilities(); caps.Status != nil {
 		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(caps.Status.Assignee)); err != nil {
 			return err
 		}
-	}
-	if caps.Status == nil {
+	} else {
 		progress := issue.Progress()
 		if _, err := fmt.Fprintf(w, "progress: %d/%d closed (open: %d, in_progress: %d, closed: %d)\n", progress.Closed, progress.Total, progress.Open, progress.InProgress, progress.Closed); err != nil {
 			return err
@@ -208,11 +209,10 @@ func formatOptionalTime(value *time.Time) string {
 }
 
 func formatIssueState(issue model.Issue) string {
-	state := issue.StatusValue()
-	if state == "" {
-		state = string(issue.State())
-	}
-	parts := []string{state}
+	// State() is shape-agnostic: leaves return their owned status, containers
+	// return the state derived from children. StatusValue() with an empty-string
+	// fallback was a pellet — duplicate dispatch across the same discriminator.
+	parts := []string{string(issue.State())}
 	if issue.ArchivedAt != nil {
 		parts = append(parts, "archived")
 	}

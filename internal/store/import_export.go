@@ -81,11 +81,9 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
-	for _, issue := range issues {
-		if !issue.IsHydrated() {
-			return model.Export{}, fmt.Errorf("export: issue %s is not hydrated; refusing to write a partial wire format", issue.ID)
-		}
-	}
+	// hydrateIssues guarantees every Issue it returns is fully hydrated
+	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
+	// remains the boundary that rejects partial values from any other source.
 	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, History: history}, nil
 }
 

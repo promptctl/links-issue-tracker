@@ -201,6 +201,20 @@ func (i *Issue) replaceLifecycle(next lifecycle.Lifecycle) {
 	i.pendingHydration = false
 }
 
+// HydrateRow is the single shape-dispatch entry point: it picks AllOf vs
+// OwnedStatus based on issue type and applies the matching hydrator. Callers
+// that have already loaded both the row's status view and (for containers) the
+// child issues should route through this function instead of repeating the
+// IsContainerType discriminator.
+// [LAW:single-enforcer] Container-vs-leaf hydration dispatch lives here so
+// read paths don't grow parallel branches that drift apart.
+func HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error) {
+	if IsContainerType(issue.IssueType) {
+		return HydrateAllOf(issue, children)
+	}
+	return HydrateOwnedStatus(issue, view)
+}
+
 // HydrateAllOf composes child issue lifecycles into a non-actionable container.
 // [LAW:one-source-of-truth] Container state is derived from child lifecycles, never copied into another persisted field.
 func HydrateAllOf(issue Issue, children []Issue) (Issue, error) {

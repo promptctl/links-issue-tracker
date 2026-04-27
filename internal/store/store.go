@@ -326,11 +326,7 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	if model.IsContainerType(issueType) {
-		issue, err = model.HydrateAllOf(issue, nil)
-	} else {
-		issue, err = model.HydrateOwnedStatus(issue, model.StatusView{Value: model.StateOpen, Assignee: strings.TrimSpace(in.Assignee)})
-	}
+	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen, Assignee: strings.TrimSpace(in.Assignee)}, nil)
 	if err != nil {
 		return model.Issue{}, err
 	}
@@ -1457,35 +1453,38 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 }
 
 // statusForStorage returns the value to persist in the issues.status column.
-// Container issues store NULL because their state derives from children;
-// hydrateIssues never reads this column for them. Leaf issues persist their
-// owned status string. The schema CHECK constraint enforces this invariant —
-// the function does not have to defend against bad inputs because the type
-// system upstream (OwnedStatus vs AllOf) already does.
+// The capability presence is the type-encoded answer to the container-vs-leaf
+// question — leaves expose Status, containers do not — so this projection
+// never asks IsContainer; it asks the lifecycle.
 // [LAW:one-source-of-truth] Container state lives in the AllOf lifecycle, not
 // the DB column. Writing NULL keeps the column from lying about what it owns.
 func statusForStorage(issue model.Issue) sql.NullString {
-	if issue.IsContainer() {
-		return sql.NullString{}
+	if status := issue.Capabilities().Status; status != nil {
+		return sql.NullString{String: string(status.Value), Valid: true}
 	}
-	return sql.NullString{String: issue.StatusValue(), Valid: true}
+	return sql.NullString{}
 }
 
-// statusForStorageRaw is the issueType+status equivalent of statusForStorage
-// for write paths that don't have a hydrated Issue (import / restore). Same
-// container/leaf decision; for leaves it validates the status token through
-// the canonical normalizer.
+// statusForStorageRaw is the (issueType, status) entry point for write paths
+// that haven't yet built a hydrated Issue (import / restore). It hydrates a
+// minimal Issue through the canonical shape parser, then delegates the column
+// projection to statusForStorage so both write entrypoints share one rule.
 // [LAW:single-enforcer] One rule for "what goes in the status column" applies
-// to every write path; the hydrated and raw entrypoints share it.
+// to every write path; statusForStorage is that rule and this routes through it.
 func statusForStorageRaw(issueType string, status string) (sql.NullString, error) {
-	if model.IsContainerType(issueType) {
-		return sql.NullString{}, nil
+	view := model.StatusView{}
+	if !model.IsContainerType(issueType) {
+		normalized, err := normalizeStatus(status)
+		if err != nil {
+			return sql.NullString{}, err
+		}
+		view.Value = model.State(normalized)
 	}
-	normalized, err := normalizeStatus(status)
+	issue, err := model.HydrateRow(model.Issue{IssueType: issueType}, view, nil)
 	if err != nil {
 		return sql.NullString{}, err
 	}
-	return sql.NullString{String: normalized, Valid: true}, nil
+	return statusForStorage(issue), nil
 }
 
 func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Issue, error) {
@@ -1529,15 +1528,18 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 		if base.Labels == nil {
 			base.Labels = []string{}
 		}
-		var issue model.Issue
-		// [LAW:single-enforcer] This store hydrator is the only read boundary that turns row status plus child relations into model lifecycle state.
-		if model.IsContainerType(row.Issue.IssueType) {
-			issue, err = model.HydrateAllOf(base, childrenByEpicID[row.Issue.ID])
-		} else {
-			issue, err = model.HydrateOwnedStatus(base, row.Status)
-		}
+		// [LAW:single-enforcer] This store hydrator is the only read boundary
+		// that turns row status plus child relations into model lifecycle state.
+		// HydrateRow owns the container-vs-leaf dispatch.
+		issue, err := model.HydrateRow(base, row.Status, childrenByEpicID[row.Issue.ID])
 		if err != nil {
 			return nil, err
+		}
+		// [LAW:single-enforcer] Hydrator post-condition: every returned Issue is
+		// fully hydrated. Consumers receive a typed value and never need to
+		// re-check IsHydrated() defensively. (subsumes va-001-hydration-b3z)
+		if !issue.IsHydrated() {
+			return nil, fmt.Errorf("hydrateIssues: produced unhydrated issue %s", issue.ID)
 		}
 		hydrated = append(hydrated, issue)
 	}

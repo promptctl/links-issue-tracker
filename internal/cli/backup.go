@@ -206,11 +206,8 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 }
 
 func hashExport(export model.Export) (string, error) {
-	for _, issue := range export.Issues {
-		if !issue.IsHydrated() {
-			return "", fmt.Errorf("hash export: issue %s is not hydrated", issue.ID)
-		}
-	}
+	// Issue.MarshalJSON refuses partial values, so MarshalIndent below surfaces
+	// any unhydrated input as a marshal error — no need for a duplicate guard here.
 	payload, err := json.MarshalIndent(export, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("marshal export: %w", err)
