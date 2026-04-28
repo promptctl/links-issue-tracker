@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
@@ -152,6 +153,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	addGroupedPassthrough(root, "operations", "next", "Print the next workable leaf to lit start", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"next"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runNext(commandCtx, stdout, ap, args)
+		})
+	})
+	addGroupedPassthrough(root, "operations", "orphaned", "List in_progress issues with no recent updates", func(args []string) error {
+		return runWithApp(ctx, appAccessRead, append([]string{"orphaned"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runOrphaned(commandCtx, stdout, ap, args)
 		})
 	})
 	addGroupedPassthrough(root, "operations", "ls", "List issues (rank by default)", func(args []string) error {
@@ -811,7 +817,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
-		newOrphanedAnnotator(24*time.Hour),
+		newOrphanedAnnotator(orphanedThreshold),
 	)
 	if err != nil {
 		return nil, nil, err
@@ -853,6 +859,77 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return errors.New("no ready work")
 	}
 	return printValue(stdout, next, *jsonOut, printNextSummary)
+}
+
+// runOrphaned lists in_progress issues whose last update is older than
+// orphanedThreshold — the same definition `lit ready` uses for the
+// "(ORPHANED)" marker, surfaced as a focused command for reclamation
+// workflows.
+//
+// [LAW:single-enforcer] Orphan classification lives in
+// newOrphanedAnnotator; this command only filters and presents.
+// [LAW:one-source-of-truth] Threshold comes from orphanedThreshold,
+// not a re-declared local constant.
+func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("orphaned")
+	assignee := fs.String("assignee", "", "Filter by assignee")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit orphaned [--assignee <user>] [--json]")
+	}
+	listFilter := store.ListIssuesFilter{
+		Statuses:        []string{"in_progress"},
+		Assignees:       toSlice(strings.TrimSpace(*assignee)),
+		IncludeArchived: false,
+		IncludeDeleted:  false,
+	}
+	issues, err := ap.Store.ListIssues(ctx, listFilter)
+	if err != nil {
+		return err
+	}
+	// Containers (epics) derive state from children; their own UpdatedAt
+	// has no relationship to whether any agent is working on them, so
+	// orphaning them based on it is meaningless. Drop them — orphan is
+	// a leaf-only concept here, same as in `lit ready`/`lit next`.
+	issues = filterWorkableIssues(issues)
+	annotated, err := annotation.Annotate(ctx, issues, newOrphanedAnnotator(orphanedThreshold))
+	if err != nil {
+		return err
+	}
+	orphaned := make([]annotation.AnnotatedIssue, 0, len(annotated))
+	for _, entry := range annotated {
+		if annotation.HasAny(entry.Annotations, annotation.Orphaned) {
+			orphaned = append(orphaned, entry)
+		}
+	}
+	// Sort oldest-first so the most stale work surfaces at the top —
+	// the row most likely to need reclamation. Same UpdatedAt the
+	// annotator keyed off, so order matches staleness directly.
+	sort.SliceStable(orphaned, func(i, j int) bool {
+		return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
+	})
+	return printValue(stdout, orphaned, *jsonOut, printOrphanedText)
+}
+
+func printOrphanedText(w io.Writer, v any) error {
+	rows := v.([]annotation.AnnotatedIssue)
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "No orphaned issues.")
+		return err
+	}
+	columns := []string{"id", "state", "topic", "assignee", "title"}
+	for _, entry := range rows {
+		line := formatIssueColumns(entry.Issue, columns, " | ")
+		age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
+		line += " | Last Update: " + age.String()
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

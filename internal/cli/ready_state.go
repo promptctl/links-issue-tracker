@@ -22,6 +22,13 @@ var readyBlockingKinds = []annotation.Kind{
 	annotation.OpenDependency,
 }
 
+// orphanedThreshold is the staleness window after which an in_progress
+// issue is flagged as orphaned. Both `lit ready`'s in-progress section
+// and `lit orphaned` read from this single value so the two surfaces
+// cannot drift.
+// [LAW:one-source-of-truth] Single threshold for orphan detection.
+const orphanedThreshold = 6 * time.Hour
+
 func isReadyBlocked(annotations []annotation.Annotation) bool {
 	return annotation.HasAny(annotations, readyBlockingKinds...)
 }

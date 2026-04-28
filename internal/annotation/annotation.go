@@ -58,7 +58,7 @@ var (
 	MissingField   = Kind{def: missingFieldDef}   // a required field is empty or unset
 	OpenDependency = Kind{def: openDependencyDef} // issue depends on an open ticket
 	RankInversion  = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
-	Orphaned       = Kind{def: orphanedDef}       // in_progress with no update for 24h+
+	Orphaned       = Kind{def: orphanedDef}       // in_progress with no update past the orphaned threshold
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	// "blocked_by" is a deserialization alias for backwards compatibility after
