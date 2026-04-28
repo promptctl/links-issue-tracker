@@ -26,12 +26,23 @@ from pathlib import Path
 DEFAULT_PROJECT = "-Users-bmf-code-links-issue-tracker"
 DEFAULT_OUTDIR = "tools/session-analysis/processed"
 
-# Truncation budgets — tuned to keep signal while shrinking volume.
-TRUNC_USER_TEXT = 6000
-TRUNC_THINKING = 6000
-TRUNC_ASSISTANT_TEXT = 6000
+# Truncation budgets — tuned empirically: real content rarely exceeds 2KB,
+# so 3KB caps cut tail risk without dropping signal.
+TRUNC_USER_TEXT = 3000
+TRUNC_THINKING = 3000
+TRUNC_ASSISTANT_TEXT = 3000
 TRUNC_TOOL_ARGS = 300
 TRUNC_BASH_CMD = 800
+TRUNC_BASH_STDOUT = 300
+
+# Wrapper patterns that are pure noise — strip them entirely.
+NOISE_WRAPPERS = (
+    "<local-command-caveat>",
+    "<command-name>",
+    "<command-message>",
+    "<command-args>",
+    "<local-command-stdout>",
+)
 
 
 def truncate(s, n):
@@ -83,6 +94,51 @@ def summarize_tool_args(name, args):
     if name == "ToolSearch":
         return args.get("query", "?")
     return truncate(json.dumps(args, default=str, sort_keys=True), TRUNC_TOOL_ARGS)
+
+
+BASH_INPUT_RE = re.compile(r"<bash-input>([\s\S]*?)</bash-input>")
+BASH_STDOUT_RE = re.compile(r"<bash-stdout>([\s\S]*?)</bash-stdout>")
+BASH_STDERR_RE = re.compile(r"<bash-stderr>([\s\S]*?)</bash-stderr>")
+
+
+def normalize_user_text(text):
+    """Strip wrapper noise, compact terminal command I/O. Returns ('', kind) where kind indicates the turn shape."""
+    if not text:
+        return "", "empty"
+    stripped = text.strip()
+    # Pure-noise wrappers: drop entirely.
+    if any(stripped.startswith(w) for w in NOISE_WRAPPERS):
+        # If the only content is a noise wrapper, return empty so the turn is skipped.
+        # But preserve any user text after the wrapper (some sessions append the real prompt after).
+        # Conservative: keep text after the wrapper closes.
+        for w in NOISE_WRAPPERS:
+            if stripped.startswith(w):
+                close = w.replace("<", "</")
+                idx = stripped.find(close)
+                if idx >= 0:
+                    after = stripped[idx + len(close) :].strip()
+                    if not after:
+                        return "", "noise"
+                    text = after
+                    stripped = after
+                    break
+                else:
+                    return "", "noise"
+    # Terminal command pattern — compact bash-input + bash-stdout to single label line.
+    bin_m = BASH_INPUT_RE.search(text)
+    bout_m = BASH_STDOUT_RE.search(text)
+    if bin_m or bout_m:
+        cmd = bin_m.group(1).strip() if bin_m else ""
+        out = bout_m.group(1).strip() if bout_m else ""
+        out_short = truncate(out, TRUNC_BASH_STDOUT) if out else ""
+        if cmd and out_short:
+            return f"$ {cmd}\n{out_short}", "bash"
+        if cmd:
+            return f"$ {cmd}", "bash"
+        if out_short:
+            return f"(stdout) {out_short}", "bash"
+        return "", "bash-empty"
+    return text, "text"
 
 
 def extract_user_text(content):
@@ -168,13 +224,10 @@ def parse_session(path):
                 if d.get("slug") and not sess["slug"]:
                     sess["slug"] = d.get("slug")
                 msg = d.get("message", {}) or {}
-                text = extract_user_text(msg.get("content", ""))
-                # Skip system-reminder-only / hook-only shells (they appear as user but carry no real prompt)
-                if not text or text.strip().startswith("<system-reminder>"):
-                    # Still note the turn boundary if there's a prompt
-                    if d.get("isMeta"):
-                        continue
-                # Skip turns that are pure tool_result wrappers (no text)
+                raw_text = extract_user_text(msg.get("content", ""))
+                if not raw_text or raw_text.strip().startswith("<system-reminder>"):
+                    continue
+                text, kind = normalize_user_text(raw_text)
                 if not text.strip():
                     continue
                 sess["user_turns"] += 1
@@ -183,6 +236,7 @@ def parse_session(path):
                         "i": len(sess["turns"]),
                         "ts": ts,
                         "role": "user",
+                        "kind": kind,
                         "text": truncate(text, TRUNC_USER_TEXT),
                         "branch": br,
                     }
