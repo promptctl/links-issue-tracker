@@ -108,13 +108,22 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			}
 		}
 	}
-	if len(detail.History) > 0 {
+	if len(detail.Events) > 0 {
 		if _, err := fmt.Fprintln(w, "\nhistory:"); err != nil {
 			return err
 		}
-		for _, event := range detail.History {
-			if _, err := fmt.Fprintf(w, "- [%s] %s %s (%s -> %s)\n", event.CreatedBy, event.Action, strings.ReplaceAll(event.Reason, "\n", "\\n"), emptyDash(event.FromStatus), emptyDash(event.ToStatus)); err != nil {
+		for _, event := range detail.Events {
+			action := event.Action
+			if action == "" {
+				action = "update"
+			}
+			if _, err := fmt.Fprintf(w, "- [%s] %s %s\n", event.Assignee, action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
 				return err
+			}
+			for _, change := range event.Changes {
+				if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, emptyDash(change.From), emptyDash(change.To)); err != nil {
+					return err
+				}
 			}
 		}
 	}

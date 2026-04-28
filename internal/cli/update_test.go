@@ -140,10 +140,10 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.History) < 2 {
-		t.Fatalf("len(detail.History) = %d, want >= 2", len(detail.History))
+	if len(detail.Events) < 2 {
+		t.Fatalf("len(detail.Events) = %d, want >= 2", len(detail.Events))
 	}
-	last := detail.History[len(detail.History)-1]
+	last := detail.Events[len(detail.Events)-1]
 	if last.Action != "start" {
 		t.Fatalf("last.Action = %q, want start", last.Action)
 	}

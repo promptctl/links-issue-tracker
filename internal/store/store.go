@@ -85,6 +85,11 @@ type UpdateIssueInput struct {
 	Priority    *int
 	Assignee    *string
 	Labels      *[]string
+	// By identifies the actor performing the update so the resulting event
+	// log records who changed what. Empty falls back to "unknown".
+	By string
+	// Reason is optional free text recorded on the event.
+	Reason string
 }
 
 type SortSpec struct {
@@ -378,7 +383,15 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 	if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
 		return model.Issue{}, err
 	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", createdBy); err != nil {
+	// CreateIssue's "created" event records the initial status as a single
+	// field-change row. Other initial field values aren't replayed here —
+	// the issues row itself is the canonical record of creation state; the
+	// event log records mutations going forward.
+	createChanges := []model.FieldChange{}
+	if !model.IsContainerType(issue.IssueType) {
+		createChanges = append(createChanges, model.FieldChange{Field: "status", From: "", To: "open"})
+	}
+	if err := s.recordEvent(ctx, tx, issue.ID, "created", "issue created", createdBy, createChanges); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -603,7 +616,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	history, err := s.listHistory(ctx, id)
+	events, err := s.listEvents(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
@@ -611,7 +624,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		Issue:     issue,
 		Relations: relations,
 		Comments:  comments,
-		History:   history,
+		Events:    events,
 		Children:  []model.Issue{},
 		DependsOn: []model.Issue{},
 		Related:   []model.Issue{},
@@ -687,6 +700,12 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if err != nil {
 		return model.Issue{}, err
 	}
+	priorTitle := issue.Title
+	priorDescription := issue.Description
+	priorIssueType := issue.IssueType
+	priorPriority := issue.Priority
+	priorAssignee := issue.AssigneeValue()
+	priorLabels := strings.Join(issue.Labels, ",")
 	if in.Title != nil {
 		issue.Title = strings.TrimSpace(*in.Title)
 		if issue.Title == "" {
@@ -768,6 +787,34 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
 			return model.Issue{}, err
 		}
+	}
+	// [LAW:dataflow-not-control-flow] Every UpdateIssue commit emits one
+	// event with a field-change row per actually-changed field. Empty diff
+	// (no fields moved) still emits an event row — the call happened, the
+	// audit trail records it.
+	var changes []model.FieldChange
+	if priorTitle != issue.Title {
+		changes = append(changes, model.FieldChange{Field: "title", From: priorTitle, To: issue.Title})
+	}
+	if priorDescription != issue.Description {
+		changes = append(changes, model.FieldChange{Field: "description", From: priorDescription, To: issue.Description})
+	}
+	if priorIssueType != issue.IssueType {
+		changes = append(changes, model.FieldChange{Field: "issue_type", From: priorIssueType, To: issue.IssueType})
+	}
+	if priorPriority != issue.Priority {
+		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(priorPriority), To: strconv.Itoa(issue.Priority)})
+	}
+	newAssignee := issue.AssigneeValue()
+	if priorAssignee != newAssignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: newAssignee})
+	}
+	newLabels := strings.Join(issue.Labels, ",")
+	if priorLabels != newLabels {
+		changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
+	}
+	if err := s.recordEvent(ctx, tx, issue.ID, "", in.Reason, in.By, changes); err != nil {
+		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Issue{}, fmt.Errorf("commit update issue: %w", err)
@@ -862,8 +909,8 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 		return s.writeStatusTransition(ctx, issue, actor, reason, action)
 	}
 	now := time.Now().UTC()
-	fromStatus := issue.StatusValue()
-	toStatus := issue.StatusValue()
+	priorArchivedAt := issue.ArchivedAt
+	priorDeletedAt := issue.DeletedAt
 	switch action {
 	case "archive":
 		if issue.DeletedAt != nil {
@@ -909,7 +956,17 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 		statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
 		return model.Issue{}, fmt.Errorf("update issue lifecycle: %w", err)
 	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
+	// Field-change emission: archive/unarchive flip archived_at; delete/restore
+	// flip deleted_at. No status change row — the legacy "from_status==to_status"
+	// pattern was a schema lie and has been retired.
+	var changes []model.FieldChange
+	if !timesEqual(priorArchivedAt, issue.ArchivedAt) {
+		changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(issue.ArchivedAt)})
+	}
+	if !timesEqual(priorDeletedAt, issue.DeletedAt) {
+		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(issue.DeletedAt)})
+	}
+	if err := s.recordEvent(ctx, tx, issue.ID, action, reason, actor, changes); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -970,7 +1027,15 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		}
 		return model.Issue{}, fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
 	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
+	changes := []model.FieldChange{
+		{Field: "status", From: fromStatus, To: toStatus},
+	}
+	priorClosedAt := issue.ClosedAtValue()
+	newClosedAt := updated.ClosedAtValue()
+	if !timesEqual(priorClosedAt, newClosedAt) {
+		changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
+	}
+	if err := s.recordEvent(ctx, tx, issue.ID, action, reason, actor, changes); err != nil {
 		return model.Issue{}, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -1211,23 +1276,40 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) insertHistoryTx(ctx context.Context, tx *sql.Tx, issueID, action, reason, fromStatus, toStatus, createdBy string) error {
-	event := model.IssueHistory{
-		ID:         "hist-" + uuid.NewString(),
-		IssueID:    issueID,
-		Action:     action,
-		Reason:     strings.TrimSpace(reason),
-		FromStatus: strings.TrimSpace(fromStatus),
-		ToStatus:   strings.TrimSpace(toStatus),
-		CreatedAt:  time.Now().UTC(),
-		CreatedBy:  strings.TrimSpace(createdBy),
+// recordEvent writes one issue_events row plus N issue_event_changes rows.
+// [LAW:single-enforcer] Single insertion point for issue history. Every
+// mutation site (CreateIssue, transitions, UpdateIssue, ...) computes its
+// field-change diff and routes through here.
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, assignee string, changes []model.FieldChange) error {
+	event := model.IssueEvent{
+		ID:        "evt-" + uuid.NewString(),
+		IssueID:   issueID,
+		Action:    strings.TrimSpace(action),
+		Reason:    strings.TrimSpace(reason),
+		Assignee:  strings.TrimSpace(assignee),
+		CreatedAt: time.Now().UTC(),
+		Changes:   changes,
 	}
-	if event.CreatedBy == "" {
-		event.CreatedBy = "unknown"
+	if event.Assignee == "" {
+		event.Assignee = "unknown"
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_history(id, issue_id, action, reason, from_status, to_status, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, event.Action, event.Reason, event.FromStatus, event.ToStatus, event.CreatedAt.Format(time.RFC3339Nano), event.CreatedBy); err != nil {
-		return fmt.Errorf("insert issue history: %w", err)
+	var actionArg any
+	if event.Action != "" {
+		actionArg = event.Action
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, assignee, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		event.ID, event.IssueID, actionArg, event.Reason, event.Assignee, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("insert issue event: %w", err)
+	}
+	for _, change := range changes {
+		field := strings.TrimSpace(change.Field)
+		if field == "" {
+			return fmt.Errorf("issue event %s: field name cannot be empty", event.ID)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
+			event.ID, field, nullableString(change.From), nullableString(change.To)); err != nil {
+			return fmt.Errorf("insert issue event change %s.%s: %w", event.ID, field, err)
+		}
 	}
 	return nil
 }
@@ -1255,27 +1337,12 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
-func (s *Store) listHistory(ctx context.Context, issueID string) ([]model.IssueHistory, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, issue_id, action, reason, from_status, to_status, created_at, created_by FROM issue_history WHERE issue_id = ? ORDER BY created_at ASC`, issueID)
+func (s *Store) listEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+	events, err := s.queryEvents(ctx, `SELECT id, issue_id, action, reason, assignee, created_at FROM issue_events WHERE issue_id = ? ORDER BY created_at ASC`, issueID)
 	if err != nil {
-		return nil, fmt.Errorf("list issue history: %w", err)
+		return nil, fmt.Errorf("list issue events: %w", err)
 	}
-	defer rows.Close()
-	out := []model.IssueHistory{}
-	for rows.Next() {
-		var event model.IssueHistory
-		var createdAt string
-		if err := rows.Scan(&event.ID, &event.IssueID, &event.Action, &event.Reason, &event.FromStatus, &event.ToStatus, &createdAt, &event.CreatedBy); err != nil {
-			return nil, err
-		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
-		if err != nil {
-			return nil, err
-		}
-		event.CreatedAt = t
-		out = append(out, event)
-	}
-	return out, rows.Err()
+	return events, nil
 }
 
 func (s *Store) listAllRelations(ctx context.Context) ([]model.Relation, error) {
@@ -1324,17 +1391,31 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) listAllHistory(ctx context.Context) ([]model.IssueHistory, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, issue_id, action, reason, from_status, to_status, created_at, created_by FROM issue_history ORDER BY created_at ASC`)
+func (s *Store) listAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
+	events, err := s.queryEvents(ctx, `SELECT id, issue_id, action, reason, assignee, created_at FROM issue_events ORDER BY created_at ASC`)
 	if err != nil {
-		return nil, fmt.Errorf("list all issue history: %w", err)
+		return nil, fmt.Errorf("list all issue events: %w", err)
+	}
+	return events, nil
+}
+
+// queryEvents runs an issue_events SELECT and hydrates each row's Changes
+// from issue_event_changes. Used by listEvents (single issue) and
+// listAllEvents (full export).
+func (s *Store) queryEvents(ctx context.Context, query string, args ...any) ([]model.IssueEvent, error) {
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, err
 	}
 	defer rows.Close()
-	out := []model.IssueHistory{}
+	out := []model.IssueEvent{}
+	var ids []string
+	idx := map[string]int{}
 	for rows.Next() {
-		var event model.IssueHistory
+		var event model.IssueEvent
 		var createdAt string
-		if err := rows.Scan(&event.ID, &event.IssueID, &event.Action, &event.Reason, &event.FromStatus, &event.ToStatus, &createdAt, &event.CreatedBy); err != nil {
+		var action sql.NullString
+		if err := rows.Scan(&event.ID, &event.IssueID, &action, &event.Reason, &event.Assignee, &createdAt); err != nil {
 			return nil, err
 		}
 		t, err := time.Parse(time.RFC3339Nano, createdAt)
@@ -1342,9 +1423,51 @@ func (s *Store) listAllHistory(ctx context.Context) ([]model.IssueHistory, error
 			return nil, err
 		}
 		event.CreatedAt = t
+		if action.Valid {
+			event.Action = action.String
+		}
+		event.Changes = []model.FieldChange{}
+		idx[event.ID] = len(out)
+		ids = append(ids, event.ID)
 		out = append(out, event)
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	if len(ids) == 0 {
+		return out, nil
+	}
+	placeholders := strings.Repeat("?,", len(ids))
+	placeholders = placeholders[:len(placeholders)-1]
+	changeArgs := make([]any, len(ids))
+	for i, id := range ids {
+		changeArgs[i] = id
+	}
+	changeRows, err := s.db.QueryContext(ctx, `SELECT event_id, field, from_value, to_value FROM issue_event_changes WHERE event_id IN (`+placeholders+`)`, changeArgs...)
+	if err != nil {
+		return nil, fmt.Errorf("query issue event changes: %w", err)
+	}
+	defer changeRows.Close()
+	for changeRows.Next() {
+		var eventID, field string
+		var fromVal, toVal sql.NullString
+		if err := changeRows.Scan(&eventID, &field, &fromVal, &toVal); err != nil {
+			return nil, err
+		}
+		i, ok := idx[eventID]
+		if !ok {
+			continue
+		}
+		change := model.FieldChange{Field: field}
+		if fromVal.Valid {
+			change.From = fromVal.String
+		}
+		if toVal.Valid {
+			change.To = toVal.String
+		}
+		out[i].Changes = append(out[i].Changes, change)
+	}
+	return out, changeRows.Err()
 }
 
 type issueScanner interface{ Scan(dest ...any) error }
@@ -1668,6 +1791,39 @@ func nullableTime(value *time.Time) any {
 		return nil
 	}
 	return value.Format(time.RFC3339Nano)
+}
+
+// nullableString turns "" into SQL NULL so empty field values round-trip
+// distinctly from real empty strings is unnecessary — we treat both as
+// "no value." The change shape carries the field name as the discriminator.
+func nullableString(value string) any {
+	if value == "" {
+		return nil
+	}
+	return value
+}
+
+// formatNullableTime renders a *time.Time for storage in a FieldChange's
+// from/to value: nil → "" (which becomes SQL NULL via nullableString),
+// non-nil → RFC3339Nano string. Symmetric with nullableTime's storage shape.
+func formatNullableTime(value *time.Time) string {
+	if value == nil {
+		return ""
+	}
+	return value.Format(time.RFC3339Nano)
+}
+
+// timesEqual compares two *time.Time pointers by value (both nil is equal,
+// nil vs non-nil is not, two non-nil compared with .Equal). Used to detect
+// archived_at / deleted_at flips for field-change emission.
+func timesEqual(a, b *time.Time) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return a.Equal(*b)
 }
 
 func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) error {

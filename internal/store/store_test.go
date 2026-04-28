@@ -791,15 +791,16 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			CreatedAt: time.Now().UTC(),
 			CreatedBy: "sync",
 		}},
-		History: []model.IssueHistory{{
-			ID:         "hist-1",
-			IssueID:    "issue-replaced",
-			Action:     "created",
-			Reason:     "imported from sync",
-			FromStatus: "",
-			ToStatus:   "open",
-			CreatedAt:  time.Now().UTC(),
-			CreatedBy:  "sync",
+		Events: []model.IssueEvent{{
+			ID:        "evt-1",
+			IssueID:   "issue-replaced",
+			Action:    "created",
+			Reason:    "imported from sync",
+			Assignee:  "sync",
+			CreatedAt: time.Now().UTC(),
+			Changes: []model.FieldChange{
+				{Field: "status", From: "", To: "open"},
+			},
 		}},
 	}
 	if err := st.ReplaceFromExport(ctx, export); err != nil {
@@ -885,17 +886,22 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.History) != 4 {
-		t.Fatalf("history = %#v", detail.History)
+	if len(detail.Events) != 4 {
+		t.Fatalf("events = %#v", detail.Events)
 	}
-	if detail.History[1].Action != "close" || detail.History[1].Reason != "done" {
-		t.Fatalf("history[1] = %#v", detail.History[1])
+	if detail.Events[1].Action != "close" || detail.Events[1].Reason != "done" {
+		t.Fatalf("events[1] = %#v", detail.Events[1])
 	}
-	if detail.History[2].Action != "reopen" || detail.History[2].Reason != "follow-up work" {
-		t.Fatalf("history[2] = %#v", detail.History[2])
+	if detail.Events[2].Action != "reopen" || detail.Events[2].Reason != "follow-up work" {
+		t.Fatalf("events[2] = %#v", detail.Events[2])
 	}
-	if detail.History[3].Action != "archive" || detail.History[3].Reason != "inactive" {
-		t.Fatalf("history[3] = %#v", detail.History[3])
+	if detail.Events[3].Action != "archive" || detail.Events[3].Reason != "inactive" {
+		t.Fatalf("events[3] = %#v", detail.Events[3])
+	}
+	// archive event records archived_at flip but NOT a fake status row.
+	archiveChanges := detail.Events[3].Changes
+	if len(archiveChanges) != 1 || archiveChanges[0].Field != "archived_at" {
+		t.Fatalf("archive event changes = %#v; want one archived_at row, no status row", archiveChanges)
 	}
 }
 
@@ -918,11 +924,11 @@ func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.History) != 2 {
-		t.Fatalf("history = %#v", detail.History)
+	if len(detail.Events) != 2 {
+		t.Fatalf("events = %#v", detail.Events)
 	}
-	if detail.History[1].Action != "close" || detail.History[1].Reason != "" {
-		t.Fatalf("history[1] = %#v (want action=close reason=\"\")", detail.History[1])
+	if detail.Events[1].Action != "close" || detail.Events[1].Reason != "" {
+		t.Fatalf("events[1] = %#v (want action=close reason=\"\")", detail.Events[1])
 	}
 }
 

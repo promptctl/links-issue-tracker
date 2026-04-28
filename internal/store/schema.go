@@ -82,18 +82,27 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE INDEX idx_comments_issue_created ON comments(issue_id, created_at);`,
 		`CREATE INDEX idx_labels_issue ON labels(issue_id, label);`,
 		`CREATE INDEX idx_labels_name ON labels(label, issue_id);`,
-		`CREATE TABLE issue_history (
+		// [LAW:one-source-of-truth] issue_events is the canonical mutation log
+		// for every issue field. The legacy issue_history schema (status-only,
+		// from/to columns that lied for archive/delete) is dropped below.
+		`CREATE TABLE issue_events (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
-			action TEXT NOT NULL,
+			action VARCHAR(64) NULL,
 			reason TEXT NOT NULL,
-			from_status TEXT NOT NULL,
-			to_status TEXT NOT NULL,
+			assignee TEXT NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
-			created_by TEXT NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
 		);`,
-		`CREATE INDEX idx_issue_history_issue_created ON issue_history(issue_id, created_at);`,
+		`CREATE TABLE issue_event_changes (
+			event_id VARCHAR(191) NOT NULL,
+			field VARCHAR(64) NOT NULL,
+			from_value TEXT NULL,
+			to_value TEXT NULL,
+			PRIMARY KEY (event_id, field),
+			FOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE
+		);`,
+		`CREATE INDEX idx_issue_events_issue_created ON issue_events(issue_id, created_at);`,
 	}
 	for _, stmt := range schema {
 		stmtChanged, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
@@ -101,6 +110,12 @@ func (s *Store) migrate(ctx context.Context) error {
 			return err
 		}
 		changed = changed || stmtChanged
+	}
+	// [LAW:one-source-of-truth] issue_history is superseded by
+	// issue_events + issue_event_changes. Existing repos may still have it;
+	// drop it (existing history rows are discarded — issues are untouched).
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS issue_history`); err != nil {
+		return fmt.Errorf("drop legacy issue_history table: %w", err)
 	}
 	rankColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
 	if err != nil {

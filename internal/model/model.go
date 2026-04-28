@@ -375,36 +375,51 @@ type Label struct {
 	CreatedBy string    `json:"created_by"`
 }
 
-type IssueHistory struct {
-	ID         string    `json:"id"`
-	IssueID    string    `json:"issue_id"`
-	Action     string    `json:"action"`
-	Reason     string    `json:"reason"`
-	FromStatus string    `json:"from_status"`
-	ToStatus   string    `json:"to_status"`
-	CreatedAt  time.Time `json:"created_at"`
-	CreatedBy  string    `json:"created_by"`
+// FieldChange describes a single field's transition within an IssueEvent.
+// Both From and To are stringified (TEXT in the database) so the schema is
+// field-agnostic — every issue field, regardless of its native type, lands
+// in the same shape.
+type FieldChange struct {
+	Field string `json:"field"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+// IssueEvent is the field-agnostic history record. Every mutation to an
+// issue — status transitions, archive/delete flips, plain field updates —
+// produces one event with the actor + reason and N field-change rows for
+// the fields that actually moved. Action is optional intent metadata
+// populated by named status transitions (start/done/close/reopen/etc.) and
+// left empty for plain field updates; per-field actions do not exist.
+type IssueEvent struct {
+	ID        string        `json:"id"`
+	IssueID   string        `json:"issue_id"`
+	Action    string        `json:"action,omitempty"`
+	Reason    string        `json:"reason"`
+	Assignee  string        `json:"assignee"`
+	CreatedAt time.Time     `json:"created_at"`
+	Changes   []FieldChange `json:"changes"`
 }
 
 type IssueDetail struct {
-	Issue     Issue          `json:"issue"`
-	Relations []Relation     `json:"relations"`
-	Comments  []Comment      `json:"comments"`
-	Children  []Issue        `json:"children"`
-	DependsOn []Issue        `json:"depends_on"`
-	Related   []Issue        `json:"related"`
-	Blocks    []Issue        `json:"blocks"`
-	Parent    *Issue         `json:"parent,omitempty"`
-	History   []IssueHistory `json:"history"`
+	Issue     Issue        `json:"issue"`
+	Relations []Relation   `json:"relations"`
+	Comments  []Comment    `json:"comments"`
+	Children  []Issue      `json:"children"`
+	DependsOn []Issue      `json:"depends_on"`
+	Related   []Issue      `json:"related"`
+	Blocks    []Issue      `json:"blocks"`
+	Parent    *Issue       `json:"parent,omitempty"`
+	Events    []IssueEvent `json:"events"`
 }
 
 type Export struct {
-	Version     int            `json:"version"`
-	WorkspaceID string         `json:"workspace_id"`
-	ExportedAt  time.Time      `json:"exported_at"`
-	Issues      []Issue        `json:"issues"`
-	Relations   []Relation     `json:"relations"`
-	Comments    []Comment      `json:"comments"`
-	Labels      []Label        `json:"labels"`
-	History     []IssueHistory `json:"history"`
+	Version     int          `json:"version"`
+	WorkspaceID string       `json:"workspace_id"`
+	ExportedAt  time.Time    `json:"exported_at"`
+	Issues      []Issue      `json:"issues"`
+	Relations   []Relation   `json:"relations"`
+	Comments    []Comment    `json:"comments"`
+	Labels      []Label      `json:"labels"`
+	Events      []IssueEvent `json:"events"`
 }

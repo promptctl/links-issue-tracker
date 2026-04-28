@@ -77,14 +77,14 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
-	history, err := s.listAllHistory(ctx)
+	events, err := s.listAllEvents(ctx)
 	if err != nil {
 		return model.Export{}, err
 	}
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, History: history}, nil
+	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
@@ -121,11 +121,11 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	if report.InvalidRelatedRows > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("invalid related-to ordering rows: %d", report.InvalidRelatedRows))
 	}
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_history h LEFT JOIN issues i ON i.id = h.issue_id WHERE i.id IS NULL`).Scan(&report.OrphanHistoryRows); err != nil {
-		return report, fmt.Errorf("count orphan history rows: %w", err)
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events e LEFT JOIN issues i ON i.id = e.issue_id WHERE i.id IS NULL`).Scan(&report.OrphanHistoryRows); err != nil {
+		return report, fmt.Errorf("count orphan event rows: %w", err)
 	}
 	if report.OrphanHistoryRows > 0 {
-		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue history rows: %d", report.OrphanHistoryRows))
+		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
 	// Rank inversions: blocks relations where the dependency (dst) is ranked
 	// below the dependent (src) among non-closed issues.
@@ -150,8 +150,8 @@ func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 			return HealthReport{}, fmt.Errorf("begin fsck repair tx: %w", err)
 		}
 		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_history WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
-			return HealthReport{}, fmt.Errorf("repair orphan history: %w", err)
+		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
+			return HealthReport{}, fmt.Errorf("repair orphan events: %w", err)
 		}
 		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
 			return HealthReport{}, fmt.Errorf("repair self related rows: %w", err)
@@ -436,10 +436,20 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 			return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
 		}
 	}
-	for _, event := range export.History {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_history(id, issue_id, action, reason, from_status, to_status, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.ID, event.IssueID, event.Action, event.Reason, event.FromStatus, event.ToStatus, event.CreatedAt.Format(time.RFC3339Nano), event.CreatedBy); err != nil {
-			return fmt.Errorf("restore issue history %s: %w", event.ID, err)
+	for _, event := range export.Events {
+		var actionArg any
+		if event.Action != "" {
+			actionArg = event.Action
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, assignee, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+			event.ID, event.IssueID, actionArg, event.Reason, event.Assignee, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("restore issue event %s: %w", event.ID, err)
+		}
+		for _, change := range event.Changes {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
+				event.ID, change.Field, nullableString(change.From), nullableString(change.To)); err != nil {
+				return fmt.Errorf("restore issue event change %s.%s: %w", event.ID, change.Field, err)
+			}
 		}
 	}
 	if err := tx.Commit(); err != nil {
