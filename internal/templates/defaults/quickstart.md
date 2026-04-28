@@ -18,6 +18,8 @@ Agent quickstart for links issue tracking
    `lit rank <issue-id> --bottom`
    `lit rank <issue-id> --above <other-id>`
    `lit rank <issue-id> --below <other-id>`
+   `lit label add <issue-id> needs-design`  — flag a ticket as not yet ready (drops it from `lit ready` into Blocked: needs_design until the label is removed)
+   `lit label rm <issue-id> needs-design`   — clear the flag once the design is settled
 
 4) Structure and notes
    `lit parent set <child-id> <parent-id>`
