@@ -1,7 +1,7 @@
 # REFACTOR_PLAN: cli.go / store.go decomposition + targeted absorbed-variance
 
 **Tracking:** epic `links-refactor-o35`
-**Companion:** `docs/COMPLEXITY_AUDIT-2026-04-19.md`
+**Companion:** `design-docs/COMPLEXITY_AUDIT-2026-04-19.md`
 
 This document is the **contract** that makes each extraction issue reviewable as a single commit: it names the exact symbols that move, the exact files that receive them, and the interfaces at seams. A reviewer of any single extraction PR should be able to answer "is this correct?" by comparing the PR against this document, not by re-deriving the split.
 
