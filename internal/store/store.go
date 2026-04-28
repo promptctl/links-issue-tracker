@@ -127,6 +127,11 @@ type TransitionIssueInput struct {
 	Action    string
 	Reason    string
 	CreatedBy string
+	// Assignee is consumed only by the "start" action: claiming an issue
+	// stamps the assignee column with the agent identity. Other actions
+	// (done, close, reopen, archive, ...) leave assignee untouched and
+	// must not pass a value here — TransitionIssue rejects it.
+	Assignee string
 }
 
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
@@ -813,8 +818,13 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if priorLabels != newLabels {
 		changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
 	}
-	if err := s.recordEvent(ctx, tx, issue.ID, "", in.Reason, in.By, changes); err != nil {
-		return model.Issue{}, err
+	// No-op updates (zero fields actually moved) emit no event. Audit-trail
+	// noise from no-op calls — common when the CLI plumbs the same value
+	// through multiple paths — outweighs the "the call happened" signal.
+	if len(changes) > 0 {
+		if err := s.recordEvent(ctx, tx, issue.ID, "", in.Reason, in.By, changes); err != nil {
+			return model.Issue{}, err
+		}
 	}
 	if err := tx.Commit(); err != nil {
 		return model.Issue{}, fmt.Errorf("commit update issue: %w", err)
@@ -904,9 +914,20 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 	if actor == "" {
 		actor = "unknown"
 	}
+	newAssignee := strings.TrimSpace(in.Assignee)
+	// Assignee is consumed only by `start`. For any other action, an
+	// assignee value is a programming error from the caller — fail loud
+	// instead of silently dropping it. start REQUIRES an assignee: claiming
+	// an issue without saying who's claiming it defeats the whole point.
+	if newAssignee != "" && action != "start" {
+		return model.Issue{}, fmt.Errorf("assignee is only accepted on the start action, not %q", action)
+	}
+	if action == "start" && newAssignee == "" {
+		return model.Issue{}, errors.New("start requires --assignee: an unclaimed in_progress ticket has no owner")
+	}
 	switch action {
 	case "start", "done", "close", "reopen":
-		return s.writeStatusTransition(ctx, issue, actor, reason, action)
+		return s.writeStatusTransition(ctx, issue, actor, reason, action, newAssignee)
 	}
 	now := time.Now().UTC()
 	priorArchivedAt := issue.ArchivedAt
@@ -985,7 +1006,7 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 	return reloaded, nil
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action string) (model.Issue, error) {
+func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action string, newAssignee string) (model.Issue, error) {
 	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
 		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
 	}
@@ -995,6 +1016,14 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	}
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
+	priorAssignee := issue.AssigneeValue()
+	// Only `start` rewrites the assignee column. Other transitions inherit
+	// whatever the issue already had — done/close/reopen all preserve
+	// ownership.
+	postAssignee := priorAssignee
+	if action == "start" {
+		postAssignee = newAssignee
+	}
 	now := time.Now().UTC()
 	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
 	if err != nil {
@@ -1011,8 +1040,8 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		closedAt = value.Format(time.RFC3339Nano)
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
-		toStatus, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
+		toStatus, postAssignee, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("update issue status: %w", err)
 	}
@@ -1034,6 +1063,9 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	newClosedAt := updated.ClosedAtValue()
 	if !timesEqual(priorClosedAt, newClosedAt) {
 		changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
+	}
+	if priorAssignee != postAssignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 	}
 	if err := s.recordEvent(ctx, tx, issue.ID, action, reason, actor, changes); err != nil {
 		return model.Issue{}, err

@@ -179,6 +179,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runTransition(commandCtx, stdout, ap, args, "start")
 		})
 	})
+	addGroupedPassthrough(root, "operations", "assign", "Reassign an issue to a different agent (without changing status)", func(args []string) error {
+		return runWithApp(ctx, appAccessWrite, append([]string{"assign"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runAssign(commandCtx, stdout, ap, args)
+		})
+	})
 	addGroupedPassthrough(root, "operations", "done", "Finish claimed work (success path; requires in_progress)", func(args []string) error {
 		return runWithApp(ctx, appAccessWrite, append([]string{"done"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runTransition(commandCtx, stdout, ap, args, "done")
@@ -946,12 +951,24 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		issue = current
 		// [LAW:dataflow-not-control-flow] Transition execution order is fixed; data determines whether action slice is empty.
 		for _, action := range actions {
-			transitioned, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+			input := store.TransitionIssueInput{
 				IssueID:   issueID,
 				Action:    action,
 				Reason:    transitionReason,
 				CreatedBy: *by,
-			})
+			}
+			// `start` claims an issue; the assignee column must be stamped so
+			// future readers (and orphan detection) know who owns it. When the
+			// caller passed --assignee on `lit update`, plumb it through; when
+			// they didn't, fail with the same fail-loud message `lit start`
+			// produces. [LAW:dataflow-not-control-flow]
+			if action == "start" {
+				if !visited["assignee"] {
+					return errors.New("--status in_progress requires --assignee: claiming an issue without an owner has no traceability")
+				}
+				input.Assignee = strings.TrimSpace(*assignee)
+			}
+			transitioned, err := ap.Store.TransitionIssue(ctx, input)
 			if err != nil {
 				return err
 			}
@@ -985,6 +1002,12 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			value := splitCSV(*labels)
 			update.Labels = &value
 		}
+		update.By = *by
+		// `--reason` is gated to status-only updates above; the reason
+		// captured here only fires when both --status and --reason were
+		// passed alongside other field flags. UpdateIssue stores it on the
+		// emitted event row.
+		update.Reason = *reason
 		updated, err := ap.Store.UpdateIssue(ctx, issueID, update)
 		if err != nil {
 			return err
@@ -1105,21 +1128,68 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Transition actor")
+	// Only `start` consumes --assignee. Defining the flag for every action
+	// keeps the parser uniform; runTransition rejects use on non-start
+	// actions below before any store call.
+	assignee := fs.String("assignee", "", "Assignee identity to stamp on `start` (e.g. claude_<sessionId>); rejected on other actions")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
+	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+	if action == "start" {
+		usage = fmt.Sprintf("usage: lit %s <id> --assignee <name> [--reason <text>]", transitionCommandName(action))
+	}
 	if len(positional) != 1 {
-		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+		return errors.New(usage)
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+		return errors.New(usage)
+	}
+	visited := map[string]bool{}
+	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
+	if visited["assignee"] && action != "start" {
+		return fmt.Errorf("--assignee is only valid on `lit start` (claiming an issue), not on `lit %s`", transitionCommandName(action))
 	}
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 		IssueID:   positional[0],
 		Action:    action,
 		Reason:    *reason,
 		CreatedBy: *by,
+		Assignee:  *assignee,
+	})
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+// runAssign rewrites the assignee column on an issue without changing
+// status. Flows through Store.UpdateIssue so the resulting event log
+// row is a normal field-update event with one assignee field-change row
+// — there is no special "assign" action type, just a generic field
+// mutation. [LAW:one-type-per-behavior]
+func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("assign")
+	reason := fs.String("reason", "", "Reassignment reason (optional)")
+	by := fs.String("by", os.Getenv("USER"), "Actor recording the reassignment")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 2 || fs.NArg() != 0 {
+		return errors.New("usage: lit assign <id> <new-assignee> [--reason <text>] [--by <actor>]")
+	}
+	id := positional[0]
+	newAssignee := strings.TrimSpace(positional[1])
+	if newAssignee == "" {
+		return errors.New("new assignee cannot be empty")
+	}
+	issue, err := ap.Store.UpdateIssue(ctx, id, store.UpdateIssueInput{
+		Assignee: &newAssignee,
+		By:       *by,
+		Reason:   *reason,
 	})
 	if err != nil {
 		return err

@@ -34,7 +34,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(ctx, &stdout, ap, []string{epic.ID}, "start")
+	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--assignee", "tester"}, "start")
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
@@ -42,7 +42,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("runTransition(start epic) error = %q, want no start action available", err.Error())
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	var started model.Issue
@@ -85,7 +85,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closed child) error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -124,7 +124,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress --json) error = %v", err)
 	}
 

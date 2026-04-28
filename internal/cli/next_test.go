@@ -49,7 +49,7 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inProgress := h.createIssue(store.CreateIssueInput{Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: inProgress.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: inProgress.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 	openLeaf := h.createIssue(store.CreateIssueInput{Title: "Workable", Topic: "next", IssueType: "task", Priority: 2})
@@ -108,7 +108,7 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	b1 := h.createIssue(store.CreateIssueInput{Title: "B.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicB.ID})
 
 	// Start B.1 so epicB derives to in_progress; epicA stays open.
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: b1.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: b1.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start B.1) error = %v", err)
 	}
 

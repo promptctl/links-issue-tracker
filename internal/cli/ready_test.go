@@ -313,6 +313,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 		Action:    "start",
 		Reason:    "claim",
 		CreatedBy: "agent",
+		Assignee:  "agent",
 	}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
@@ -343,6 +344,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 		Action:    "start",
 		Reason:    "claim",
 		CreatedBy: "agent",
+		Assignee:  "agent",
 	}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
@@ -372,6 +374,7 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 		Action:    "start",
 		Reason:    "claim",
 		CreatedBy: "agent",
+		Assignee:  "agent",
 	}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}

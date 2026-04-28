@@ -118,7 +118,7 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closed leaf) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -177,7 +177,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(mixedEpic closed child) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(mixed closed start) error = %v", err)
 	}
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -192,7 +192,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closedEpic child) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(closed child start) error = %v", err)
 	}
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -949,6 +949,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		Action:    "start",
 		Reason:    "claim",
 		CreatedBy: "agent-a",
+		Assignee:  "agent-a",
 	})
 	if err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
@@ -962,6 +963,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		Action:    "start",
 		Reason:    "competing claim",
 		CreatedBy: "agent-b",
+		Assignee:  "agent-b",
 	}); err == nil {
 		t.Fatal("expected claim conflict when claiming an already in_progress issue")
 	}
@@ -1485,10 +1487,10 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close"); err != nil {
+	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", ""); err != nil {
 		t.Fatalf("writeStatusTransition(first) error = %v", err)
 	}
-	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close")
+	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "")
 	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
 		t.Fatalf("writeStatusTransition(second) error = %v, want close conflict", err)
 	}

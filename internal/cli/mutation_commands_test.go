@@ -65,7 +65,7 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 	if _, err := runWithTimeout([]string{"comment", "add", issueID, "--body", "deadlock regression probe", "--json"}, 10*time.Second); err != nil {
 		t.Fatalf("Run(comment add --json) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"update", issueID, "--status", "in_progress", "--json"}, 10*time.Second); err != nil {
+	if _, err := runWithTimeout([]string{"update", issueID, "--status", "in_progress", "--assignee", "tester", "--json"}, 10*time.Second); err != nil {
 		t.Fatalf("Run(update --status in_progress --json) error = %v", err)
 	}
 	if _, err := runWithTimeout([]string{"close", issueID, "--reason", "deadlock regression probe cleanup", "--json"}, 10*time.Second); err != nil {
