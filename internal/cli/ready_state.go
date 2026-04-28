@@ -20,6 +20,33 @@ import (
 var readyBlockingKinds = []annotation.Kind{
 	annotation.MissingField,
 	annotation.OpenDependency,
+	annotation.NeedsDesign,
+}
+
+// NeedsDesignLabel is the reserved label that flags an issue as awaiting
+// design work. The annotator below converts the label (a neutral fact on the
+// issue) into a NeedsDesign annotation; readyBlockingKinds is where the
+// consumer decides that this annotation blocks readiness.
+// [LAW:one-source-of-truth] Single definition of the needs-design label.
+const NeedsDesignLabel = "needs-design"
+
+// newNeedsDesignAnnotator returns an annotator that emits a NeedsDesign
+// annotation for any issue carrying NeedsDesignLabel.
+// [LAW:dataflow-not-control-flow] The annotator runs unconditionally for
+// every issue; absence of the label produces a nil slice (Annotate
+// normalizes to an empty slice at the row level), not a skipped operation.
+func newNeedsDesignAnnotator() annotation.Annotator {
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		for _, label := range issue.Labels {
+			if label == NeedsDesignLabel {
+				return []annotation.Annotation{{
+					Kind:    annotation.NeedsDesign,
+					Message: NeedsDesignLabel,
+				}}, nil
+			}
+		}
+		return nil, nil
+	}
 }
 
 // orphanedThreshold is the staleness window after which an in_progress

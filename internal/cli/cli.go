@@ -818,6 +818,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 		fieldAnnotator,
 		newBlockerAnnotator(details),
 		newOrphanedAnnotator(orphanedThreshold),
+		newNeedsDesignAnnotator(),
 	)
 	if err != nil {
 		return nil, nil, err

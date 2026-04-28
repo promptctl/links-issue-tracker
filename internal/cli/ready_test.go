@@ -221,6 +221,40 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	}
 }
 
+func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	plain := h.createIssue(store.CreateIssueInput{
+		Title:     "Ready leaf",
+		Topic:     "alpha",
+		IssueType: "task",
+		Priority:  2,
+	})
+	flagged := h.createIssue(store.CreateIssueInput{
+		Title:     "Needs design first",
+		Topic:     "alpha",
+		IssueType: "task",
+		Priority:  2,
+		Labels:    []string{NeedsDesignLabel},
+	})
+
+	got := h.runReadyJSON()
+	if len(got) != 2 {
+		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
+	}
+
+	byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
+	if isReadyBlocked(byID[plain.ID].Annotations) {
+		t.Fatalf("plain issue should not be blocked, annotations=%#v", byID[plain.ID].Annotations)
+	}
+	if !isReadyBlocked(byID[flagged.ID].Annotations) {
+		t.Fatalf("needs-design issue should be blocked, annotations=%#v", byID[flagged.ID].Annotations)
+	}
+	if _, ok := findAnnotation(byID[flagged.ID].Annotations, annotation.NeedsDesign); !ok {
+		t.Fatalf("missing NeedsDesign annotation: %#v", byID[flagged.ID].Annotations)
+	}
+}
+
 func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	h := newReadyTestHarness(t)
 

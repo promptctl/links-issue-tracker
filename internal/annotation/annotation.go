@@ -54,11 +54,13 @@ var (
 	openDependencyDef = &kindDef{key: "open_dependency"}
 	rankInversionDef  = &kindDef{key: "rank_inversion"}
 	orphanedDef       = &kindDef{key: "orphaned"}
+	needsDesignDef    = &kindDef{key: "needs_design"}
 
 	MissingField   = Kind{def: missingFieldDef}   // a required field is empty or unset
 	OpenDependency = Kind{def: openDependencyDef} // issue depends on an open ticket
 	RankInversion  = Kind{def: rankInversionDef}  // dependency is ranked below the dependent
 	Orphaned       = Kind{def: orphanedDef}       // in_progress with no update past the orphaned threshold
+	NeedsDesign    = Kind{def: needsDesignDef}    // carries the needs-design label; consumer may treat as not-yet-ready
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	// "blocked_by" is a deserialization alias for backwards compatibility after
@@ -69,6 +71,7 @@ var (
 		"blocked_by":          OpenDependency,
 		rankInversionDef.key:  RankInversion,
 		orphanedDef.key:       Orphaned,
+		needsDesignDef.key:    NeedsDesign,
 	}
 )
 
