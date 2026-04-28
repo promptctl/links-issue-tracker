@@ -49,6 +49,99 @@ func (s *Store) RankToTop(ctx context.Context, issueID string) error {
 	return s.smoothRanksIfNeeded(ctx, newRank)
 }
 
+// RankSet establishes absolute order across the given IDs by stacking them at
+// the top of the rank space in the order supplied: ids[0] becomes topmost,
+// ids[1] ranks just below, etc. Atomic — every assignment commits together
+// or none does. Validates IDs exist and rejects duplicates before any write.
+// [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
+// transaction so partial-application states cannot occur.
+func rankSetValidateIDs(ids []string) error {
+	if len(ids) < 2 {
+		return errors.New("rank set: need at least 2 IDs to establish order")
+	}
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id == "" {
+			return errors.New("rank set: empty ID in input")
+		}
+		if _, dup := seen[id]; dup {
+			return fmt.Errorf("rank set: duplicate ID %q in input", id)
+		}
+		seen[id] = struct{}{}
+	}
+	return nil
+}
+
+func (s *Store) RankSet(ctx context.Context, ids []string) error {
+	if err := rankSetValidateIDs(ids); err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err := s.GetIssue(ctx, id); err != nil {
+			return err
+		}
+	}
+	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
+	if err != nil {
+		return err
+	}
+	defer releaseCommitLock()
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin rank-set tx: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Find the current topmost rank, excluding any of the IDs being reassigned
+	// (so we anchor against rows that aren't moving).
+	excludeIDs := make([]any, 0, len(ids))
+	placeholders := make([]string, 0, len(ids))
+	for _, id := range ids {
+		excludeIDs = append(excludeIDs, id)
+		placeholders = append(placeholders, "?")
+	}
+	query := fmt.Sprintf(`SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' AND id NOT IN (%s) ORDER BY item_rank ASC LIMIT 1`, strings.Join(placeholders, ","))
+	var topRank sql.NullString
+	if err := tx.QueryRowContext(ctx, query, excludeIDs...).Scan(&topRank); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("rank-set: query top: %w", err)
+	}
+
+	// Walk IDs in reverse, assigning each a rank just above the previous one.
+	// The last ID (idx N-1) is anchored just above the existing top; each
+	// earlier ID is anchored just above the previously-assigned rank, so the
+	// final order is ids[0] < ids[1] < ... < ids[N-1] < (existing top).
+	now := time.Now().UTC().Format(time.RFC3339Nano)
+	cursor := topRank.String
+	hasCursor := topRank.Valid && topRank.String != ""
+	newRanks := make([]string, len(ids))
+	for i := len(ids) - 1; i >= 0; i-- {
+		var newRank string
+		if !hasCursor {
+			newRank = rank.Initial()
+			hasCursor = true
+		} else {
+			newRank = rank.Before(cursor)
+		}
+		newRanks[i] = newRank
+		cursor = newRank
+	}
+	for i, id := range ids {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?`, newRanks[i], now, id); err != nil {
+			return fmt.Errorf("rank-set: update %s: %w", id, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit rank-set: %w", err)
+	}
+	if err := s.commitWorkingSet(ctx, "rank set"); err != nil {
+		return err
+	}
+	if len(newRanks) > 0 {
+		return s.smoothRanksIfNeeded(ctx, newRanks[0])
+	}
+	return nil
+}
+
 // RankToBottom moves an issue to rank below all other issues.
 func (s *Store) RankToBottom(ctx context.Context, issueID string) error {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {

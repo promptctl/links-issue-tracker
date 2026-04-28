@@ -371,19 +371,22 @@ func printReadyOutput(w io.Writer, columns []string, issues []annotation.Annotat
 	return printRankInversions(w, issues)
 }
 
-// printReadySection prints the preamble, separator, and numbered ready items
-// with inline dependency info. Caps output at readyMaxItems.
-func printReadySection(w io.Writer, columns []string, ready []annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+// writeReadyPreamble emits the agent coaching block plus separator. Lives at
+// the runReady boundary so it can be routed to stderr (keeping stdout
+// parseable) without threading a second writer through the rendering path.
+// [LAW:single-enforcer] Single point of preamble emission.
+func writeReadyPreamble(w io.Writer) error {
 	if _, err := fmt.Fprintln(w, readyPreamble); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(w, strings.Repeat("─", 80)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
+	_, err := fmt.Fprintln(w, strings.Repeat("─", 80))
+	return err
+}
 
+// printReadySection prints numbered ready items with inline dependency info.
+// Caps output at readyMaxItems. The preamble is emitted separately to stderr
+// by writeReadyPreamble at the runReady boundary.
+func printReadySection(w io.Writer, columns []string, ready []annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
 	display := ready
 	if len(display) > readyMaxItems {
 		display = display[:readyMaxItems]

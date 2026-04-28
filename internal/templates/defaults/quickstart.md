@@ -26,8 +26,8 @@ Agent quickstart for links issue tracking
    `lit comment add <issue-id> --body "Starting: <plan>"`
 
 5) Closeout
-   `lit done <issue-id>`
-   `lit close <issue-id>`
+   `lit done <issue-id>`   — finished the intended work (success path; only from in_progress)
+   `lit close <issue-id>`  — closing without finishing (wontfix, obsolete, duplicate; from any non-closed state)
    `git add -A && git commit -m "<summary>"`
 
 6) Health

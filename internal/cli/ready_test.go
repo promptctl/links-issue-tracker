@@ -126,9 +126,9 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 
 func (h readyTestHarness) runReadyJSON(args ...string) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	var stdout bytes.Buffer
+	var stdout, stderr bytes.Buffer
 	allArgs := append(append([]string{}, args...), "--json")
-	if err := runReady(h.ctx, &stdout, h.ap, allArgs); err != nil {
+	if err := runReady(h.ctx, &stdout, &stderr, h.ap, allArgs); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", allArgs, err)
 	}
 	var got []annotation.AnnotatedIssue
@@ -140,17 +140,23 @@ func (h readyTestHarness) runReadyJSON(args ...string) []annotation.AnnotatedIss
 
 func (h readyTestHarness) runReadyText(args ...string) string {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	if err := runReady(h.ctx, &stdout, h.ap, args); err != nil {
+	stdout, _ := h.runReadyTextStreams(args...)
+	return stdout
+}
+
+func (h readyTestHarness) runReadyTextStreams(args ...string) (string, string) {
+	h.t.Helper()
+	var stdout, stderr bytes.Buffer
+	if err := runReady(h.ctx, &stdout, &stderr, h.ap, args); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", args, err)
 	}
-	return stdout.String()
+	return stdout.String(), stderr.String()
 }
 
 func (h readyTestHarness) runReadyErr(args ...string) error {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	return runReady(h.ctx, &stdout, h.ap, args)
+	var stdout, stderr bytes.Buffer
+	return runReady(h.ctx, &stdout, &stderr, h.ap, args)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
@@ -483,7 +489,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	}
 }
 
-func TestRunReadyTextOutputIncludesPreamble(t *testing.T) {
+func TestRunReadyPreambleGoesToStderr(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	h.createIssue(store.CreateIssueInput{
@@ -493,12 +499,15 @@ func TestRunReadyTextOutputIncludesPreamble(t *testing.T) {
 		Priority:  1,
 	})
 
-	text := h.runReadyText()
-	if !strings.Contains(text, "This is the backlog") {
-		t.Fatal("text output missing preamble")
+	stdout, stderr := h.runReadyTextStreams()
+	if !strings.Contains(stderr, "This is the backlog") {
+		t.Fatal("stderr missing preamble")
 	}
-	if !strings.Contains(text, "─") {
-		t.Fatal("text output missing separator line")
+	if !strings.Contains(stderr, "─") {
+		t.Fatal("stderr missing separator line")
+	}
+	if strings.Contains(stdout, "This is the backlog") {
+		t.Fatal("preamble leaked to stdout; it must be parseable-data only")
 	}
 }
 

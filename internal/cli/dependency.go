@@ -25,19 +25,25 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("dep add")
-		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
+		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+		blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
+		blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
 		by := fs.String("by", os.Getenv("USER"), "Relation creator")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
-		if len(positional) != 2 {
-			return errors.New("usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]")
+		fromID, toID, err := resolveDepAddEndpoints(positional, *relType, *blocker, *blocked, fs.NArg())
+		if err != nil {
+			return err
 		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]")
+		// Self-loop check: a relation from an issue to itself is meaningless and
+		// would otherwise corrupt downstream blocker traversals. Cheap to catch
+		// here; transitive cycle detection is a follow-up.
+		if fromID == toID {
+			return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
 		}
-		srcID, dstID := depStoreEndpoints(*relType, positional[0], positional[1])
+		srcID, dstID := depStoreEndpoints(*relType, fromID, toID)
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: *relType, CreatedBy: *by})
 		if err != nil {
 			return err
@@ -104,6 +110,33 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	default:
 		return errors.New("usage: lit dep <add|rm|ls> ...")
 	}
+}
+
+// resolveDepAddEndpoints chooses between positional and named-flag input for
+// 'lit dep add'. Named flags (--blocker/--blocked) only apply to --type blocks.
+// Mixing positional and named flags is an error: the user would have to know
+// the orientation rule to mix them safely, which defeats the purpose.
+// [LAW:single-enforcer] One place decides which input form was used.
+func resolveDepAddEndpoints(positional []string, relType, blocker, blocked string, extraArgs int) (string, string, error) {
+	usage := "usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]\n  or:  lit dep add --blocker <id> --blocked <id> (only with --type blocks)"
+	hasNamed := blocker != "" || blocked != ""
+	if hasNamed {
+		if relType != "blocks" {
+			return "", "", fmt.Errorf("--blocker/--blocked only apply with --type blocks; got --type %s", relType)
+		}
+		if blocker == "" || blocked == "" {
+			return "", "", errors.New("--blocker and --blocked must both be provided")
+		}
+		if len(positional) > 0 || extraArgs > 0 {
+			return "", "", errors.New("provide either positional <from> <to> or --blocker/--blocked, not both")
+		}
+		// "from" in CLI convention = blocker; "to" = blocked.
+		return blocker, blocked, nil
+	}
+	if len(positional) != 2 || extraArgs != 0 {
+		return "", "", errors.New(usage)
+	}
+	return positional[0], positional[1], nil
 }
 
 func depStoreEndpoints(relType, fromID, toID string) (string, string) {

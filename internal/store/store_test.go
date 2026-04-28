@@ -1608,6 +1608,61 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 	}
 }
 
+func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Title: "A", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	b, err := st.CreateIssue(ctx, CreateIssueInput{Title: "B", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+	c, err := st.CreateIssue(ctx, CreateIssueInput{Title: "C", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(C) error = %v", err)
+	}
+
+	// Apply absolute order [C, A, B] at the top, regardless of creation order.
+	if err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID}); err != nil {
+		t.Fatalf("RankSet() error = %v", err)
+	}
+	all, err := st.ListIssues(ctx, ListIssuesFilter{Limit: 0})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	got := issueIDs(all)
+	want := []string{c.ID, a.ID, b.ID}
+	if len(got) < 3 || got[0] != want[0] || got[1] != want[1] || got[2] != want[2] {
+		t.Fatalf("ListIssues() top 3 ids = %#v, want prefix %#v", got, want)
+	}
+}
+
+func TestRankSetRejectsDuplicates(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Title: "A", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	if err := st.RankSet(ctx, []string{a.ID, a.ID}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("RankSet(duplicates) error = %v, want duplicate-id error", err)
+	}
+}
+
+func TestRankSetRejectsTooFewIDs(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Title: "A", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	if err := st.RankSet(ctx, []string{a.ID}); err == nil || !strings.Contains(err.Error(), "at least 2") {
+		t.Fatalf("RankSet(single id) error = %v, want too-few error", err)
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {

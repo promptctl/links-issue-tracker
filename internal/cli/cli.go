@@ -146,7 +146,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	})
 	addGroupedPassthrough(root, "operations", "ready", "List open work by readiness and rank", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"ready"}, args...), func(commandCtx context.Context, ap *app.App) error {
-			return runReady(commandCtx, stdout, ap, args)
+			return runReady(commandCtx, stdout, stderr, ap, args)
 		})
 	})
 	addGroupedPassthrough(root, "operations", "next", "Print the next workable leaf to lit start", func(args []string) error {
@@ -179,12 +179,12 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runTransition(commandCtx, stdout, ap, args, "start")
 		})
 	})
-	addGroupedPassthrough(root, "operations", "done", "Mark claimed work complete", func(args []string) error {
+	addGroupedPassthrough(root, "operations", "done", "Finish claimed work (success path; requires in_progress)", func(args []string) error {
 		return runWithApp(ctx, appAccessWrite, append([]string{"done"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runTransition(commandCtx, stdout, ap, args, "done")
 		})
 	})
-	addGroupedPassthrough(root, "operations", "close", "Close issue(s)", func(args []string) error {
+	addGroupedPassthrough(root, "operations", "close", "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", func(args []string) error {
 		return runWithApp(ctx, appAccessWrite, append([]string{"close"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runTransition(commandCtx, stdout, ap, args, "close")
 		})
@@ -258,6 +258,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	addGroupedPassthrough(root, "data", "export", "Export workspace snapshot", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"export"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runExport(commandCtx, stdout, ap, args)
+		})
+	})
+	addGroupedPassthrough(root, "data", "import", "Bulk-create issues from a JSON tree spec", func(args []string) error {
+		return runWithApp(ctx, appAccessWrite, append([]string{"import"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runImportTree(commandCtx, stdout, ap, args)
 		})
 	})
 	addGroupedPassthrough(root, "maintenance", "workspace", "Show workspace metadata", func(args []string) error {
@@ -692,9 +697,14 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	})
 }
 
-func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("ready")
 	assignee := fs.String("assignee", "", "Filter by assignee")
+	issueType := fs.String("type", "", "Filter by issue type")
+	status := fs.String("status", "", "Filter by status: open|in_progress (closed excludes everything)")
+	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
+	priorityMin := fs.Int("priority-min", -1, "Minimum priority 0..4")
+	priorityMax := fs.Int("priority-max", -1, "Maximum priority 0..4")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -702,17 +712,54 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]")
+		return errors.New("usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--priority-min N] [--priority-max N] [--limit N] [--columns ...] [--json]")
 	}
-	annotated, _, err := gatherReadyAnnotated(ctx, ap, *assignee)
+	visited := map[string]bool{}
+	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
+	rf := readyFilter{
+		Assignee:  strings.TrimSpace(*assignee),
+		IssueType: strings.TrimSpace(*issueType),
+		Status:    strings.TrimSpace(*status),
+		Labels:    splitCSV(*labels),
+	}
+	if visited["priority-min"] {
+		v := *priorityMin
+		rf.PriorityMin = &v
+	}
+	if visited["priority-max"] {
+		v := *priorityMax
+		rf.PriorityMax = &v
+	}
+	annotated, _, err := gatherReadyAnnotated(ctx, ap, rf)
 	if err != nil {
 		return err
 	}
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
+	// Coaching preamble goes to stderr so stdout stays parseable: a script piping
+	// `lit ready | parser` reads only the data, while a TTY user sees both streams
+	// merged. JSON output skips the preamble entirely — structured consumers don't
+	// need prose.
+	if !*jsonOut {
+		if err := writeReadyPreamble(stderr); err != nil {
+			return err
+		}
+	}
 	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
 		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})
+}
+
+// readyFilter carries the user-supplied narrowing options for `lit ready` and
+// `lit next`. Empty fields mean "no narrowing"; the workable definition
+// (open/in_progress, leaves only) is layered on top by gatherReadyAnnotated.
+type readyFilter struct {
+	Assignee    string
+	IssueType   string
+	Status      string
+	Labels      []string
+	PriorityMin *int
+	PriorityMax *int
 }
 
 // gatherReadyAnnotated runs the shared ready pipeline: list workable leaves,
@@ -722,20 +769,33 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 // fetch round-trip.
 // [LAW:single-enforcer] Both `lit ready` and `lit next` read from this single
 // pipeline so their "what is workable, in what order" model cannot drift.
-func gatherReadyAnnotated(ctx context.Context, ap *app.App, assignee string) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
+func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
 	cfg, err := config.Load(ap.Workspace.RootDir)
 	if err != nil {
 		return nil, nil, err
 	}
+	statuses := []string{"open", "in_progress"}
+	if rf.Status != "" {
+		// User-supplied status overrides the workable default. The intersection
+		// with leaf-only filtering still applies via filterWorkableIssues below;
+		// a user asking for closed items here gets none, which is the honest
+		// answer rather than silently substituting a different status.
+		statuses = []string{rf.Status}
+	}
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
-	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{
-		Statuses:        []string{"open", "in_progress"},
-		Assignees:       toSlice(strings.TrimSpace(assignee)),
+	listFilter := store.ListIssuesFilter{
+		Statuses:        statuses,
+		IssueTypes:      toSlice(rf.IssueType),
+		Assignees:       toSlice(rf.Assignee),
+		LabelsAll:       rf.Labels,
+		PriorityMin:     rf.PriorityMin,
+		PriorityMax:     rf.PriorityMax,
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
-	})
+	}
+	issues, err := ap.Store.ListIssues(ctx, listFilter)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -778,7 +838,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit next [--continue] [--assignee <user>] [--json]")
 	}
-	annotated, details, err := gatherReadyAnnotated(ctx, ap, *assignee)
+	annotated, details, err := gatherReadyAnnotated(ctx, ap, readyFilter{Assignee: strings.TrimSpace(*assignee)})
 	if err != nil {
 		return err
 	}
@@ -945,6 +1005,13 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	// Subcommand dispatch: 'lit rank set <id1> <id2> ...' is a separate verb
+	// that establishes absolute order across N issues atomically. Issue IDs
+	// always carry a workspace-configured prefix (e.g. <prefix>-<n>), so the
+	// literal 'set' is unambiguous.
+	if len(args) > 0 && args[0] == "set" {
+		return runRankSet(ctx, stdout, ap, args[1:])
+	}
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("rank")
 	_ = fs.Bool("top", false, "Move to highest rank")
@@ -996,6 +1063,28 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
+// runRankSet establishes absolute order across N issues by stacking them at
+// the top in the given sequence: id1 becomes the topmost, id2 ranks just
+// below, etc. Atomic: the store either applies all or none.
+func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, len(args))
+	fs := newCobraFlagSet("rank set")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) < 2 {
+		return errors.New("usage: lit rank set <id1> <id2> [<id3> ...]")
+	}
+	if err := ap.Store.RankSet(ctx, positional); err != nil {
+		return err
+	}
+	return printValue(stdout, map[string]any{"status": "ok", "ranked": positional}, *jsonOut, func(w io.Writer, _ any) error {
+		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(positional), strings.Join(positional, ", "))
+		return err
+	})
 }
 
 func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]string, error) {
@@ -1087,6 +1176,62 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	// Export is JSON-only — there is no text representation of a full database export.
 	return writeJSON(stdout, export)
+}
+
+// runImportTree consumes a JSON tree spec and creates issues in dependency
+// order with best-effort rollback on failure (see Store.ImportTree). The spec
+// is an array of records; each carries a local_id used inside the spec to
+// wire parent/depends_on refs. Real issue IDs are generated at create time
+// and returned in the id_map result. Run `lit doctor` after a failed import
+// to detect any orphans left if rollback itself failed.
+//
+// JSON shape (see store.ImportTreeSpec):
+//
+//	[
+//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 2},
+//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 2},
+//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 2}
+//	]
+//
+// YAML support is a follow-up — the indirect yaml.v3 dep would have to become
+// direct, and the spec types already carry yaml struct tags.
+func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("import")
+	path := fs.String("path", "", "Path to JSON tree spec file")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*path) == "" {
+		return errors.New("usage: lit import --path <file.json>")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit import --path <file.json>")
+	}
+	data, err := os.ReadFile(*path)
+	if err != nil {
+		return fmt.Errorf("read import spec: %w", err)
+	}
+	var specs []store.ImportTreeSpec
+	if err := json.Unmarshal(data, &specs); err != nil {
+		return fmt.Errorf("parse import spec: %w", err)
+	}
+	result, err := ap.Store.ImportTree(ctx, specs)
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, result, *jsonOut, func(w io.Writer, v any) error {
+		r := v.(store.ImportTreeResult)
+		if _, err := fmt.Fprintf(w, "imported %d issues\n", len(r.IDMap)); err != nil {
+			return err
+		}
+		for local, real := range r.IDMap {
+			if _, err := fmt.Fprintf(w, "  %s -> %s\n", local, real); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {

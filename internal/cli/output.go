@@ -59,6 +59,14 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			return err
 		}
 	}
+	// "unblocks:" surfaces the same leverage signal `lit ready` shows inline:
+	// IDs of open issues that depend on this one, i.e. would lose this as an
+	// open dependency when it closes. Empty list = no leverage; line omitted.
+	if ids := openUnblockIDs(detail.Blocks); len(ids) > 0 {
+		if _, err := fmt.Fprintf(w, "unblocks: %s\n", strings.Join(ids, ", ")); err != nil {
+			return err
+		}
+	}
 	// [LAW:dataflow-not-control-flow] Parent block precedes the leaf description
 	// so an agent reading top-to-bottom encounters containing context before
 	// the specific leaf details. When the parent has a description, it inlines
@@ -209,6 +217,20 @@ func formatOptionalTime(value *time.Time) string {
 		return "-"
 	}
 	return value.Format(time.RFC3339)
+}
+
+// openUnblockIDs returns the IDs of issues from blocks that are still active
+// (not closed, not archived, not deleted) — the set this issue's closure
+// would actually unblock from a "ready" perspective.
+func openUnblockIDs(blocks []model.Issue) []string {
+	ids := make([]string, 0, len(blocks))
+	for _, b := range blocks {
+		if b.State() == model.StateClosed || b.ArchivedAt != nil || b.DeletedAt != nil {
+			continue
+		}
+		ids = append(ids, b.ID)
+	}
+	return ids
 }
 
 func formatIssueState(issue model.Issue) string {
