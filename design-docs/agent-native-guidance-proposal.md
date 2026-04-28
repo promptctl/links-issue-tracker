@@ -97,6 +97,8 @@ List-shaped responses are intentionally unchanged in this proposal.
 
 ### 3. Quickstart as a stage model
 
+> **Superseded** by `design-docs/agent-work-loop-and-cue-framework.md` (2026-04-28). The 5-stage model below is retained as historical context. The replacement framework treats positions in an interconnected work loop as cue anchors rather than stages an agent traverses in order.
+
 `quickstart` is modeled as five canonical stages:
 
 1. Session bootstrap/context refresh
