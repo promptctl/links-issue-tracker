@@ -811,7 +811,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
-		newOrphanedAnnotator(24*time.Hour),
+		newOrphanedAnnotator(6*time.Hour),
 	)
 	if err != nil {
 		return nil, nil, err
