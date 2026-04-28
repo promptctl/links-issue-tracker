@@ -126,9 +126,9 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 
 func (h readyTestHarness) runReadyJSON(args ...string) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	var stdout, stderr bytes.Buffer
+	var stdout bytes.Buffer
 	allArgs := append(append([]string{}, args...), "--json")
-	if err := runReady(h.ctx, &stdout, &stderr, h.ap, allArgs); err != nil {
+	if err := runReady(h.ctx, &stdout, h.ap, allArgs); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", allArgs, err)
 	}
 	var got []annotation.AnnotatedIssue
@@ -146,17 +146,19 @@ func (h readyTestHarness) runReadyText(args ...string) string {
 
 func (h readyTestHarness) runReadyTextStreams(args ...string) (string, string) {
 	h.t.Helper()
-	var stdout, stderr bytes.Buffer
-	if err := runReady(h.ctx, &stdout, &stderr, h.ap, args); err != nil {
+	var stdout bytes.Buffer
+	if err := runReady(h.ctx, &stdout, h.ap, args); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", args, err)
 	}
-	return stdout.String(), stderr.String()
+	// runReady no longer writes to a separate stderr stream; cues are part of
+	// stdout. Returning an empty stderr keeps the test API stable.
+	return stdout.String(), ""
 }
 
 func (h readyTestHarness) runReadyErr(args ...string) error {
 	h.t.Helper()
-	var stdout, stderr bytes.Buffer
-	return runReady(h.ctx, &stdout, &stderr, h.ap, args)
+	var stdout bytes.Buffer
+	return runReady(h.ctx, &stdout, h.ap, args)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
@@ -489,7 +491,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	}
 }
 
-func TestRunReadyPreambleGoesToStderr(t *testing.T) {
+func TestRunReadyPreambleGoesToStdout(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	h.createIssue(store.CreateIssueInput{
@@ -500,14 +502,14 @@ func TestRunReadyPreambleGoesToStderr(t *testing.T) {
 	})
 
 	stdout, stderr := h.runReadyTextStreams()
-	if !strings.Contains(stderr, "This is the backlog") {
-		t.Fatal("stderr missing preamble")
+	if !strings.Contains(stdout, "This is the backlog") {
+		t.Fatal("stdout missing preamble")
 	}
-	if !strings.Contains(stderr, "─") {
-		t.Fatal("stderr missing separator line")
+	if !strings.Contains(stdout, "─") {
+		t.Fatal("stdout missing separator line")
 	}
-	if strings.Contains(stdout, "This is the backlog") {
-		t.Fatal("preamble leaked to stdout; it must be parseable-data only")
+	if strings.Contains(stderr, "This is the backlog") {
+		t.Fatal("preamble leaked to stderr; agent cues are normal output, not errors")
 	}
 }
 
