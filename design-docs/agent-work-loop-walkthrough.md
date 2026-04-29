@@ -8,15 +8,16 @@ This is the empirical pass on the cue framework: a structured walkthrough of rea
 
 ## Sessions sampled
 
-Three sessions of distinct shape were walked end-to-end. Sample diversity matters more than corpus size for this pass — patterns that repeat across shapes are the load-bearing ones.
+Four sessions of distinct shape were walked. Sample diversity matters more than corpus size for this pass — patterns that repeat across shapes are the load-bearing ones.
 
 | Session | Date | Turns | Shape | Title / theme |
 |---|---|---|---|---|
 | `b1558792` | 2026-04-08–09 | 120 | guidance-audit + multi-PR housekeeping | strengthen-hook-agent-directive |
 | `a4504c7b` | 2026-04-19 | 296 | quickstart fix → multi-branch sequence | fix-quickstart-output |
 | `0567deb2` | 2026-04-24–26 | 568 | epic-driven implementation, 7 branches | lit-ready-exclude-epics |
+| `a6cc0c74` | 2026-04-22–25 | 102 | hypothesis-verification → debug → recovery merge | template-eject (cold-start sync skip) |
 
-Together they exercise: triage, design/plan, mechanical refactor, multi-PR housekeeping, long-running epic execution, in-flight scope discovery, and cross-session continuation. The patterns identified below all surfaced in at least two of the three sessions.
+Together they exercise: triage, design/plan, mechanical refactor, multi-PR housekeeping, long-running epic execution, in-flight scope discovery, cross-session continuation, hypothesis verification, and merge-conflict recovery under user pressure. The patterns identified below all surfaced in at least two of the four sessions.
 
 ## Position list — confirmed and refined
 
@@ -31,11 +32,13 @@ The candidate position list from the framework doc held up. Refinements:
 | **Closing** | finalize a piece of work — commit, push, PR, validate, address reviews, merge, mark done | b1558792 turns 50–58 (commit→push→merge→delete); a4504c7b's repeated PR-finalization cycles |
 | **Reflecting** | between pieces — noticing what just changed and what it implies for next | b1558792 turns 60, 73, 83 (each surfacing an adjacent fix the user noticed during their own use) |
 
-**Two things the walk-through clarified:**
+**Three things the walk-through clarified:**
 
 - *Reflecting is more often user-driven than agent-driven.* In b1558792, the user surfaces three adjacent fixes (sync-push, ANSI colors, doctor --fix) by noticing them during normal use. The agent doesn't reflect autonomously — it executes and waits. **This is an affordance gap, not a position-list problem.** Reflecting as a stage exists; the system just doesn't currently invite the agent into it.
 
 - *Sub-modes exist within Engaged but don't need first-class names.* "Searching" (read same file 3x, redundant greps), "validating" (running tests), "writing" (edits), "scaffolding" (new files) all happen inside Engaged. They're tactics, not positions. Cues placed at Engaged boundaries are sufficient — no need for a finer position taxonomy.
+
+- *Refining has multiple entry shapes.* In 0567deb2 the user named a ticket and the agent entered Refining to plan a clean slice. In a6cc0c74 the user provided *another agent's diagnosis* and asked the agent to evaluate it — turn 0 through turn 20 were 19 tool calls of pure investigation followed by a structured "your diagnosis is partially correct symptomatically but wrong about location." Same Refining position, different trigger (hypothesis-verification vs. work-decomposition). The cue framework should accommodate both — they share the discipline (don't act until you've actually understood the system) but differ in the kind of artifact produced (analysis vs. plan).
 
 ## Cue moments observed — concrete catalog
 
@@ -65,6 +68,30 @@ Each of these fired in at least two sessions. Listed in priority order by impact
 **Archetype:** Prompt-question (asked of the agent, not the user) → Reframe to action.
 **Placement:** Closing position; before any final summary that ends in a question to the user.
 **Cue text candidate:** `If unambiguous evidence + reversible action, do it and report. Surface only as a question when scope or reversibility actually requires user judgment.`
+
+### 2b. Bias-toward-execution cue — "for small clearly-scoped work, execute; don't pre-plan it"
+
+**Trigger:** about to emit a plan, task list, or TaskCreate sequence for work that is small (≤5 file edits) and well-scoped by a fresh user directive.
+
+**Example (a6cc0c74 turns 28–41 — the worst friction in the entire corpus):** User had given an explicit narrow directive ("only valid for first push of empty repo, print that"). Agent ran `ToolSearch:TaskCreate,TaskUpdate`, then created **four** TaskCreate records describing the upcoming work, before any code edit. User interrupted three times across the next 20 turns with progressively harsher tone ("Huh? What the fuck are you talking about", "What are you doing? Please describe how this is what I asked you to do"). At turn 42 the agent self-corrected: *"I should have just done the whole thing in one shot instead of narrating a plan."*
+
+**The pattern:** TaskCreate is for tracking multi-stage work that may pause across sessions. For a 30-second-to-execute fix it reads as stalling — especially after the user has been explicit. The four task records added zero analytic value over just doing the work and reporting back.
+
+**Archetype:** Reframe.
+**Placement:** any TaskCreate after a user directive whose scope is already explicit; any plan-emission after a clear directive.
+**Cue text candidate:** `Plans and task lists are for multi-stage work that may pause. For small clear work in front of you, execute and report. The user reading "TaskCreate × 4" while waiting on a fix sees stalling.`
+
+**Distinguishing from #2:** Action vs. asking is one axis (the cue at #2). Execution vs. planning is a *second* axis. An agent can avoid asking the user *and* still pre-plan to the point of friction. Both cues are needed.
+
+### 2c. Re-emphasis-as-signal cue — "if the user repeats themselves, treat as a hard 'act now' signal"
+
+**Trigger:** user message that re-states the previous user message verbatim or near-verbatim, sometimes wrapped in quotes.
+
+**Example (a6cc0c74 turn 30):** User pasted the entirety of their turn 25 directive in quotes after the agent had spent turn 28 doing a `ToolSearch` instead of acting. Repetition is the most reliable signal in any corpus that the previous attempt did not land — either the agent didn't act on it or the action was wrong-shaped.
+
+**Archetype:** Reframe.
+**Placement:** entire session (this is more agent-discipline than command-bound). Cue fires when the agent observes the repetition pattern in user input.
+**Cue text candidate:** `User just re-stated their previous message. That's a hard signal the previous turn didn't land. Either execute the directive immediately or ask one focused clarifying question — do not narrate further.`
 
 ### 3. Pattern-extraction cue — "this looks like a procedure; codify it before forgetting"
 
@@ -184,6 +211,14 @@ Multiple sessions show 2–3 `Read` calls on the same file across nearby turns (
 
 **Proposal:** out of scope for cue framework. Note: an LSP-aware cache or per-session file fingerprint would help.
 
+### G-pre. Progressive user-frustration goes unsignaled
+
+In a6cc0c74 turns 21–46 the user's tone escalated over six turns: scope correction → polite re-clarification → verbatim-quoted re-statement → `[Request interrupted]` → "Huh? What the fuck are you talking about" → `[Request interrupted]` → "What are you doing? Please describe how this is what I asked you to do." The agent had no machine-readable signal that user frustration was rising. By turn 36 the situation was hot and could have been hotter; the agent only realized at turn 42 ("I should have just done the whole thing in one shot instead of narrating a plan") — well past the point a sharper agent would have caught.
+
+The signals were observable in the data — repetition, multiple interrupts, harsh language — but no single cue catches all three. A composite "frustration rising" indicator would be cheap: `(re-emphasis-recognition cue) + (recent interrupt count) + (harsh-language detection)`. When any two fire in a 5-turn window, the agent should bias hard toward execute-and-report and cut narration to a single line.
+
+**Proposal:** out of scope for the cue framework's first pass — this is harness-level pattern recognition, not command-bound emission. Note for follow-up: a sentinel cue or a session-level monitor that escalates execute-bias when the composite indicator fires.
+
 ### G. `needs-design` label is binary
 
 The label exists today (`feedback_agent_directive_judgment.md`) but it's a single bit: blocks readiness or not. Real design states are richer: brainstorming, drafted, reviewed-pending, ready-to-implement.
@@ -204,12 +239,14 @@ When `lit start` runs, the agent transitions Selecting → Engaged. When `lit do
 
 2. **Top-priority cues to author** (in this order):
    1. Bias-toward-action (Closing) — directly captures `feedback_act_on_proof.md`
-   2. Sibling-search (Closing) — addresses the b1558792 whack-a-mole pattern
-   3. Pre-recommendation (Closing summaries) — captures `feedback_one_pr_per_epic.md`
-   4. Audience-check (any Edit/Write to agent-facing files) — fires at the source of the b1558792 root cause
-   5. Right-scoped-response / deletion-robustness (mid-Engaged structural moments) — the framework's load-bearing principle
-   6. Pattern-extraction (Reflecting) — invites the `address-pr-reviews` move
-   7. Scope-validation (Selecting → Refining) — addresses today's stale-ticket pattern
+   2. Bias-toward-execution (anywhere TaskCreate/plan-emission fires after a clear directive) — addresses the worst friction in the corpus (a6cc0c74 turns 28–41)
+   3. Re-emphasis-as-signal (session-level) — single cheap signal that catches "the previous turn didn't land"
+   4. Sibling-search (Closing) — addresses the b1558792 whack-a-mole pattern
+   5. Pre-recommendation (Closing summaries) — captures `feedback_one_pr_per_epic.md`
+   6. Audience-check (any Edit/Write to agent-facing files) — fires at the source of the b1558792 root cause
+   7. Right-scoped-response / deletion-robustness (mid-Engaged structural moments) — the framework's load-bearing principle
+   8. Pattern-extraction (Reflecting) — invites the `address-pr-reviews` move
+   9. Scope-validation (Selecting → Refining) — addresses today's stale-ticket pattern
 
 3. **Top-priority affordance gaps** (in this order, by leverage × cost-to-build):
    - **A** `lit context` / orient command — high leverage, modest cost
@@ -217,7 +254,9 @@ When `lit start` runs, the agent transitions Selecting → Engaged. When `lit do
    - **B** `lit guidance audit` — moderate leverage, moderate cost
    - **H** `position` field in JSON envelope — high leverage, prereq for the cue system itself
 
-4. **Cue noise budget validation** — the seven cues above, fired only at their position-changing or risk moments, would emit roughly 2–4 cues per typical Engaged-heavy session and 4–6 cues per multi-PR session. That's well under any plausible noise threshold. The cues are structurally sparse because their placement rules tie them to *transitions* and *risk events*, not every command.
+4. **Cue noise budget validation** — the nine cues above, fired only at their position-changing or risk moments, would emit roughly 2–5 cues per typical Engaged-heavy session and 5–8 cues per multi-PR session. That's well under any plausible noise threshold. The cues are structurally sparse because their placement rules tie them to *transitions* and *risk events*, not every command. The two new cues (#2b execution-bias and #2c re-emphasis) fire even more rarely — only when their specific anti-pattern is about to trigger — so they add minimal noise.
+
+5. **One contrasting positive datapoint to preserve.** The same a6cc0c74 session that produced the worst friction (turns 21–46, TaskCreate planning theater) also produced the *cleanest* execution sequence in the corpus (turns 85–101: merge conflict → investigate → resolve → build → test → commit → push → verify mergeable → report, all in 17 turns with zero user interrupts). The difference: the second sequence had a hard directive ("Fix it immediately. Then get your change up there.") and the agent operated in pure execute-and-report mode. The cue system should reinforce *that* mode whenever the conditions are met (clear scope + reversible work + explicit directive) and not actively get in its way.
 
 ## Follow-up tickets to file
 
