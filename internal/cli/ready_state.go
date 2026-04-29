@@ -277,6 +277,7 @@ func sortByPriority(issues []annotation.AnnotatedIssue) {
 	})
 }
 
+
 // sortByBlockingAnnotations places issues without blocking annotations first,
 // preserving the original store ordering within each group. The name is
 // deliberate: "readiness" is an interpretation a consumer applies over the
