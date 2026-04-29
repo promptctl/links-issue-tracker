@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/issueid"
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
@@ -229,7 +230,7 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 		status,
 		in.Priority,
 		issueType,
-		normalizeIssueSlug(in.Topic),
+		issueid.NormalizeSlug(in.Topic),
 		strings.TrimSpace(in.Assignee),
 		issueRank,
 		in.CreatedAt.Format(time.RFC3339Nano),
@@ -414,7 +415,7 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 		status := statusForStorage(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
 			VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, normalizeIssueSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 	}

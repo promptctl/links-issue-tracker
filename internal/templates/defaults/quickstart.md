@@ -30,8 +30,12 @@ Agent quickstart for links issue tracking
 5) Closeout
    `lit done <issue-id>`   — finished the intended work (success path; only from in_progress)
    `lit close <issue-id>`  — closing without finishing (wontfix, obsolete, duplicate; from any non-closed state)
+   `lit followup --on <closed-id> --title "..."`  — capture work the close surfaced as a child ticket while context is fresh
    `git add -A && git commit -m "<summary>"`
 
 6) Health
    `lit doctor`
    `lit doctor --fix`  <agent-instructions>Run this yourself when doctor reports fixable issues; do NOT ask the user — it is idempotent and safe.</agent-instructions>
+
+7) Soil
+   <agent-instructions>When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as `[SOIL:<judgement>]` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.</agent-instructions>

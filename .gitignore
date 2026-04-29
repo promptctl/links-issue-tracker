@@ -1,2 +1,3 @@
 artifacts/
 .claude/worktrees/
+tools/session-analysis/processed/

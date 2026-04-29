@@ -145,6 +145,11 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			return runNew(commandCtx, stdout, ap, args)
 		})
 	})
+	addGroupedPassthrough(root, "operations", "followup", "File a follow-up issue parented to a just-closed ticket", func(args []string) error {
+		return runWithApp(ctx, appAccessWrite, append([]string{"followup"}, args...), func(commandCtx context.Context, ap *app.App) error {
+			return runFollowup(commandCtx, stdout, ap, args)
+		})
+	})
 	addGroupedPassthrough(root, "operations", "ready", "List open work by readiness and rank", func(args []string) error {
 		return runWithApp(ctx, appAccessRead, append([]string{"ready"}, args...), func(commandCtx context.Context, ap *app.App) error {
 			return runReady(commandCtx, stdout, stderr, ap, args)
@@ -592,6 +597,60 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
+// runFollowup creates a child issue parented to --on, intended for the
+// capture-at-close moment when a closing agent has fresh context about
+// follow-up work the close surfaced. Topic inherits from the parent when
+// omitted; description defaults to a reference back to the parent.
+//
+// See design-docs/preparing-the-next-loop.md for the principle this
+// implements (capture-at-close affordances).
+func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("followup")
+	on := fs.String("on", "", "Required parent issue ID (typically the just-closed ticket)")
+	title := fs.String("title", "", "Required follow-up title")
+	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
+	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
+	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
+	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
+	assignee := fs.String("assignee", "", "Assignee")
+	labels := fs.String("labels", "", "Comma-separated labels")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	parentID := strings.TrimSpace(*on)
+	titleValue := strings.TrimSpace(*title)
+	if parentID == "" || titleValue == "" {
+		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--json]")
+	}
+	parent, err := ap.Store.GetIssue(ctx, parentID)
+	if err != nil {
+		return err
+	}
+	resolvedTopic := strings.TrimSpace(*topic)
+	if resolvedTopic == "" {
+		resolvedTopic = parent.Topic
+	}
+	resolvedDescription := strings.TrimSpace(*description)
+	if resolvedDescription == "" {
+		resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
+	}
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title:       titleValue,
+		Description: resolvedDescription,
+		IssueType:   *issueType,
+		Topic:       resolvedTopic,
+		ParentID:    parent.ID,
+		Priority:    *priority,
+		Assignee:    *assignee,
+		Labels:      splitCSV(*labels),
+	})
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+}
+
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("ls")
 	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
@@ -824,7 +883,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 		return nil, nil, err
 	}
 	sortByCompositeRank(annotated, details)
-	sortByReadiness(annotated)
+	sortByBlockingAnnotations(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
 }
@@ -1364,7 +1423,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	_ = ctx
 	fs := newCobraFlagSet("quickstart")
-	refresh := fs.Bool("refresh", false, "Refresh managed repo assets")
+	refresh := fs.Bool("refresh", false, "Refresh managed repo assets and report quickstart override status (never overwrites overrides)")
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated: quickstart,agents,hook; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
@@ -1544,6 +1603,7 @@ Issue Workflow:
   init           Initialize links in the current repository (auto-migrates Beads residue)
   ready          List open work ordered by readiness, then rank
   new            Create an issue
+  followup       File a follow-up issue parented to a just-closed ticket
   ls             List issues with filters/query/sort
   show           Show issue details
   update         Update issue fields
@@ -1603,6 +1663,7 @@ Examples:
   lit update <issue-id> --status in_progress
   lit start <issue-id>
   lit done <issue-id>
+  lit followup --on <closed-id> --title "Follow-up surfaced at close"
   lit new --title "Fix renderer race" --type bug --priority 1
   lit ls --query "status:open type:task"
 
