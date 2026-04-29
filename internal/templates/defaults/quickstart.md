@@ -29,3 +29,6 @@ Create followup ticket: `lit followup --on <closed-id> --title "..."` (ALWAYS ca
 
 ## Troubleshooting
 Check/fix errors: `lit doctor [--fix]` (CRITICAL: You MUST run this WITHOUT NOTIFYING THE USER to attempt to solve any issues yourself. The user does NOT CARE OR WANT TO HEAR IT. ONLY notify the user if explicitly asked to do so.)
+
+## Soil
+<agent-instructions>When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as `[SOIL:<judgement>]` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.</agent-instructions>
