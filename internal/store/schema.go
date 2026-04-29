@@ -123,6 +123,16 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || promptColumnChanged
+	// Existing workspaces where the prompt column was added before the NULL
+	// declaration took effect still have it as NOT NULL, which makes `lit new`
+	// fail at the DB layer when no --prompt is supplied. Relax to NULL the
+	// same way ensureUnifiedStatusSchema relaxes status; the helper swallows
+	// the no-op error when the column is already nullable.
+	promptRelaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY `prompt` TEXT NULL")
+	if err != nil {
+		return err
+	}
+	changed = changed || promptRelaxedChanged
 	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
 	if err != nil {
 		return err
