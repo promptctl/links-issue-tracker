@@ -23,7 +23,13 @@ import sys
 from collections import Counter
 from pathlib import Path
 
-DEFAULT_PROJECT = "-Users-bmf-code-links-issue-tracker"
+# Claude Code encodes a project's absolute path as its dir name under
+# ~/.claude/projects by replacing '/' with '-'. Deriving the default from
+# the script's own repo root keeps the encoded form in lockstep with where
+# this script is actually running, regardless of clone path.
+# [LAW:one-source-of-truth] one canonical representation of the repo path.
+REPO_ROOT = Path(__file__).resolve().parents[2]
+DEFAULT_PROJECT = str(REPO_ROOT).replace("/", "-")
 DEFAULT_OUTDIR = "tools/session-analysis/processed"
 
 # Truncation budgets — tuned empirically: real content rarely exceeds 2KB,
@@ -184,7 +190,7 @@ def parse_session(path):
     }
     seen_branches = set()
 
-    with open(path, errors="replace") as f:
+    with open(path, encoding="utf-8", errors="replace") as f:
         for line in f:
             line = line.strip()
             if not line:
@@ -314,14 +320,14 @@ def parse_session(path):
 
 def write_session_json(sess, outdir):
     p = outdir / f"{sess['session_id']}.json"
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         json.dump(sess, f, indent=2, default=str)
     return p
 
 
 def write_session_markdown(sess, outdir):
     p = outdir / f"{sess['session_id']}.md"
-    with open(p, "w") as f:
+    with open(p, "w", encoding="utf-8") as f:
         f.write(f"# Session {sess['session_id']}\n\n")
         f.write(f"- start: `{sess['first_user_ts']}`\n")
         f.write(f"- end: `{sess['last_ts']}`\n")
@@ -401,7 +407,7 @@ def write_index(sessions, outdir):
             }
         )
     index.sort(key=lambda x: x["first_user_ts"] or "")
-    with open(outdir / "index.json", "w") as f:
+    with open(outdir / "index.json", "w", encoding="utf-8") as f:
         json.dump(index, f, indent=2)
 
 
