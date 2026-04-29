@@ -2,9 +2,7 @@
 
 Status: design (2026-04-28)
 
-This document supersedes the *purpose* — though not all the vocabulary — of `design-docs/agent-work-loop-and-cue-framework.md`. The position labels and cue archetypes from the framework doc remain useful as descriptive vocabulary; what cues are *for* has been substantially reframed.
-
-The walkthrough doc (`design-docs/agent-work-loop-walkthrough.md`) was authored under the prior framing and its cue catalog is mostly invalidated by this reframe. That doc should be retained as a record of the empirical pass and updated to reflect the corrected framing in a follow-up.
+This document is the authoritative principle for agent enablement in this codebase. Companion: `design-docs/agent-enablement-onboarding.md` describes the discovery path that produced this principle.
 
 ## The core insight
 

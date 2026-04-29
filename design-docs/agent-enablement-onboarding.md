@@ -56,7 +56,7 @@ Each reframe was driven by user correction. Each pushed the design one step back
 
 ### Reframe 4 — *return to loops, but as cue-anchors*
 
-**What we did:** wrote `design-docs/agent-work-loop-and-cue-framework.md`. Positions, transitions, cue archetypes (Reframe / Prompt-question / Next-concrete-action / Surface-to-human), placement rules, principle-encoding for deletion-robustness.
+**What we did:** wrote a framework doc (since deleted) describing positions, transitions, cue archetypes (Reframe / Prompt-question / Next-concrete-action / Surface-to-human), placement rules, and principle-encoding for deletion-robustness.
 
 **What survived from this:** the vocabulary. Position labels and archetype names are still useful descriptive tools.
 
@@ -70,7 +70,7 @@ Each reframe was driven by user correction. Each pushed the design one step back
 
 **What we built:** `tools/session-analysis/process_sessions.py`. Reduces 24MB of raw `~/.claude/projects/<encoded>/<session-id>.jsonl` files (41 sessions) to 3.6MB of structured digests + per-session markdown timelines + an index for cataloguing. Survives.
 
-**What we then did:** walked four sessions of distinct shape (b1558792 guidance-audit, a4504c7b quickstart-fix, 0567deb2 epic-driven implementation, a6cc0c74 debug/recovery). Wrote `design-docs/agent-work-loop-walkthrough.md` with a 9-cue catalog and 8 affordance gaps.
+**What we then did:** walked four sessions of distinct shape (b1558792 guidance-audit, a4504c7b quickstart-fix, 0567deb2 epic-driven implementation, a6cc0c74 debug/recovery) and wrote a walkthrough doc (since deleted) with a 9-cue catalog and 8 affordance gaps.
 
 **What survived from the walkthrough:** the methodology. The position list (validated empirically). The observation that Reflecting is mostly user-driven today.
 
@@ -138,12 +138,12 @@ What we cannot control: the agent in the moment, the user, the world. The accept
 
 | Doc | Status |
 |---|---|
-| `design-docs/preparing-the-next-loop.md` | Authoritative principle. Read this first after this onboarding. |
-| `design-docs/agent-work-loop-and-cue-framework.md` | Vocabulary (positions, archetypes) survives; *purpose* superseded. |
-| `design-docs/agent-work-loop-walkthrough.md` | Methodology survives; cue catalog mostly invalidated. Needs a follow-up correction pass. |
+| `design-docs/preparing-the-next-loop.md` | Authoritative principle. Read this after this onboarding. |
 | `design-docs/agent-native-guidance-proposal.md` | JSON envelope substrate survives; the 5-stage `quickstart` model is superseded. |
 | `tools/session-analysis/process_sessions.py` | Survives. Useful for any future cross-session analysis. |
 | `tools/session-analysis/processed/` | Gitignored output. Run `python3 tools/session-analysis/process_sessions.py` to regenerate against the current session corpus. |
+
+The framework and walkthrough docs that emerged at Reframes 4 and 5 were deleted as part of this cleanup. They were patently superseded — preserving them risked future agents reading them as authoritative. Their narrative role lives on in the reframe descriptions above.
 
 ## For the next session: how to engage
 
@@ -151,7 +151,7 @@ If you are picking up this work fresh:
 
 1. Read `preparing-the-next-loop.md` first. It is the principle. ~240 lines.
 2. Read this onboarding doc second for the journey. The dead ends matter; they explain why obvious-looking moves are wrong.
-3. The framework doc and walkthrough doc are background. Their vocabulary is useful; their conclusions are partially invalidated. Consult selectively.
+3. The intermediate framework and walkthrough docs that arose at Reframes 4 and 5 have been deleted; their content is captured narratively above where it remains useful.
 4. The next move is most likely *not* designing more cues. It is identifying which touchpoints in the current `lit` surface need garden-tending affordances and building those. The "what we should build" priority list lives in `preparing-the-next-loop.md`'s Implications section.
 5. Be skeptical of any design move that:
    - Asks the agent to read or predict the user

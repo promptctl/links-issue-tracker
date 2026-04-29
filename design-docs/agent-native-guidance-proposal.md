@@ -97,7 +97,7 @@ List-shaped responses are intentionally unchanged in this proposal.
 
 ### 3. Quickstart as a stage model
 
-> **Superseded** by `design-docs/agent-work-loop-and-cue-framework.md` (2026-04-28). The 5-stage model below is retained as historical context. The replacement framework treats positions in an interconnected work loop as cue anchors rather than stages an agent traverses in order.
+> **Superseded** by `design-docs/preparing-the-next-loop.md` (2026-04-28). The 5-stage model below is retained as historical context. The current view is that an agent's work loop tangles rather than progressing through ordered stages, and the load-bearing design discipline is preparing the *next* loop rather than steering the current one. See `design-docs/agent-enablement-onboarding.md` for the discovery path.
 
 `quickstart` is modeled as five canonical stages:
 
