@@ -1073,7 +1073,7 @@ func (s *Store) listRelations(ctx context.Context, issueID string) ([]model.Rela
 		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1202,7 +1202,7 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 		if err := rows.Scan(&label.IssueID, &label.Name, &createdAt, &label.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1246,7 +1246,7 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 		if err := rows.Scan(&c.ID, &c.IssueID, &c.Body, &createdAt, &c.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1269,7 +1269,7 @@ func (s *Store) listHistory(ctx context.Context, issueID string) ([]model.IssueH
 		if err := rows.Scan(&event.ID, &event.IssueID, &event.Action, &event.Reason, &event.FromStatus, &event.ToStatus, &createdAt, &event.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1292,7 +1292,7 @@ func (s *Store) listAllRelations(ctx context.Context) ([]model.Relation, error) 
 		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1315,7 +1315,7 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 		if err := rows.Scan(&c.ID, &c.IssueID, &c.Body, &createdAt, &c.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1338,7 +1338,7 @@ func (s *Store) listAllHistory(ctx context.Context) ([]model.IssueHistory, error
 		if err := rows.Scan(&event.ID, &event.IssueID, &event.Action, &event.Reason, &event.FromStatus, &event.ToStatus, &createdAt, &event.CreatedBy); err != nil {
 			return nil, err
 		}
-		t, err := time.Parse(time.RFC3339Nano, createdAt)
+		t, err := scanTime(createdAt)
 		if err != nil {
 			return nil, err
 		}
@@ -1415,11 +1415,11 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 
 func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
 	var err error
-	issue.CreatedAt, err = time.Parse(time.RFC3339Nano, createdAt)
+	issue.CreatedAt, err = scanTime(createdAt)
 	if err != nil {
 		return issueRow{}, err
 	}
-	issue.UpdatedAt, err = time.Parse(time.RFC3339Nano, updatedAt)
+	issue.UpdatedAt, err = scanTime(updatedAt)
 	if err != nil {
 		return issueRow{}, err
 	}
@@ -1429,21 +1429,21 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 	// lives in hydrateIssues; here we just carry the row data as it appears.
 	statusView := model.StatusView{Value: model.State(status.String), Assignee: assignee}
 	if closedAt.Valid {
-		t, err := time.Parse(time.RFC3339Nano, closedAt.String)
+		t, err := scanTime(closedAt.String)
 		if err != nil {
 			return issueRow{}, err
 		}
 		statusView.ClosedAt = &t
 	}
 	if archivedAt.Valid {
-		t, err := time.Parse(time.RFC3339Nano, archivedAt.String)
+		t, err := scanTime(archivedAt.String)
 		if err != nil {
 			return issueRow{}, err
 		}
 		issue.ArchivedAt = &t
 	}
 	if deletedAt.Valid {
-		t, err := time.Parse(time.RFC3339Nano, deletedAt.String)
+		t, err := scanTime(deletedAt.String)
 		if err != nil {
 			return issueRow{}, err
 		}
@@ -1451,6 +1451,14 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 	}
 	issue.Labels = []string{}
 	return issueRow{Issue: issue, Status: statusView}, nil
+}
+
+// scanTime parses an RFC3339Nano timestamp returned by a SQL row scan.
+// [LAW:single-enforcer] All RFC3339Nano-typed timestamp columns parse through
+// here so the format binding lives in one place; changing the wire format is
+// one edit, not 12.
+func scanTime(value string) (time.Time, error) {
+	return time.Parse(time.RFC3339Nano, value)
 }
 
 // statusForStorage returns the value to persist in the issues.status column.
