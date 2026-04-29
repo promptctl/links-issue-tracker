@@ -267,9 +267,14 @@ func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]mo
 	})
 }
 
-// sortByReadiness places issues without blocking annotations first,
-// preserving the original store ordering within each group.
-func sortByReadiness(issues []annotation.AnnotatedIssue) {
+// sortByBlockingAnnotations places issues without blocking annotations first,
+// preserving the original store ordering within each group. The name is
+// deliberate: "readiness" is an interpretation a consumer applies over the
+// neutral fact set of annotations, never a property of the annotations
+// themselves. Calling this "sortByReadiness" would invite future callers to
+// treat ready-ness as an annotation property and violate the "annotations
+// are neutral facts" law.
+func sortByBlockingAnnotations(issues []annotation.AnnotatedIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		iBlocked := isReadyBlocked(issues[i].Annotations)
 		jBlocked := isReadyBlocked(issues[j].Annotations)

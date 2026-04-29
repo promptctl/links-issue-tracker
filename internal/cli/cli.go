@@ -883,7 +883,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 		return nil, nil, err
 	}
 	sortByCompositeRank(annotated, details)
-	sortByReadiness(annotated)
+	sortByBlockingAnnotations(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
 }
