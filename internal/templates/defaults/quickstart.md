@@ -35,3 +35,6 @@ Agent quickstart for links issue tracking
 6) Health
    `lit doctor`
    `lit doctor --fix`  <agent-instructions>Run this yourself when doctor reports fixable issues; do NOT ask the user — it is idempotent and safe.</agent-instructions>
+
+7) Soil
+   <agent-instructions>When you form a judgement about how prepared this work was — soil that was tended for you, or soil that wasn't — record it inline in chat as `[SOIL:<judgement>]`, in your own words. Do not investigate why; do not categorize; just express the felt sense and continue. Chat only — not commit messages, not code. The corpus of these markers is the only signal we have that the garden-tending discipline is doing anything; it is trivially cheap and disproportionately effective.</agent-instructions>
