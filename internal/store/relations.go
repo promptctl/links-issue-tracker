@@ -208,7 +208,7 @@ func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issu
 	if _, err := s.GetIssue(ctx, parentID); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.title, i.description, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
+	rows, err := s.db.QueryContext(ctx, `SELECT i.id, i.title, i.description, i.prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		WHERE r.type = 'parent-child' AND r.dst_id = ?

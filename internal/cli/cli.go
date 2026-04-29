@@ -578,6 +578,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
+	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
 	topic := fs.String("topic", "", "Required immutable issue topic slug")
 	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
@@ -589,7 +590,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
 	})
 	if err != nil {
 		return err
@@ -609,6 +610,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	on := fs.String("on", "", "Required parent issue ID (typically the just-closed ticket)")
 	title := fs.String("title", "", "Required follow-up title")
 	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
+	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
 	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
@@ -638,6 +640,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:       titleValue,
 		Description: resolvedDescription,
+		Prompt:      strings.TrimSpace(*prompt),
 		IssueType:   *issueType,
 		Topic:       resolvedTopic,
 		ParentID:    parent.ID,
@@ -1033,6 +1036,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	fs := newCobraFlagSet("update")
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
+	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "", "Issue type: task|feature|bug|chore|epic")
 	priority := fs.Int("priority", 0, "Priority 0..4 (lower is more important)")
 	assignee := fs.String("assignee", "", "Assignee")
@@ -1045,10 +1049,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1058,7 +1062,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if visited["by"] && !visited["status"] {
 		return errors.New("--by requires --status")
 	}
-	mutatesFields := visited["title"] || visited["description"] || visited["type"] || visited["priority"] || visited["assignee"] || visited["labels"]
+	mutatesFields := visited["title"] || visited["description"] || visited["prompt"] || visited["type"] || visited["priority"] || visited["assignee"] || visited["labels"]
 	mutatesStatus := visited["status"]
 	if !mutatesFields && !mutatesStatus {
 		return errors.New("lit update requires at least one field flag")
@@ -1114,6 +1118,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		if visited["description"] {
 			value := *description
 			update.Description = &value
+		}
+		if visited["prompt"] {
+			value := *prompt
+			update.Prompt = &value
 		}
 		if visited["type"] {
 			value := *issueType

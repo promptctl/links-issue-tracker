@@ -25,6 +25,7 @@ func createIssuesTableStmt() string {
 			id VARCHAR(191) PRIMARY KEY,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
+			prompt TEXT,
 			status VARCHAR(32) NULL,
 			priority INT NOT NULL,
 			issue_type VARCHAR(32) NOT NULL,
@@ -117,6 +118,11 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || topicColumnChanged
+	promptColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN `prompt` TEXT NULL AFTER `description`")
+	if err != nil {
+		return err
+	}
+	changed = changed || promptColumnChanged
 	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
 	if err != nil {
 		return err

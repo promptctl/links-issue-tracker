@@ -409,6 +409,67 @@ func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
 	}
 }
 
+func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	created, err := st.CreateIssue(ctx, CreateIssueInput{
+		Title:       "Render the cube",
+		Description: "Standard scene fixture.",
+		Prompt:      "Run the renderer at 1024x768 and assert no NaNs in the depth buffer.",
+		Topic:       "renderer",
+		IssueType:   "task",
+		Priority:    2,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if created.Prompt == "" {
+		t.Fatalf("created.Prompt is empty; want preserved through CreateIssue")
+	}
+
+	got, err := st.GetIssue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Prompt != created.Prompt {
+		t.Fatalf("GetIssue prompt = %q, want %q", got.Prompt, created.Prompt)
+	}
+
+	newPrompt := "Re-run with --headless and capture screenshot to /tmp/out.png"
+	updated, err := st.UpdateIssue(ctx, created.ID, UpdateIssueInput{Prompt: &newPrompt})
+	if err != nil {
+		t.Fatalf("UpdateIssue() error = %v", err)
+	}
+	if updated.Prompt != newPrompt {
+		t.Fatalf("UpdateIssue prompt = %q, want %q", updated.Prompt, newPrompt)
+	}
+
+	matches, err := st.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"headless"}})
+	if err != nil {
+		t.Fatalf("ListIssues(search) error = %v", err)
+	}
+	found := false
+	for _, m := range matches {
+		if m.ID == created.ID {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("search for prompt-only term did not return %q", created.ID)
+	}
+
+	cleared := ""
+	cleared2, err := st.UpdateIssue(ctx, created.ID, UpdateIssueInput{Prompt: &cleared})
+	if err != nil {
+		t.Fatalf("UpdateIssue(clear prompt) error = %v", err)
+	}
+	if cleared2.Prompt != "" {
+		t.Fatalf("UpdateIssue(clear) prompt = %q, want empty", cleared2.Prompt)
+	}
+}
+
 func TestGenerateHashIssueIDIsDeterministicForSameInputs(t *testing.T) {
 	createdAt := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 

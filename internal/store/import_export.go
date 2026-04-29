@@ -16,6 +16,7 @@ type ImportIssue struct {
 	ID          string
 	Title       string
 	Description string
+	Prompt      string
 	Status      string
 	Priority    int
 	IssueType   string
@@ -210,11 +211,12 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 		}
 	}
 	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, NULL, NULL)
+			id, title, description, prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, NULL, NULL)
 		ON DUPLICATE KEY UPDATE
 			title = VALUES(title),
 			description = VALUES(description),
+			prompt = VALUES(prompt),
 			status = VALUES(status),
 			priority = VALUES(priority),
 			issue_type = VALUES(issue_type),
@@ -227,6 +229,7 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 		in.ID,
 		strings.TrimSpace(in.Title),
 		strings.TrimSpace(in.Description),
+		nullableString(strings.TrimSpace(in.Prompt)),
 		status,
 		in.Priority,
 		issueType,
@@ -413,9 +416,9 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 		// decision; the import path inherits it instead of inventing its own
 		// default for containers.
 		status := statusForStorage(issue)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, status, issue.Priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
+			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, issue.Priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 		}
 	}
