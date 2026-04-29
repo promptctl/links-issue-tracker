@@ -22,8 +22,9 @@ TARGET_DIR="${TARGET_DIR:-$GOBIN}"
 mkdir -p "$TARGET_DIR"
 GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build -o "$TARGET_DIR/lit" ./cmd/lit
 
-# `lnks` remains as a compatibility entrypoint for local projects still referencing it.
-ln -sf "$TARGET_DIR/lit" "$TARGET_DIR/lnks"
+# Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
+# only entrypoint going forward.
+rm -f "$TARGET_DIR/lnks"
 
 # Detect any *other* `lit` on PATH that we did NOT just overwrite — those are
 # the stale binaries that cause "the fix landed but the bug came back" reports.
@@ -39,7 +40,7 @@ for dir in "${PATH_ENTRIES[@]}"; do
     fi
 done
 
-echo "Installed lit -> $TARGET_DIR/lit (lnks symlink created for compatibility)"
+echo "Installed lit -> $TARGET_DIR/lit"
 if [ "${#STALE[@]}" -gt 0 ]; then
     echo
     echo "WARNING: other 'lit' binaries found on PATH that were NOT updated:"

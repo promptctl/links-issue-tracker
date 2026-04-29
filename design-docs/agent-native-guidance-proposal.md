@@ -26,7 +26,7 @@ This proposal standardizes how agent-facing command outputs describe:
 The current proposal has two layers:
 
 1. an additive JSON guidance envelope for object-shaped command outputs
-2. a canonical staged model for `lnks quickstart`, with compatibility fields derived from that stage model
+2. a canonical staged model for `lit quickstart`, with compatibility fields derived from that stage model
 
 The goal is to make follow-up actions explicit without introducing hidden behavior, silent state transitions, or breaking existing JSON consumers.
 
@@ -50,7 +50,7 @@ Before this proposal:
 ## Non-goals
 
 - Versioning all JSON responses immediately.
-- Changing list-shaped JSON outputs such as `lnks ready` in this proposal.
+- Changing list-shaped JSON outputs such as `lit ready` in this proposal.
 - Adding hidden command chaining or automatic follow-up execution.
 - Finalizing the long-term schema for every command family in the CLI.
 
@@ -69,7 +69,7 @@ Object-shaped JSON responses may include these additive top-level fields:
 
 ```json
 {
-  "command": "lnks workspace --json",
+  "command": "lit workspace --json",
   "purpose": "Resolve canonical workspace paths and trace locations.",
   "condition": "when a git remote is configured"
 }
