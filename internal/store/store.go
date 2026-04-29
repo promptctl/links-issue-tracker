@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/bmf/links-issue-tracker/internal/issueid"
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/rank"
 )
@@ -311,7 +312,7 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 	if err != nil {
 		return model.Issue{}, err
 	}
-	topic, err := normalizeIssueTopicForCreate(in.Topic)
+	topic, err := issueid.NormalizeTopicForCreate(in.Topic)
 	if err != nil {
 		return model.Issue{}, err
 	}

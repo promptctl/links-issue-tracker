@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
+	"github.com/bmf/links-issue-tracker/internal/issueid"
 	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
@@ -411,11 +412,11 @@ func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
 func TestGenerateHashIssueIDIsDeterministicForSameInputs(t *testing.T) {
 	createdAt := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 
-	first := generateHashIssueID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
-	second := generateHashIssueID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
+	first := issueid.GenerateHashID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
+	second := issueid.GenerateHashID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
 
 	if first != second {
-		t.Fatalf("generateHashIssueID() = %q then %q, want deterministic output", first, second)
+		t.Fatalf("issueid.GenerateHashID() = %q then %q, want deterministic output", first, second)
 	}
 }
 
