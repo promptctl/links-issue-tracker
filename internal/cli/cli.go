@@ -1423,7 +1423,7 @@ func runCompletion(stdout io.Writer, args []string) error {
 func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	_ = ctx
 	fs := newCobraFlagSet("quickstart")
-	refresh := fs.Bool("refresh", false, "Refresh managed repo assets")
+	refresh := fs.Bool("refresh", false, "Refresh managed repo assets and report quickstart override status (never overwrites overrides)")
 	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated: quickstart,agents,hook; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
 	if err := parseFlagSet(fs, args, stdout); err != nil {

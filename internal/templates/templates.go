@@ -91,6 +91,50 @@ func GlobalPath(name string) string {
 	return filepath.Join(dir, name)
 }
 
+// ProjectPath returns the override path under the workspace's .lit/templates directory.
+// Returns empty string when workspaceRoot is empty.
+func ProjectPath(workspaceRoot string, name string) string {
+	return projectTemplatePath(workspaceRoot, name)
+}
+
+// OverrideLayer identifies which override layer a resolved file came from.
+type OverrideLayer string
+
+const (
+	OverrideLayerNone    OverrideLayer = ""
+	OverrideLayerProject OverrideLayer = "project"
+	OverrideLayerGlobal  OverrideLayer = "global"
+)
+
+// ActiveOverride returns the highest-priority existing override (project > global)
+// for name. When neither layer has a file, the returned path is empty, content is
+// nil, and Layer is OverrideLayerNone. Filesystem errors other than "not exist" are
+// propagated.
+func ActiveOverride(workspaceRoot string, name string) (path string, content []byte, layer OverrideLayer, err error) {
+	// [LAW:dataflow-not-control-flow] Inspect both layers in fixed order; presence/absence is data, not branching.
+	candidates := []struct {
+		layer OverrideLayer
+		path  string
+	}{
+		{OverrideLayerProject, projectTemplatePath(workspaceRoot, name)},
+		{OverrideLayerGlobal, GlobalPath(name)},
+	}
+	for _, c := range candidates {
+		if strings.TrimSpace(c.path) == "" {
+			continue
+		}
+		raw, readErr := os.ReadFile(c.path)
+		if readErr != nil {
+			if errors.Is(readErr, os.ErrNotExist) {
+				continue
+			}
+			return "", nil, OverrideLayerNone, readErr
+		}
+		return c.path, raw, c.layer, nil
+	}
+	return "", nil, OverrideLayerNone, nil
+}
+
 func readOptionalFile(path string) (string, error) {
 	if strings.TrimSpace(path) == "" {
 		return "", nil

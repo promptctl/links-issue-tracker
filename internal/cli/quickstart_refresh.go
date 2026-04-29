@@ -16,8 +16,9 @@ type quickstartRefreshItem struct {
 }
 
 type quickstartRefreshReport struct {
-	Agents quickstartRefreshItem `json:"agents"`
-	Hooks  quickstartRefreshItem `json:"hooks"`
+	Agents     quickstartRefreshItem `json:"agents"`
+	Hooks      quickstartRefreshItem `json:"hooks"`
+	Quickstart quickstartRefreshItem `json:"quickstart"`
 }
 
 func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport, error) {
@@ -30,6 +31,10 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
 	}
+	quickstartItem, qsErr := refreshQuickstartTemplate(ws.RootDir)
+	if qsErr != nil {
+		return quickstartRefreshReport{}, qsErr
+	}
 	return quickstartRefreshReport{
 		Hooks: quickstartHookRefreshItem(hookResult),
 		Agents: quickstartRefreshItem{
@@ -37,6 +42,44 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 			Status:  managedAssetStatus(agentsResult.Changed, agentsResult.Created),
 			Managed: true,
 		},
+		Quickstart: quickstartItem,
+	}, nil
+}
+
+// refreshQuickstartTemplate inspects the active quickstart.md override (project > global)
+// and reports its status without overwriting it. This is intentionally conservative:
+// the override file exists because the user explicitly ejected, so refresh never
+// mutates it. When content matches the embedded default, status is "unchanged".
+// When content has drifted, status is "skipped" with reason "customized" and the
+// override path is surfaced so the user can decide whether it is genuinely customized
+// or a stale verbatim copy worth deleting / re-ejecting.
+func refreshQuickstartTemplate(workspaceRoot string) (quickstartRefreshItem, error) {
+	embedded, err := templates.EmbeddedDefault(templates.QuickstartTemplateName)
+	if err != nil {
+		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read embedded default: %w", err)
+	}
+	path, content, _, err := templates.ActiveOverride(workspaceRoot, templates.QuickstartTemplateName)
+	if err != nil {
+		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read override: %w", err)
+	}
+	if path == "" {
+		return quickstartRefreshItem{
+			Status:  "absent",
+			Managed: false,
+		}, nil
+	}
+	if string(content) == string(embedded) {
+		return quickstartRefreshItem{
+			Path:    path,
+			Status:  "unchanged",
+			Managed: true,
+		}, nil
+	}
+	return quickstartRefreshItem{
+		Path:    path,
+		Status:  "skipped",
+		Managed: true,
+		Reason:  "customized",
 	}, nil
 }
 
@@ -53,7 +96,11 @@ func managedAssetStatus(changed bool, created bool) string {
 }
 
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
-	return fmt.Sprintf("hooks=%s agents=%s", formatQuickstartRefreshItemSummary(refresh.Hooks), formatQuickstartRefreshItemSummary(refresh.Agents))
+	return fmt.Sprintf("hooks=%s agents=%s quickstart=%s",
+		formatQuickstartRefreshItemSummary(refresh.Hooks),
+		formatQuickstartRefreshItemSummary(refresh.Agents),
+		formatQuickstartRefreshItemSummary(refresh.Quickstart),
+	)
 }
 
 func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
