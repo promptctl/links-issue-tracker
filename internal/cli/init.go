@@ -102,6 +102,15 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	})
 }
 
+// [SUNSET: 2026-04-22] All beads-residue handling below is past its
+// removal date. The cutover ticket (links-refactor-o35.18) deletes:
+// - shouldBypassBeadsPreflight, requireBeadsMigrationPreflight (this file)
+// - scanBeadsResidue, BeadsMigrationRequiredError (internal/cli/migrate.go)
+// - the residue-migration block in runInit (above) that calls
+//   runMigrationWithOptions when scan.HasResidue() is true
+// - internal/legacydolt/ (the whole package)
+// Done as a single sweep so the migration path disappears atomically.
+
 func shouldBypassBeadsPreflight(args []string) bool {
 	if len(args) == 0 {
 		return true

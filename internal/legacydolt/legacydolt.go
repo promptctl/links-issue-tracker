@@ -1,3 +1,7 @@
+// [SUNSET: 2026-04-22] Whole package is past its removal date.
+// Tracked in links-refactor-o35.18 (migration sunset). Delete this
+// package, the migration code in internal/cli/migrate.go, and the
+// beads-preflight markers in internal/cli/init.go in the same sweep.
 package legacydolt
 
 import (

@@ -1,3 +1,8 @@
+// [SUNSET: 2026-04-22] This migration code is past its removal date.
+// The cutover ticket (links-refactor-o35.18) tracks the deletion sweep:
+// remove this file, internal/legacydolt/, beads detection in init.go, and
+// the migrate-required preflight markers. Kept here in the meantime so
+// repos that have not yet upgraded still get the migration path.
 package cli
 
 import (
