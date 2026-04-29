@@ -30,6 +30,7 @@ Agent quickstart for links issue tracking
 5) Closeout
    `lit done <issue-id>`   — finished the intended work (success path; only from in_progress)
    `lit close <issue-id>`  — closing without finishing (wontfix, obsolete, duplicate; from any non-closed state)
+   `lit followup --on <closed-id> --title "..."`  — capture work the close surfaced as a child ticket while context is fresh
    `git add -A && git commit -m "<summary>"`
 
 6) Health
