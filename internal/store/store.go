@@ -608,6 +608,16 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
+
+	// [LAW:single-enforcer] Hydrate every related issue in one query
+	// rather than running N+1 GetIssue calls. The map lets the relation
+	// loop below stay a pure data-flow over already-hydrated rows.
+	relatedIDs := collectRelatedIssueIDs(id, relations)
+	relatedByID, err := s.getIssuesByIDs(ctx, relatedIDs)
+	if err != nil {
+		return model.IssueDetail{}, err
+	}
+
 	detail := model.IssueDetail{
 		Issue:     issue,
 		Relations: relations,
@@ -623,29 +633,23 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		case "blocks":
 			// blocks convention: src_id=dependent, dst_id=dependency.
 			if rel.SrcID == id {
-				// This issue is the dependent; DstID is what it depends on.
-				dep, err := s.GetIssue(ctx, rel.DstID)
-				if err == nil {
+				if dep, ok := relatedByID[rel.DstID]; ok {
 					detail.DependsOn = append(detail.DependsOn, dep)
 				}
 			}
 			if rel.DstID == id {
-				// This issue is the dependency; SrcID depends on it.
-				dependent, err := s.GetIssue(ctx, rel.SrcID)
-				if err == nil {
+				if dependent, ok := relatedByID[rel.SrcID]; ok {
 					detail.Blocks = append(detail.Blocks, dependent)
 				}
 			}
 		case "parent-child":
 			if rel.SrcID == id {
-				parent, err := s.GetIssue(ctx, rel.DstID)
-				if err == nil {
+				if parent, ok := relatedByID[rel.DstID]; ok {
 					detail.Parent = &parent
 				}
 			}
 			if rel.DstID == id {
-				child, err := s.GetIssue(ctx, rel.SrcID)
-				if err == nil {
+				if child, ok := relatedByID[rel.SrcID]; ok {
 					detail.Children = append(detail.Children, child)
 				}
 			}
@@ -654,8 +658,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 			if otherID == id {
 				otherID = rel.DstID
 			}
-			related, err := s.GetIssue(ctx, otherID)
-			if err == nil {
+			if related, ok := relatedByID[otherID]; ok {
 				detail.Related = append(detail.Related, related)
 			}
 		}
@@ -665,6 +668,70 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	sortIssuesByRank(detail.Related)
 	sortIssuesByRank(detail.Blocks)
 	return detail, nil
+}
+
+// collectRelatedIssueIDs returns every distinct counterparty id referenced
+// by relations, excluding the focal id itself.
+func collectRelatedIssueIDs(focalID string, relations []model.Relation) []string {
+	seen := make(map[string]struct{}, len(relations)*2)
+	ids := make([]string, 0, len(relations))
+	add := func(candidate string) {
+		if candidate == "" || candidate == focalID {
+			return
+		}
+		if _, exists := seen[candidate]; exists {
+			return
+		}
+		seen[candidate] = struct{}{}
+		ids = append(ids, candidate)
+	}
+	for _, rel := range relations {
+		add(rel.SrcID)
+		add(rel.DstID)
+	}
+	return ids
+}
+
+// getIssuesByIDs batch-loads issues by id and returns a map keyed by id.
+// Missing ids (deleted/archived/never-existed) are simply absent from the
+// returned map; callers decide whether absence is an error or merely a hole
+// to skip. Empty input returns an empty map without querying.
+func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]model.Issue, error) {
+	if len(ids) == 0 {
+		return map[string]model.Issue{}, nil
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]any, len(ids))
+	for i, id := range ids {
+		placeholders[i] = "?"
+		args[i] = id
+	}
+	query := fmt.Sprintf(`SELECT id, title, description, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("batch load issues: %w", err)
+	}
+	defer rows.Close()
+	scanned := make([]issueRow, 0, len(ids))
+	for rows.Next() {
+		row, err := scanIssue(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan batch-loaded issue: %w", err)
+		}
+		scanned = append(scanned, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate batch-loaded issues: %w", err)
+	}
+	hydrated, err := s.hydrateIssues(ctx, scanned)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]model.Issue, len(hydrated))
+	for _, issue := range hydrated {
+		out[issue.ID] = issue
+	}
+	return out, nil
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
