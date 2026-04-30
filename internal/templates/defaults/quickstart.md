@@ -11,6 +11,7 @@ Agent quickstart for links issue tracking
 2) Create tickets
    `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic`
    `lit new --title "..." --topic <topic> --parent <parent-id> --type task`
+   <agent-instructions>`--topic`: Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')</agent-instructions>
 
 3) Update tickets
    `lit update <issue-id> --title "..." --description "..." --priority 1 --assignee <user> --labels a,b`
