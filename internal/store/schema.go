@@ -25,6 +25,7 @@ func createIssuesTableStmt() string {
 			id VARCHAR(191) PRIMARY KEY,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
+			agent_prompt TEXT,
 			status VARCHAR(32) NULL,
 			priority INT NOT NULL,
 			issue_type VARCHAR(32) NOT NULL,
@@ -117,6 +118,36 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || topicColumnChanged
+	// Workspaces predating the rename still have the old `prompt` column.
+	// Probe-gated rename keeps migration idempotent across fresh / migrated /
+	// pre-rename workspace states. `prompt` is reserved in Dolt's MySQL parser,
+	// so the source-side identifier is backtick-quoted; `agent_prompt` is not
+	// reserved and needs no quoting.
+	promptRenamedChanged, err := s.execReconciliationUpdate(
+		ctx,
+		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'prompt' LIMIT 1`,
+		"ALTER TABLE issues RENAME COLUMN `prompt` TO agent_prompt",
+		"rename prompt column to agent_prompt",
+	)
+	if err != nil {
+		return err
+	}
+	changed = changed || promptRenamedChanged
+	promptColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`")
+	if err != nil {
+		return err
+	}
+	changed = changed || promptColumnChanged
+	// Workspaces where the column was added before the NULL declaration took
+	// effect still have it as NOT NULL, which makes `lit new` fail at the DB
+	// layer when no --prompt is supplied. Relax to NULL the same way
+	// ensureUnifiedStatusSchema relaxes status; the helper swallows the no-op
+	// error when the column is already nullable.
+	promptRelaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL")
+	if err != nil {
+		return err
+	}
+	changed = changed || promptRelaxedChanged
 	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
 	if err != nil {
 		return err

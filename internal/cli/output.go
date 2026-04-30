@@ -86,6 +86,11 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			return err
 		}
 	}
+	if issue.Prompt != "" {
+		if _, err := fmt.Fprintf(w, "\nprompt:\n%s\n", issue.Prompt); err != nil {
+			return err
+		}
+	}
 	if err := printIssueGroup(w, "children", detail.Children); err != nil {
 		return err
 	}
