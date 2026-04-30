@@ -59,6 +59,7 @@ type Issue struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
+	Prompt      string     `json:"prompt,omitempty"`
 	Priority    int        `json:"priority"`
 	IssueType   string     `json:"issue_type"`
 	Topic       string     `json:"topic"`
@@ -257,6 +258,7 @@ type issueJSON struct {
 	ID          string     `json:"id"`
 	Title       string     `json:"title"`
 	Description string     `json:"description"`
+	Prompt      string     `json:"prompt,omitempty"`
 	Status      *State     `json:"status,omitempty"`
 	Priority    int        `json:"priority"`
 	IssueType   string     `json:"issue_type"`
@@ -297,6 +299,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		ID:          i.ID,
 		Title:       i.Title,
 		Description: i.Description,
+		Prompt:      i.Prompt,
 		Status:      statusValue,
 		Priority:    i.Priority,
 		IssueType:   i.IssueType,
@@ -321,6 +324,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		ID:          payload.ID,
 		Title:       payload.Title,
 		Description: payload.Description,
+		Prompt:      payload.Prompt,
 		Priority:    payload.Priority,
 		IssueType:   payload.IssueType,
 		Topic:       payload.Topic,

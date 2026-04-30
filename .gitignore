@@ -1,3 +1,4 @@
 artifacts/
 .claude/worktrees/
 tools/session-analysis/processed/
+__pycache__/

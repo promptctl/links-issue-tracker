@@ -186,6 +186,42 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	}
 }
 
+func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	var newOut bytes.Buffer
+	if err := runNew(ctx, &newOut, ap, []string{
+		"--title", "Wire prompt field",
+		"--topic", "prompts",
+		"--type", "task",
+		"--priority", "2",
+		"--prompt", "Render at 1024x768 and verify no NaNs.",
+		"--json",
+	}); err != nil {
+		t.Fatalf("runNew(--prompt) error = %v", err)
+	}
+	var created model.Issue
+	if err := json.Unmarshal(newOut.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal(new) error = %v", err)
+	}
+	if created.Prompt != "Render at 1024x768 and verify no NaNs." {
+		t.Fatalf("created.Prompt = %q, want trimmed prompt body", created.Prompt)
+	}
+
+	var upOut bytes.Buffer
+	if err := runUpdate(ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead.", "--json"}); err != nil {
+		t.Fatalf("runUpdate(--prompt) error = %v", err)
+	}
+	var updated model.Issue
+	if err := json.Unmarshal(upOut.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(update) error = %v", err)
+	}
+	if updated.Prompt != "Run --headless instead." {
+		t.Fatalf("updated.Prompt = %q, want updated value", updated.Prompt)
+	}
+}
+
 func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

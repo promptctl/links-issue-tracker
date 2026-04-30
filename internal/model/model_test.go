@@ -96,6 +96,50 @@ func TestIssueJSONRoundTripLeafPreservesStatusFields(t *testing.T) {
 	}
 }
 
+func TestIssueJSONRoundTripPreservesPrompt(t *testing.T) {
+	leaf, err := HydrateOwnedStatus(Issue{
+		ID:        "task-1",
+		Title:     "Leaf with prompt",
+		IssueType: "task",
+		Prompt:    "Run the renderer headless and assert no NaNs.",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}, StatusView{Value: StateOpen})
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+	}
+	data, err := json.Marshal(leaf)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var decoded Issue
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	if decoded.Prompt != leaf.Prompt {
+		t.Fatalf("decoded.Prompt = %q, want %q", decoded.Prompt, leaf.Prompt)
+	}
+
+	// Empty prompt should be omitted from the JSON wire shape entirely.
+	bare, err := HydrateOwnedStatus(Issue{
+		ID:        "task-2",
+		Title:     "Leaf without prompt",
+		IssueType: "task",
+		CreatedAt: time.Now().UTC(),
+		UpdatedAt: time.Now().UTC(),
+	}, StatusView{Value: StateOpen})
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus(bare) error = %v", err)
+	}
+	bareData, err := json.Marshal(bare)
+	if err != nil {
+		t.Fatalf("Marshal(bare) error = %v", err)
+	}
+	if strings.Contains(string(bareData), "\"prompt\"") {
+		t.Fatalf("empty prompt leaked into JSON: %s", bareData)
+	}
+}
+
 func TestIssueJSONRejectsLeafWithoutStatus(t *testing.T) {
 	payload := `{"id":"task-1","title":"Leaf","issue_type":"task","created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","progress":{"total":1}}`
 	var issue Issue

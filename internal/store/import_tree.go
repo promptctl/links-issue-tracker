@@ -16,6 +16,7 @@ type ImportTreeSpec struct {
 	LocalID     string   `json:"local_id" yaml:"local_id"`
 	Title       string   `json:"title" yaml:"title"`
 	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
+	Prompt      string   `json:"prompt,omitempty" yaml:"prompt,omitempty"`
 	IssueType   string   `json:"type" yaml:"type"`
 	Topic       string   `json:"topic" yaml:"topic"`
 	Priority    int      `json:"priority" yaml:"priority"`
@@ -63,6 +64,7 @@ func (s *Store) ImportTree(ctx context.Context, specs []ImportTreeSpec) (ImportT
 		issue, err := s.CreateIssue(ctx, CreateIssueInput{
 			Title:       spec.Title,
 			Description: spec.Description,
+			Prompt:      spec.Prompt,
 			IssueType:   spec.IssueType,
 			Topic:       spec.Topic,
 			Priority:    spec.Priority,
