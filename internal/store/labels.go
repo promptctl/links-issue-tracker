@@ -28,26 +28,15 @@ func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin add label tx: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
-		VALUES (?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, time.Now().UTC().Format(time.RFC3339Nano), createdBy)
-	if err != nil {
-		return nil, fmt.Errorf("insert label: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit add label: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "add label"); err != nil {
+	if err := s.withMutation(ctx, "add label", func(ctx context.Context, tx *sql.Tx) error {
+		_, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
+			VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, time.Now().UTC().Format(time.RFC3339Nano), createdBy)
+		if err != nil {
+			return fmt.Errorf("insert label: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return s.ListLabels(ctx, in.IssueID)
@@ -61,28 +50,17 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 	if err != nil {
 		return nil, err
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, fmt.Errorf("begin remove label tx: %w", err)
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, issueID, label)
-	if err != nil {
-		return nil, fmt.Errorf("delete label: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		return nil, fmt.Errorf("label %q not found on issue %q", label, issueID)
-	}
-	if err := tx.Commit(); err != nil {
-		return nil, fmt.Errorf("commit remove label: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "remove label"); err != nil {
+	if err := s.withMutation(ctx, "remove label", func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, issueID, label)
+		if err != nil {
+			return fmt.Errorf("delete label: %w", err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return fmt.Errorf("label %q not found on issue %q", label, issueID)
+		}
+		return nil
+	}); err != nil {
 		return nil, err
 	}
 	return s.ListLabels(ctx, issueID)
@@ -96,26 +74,9 @@ func (s *Store) ReplaceLabels(ctx context.Context, issueID string, labels []stri
 	if err != nil {
 		return err
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin replace labels tx: %w", err)
-	}
-	defer tx.Rollback()
-	if err := s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit replace labels: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "replace labels"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "replace labels", func(ctx context.Context, tx *sql.Tx) error {
+		return s.replaceLabelsTx(ctx, tx, issueID, normalized, createdBy)
+	})
 }
 
 func (s *Store) ListLabels(ctx context.Context, issueID string) ([]string, error) {

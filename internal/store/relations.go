@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -49,23 +50,12 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 	if rel.CreatedBy == "" {
 		rel.CreatedBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Relation{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("begin add relation tx: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
-		return model.Relation{}, fmt.Errorf("insert relation: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Relation{}, fmt.Errorf("commit add relation: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "add relation"); err != nil {
+	if err := s.withMutation(ctx, "add relation", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
+			return fmt.Errorf("insert relation: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return model.Relation{}, err
 	}
 	return rel, nil
@@ -77,31 +67,17 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 		sort.Strings(ordered)
 		srcID, dstID = ordered[0], ordered[1]
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin remove relation tx: %w", err)
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, relType)
-	if err != nil {
-		return fmt.Errorf("delete relation: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		return fmt.Errorf("relation not found")
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit remove relation: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "remove relation"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "remove relation", func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, relType)
+		if err != nil {
+			return fmt.Errorf("delete relation: %w", err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return fmt.Errorf("relation not found")
+		}
+		return nil
+	})
 }
 
 func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, relType string) ([]model.Relation, error) {
@@ -138,19 +114,6 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	if _, err := s.GetIssue(ctx, in.ParentID); err != nil {
 		return model.Relation{}, err
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Relation{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Relation{}, fmt.Errorf("begin set parent tx: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, in.ChildID); err != nil {
-		return model.Relation{}, fmt.Errorf("clear parent relation: %w", err)
-	}
 	rel := model.Relation{
 		SrcID:     in.ChildID,
 		DstID:     in.ParentID,
@@ -161,13 +124,15 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	if rel.CreatedBy == "" {
 		rel.CreatedBy = "unknown"
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`, rel.SrcID, rel.DstID, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
-		return model.Relation{}, fmt.Errorf("insert parent relation: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Relation{}, fmt.Errorf("commit set parent: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "set parent"); err != nil {
+	if err := s.withMutation(ctx, "set parent", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, in.ChildID); err != nil {
+			return fmt.Errorf("clear parent relation: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`, rel.SrcID, rel.DstID, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
+			return fmt.Errorf("insert parent relation: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return model.Relation{}, err
 	}
 	return rel, nil
@@ -177,31 +142,17 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 	if _, err := s.GetIssue(ctx, childID); err != nil {
 		return err
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin clear parent tx: %w", err)
-	}
-	defer tx.Rollback()
-	res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
-	if err != nil {
-		return fmt.Errorf("delete parent relation: %w", err)
-	}
-	affected, _ := res.RowsAffected()
-	if affected == 0 {
-		return NotFoundError{Entity: "parent relation", ID: childID}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit clear parent: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "clear parent"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "clear parent", func(ctx context.Context, tx *sql.Tx) error {
+		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, childID)
+		if err != nil {
+			return fmt.Errorf("delete parent relation: %w", err)
+		}
+		affected, _ := res.RowsAffected()
+		if affected == 0 {
+			return NotFoundError{Entity: "parent relation", ID: childID}
+		}
+		return nil
+	})
 }
 
 func (s *Store) ListChildren(ctx context.Context, parentID string) ([]model.Issue, error) {

@@ -327,6 +327,96 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 	}
 }
 
+// Regression: dst.status is NULL for epic dependencies (state lives in the
+// AllOf lifecycle, not the column). The previous `dst.status != 'closed'`
+// filter evaluated NULL as not-true and silently excluded every blocks-edge
+// pointing at an open epic — Doctor reported 0 inversions and --fix was a
+// no-op even when ready.go's annotator flagged the same edge.
+func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Release", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependent) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocking epic", Topic: "rank", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Epic child", Topic: "rank", IssueType: "task", Priority: 2, ParentID: epic.ID}); err != nil {
+		t.Fatalf("CreateIssue(epic child) error = %v", err)
+	}
+	if err := st.RankToBottom(ctx, epic.ID); err != nil {
+		t.Fatalf("RankToBottom(epic) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(dependent blocks epic) error = %v", err)
+	}
+
+	before, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(before) error = %v", err)
+	}
+	if before.RankInversions != 1 {
+		t.Fatalf("Doctor(before).RankInversions = %d, want 1 (epic dependency ranked below dependent)", before.RankInversions)
+	}
+
+	fixed, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions() error = %v", err)
+	}
+	if fixed != 1 {
+		t.Fatalf("FixRankInversions() fixed = %d, want 1", fixed)
+	}
+
+	after, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(after) error = %v", err)
+	}
+	if after.RankInversions != 0 {
+		t.Fatalf("Doctor(after).RankInversions = %d, want 0", after.RankInversions)
+	}
+}
+
+func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 2})
+	if err != nil {
+		t.Fatalf("CreateIssue(dependent) error = %v", err)
+	}
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Closed epic", Topic: "rank", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Closed child", Topic: "rank", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic child) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(child start) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(child done) error = %v", err)
+	}
+	if err := st.RankToBottom(ctx, epic.ID); err != nil {
+		t.Fatalf("RankToBottom(epic) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependent.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(dependent blocks epic) error = %v", err)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if report.RankInversions != 0 {
+		t.Fatalf("Doctor().RankInversions = %d, want 0 (closed epic dependency is not a live inversion)", report.RankInversions)
+	}
+}
+
 func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
