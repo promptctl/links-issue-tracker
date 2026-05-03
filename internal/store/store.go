@@ -71,6 +71,50 @@ type UpdateIssueInput struct {
 	Labels      *[]string
 }
 
+func (u UpdateIssueInput) IsEmpty() bool {
+	return u.Title == nil && u.Description == nil && u.Prompt == nil && u.IssueType == nil &&
+		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Labels == nil
+}
+
+// ApplyUpdateInput is the single input for the unified update path.
+// TargetStatus == "" means no transition; empty Fields means no field mutations.
+type ApplyUpdateInput struct {
+	Fields           UpdateIssueInput
+	TargetStatus     string // empty = no status change
+	TransitionReason string
+	TransitionBy     string
+}
+
+func (a ApplyUpdateInput) IsEmpty() bool {
+	return a.TargetStatus == "" && a.Fields.IsEmpty()
+}
+
+type statusTransitionKey struct {
+	From string
+	To   string
+}
+
+// [LAW:one-source-of-truth] Status transition action map is the single authoritative source for lit update transitions.
+var updateStatusTransitionActions = map[statusTransitionKey]string{
+	{From: "open", To: "in_progress"}:   "start",
+	{From: "in_progress", To: "closed"}: "done",
+	{From: "open", To: "closed"}:        "close",
+	{From: "closed", To: "open"}:        "reopen",
+	{From: "closed", To: "in_progress"}: "reopen+start",
+	{From: "in_progress", To: "open"}:   "done+reopen",
+}
+
+func statusTransitionActionsForApplyUpdate(fromStatus, toStatus string) ([]string, error) {
+	if toStatus == "" || fromStatus == toStatus {
+		return nil, nil
+	}
+	action, exists := updateStatusTransitionActions[statusTransitionKey{From: fromStatus, To: toStatus}]
+	if !exists {
+		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
+	}
+	return strings.Split(action, "+"), nil
+}
+
 type SortSpec struct {
 	Field string
 	Desc  bool
@@ -693,6 +737,10 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 }
 
 func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput) (model.Issue, error) {
+	// [LAW:dataflow-not-control-flow] Empty input is a defined no-op; callers need not branch on whether fields were set.
+	if in.IsEmpty() {
+		return s.GetIssue(ctx, id)
+	}
 	issue, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return model.Issue{}, err
@@ -777,6 +825,43 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		return model.Issue{}, err
 	}
 	return s.GetIssue(ctx, issue.ID)
+}
+
+// [LAW:dataflow-not-control-flow] ApplyUpdate is the single execution path for all lit update mutations.
+// Variability lives in the input values: empty TargetStatus = no transitions; empty Fields = no field write.
+func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
+	current, err := s.GetIssue(ctx, id)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	normalizedTarget, err := NormalizeStatusToken(in.TargetStatus)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	if normalizedTarget != "" && normalizedTarget != in.TargetStatus {
+		in.TargetStatus = normalizedTarget
+	}
+	actions, err := statusTransitionActionsForApplyUpdate(current.StatusValue(), in.TargetStatus)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	reason := in.TransitionReason
+	if reason == "" && len(actions) > 0 {
+		reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
+	}
+	_ = current
+	for _, action := range actions {
+		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
+			IssueID:   id,
+			Action:    action,
+			Reason:    reason,
+			CreatedBy: in.TransitionBy,
+		}); err != nil {
+			return model.Issue{}, err
+		}
+	}
+	// UpdateIssue always does a fresh GetIssue internally; it is also a no-op if Fields is empty.
+	return s.UpdateIssue(ctx, id, in.Fields)
 }
 
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {

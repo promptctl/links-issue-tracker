@@ -781,20 +781,6 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	})
 }
 
-type statusTransitionKey struct {
-	From string
-	To   string
-}
-
-var updateStatusTransitionActions = map[statusTransitionKey]string{
-	{From: "open", To: "in_progress"}:   "start",
-	{From: "in_progress", To: "closed"}: "done",
-	{From: "open", To: "closed"}:        "close",
-	{From: "closed", To: "open"}:        "reopen",
-	{From: "closed", To: "in_progress"}: "reopen+start",
-	{From: "in_progress", To: "open"}:   "done+reopen",
-}
-
 func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("update")
@@ -826,90 +812,53 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if visited["by"] && !visited["status"] {
 		return errors.New("--by requires --status")
 	}
-	mutatesFields := visited["title"] || visited["description"] || visited["prompt"] || visited["type"] || visited["priority"] || visited["assignee"] || visited["labels"]
-	mutatesStatus := visited["status"]
-	if !mutatesFields && !mutatesStatus {
+	if visited["status"] && strings.TrimSpace(*status) == "" {
+		return errors.New("--status requires a non-empty value")
+	}
+
+	// [LAW:dataflow-not-control-flow] Always build one UpdateInput; variability lives in empty fields/status, not in which branch runs.
+	in := store.ApplyUpdateInput{
+		TransitionReason: strings.TrimSpace(*reason),
+		TransitionBy:     *by,
+	}
+	if visited["status"] {
+		in.TargetStatus = *status
+	}
+	if visited["title"] {
+		value := *title
+		in.Fields.Title = &value
+	}
+	if visited["description"] {
+		value := *description
+		in.Fields.Description = &value
+	}
+	if visited["prompt"] {
+		value := *prompt
+		in.Fields.Prompt = &value
+	}
+	if visited["type"] {
+		value := *issueType
+		in.Fields.IssueType = &value
+	}
+	if visited["priority"] {
+		value := *priority
+		in.Fields.Priority = &value
+	}
+	if visited["assignee"] {
+		value := *assignee
+		in.Fields.Assignee = &value
+	}
+	if visited["labels"] {
+		value := splitCSV(*labels)
+		in.Fields.Labels = &value
+	}
+	if in.IsEmpty() {
 		return errors.New("lit update requires at least one field flag")
 	}
-
-	issueID := positional[0]
-	var issue model.Issue
-
-	if mutatesStatus {
-		targetStatus, err := store.NormalizeStatusToken(*status)
-		if err != nil {
-			return err
-		}
-		if targetStatus == "" {
-			return errors.New("--status requires a non-empty value")
-		}
-		current, err := ap.Store.GetIssue(ctx, issueID)
-		if err != nil {
-			return err
-		}
-		// [LAW:one-source-of-truth] Status changes are normalized to canonical lifecycle transitions instead of writing status directly.
-		currentStatus := current.StatusValue()
-		actions, err := statusTransitionActionsForUpdate(currentStatus, targetStatus)
-		if err != nil {
-			return err
-		}
-		transitionReason := strings.TrimSpace(*reason)
-		if transitionReason == "" {
-			transitionReason = fmt.Sprintf("status update via lit update: %s -> %s", currentStatus, targetStatus)
-		}
-		issue = current
-		// [LAW:dataflow-not-control-flow] Transition execution order is fixed; data determines whether action slice is empty.
-		for _, action := range actions {
-			transitioned, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-				IssueID:   issueID,
-				Action:    action,
-				Reason:    transitionReason,
-				CreatedBy: *by,
-			})
-			if err != nil {
-				return err
-			}
-			issue = transitioned
-		}
+	issue, err := ap.Store.ApplyUpdate(ctx, positional[0], in)
+	if err != nil {
+		return err
 	}
-
-	if mutatesFields {
-		update := store.UpdateIssueInput{}
-		if visited["title"] {
-			value := *title
-			update.Title = &value
-		}
-		if visited["description"] {
-			value := *description
-			update.Description = &value
-		}
-		if visited["prompt"] {
-			value := *prompt
-			update.Prompt = &value
-		}
-		if visited["type"] {
-			value := *issueType
-			update.IssueType = &value
-		}
-		if visited["priority"] {
-			value := *priority
-			update.Priority = &value
-		}
-		if visited["assignee"] {
-			value := *assignee
-			update.Assignee = &value
-		}
-		if visited["labels"] {
-			value := splitCSV(*labels)
-			update.Labels = &value
-		}
-		updated, err := ap.Store.UpdateIssue(ctx, issueID, update)
-		if err != nil {
-			return err
-		}
-		issue = updated
-	}
-
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
@@ -996,16 +945,6 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	})
 }
 
-func statusTransitionActionsForUpdate(fromStatus string, toStatus string) ([]string, error) {
-	if fromStatus == toStatus {
-		return nil, nil
-	}
-	action, exists := updateStatusTransitionActions[statusTransitionKey{From: fromStatus, To: toStatus}]
-	if !exists {
-		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
-	}
-	return strings.Split(action, "+"), nil
-}
 
 func filterWorkableIssues(issues []model.Issue) []model.Issue {
 	filtered := make([]model.Issue, 0, len(issues))
