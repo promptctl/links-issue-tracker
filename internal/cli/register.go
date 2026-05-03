@@ -60,30 +60,28 @@ type commandRegistrar struct {
 	stderr io.Writer
 }
 
-func (r *commandRegistrar) appCmd(access appAccessMode, name string, fn appRunFn) CommandRunner {
-	return r.appCmdDynamic(func([]string) appAccessMode { return access }, name, fn)
+func (r *commandRegistrar) appCmd(access appAccessMode, fn appRunFn) CommandRunner {
+	return r.appCmdDynamic(func([]string) appAccessMode { return access }, fn)
 }
 
-func (r *commandRegistrar) appCmdDynamic(resolve func([]string) appAccessMode, name string, fn appRunFn) CommandRunner {
+func (r *commandRegistrar) appCmdDynamic(resolve func([]string) appAccessMode, fn appRunFn) CommandRunner {
 	return func(args []string) error {
-		commandArgs := append([]string{name}, args...)
-		return runWithApp(r.ctx, resolve(args), commandArgs, func(commandCtx context.Context, ap *app.App) error {
+		return runWithApp(r.ctx, resolve(args), func(commandCtx context.Context, ap *app.App) error {
 			return fn(commandCtx, r.stdout, ap, args)
 		})
 	}
 }
 
-func (r *commandRegistrar) wsCmd(name string, fn wsRunFn) CommandRunner {
+func (r *commandRegistrar) wsCmd(fn wsRunFn) CommandRunner {
 	return func(args []string) error {
-		commandArgs := append([]string{name}, args...)
-		return runWithWorkspace(commandArgs, func(ws workspace.Info) error {
+		return runWithWorkspace(func(ws workspace.Info) error {
 			return fn(r.ctx, r.stdout, ws, args)
 		})
 	}
 }
 
-func (r *commandRegistrar) transitionCmd(name string, action string) CommandRunner {
-	return r.appCmd(appAccessWrite, name, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+func (r *commandRegistrar) transitionCmd(action string) CommandRunner {
+	return r.appCmd(appAccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runTransition(ctx, stdout, ap, args, action)
 	})
 }
@@ -104,7 +102,7 @@ func withValidation(validate func([]string) error, run CommandRunner) CommandRun
 func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []CommandSpec {
 	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
 
-	readyRun := r.appCmd(appAccessRead, "ready", func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	readyRun := r.appCmd(appAccessRead, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runReady(ctx, stdout, r.stderr, ap, args)
 	})
 
@@ -127,79 +125,77 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 
 	return []CommandSpec{
 		{Name: "init", Summary: "Initialize links", Long: humanBootstrapHelp, GroupID: "bootstrap",
-			Run: r.wsCmd("init", runInit)},
+			Run: r.wsCmd(runInit)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
-			Run: r.wsCmd("quickstart", runQuickstart)},
+			Run: r.wsCmd(runQuickstart)},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
-			Run: withValidation(validateHooksCommandPath, r.wsCmd("hooks", func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+			Run: withValidation(validateHooksCommandPath, r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runHooks(stdout, ws, args)
 			}))},
-		{Name: "migrate", Summary: "Migrate from Beads to links", GroupID: "maintenance",
-			Run: r.wsCmd("migrate", runMigrate)},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
-			Run: withValidation(validateSyncCommandPath, r.wsCmd("sync", runSync))},
+			Run: withValidation(validateSyncCommandPath, r.wsCmd(runSync))},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, "new", runNew)},
+			Run: r.appCmd(appAccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, "followup", runFollowup)},
+			Run: r.appCmd(appAccessWrite, runFollowup)},
 		{Name: "ready", Summary: "List open work by readiness and rank", GroupID: "operations",
 			Run: readyRun},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, "next", runNext)},
+			Run: r.appCmd(appAccessRead, runNext)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, "orphaned", runOrphaned)},
+			Run: r.appCmd(appAccessRead, runOrphaned)},
 		{Name: "ls", Summary: "List issues (rank by default)", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, "ls", runList)},
+			Run: r.appCmd(appAccessRead, runList)},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, "show", runShow)},
+			Run: r.appCmd(appAccessRead, runShow)},
 		{Name: "update", Summary: "Update issue fields", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, "update", runUpdate)},
+			Run: r.appCmd(appAccessWrite, runUpdate)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, "rank", runRank)},
+			Run: r.appCmd(appAccessWrite, runRank)},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
-			Run: r.transitionCmd("start", "start")},
+			Run: r.transitionCmd("start")},
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
-			Run: r.transitionCmd("done", "done")},
+			Run: r.transitionCmd("done")},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
-			Run: r.transitionCmd("close", "close")},
+			Run: r.transitionCmd("close")},
 		{Name: "open", Summary: "Reopen issue(s)", GroupID: "operations",
-			Run: r.transitionCmd("open", "reopen")},
+			Run: r.transitionCmd("reopen")},
 		{Name: "archive", Summary: "Archive issue(s)", GroupID: "operations",
-			Run: r.transitionCmd("archive", "archive")},
+			Run: r.transitionCmd("archive")},
 		{Name: "delete", Summary: "Delete issue(s)", GroupID: "operations",
-			Run: r.transitionCmd("delete", "delete")},
+			Run: r.transitionCmd("delete")},
 		{Name: "unarchive", Summary: "Unarchive issue(s)", GroupID: "operations",
-			Run: r.transitionCmd("unarchive", "unarchive")},
+			Run: r.transitionCmd("unarchive")},
 		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "operations",
-			Run: r.transitionCmd("restore", "restore")},
+			Run: r.transitionCmd("restore")},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
-			Run: withValidation(validateCommentCommandPath, r.appCmd(appAccessWrite, "comment", runComment))},
+			Run: withValidation(validateCommentCommandPath, r.appCmd(appAccessWrite, runComment))},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",
-			Run: withValidation(validateLabelCommandPath, r.appCmd(appAccessWrite, "label", runLabel))},
+			Run: withValidation(validateLabelCommandPath, r.appCmd(appAccessWrite, runLabel))},
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
-			Run: withValidation(validateParentCommandPath, r.appCmd(appAccessWrite, "parent", runParent))},
+			Run: withValidation(validateParentCommandPath, r.appCmd(appAccessWrite, runParent))},
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
-			Run: r.appCmd(appAccessRead, "children", runChildren)},
+			Run: r.appCmd(appAccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
-			Run: withValidation(validateDepCommandPath, r.appCmdDynamic(depAccess, "dep", runDep))},
+			Run: withValidation(validateDepCommandPath, r.appCmdDynamic(depAccess, runDep))},
 		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
-			Run: r.appCmd(appAccessRead, "export", runExport)},
+			Run: r.appCmd(appAccessRead, runExport)},
 		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
-			Run: r.appCmd(appAccessWrite, "import", runImportTree)},
+			Run: r.appCmd(appAccessWrite, runImportTree)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
-			Run: r.wsCmd("workspace", func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runWorkspace(stdout, ws, args)
 			})},
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
-			Run: r.appCmdDynamic(resolveDoctorAccessMode, "doctor", runDoctor)},
+			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
 		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
-			Run: withValidation(validateBackupCommandPath, r.appCmdDynamic(backupAccess, "backup", runBackup))},
+			Run: withValidation(validateBackupCommandPath, r.appCmdDynamic(backupAccess, runBackup))},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
-			Run: r.appCmd(appAccessWrite, "recover", runRecover)},
+			Run: r.appCmd(appAccessWrite, runRecover)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
-			Run: withValidation(validateBulkCommandPath, r.appCmd(appAccessWrite, "bulk", runBulk))},
+			Run: withValidation(validateBulkCommandPath, r.appCmd(appAccessWrite, runBulk))},
 	}
 }
 

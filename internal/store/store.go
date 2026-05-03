@@ -849,7 +849,6 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if reason == "" && len(actions) > 0 {
 		reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
 	}
-	_ = current
 	for _, action := range actions {
 		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
 			IssueID:   id,

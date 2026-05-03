@@ -13,8 +13,6 @@ const (
 	// [LAW:one-source-of-truth] Marker pairs are the canonical ownership boundary for AGENTS.md content.
 	linksAgentsBeginMarker = "<!-- BEGIN LINKS INTEGRATION -->"
 	linksAgentsEndMarker   = "<!-- END LINKS INTEGRATION -->"
-	beadsAgentsBeginMarker = "<!-- BEGIN BEADS INTEGRATION -->"
-	beadsAgentsEndMarker   = "<!-- END BEADS INTEGRATION -->"
 )
 
 type agentsInstallResult struct {
@@ -59,6 +57,3 @@ func ensureLinksAgentsSection(rootDir string) (agentsInstallResult, error) {
 	return agentsInstallResult{Path: agentsPath, Created: false, Changed: true}, nil
 }
 
-func stripBeadsAgentsSection(content string) (string, bool) {
-	return removeManagedSection(content, beadsAgentsBeginMarker, beadsAgentsEndMarker)
-}

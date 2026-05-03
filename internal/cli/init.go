@@ -11,13 +11,11 @@ import (
 )
 
 type initReport struct {
-	Status       string         `json:"status"`
-	WorkspaceID  string         `json:"workspace_id"`
-	DatabasePath string         `json:"database_path"`
-	Migrated     bool           `json:"migrated"`
-	Migration    *migrateReport `json:"migration,omitempty"`
-	Hooks        string         `json:"hooks"`
-	Agents       string         `json:"agents"`
+	Status       string `json:"status"`
+	WorkspaceID  string `json:"workspace_id"`
+	DatabasePath string `json:"database_path"`
+	Hooks        string `json:"hooks"`
+	Agents       string `json:"agents"`
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -36,28 +34,12 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return err
 	}
 
-	scan, err := scanBeadsResidue(ws)
-	if err != nil {
-		return err
-	}
-
 	report := initReport{
 		Status:       "initialized",
 		WorkspaceID:  ws.WorkspaceID,
 		DatabasePath: ws.DatabasePath,
-		Migrated:     false,
 		Hooks:        "skipped",
 		Agents:       "skipped",
-	}
-
-	if scan.HasResidue() {
-		// [LAW:single-enforcer] init reuses migration engine; cleanup policy is not reimplemented locally.
-		migration, migrateErr := runMigrationWithOptions(ctx, ws, true, migrateApplyOptions{InstallHooks: false, InstallAgents: false}, &scan)
-		if migrateErr != nil {
-			return migrateErr
-		}
-		report.Migrated = true
-		report.Migration = &migration
 	}
 
 	if !*skipHooks {
@@ -90,71 +72,13 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		payload := v.(initReport)
 		_, printErr := fmt.Fprintf(
 			w,
-			"%s workspace=%s db=%s migrated=%t hooks=%s agents=%s\n",
+			"%s workspace=%s db=%s hooks=%s agents=%s\n",
 			payload.Status,
 			payload.WorkspaceID,
 			payload.DatabasePath,
-			payload.Migrated,
 			payload.Hooks,
 			payload.Agents,
 		)
 		return printErr
 	})
-}
-
-// [SUNSET: 2026-04-22] All beads-residue handling below is past its
-// removal date. The cutover ticket (links-refactor-o35.18) deletes:
-// - shouldBypassBeadsPreflight, requireBeadsMigrationPreflight (this file)
-// - scanBeadsResidue, BeadsMigrationRequiredError (internal/cli/migrate.go)
-// - the residue-migration block in runInit (above) that calls
-//   runMigrationWithOptions when scan.HasResidue() is true
-// - internal/legacydolt/ (the whole package)
-// Done as a single sweep so the migration path disappears atomically.
-
-func shouldBypassBeadsPreflight(args []string) bool {
-	if len(args) == 0 {
-		return true
-	}
-	switch args[0] {
-	case "help", "-h", "--help", "completion", "init", "migrate":
-		return true
-	default:
-		return false
-	}
-}
-
-func requireBeadsMigrationPreflight(ws workspace.Info, commandArgs []string) error {
-	scan, err := scanBeadsResidue(ws)
-	if err != nil {
-		return err
-	}
-	if !scan.HasResidue() {
-		return nil
-	}
-	blockedCommand := formatCommand(commandArgs)
-	// [LAW:one-source-of-truth] Startup preflight reuses the shared automation trace record instead of inventing a second trace format.
-	traceRef, traceErr := recordAutomationTrace(ws, automationTraceRecord{
-		Trigger:    "startup-preflight",
-		Command:    blockedCommand,
-		SideEffect: "block non-init command execution until beads migration completes",
-		Status:     "blocked",
-		Reason:     "beads residue detected during startup preflight",
-		Metadata: map[string]string{
-			"blocked_command":     blockedCommand,
-			"remediation_command": "lit migrate --apply --json",
-			"residue_summary":     scan.Summary(),
-		},
-	})
-	preflightErr := BeadsMigrationRequiredError{
-		Summary:            scan.Summary(),
-		Trigger:            "startup-preflight",
-		BlockedCommand:     blockedCommand,
-		RemediationCommand: "lit migrate --apply --json",
-	}
-	if traceErr != nil {
-		preflightErr.TraceWriteError = traceErr.Error()
-		return preflightErr
-	}
-	preflightErr.TraceRef = traceRef.Path
-	return preflightErr
 }

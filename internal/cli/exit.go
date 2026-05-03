@@ -33,10 +33,6 @@ func ExitCode(err error) int {
 	if errors.As(err, &corruption) {
 		return ExitCorruption
 	}
-	var beadsRequired BeadsMigrationRequiredError
-	if errors.As(err, &beadsRequired) {
-		return ExitValidation
-	}
 	message := strings.ToLower(strings.TrimSpace(err.Error()))
 	switch {
 	case strings.HasPrefix(message, "usage:"),
