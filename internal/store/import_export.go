@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"sort"
@@ -130,10 +131,18 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue history rows: %d", report.OrphanHistoryRows))
 	}
 	// Rank inversions: blocks relations where the dependency (dst) is ranked
-	// below the dependent (src) among non-closed issues.
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) `+rankInversionsRelationClause).Scan(&report.RankInversions); err != nil {
+	// below the dependent (src) among lifecycle-live issues. Counted via the
+	// same Go-side classifier FixRankInversions consumes so the two cannot
+	// disagree about what is an inversion. (Pre-fix this read used a SQL
+	// `status != 'closed'` filter that silently excluded every blocks-edge
+	// pointing at an epic, since epics carry status=NULL by design.)
+	// [LAW:single-enforcer] Doctor count and FixRankInversions are routed
+	// through Store.liveRankInversions.
+	inversions, err := s.liveRankInversions(ctx)
+	if err != nil {
 		return report, fmt.Errorf("count rank inversions: %w", err)
 	}
+	report.RankInversions = len(inversions)
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
 	}
@@ -142,29 +151,18 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 
 func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 	if repair {
-		ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-		if err != nil {
-			return HealthReport{}, err
-		}
-		defer releaseCommitLock()
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return HealthReport{}, fmt.Errorf("begin fsck repair tx: %w", err)
-		}
-		defer tx.Rollback()
-		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_history WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
-			return HealthReport{}, fmt.Errorf("repair orphan history: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
-			return HealthReport{}, fmt.Errorf("repair self related rows: %w", err)
-		}
-		if _, err := tx.ExecContext(ctx, `UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id`); err != nil {
-			return HealthReport{}, fmt.Errorf("repair related ordering: %w", err)
-		}
-		if err := tx.Commit(); err != nil {
-			return HealthReport{}, fmt.Errorf("commit fsck repair: %w", err)
-		}
-		if err := s.commitWorkingSet(ctx, "fsck repair"); err != nil {
+		if err := s.withMutation(ctx, "fsck repair", func(ctx context.Context, tx *sql.Tx) error {
+			if _, err := tx.ExecContext(ctx, `DELETE FROM issue_history WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
+				return fmt.Errorf("repair orphan history: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
+				return fmt.Errorf("repair self related rows: %w", err)
+			}
+			if _, err := tx.ExecContext(ctx, `UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id`); err != nil {
+				return fmt.Errorf("repair related ordering: %w", err)
+			}
+			return nil
+		}); err != nil {
 			return HealthReport{}, err
 		}
 	}
@@ -193,70 +191,53 @@ func (s *Store) ImportIssue(ctx context.Context, in ImportIssue) error {
 	if in.ClosedAt != nil {
 		closedAt = in.ClosedAt.Format(time.RFC3339Nano)
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin import issue tx: %w", err)
-	}
-	defer tx.Rollback()
-	issueRank := in.Rank
-	if issueRank == "" {
-		issueRank, err = nextRankAtBottom(ctx, tx)
-		if err != nil {
-			return fmt.Errorf("import issue rank: %w", err)
-		}
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, NULL, NULL)
-		ON DUPLICATE KEY UPDATE
-			title = VALUES(title),
-			description = VALUES(description),
-			agent_prompt = VALUES(agent_prompt),
-			status = VALUES(status),
-			priority = VALUES(priority),
-			issue_type = VALUES(issue_type),
-			topic = VALUES(topic),
-			assignee = VALUES(assignee),
-			item_rank = VALUES(item_rank),
-			created_at = VALUES(created_at),
-			updated_at = VALUES(updated_at),
-			closed_at = VALUES(closed_at)`,
-		in.ID,
-		strings.TrimSpace(in.Title),
-		strings.TrimSpace(in.Description),
-		nullableString(strings.TrimSpace(in.Prompt)),
-		status,
-		in.Priority,
-		issueType,
-		issueid.NormalizeSlug(in.Topic),
-		strings.TrimSpace(in.Assignee),
-		issueRank,
-		in.CreatedAt.Format(time.RFC3339Nano),
-		in.UpdatedAt.Format(time.RFC3339Nano),
-		closedAt,
-	)
-	if err != nil {
-		return fmt.Errorf("import issue: %w", err)
-	}
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
 		return err
 	}
-	if err := s.replaceLabelsTx(ctx, tx, in.ID, labels, "import"); err != nil {
-		return err
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit import issue: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "import issue"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "import issue", func(ctx context.Context, tx *sql.Tx) error {
+		issueRank := in.Rank
+		if issueRank == "" {
+			r, err := nextRankAtBottom(ctx, tx)
+			if err != nil {
+				return fmt.Errorf("import issue rank: %w", err)
+			}
+			issueRank = r
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
+				id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
+			) VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, NULL, NULL)
+			ON DUPLICATE KEY UPDATE
+				title = VALUES(title),
+				description = VALUES(description),
+				agent_prompt = VALUES(agent_prompt),
+				status = VALUES(status),
+				priority = VALUES(priority),
+				issue_type = VALUES(issue_type),
+				topic = VALUES(topic),
+				assignee = VALUES(assignee),
+				item_rank = VALUES(item_rank),
+				created_at = VALUES(created_at),
+				updated_at = VALUES(updated_at),
+				closed_at = VALUES(closed_at)`,
+			in.ID,
+			strings.TrimSpace(in.Title),
+			strings.TrimSpace(in.Description),
+			nullableString(strings.TrimSpace(in.Prompt)),
+			status,
+			in.Priority,
+			issueType,
+			issueid.NormalizeSlug(in.Topic),
+			strings.TrimSpace(in.Assignee),
+			issueRank,
+			in.CreatedAt.Format(time.RFC3339Nano),
+			in.UpdatedAt.Format(time.RFC3339Nano),
+			closedAt,
+		); err != nil {
+			return fmt.Errorf("import issue: %w", err)
+		}
+		return s.replaceLabelsTx(ctx, tx, in.ID, labels, "import")
+	})
 }
 
 func (s *Store) ImportComment(ctx context.Context, in ImportComment) error {
@@ -273,34 +254,19 @@ func (s *Store) ImportComment(ctx context.Context, in ImportComment) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin import comment tx: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-			issue_id = VALUES(issue_id),
-			body = VALUES(body),
-			created_at = VALUES(created_at),
-			created_by = VALUES(created_by)`,
-		in.ID, in.IssueID, strings.TrimSpace(in.Body), in.CreatedAt.Format(time.RFC3339Nano), createdBy)
-	if err != nil {
-		return fmt.Errorf("import comment: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit import comment: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "import comment"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "import comment", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by)
+			VALUES (?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				issue_id = VALUES(issue_id),
+				body = VALUES(body),
+				created_at = VALUES(created_at),
+				created_by = VALUES(created_by)`,
+			in.ID, in.IssueID, strings.TrimSpace(in.Body), in.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+			return fmt.Errorf("import comment: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
@@ -324,32 +290,17 @@ func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin import relation tx: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by)
-		VALUES (?, ?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-			created_at = VALUES(created_at),
-			created_by = VALUES(created_by)`,
-		srcID, dstID, relType, in.CreatedAt.Format(time.RFC3339Nano), createdBy)
-	if err != nil {
-		return fmt.Errorf("import relation: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit import relation: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "import relation"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "import relation", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by)
+			VALUES (?, ?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				created_at = VALUES(created_at),
+				created_by = VALUES(created_by)`,
+			srcID, dstID, relType, in.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+			return fmt.Errorf("import relation: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) ImportLabel(ctx context.Context, in ImportLabel) error {
@@ -364,93 +315,64 @@ func (s *Store) ImportLabel(ctx context.Context, in ImportLabel) error {
 	if createdBy == "" {
 		createdBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin import label tx: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
-		VALUES (?, ?, ?, ?)
-		ON DUPLICATE KEY UPDATE
-			created_at = VALUES(created_at),
-			created_by = VALUES(created_by)`, in.IssueID, label, in.CreatedAt.Format(time.RFC3339Nano), createdBy)
-	if err != nil {
-		return fmt.Errorf("import label: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit import label: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "import label"); err != nil {
-		return err
-	}
-	return nil
+	return s.withMutation(ctx, "import label", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
+			VALUES (?, ?, ?, ?)
+			ON DUPLICATE KEY UPDATE
+				created_at = VALUES(created_at),
+				created_by = VALUES(created_by)`, in.IssueID, label, in.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+			return fmt.Errorf("import label: %w", err)
+		}
+		return nil
+	})
 }
 
 func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin replace from export tx: %w", err)
-	}
-	defer tx.Rollback()
-	for _, table := range []string{"labels", "comments", "relations", "issues"} {
-		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
-			return fmt.Errorf("clear %s: %w", table, err)
+	return s.withMutation(ctx, "replace from export", func(ctx context.Context, tx *sql.Tx) error {
+		for _, table := range []string{"labels", "comments", "relations", "issues"} {
+			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
+				return fmt.Errorf("clear %s: %w", table, err)
+			}
 		}
-	}
-	for _, issue := range export.Issues {
-		var closedAt any
-		if value := issue.ClosedAtValue(); value != nil {
-			closedAt = value.Format(time.RFC3339Nano)
+		for _, issue := range export.Issues {
+			var closedAt any
+			if value := issue.ClosedAtValue(); value != nil {
+				closedAt = value.Format(time.RFC3339Nano)
+			}
+			// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
+			// decision; the import path inherits it instead of inventing its own
+			// default for containers.
+			status := statusForStorage(issue)
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
+				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, issue.Priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+				return fmt.Errorf("restore issue %s: %w", issue.ID, err)
+			}
 		}
-		// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
-		// decision; the import path inherits it instead of inventing its own
-		// default for containers.
-		status := statusForStorage(issue)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, issue.Priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
-			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
+		for _, relation := range export.Relations {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
+				relation.SrcID, relation.DstID, relation.Type, relation.CreatedAt.Format(time.RFC3339Nano), relation.CreatedBy); err != nil {
+				return fmt.Errorf("restore relation %s->%s: %w", relation.SrcID, relation.DstID, err)
+			}
 		}
-	}
-	for _, relation := range export.Relations {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-			relation.SrcID, relation.DstID, relation.Type, relation.CreatedAt.Format(time.RFC3339Nano), relation.CreatedBy); err != nil {
-			return fmt.Errorf("restore relation %s->%s: %w", relation.SrcID, relation.DstID, err)
+		for _, comment := range export.Comments {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
+				comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
+				return fmt.Errorf("restore comment %s: %w", comment.ID, err)
+			}
 		}
-	}
-	for _, comment := range export.Comments {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-			comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
-			return fmt.Errorf("restore comment %s: %w", comment.ID, err)
+		for _, label := range export.Labels {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
+				label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
+				return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
+			}
 		}
-	}
-	for _, label := range export.Labels {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
-			label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
-			return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
+		for _, event := range export.History {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issue_history(id, issue_id, action, reason, from_status, to_status, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+				event.ID, event.IssueID, event.Action, event.Reason, event.FromStatus, event.ToStatus, event.CreatedAt.Format(time.RFC3339Nano), event.CreatedBy); err != nil {
+				return fmt.Errorf("restore issue history %s: %w", event.ID, err)
+			}
 		}
-	}
-	for _, event := range export.History {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_history(id, issue_id, action, reason, from_status, to_status, created_at, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-			event.ID, event.IssueID, event.Action, event.Reason, event.FromStatus, event.ToStatus, event.CreatedAt.Format(time.RFC3339Nano), event.CreatedBy); err != nil {
-			return fmt.Errorf("restore issue history %s: %w", event.ID, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit replace from export: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "replace from export"); err != nil {
-		return err
-	}
-	return nil
+		return nil
+	})
 }

@@ -9,10 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	_ "github.com/dolthub/driver"
@@ -29,17 +26,6 @@ const (
 	doltDatabaseName = "links"
 )
 
-var ErrTransientManifestReadOnly = errors.New("transient manifest read-only")
-var processCommitMutex sync.Mutex
-var commitLockPIDRunning = isCommitLockPIDRunning
-
-const (
-	transientManifestRetryMaxAttempts = 12
-	transientManifestRetryBaseDelay   = 50 * time.Millisecond
-	transientManifestRetryMaxDelay    = 1 * time.Second
-	commitLockStaleAfter              = 10 * time.Minute
-)
-
 type Store struct {
 	db             *sql.DB
 	workspaceID    string
@@ -47,11 +33,6 @@ type Store struct {
 	commitLockPath string
 	telemetryDir   string
 }
-
-type retryOperation func(context.Context) error
-type retryDelayFunc func(attempt int) time.Duration
-type retrySleepFunc func(context.Context, time.Duration) error
-type commitLockContextKey struct{}
 
 type NotFoundError struct {
 	Entity string
@@ -146,6 +127,9 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
+	}
+	if _, err := os.Stat(doltRootDir); errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
@@ -254,50 +238,20 @@ func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
 }
 
 func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return fmt.Errorf("begin record sync state tx: %w", err)
-	}
-	defer tx.Rollback()
-	for key, value := range map[string]string{
-		"last_sync_path": strings.TrimSpace(state.Path),
-		"last_sync_hash": strings.TrimSpace(state.ContentHash),
-	} {
-		if err := s.setMeta(ctx, tx, key, value); err != nil {
-			return err
+	return s.withMutation(ctx, "record sync state", func(ctx context.Context, tx *sql.Tx) error {
+		for key, value := range map[string]string{
+			"last_sync_path": strings.TrimSpace(state.Path),
+			"last_sync_hash": strings.TrimSpace(state.ContentHash),
+		} {
+			if err := s.setMeta(ctx, tx, key, value); err != nil {
+				return err
+			}
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit record sync state: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "record sync state"); err != nil {
-		return err
-	}
-	return nil
+		return nil
+	})
 }
 
 func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Issue, error) {
-	var issue model.Issue
-	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
-		created, createErr := s.createIssueOnce(ctx, in)
-		if createErr != nil {
-			return createErr
-		}
-		issue = created
-		return nil
-	}, transientManifestRetryDelay, waitWithContext)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	return issue, nil
-}
-
-func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, errors.New("title is required")
 	}
@@ -334,64 +288,49 @@ func (s *Store) createIssueOnce(ctx context.Context, in CreateIssueInput) (model
 	if err != nil {
 		return model.Issue{}, err
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("begin create issue tx: %w", err)
-	}
-	defer tx.Rollback()
 	parentID := strings.TrimSpace(in.ParentID)
-	if parentID != "" {
-		if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, parentID).Scan(new(string)); err != nil {
-			if errors.Is(err, sql.ErrNoRows) {
-				return model.Issue{}, NotFoundError{Entity: "issue", ID: parentID}
+	if err := s.withMutation(ctx, "create issue", func(ctx context.Context, tx *sql.Tx) error {
+		if parentID != "" {
+			if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, parentID).Scan(new(string)); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					return NotFoundError{Entity: "issue", ID: parentID}
+				}
+				return fmt.Errorf("lookup parent issue %q: %w", parentID, err)
 			}
-			return model.Issue{}, fmt.Errorf("lookup parent issue %q: %w", parentID, err)
 		}
-	}
-	prefix, err := s.issuePrefixForTx(ctx, tx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	issue.Rank, err = nextRankAtBottom(ctx, tx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	_, err = tx.ExecContext(ctx, `INSERT INTO issues(
-		id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
-		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-		issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano))
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("insert issue: %w", err)
-	}
-	if parentID != "" {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`,
-			issue.ID, parentID, issue.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
-			return model.Issue{}, fmt.Errorf("insert parent relation: %w", err)
+		prefix, err := s.issuePrefixForTx(ctx, tx)
+		if err != nil {
+			return err
 		}
-	}
-	if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
-		return model.Issue{}, err
-	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", createdBy); err != nil {
-		return model.Issue{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Issue{}, fmt.Errorf("commit create issue: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "create issue"); err != nil {
-		return model.Issue{}, err
-	}
-	if err := s.smoothRanksIfNeeded(ctx, issue.Rank); err != nil {
+		issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
+		if err != nil {
+			return err
+		}
+		issue.Rank, err = nextRankAtBottom(ctx, tx)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
+			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
+			issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+			return fmt.Errorf("insert issue: %w", err)
+		}
+		if parentID != "" {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`,
+				issue.ID, parentID, issue.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+				return fmt.Errorf("insert parent relation: %w", err)
+			}
+		}
+		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
+			return err
+		}
+		if err := s.insertHistoryTx(ctx, tx, issue.ID, "created", "issue created", "", "open", createdBy); err != nil {
+			return err
+		}
+		return smoothRanksIfNeededTx(ctx, tx, issue.Rank)
+	}); err != nil {
 		return model.Issue{}, err
 	}
 	return issue, nil
@@ -822,54 +761,25 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if value := issue.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("begin update issue tx: %w", err)
-	}
-	defer tx.Rollback()
-	_, err = tx.ExecContext(ctx, `UPDATE issues SET
-		title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
-		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("update issue: %w", err)
-	}
-	if in.Labels != nil {
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
-			return model.Issue{}, err
+	if err := s.withMutation(ctx, "update issue", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET
+			title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
+			WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+			return fmt.Errorf("update issue: %w", err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Issue{}, fmt.Errorf("commit update issue: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "update issue"); err != nil {
+		if in.Labels != nil {
+			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
 		return model.Issue{}, err
 	}
 	return s.GetIssue(ctx, issue.ID)
 }
 
-// RankToTop moves an issue to rank above all other issues.
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
-	var comment model.Comment
-	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
-		created, createErr := s.addCommentOnce(ctx, in)
-		if createErr != nil {
-			return createErr
-		}
-		comment = created
-		return nil
-	}, transientManifestRetryDelay, waitWithContext)
-	if err != nil {
-		return model.Comment{}, err
-	}
-	return comment, nil
-}
-
-func (s *Store) addCommentOnce(ctx context.Context, in AddCommentInput) (model.Comment, error) {
 	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
 		return model.Comment{}, err
 	}
@@ -882,45 +792,18 @@ func (s *Store) addCommentOnce(ctx context.Context, in AddCommentInput) (model.C
 	if comment.CreatedBy == "" {
 		comment.CreatedBy = "unknown"
 	}
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Comment{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Comment{}, fmt.Errorf("begin add comment tx: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
-		return model.Comment{}, fmt.Errorf("insert comment: %w", err)
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Comment{}, fmt.Errorf("commit add comment: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "add comment"); err != nil {
+	if err := s.withMutation(ctx, "add comment", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
+			return fmt.Errorf("insert comment: %w", err)
+		}
+		return nil
+	}); err != nil {
 		return model.Comment{}, err
 	}
 	return comment, nil
 }
 
 func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
-	var issue model.Issue
-	err := retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
-		transitioned, transitionErr := s.transitionIssueOnce(ctx, in)
-		if transitionErr != nil {
-			return transitionErr
-		}
-		issue = transitioned
-		return nil
-	}, transientManifestRetryDelay, waitWithContext)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	return issue, nil
-}
-
-func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
 	issue, err := s.GetIssue(ctx, in.IssueID)
 	if err != nil {
 		return model.Issue{}, err
@@ -969,27 +852,13 @@ func (s *Store) transitionIssueOnce(ctx context.Context, in TransitionIssueInput
 		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", action)
 	}
 	issue.UpdatedAt = now
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("begin transition issue tx: %w", err)
-	}
-	defer tx.Rollback()
-	if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-		statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
-		return model.Issue{}, fmt.Errorf("update issue lifecycle: %w", err)
-	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
-		return model.Issue{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Issue{}, fmt.Errorf("commit transition issue: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "transition issue"); err != nil {
+	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
+			statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+			return fmt.Errorf("update issue lifecycle: %w", err)
+		}
+		return s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor)
+	}); err != nil {
 		return model.Issue{}, err
 	}
 	reloaded, err := s.GetIssue(ctx, issue.ID)
@@ -1013,44 +882,30 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	now := time.Now().UTC()
-	ctx, releaseCommitLock, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	defer releaseCommitLock()
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("begin transition issue tx: %w", err)
-	}
-	defer tx.Rollback()
 	var closedAt any
 	if value := updated.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
 	}
-	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
-		toStatus, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("update issue status: %w", err)
-	}
-	affected, err := result.RowsAffected()
-	if err != nil {
-		return model.Issue{}, fmt.Errorf("read status transition result: %w", err)
-	}
-	if affected == 0 {
-		currentStatus, lookupErr := currentStatusTx(ctx, tx, issue.ID)
-		if lookupErr != nil {
-			return model.Issue{}, lookupErr
+	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
+		result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
+			toStatus, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
+		if err != nil {
+			return fmt.Errorf("update issue status: %w", err)
 		}
-		return model.Issue{}, fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
-	}
-	if err := s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor); err != nil {
-		return model.Issue{}, err
-	}
-	if err := tx.Commit(); err != nil {
-		return model.Issue{}, fmt.Errorf("commit transition issue: %w", err)
-	}
-	if err := s.commitWorkingSet(ctx, "transition issue"); err != nil {
+		affected, err := result.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("read status transition result: %w", err)
+		}
+		if affected == 0 {
+			currentStatus, lookupErr := currentStatusTx(ctx, tx, issue.ID)
+			if lookupErr != nil {
+				return lookupErr
+			}
+			return fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
+		}
+		return s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor)
+	}); err != nil {
 		return model.Issue{}, err
 	}
 	updated.UpdatedAt = now
@@ -1070,52 +925,6 @@ func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, e
 	return status.String, nil
 }
 
-func retryTransientManifestReadOnly(ctx context.Context, operation retryOperation, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
-	var lastErr error
-	for attempt := 1; attempt <= transientManifestRetryMaxAttempts; attempt++ {
-		err := classifyTransientManifestError(operation(ctx))
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-		if !errors.Is(err, ErrTransientManifestReadOnly) || attempt == transientManifestRetryMaxAttempts {
-			break
-		}
-		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
-			return waitErr
-		}
-	}
-	return lastErr
-}
-
-func transientManifestRetryDelay(attempt int) time.Duration {
-	if attempt < 1 {
-		attempt = 1
-	}
-	delay := transientManifestRetryBaseDelay << (attempt - 1)
-	if delay > transientManifestRetryMaxDelay {
-		delay = transientManifestRetryMaxDelay
-	}
-	return delay
-}
-
-func waitWithContext(ctx context.Context, duration time.Duration) error {
-	timer := time.NewTimer(duration)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
-}
 func (s *Store) ListTopics(ctx context.Context) ([]string, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT topic FROM issues WHERE deleted_at IS NULL AND topic <> '' ORDER BY topic ASC`)
 	if err != nil {
@@ -1842,219 +1651,4 @@ func buildDoltDSN(doltRootDir, workspaceID string, includeDatabase bool) string 
 		query.Set("database", doltDatabaseName)
 	}
 	return "file://" + filepath.ToSlash(filepath.Clean(doltRootDir)) + "?" + query.Encode()
-}
-
-func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
-	trimmed := strings.TrimSpace(message)
-	if trimmed == "" {
-		trimmed = "links mutation"
-	}
-	// [LAW:single-enforcer] commitWorkingSet is the single mutation boundary that owns transient commit retry behavior.
-	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
-	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
-			return s.commitWorkingSetOnce(ctx, trimmed)
-		}, transientManifestRetryDelay, waitWithContext)
-	})
-}
-
-func (s *Store) commitWorkingSetOnce(ctx context.Context, message string) error {
-	var commitHash string
-	err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?)`, message).Scan(&commitHash)
-	if err == nil {
-		return nil
-	}
-	normalized := strings.ToLower(err.Error())
-	if strings.Contains(normalized, "nothing to commit") {
-		return nil
-	}
-	return wrapCommitWorkingSetError(err)
-}
-
-func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) error {
-	lockedCtx, release, err := s.acquireCommitLock(ctx)
-	if err != nil {
-		return err
-	}
-	defer release()
-	return operation(lockedCtx)
-}
-
-func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(), error) {
-	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
-		return ctx, func() {}, nil
-	}
-
-	processCommitMutex.Lock()
-	locked, err := tryAcquireFileLock(s.commitLockPath)
-	for errors.Is(err, os.ErrExist) && !locked {
-		if staleErr := removeStaleCommitLock(s.commitLockPath, commitLockStaleAfter); staleErr != nil {
-			processCommitMutex.Unlock()
-			return ctx, nil, fmt.Errorf("acquire commit lock: %w", staleErr)
-		}
-		if waitErr := waitWithContext(ctx, transientManifestRetryBaseDelay); waitErr != nil {
-			processCommitMutex.Unlock()
-			return ctx, nil, waitErr
-		}
-		locked, err = tryAcquireFileLock(s.commitLockPath)
-	}
-	if err != nil {
-		processCommitMutex.Unlock()
-		return ctx, nil, fmt.Errorf("acquire commit lock: %w", err)
-	}
-	if !locked {
-		processCommitMutex.Unlock()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctx, nil, ctxErr
-		}
-		return ctx, nil, errors.New("acquire commit lock: lock not acquired")
-	}
-
-	release := func() {
-		_ = os.Remove(s.commitLockPath)
-		processCommitMutex.Unlock()
-	}
-	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
-}
-
-func tryAcquireFileLock(path string) (bool, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return false, err
-	}
-	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return false, err
-	}
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(path)
-		return false, closeErr
-	}
-	return true, nil
-}
-
-func removeStaleCommitLock(path string, staleAfter time.Duration) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	isStaleByAge := time.Since(info.ModTime()) > staleAfter
-	isStaleByOwner, err := commitLockOwnedByDeadProcess(path)
-	if err != nil {
-		return err
-	}
-	if !isStaleByAge && !isStaleByOwner {
-		return nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-func commitLockOwnedByDeadProcess(path string) (bool, error) {
-	// [LAW:single-enforcer] Commit-lock owner liveness classification is centralized here to keep stale-lock handling deterministic.
-	pid, hasOwnerPID, err := readCommitLockOwnerPID(path)
-	if err != nil {
-		return false, err
-	}
-	if !hasOwnerPID {
-		return false, nil
-	}
-	running, err := commitLockPIDRunning(pid)
-	if err != nil {
-		return false, err
-	}
-	return !running, nil
-}
-
-func readCommitLockOwnerPID(path string) (int, bool, error) {
-	content, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	pidText := strings.TrimSpace(string(content))
-	if pidText == "" {
-		return 0, false, nil
-	}
-	pid, err := strconv.Atoi(pidText)
-	if err != nil || pid <= 0 {
-		return 0, false, nil
-	}
-	return pid, true, nil
-}
-
-func isCommitLockPIDRunning(pid int) (bool, error) {
-	if pid <= 0 {
-		return false, nil
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false, nil
-	}
-	err = process.Signal(syscall.Signal(0))
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-		return false, nil
-	}
-	if errors.Is(err, syscall.EPERM) {
-		return true, nil
-	}
-	// Unknown probe errors are treated as running to avoid removing an active lock.
-	return true, nil
-}
-
-type transientManifestReadOnlyError struct {
-	err error
-}
-
-func (e transientManifestReadOnlyError) Error() string {
-	return e.err.Error()
-}
-
-func (e transientManifestReadOnlyError) Unwrap() error {
-	return e.err
-}
-
-func (e transientManifestReadOnlyError) Is(target error) bool {
-	return target == ErrTransientManifestReadOnly
-}
-
-func wrapCommitWorkingSetError(err error) error {
-	wrapped := fmt.Errorf("dolt commit working set: %w", err)
-	if !isManifestReadOnlyCommitError(err) {
-		return wrapped
-	}
-	// [LAW:one-source-of-truth] Store commit wrapping is the canonical transient classifier for manifest read-only failures.
-	return transientManifestReadOnlyError{err: wrapped}
-}
-
-func classifyTransientManifestError(err error) error {
-	if err == nil {
-		return nil
-	}
-	if errors.Is(err, ErrTransientManifestReadOnly) {
-		return err
-	}
-	if !isManifestReadOnlyCommitError(err) {
-		return err
-	}
-	return transientManifestReadOnlyError{err: err}
-}
-
-func isManifestReadOnlyCommitError(err error) bool {
-	if err == nil {
-		return false
-	}
-	normalized := strings.ToLower(err.Error())
-	return strings.Contains(normalized, "cannot update manifest") && strings.Contains(normalized, "read only")
 }
