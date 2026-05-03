@@ -20,12 +20,12 @@ func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
 	traceRef, err := recordAutomationTrace(ws, automationTraceRecord{
 		Trigger:    "startup-preflight",
 		Command:    "lit ls",
-		SideEffect: "block command execution until beads migration completes",
+		SideEffect: "block command execution pending a required setup step",
 		Status:     "blocked",
-		Reason:     "beads residue detected during startup preflight",
+		Reason:     "setup required before running commands",
 		Metadata: map[string]string{
 			"blocked_command":     "lit ls",
-			"remediation_command": "lit migrate beads --apply --json",
+			"remediation_command": "lit init",
 		},
 	})
 	if err != nil {
@@ -90,21 +90,3 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 	}
 }
 
-func TestBuildCommandErrorPayloadIncludesDetailedErrorFields(t *testing.T) {
-	payload := buildCommandErrorPayload(BeadsMigrationRequiredError{
-		Summary:            "hooks=1",
-		Trigger:            "startup-preflight",
-		BlockedCommand:     "lit ls",
-		RemediationCommand: "lit migrate beads --apply --json",
-		TraceRef:           "/tmp/trace.json",
-	})
-	if payload.Trigger != "startup-preflight" {
-		t.Fatalf("trigger = %v, want startup-preflight", payload.Trigger)
-	}
-	if payload.TraceRef != "/tmp/trace.json" {
-		t.Fatalf("trace_ref = %v, want /tmp/trace.json", payload.TraceRef)
-	}
-	if payload.BlockedCommand != "lit ls" {
-		t.Fatalf("blocked_command = %v, want lit ls", payload.BlockedCommand)
-	}
-}

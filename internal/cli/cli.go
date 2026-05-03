@@ -101,14 +101,6 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	return root
 }
 
-func runWithPreflight(commandArgs []string, run func() error) error {
-	_, _, err := enforceBeadsPreflight(commandArgs)
-	if err != nil {
-		return err
-	}
-	return run()
-}
-
 func validateNestedCommandPath(args []string, usage string, commands ...string) error {
 	// [LAW:single-enforcer] Nested command path validation is centralized here so invalid/help paths fail before startup side effects.
 	if len(args) == 0 {
@@ -134,27 +126,15 @@ func validateCommentCommandPath(args []string) error {
 	return validateNestedCommandPath(args, "usage: lit comment add <id> --body <text>", "add")
 }
 
-func runWithWorkspace(commandArgs []string, run func(workspace.Info) error) error {
-	preflightWorkspace, hasPreflightWorkspace, err := enforceBeadsPreflight(commandArgs)
+func runWithWorkspace(run func(workspace.Info) error) error {
+	ws, err := resolveWorkspaceFromWD()
 	if err != nil {
 		return err
-	}
-	// [LAW:one-source-of-truth] Reuse the preflight workspace resolution when available.
-	ws := preflightWorkspace
-	if !hasPreflightWorkspace {
-		ws, err = resolveWorkspaceFromWD()
-		if err != nil {
-			return err
-		}
 	}
 	return run(ws)
 }
 
-func runWithApp(ctx context.Context, accessMode appAccessMode, commandArgs []string, run func(context.Context, *app.App) error) error {
-	_, _, err := enforceBeadsPreflight(commandArgs)
-	if err != nil {
-		return err
-	}
+func runWithApp(ctx context.Context, accessMode appAccessMode, run func(context.Context, *app.App) error) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
@@ -175,27 +155,6 @@ func runWithApp(ctx context.Context, accessMode appAccessMode, commandArgs []str
 	}
 	defer ap.Close()
 	return run(ctx, ap)
-}
-
-func enforceBeadsPreflight(commandArgs []string) (workspace.Info, bool, error) {
-	if shouldBypassBeadsPreflight(commandArgs) {
-		return workspace.Info{}, false, nil
-	}
-	cwd, err := os.Getwd()
-	if err != nil {
-		return workspace.Info{}, false, fmt.Errorf("get cwd: %w", err)
-	}
-	ws, resolveErr := workspace.Resolve(cwd)
-	if resolveErr == nil {
-		if err := requireBeadsMigrationPreflight(ws, commandArgs); err != nil {
-			return workspace.Info{}, false, err
-		}
-		return ws, true, nil
-	}
-	if !errors.Is(resolveErr, workspace.ErrNotGitRepo) {
-		return workspace.Info{}, false, resolveErr
-	}
-	return workspace.Info{}, false, nil
 }
 
 func resolveWorkspaceFromWD() (workspace.Info, error) {
@@ -945,7 +904,6 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	})
 }
 
-
 func filterWorkableIssues(issues []model.Issue) []model.Issue {
 	filtered := make([]model.Issue, 0, len(issues))
 	for _, issue := range issues {
@@ -1106,10 +1064,6 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 		}
 		return nil
 	})
-}
-
-type errorDetailer interface {
-	ErrorDetails() map[string]any
 }
 
 func runCompletion(stdout io.Writer, args []string) error {
@@ -1311,7 +1265,7 @@ Sync Remote (pull/push):
   no match       skip sync without Dolt side effects
 
 Issue Workflow:
-  init           Initialize links in the current repository (auto-migrates Beads residue)
+  init           Initialize links in the current repository
   ready          List open work ordered by readiness, then rank
   new            Create an issue
   followup       File a follow-up issue parented to a just-closed ticket
@@ -1344,7 +1298,6 @@ Sync & Data:
 Setup & Maintenance:
   workspace      Show workspace metadata
   hooks          Install git hook automation
-  migrate        Migrate from Beads to links
   doctor         Health check and repair
 
 Guidance & Tooling:
@@ -1359,7 +1312,6 @@ Command Syntax:
   lit start <id> [--reason <text>] [--by <user>] [--json]
   lit done <id> [--reason <text>] [--by <user>] [--json]
   lit hooks install [--json]
-  lit migrate [--apply] [--json] [--skip-hooks] [--skip-agents]
   lit quickstart [--refresh]
   lit completion <bash|zsh|fish>
   lit workspace [--json]
