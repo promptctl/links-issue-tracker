@@ -62,6 +62,7 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 }
 
 func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string) error {
+	relType = strings.TrimSpace(relType)
 	if relType == "related-to" {
 		ordered := []string{srcID, dstID}
 		sort.Strings(ordered)
@@ -72,9 +73,12 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 		if err != nil {
 			return fmt.Errorf("delete relation: %w", err)
 		}
-		affected, _ := res.RowsAffected()
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
 		if affected == 0 {
-			return fmt.Errorf("relation not found")
+			return NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
 		return nil
 	})

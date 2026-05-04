@@ -1815,6 +1815,69 @@ func TestRankSetRejectsTooFewIDs(t *testing.T) {
 	}
 }
 
+// TestRemovePerChildBlockAfterRankReorder reproduces the bug where per-child
+// block edges added when an epic-level block already exists cannot be removed
+// after a rank reorder. The store-level orientation for blocks is:
+// src=dependent (blocked), dst=dependency (blocker).
+func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	// Create blocker epic A and blocked epic B.
+	epicA, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocker epic A", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicA) error = %v", err)
+	}
+	epicB, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Blocked epic B", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicB) error = %v", err)
+	}
+
+	// Create children of B.
+	childB1, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child B.1", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(childB1) error = %v", err)
+	}
+	childB2, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child B.2", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(childB2) error = %v", err)
+	}
+	childB3, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child B.3", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(childB3) error = %v", err)
+	}
+
+	// Add epic-to-epic block: A blocks B.
+	// Store convention: src=blocked (B), dst=blocker (A).
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: epicB.ID, DstID: epicA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(epic-level block) error = %v", err)
+	}
+
+	// Add per-child blocks: A blocks B.1, B.2, B.3.
+	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
+		if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: childID, DstID: epicA.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+			t.Fatalf("AddRelation(per-child block %s) error = %v", childID, err)
+		}
+	}
+
+	// Rank A above B.
+	if err := st.RankAbove(ctx, epicA.ID, epicB.ID); err != nil {
+		t.Fatalf("RankAbove(A, B) error = %v", err)
+	}
+
+	// Remove per-child blocks — this is where the bug manifests.
+	for _, childID := range []string{childB1.ID, childB2.ID, childB3.ID} {
+		if err := st.RemoveRelation(ctx, childID, epicA.ID, "blocks"); err != nil {
+			t.Errorf("RemoveRelation(per-child block %s) error = %v", childID, err)
+		}
+	}
+
+	// Remove epic-level block.
+	if err := st.RemoveRelation(ctx, epicB.ID, epicA.ID, "blocks"); err != nil {
+		t.Fatalf("RemoveRelation(epic-level block) error = %v", err)
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
