@@ -11,6 +11,68 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
 
+func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title: "Guidance test", Topic: "guidance", IssueType: "task", Priority: 2,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "done"); err != nil {
+		t.Fatalf("runTransition(done without --apply) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "Double check the ticket") {
+		t.Fatalf("expected pre-guidance output, got %q", stdout.String())
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Issue.State() != model.StateInProgress {
+		t.Fatalf("issue should still be in_progress after bare done, got %q", detail.Issue.State())
+	}
+}
+
+func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Title: "Guidance apply test", Topic: "guidance", IssueType: "task", Priority: 2,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply"}, "done"); err != nil {
+		t.Fatalf("runTransition(done --apply) error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "has been closed") {
+		t.Fatalf("expected post-guidance output, got %q", stdout.String())
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Issue.State() != model.StateClosed {
+		t.Fatalf("issue should be closed after --apply, got %q", detail.Issue.State())
+	}
+}
+
 func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
