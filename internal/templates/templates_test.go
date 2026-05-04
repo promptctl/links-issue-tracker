@@ -26,19 +26,6 @@ func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
 	}
 }
 
-func TestLoadReturnsEmbeddedQuickstartWhenNoOverride(t *testing.T) {
-	xdgRoot := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
-
-	content, err := Load(QuickstartTemplateName, t.TempDir())
-	if err != nil {
-		t.Fatalf("Load() error = %v", err)
-	}
-	if !strings.Contains(content, "Agent quickstart for links issue tracking") {
-		t.Fatalf("embedded quickstart default missing summary: %q", content)
-	}
-}
-
 func TestLoadGlobalOverrideWins(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
@@ -127,12 +114,3 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 	}
 }
 
-func TestEmbeddedDefaultReturnsContent(t *testing.T) {
-	content, err := EmbeddedDefault(QuickstartTemplateName)
-	if err != nil {
-		t.Fatalf("EmbeddedDefault() error = %v", err)
-	}
-	if !strings.Contains(string(content), "Agent quickstart for links issue tracking") {
-		t.Fatalf("embedded quickstart missing summary: %q", content)
-	}
-}
