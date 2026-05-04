@@ -18,6 +18,7 @@ import (
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/query"
 	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/bmf/links-issue-tracker/internal/templates"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -920,22 +921,42 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 }
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
-	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Transition actor")
+	apply := fs.Bool("apply", false, "Apply the transition (without this flag, pre-guidance is printed instead)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if len(positional) != 1 {
-		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+	remaining := fs.cmd.Flags().Args()
+	if len(remaining) != 1 {
+		return fmt.Errorf("usage: lit %s <id> [--reason <text>] [--apply]", transitionCommandName(action))
 	}
-	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+
+	issueID := remaining[0]
+	isJSON := *jsonOut || outputModeFromWriter(stdout) == outputModeJSON
+
+	// [LAW:dataflow-not-control-flow] Pre-guidance template existence is the data that
+	// activates the two-phase flow. When a pre-guidance template exists, the bare command
+	// prints guidance and exits; --apply executes the transition and prints post-guidance.
+	// When no pre-guidance template exists, the command works as before (backward compatible).
+	// JSON mode bypasses guidance entirely — scripts don't need coaching.
+	preGuidance, hasPreGuidance, err := loadTransitionGuidance(action, "pre", ap.Workspace.RootDir)
+	if err != nil {
+		return fmt.Errorf("load pre-guidance: %w", err)
 	}
+
+	if hasPreGuidance && !*apply && !isJSON {
+		rendered := renderGuidance(preGuidance, issueID)
+		if _, err := fmt.Fprintln(stdout, rendered); err != nil {
+			return err
+		}
+		return nil
+	}
+
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-		IssueID:   positional[0],
+		IssueID:   issueID,
 		Action:    action,
 		Reason:    *reason,
 		CreatedBy: *by,
@@ -943,6 +964,20 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
+
+	if !isJSON {
+		postGuidance, hasPostGuidance, err := loadTransitionGuidance(action, "post", ap.Workspace.RootDir)
+		if err != nil {
+			return fmt.Errorf("load post-guidance: %w", err)
+		}
+		if hasPostGuidance {
+			rendered := renderGuidance(postGuidance, issueID)
+			if _, err := fmt.Fprintln(stdout, rendered); err != nil {
+				return err
+			}
+		}
+	}
+
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
@@ -1198,6 +1233,25 @@ func transitionCommandName(action string) string {
 	default:
 		return action
 	}
+}
+
+// loadTransitionGuidance loads a guidance template for the given action/phase.
+// Returns the template content, whether it exists, and any I/O error.
+// Absent templates are not an error — they simply deactivate the guidance flow.
+func loadTransitionGuidance(action, phase, workspaceRoot string) (string, bool, error) {
+	content, err := templates.LoadGuidance(action, phase, workspaceRoot)
+	if err != nil {
+		return "", false, err
+	}
+	if content == "" {
+		return "", false, nil
+	}
+	return strings.TrimSpace(content), true, nil
+}
+
+// renderGuidance interpolates <id> placeholders in a guidance template.
+func renderGuidance(template string, issueID string) string {
+	return strings.ReplaceAll(template, "<id>", issueID)
 }
 
 func splitCSV(input string) []string {

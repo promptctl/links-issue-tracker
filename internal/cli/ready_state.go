@@ -342,13 +342,16 @@ func printNextSummary(w io.Writer, v any) error {
 // readyPreamble is printed before the ready list to give agents context about
 // how to interpret and act on the backlog.
 // [LAW:one-source-of-truth] Single definition of ready preamble text.
-const readyPreamble = `This is the backlog. Pick the top item, but read every item so you understand the context.
+const readyPreamble = `This is the backlog. Always pick the top item UNLESS asked to work on a specific ticket.
+You MUST carefully read every item so you understand the context for the work.
 Dependencies explain the WHY behind what you are building.
-Design for the consumers who will use what you build. A poor foundation becomes
-an immediate liability. Downstream tickets are your real acceptance criteria —
-not just "does this work in isolation" but "does this set up the next layer for
-success." Structure your implementation to make downstream tickets trivially easy,
-even if the ticket doesn't specify it (but only if it aligns with the ticket).`
+You MUST design for the implementers who will build on top of your work. A poor foundation becomes
+an immediate liability and should be avoided at all costs.
+Downstream tickets are your real acceptance criteria —
+not just "does this work in isolation" but "does this set the project up to be successful in the future."
+Structure your implementation to make downstream tickets simpler and more robust,
+even if the ticket doesn't specify it (but only if it aligns with the downstream tickets).
+IMPORTANT: If you haven't run 'lit quickstart' yet, do so NOW to ensure you understand how to use lit.`
 
 const readyMaxItems = 10
 
@@ -426,6 +429,10 @@ func writeReadyPreamble(w io.Writer) error {
 // Caps output at readyMaxItems. The preamble is emitted separately to stderr
 // by writeReadyPreamble at the runReady boundary.
 func printReadySection(w io.Writer, columns []string, ready []annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+	if _, err := fmt.Fprintln(w, "Ready tickets:"); err != nil {
+		return err
+	}
+
 	display := ready
 	if len(display) > readyMaxItems {
 		display = display[:readyMaxItems]
@@ -528,7 +535,7 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 			counts[a.Kind]++
 		}
 	}
-	if _, err := fmt.Fprintf(w, "\nBlocked (%d):\n", len(blocked)); err != nil {
+	if _, err := fmt.Fprintf(w, "\nBlocked tickets: %d (blocked tickets are not displayed above)\n", len(blocked)); err != nil {
 		return err
 	}
 	// Print in a stable order based on readyBlockingKinds.

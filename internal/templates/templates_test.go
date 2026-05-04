@@ -114,3 +114,4 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 	}
 }
 
+
