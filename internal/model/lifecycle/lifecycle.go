@@ -10,7 +10,10 @@
 // without Container semantics will make it contribute only its own Progress.
 package lifecycle
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type State string
 
@@ -71,11 +74,37 @@ func Walk(l Lifecycle, visit func(Lifecycle) bool) {
 }
 
 func ParseState(value string) (State, error) {
-	switch State(value) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	if normalized == "in-progress" {
+		normalized = "in_progress"
+	}
+	switch State(normalized) {
 	case Open, InProgress, Closed:
-		return State(value), nil
+		return State(normalized), nil
 	default:
-		return "", fmt.Errorf("unknown lifecycle state %q", value)
+		return "", fmt.Errorf("invalid status %q (valid: open, in_progress, closed)", value)
+	}
+}
+
+// DefaultOpen parses a state, defaulting to Open for blank or unrecognized
+// input. Use this for lenient boundaries (import, hydration, storage) where
+// the data may be absent or legacy. Strict boundaries (CLI flags, query
+// language) should use ParseState directly.
+func DefaultOpen(value string) State {
+	state, err := ParseState(value)
+	if err != nil {
+		return Open
+	}
+	return state
+}
+
+func ParseAction(value string) (ActionName, error) {
+	normalized := strings.TrimSpace(strings.ToLower(value))
+	switch ActionName(normalized) {
+	case ActionStart, ActionDone, ActionClose, ActionReopen:
+		return ActionName(normalized), nil
+	default:
+		return "", fmt.Errorf("unsupported lifecycle action %q", value)
 	}
 }
 

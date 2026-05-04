@@ -90,25 +90,27 @@ func (a ApplyUpdateInput) IsEmpty() bool {
 }
 
 type statusTransitionKey struct {
-	From string
-	To   string
+	From model.State
+	To   model.State
 }
 
 // [LAW:one-source-of-truth] Status transition action map is the single authoritative source for lit update transitions.
 var updateStatusTransitionActions = map[statusTransitionKey]string{
-	{From: "open", To: "in_progress"}:   "start",
-	{From: "in_progress", To: "closed"}: "done",
-	{From: "open", To: "closed"}:        "close",
-	{From: "closed", To: "open"}:        "reopen",
-	{From: "closed", To: "in_progress"}: "reopen+start",
-	{From: "in_progress", To: "open"}:   "done+reopen",
+	{From: model.StateOpen, To: model.StateInProgress}:    "start",
+	{From: model.StateInProgress, To: model.StateClosed}: "done",
+	{From: model.StateOpen, To: model.StateClosed}:        "close",
+	{From: model.StateClosed, To: model.StateOpen}:        "reopen",
+	{From: model.StateClosed, To: model.StateInProgress}: "reopen+start",
+	{From: model.StateInProgress, To: model.StateOpen}:   "done+reopen",
 }
 
 func statusTransitionActionsForApplyUpdate(fromStatus, toStatus string) ([]string, error) {
 	if toStatus == "" || fromStatus == toStatus {
 		return nil, nil
 	}
-	action, exists := updateStatusTransitionActions[statusTransitionKey{From: fromStatus, To: toStatus}]
+	from := model.DefaultOpen(fromStatus)
+	to := model.DefaultOpen(toStatus)
+	action, exists := updateStatusTransitionActions[statusTransitionKey{From: from, To: to}]
 	if !exists {
 		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
 	}
@@ -121,7 +123,7 @@ type SortSpec struct {
 }
 
 type ListIssuesFilter struct {
-	Statuses          []string
+	Statuses          []model.State
 	IssueTypes        []string
 	ExcludeIssueTypes []string
 	Assignees         []string
@@ -532,14 +534,11 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 	return capLimit(filterByState(hydrated, allowedStates), filter.Limit), nil
 }
 
-func parseStatusFilter(input []string) ([]model.State, error) {
+func parseStatusFilter(input []model.State) ([]model.State, error) {
 	out := make([]model.State, 0, len(input))
 	for _, raw := range input {
-		normalized, err := normalizeStatus(raw)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, model.State(normalized))
+		state := model.DefaultOpen(string(raw))
+		out = append(out, state)
 	}
 	return out, nil
 }
@@ -834,13 +833,8 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if err != nil {
 		return model.Issue{}, err
 	}
-	normalizedTarget, err := NormalizeStatusToken(in.TargetStatus)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	if normalizedTarget != "" && normalizedTarget != in.TargetStatus {
-		in.TargetStatus = normalizedTarget
-	}
+	normalizedTarget := model.DefaultOpen(in.TargetStatus)
+	in.TargetStatus = string(normalizedTarget)
 	actions, err := statusTransitionActionsForApplyUpdate(current.StatusValue(), in.TargetStatus)
 	if err != nil {
 		return model.Issue{}, err
@@ -898,9 +892,8 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	if actor == "" {
 		actor = "unknown"
 	}
-	switch action {
-	case "start", "done", "close", "reopen":
-		return s.writeStatusTransition(ctx, issue, actor, reason, action)
+	if parsed, err := model.ParseAction(action); err == nil {
+		return s.writeStatusTransition(ctx, issue, actor, reason, parsed)
 	}
 	now := time.Now().UTC()
 	fromStatus := issue.StatusValue()
@@ -941,7 +934,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 			statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
 			return fmt.Errorf("update issue lifecycle: %w", err)
 		}
-		return s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor)
+		return s.insertHistoryTx(ctx, tx, issue.ID, string(action), reason, fromStatus, toStatus, actor)
 	}); err != nil {
 		return model.Issue{}, err
 	}
@@ -955,11 +948,11 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	return reloaded, nil
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action string) (model.Issue, error) {
+func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName) (model.Issue, error) {
 	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
 		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
 	}
-	updated, err := issue.Apply(model.ActionName(action), actor, reason)
+	updated, err := issue.Apply(action, actor, reason)
 	if err != nil {
 		return model.Issue{}, err
 	}
@@ -988,7 +981,7 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 			}
 			return fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
 		}
-		return s.insertHistoryTx(ctx, tx, issue.ID, action, reason, fromStatus, toStatus, actor)
+		return s.insertHistoryTx(ctx, tx, issue.ID, string(action), reason, fromStatus, toStatus, actor)
 	}); err != nil {
 		return model.Issue{}, err
 	}
@@ -1454,11 +1447,8 @@ func statusForStorage(issue model.Issue) sql.NullString {
 func statusForStorageRaw(issueType string, status string) (sql.NullString, error) {
 	view := model.StatusView{}
 	if !model.IsContainerType(issueType) {
-		normalized, err := normalizeStatus(status)
-		if err != nil {
-			return sql.NullString{}, err
-		}
-		view.Value = model.State(normalized)
+		state := model.DefaultOpen(status)
+		view.Value = state
 	}
 	issue, err := model.HydrateRow(model.Issue{IssueType: issueType}, view, nil)
 	if err != nil {
@@ -1616,32 +1606,6 @@ func validatePriority(priority int) error {
 		return errors.New("priority must be between 0 and 4")
 	}
 	return nil
-}
-
-func NormalizeStatusToken(status string) (string, error) {
-	normalized := strings.TrimSpace(strings.ToLower(status))
-	if normalized == "in-progress" {
-		normalized = "in_progress"
-	}
-	switch normalized {
-	case "open", "in_progress", "closed":
-		return normalized, nil
-	case "":
-		return "", nil
-	default:
-		return "", errors.New("status must be open, in_progress, or closed")
-	}
-}
-
-func normalizeStatus(status string) (string, error) {
-	normalized, err := NormalizeStatusToken(status)
-	if err != nil {
-		return "", err
-	}
-	if normalized == "" {
-		return "open", nil
-	}
-	return normalized, nil
 }
 
 func nullableTime(value *time.Time) any {

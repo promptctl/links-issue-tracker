@@ -24,6 +24,12 @@ const (
 	ActionReopen = lifecycle.ActionReopen
 )
 
+var (
+	ParseState  = lifecycle.ParseState
+	ParseAction = lifecycle.ParseAction
+	DefaultOpen = lifecycle.DefaultOpen
+)
+
 func IsContainerType(issueType string) bool {
 	trimmed := strings.TrimSpace(issueType)
 	for _, container := range ContainerIssueTypes {
@@ -184,10 +190,7 @@ func (i Issue) IsHydrated() bool {
 // status fields into the lifecycle expression stored inside Issue.
 // [LAW:single-enforcer] Row status fields become lifecycle state only through this model API.
 func HydrateOwnedStatus(issue Issue, view StatusView) (Issue, error) {
-	state, err := lifecycle.ParseState(string(view.Value))
-	if err != nil {
-		return Issue{}, err
-	}
+	state := lifecycle.DefaultOpen(string(view.Value))
 	issue.replaceLifecycle(lifecycle.OwnedStatus{
 		Value:    state,
 		Assignee: view.Assignee,
