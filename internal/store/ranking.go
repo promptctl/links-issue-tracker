@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/rank"
 )
 
@@ -398,7 +399,7 @@ func filterLiveInversions(candidates []rankInversion, liveIDs map[string]struct{
 // [LAW:one-source-of-truth] State classification rides the lifecycle here,
 // the same predicate ready uses for its rank_inversion annotations.
 func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
-	issues, err := s.ListIssues(ctx, ListIssuesFilter{Statuses: []string{"open", "in_progress"}})
+	issues, err := s.ListIssues(ctx, ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("list live issues: %w", err)
 	}

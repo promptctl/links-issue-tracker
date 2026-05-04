@@ -202,13 +202,13 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 
 	cases := []struct {
 		name     string
-		statuses []string
+		statuses []model.State
 		want     map[string]bool
 	}{
-		{name: "default open+in_progress", statuses: []string{"open", "in_progress"}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: true, closedEpic.ID: false}},
-		{name: "open only", statuses: []string{"open"}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: false, closedEpic.ID: false}},
-		{name: "in_progress only", statuses: []string{"in_progress"}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: true, closedEpic.ID: false}},
-		{name: "closed only", statuses: []string{"closed"}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: false, closedEpic.ID: true}},
+		{name: "default open+in_progress", statuses: []model.State{model.StateOpen, model.StateInProgress}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "open only", statuses: []model.State{model.StateOpen}, want: map[string]bool{openEpic.ID: true, mixedEpic.ID: false, closedEpic.ID: false}},
+		{name: "in_progress only", statuses: []model.State{model.StateInProgress}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: true, closedEpic.ID: false}},
+		{name: "closed only", statuses: []model.State{model.StateClosed}, want: map[string]bool{openEpic.ID: false, mixedEpic.ID: false, closedEpic.ID: true}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -709,7 +709,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	after := now.Add(time.Hour)
 	hasComments := true
 	issues, err := st.ListIssues(ctx, ListIssuesFilter{
-		Statuses:      []string{"open"},
+		Statuses:      []model.State{model.StateOpen},
 		IssueTypes:    []string{"task"},
 		Assignees:     []string{"bmf"},
 		PriorityMax:   intPtr(2),
@@ -1125,7 +1125,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("done = %#v, want closed with ClosedAt", done)
 	}
 
-	openIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []string{"open"}})
+	openIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []model.State{model.StateOpen}})
 	if err != nil {
 		t.Fatalf("ListIssues(open) error = %v", err)
 	}
@@ -1133,7 +1133,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("openIssues = %#v, want empty", openIssues)
 	}
 
-	closedIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []string{"closed"}})
+	closedIssues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: []model.State{model.StateClosed}})
 	if err != nil {
 		t.Fatalf("ListIssues(closed) error = %v", err)
 	}
