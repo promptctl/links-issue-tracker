@@ -1137,7 +1137,7 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		if err != nil {
 			return err
 		}
-		lines = append(lines, fmt.Sprintf("refresh %s", formatQuickstartRefreshSummary(refreshReport)), "")
+		lines = append(lines, formatQuickstartRefreshSummary(refreshReport), "")
 	}
 	lines = append(lines, guidance)
 	_, err = fmt.Fprintln(stdout, strings.Join(lines, "\n"))

@@ -43,8 +43,8 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	first := runQuickstartRefresh(t)
-	if !strings.Contains(first, "refresh hooks=updated agents=updated quickstart=absent") {
-		t.Fatalf("quickstart refresh output = %q, want updated summary", first)
+	if !strings.Contains(first, "Refreshed: pre-push hook, AGENTS.md, CLAUDE.md") {
+		t.Fatalf("quickstart refresh output = %q, want refreshed summary", first)
 	}
 
 	firstAgents, err := os.ReadFile(agentsPath)
@@ -56,7 +56,7 @@ func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {
 	}
 
 	second := runQuickstartRefresh(t)
-	if !strings.Contains(second, "refresh hooks=unchanged agents=unchanged quickstart=absent") {
+	if !strings.Contains(second, "Up to date: pre-push hook, AGENTS.md, CLAUDE.md") {
 		t.Fatalf("second quickstart refresh output = %q, want unchanged summary", second)
 	}
 
@@ -96,8 +96,8 @@ func TestQuickstartRefreshReportsIncompatibleHookAsSkipped(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	output := runQuickstartRefresh(t)
-	if !strings.Contains(output, "refresh hooks=skipped(incompatible)") {
-		t.Fatalf("quickstart refresh output = %q, want skipped(incompatible)", output)
+	if !strings.Contains(output, "Skipped: pre-push hook (incompatible)") {
+		t.Fatalf("quickstart refresh output = %q, want skipped incompatible", output)
 	}
 }
 
@@ -126,8 +126,8 @@ func TestQuickstartRefreshReportsStaleGlobalOverrideAsCustomizedWithoutOverwriti
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	output := runQuickstartRefresh(t)
-	if !strings.Contains(output, "quickstart=skipped(customized)") {
-		t.Fatalf("quickstart refresh output = %q, want quickstart=skipped(customized)", output)
+	if !strings.Contains(output, "Skipped: quickstart template (customized)") {
+		t.Fatalf("quickstart refresh output = %q, want quickstart skipped customized", output)
 	}
 
 	got, err := os.ReadFile(globalPath)
@@ -167,8 +167,8 @@ func TestQuickstartRefreshReportsCurrentGlobalOverrideAsUnchanged(t *testing.T) 
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	output := runQuickstartRefresh(t)
-	if !strings.Contains(output, "quickstart=unchanged") {
-		t.Fatalf("quickstart refresh output = %q, want quickstart=unchanged", output)
+	if !strings.Contains(output, "Up to date: quickstart template") {
+		t.Fatalf("quickstart refresh output = %q, want quickstart unchanged", output)
 	}
 }
 
@@ -209,8 +209,8 @@ func TestQuickstartRefreshProjectOverrideMasksGlobal(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	output := runQuickstartRefresh(t)
-	if !strings.Contains(output, "quickstart=unchanged") {
-		t.Fatalf("quickstart refresh output = %q, want quickstart=unchanged (project layer wins)", output)
+	if !strings.Contains(output, "Up to date: quickstart template") {
+		t.Fatalf("quickstart refresh output = %q, want quickstart unchanged (project layer wins)", output)
 	}
 }
 

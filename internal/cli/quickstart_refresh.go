@@ -17,17 +17,18 @@ type quickstartRefreshItem struct {
 
 type quickstartRefreshReport struct {
 	Agents     quickstartRefreshItem `json:"agents"`
+	Claude     quickstartRefreshItem `json:"claude"`
 	Hooks      quickstartRefreshItem `json:"hooks"`
 	Quickstart quickstartRefreshItem `json:"quickstart"`
 }
 
 func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport, error) {
-	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed writers so AGENTS and hook updates stay owned at one boundary.
+	// [LAW:single-enforcer] Quickstart refresh reuses the existing managed writers so AGENTS, CLAUDE, and hook updates stay owned at one boundary.
 	hookResult, hookErr := installHooks(ws)
 	if hookErr != nil {
 		return quickstartRefreshReport{}, hookErr
 	}
-	agentsResult, agentsErr := ensureLinksAgentsSection(ws.RootDir)
+	agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(ws.RootDir)
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
 	}
@@ -40,6 +41,11 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 		Agents: quickstartRefreshItem{
 			Path:    agentsResult.Path,
 			Status:  managedAssetStatus(agentsResult.Changed, agentsResult.Created),
+			Managed: true,
+		},
+		Claude: quickstartRefreshItem{
+			Path:    claudeResult.Path,
+			Status:  managedAssetStatus(claudeResult.Changed, claudeResult.Created),
 			Managed: true,
 		},
 		Quickstart: quickstartItem,
@@ -96,11 +102,43 @@ func managedAssetStatus(changed bool, created bool) string {
 }
 
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
-	return fmt.Sprintf("hooks=%s agents=%s quickstart=%s",
-		formatQuickstartRefreshItemSummary(refresh.Hooks),
-		formatQuickstartRefreshItemSummary(refresh.Agents),
-		formatQuickstartRefreshItemSummary(refresh.Quickstart),
-	)
+	items := []labeledStatus{
+		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
+		{"AGENTS.md", refresh.Agents.Status, refresh.Agents.Reason},
+		{"CLAUDE.md", refresh.Claude.Status, refresh.Claude.Reason},
+		{"quickstart template", refresh.Quickstart.Status, refresh.Quickstart.Reason},
+	}
+
+	var updated, skipped, unchanged []string
+	for _, item := range items {
+		switch {
+		case item.status == "updated" || item.status == "created":
+			updated = append(updated, item.label)
+		case item.status == "skipped":
+			entry := item.label
+			if item.reason != "" {
+				entry += fmt.Sprintf(" (%s)", item.reason)
+			}
+			skipped = append(skipped, entry)
+		case item.status == "unchanged":
+			unchanged = append(unchanged, item.label)
+		}
+	}
+
+	var lines []string
+	if len(updated) > 0 {
+		lines = append(lines, fmt.Sprintf("  Refreshed: %s", strings.Join(updated, ", ")))
+	}
+	if len(skipped) > 0 {
+		lines = append(lines, fmt.Sprintf("  Skipped: %s", strings.Join(skipped, ", ")))
+	}
+	if len(unchanged) > 0 {
+		lines = append(lines, fmt.Sprintf("  Up to date: %s", strings.Join(unchanged, ", ")))
+	}
+	if len(lines) == 0 {
+		return "  nothing to refresh"
+	}
+	return strings.Join(lines, "\n")
 }
 
 func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
@@ -114,13 +152,6 @@ func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
 		Managed: result.Managed,
 		Reason:  result.Reason,
 	}
-}
-
-func formatQuickstartRefreshItemSummary(item quickstartRefreshItem) string {
-	if item.Reason == "" {
-		return item.Status
-	}
-	return fmt.Sprintf("%s(%s)", item.Status, item.Reason)
 }
 
 func renderQuickstartGuidance(workspaceRoot string) (string, error) {

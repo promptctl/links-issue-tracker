@@ -1269,7 +1269,7 @@ func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	// Create the database without running migration.
-	if err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
 	seed, err := openStoreConnection(doltRoot, "test-workspace-id")
