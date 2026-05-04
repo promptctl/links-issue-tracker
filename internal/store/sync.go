@@ -55,7 +55,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (*Sto
 		return nil, err
 	}
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	if err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	return openStoreConnection(doltRootDir, workspaceID)

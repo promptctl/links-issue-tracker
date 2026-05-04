@@ -25,35 +25,54 @@ func renderLinksAgentsSection(workspaceRoot string) (string, error) {
 	return templates.Load(templates.AgentsSectionTemplateName, workspaceRoot)
 }
 
-// ensureLinksAgentsSection is the single enforcer for AGENTS.md updates:
+// writeManagedFile writes a managed marker-delimited section to filename.
+// For new files, headerPrefix is prepended before the section.
 // lit only owns the content between the BEGIN/END markers; everything else
 // in the file is the user's and is preserved across installs and refreshes.
-// [LAW:single-enforcer] All AGENTS.md writes go through this one function.
-func ensureLinksAgentsSection(rootDir string) (agentsInstallResult, error) {
-	agentsPath := filepath.Join(rootDir, "AGENTS.md")
-	section, err := renderLinksAgentsSection(rootDir)
-	if err != nil {
-		return agentsInstallResult{}, fmt.Errorf("load AGENTS section template: %w", err)
-	}
-	content, err := os.ReadFile(agentsPath)
+func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, endMarker string) (agentsInstallResult, error) {
+	filePath := filepath.Join(rootDir, filename)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		if !errors.Is(err, os.ErrNotExist) {
-			return agentsInstallResult{}, fmt.Errorf("read AGENTS.md: %w", err)
+			return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
 		}
-		initial := "# AGENTS\n\n" + section
-		if writeErr := os.WriteFile(agentsPath, []byte(initial), 0o644); writeErr != nil {
-			return agentsInstallResult{}, fmt.Errorf("write AGENTS.md: %w", writeErr)
+		initial := headerPrefix + section
+		if writeErr := os.WriteFile(filePath, []byte(initial), 0o644); writeErr != nil {
+			return agentsInstallResult{}, fmt.Errorf("write %s: %w", filename, writeErr)
 		}
-		return agentsInstallResult{Path: agentsPath, Created: true, Changed: true}, nil
+		return agentsInstallResult{Path: filePath, Created: true, Changed: true}, nil
 	}
 
-	updated, changed := upsertManagedSection(string(content), section, linksAgentsBeginMarker, linksAgentsEndMarker)
+	updated, changed := upsertManagedSection(string(content), section, beginMarker, endMarker)
 	if !changed {
-		return agentsInstallResult{Path: agentsPath, Created: false, Changed: false}, nil
+		return agentsInstallResult{Path: filePath, Created: false, Changed: false}, nil
 	}
-	if err := os.WriteFile(agentsPath, []byte(updated), 0o644); err != nil {
-		return agentsInstallResult{}, fmt.Errorf("write AGENTS.md: %w", err)
+	if err := os.WriteFile(filePath, []byte(updated), 0o644); err != nil {
+		return agentsInstallResult{}, fmt.Errorf("write %s: %w", filename, err)
 	}
-	return agentsInstallResult{Path: agentsPath, Created: false, Changed: true}, nil
+	return agentsInstallResult{Path: filePath, Created: false, Changed: true}, nil
+}
+
+// ensureLinksAgentFiles is the single enforcer for agent config file updates
+// (AGENTS.md and CLAUDE.md). lit only owns the content between the BEGIN/END
+// markers; everything else in each file is the user's and is preserved.
+// [LAW:single-enforcer] All agent config file writes go through this one function.
+func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude agentsInstallResult, err error) {
+	section, err := renderLinksAgentsSection(rootDir)
+	if err != nil {
+		return agentsInstallResult{}, agentsInstallResult{}, fmt.Errorf("load agent section template: %w", err)
+	}
+
+	agentsResult, err := writeManagedFile(rootDir, "AGENTS.md", "# AGENTS\n\n", section, linksAgentsBeginMarker, linksAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, agentsInstallResult{}, err
+	}
+
+	claudeResult, err := writeManagedFile(rootDir, "CLAUDE.md", "", section, linksAgentsBeginMarker, linksAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, agentsInstallResult{}, err
+	}
+
+	return agentsResult, claudeResult, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
@@ -14,8 +15,10 @@ type initReport struct {
 	Status       string `json:"status"`
 	WorkspaceID  string `json:"workspace_id"`
 	DatabasePath string `json:"database_path"`
+	DBCreated    bool   `json:"db_created"`
 	Hooks        string `json:"hooks"`
 	Agents       string `json:"agents"`
+	Claude       string `json:"claude"`
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -30,7 +33,8 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return errors.New("usage: lit init [--json] [--skip-hooks] [--skip-agents]")
 	}
 
-	if err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID); err != nil {
+	dbCreated, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
 		return err
 	}
 
@@ -38,8 +42,10 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		Status:       "initialized",
 		WorkspaceID:  ws.WorkspaceID,
 		DatabasePath: ws.DatabasePath,
+		DBCreated:    dbCreated,
 		Hooks:        "skipped",
 		Agents:       "skipped",
+		Claude:       "skipped",
 	}
 
 	if !*skipHooks {
@@ -55,7 +61,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	}
 
 	if !*skipAgents {
-		agentsResult, agentsErr := ensureLinksAgentsSection(ws.RootDir)
+		agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(ws.RootDir)
 		if agentsErr != nil {
 			return agentsErr
 		}
@@ -66,19 +72,69 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		} else {
 			report.Agents = "unchanged"
 		}
+		if claudeResult.Created {
+			report.Claude = "created"
+		} else if claudeResult.Changed {
+			report.Claude = "updated"
+		} else {
+			report.Claude = "unchanged"
+		}
 	}
 
 	return printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
 		payload := v.(initReport)
-		_, printErr := fmt.Fprintf(
-			w,
-			"%s workspace=%s db=%s hooks=%s agents=%s\n",
-			payload.Status,
-			payload.WorkspaceID,
-			payload.DatabasePath,
-			payload.Hooks,
-			payload.Agents,
-		)
-		return printErr
+		return writeInitHumanOutput(w, payload)
 	})
+}
+
+type labeledStatus struct {
+	label  string
+	status string
+	reason string
+}
+
+func writeInitHumanOutput(w io.Writer, report initReport) error {
+	items := []labeledStatus{
+		{"pre-push hook", report.Hooks, ""},
+		{"AGENTS.md", report.Agents, ""},
+		{"CLAUDE.md", report.Claude, ""},
+	}
+
+	var updated, skipped, unchanged []string
+	for _, item := range items {
+		switch item.status {
+		case "created", "updated", "installed":
+			updated = append(updated, item.label)
+		case "skipped":
+			skipped = append(skipped, item.label)
+		case "unchanged":
+			unchanged = append(unchanged, item.label)
+		}
+	}
+
+	if report.DBCreated {
+		if _, err := fmt.Fprintf(w, "Initialized lit workspace\n"); err != nil {
+			return err
+		}
+	} else {
+		if _, err := fmt.Fprintf(w, "lit workspace already initialized\n"); err != nil {
+			return err
+		}
+	}
+	if len(updated) > 0 {
+		if _, err := fmt.Fprintf(w, "  Updated: %s\n", strings.Join(updated, ", ")); err != nil {
+			return err
+		}
+	}
+	if len(unchanged) > 0 {
+		if _, err := fmt.Fprintf(w, "  Up to date: %s\n", strings.Join(unchanged, ", ")); err != nil {
+			return err
+		}
+	}
+	if len(skipped) > 0 {
+		if _, err := fmt.Fprintf(w, "  Skipped: %s\n", strings.Join(skipped, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }

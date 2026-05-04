@@ -153,7 +153,7 @@ type TransitionIssueInput struct {
 }
 
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
-	if err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
@@ -188,9 +188,9 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*
 	return s, nil
 }
 
-func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) error {
+func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
-		return err
+		return false, err
 	}
 	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
 }
@@ -1661,28 +1661,29 @@ func nullableString(value string) any {
 	return value
 }
 
-func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) error {
+func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {
 	root := filepath.Clean(doltRootDir)
+	created := !dirExists(root)
 	if err := os.MkdirAll(root, 0o755); err != nil {
-		return fmt.Errorf("create dolt root dir: %w", err)
+		return false, fmt.Errorf("create dolt root dir: %w", err)
 	}
 	db, err := sql.Open(doltDriverName, buildDoltDSN(root, workspaceID, false))
 	if err != nil {
-		return fmt.Errorf("open dolt bootstrap: %w", err)
+		return false, fmt.Errorf("open dolt bootstrap: %w", err)
 	}
 	defer db.Close()
 	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
-		return fmt.Errorf("create dolt database: %w", err)
+		return false, fmt.Errorf("create dolt database: %w", err)
 	}
 	db, err = sql.Open(doltDriverName, buildDoltDSN(root, workspaceID, true))
 	if err != nil {
-		return fmt.Errorf("open dolt bootstrap database: %w", err)
+		return false, fmt.Errorf("open dolt bootstrap database: %w", err)
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return err
+		return false, err
 	}
-	return nil
+	return created, nil
 }
 
 func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
@@ -1735,4 +1736,9 @@ func buildDoltDSN(doltRootDir, workspaceID string, includeDatabase bool) string 
 		query.Set("database", doltDatabaseName)
 	}
 	return "file://" + filepath.ToSlash(filepath.Clean(doltRootDir)) + "?" + query.Encode()
+}
+
+func dirExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

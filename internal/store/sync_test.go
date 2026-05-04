@@ -98,7 +98,7 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 		t.Fatalf("unexpected dolt status before EnsureDatabase: %q", statusBefore)
 	}
 
-	if err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
+	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
 
