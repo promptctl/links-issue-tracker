@@ -2,7 +2,6 @@ package query
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -44,12 +43,6 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	filter.SearchTerms = append(filter.SearchTerms, incoming.SearchTerms...)
 	filter.IDs = append(filter.IDs, incoming.IDs...)
 	filter.LabelsAll = append(filter.LabelsAll, incoming.LabelsAll...)
-	if err := mergeIntPointer("priority-min", &filter.PriorityMin, incoming.PriorityMin); err != nil {
-		return store.ListIssuesFilter{}, err
-	}
-	if err := mergeIntPointer("priority-max", &filter.PriorityMax, incoming.PriorityMax); err != nil {
-		return store.ListIssuesFilter{}, err
-	}
 	if err := mergeBoolPointer("has-comments", &filter.HasComments, incoming.HasComments); err != nil {
 		return store.ListIssuesFilter{}, err
 	}
@@ -98,10 +91,6 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 		default:
 			return fmt.Errorf("unsupported has: filter %q", term)
 		}
-	case strings.HasPrefix(term, "priority"):
-		return applyPriority(filter, strings.TrimPrefix(term, "priority"))
-	case strings.HasPrefix(term, "p:") || strings.HasPrefix(term, "p>") || strings.HasPrefix(term, "p<"):
-		return applyPriority(filter, strings.TrimPrefix(term, "p"))
 	case strings.HasPrefix(term, "updated"):
 		return applyTimeTerm(filter, strings.TrimPrefix(term, "updated"))
 	default:
@@ -156,30 +145,6 @@ func mergeSlice(base, incoming []string) []string {
 		}
 	}
 	return result
-}
-
-func applyPriority(filter *store.ListIssuesFilter, expr string) error {
-	comparator, value, err := splitComparator(expr)
-	if err != nil {
-		return fmt.Errorf("parse priority term %q: %w", "priority"+expr, err)
-	}
-	parsed, err := strconv.Atoi(value)
-	if err != nil {
-		return fmt.Errorf("priority must be an integer")
-	}
-	switch comparator {
-	case ":":
-		if err := mergeIntPointer("priority-min", &filter.PriorityMin, &parsed); err != nil {
-			return err
-		}
-		return mergeIntPointer("priority-max", &filter.PriorityMax, &parsed)
-	case ">=", ">":
-		return mergeIntPointer("priority-min", &filter.PriorityMin, &parsed)
-	case "<=", "<":
-		return mergeIntPointer("priority-max", &filter.PriorityMax, &parsed)
-	default:
-		return fmt.Errorf("unsupported priority comparator %q", comparator)
-	}
 }
 
 func applyTimeTerm(filter *store.ListIssuesFilter, expr string) error {
@@ -254,29 +219,12 @@ func tokenize(input string) ([]string, error) {
 }
 
 func validateFilter(filter store.ListIssuesFilter) error {
-	if filter.PriorityMin != nil && filter.PriorityMax != nil && *filter.PriorityMin > *filter.PriorityMax {
-		return fmt.Errorf("priority-min cannot be greater than priority-max")
-	}
 	if filter.UpdatedAfter != nil && filter.UpdatedBefore != nil && filter.UpdatedAfter.After(*filter.UpdatedBefore) {
 		return fmt.Errorf("updated-after cannot be greater than updated-before")
 	}
 	return nil
 }
 
-
-func mergeIntPointer(name string, dst **int, incoming *int) error {
-	if incoming == nil {
-		return nil
-	}
-	if *dst != nil && **dst != *incoming {
-		return fmt.Errorf("conflicting %s filters %d and %d", name, **dst, *incoming)
-	}
-	if *dst == nil {
-		value := *incoming
-		*dst = &value
-	}
-	return nil
-}
 
 func mergeBoolPointer(name string, dst **bool, incoming *bool) error {
 	if incoming == nil {

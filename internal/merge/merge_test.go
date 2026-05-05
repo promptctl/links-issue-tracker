@@ -31,7 +31,7 @@ func jsonRoundTripIssue(t *testing.T, issue model.Issue) model.Issue {
 }
 
 func TestThreeWayDetectsPerIssueConflict(t *testing.T) {
-	base := model.Export{Issues: []model.Issue{issueWithStatus(t, model.Issue{ID: "i1", Title: "issue", Priority: 2, IssueType: "task", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}, model.StateOpen)}}
+	base := model.Export{Issues: []model.Issue{issueWithStatus(t, model.Issue{ID: "i1", Title: "issue", Priority: 0, IssueType: "task", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}, model.StateOpen)}}
 	local := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
 	remote := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
 	local.Issues[0].Title = "local-change"
@@ -75,7 +75,7 @@ func TestThreeWayComparesJSONUnmarshaledEpicData(t *testing.T) {
 
 func TestIssueEqualTreatsNilAndEmptyLabelsAsEquivalent(t *testing.T) {
 	now := time.Now().UTC()
-	base := issueWithStatus(t, model.Issue{ID: "i1", Title: "label test", Priority: 2, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
+	base := issueWithStatus(t, model.Issue{ID: "i1", Title: "label test", Priority: 0, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
 	withNil := base
 	withNil.Labels = nil
 	withEmpty := base
@@ -90,8 +90,8 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	base := model.Export{
 		WorkspaceID: "ws",
 		Issues: []model.Issue{
-			issueWithStatus(t, model.Issue{ID: "i1", Title: "one", Priority: 2, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen),
-			issueWithStatus(t, model.Issue{ID: "i2", Title: "two", Priority: 2, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen),
+			issueWithStatus(t, model.Issue{ID: "i1", Title: "one", Priority: 0, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen),
+			issueWithStatus(t, model.Issue{ID: "i2", Title: "two", Priority: 0, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen),
 		},
 	}
 	local := model.Export{WorkspaceID: base.WorkspaceID, Issues: append([]model.Issue(nil), base.Issues...)}

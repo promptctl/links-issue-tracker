@@ -226,7 +226,7 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 2})
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}

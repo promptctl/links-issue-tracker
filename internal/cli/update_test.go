@@ -16,7 +16,7 @@ func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
-		Title: "Guidance test", Topic: "guidance", IssueType: "task", Priority: 2,
+		Title: "Guidance test", Topic: "guidance", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -47,7 +47,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
-		Title: "Guidance apply test", Topic: "guidance", IssueType: "task", Priority: 2,
+		Title: "Guidance apply test", Topic: "guidance", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -89,7 +89,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		Title:     "Leaf work",
 		Topic:     "lifecycle",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 		ParentID:  epic.ID,
 	})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 		Title:     "Open child",
 		Topic:     "show",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 		ParentID:  epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue(open child) error = %v", err)
@@ -141,7 +141,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 		Title:     "Closed child",
 		Topic:     "show",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 		ParentID:  epic.ID,
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 		Title:     "Update status",
 		Topic:     "status",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -222,7 +222,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 		Title:     "Update fields",
 		Topic:     "fields",
 		IssueType: "task",
-		Priority:  3,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -257,7 +257,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
-		"--priority", "2",
+		"--priority", "1",
 		"--prompt", "Render at 1024x768 and verify no NaNs.",
 		"--json",
 	}); err != nil {
@@ -292,7 +292,7 @@ func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 		Title:     "Validation",
 		Topic:     "validation",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -313,6 +313,7 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix:    "test",
 		Title:     "Original epic title",
 		Topic:     "container-update",
 		IssueType: "epic",
@@ -361,7 +362,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 		Title:     "Empty status",
 		Topic:     "status",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)

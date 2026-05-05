@@ -19,7 +19,7 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 		Title:     "Renderer cache invalidation",
 		Topic:     "renderer",
 		IssueType: "task",
-		Priority:  2,
+		Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
@@ -70,7 +70,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 		Title:     "Sync flow tightening",
 		Topic:     "sync",
 		IssueType: "task",
-		Priority:  2,
+		Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)

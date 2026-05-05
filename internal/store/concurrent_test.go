@@ -36,7 +36,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 				Title:     fmt.Sprintf("Concurrent issue %d", i),
 				Topic:     "concurrent",
 				IssueType: "task",
-				Priority:  i % 5,
+				Priority:  i % 2,
 				Labels:    []string{"concurrent-test"},
 			})
 			if err != nil {
@@ -107,7 +107,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 			Title:     fmt.Sprintf("Pre-create %d", i),
 			Topic:     "mixed",
 			IssueType: "task",
-			Priority:  2,
+			Priority:  0,
 			Labels:    []string{"mixed-test"},
 		})
 		if err != nil {
@@ -160,7 +160,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	// Plan: update priorities on pre-created issues.
 	for i, id := range issues[5:] {
-		newPriority := (i + 1) % 5
+		newPriority := (i + 1) % 2
 		priorityPlan[id] = newPriority
 		eg.Go(func() error {
 			p := newPriority

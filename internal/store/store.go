@@ -130,8 +130,6 @@ type ListIssuesFilter struct {
 	IssueTypes        []string
 	ExcludeIssueTypes []string
 	Assignees         []string
-	PriorityMin       *int
-	PriorityMax       *int
 	SearchTerms       []string
 	IDs               []string
 	HasComments       *bool
@@ -447,14 +445,6 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 		if len(placeholders) > 0 {
 			where = append(where, "i.assignee IN ("+strings.Join(placeholders, ",")+")")
 		}
-	}
-	if filter.PriorityMin != nil {
-		where = append(where, "i.priority >= ?")
-		args = append(args, *filter.PriorityMin)
-	}
-	if filter.PriorityMax != nil {
-		where = append(where, "i.priority <= ?")
-		args = append(args, *filter.PriorityMax)
 	}
 	if filter.UpdatedAfter != nil {
 		where = append(where, "i.updated_at >= ?")
@@ -1608,8 +1598,8 @@ func validateIssueType(issueType string) (string, error) {
 }
 
 func validatePriority(priority int) error {
-	if priority < 0 || priority > 4 {
-		return errors.New("priority must be between 0 and 4")
+	if priority != model.PriorityNormal && priority != model.PriorityUrgent {
+		return fmt.Errorf("priority must be %d (normal) or %d (urgent)", model.PriorityNormal, model.PriorityUrgent)
 	}
 	return nil
 }
