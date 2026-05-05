@@ -23,6 +23,35 @@ const (
 	Closed     State = "closed"
 )
 
+// Display renders the state for human-readable error messages and CLI output.
+// Wire formats and storage continue to use the underscored State value.
+func (s State) Display() string {
+	switch s {
+	case InProgress:
+		return "in progress"
+	default:
+		return string(s)
+	}
+}
+
+// ActionTargetState returns the state that successfully applying action would
+// produce. The second return reports whether action is a known status action.
+// [LAW:one-source-of-truth] Action→target mapping lives in one table consulted
+// by both transition and idempotent-call diagnostics, instead of being inferred
+// independently at each callsite.
+func ActionTargetState(action ActionName) (State, bool) {
+	switch action {
+	case ActionStart:
+		return InProgress, true
+	case ActionDone, ActionClose:
+		return Closed, true
+	case ActionReopen:
+		return Open, true
+	default:
+		return "", false
+	}
+}
+
 type Progress struct {
 	Open       int `json:"open"`
 	InProgress int `json:"in_progress"`

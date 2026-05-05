@@ -29,6 +29,54 @@ func TestApplyRefusesContainerEvenWhenMembersAreActionable(t *testing.T) {
 	}
 }
 
+func TestApplyIdempotentReportsAlreadyInState(t *testing.T) {
+	tests := []struct {
+		name    string
+		state   State
+		action  ActionName
+		wantErr string
+	}{
+		{name: "start on in_progress", state: StateInProgress, action: ActionStart, wantErr: "issue is already in progress"},
+		{name: "done on closed", state: StateClosed, action: ActionDone, wantErr: "issue is already closed"},
+		{name: "close on closed", state: StateClosed, action: ActionClose, wantErr: "issue is already closed"},
+		{name: "reopen on open", state: StateOpen, action: ActionReopen, wantErr: "issue is already open"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, tt.state)
+			_, err := leaf.Apply(tt.action, "tester", "")
+			if err == nil || err.Error() != tt.wantErr {
+				t.Fatalf("Apply(%s on %s) error = %v, want %q", tt.action, tt.state, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestApplyNonIdempotentInvalidTransitionKeepsLegacyMessage(t *testing.T) {
+	// reopen on in_progress is invalid but NOT idempotent — target state of
+	// reopen is Open, not InProgress — so the legacy "no X action available"
+	// message is preserved. Same for done on open and start on closed.
+	tests := []struct {
+		name   string
+		state  State
+		action ActionName
+	}{
+		{name: "reopen on in_progress", state: StateInProgress, action: ActionReopen},
+		{name: "done on open", state: StateOpen, action: ActionDone},
+		{name: "start on closed", state: StateClosed, action: ActionStart},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, tt.state)
+			_, err := leaf.Apply(tt.action, "tester", "")
+			want := "no " + string(tt.action) + " action available on this issue"
+			if err == nil || err.Error() != want {
+				t.Fatalf("Apply(%s on %s) error = %v, want %q", tt.action, tt.state, err, want)
+			}
+		})
+	}
+}
+
 func TestIssueJSONRoundTripEpicRequiresStoreHydration(t *testing.T) {
 	epic, err := HydrateAllOf(Issue{
 		ID:        "epic-1",

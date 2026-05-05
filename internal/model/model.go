@@ -129,14 +129,28 @@ func (i Issue) Apply(action ActionName, actor string, reason string) (Issue, err
 	if !ok {
 		return Issue{}, fmt.Errorf("no %s action available on this issue", action)
 	}
-	available := false
-	for _, candidate := range actionable.AvailableActions() {
+	available := actionable.AvailableActions()
+	matched := false
+	for _, candidate := range available {
 		if candidate == lifecycle.ActionName(action) {
-			available = true
+			matched = true
 			break
 		}
 	}
-	if !available {
+	if !matched {
+		// [LAW:dataflow-not-control-flow] The (currentState, targetState) pair
+		// is data; the message is a function of that pair. Idempotent calls —
+		// where the issue is already in the action's target state — produce
+		// the "already X" diagnostic. Non-idempotent rejections (and container
+		// lifecycles whose AvailableActions is empty) keep the original
+		// message; gating on len(available)>0 prevents container types (epics,
+		// whose state is derived from children) from receiving idempotent
+		// wording for an action that conceptually doesn't apply to them.
+		if len(available) > 0 {
+			if target, known := lifecycle.ActionTargetState(lifecycle.ActionName(action)); known && root.State() == target {
+				return Issue{}, fmt.Errorf("issue is already %s", root.State().Display())
+			}
+		}
 		return Issue{}, fmt.Errorf("no %s action available on this issue", action)
 	}
 	next, err := actionable.Apply(lifecycle.ActionName(action), actor, reason)
