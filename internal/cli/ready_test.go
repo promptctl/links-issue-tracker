@@ -29,9 +29,6 @@ func newTestCLIApp(t *testing.T) *app.App {
 	if err != nil {
 		t.Fatalf("store.Open() error = %v", err)
 	}
-	if err := st.EnsureIssuePrefix(ctx, "test"); err != nil {
-		t.Fatalf("EnsureIssuePrefix() error = %v", err)
-	}
 	t.Cleanup(func() {
 		_ = st.Close()
 	})
@@ -83,6 +80,9 @@ func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {
 
 func (h readyTestHarness) createIssue(input store.CreateIssueInput) model.Issue {
 	h.t.Helper()
+	if input.Prefix == "" {
+		input.Prefix = h.ap.Workspace.IssuePrefix
+	}
 	issue, err := h.ap.Store.CreateIssue(h.ctx, input)
 	if err != nil {
 		h.t.Fatalf("CreateIssue(%q) error = %v", input.Title, err)
@@ -171,14 +171,14 @@ func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (
 func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	openA := h.createIssue(store.CreateIssueInput{
+	openA := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Open issue A",
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  2,
 		Assignee:  "alice",
 	})
-	openB := h.createIssue(store.CreateIssueInput{
+	openB := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Open issue B",
 		Topic:     "bravo",
 		IssueType: "bug",
@@ -187,7 +187,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	})
 	h.addDependency(openB.ID, openA.ID)
 
-	closed := h.createIssue(store.CreateIssueInput{
+	closed := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Already done",
 		Topic:     "closed",
 		IssueType: "task",
@@ -224,13 +224,13 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	plain := h.createIssue(store.CreateIssueInput{
+	plain := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Ready leaf",
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  2,
 	})
-	flagged := h.createIssue(store.CreateIssueInput{
+	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Needs design first",
 		Topic:     "alpha",
 		IssueType: "task",
@@ -258,14 +258,14 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	h.createIssue(store.CreateIssueInput{
+	h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Alice old",
 		Topic:     "alice",
 		IssueType: "task",
 		Priority:  1,
 		Assignee:  "alice",
 	})
-	h.createIssue(store.CreateIssueInput{
+	h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Bob task",
 		Topic:     "bob",
 		IssueType: "task",
@@ -287,7 +287,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("assignee")
 
-	issue := h.createIssue(store.CreateIssueInput{
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:       "Needs assignee",
 		Topic:       "assignee",
 		IssueType:   "task",
@@ -334,7 +334,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 func TestRunReadyShowsInProgressSection(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Claimed work",
 		Topic:     "claimed",
 		IssueType: "task",
@@ -364,7 +364,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Stale work",
 		Topic:     "stale",
 		IssueType: "task",
@@ -393,7 +393,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Fresh work",
 		Topic:     "fresh",
 		IssueType: "task",
@@ -424,13 +424,13 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// second depends on first — first is ranked above second, no inversion.
 	// But if we make first depend on second (second blocks first), second has
 	// worse rank than first — that's a rank inversion.
-	first := h.createIssue(store.CreateIssueInput{
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
@@ -468,13 +468,13 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 
 	// first is created first (better rank), second is created second (worse rank).
 	// second depends on first — first (dependency) has better rank → no inversion.
-	first := h.createIssue(store.CreateIssueInput{
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
@@ -499,13 +499,13 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	first := h.createIssue(store.CreateIssueInput{
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "First issue",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Second issue",
 		Topic:     "second",
 		IssueType: "task",
@@ -526,7 +526,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 func TestRunReadyPreambleGoesToStderr(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	h.createIssue(store.CreateIssueInput{
+	h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Some task",
 		Topic:     "task",
 		IssueType: "task",
@@ -548,10 +548,10 @@ func TestRunReadyPreambleGoesToStderr(t *testing.T) {
 func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	a := h.createIssue(store.CreateIssueInput{
+	a := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1,
 	})
-	b := h.createIssue(store.CreateIssueInput{
+	b := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 2,
 	})
 
@@ -572,10 +572,10 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	blocker := h.createIssue(store.CreateIssueInput{
+	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
 	})
-	dependent := h.createIssue(store.CreateIssueInput{
+	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 2,
 	})
 	h.addDependency(dependent.ID, blocker.ID)
@@ -590,7 +590,7 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	for i := 0; i < 12; i++ {
-		h.createIssue(store.CreateIssueInput{
+		h.createIssue(store.CreateIssueInput{Prefix: "test", 
 			Title:     fmt.Sprintf("Task %d", i),
 			Topic:     fmt.Sprintf("topic-%02d", i),
 			IssueType: "task",
@@ -616,20 +616,20 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 func TestRunReadyExcludesEpics(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(store.CreateIssueInput{
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Epic container",
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leafTask := h.createIssue(store.CreateIssueInput{
+	leafTask := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Leaf task under epic",
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standaloneBug := h.createIssue(store.CreateIssueInput{
+	standaloneBug := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Standalone bug",
 		Topic:     "bug-topic",
 		IssueType: "bug",
@@ -663,32 +663,32 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 func TestRunReadyCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(store.CreateIssueInput{
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Integrate foo subsystem end-to-end",
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leaf := h.createIssue(store.CreateIssueInput{
+	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Wire up the frobnicator",
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standalone := h.createIssue(store.CreateIssueInput{
+	standalone := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Standalone bug",
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
 	})
-	nonEpicParent := h.createIssue(store.CreateIssueInput{
+	nonEpicParent := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Parent feature",
 		Topic:     "feat-topic",
 		IssueType: "feature",
 		Priority:  1,
 	})
-	childOfFeature := h.createIssue(store.CreateIssueInput{
+	childOfFeature := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Feature subtask",
 		Topic:     "feat-topic",
 		IssueType: "task",
@@ -743,33 +743,33 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epicA := h.createIssue(store.CreateIssueInput{
+	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Epic A",
 		Topic:     "epic-a",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	epicB := h.createIssue(store.CreateIssueInput{
+	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Epic B",
 		Topic:     "epic-b",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leafA1 := h.createIssue(store.CreateIssueInput{
+	leafA1 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "A.1",
 		Topic:     "epic-a",
 		IssueType: "task",
 		ParentID:  epicA.ID,
 		Priority:  1,
 	})
-	leafB1 := h.createIssue(store.CreateIssueInput{
+	leafB1 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "B.1",
 		Topic:     "epic-b",
 		IssueType: "task",
 		ParentID:  epicB.ID,
 		Priority:  1,
 	})
-	leafA2 := h.createIssue(store.CreateIssueInput{
+	leafA2 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "A.2",
 		Topic:     "epic-a",
 		IssueType: "task",

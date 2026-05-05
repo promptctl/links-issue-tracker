@@ -15,7 +15,7 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Renderer cache invalidation",
 		Topic:     "renderer",
 		IssueType: "task",
@@ -66,7 +66,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Sync flow tightening",
 		Topic:     "sync",
 		IssueType: "task",

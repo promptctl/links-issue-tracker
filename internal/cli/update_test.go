@@ -15,7 +15,7 @@ func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title: "Guidance test", Topic: "guidance", IssueType: "task", Priority: 2,
 	})
 	if err != nil {
@@ -46,7 +46,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title: "Guidance apply test", Topic: "guidance", IssueType: "task", Priority: 2,
 	})
 	if err != nil {
@@ -76,7 +76,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Epic container",
 		Topic:     "lifecycle",
 		IssueType: "epic",
@@ -85,7 +85,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Leaf work",
 		Topic:     "lifecycle",
 		IssueType: "task",
@@ -119,7 +119,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Epic container",
 		Topic:     "show",
 		IssueType: "epic",
@@ -128,7 +128,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Open child",
 		Topic:     "show",
 		IssueType: "task",
@@ -137,7 +137,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("CreateIssue(open child) error = %v", err)
 	}
-	closedChild, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	closedChild, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Closed child",
 		Topic:     "show",
 		IssueType: "task",
@@ -175,7 +175,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Update status",
 		Topic:     "status",
 		IssueType: "task",
@@ -218,7 +218,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Update fields",
 		Topic:     "fields",
 		IssueType: "task",
@@ -288,7 +288,7 @@ func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Validation",
 		Topic:     "validation",
 		IssueType: "task",
@@ -312,7 +312,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Empty status",
 		Topic:     "status",
 		IssueType: "task",

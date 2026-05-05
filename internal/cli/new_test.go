@@ -17,7 +17,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
 		Title:     "Renderer cleanup",
 		Topic:     "renderer",
 		IssueType: "epic",

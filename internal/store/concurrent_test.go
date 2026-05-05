@@ -32,7 +32,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	for i := range goroutines {
 		i := i
 		eg.Go(func() error {
-			issue, err := st.CreateIssue(egCtx, CreateIssueInput{
+			issue, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test", 
 				Title:     fmt.Sprintf("Concurrent issue %d", i),
 				Topic:     "concurrent",
 				IssueType: "task",
@@ -103,7 +103,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	const preCreateCount = 10
 	issues := make([]string, preCreateCount)
 	for i := range issues {
-		issue, err := st.CreateIssue(ctx, CreateIssueInput{
+		issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
 			Title:     fmt.Sprintf("Pre-create %d", i),
 			Topic:     "mixed",
 			IssueType: "task",
@@ -133,7 +133,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	for i := range newCount {
 		eg.Go(func() error {
-			_, err := st.CreateIssue(egCtx, CreateIssueInput{
+			_, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test", 
 				Title:     fmt.Sprintf("New issue %d", i),
 				Topic:     "mixed",
 				IssueType: "task",

@@ -34,8 +34,8 @@ func (h readyTestHarness) runNextErr(args ...string) error {
 // leaf in the same composite-rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	first := h.createIssue(store.CreateIssueInput{Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
-	h.createIssue(store.CreateIssueInput{Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 2})
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
+	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 2})
 
 	got := h.runNextJSON()
 	if got.ID != first.ID {
@@ -48,11 +48,11 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 // `lit start` it again.
 func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	inProgress := h.createIssue(store.CreateIssueInput{Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
+	inProgress := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
 	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: inProgress.ID, Action: "start", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
-	openLeaf := h.createIssue(store.CreateIssueInput{Title: "Workable", Topic: "next", IssueType: "task", Priority: 2})
+	openLeaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 2})
 
 	got := h.runNextJSON()
 	if got.ID != openLeaf.ID {
@@ -66,10 +66,10 @@ func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 // so the assertion pins both "dependent skipped" and the exact expected pick.
 func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	blocker := h.createIssue(store.CreateIssueInput{Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1})
-	dependent := h.createIssue(store.CreateIssueInput{Title: "Dependent", Topic: "next", IssueType: "task", Priority: 2})
+	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1})
+	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 2})
 	h.addDependency(dependent.ID, blocker.ID)
-	h.createIssue(store.CreateIssueInput{Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 3})
+	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 3})
 
 	got := h.runNextJSON()
 	if got.ID == dependent.ID {
@@ -100,12 +100,12 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 	// epicA gets created first → composite rank places its leaves above epicB's.
-	epicA := h.createIssue(store.CreateIssueInput{Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Title: "A.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
-	a2 := h.createIssue(store.CreateIssueInput{Title: "A.2", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
+	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
+	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
 
-	epicB := h.createIssue(store.CreateIssueInput{Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(store.CreateIssueInput{Title: "B.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicB.ID})
 
 	// Start B.1 so epicB derives to in_progress; epicA stays open.
 	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: b1.ID, Action: "start", CreatedBy: "tester"}); err != nil {
@@ -122,7 +122,7 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	// B.1 is in_progress (skipped); there are no other open leaves under B.
 	// So --continue falls back to top-of-queue: A.1.
 	// Reframe the test: add B.2 so there is a workable leaf under B.
-	b2 := h.createIssue(store.CreateIssueInput{Title: "B.2", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	b2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.2", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicB.ID})
 	_ = a2
 
 	continuePick := h.runNextJSON("--continue")
@@ -135,8 +135,8 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 // pick — the bias is "prefer if available," not "filter to only".
 func TestRunNextContinueFallsBackWhenNoInProgressEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(store.CreateIssueInput{Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Title: "A.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
+	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 2, ParentID: epicA.ID})
 
 	got := h.runNextJSON("--continue")
 	if got.ID != a1.ID {
@@ -149,8 +149,8 @@ func TestRunNextContinueFallsBackWhenNoInProgressEpic(t *testing.T) {
 // scripts depend on it.
 func TestRunNextJSONShapeCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(store.CreateIssueInput{Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
-	leaf := h.createIssue(store.CreateIssueInput{Title: "Leaf", Topic: "next", IssueType: "task", Priority: 2, ParentID: epic.ID})
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
+	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 2, ParentID: epic.ID})
 
 	got := h.runNextJSON()
 	if got.ID != leaf.ID {

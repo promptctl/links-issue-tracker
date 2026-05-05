@@ -14,7 +14,7 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 		{LocalID: "t1", Title: "First", IssueType: "task", Topic: "tree", Priority: 2, Parent: "e1"},
 		{LocalID: "t2", Title: "Second", IssueType: "task", Topic: "tree", Priority: 2, Parent: "e1", DependsOn: []string{"t1"}},
 	}
-	result, err := st.ImportTree(ctx, specs)
+	result, err := st.ImportTree(ctx, "test", specs)
 	if err != nil {
 		t.Fatalf("ImportTree() error = %v", err)
 	}
@@ -51,7 +51,7 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 2, DependsOn: []string{"b"}},
 		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 2, DependsOn: []string{"a"}},
 	}
-	if _, err := st.ImportTree(ctx, specs); err == nil || !strings.Contains(err.Error(), "cycle") {
+	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "cycle") {
 		t.Fatalf("ImportTree(cycle) error = %v, want cycle error", err)
 	}
 }
@@ -62,7 +62,7 @@ func TestImportTreeRejectsMissingReference(t *testing.T) {
 	specs := []ImportTreeSpec{
 		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 2, Parent: "ghost"},
 	}
-	if _, err := st.ImportTree(ctx, specs); err == nil || !strings.Contains(err.Error(), "missing parent") {
+	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "missing parent") {
 		t.Fatalf("ImportTree(missing parent) error = %v, want missing-parent error", err)
 	}
 }
@@ -73,7 +73,7 @@ func TestImportTreeRejectsInvalidType(t *testing.T) {
 	specs := []ImportTreeSpec{
 		{LocalID: "a", Title: "A", IssueType: "ghost", Topic: "x", Priority: 2},
 	}
-	if _, err := st.ImportTree(ctx, specs); err == nil || !strings.Contains(err.Error(), "invalid type") {
+	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "invalid type") {
 		t.Fatalf("ImportTree(bad type) error = %v, want invalid-type error", err)
 	}
 }

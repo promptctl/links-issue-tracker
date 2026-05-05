@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -11,40 +10,6 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/issueid"
 )
-
-// [LAW:verifiable-goals] Remove the startup topic backfill once all pre-topic repositories
-// have crossed the sunset window on April 19, 2026.
-const legacyTopicMigrationRemoveBy = "2026-04-19"
-
-func (s *Store) EnsureIssuePrefix(ctx context.Context, prefix string) error {
-	normalized, err := issueid.NormalizeConfiguredPrefix(prefix)
-	if err != nil {
-		return fmt.Errorf("normalize issue prefix: %w", err)
-	}
-	changed, err := s.ensureMetaValue(ctx, "issue_prefix", normalized)
-	if err != nil {
-		return err
-	}
-	if !changed {
-		return nil
-	}
-	return s.commitWorkingSet(ctx, "set issue prefix")
-}
-
-func (s *Store) issuePrefixForTx(ctx context.Context, tx *sql.Tx) (string, error) {
-	var prefix string
-	if err := tx.QueryRowContext(ctx, `SELECT meta_value FROM meta WHERE meta_key = 'issue_prefix'`).Scan(&prefix); err != nil {
-		if err == sql.ErrNoRows {
-			return "", errors.New("issue prefix is not configured")
-		}
-		return "", fmt.Errorf("get issue prefix: %w", err)
-	}
-	normalized, err := issueid.NormalizeConfiguredPrefix(prefix)
-	if err != nil {
-		return "", fmt.Errorf("normalize stored issue prefix: %w", err)
-	}
-	return normalized, nil
-}
 
 func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, title string, description string, createdBy string, createdAt time.Time, parentID string) (string, error) {
 	if strings.TrimSpace(parentID) != "" {
@@ -54,7 +19,7 @@ func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, ti
 }
 
 func newTopLevelIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, title string, description string, createdBy string, createdAt time.Time) (string, error) {
-	baseLength, err := getAdaptiveIssueIDLength(ctx, tx, prefix)
+	baseLength, err := getAdaptiveIssueIDLength(ctx, tx)
 	if err != nil {
 		baseLength = 6
 	}
@@ -107,17 +72,22 @@ func newChildIssueID(ctx context.Context, tx *sql.Tx, parentID string) (string, 
 	return fmt.Sprintf("%s.%d", parentID, maxChildNumber+1), nil
 }
 
-func getAdaptiveIssueIDLength(ctx context.Context, tx *sql.Tx, prefix string) (int, error) {
-	numIssues, err := countTopLevelIssues(ctx, tx, prefix)
+// [LAW:dataflow-not-control-flow] Adaptive length is a pure function of the
+// top-level issue population. The prefix never gates the count: every issue in
+// a workspace shares one generation-time prefix, and even after a rename the
+// collision space we care about is "all top-level IDs in this DB" — counting
+// across prefixes is conservative (slightly longer hashes) and never wrong.
+func getAdaptiveIssueIDLength(ctx context.Context, tx *sql.Tx) (int, error) {
+	numIssues, err := countTopLevelIssues(ctx, tx)
 	if err != nil {
 		return 6, err
 	}
 	return issueid.ComputeAdaptiveLength(numIssues), nil
 }
 
-func countTopLevelIssues(ctx context.Context, tx *sql.Tx, prefix string) (int, error) {
+func countTopLevelIssues(ctx context.Context, tx *sql.Tx) (int, error) {
 	var count int
-	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id LIKE ? AND id NOT LIKE ?`, prefix+"-%", "%.%").Scan(&count); err != nil {
+	if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues WHERE id NOT LIKE ?`, "%.%").Scan(&count); err != nil {
 		return 0, err
 	}
 	return count, nil
