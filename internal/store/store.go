@@ -831,13 +831,16 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 
 // [LAW:dataflow-not-control-flow] ApplyUpdate is the single execution path for all lit update mutations.
 // Variability lives in the input values: empty TargetStatus = no transitions; empty Fields = no field write.
+// Empty TargetStatus must not be normalized — DefaultOpen("") would mutate the "no --status flag" signal
+// into a real "open" target, which then fails the transition lookup for containers (StatusValue == "").
 func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return model.Issue{}, err
 	}
-	normalizedTarget := model.DefaultOpen(in.TargetStatus)
-	in.TargetStatus = string(normalizedTarget)
+	if strings.TrimSpace(in.TargetStatus) != "" {
+		in.TargetStatus = string(model.DefaultOpen(in.TargetStatus))
+	}
 	actions, err := statusTransitionActionsForApplyUpdate(current.StatusValue(), in.TargetStatus)
 	if err != nil {
 		return model.Issue{}, err
