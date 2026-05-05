@@ -324,7 +324,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
-	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
+	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -356,7 +356,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
-	priority := fs.Int("priority", 2, "Priority 0..4 (lower is more important)")
+	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -366,7 +366,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--json]")
+		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--json]")
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -403,8 +403,6 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
 	issueType := fs.String("type", "", "Filter by issue type")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	priorityMin := fs.Int("priority-min", -1, "Minimum priority 0..4")
-	priorityMax := fs.Int("priority-max", -1, "Maximum priority 0..4")
 	search := fs.String("search", "", "Search title and description text")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
@@ -413,7 +411,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:in_progress type:task priority<=2 has:comments text")
+	queryExpr := fs.String("query", "", "Query language: status:in_progress type:task has:comments text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
@@ -442,14 +440,6 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 			return err
 		}
 		filter.SortBy = sortSpecs
-	}
-	if visited["priority-min"] {
-		value := *priorityMin
-		filter.PriorityMin = &value
-	}
-	if visited["priority-max"] {
-		value := *priorityMax
-		filter.PriorityMax = &value
 	}
 	if visited["search"] {
 		filter.SearchTerms = append(filter.SearchTerms, strings.TrimSpace(*search))
@@ -519,8 +509,6 @@ func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.A
 	issueType := fs.String("type", "", "Filter by issue type")
 	status := fs.String("status", "", "Filter by status: open|in_progress (closed excludes everything)")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
-	priorityMin := fs.Int("priority-min", -1, "Minimum priority 0..4")
-	priorityMax := fs.Int("priority-max", -1, "Maximum priority 0..4")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -528,23 +516,13 @@ func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.A
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--priority-min N] [--priority-max N] [--limit N] [--columns ...] [--json]")
+		return errors.New("usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]")
 	}
-	visited := map[string]bool{}
-	fs.Visit(func(f *pflag.Flag) { visited[f.Name] = true })
 	rf := readyFilter{
 		Assignee:  strings.TrimSpace(*assignee),
 		IssueType: strings.TrimSpace(*issueType),
 		Status:    strings.TrimSpace(*status),
 		Labels:    splitCSV(*labels),
-	}
-	if visited["priority-min"] {
-		v := *priorityMin
-		rf.PriorityMin = &v
-	}
-	if visited["priority-max"] {
-		v := *priorityMax
-		rf.PriorityMax = &v
 	}
 	annotated, _, err := gatherReadyAnnotated(ctx, ap, rf)
 	if err != nil {
@@ -570,12 +548,10 @@ func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.A
 // `lit next`. Empty fields mean "no narrowing"; the workable definition
 // (open/in_progress, leaves only) is layered on top by gatherReadyAnnotated.
 type readyFilter struct {
-	Assignee    string
-	IssueType   string
-	Status      string
-	Labels      []string
-	PriorityMin *int
-	PriorityMax *int
+	Assignee  string
+	IssueType string
+	Status    string
+	Labels    []string
 }
 
 // gatherReadyAnnotated runs the shared ready pipeline: list workable leaves,
@@ -605,8 +581,6 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 		IssueTypes:      toSlice(rf.IssueType),
 		Assignees:       toSlice(rf.Assignee),
 		LabelsAll:       rf.Labels,
-		PriorityMin:     rf.PriorityMin,
-		PriorityMax:     rf.PriorityMax,
 		IncludeArchived: false,
 		IncludeDeleted:  false,
 		Limit:           0,
@@ -634,6 +608,7 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 		return nil, nil, err
 	}
 	sortByCompositeRank(annotated, details)
+	sortByPriority(annotated)
 	sortByBlockingAnnotations(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
@@ -772,7 +747,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	description := fs.String("description", "", "Issue description")
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "", "Issue type: task|feature|bug|chore|epic")
-	priority := fs.Int("priority", 0, "Priority 0..4 (lower is more important)")
+	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	status := fs.String("status", "", "Status: open|in_progress|closed")
@@ -783,10 +758,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -1053,9 +1028,9 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 // JSON shape (see store.ImportTreeSpec):
 //
 //	[
-//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 2},
-//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 2},
-//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 2}
+//	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 0},
+//	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
+//	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
 //	]
 //
 // YAML support is a follow-up — the indirect yaml.v3 dep would have to become

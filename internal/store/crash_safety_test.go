@@ -41,7 +41,7 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 		Title:     "Post-panic issue",
 		Topic:     "crash",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue after panic error = %v", err)

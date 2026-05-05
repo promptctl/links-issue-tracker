@@ -175,7 +175,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 		Title:     "Open issue A",
 		Topic:     "alpha",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 		Assignee:  "alice",
 	})
 	openB := h.createIssue(store.CreateIssueInput{Prefix: "test", 
@@ -228,13 +228,13 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 		Title:     "Ready leaf",
 		Topic:     "alpha",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 	})
 	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Needs design first",
 		Topic:     "alpha",
 		IssueType: "task",
-		Priority:  2,
+		Priority:  0,
 		Labels:    []string{NeedsDesignLabel},
 	})
 
@@ -434,7 +434,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
-		Priority:  4,
+		Priority:  0,
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
@@ -478,7 +478,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
-		Priority:  4,
+		Priority:  0,
 	})
 	// second depends on first — first (dependency) ranked above second → no inversion.
 	h.addDependency(second.ID, first.ID)
@@ -509,7 +509,7 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 		Title:     "Second issue",
 		Topic:     "second",
 		IssueType: "task",
-		Priority:  4,
+		Priority:  0,
 	})
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
@@ -552,7 +552,7 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1,
 	})
 	b := h.createIssue(store.CreateIssueInput{Prefix: "test", 
-		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 2,
+		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0,
 	})
 
 	text := h.runReadyText()
@@ -576,7 +576,7 @@ func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
 		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
 	})
 	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test", 
-		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 2,
+		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 0,
 	})
 	h.addDependency(dependent.ID, blocker.ID)
 
@@ -594,7 +594,7 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 			Title:     fmt.Sprintf("Task %d", i),
 			Topic:     fmt.Sprintf("topic-%02d", i),
 			IssueType: "task",
-			Priority:  i % 5,
+			Priority:  i % 2,
 		})
 	}
 

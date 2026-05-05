@@ -267,6 +267,16 @@ func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]mo
 	})
 }
 
+// sortByPriority places urgent issues before normal issues, preserving the
+// existing ordering within each priority group via stable sort.
+// [LAW:dataflow-not-control-flow] Every issue flows through the same comparator;
+// the priority value decides ordering, not whether the comparator runs.
+func sortByPriority(issues []annotation.AnnotatedIssue) {
+	sort.SliceStable(issues, func(i, j int) bool {
+		return issues[i].Priority > issues[j].Priority
+	})
+}
+
 // sortByBlockingAnnotations places issues without blocking annotations first,
 // preserving the original store ordering within each group. The name is
 // deliberate: "readiness" is an interpretation a consumer applies over the

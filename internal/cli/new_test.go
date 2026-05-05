@@ -33,7 +33,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 		"--topic", "renderer",
 		"--parent", parent.ID,
 		"--type", "task",
-		"--priority", "2",
+		"--priority", "1",
 		"--json",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)

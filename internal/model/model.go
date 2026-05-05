@@ -48,6 +48,24 @@ var (
 	ContainerIssueTypes = []string{"epic"}
 )
 
+// Priority constants for the two-level priority system.
+// [LAW:one-source-of-truth] Canonical priority values live here; all other
+// references derive from these constants rather than repeating magic ints.
+const (
+	PriorityNormal = 0
+	PriorityUrgent = 1
+)
+
+// PriorityName returns the display name for a priority value.
+func PriorityName(p int) string {
+	switch p {
+	case PriorityUrgent:
+		return "urgent"
+	default:
+		return "normal"
+	}
+}
+
 func IsValidIssueType(issueType string) bool {
 	trimmed := strings.TrimSpace(issueType)
 	for _, valid := range ValidIssueTypes {

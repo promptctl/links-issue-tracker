@@ -21,11 +21,11 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epicB) error = %v", err)
 	}
-	child1, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child 1", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	child1, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child 1", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(child1) error = %v", err)
 	}
-	child2, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child 2", Topic: "dep", IssueType: "task", Priority: 2, ParentID: epicB.ID})
+	child2, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child 2", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(child2) error = %v", err)
 	}
@@ -78,7 +78,7 @@ func TestDepAddRmWithPositionalArgs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Blocked B", Topic: "dep", IssueType: "task", Priority: 2})
+	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Blocked B", Topic: "dep", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
@@ -107,7 +107,7 @@ func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "dep", IssueType: "task", Priority: 2})
+	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "dep", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
