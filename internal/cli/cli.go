@@ -92,7 +92,23 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 			if len(args) > 0 {
 				return fmt.Errorf("unknown command %q", args[0])
 			}
-			return cmd.Help()
+			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
+			// so the output is always identical to `lit quickstart`.
+			ws, wsErr := resolveWorkspaceFromWD()
+			// [LAW:dataflow-not-control-flow] Only the "outside git repo" case routes to help;
+			// other failures (getcwd, template load) surface so they remain diagnosable.
+			if errors.Is(wsErr, workspace.ErrNotGitRepo) {
+				return cmd.Help()
+			}
+			if wsErr != nil {
+				return wsErr
+			}
+			guidance, guidanceErr := renderQuickstartGuidance(ws.RootDir)
+			if guidanceErr != nil {
+				return guidanceErr
+			}
+			_, printErr := fmt.Fprintln(cmd.OutOrStdout(), guidance)
+			return printErr
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
@@ -166,7 +182,9 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 	ws, err := workspace.Resolve(cwd)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
-			return workspace.Info{}, fmt.Errorf("links requires running inside a git repository/worktree")
+			// [LAW:one-source-of-truth] Wrap with %w so callers can dispatch on the
+			// sentinel; the surface text remains the canonical CLI message.
+			return workspace.Info{}, fmt.Errorf("links requires running inside a git repository/worktree: %w", err)
 		}
 		return workspace.Info{}, err
 	}
