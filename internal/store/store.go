@@ -58,6 +58,9 @@ type CreateIssueInput struct {
 	Priority    int
 	Assignee    string
 	Labels      []string
+	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
+	// Sourced from workspace config at the call site. Not persisted as derived state.
+	Prefix string
 }
 
 type UpdateIssueInput struct {
@@ -344,9 +347,9 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 				return fmt.Errorf("lookup parent issue %q: %w", parentID, err)
 			}
 		}
-		prefix, err := s.issuePrefixForTx(ctx, tx)
+		prefix, err := issueid.NormalizeConfiguredPrefix(in.Prefix)
 		if err != nil {
-			return err
+			return fmt.Errorf("normalize issue prefix: %w", err)
 		}
 		issue.ID, err = newIssueID(ctx, tx, prefix, issue.Topic, issue.Title, issue.Description, createdBy, issue.CreatedAt, parentID)
 		if err != nil {

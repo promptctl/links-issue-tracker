@@ -40,12 +40,12 @@ func startIssueForTest(t *testing.T, h readyTestHarness, id string) {
 func TestRunOrphanedListsStaleInProgress(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	stale := h.createIssue(store.CreateIssueInput{
+	stale := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Stale work",
 		Topic:     "stale",
 		IssueType: "task",
 	})
-	fresh := h.createIssue(store.CreateIssueInput{
+	fresh := h.createIssue(store.CreateIssueInput{Prefix: "test", 
 		Title:     "Fresh work",
 		Topic:     "fresh",
 		IssueType: "task",
@@ -69,8 +69,8 @@ func TestRunOrphanedListsStaleInProgress(t *testing.T) {
 func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	open := h.createIssue(store.CreateIssueInput{Title: "Open", Topic: "topic", IssueType: "task"})
-	closed := h.createIssue(store.CreateIssueInput{Title: "Closed", Topic: "topic", IssueType: "task"})
+	open := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Open", Topic: "topic", IssueType: "task"})
+	closed := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Closed", Topic: "topic", IssueType: "task"})
 	h.backdateUpdatedAt(open.ID, 7*time.Hour)
 	h.closeIssue(closed.ID, "done")
 	h.backdateUpdatedAt(closed.ID, 7*time.Hour)
@@ -84,8 +84,8 @@ func TestRunOrphanedExcludesOpenAndClosed(t *testing.T) {
 func TestRunOrphanedSortsOldestFirst(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	older := h.createIssue(store.CreateIssueInput{Title: "Older", Topic: "topic", IssueType: "task"})
-	newer := h.createIssue(store.CreateIssueInput{Title: "Newer", Topic: "topic", IssueType: "task"})
+	older := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Older", Topic: "topic", IssueType: "task"})
+	newer := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Newer", Topic: "topic", IssueType: "task"})
 	startIssueForTest(t, h, older.ID)
 	startIssueForTest(t, h, newer.ID)
 	h.backdateUpdatedAt(older.ID, 48*time.Hour)
@@ -114,8 +114,8 @@ func TestRunOrphanedTextEmpty(t *testing.T) {
 func TestRunOrphanedAssigneeFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	mine := h.createIssue(store.CreateIssueInput{Title: "Mine", Topic: "topic", IssueType: "task", Assignee: "alice"})
-	theirs := h.createIssue(store.CreateIssueInput{Title: "Theirs", Topic: "topic", IssueType: "task", Assignee: "bob"})
+	mine := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Mine", Topic: "topic", IssueType: "task", Assignee: "alice"})
+	theirs := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "topic", IssueType: "task", Assignee: "bob"})
 	startIssueForTest(t, h, mine.ID)
 	startIssueForTest(t, h, theirs.ID)
 	h.backdateUpdatedAt(mine.ID, 7*time.Hour)
@@ -130,8 +130,8 @@ func TestRunOrphanedAssigneeFilter(t *testing.T) {
 func TestRunOrphanedExcludesContainerEpics(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(store.CreateIssueInput{Title: "Epic", Topic: "topic", IssueType: "epic"})
-	leaf := h.createIssue(store.CreateIssueInput{Title: "Leaf", Topic: "topic", IssueType: "task", ParentID: epic.ID})
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "topic", IssueType: "epic"})
+	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "topic", IssueType: "task", ParentID: epic.ID})
 	startIssueForTest(t, h, leaf.ID)
 	// Epic's State() derives from the leaf and is in_progress, but its
 	// own UpdatedAt is irrelevant — orphan is a leaf-only concept.

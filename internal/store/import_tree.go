@@ -45,7 +45,7 @@ type ImportTreeResult struct {
 //
 // [LAW:single-enforcer] Atomic tree import is the one shared boundary that
 // owns ID resolution + topological create order.
-func (s *Store) ImportTree(ctx context.Context, specs []ImportTreeSpec) (ImportTreeResult, error) {
+func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTreeSpec) (ImportTreeResult, error) {
 	if err := validateImportTreeSpecs(specs); err != nil {
 		return ImportTreeResult{}, err
 	}
@@ -71,6 +71,7 @@ func (s *Store) ImportTree(ctx context.Context, specs []ImportTreeSpec) (ImportT
 			Assignee:    spec.Assignee,
 			Labels:      spec.Labels,
 			ParentID:    parentID,
+			Prefix:      prefix,
 		})
 		if err != nil {
 			leaked := s.rollbackImportTreePartial(ctx, idMap)

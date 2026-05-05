@@ -23,10 +23,6 @@ func Open(ctx context.Context, cwd string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := st.EnsureIssuePrefix(ctx, ws.IssuePrefix); err != nil {
-		_ = st.Close()
-		return nil, err
-	}
 	return &App{Workspace: ws, Store: st}, nil
 }
 

@@ -333,6 +333,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
+		Prefix: ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
 		return err
@@ -389,6 +390,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Priority:    *priority,
 		Assignee:    *assignee,
 		Labels:      splitCSV(*labels),
+		Prefix:      ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
 		return err
@@ -1079,7 +1081,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err := json.Unmarshal(data, &specs); err != nil {
 		return fmt.Errorf("parse import spec: %w", err)
 	}
-	result, err := ap.Store.ImportTree(ctx, specs)
+	result, err := ap.Store.ImportTree(ctx, ap.Workspace.IssuePrefix, specs)
 	if err != nil {
 		return err
 	}
@@ -1329,97 +1331,6 @@ type CorruptionError struct {
 }
 
 func (e CorruptionError) Error() string { return e.Message }
-
-func printUsage(w io.Writer) {
-	fmt.Fprint(w, `links / lit
-
-Agent-native issue tracker
-
-Output:
-  default text
-  --json                      Output machine-readable JSON.
-
-Usage:
-  lit [--json] [command]
-  lit [--json] [command] [flags]
-
-Sync Branch:
-  default        remote default branch (resolved from git remote HEAD)
-  debug override LINKS_DEBUG_DOLT_SYNC_BRANCH
-
-Sync Remote (pull/push):
-  default        upstream remote, else single configured remote
-  no match       skip sync without Dolt side effects
-
-Issue Workflow:
-  init           Initialize links in the current repository
-  ready          List open work ordered by readiness, then rank
-  new            Create an issue
-  followup       File a follow-up issue parented to a just-closed ticket
-  ls             List issues with filters/query/sort
-  show           Show issue details
-  update         Update issue fields
-  start          Claim work (open -> in_progress)
-  done           Mark work complete (in_progress -> closed)
-  close          Close issue(s)
-  open           Reopen issue(s)
-  archive        Archive issue(s)
-  delete         Soft-delete issue(s)
-  unarchive      Unarchive issue(s)
-  restore        Restore deleted issue(s)
-  comment        Add issue comments
-  label          Add/remove issue labels
-  bulk           Bulk issue operations (label, close, archive, import)
-
-Dependencies & Structure:
-  parent         Manage parent/child links
-  children       List child issues
-  dep            Manage dependency edges
-
-Sync & Data:
-  export         Export workspace snapshot JSON
-  sync           Mirror Dolt data through git remotes
-  backup         Create/list/restore backup snapshots
-  recover        Recover from sync file or backup
-
-Setup & Maintenance:
-  workspace      Show workspace metadata
-  hooks          Install git hook automation
-  doctor         Health check and repair
-
-Guidance & Tooling:
-  quickstart     Agent quickstart workflow
-  completion     Generate shell completion script
-  help           Show this help output
-
-Command Syntax:
-  lit init [--json] [--skip-hooks] [--skip-agents]
-  lit ready [--assignee <user>] [--limit N] [--columns ...] [--json]
-  lit update <id> [--title <text>] [--description <text>] [--type <task|feature|bug|chore|epic>] [--priority <0..4>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]
-  lit start <id> [--reason <text>] [--by <user>] [--json]
-  lit done <id> [--reason <text>] [--by <user>] [--json]
-  lit hooks install [--json]
-  lit quickstart [--refresh]
-  lit completion <bash|zsh|fish>
-  lit workspace [--json]
-  lit sync remote ls [--json]
-  lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]
-  lit sync pull [--remote <name>] [--verbose] [--json]
-  lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]
-
-Examples:
-  lit init
-  lit ready
-  lit update <issue-id> --status in_progress
-  lit start <issue-id>
-  lit done <issue-id>
-  lit followup --on <closed-id> --title "Follow-up surfaced at close"
-  lit new --title "Fix renderer race" --type bug --priority 1
-  lit ls --query "status:open type:task"
-
-Use "lit [command] --help" for more information about a command.
-`)
-}
 
 func splitArgs(args []string, positionalCount int) ([]string, []string) {
 	positionals := make([]string, 0, positionalCount)

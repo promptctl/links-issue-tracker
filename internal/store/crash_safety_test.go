@@ -37,7 +37,7 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 	}
 
 	// A subsequent mutation must succeed, proving the lock was released.
-	_, err := st.CreateIssue(context.Background(), CreateIssueInput{
+	_, err := st.CreateIssue(context.Background(), CreateIssueInput{Prefix: "test", 
 		Title:     "Post-panic issue",
 		Topic:     "crash",
 		IssueType: "task",
@@ -87,7 +87,7 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 	// 2. begins tx, runs fn, commits tx
 	// 3. calls commitWorkingSet (which re-enters withCommitLock — short-circuits)
 	// If any step fails, CreateIssue returns an error.
-	issue, err := st.CreateIssue(context.Background(), CreateIssueInput{
+	issue, err := st.CreateIssue(context.Background(), CreateIssueInput{Prefix: "test", 
 		Title:     "Commit path exercise",
 		Topic:     "crash",
 		IssueType: "task",
