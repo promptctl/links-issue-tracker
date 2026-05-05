@@ -19,6 +19,8 @@ type initReport struct {
 	Hooks        string `json:"hooks"`
 	Agents       string `json:"agents"`
 	Claude       string `json:"claude"`
+	AgentsSource string `json:"agents_source,omitempty"`
+	ClaudeSource string `json:"claude_source,omitempty"`
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -65,6 +67,8 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if agentsErr != nil {
 			return agentsErr
 		}
+		report.AgentsSource = string(agentsResult.Source)
+		report.ClaudeSource = string(claudeResult.Source)
 		if agentsResult.Created {
 			report.Agents = "created"
 		} else if agentsResult.Changed {
@@ -93,22 +97,45 @@ type labeledStatus struct {
 	reason string
 }
 
+func sourceDetail(source string, status string) string {
+	return composeSourceReason("", source, status)
+}
+
+func composeSourceReason(reason, source, status string) string {
+	if source == "" || status == "skipped" {
+		return reason
+	}
+	if reason != "" {
+		return reason + ", via " + source
+	}
+	return "via " + source
+}
+
+func formatLabeledEntry(item labeledStatus) string {
+	entry := item.label
+	if item.reason != "" {
+		entry += " (" + item.reason + ")"
+	}
+	return entry
+}
+
 func writeInitHumanOutput(w io.Writer, report initReport) error {
 	items := []labeledStatus{
 		{"pre-push hook", report.Hooks, ""},
-		{"AGENTS.md", report.Agents, ""},
-		{"CLAUDE.md", report.Claude, ""},
+		{"AGENTS.md", report.Agents, sourceDetail(report.AgentsSource, report.Agents)},
+		{"CLAUDE.md", report.Claude, sourceDetail(report.ClaudeSource, report.Claude)},
 	}
 
 	var updated, skipped, unchanged []string
 	for _, item := range items {
+		entry := formatLabeledEntry(item)
 		switch item.status {
 		case "created", "updated", "installed":
-			updated = append(updated, item.label)
+			updated = append(updated, entry)
 		case "skipped":
-			skipped = append(skipped, item.label)
+			skipped = append(skipped, entry)
 		case "unchanged":
-			unchanged = append(unchanged, item.label)
+			unchanged = append(unchanged, entry)
 		}
 	}
 

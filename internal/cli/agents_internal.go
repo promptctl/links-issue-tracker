@@ -19,10 +19,11 @@ type agentsInstallResult struct {
 	Path    string
 	Created bool
 	Changed bool
+	Source  templates.Source
 }
 
-func renderLinksAgentsSection(workspaceRoot string) (string, error) {
-	return templates.Load(templates.AgentsSectionTemplateName, workspaceRoot)
+func renderLinksAgentsSection(workspaceRoot string) (string, templates.Source, error) {
+	return templates.LoadWithSource(templates.AgentsSectionTemplateName, workspaceRoot)
 }
 
 // writeManagedFile writes a managed marker-delimited section to filename.
@@ -58,7 +59,7 @@ func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, end
 // markers; everything else in each file is the user's and is preserved.
 // [LAW:single-enforcer] All agent config file writes go through this one function.
 func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude agentsInstallResult, err error) {
-	section, err := renderLinksAgentsSection(rootDir)
+	section, source, err := renderLinksAgentsSection(rootDir)
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, fmt.Errorf("load agent section template: %w", err)
 	}
@@ -67,11 +68,13 @@ func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude a
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, err
 	}
+	agentsResult.Source = source
 
 	claudeResult, err := writeManagedFile(rootDir, "CLAUDE.md", "", section, linksAgentsBeginMarker, linksAgentsEndMarker)
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, err
 	}
+	claudeResult.Source = source
 
 	return agentsResult, claudeResult, nil
 }
