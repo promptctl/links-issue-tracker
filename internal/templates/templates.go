@@ -55,27 +55,52 @@ func ResolveShortName(alias string) (string, error) {
 	return name, nil
 }
 
+// Source describes which layer a resolved template came from.
+type Source string
+
+const (
+	SourceProject  Source = "project"
+	SourceGlobal   Source = "global"
+	SourceEmbedded Source = "embedded"
+)
+
 // Load resolves a managed template with project > global > embedded precedence.
 // It never writes; absence of a file at a given layer simply means that layer
 // contributes nothing. The embedded default is always available as the final fallback.
 func Load(name string, workspaceRoot string) (string, error) {
+	content, _, err := LoadWithSource(name, workspaceRoot)
+	return content, err
+}
+
+// LoadWithSource is like Load but also returns which layer the content came from.
+func LoadWithSource(name string, workspaceRoot string) (string, Source, error) {
 	projectContent, projectErr := readOptionalFile(projectTemplatePath(workspaceRoot, name))
 	if projectErr != nil {
-		return "", fmt.Errorf("load project template %s: %w", projectTemplatePath(workspaceRoot, name), projectErr)
+		return "", "", fmt.Errorf("load project template %s: %w", projectTemplatePath(workspaceRoot, name), projectErr)
 	}
 	globalContent, globalErr := readOptionalFile(GlobalPath(name))
 	if globalErr != nil {
-		return "", fmt.Errorf("load global template %s: %w", GlobalPath(name), globalErr)
+		return "", "", fmt.Errorf("load global template %s: %w", GlobalPath(name), globalErr)
 	}
 	embedded, err := EmbeddedDefault(name)
 	if err != nil {
-		return "", fmt.Errorf("load embedded template %s: %w", name, err)
+		return "", "", fmt.Errorf("load embedded template %s: %w", name, err)
 	}
-	resolved := firstNonEmpty(projectContent, globalContent, string(embedded))
-	if resolved == "" {
-		return "", fmt.Errorf("load template %s: no non-empty source", name)
+	type candidate struct {
+		content string
+		source  Source
 	}
-	return resolved, nil
+	candidates := []candidate{
+		{projectContent, SourceProject},
+		{globalContent, SourceGlobal},
+		{string(embedded), SourceEmbedded},
+	}
+	for _, c := range candidates {
+		if c.content != "" {
+			return c.content, c.source, nil
+		}
+	}
+	return "", "", fmt.Errorf("load template %s: no non-empty source", name)
 }
 
 // EmbeddedDefault returns the raw bytes of the embedded default for name.
@@ -99,42 +124,32 @@ func ProjectPath(workspaceRoot string, name string) string {
 	return projectTemplatePath(workspaceRoot, name)
 }
 
-// OverrideLayer identifies which override layer a resolved file came from.
-type OverrideLayer string
-
-const (
-	OverrideLayerNone    OverrideLayer = ""
-	OverrideLayerProject OverrideLayer = "project"
-	OverrideLayerGlobal  OverrideLayer = "global"
-)
-
 // ActiveOverride returns the highest-priority existing override (project > global)
-// for name. When neither layer has a file, the returned path is empty, content is
-// nil, and Layer is OverrideLayerNone. Filesystem errors other than "not exist" are
-// propagated.
-func ActiveOverride(workspaceRoot string, name string) (path string, content []byte, layer OverrideLayer, err error) {
+// for name. When neither layer has a file, the returned path is empty and content
+// is nil. Filesystem errors other than "not exist" are propagated.
+// [LAW:one-source-of-truth] This helper resolves only the project/global override
+// layers; callers that need to know which override layer was selected can infer it
+// from the returned path.
+func ActiveOverride(workspaceRoot string, name string) (path string, content []byte, err error) {
 	// [LAW:dataflow-not-control-flow] Inspect both layers in fixed order; presence/absence is data, not branching.
-	candidates := []struct {
-		layer OverrideLayer
-		path  string
-	}{
-		{OverrideLayerProject, projectTemplatePath(workspaceRoot, name)},
-		{OverrideLayerGlobal, GlobalPath(name)},
+	candidatePaths := []string{
+		projectTemplatePath(workspaceRoot, name),
+		GlobalPath(name),
 	}
-	for _, c := range candidates {
-		if strings.TrimSpace(c.path) == "" {
+	for _, p := range candidatePaths {
+		if strings.TrimSpace(p) == "" {
 			continue
 		}
-		raw, readErr := os.ReadFile(c.path)
+		raw, readErr := os.ReadFile(p)
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
 				continue
 			}
-			return "", nil, OverrideLayerNone, readErr
+			return "", nil, readErr
 		}
-		return c.path, raw, c.layer, nil
+		return p, raw, nil
 	}
-	return "", nil, OverrideLayerNone, nil
+	return "", nil, nil
 }
 
 func readOptionalFile(path string) (string, error) {

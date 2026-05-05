@@ -13,6 +13,7 @@ type quickstartRefreshItem struct {
 	Status  string `json:"status"`
 	Managed bool   `json:"managed"`
 	Reason  string `json:"reason,omitempty"`
+	Source  string `json:"source,omitempty"`
 }
 
 type quickstartRefreshReport struct {
@@ -42,11 +43,13 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 			Path:    agentsResult.Path,
 			Status:  managedAssetStatus(agentsResult.Changed, agentsResult.Created),
 			Managed: true,
+			Source:  string(agentsResult.Source),
 		},
 		Claude: quickstartRefreshItem{
 			Path:    claudeResult.Path,
 			Status:  managedAssetStatus(claudeResult.Changed, claudeResult.Created),
 			Managed: true,
+			Source:  string(claudeResult.Source),
 		},
 		Quickstart: quickstartItem,
 	}, nil
@@ -64,7 +67,7 @@ func refreshQuickstartTemplate(workspaceRoot string) (quickstartRefreshItem, err
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read embedded default: %w", err)
 	}
-	path, content, _, err := templates.ActiveOverride(workspaceRoot, templates.QuickstartTemplateName)
+	path, content, err := templates.ActiveOverride(workspaceRoot, templates.QuickstartTemplateName)
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read override: %w", err)
 	}
@@ -104,24 +107,21 @@ func managedAssetStatus(changed bool, created bool) string {
 func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 	items := []labeledStatus{
 		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
-		{"AGENTS.md", refresh.Agents.Status, refresh.Agents.Reason},
-		{"CLAUDE.md", refresh.Claude.Status, refresh.Claude.Reason},
+		{"AGENTS.md", refresh.Agents.Status, composeSourceReason(refresh.Agents.Reason, refresh.Agents.Source, refresh.Agents.Status)},
+		{"CLAUDE.md", refresh.Claude.Status, composeSourceReason(refresh.Claude.Reason, refresh.Claude.Source, refresh.Claude.Status)},
 		{"quickstart template", refresh.Quickstart.Status, refresh.Quickstart.Reason},
 	}
 
 	var updated, skipped, unchanged []string
 	for _, item := range items {
+		entry := formatLabeledEntry(item)
 		switch {
 		case item.status == "updated" || item.status == "created":
-			updated = append(updated, item.label)
+			updated = append(updated, entry)
 		case item.status == "skipped":
-			entry := item.label
-			if item.reason != "" {
-				entry += fmt.Sprintf(" (%s)", item.reason)
-			}
 			skipped = append(skipped, entry)
 		case item.status == "unchanged":
-			unchanged = append(unchanged, item.label)
+			unchanged = append(unchanged, entry)
 		}
 	}
 
