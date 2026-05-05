@@ -202,3 +202,43 @@ func TestParseActionRejectsNonLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestActionTargetState(t *testing.T) {
+	tests := []struct {
+		action ActionName
+		want   State
+	}{
+		{ActionStart, InProgress},
+		{ActionDone, Closed},
+		{ActionClose, Closed},
+		{ActionReopen, Open},
+	}
+	for _, tt := range tests {
+		got, ok := ActionTargetState(tt.action)
+		if !ok {
+			t.Fatalf("ActionTargetState(%q) ok=false; want true", tt.action)
+		}
+		if got != tt.want {
+			t.Fatalf("ActionTargetState(%q) = %q, want %q", tt.action, got, tt.want)
+		}
+	}
+	if _, ok := ActionTargetState(ActionName("bogus")); ok {
+		t.Fatal("ActionTargetState(\"bogus\") ok=true; want false")
+	}
+}
+
+func TestStateDisplay(t *testing.T) {
+	tests := []struct {
+		state State
+		want  string
+	}{
+		{Open, "open"},
+		{InProgress, "in progress"},
+		{Closed, "closed"},
+	}
+	for _, tt := range tests {
+		if got := tt.state.Display(); got != tt.want {
+			t.Fatalf("State(%q).Display() = %q, want %q", tt.state, got, tt.want)
+		}
+	}
+}
