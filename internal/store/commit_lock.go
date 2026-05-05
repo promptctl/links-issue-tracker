@@ -16,6 +16,13 @@ import (
 // [LAW:single-enforcer] All commit-lock acquisition, transient-retry, and
 // commitWorkingSet sequencing live here so writer serialization is enforced
 // at exactly one boundary.
+//
+// Deadlock impossibility: This system has exactly one lock type (file-based
+// commit lock). Single-resource systems cannot deadlock by lock-ordering. The
+// processCommitMutex serializes in-process acquisition, and O_CREATE|O_EXCL
+// serializes cross-process acquisition. Deadlock is only possible if the lock
+// is never released, which defer prevents for panics and PID-liveness
+// reclaims for killed processes.
 
 var ErrTransientManifestReadOnly = errors.New("transient manifest read-only")
 var processCommitMutex sync.Mutex
