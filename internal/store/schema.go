@@ -50,17 +50,23 @@ func createIssuesTableStmt() string {
 		);`, canonicalStatusCheckClause, priorityCheckClause)
 }
 
-// migrate is the per-Open schema entry point. It dispatches to the goose-backed
-// runner (which handles fresh / pre-goose / already-on-goose workspaces) and
-// then writes the always-current workspace_id meta fixture. Commits the
-// working set exactly once if anything changed.
+// migrate is the per-Open schema entry point. It refuses out-of-window
+// workspaces, dispatches to the goose-backed runner (which handles fresh /
+// pre-goose / already-on-goose shapes), then writes the always-current
+// workspace_id meta fixture. Commits the working set exactly once if
+// anything changed.
 //
 // [LAW:single-enforcer] Every workspace shape funnels through runMigrations
 // for schema convergence; the per-Open meta fixture is the only thing that
-// runs unconditionally outside that path.
+// runs unconditionally outside that path. The compat-window check is the
+// only thing that runs *before* the runner and can refuse the entire Open.
 // [LAW:dataflow-not-control-flow] The same operations execute every Open;
-// what varies is what the runner has to do (apply baseline / adopt / no-op).
+// what varies is what the runner has to do (apply baseline / adopt / no-op)
+// and whether the compat check returns a typed error or nil.
 func (s *Store) migrate(ctx context.Context) error {
+	if err := checkCompatWindow(ctx, s.db, codeVersion); err != nil {
+		return err
+	}
 	migrated, err := s.runMigrations(ctx)
 	if err != nil {
 		return err

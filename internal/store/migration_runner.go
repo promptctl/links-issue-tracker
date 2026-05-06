@@ -49,7 +49,29 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("apply pending migrations: %w", err)
 	}
-	return adopted || len(results) > 0, nil
+	settled := collectSettledVersions(adopted, results)
+	floorChanged, err := s.advanceCompatFloor(ctx, settled)
+	if err != nil {
+		return false, fmt.Errorf("advance code_compat_floor: %w", err)
+	}
+	return adopted || len(results) > 0 || floorChanged, nil
+}
+
+// collectSettledVersions returns the set of migration versions that ended up
+// applied in this Open: every version goose just ran via Up plus, when an
+// adoption stamped them, baselineVersion. Used by advanceCompatFloor to
+// determine whether the workspace's code_compat_floor needs to advance.
+func collectSettledVersions(adopted bool, results []*goose.MigrationResult) []int64 {
+	versions := make([]int64, 0, len(results)+1)
+	if adopted {
+		versions = append(versions, baselineVersion)
+	}
+	for _, r := range results {
+		if r.Source != nil {
+			versions = append(versions, r.Source.Version)
+		}
+	}
+	return versions
 }
 
 // adoptPreGooseWorkspace detects workspaces that predate goose (application
