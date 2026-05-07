@@ -86,3 +86,10 @@ CREATE TABLE `issue_history` (
   CONSTRAINT `issue_history_ibfk_1` FOREIGN KEY (`issue_id`) REFERENCES `issues` (`id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE `migration_quarantine` (
+  `version_id` bigint NOT NULL,
+  `reason` text NOT NULL,
+  `quarantined_at` datetime NOT NULL,
+  PRIMARY KEY (`version_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+

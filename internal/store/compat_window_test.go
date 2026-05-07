@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"testing"
 )
 
@@ -149,10 +150,11 @@ func TestCompatWindowRefusesAtFloorBoundary(t *testing.T) {
 		t.Fatalf("Open() at floor==codeVersion error = %v (boundary should be inclusive)", err)
 	}
 	// Bump floor one above codeVersion. Refused.
+	above := strconv.FormatInt(codeVersion+1, 10)
 	if _, err := st.db.ExecContext(ctx,
 		`UPDATE meta SET meta_value = ? WHERE meta_key = ?`,
-		"2", codeCompatFloorMetaKey); err != nil {
-		t.Fatalf("bump floor=2 error = %v", err)
+		above, codeCompatFloorMetaKey); err != nil {
+		t.Fatalf("bump floor=%s error = %v", above, err)
 	}
 	if err := st.commitWorkingSet(ctx, "test: floor above boundary"); err != nil {
 		t.Fatalf("commit error = %v", err)
@@ -163,6 +165,6 @@ func TestCompatWindowRefusesAtFloorBoundary(t *testing.T) {
 	_, err = Open(ctx, doltRoot, wsID)
 	var compatErr *CompatError
 	if !errors.As(err, &compatErr) {
-		t.Fatalf("expected *CompatError at floor=2, got %T: %v", err, err)
+		t.Fatalf("expected *CompatError at floor=%s, got %T: %v", above, err, err)
 	}
 }
