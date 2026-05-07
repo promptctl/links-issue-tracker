@@ -39,6 +39,16 @@ func TestPreGooseWorkspaceIsAdoptedAndStamped(t *testing.T) {
 	if _, err := first.db.ExecContext(ctx, "DROP TABLE "+gooseVersionTable); err != nil {
 		t.Fatalf("drop goose table error = %v", err)
 	}
+	// Drop every post-baseline migration's table so the workspace mirrors a
+	// true pre-goose state (schema only at baseline shape). Without this,
+	// adoption stamps version 1 and goose then tries to apply 2+ against a
+	// schema that already has those tables. Update this list whenever a new
+	// post-baseline migration ships.
+	for _, postBaselineTable := range []string{"migration_quarantine"} {
+		if _, err := first.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+postBaselineTable); err != nil {
+			t.Fatalf("drop post-baseline table %s error = %v", postBaselineTable, err)
+		}
+	}
 	if _, err := first.db.ExecContext(ctx,
 		`INSERT INTO meta (meta_key, meta_value) VALUES (?, ?)`,
 		"schema_version", "1"); err != nil {

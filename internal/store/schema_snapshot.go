@@ -22,6 +22,7 @@ var applicationTables = []string{
 	"comments",
 	"labels",
 	"issue_history",
+	"migration_quarantine",
 }
 
 // schemaSnapshotHeader is the human-facing header that prefixes the canonical

@@ -67,6 +67,7 @@ type ImportLabel struct {
 
 type HealthReport struct {
 	IntegrityCheck     string   `json:"integrity_check"`
+	SmokeTest          string   `json:"smoke_test"`
 	ForeignKeyIssues   int      `json:"foreign_key_issues"`
 	InvalidRelatedRows int      `json:"invalid_related_rows"`
 	OrphanHistoryRows  int      `json:"orphan_history_rows"`
@@ -108,6 +109,23 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 		Warnings: []string{},
 	}
 	report.IntegrityCheck = "ok"
+	report.SmokeTest = "ok"
+	// Run schema smoke probes first so a structurally broken workspace
+	// surfaces with a recovery hint rather than a generic constraint error
+	// from the integrity check below. [LAW:dataflow-not-control-flow] both
+	// fields are populated unconditionally; what varies is the value, not
+	// whether the work runs.
+	if probe, smokeErr := s.runSmokeTests(ctx); smokeErr != nil {
+		lastVersion, lastTs, _ := readLastAppliedMigration(ctx, s.db)
+		hint := formatRecoveryHint(probe, lastVersion, lastTs)
+		report.SmokeTest = hint
+		report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", hint, smokeErr))
+		// Short-circuit: when the schema is structurally broken, the
+		// integrity / FK / rank queries below will spew secondary errors
+		// referencing the same missing column. Returning the smoke
+		// failure alone keeps the surface focused on the recovery action.
+		return report, nil
+	}
 	var violations int
 	if err := s.db.QueryRowContext(ctx, `CALL DOLT_VERIFY_CONSTRAINTS()`).Scan(&violations); err != nil {
 		return report, fmt.Errorf("verify constraints: %w", err)

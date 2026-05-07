@@ -5,6 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"io"
+	"os"
+	"sort"
+	"strings"
 
 	"github.com/pressly/goose/v3"
 
@@ -27,34 +31,198 @@ const gooseVersionTable = "goose_db_version"
 // baseline"; both must move together if we ever renumber the file.
 const baselineVersion = 1
 
+// preMigrateCheckpointPrefix names the safety-branch family the runner
+// creates before every Open's migration step. Listed here, not in the
+// checkpoint primitive, so the primitive remains migration-agnostic.
+const preMigrateCheckpointPrefix = "pre-migrate"
+
+// preMigrateCheckpointRetain is the retention budget for safety branches.
+// Five was the spec's choice; large enough to walk back across a small
+// burst of bad migrations, small enough to keep the branch list scannable.
+const preMigrateCheckpointRetain = 5
+
+// MigrationError is the typed failure callers receive when the runner had to
+// auto-revert a migration (or refused to start one). Phase identifies which
+// step failed; Version is the migration version that was running (0 if the
+// failure was not tied to a specific version, e.g., checkpoint or provider
+// construction). Cause is the underlying error and is unwrappable.
+type MigrationError struct {
+	Phase   string
+	Version int64
+	Cause   error
+}
+
+func (e *MigrationError) Error() string {
+	if e.Version > 0 {
+		return fmt.Sprintf("migration phase %s (version %d): %v", e.Phase, e.Version, e.Cause)
+	}
+	return fmt.Sprintf("migration phase %s: %v", e.Phase, e.Cause)
+}
+
+func (e *MigrationError) Unwrap() error { return e.Cause }
+
+// migrationEventWriter is where the runner emits structured-ish event lines.
+// .7 (structured stderr events) will replace the current `name k=v` plain
+// text with JSON; until then, this hook lets tests capture and assert on the
+// rendered output.
+var migrationEventWriter io.Writer = os.Stderr
+
+// extraMigrationProviderOptions is a test-only seam: when non-nil, the
+// runner appends the returned options to NewProvider. Production never sets
+// this. Lives in production code (not _test.go) so multiple test files can
+// share the hook; reset between tests via t.Cleanup.
+//
+// [LAW:no-shared-mutable-globals] Single owner (tests). Production code
+// never assigns. Documented contract: nil except inside a test that opted
+// in via this hook.
+var extraMigrationProviderOptions func() []goose.ProviderOption
+
+// emitMigrationEvent writes one line of `name k1=v1 k2=v2`, keys sorted so
+// tests can match exact strings. [LAW:single-enforcer] One emission helper —
+// every event in the runner routes through here.
+func emitMigrationEvent(name string, fields map[string]string) {
+	var b strings.Builder
+	b.WriteString(name)
+	keys := make([]string, 0, len(fields))
+	for k := range fields {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		fmt.Fprintf(&b, " %s=%s", k, fields[k])
+	}
+	fmt.Fprintln(migrationEventWriter, b.String())
+}
+
 // runMigrations brings the workspace's schema to the latest registered goose
-// version. Returns true if any state changed (so the caller can decide whether
-// to commit the working set).
+// version under the protection of a pre-migrate safety branch. Returns true
+// if any state changed (so the caller can decide whether to commit the
+// working set).
 //
 // Three workspace shapes converge through this function:
 //   - fresh (no application tables, no goose_db_version) → goose runs baseline.
 //   - pre-goose (application tables exist, no goose_db_version) → adoption
 //     reconciles the legacy schema then stamps baseline as applied.
 //   - already-on-goose → goose runs any pending migrations beyond baseline.
+//
+// [LAW:dataflow-not-control-flow] Same operations every Open: create
+// checkpoint, read quarantine, adopt, build provider, Up, advance floor.
+// Variability is in the data — what's pending, what's quarantined, whether
+// adoption fires — never in whether each step executes.
+// [LAW:single-enforcer] Auto-revert is the only writer of "undo a partially
+// applied migration"; manual recovery (`lit doctor --reset-to-pre-migration`)
+// reuses the same primitives but as a separate code path on a separate
+// trigger.
 func (s *Store) runMigrations(ctx context.Context) (bool, error) {
+	safety, err := s.CreateCheckpoint(ctx, preMigrateCheckpointPrefix, preMigrateCheckpointRetain)
+	if err != nil {
+		return false, &MigrationError{Phase: "checkpoint", Cause: fmt.Errorf("create pre-migrate safety branch: %w", err)}
+	}
+	emitMigrationEvent("safety_branch.created", map[string]string{
+		"branch": safety.Name,
+		"commit": safety.CommitSHA,
+	})
+
+	quarantined, err := readQuarantinedVersions(ctx, s.db)
+	if err != nil {
+		return false, &MigrationError{Phase: "quarantine_read", Cause: err}
+	}
+	for _, v := range quarantined {
+		emitMigrationEvent("migrate.skipped_quarantined", map[string]string{
+			"version": fmt.Sprintf("%d", v),
+		})
+	}
+
 	adopted, err := s.adoptPreGooseWorkspace(ctx)
 	if err != nil {
-		return false, fmt.Errorf("adopt pre-goose workspace: %w", err)
+		return false, s.revertWithQuarantine(ctx, safety, "adoption", 0, fmt.Errorf("adopt pre-goose workspace: %w", err))
 	}
-	provider, err := goose.NewProvider(gooseDialect, s.db, migrations.FS)
+
+	opts := []goose.ProviderOption{}
+	if len(quarantined) > 0 {
+		opts = append(opts, goose.WithExcludeVersions(quarantined))
+	}
+	if extraMigrationProviderOptions != nil {
+		opts = append(opts, extraMigrationProviderOptions()...)
+	}
+	provider, err := goose.NewProvider(gooseDialect, s.db, migrations.FS, opts...)
 	if err != nil {
-		return false, fmt.Errorf("build goose provider: %w", err)
+		return false, s.revertWithQuarantine(ctx, safety, "provider", 0, fmt.Errorf("build goose provider: %w", err))
 	}
 	results, err := provider.Up(ctx)
 	if err != nil {
-		return false, fmt.Errorf("apply pending migrations: %w", err)
+		version := versionFromGooseError(err)
+		return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("apply pending migrations: %w", err))
 	}
 	settled := collectSettledVersions(adopted, results)
 	floorChanged, err := s.advanceCompatFloor(ctx, settled)
 	if err != nil {
-		return false, fmt.Errorf("advance code_compat_floor: %w", err)
+		return false, s.revertWithQuarantine(ctx, safety, "advance_floor", 0, fmt.Errorf("advance code_compat_floor: %w", err))
 	}
 	return adopted || len(results) > 0 || floorChanged, nil
+}
+
+// revertWithQuarantine resets to the safety branch and quarantines the
+// failed version (if known) so subsequent Opens skip it. Returns the typed
+// MigrationError describing the original failure. If the reset itself fails,
+// the returned error wraps both failures so the surface keeps full context.
+//
+// Ordering note: reset happens FIRST, then the quarantine row is inserted on
+// top of the now-pre-migration state and committed. Inserting before reset
+// would write the row to a commit that the reset then discards. Reading the
+// failed version is independent of database state — it comes from the goose
+// error — so no read is lost by reverting first.
+func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, phase string, version int64, cause error) *MigrationError {
+	me := &MigrationError{Phase: phase, Version: version, Cause: cause}
+	emitMigrationEvent("migrate.failed", map[string]string{
+		"phase":   phase,
+		"version": fmt.Sprintf("%d", version),
+		"error":   cause.Error(),
+	})
+	if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
+		emitMigrationEvent("safety_branch.revert_failed", map[string]string{
+			"branch": safety.Name,
+			"error":  err.Error(),
+		})
+		me.Cause = fmt.Errorf("%w; revert to safety branch %s also failed: %v", cause, safety.Name, err)
+		return me
+	}
+	emitMigrationEvent("safety_branch.reverted", map[string]string{
+		"branch":  safety.Name,
+		"phase":   phase,
+		"version": fmt.Sprintf("%d", version),
+	})
+	if version <= 0 {
+		return me
+	}
+	if qerr := s.recordQuarantine(ctx, version, fmt.Sprintf("auto-reverted by migration runner: %v", cause)); qerr != nil {
+		emitMigrationEvent("quarantine.write_failed", map[string]string{
+			"version": fmt.Sprintf("%d", version),
+			"error":   qerr.Error(),
+		})
+		return me
+	}
+	if cerr := s.commitWorkingSet(ctx, fmt.Sprintf("Quarantine migration version %d", version)); cerr != nil {
+		emitMigrationEvent("quarantine.commit_failed", map[string]string{
+			"version": fmt.Sprintf("%d", version),
+			"error":   cerr.Error(),
+		})
+	}
+	return me
+}
+
+// versionFromGooseError extracts the failing version from goose's
+// PartialError when present. Returns 0 if the error is not a PartialError —
+// callers treat 0 as "no specific version to quarantine."
+func versionFromGooseError(err error) int64 {
+	var partial *goose.PartialError
+	if !errors.As(err, &partial) {
+		return 0
+	}
+	if partial.Failed == nil || partial.Failed.Source == nil {
+		return 0
+	}
+	return partial.Failed.Source.Version
 }
 
 // collectSettledVersions returns the set of migration versions that ended up
