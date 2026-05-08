@@ -4,8 +4,11 @@ import "strings"
 
 // migrateMarkers replaces legacy begin/end marker pairs with current ones.
 // Idempotent: if no legacy markers are present, the content is returned unchanged.
+// Migrates whenever EITHER legacy marker is present so partial-state files
+// (one marker manually edited away) still converge — leaving a stray legacy
+// marker would cause upsertManagedSection to append a second managed section.
 func migrateMarkers(content, oldBegin, oldEnd, newBegin, newEnd string) string {
-	if !strings.Contains(content, oldBegin) {
+	if !strings.Contains(content, oldBegin) && !strings.Contains(content, oldEnd) {
 		return content
 	}
 	content = strings.ReplaceAll(content, oldBegin, newBegin)

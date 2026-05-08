@@ -83,6 +83,44 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 	}
 }
 
+func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	hooksDir := filepath.Join(ws.GitCommonDir, "hooks")
+	if err := os.MkdirAll(hooksDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(hooks) error = %v", err)
+	}
+	hookPath := filepath.Join(hooksDir, "pre-push")
+	seeded := "#!/usr/bin/env bash\necho user-prefix\n\n" +
+		legacyHookBeginMarker + "\necho stale-managed-content\n" + legacyHookEndMarker + "\n"
+	if err := os.WriteFile(hookPath, []byte(seeded), 0o755); err != nil {
+		t.Fatalf("WriteFile(legacy pre-push) error = %v", err)
+	}
+
+	if err := runHooksInstall(new(bytes.Buffer), ws, nil); err != nil {
+		t.Fatalf("runHooksInstall() error = %v", err)
+	}
+
+	got, err := os.ReadFile(hookPath)
+	if err != nil {
+		t.Fatalf("ReadFile(pre-push) error = %v", err)
+	}
+	text := string(got)
+	if strings.Contains(text, legacyHookBeginMarker) || strings.Contains(text, legacyHookEndMarker) {
+		t.Fatalf("legacy markers not migrated: %q", text)
+	}
+	if strings.Count(text, litHookBeginMarker) != 1 || strings.Count(text, litHookEndMarker) != 1 {
+		t.Fatalf("expected exactly one managed section, got: %q", text)
+	}
+	if !strings.Contains(text, "echo user-prefix") {
+		t.Fatalf("user-owned prefix dropped: %q", text)
+	}
+}
+
 func TestRunHooksViaCLI(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

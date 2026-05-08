@@ -105,7 +105,7 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 		if source != SourceEmbedded {
 			t.Fatalf("LoadWithSource() source = %q, want %q", source, SourceEmbedded)
 		}
-		if !strings.Contains(content, "BEGIN LINKS INTEGRATION") {
+		if !strings.Contains(content, "BEGIN LIT INTEGRATION") {
 			t.Fatalf("embedded default missing marker: %q", content)
 		}
 	})
