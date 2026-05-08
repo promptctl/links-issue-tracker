@@ -25,7 +25,7 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-		IssueID: parent.ID, Action: "start", CreatedBy: "tester",
+		IssueID: parent.ID, Action: "start", CreatedBy: "tester", Assignee: "tester",
 	}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}

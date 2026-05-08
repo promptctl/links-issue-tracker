@@ -182,12 +182,17 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 			action = "close"
 		}
 		transitionPlan[id] = transitionStatus[action]
+		assignee := ""
+		if action == "start" {
+			assignee = "concurrent-tester"
+		}
 		eg.Go(func() error {
 			_, err := st.TransitionIssue(egCtx, TransitionIssueInput{
 				IssueID:   id,
 				Action:    action,
 				Reason:    "concurrent test",
 				CreatedBy: "concurrent-tester",
+				Assignee:  assignee,
 			})
 			return err
 		})
