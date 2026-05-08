@@ -11,8 +11,10 @@ import (
 
 const (
 	// [LAW:one-source-of-truth] Marker pairs are the canonical ownership boundary for AGENTS.md content.
-	linksAgentsBeginMarker = "<!-- BEGIN LINKS INTEGRATION -->"
-	linksAgentsEndMarker   = "<!-- END LINKS INTEGRATION -->"
+	litAgentsBeginMarker     = "<!-- BEGIN LIT INTEGRATION -->"
+	litAgentsEndMarker       = "<!-- END LIT INTEGRATION -->"
+	legacyAgentsBeginMarker  = "<!-- BEGIN LINKS INTEGRATION -->"
+	legacyAgentsEndMarker    = "<!-- END LINKS INTEGRATION -->"
 )
 
 type agentsInstallResult struct {
@@ -44,7 +46,8 @@ func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, end
 		return agentsInstallResult{Path: filePath, Created: true, Changed: true}, nil
 	}
 
-	updated, changed := upsertManagedSection(string(content), section, beginMarker, endMarker)
+	existing := migrateMarkers(string(content), legacyAgentsBeginMarker, legacyAgentsEndMarker, litAgentsBeginMarker, litAgentsEndMarker)
+	updated, changed := upsertManagedSection(existing, section, beginMarker, endMarker)
 	if !changed {
 		return agentsInstallResult{Path: filePath, Created: false, Changed: false}, nil
 	}
@@ -64,13 +67,13 @@ func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude a
 		return agentsInstallResult{}, agentsInstallResult{}, fmt.Errorf("load agent section template: %w", err)
 	}
 
-	agentsResult, err := writeManagedFile(rootDir, "AGENTS.md", "# AGENTS\n\n", section, linksAgentsBeginMarker, linksAgentsEndMarker)
+	agentsResult, err := writeManagedFile(rootDir, "AGENTS.md", "# AGENTS\n\n", section, litAgentsBeginMarker, litAgentsEndMarker)
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, err
 	}
 	agentsResult.Source = source
 
-	claudeResult, err := writeManagedFile(rootDir, "CLAUDE.md", "", section, linksAgentsBeginMarker, linksAgentsEndMarker)
+	claudeResult, err := writeManagedFile(rootDir, "CLAUDE.md", "", section, litAgentsBeginMarker, litAgentsEndMarker)
 	if err != nil {
 		return agentsInstallResult{}, agentsInstallResult{}, err
 	}

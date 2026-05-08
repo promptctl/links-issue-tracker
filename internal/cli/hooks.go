@@ -13,9 +13,11 @@ import (
 )
 
 const (
-	// [LAW:one-source-of-truth] Only the section between these markers is owned by links.
-	linksHookBeginMarker = "# --- BEGIN LINKS INTEGRATION ---"
-	linksHookEndMarker   = "# --- END LINKS INTEGRATION ---"
+	// [LAW:one-source-of-truth] Only the section between these markers is owned by lit.
+	litHookBeginMarker     = "# --- BEGIN LIT INTEGRATION ---"
+	litHookEndMarker       = "# --- END LIT INTEGRATION ---"
+	legacyHookBeginMarker  = "# --- BEGIN LINKS INTEGRATION ---"
+	legacyHookEndMarker    = "# --- END LINKS INTEGRATION ---"
 )
 
 type hookInstallResult struct {
@@ -124,7 +126,8 @@ func installHooks(ws workspace.Info) (hookInstallResult, error) {
 			Reason:   "incompatible",
 		}, nil
 	}
-	updated, changed := upsertManagedSection(existingStr, section, linksHookBeginMarker, linksHookEndMarker)
+	existingStr = migrateMarkers(existingStr, legacyHookBeginMarker, legacyHookEndMarker, litHookBeginMarker, litHookEndMarker)
+	updated, changed := upsertManagedSection(existingStr, section, litHookBeginMarker, litHookEndMarker)
 	if !changed {
 		return hookInstallResult{HookPath: hookPath, Changed: false, Managed: true}, nil
 	}
