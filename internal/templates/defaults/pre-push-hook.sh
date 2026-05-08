@@ -1,4 +1,4 @@
-# --- BEGIN LINKS INTEGRATION ---
+# --- BEGIN LIT INTEGRATION ---
 set -u
 
 remote_name="${1:-origin}"
@@ -22,4 +22,4 @@ else
 fi
 
 exit 0
-# --- END LINKS INTEGRATION ---
+# --- END LIT INTEGRATION ---

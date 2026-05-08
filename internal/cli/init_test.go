@@ -86,6 +86,40 @@ func TestInitReportsAgentsSourceFromGlobalOverride(t *testing.T) {
 	}
 }
 
+func TestEnsureLinksAgentFilesMigratesLegacyMarkers(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		seeded := "# user-owned heading\n\nUser content above.\n\n" +
+			legacyAgentsBeginMarker + "\nstale managed content\n" + legacyAgentsEndMarker + "\n"
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(seeded), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s legacy) error = %v", name, err)
+		}
+	}
+
+	if _, _, err := ensureLinksAgentFiles(repo); err != nil {
+		t.Fatalf("ensureLinksAgentFiles() error = %v", err)
+	}
+
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		got, err := os.ReadFile(filepath.Join(repo, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		text := string(got)
+		if strings.Contains(text, legacyAgentsBeginMarker) || strings.Contains(text, legacyAgentsEndMarker) {
+			t.Fatalf("%s: legacy markers not migrated: %q", name, text)
+		}
+		if strings.Count(text, litAgentsBeginMarker) != 1 || strings.Count(text, litAgentsEndMarker) != 1 {
+			t.Fatalf("%s: expected exactly one managed section, got: %q", name, text)
+		}
+		if !strings.Contains(text, "# user-owned heading") || !strings.Contains(text, "User content above.") {
+			t.Fatalf("%s: user content dropped: %q", name, text)
+		}
+	}
+}
+
 func TestInitHumanOutputShowsAgentsSource(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
