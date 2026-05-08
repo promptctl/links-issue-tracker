@@ -21,7 +21,7 @@ Set related: `lit dep add <issue-id> <peer-id> --type related-to`
 Add comment: `lit comment add <issue-id> --body "Starting: <plan>"`
 
 ## Finish work
-Mark ticket done when all work completed: `lit done <issue-id>` prints pre-guidance; `lit done <issue-id> --apply` closes the ticket (success path; only from in_progress)
+Mark ticket done when all work completed: `lit done <issue-id>` prints pre-guidance with the exact apply command to run next (success path; only from in_progress)
 Close ticket without marking done: `lit close <issue-id>` (wontfix, obsolete, duplicate; from any non-closed state)
 Create followup ticket: `lit followup --on <closed-id> --title "..."` (ALWAYS capture work surfaced as a child ticket while context is fresh)
 
