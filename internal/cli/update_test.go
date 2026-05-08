@@ -4,12 +4,28 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/store"
 )
+
+// extractApplyToken pulls the 8-hex-char token out of the preview output.
+// The preview line looks like: ... `lit done <id> --apply=abcd1234` ...
+var applyTokenRE = regexp.MustCompile(`--apply=([0-9a-f]{8})`)
+
+func extractApplyToken(t *testing.T, previewOutput string) string {
+	t.Helper()
+	m := applyTokenRE.FindStringSubmatch(previewOutput)
+	if m == nil {
+		t.Fatalf("preview output missing --apply=<token>: %q", previewOutput)
+	}
+	return m[1]
+}
 
 func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	ctx := context.Background()
@@ -46,7 +62,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title: "Guidance apply test", Topic: "guidance", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -56,9 +72,17 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
+	// Run the preview phase to obtain the apply token, mirroring how an agent
+	// is forced to discover it.
+	var preview bytes.Buffer
+	if err := runTransition(ctx, &preview, ap, []string{issue.ID}, "done"); err != nil {
+		t.Fatalf("runTransition(preview) error = %v", err)
+	}
+	token := extractApplyToken(t, preview.String())
+
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply"}, "done"); err != nil {
-		t.Fatalf("runTransition(done --apply) error = %v", err)
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply=" + token}, "done"); err != nil {
+		t.Fatalf("runTransition(done --apply=<token>) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "has been closed") {
 		t.Fatalf("expected post-guidance output, got %q", stdout.String())
@@ -70,6 +94,168 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	}
 	if detail.Issue.State() != model.StateClosed {
 		t.Fatalf("issue should be closed after --apply, got %q", detail.Issue.State())
+	}
+}
+
+func TestRunTransitionDoneApplyWithoutTokenRefusesWithShortMessage(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Token-required test", Topic: "guidance", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply"}, "done")
+	if err == nil {
+		t.Fatal("runTransition(done --apply) returned nil; expected refusal")
+	}
+	want := "run `lit done " + issue.ID + "` first"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Issue.State() != model.StateInProgress {
+		t.Fatalf("issue should still be in_progress after refusal, got %q", detail.Issue.State())
+	}
+}
+
+func TestRunTransitionDoneApplyEmptyValueIsRefused(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Empty-value test", Topic: "guidance", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	// `--apply=` (explicit empty value) is an apply attempt with a malformed
+	// token, not a missing flag — it must refuse just like `--apply` and
+	// `--apply=deadbeef`.
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply="}, "done")
+	if err == nil {
+		t.Fatal("runTransition(done --apply=) returned nil; expected refusal")
+	}
+	want := "run `lit done " + issue.ID + "` first"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRunTransitionDonePreGuidanceMissingTokenPlaceholderRefusesAtLoad(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	// Project override that omits the required <token> placeholder. Without
+	// the placeholder, the agent could not discover the apply token, so the
+	// command refuses at load time and names the file to fix.
+	overridePath := filepath.Join(ap.Workspace.RootDir, ".lit", "templates", "guidance-done-pre.md")
+	if err := os.MkdirAll(filepath.Dir(overridePath), 0o755); err != nil {
+		t.Fatalf("MkdirAll() error = %v", err)
+	}
+	if err := os.WriteFile(overridePath, []byte("Run `lit done <id> --apply` to close.\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Missing-token test", Topic: "guidance", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{issue.ID}, "done")
+	if err == nil {
+		t.Fatal("runTransition(done) returned nil; expected template-validation error")
+	}
+	if !strings.Contains(err.Error(), "<token>") {
+		t.Fatalf("error = %q, want mention of <token>", err.Error())
+	}
+	if !strings.Contains(err.Error(), overridePath) {
+		t.Fatalf("error = %q, want override path %q", err.Error(), overridePath)
+	}
+}
+
+func TestRunTransitionDoneApplyWithWrongTokenRefusesWithShortMessage(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Wrong-token test", Topic: "guidance", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply=deadbeef"}, "done")
+	if err == nil {
+		t.Fatal("runTransition(done --apply=deadbeef) returned nil; expected refusal")
+	}
+	want := "run `lit done " + issue.ID + "` first"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+func TestRunTransitionDoneTokenInvalidatedByDriftBetweenPreviewAndApply(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Drift test", Topic: "guidance", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(start) error = %v", err)
+	}
+
+	var preview bytes.Buffer
+	if err := runTransition(ctx, &preview, ap, []string{issue.ID}, "done"); err != nil {
+		t.Fatalf("runTransition(preview) error = %v", err)
+	}
+	stale := extractApplyToken(t, preview.String())
+
+	// Mutate the issue between preview and apply — this changes UpdatedAt and
+	// must invalidate the previously-printed token.
+	newTitle := "Drift test — updated"
+	if _, err := ap.Store.UpdateIssue(ctx, issue.ID, store.UpdateIssueInput{Title: &newTitle}); err != nil {
+		t.Fatalf("UpdateIssue() error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	err = runTransition(ctx, &stdout, ap, []string{issue.ID, "--apply=" + stale}, "done")
+	if err == nil {
+		t.Fatal("runTransition with stale token returned nil; expected refusal after drift")
+	}
+	want := "run `lit done " + issue.ID + "` first"
+	if err.Error() != want {
+		t.Fatalf("error = %q, want %q", err.Error(), want)
 	}
 }
 

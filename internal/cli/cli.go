@@ -915,39 +915,79 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 	return filtered
 }
 
+// applyNoTokenSentinel is the value StringOptional resolves to when --apply is
+// passed without `=<token>`. It cannot collide with a real token (which is hex).
+const applyNoTokenSentinel = "__no_token__"
+
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Transition actor")
-	apply := fs.Bool("apply", false, "Apply the transition (without this flag, pre-guidance is printed instead)")
+	// [LAW:types-are-the-program] `--apply` carries the token printed by the
+	// preview phase as its value (`--apply=<token>`). Empty default = preview;
+	// non-empty = apply attempt. The two-phase contract is the type: a valid
+	// apply requires a value matching the plan's hash, no other state needed.
+	applyVal := fs.StringOptional("apply", applyNoTokenSentinel, "", "Apply the transition with the token printed by the preview phase (use `--apply=<token>`)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	remaining := fs.cmd.Flags().Args()
 	if len(remaining) != 1 {
-		return fmt.Errorf("usage: lit %s <id> [--reason <text>] [--apply]", transitionCommandName(action))
+		return fmt.Errorf("usage: lit %s <id> [--reason <text>] [--apply=<token>]", transitionCommandName(action))
 	}
 
 	issueID := remaining[0]
 	isJSON := *jsonOut || outputModeFromWriter(stdout) == outputModeJSON
+	// [LAW:types-are-the-program] Apply intent is "did the caller pass --apply
+	// in any form" — both `--apply` (no value) and `--apply=` (explicit empty)
+	// are apply attempts whose tokens cannot match the expected hash.
+	// `*applyVal != ""` would mis-classify the empty-value form as "no apply".
+	applyRequested := fs.Changed("apply")
 
-	// [LAW:dataflow-not-control-flow] Pre-guidance template existence is the data that
-	// activates the two-phase flow. When a pre-guidance template exists, the bare command
-	// prints guidance and exits; --apply executes the transition and prints post-guidance.
-	// When no pre-guidance template exists, the command works as before (backward compatible).
-	// JSON mode bypasses guidance entirely — scripts don't need coaching.
+	// [LAW:dataflow-not-control-flow] Pre-guidance template existence is the data
+	// that activates the two-phase (preview/apply) flow. When the template exists
+	// and we are not in JSON mode, the bare command prints guidance with a
+	// state-derived token, and only `--apply=<token>` with a matching token may
+	// execute the transition. When no template exists or we are in JSON mode,
+	// the command keeps the legacy single-phase contract.
 	preGuidance, hasPreGuidance, err := loadTransitionGuidance(action, "pre", ap.Workspace.RootDir)
 	if err != nil {
 		return fmt.Errorf("load pre-guidance: %w", err)
 	}
+	guided := hasPreGuidance && !isJSON
 
-	if hasPreGuidance && !*apply && !isJSON {
-		rendered := renderGuidance(preGuidance, issueID)
-		if _, err := fmt.Fprintln(stdout, rendered); err != nil {
+	if guided {
+		// [LAW:types-are-the-program] In guided mode the pre-guidance template
+		// is the only surface that communicates the apply token to the agent.
+		// A template that omits `<token>` cannot satisfy that contract — apply
+		// would refuse with no way to discover the token. Refuse at load time
+		// and name the offending override so the user can fix it.
+		if err := requireTokenPlaceholder(preGuidance, action, ap.Workspace.RootDir); err != nil {
 			return err
 		}
-		return nil
+
+		// [LAW:types-are-the-program] The token is a function of the plan
+		// (action + id + the issue's UpdatedAt fingerprint). Reading the issue
+		// before transitioning lets the apply phase recompute the same hash and
+		// reject any drift — including stale tokens from previous sessions.
+		issue, err := ap.Store.GetIssue(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		expected := applyToken("transition", action, issueID, issue.UpdatedAt.UTC().Format(time.RFC3339Nano))
+
+		if !applyRequested {
+			rendered := renderGuidance(preGuidance, issueID, expected)
+			if _, err := fmt.Fprintln(stdout, rendered); err != nil {
+				return err
+			}
+			return nil
+		}
+
+		if *applyVal != expected {
+			return fmt.Errorf("run `lit %s %s` first", transitionCommandName(action), issueID)
+		}
 	}
 
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
@@ -966,7 +1006,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 			return fmt.Errorf("load post-guidance: %w", err)
 		}
 		if hasPostGuidance {
-			rendered := renderGuidance(postGuidance, issueID)
+			rendered := renderGuidance(postGuidance, issueID, "")
 			if _, err := fmt.Fprintln(stdout, rendered); err != nil {
 				return err
 			}
@@ -1244,9 +1284,13 @@ func loadTransitionGuidance(action, phase, workspaceRoot string) (string, bool, 
 	return strings.TrimSpace(content), true, nil
 }
 
-// renderGuidance interpolates <id> placeholders in a guidance template.
-func renderGuidance(template string, issueID string) string {
-	return strings.ReplaceAll(template, "<id>", issueID)
+// renderGuidance interpolates <id> and <token> placeholders in a guidance
+// template. token may be empty (e.g. for post-guidance, where the apply token
+// no longer applies); in that case <token> is replaced with the empty string.
+func renderGuidance(template string, issueID string, token string) string {
+	out := strings.ReplaceAll(template, "<id>", issueID)
+	out = strings.ReplaceAll(out, "<token>", token)
+	return out
 }
 
 func splitCSV(input string) []string {
