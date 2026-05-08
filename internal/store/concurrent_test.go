@@ -250,13 +250,15 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 			t.Fatalf("issue %s status = %q, want %q", id, got, wantStatus)
 		}
 		transitionEvents := 0
-		for _, h := range detail.History {
-			if h.ToStatus == wantStatus {
-				transitionEvents++
+		for _, e := range detail.Events {
+			for _, ch := range e.Changes {
+				if ch.Field == "status" && ch.To == wantStatus {
+					transitionEvents++
+				}
 			}
 		}
 		if transitionEvents == 0 {
-			t.Fatalf("issue %s has no history row recording transition to %q", id, wantStatus)
+			t.Fatalf("issue %s has no event row recording transition to %q", id, wantStatus)
 		}
 	}
 

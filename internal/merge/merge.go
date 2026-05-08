@@ -86,7 +86,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Relations:   mergeRelations(issueSet, local.Relations, remote.Relations),
 		Comments:    mergeComments(issueSet, local.Comments, remote.Comments),
 		Labels:      mergeLabels(issueSet, local.Labels, remote.Labels),
-		History:     mergeHistory(issueSet, local.History, remote.History),
+		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
 	return MergeResult{Export: merged, Conflicts: conflicts}
 }
@@ -241,15 +241,15 @@ func mergeLabels(issueSet map[string]struct{}, locals, remotes []model.Label) []
 	return out
 }
 
-func mergeHistory(issueSet map[string]struct{}, locals, remotes []model.IssueHistory) []model.IssueHistory {
-	merged := map[string]model.IssueHistory{}
+func mergeEvents(issueSet map[string]struct{}, locals, remotes []model.IssueEvent) []model.IssueEvent {
+	merged := map[string]model.IssueEvent{}
 	for _, event := range append(locals, remotes...) {
 		if _, ok := issueSet[event.IssueID]; !ok {
 			continue
 		}
 		merged[event.ID] = event
 	}
-	out := make([]model.IssueHistory, 0, len(merged))
+	out := make([]model.IssueEvent, 0, len(merged))
 	for _, event := range merged {
 		out = append(out, event)
 	}

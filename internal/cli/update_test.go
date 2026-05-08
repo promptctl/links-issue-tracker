@@ -388,10 +388,10 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.History) < 2 {
-		t.Fatalf("len(detail.History) = %d, want >= 2", len(detail.History))
+	if len(detail.Events) < 2 {
+		t.Fatalf("len(detail.Events) = %d, want >= 2", len(detail.Events))
 	}
-	last := detail.History[len(detail.History)-1]
+	last := detail.Events[len(detail.Events)-1]
 	if last.Action != "start" {
 		t.Fatalf("last.Action = %q, want start", last.Action)
 	}
@@ -532,10 +532,10 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	for _, h := range detail.History {
+	for _, h := range detail.Events {
 		switch h.Action {
 		case "start", "done", "close", "reopen":
-			t.Fatalf("field-only update on container produced transition action %q; history: %#v", h.Action, detail.History)
+			t.Fatalf("field-only update on container produced transition action %q; events: %#v", h.Action, detail.Events)
 		}
 	}
 }
