@@ -1,0 +1,97 @@
+<svg width="960" height="360" viewBox="0 0 960 360" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">Animated interlocking links badge</title>
+  <desc id="desc">Two physically interlocked chain links in cyan and green with subtle motion.</desc>
+  <!-- [LAW:one-source-of-truth] README artwork is centralized in this single SVG file. -->
+  <defs>
+    <linearGradient id="cardFill" x1="330" y1="30" x2="630" y2="330" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FAFC"/>
+      <stop offset="1" stop-color="#E2E8F0"/>
+    </linearGradient>
+
+    <linearGradient id="blueLink" x1="292" y1="98" x2="538" y2="274" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#67E8F9"/>
+      <stop offset="0.52" stop-color="#22D3EE"/>
+      <stop offset="1" stop-color="#0284C7"/>
+      <animateTransform attributeName="gradientTransform" type="translate" values="-18 0;18 0;-18 0" dur="5.4s" repeatCount="indefinite"/>
+    </linearGradient>
+
+    <linearGradient id="greenLink" x1="420" y1="96" x2="666" y2="278" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#6EE7B7"/>
+      <stop offset="0.56" stop-color="#34D399"/>
+      <stop offset="1" stop-color="#059669"/>
+      <animateTransform attributeName="gradientTransform" type="translate" values="18 0;-18 0;18 0" dur="5.4s" repeatCount="indefinite"/>
+    </linearGradient>
+
+    <filter id="badgeShadow" x="290" y="4" width="380" height="352" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="16" stdDeviation="12" flood-color="#020617" flood-opacity="0.24"/>
+    </filter>
+
+    <filter id="linkShadow" x="230" y="48" width="500" height="260" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feDropShadow dx="0" dy="6" stdDeviation="6" flood-color="#0F172A" flood-opacity="0.22"/>
+    </filter>
+
+    <rect id="blueLinkShape" x="292" y="122" width="250" height="116" rx="58" transform="rotate(-38 417 180)"/>
+    <rect id="greenLinkShape" x="420" y="122" width="250" height="116" rx="58" transform="rotate(-38 545 180)"/>
+
+    <clipPath id="crossGreenTopClip">
+      <ellipse cx="468" cy="156" rx="44" ry="28" transform="rotate(-38 468 156)"/>
+    </clipPath>
+
+    <clipPath id="crossBlueTopClip">
+      <ellipse cx="496" cy="204" rx="44" ry="28" transform="rotate(-38 496 204)"/>
+    </clipPath>
+
+    <mask id="blueCutMask">
+      <rect width="960" height="360" fill="white"/>
+      <ellipse cx="468" cy="156" rx="66" ry="44" transform="rotate(-38 468 156)" fill="black"/>
+    </mask>
+
+    <mask id="greenCutMask">
+      <rect width="960" height="360" fill="white"/>
+      <ellipse cx="496" cy="204" rx="66" ry="44" transform="rotate(-38 496 204)" fill="black"/>
+    </mask>
+  </defs>
+
+  <g filter="url(#badgeShadow)">
+    <rect x="330" y="30" width="300" height="300" rx="24" fill="url(#cardFill)"/>
+  </g>
+
+  <g filter="url(#linkShadow)">
+    <g>
+      <animateTransform attributeName="transform" type="translate" values="0 0;0 -2;0 0" dur="3.8s" repeatCount="indefinite"/>
+
+      <!-- [LAW:dataflow-not-control-flow] Render order is fixed; masks/clips carry crossing variability in data. -->
+      <g mask="url(#blueCutMask)">
+        <use href="#blueLinkShape" fill="none" stroke="url(#blueLink)" stroke-width="36"/>
+      </g>
+
+      <g mask="url(#greenCutMask)">
+        <use href="#greenLinkShape" fill="none" stroke="url(#greenLink)" stroke-width="36"/>
+      </g>
+
+      <g clip-path="url(#crossGreenTopClip)">
+        <use href="#greenLinkShape" fill="none" stroke="url(#greenLink)" stroke-width="36"/>
+      </g>
+
+      <g clip-path="url(#crossBlueTopClip)">
+        <use href="#blueLinkShape" fill="none" stroke="url(#blueLink)" stroke-width="36"/>
+      </g>
+
+      <g mask="url(#blueCutMask)">
+        <use href="#blueLinkShape" fill="none" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="9"/>
+      </g>
+
+      <g mask="url(#greenCutMask)">
+        <use href="#greenLinkShape" fill="none" stroke="#FFFFFF" stroke-opacity="0.20" stroke-width="9"/>
+      </g>
+
+      <g clip-path="url(#crossGreenTopClip)">
+        <use href="#greenLinkShape" fill="none" stroke="#FFFFFF" stroke-opacity="0.20" stroke-width="9"/>
+      </g>
+
+      <g clip-path="url(#crossBlueTopClip)">
+        <use href="#blueLinkShape" fill="none" stroke="#FFFFFF" stroke-opacity="0.24" stroke-width="9"/>
+      </g>
+    </g>
+  </g>
+</svg>

@@ -1,5 +1,9 @@
 # links
 
+<p align="center">
+  <img src="docs/assets/interlocking-links.svg" alt="Two interlocking links" width="420" />
+</p>
+
 `links-issue-tracker` (`lit`) is a tool that allows your agents to track work. Inspired by `beads` but designed to be reliable with a minimal surface area.
 
 ## Inspiration and Credit
