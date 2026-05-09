@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -475,6 +477,16 @@ type v1ExportHistory struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// v1EventID derives a deterministic, collision-resistant ID from a v1 history
+// row's content so that merging two v1 exports never produces duplicate IDs
+// for different events. Identical rows produce the same ID (safe dedup); rows
+// with any differing field produce a distinct ID (safe merge).
+func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdAt time.Time) string {
+	key := strings.Join([]string{issueID, action, fromStatus, toStatus, createdBy, createdAt.Format(time.RFC3339Nano)}, "|")
+	sum := sha256.Sum256([]byte(key))
+	return "evt-v1-" + hex.EncodeToString(sum[:8])
+}
+
 // UnmarshalJSON handles both v1 (history array) and v2 (events array) export
 // formats so old sync files and backup restores remain readable after the
 // schema upgrade to Version 2.
@@ -510,9 +522,9 @@ func (e *Export) UnmarshalJSON(data []byte) error {
 	// an IssueEvent with a single status field-change so ReplaceFromExport and
 	// merging work without special-casing the version downstream.
 	if raw.Version < 2 && len(raw.History) > 0 {
-		for i, h := range raw.History {
+		for _, h := range raw.History {
 			e.Events = append(e.Events, IssueEvent{
-				ID:        fmt.Sprintf("evt-v1-%d", i),
+				ID:        v1EventID(h.IssueID, h.Action, h.FromStatus, h.ToStatus, h.CreatedBy, h.CreatedAt),
 				IssueID:   h.IssueID,
 				Action:    h.Action,
 				Reason:    h.Reason,

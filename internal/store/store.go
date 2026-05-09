@@ -895,12 +895,20 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 		reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
 	}
 	for _, action := range actions {
+		// TransitionAssignee is only meaningful for "start"; every other action
+		// in a multi-step sequence (e.g. "reopen" in "reopen+start") must
+		// receive an empty assignee or TransitionIssue rejects it.
+		// [LAW:dataflow-not-control-flow] Variability is in the value, not the branch.
+		assignee := ""
+		if action == "start" {
+			assignee = in.TransitionAssignee
+		}
 		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
 			IssueID:   id,
 			Action:    action,
 			Reason:    reason,
 			CreatedBy: in.TransitionBy,
-			Assignee:  in.TransitionAssignee,
+			Assignee:  assignee,
 		}); err != nil {
 			return model.Issue{}, err
 		}
