@@ -831,7 +831,11 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 			return fmt.Errorf("update issue: %w", err)
 		}
 		if in.Labels != nil {
-			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, "links"); err != nil {
+			labelActor := in.By
+			if labelActor == "" {
+				labelActor = "unknown"
+			}
+			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, labelActor); err != nil {
 				return err
 			}
 		}
@@ -1258,25 +1262,25 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 // [LAW:single-enforcer] Single insertion point for issue history. Every
 // mutation site (CreateIssue, transitions, UpdateIssue, ...) computes its
 // field-change diff and routes through here.
-func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, assignee string, changes []model.FieldChange) error {
+func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
 	event := model.IssueEvent{
 		ID:        "evt-" + uuid.NewString(),
 		IssueID:   issueID,
 		Action:    strings.TrimSpace(action),
 		Reason:    strings.TrimSpace(reason),
-		Assignee:  strings.TrimSpace(assignee),
+		Actor:     strings.TrimSpace(actor),
 		CreatedAt: time.Now().UTC(),
 		Changes:   changes,
 	}
-	if event.Assignee == "" {
-		event.Assignee = "unknown"
+	if event.Actor == "" {
+		event.Actor = "unknown"
 	}
 	var actionArg any
 	if event.Action != "" {
 		actionArg = event.Action
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, assignee, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, actionArg, event.Reason, event.Assignee, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 		return fmt.Errorf("insert issue event: %w", err)
 	}
 	for _, change := range changes {
@@ -1316,7 +1320,7 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 }
 
 func (s *Store) listEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `SELECT id, issue_id, action, reason, assignee, created_at FROM issue_events WHERE issue_id = ? ORDER BY created_at ASC`, issueID)
+	events, err := s.queryEvents(ctx, "e.issue_id = ?", issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)
 	}
@@ -1370,82 +1374,72 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 }
 
 func (s *Store) listAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
-	events, err := s.queryEvents(ctx, `SELECT id, issue_id, action, reason, assignee, created_at FROM issue_events ORDER BY created_at ASC`)
+	events, err := s.queryEvents(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list all issue events: %w", err)
 	}
 	return events, nil
 }
 
-// queryEvents runs an issue_events SELECT and hydrates each row's Changes
-// from issue_event_changes. Used by listEvents (single issue) and
-// listAllEvents (full export).
-func (s *Store) queryEvents(ctx context.Context, query string, args ...any) ([]model.IssueEvent, error) {
-	rows, err := s.db.QueryContext(ctx, query, args...)
+// queryEvents fetches issue_events joined with issue_event_changes in a single
+// LEFT JOIN query, collapsing the per-change rows back into IssueEvent.Changes
+// slices. whereClause is an optional SQL fragment applied after the JOIN (e.g.
+// "e.issue_id = ?"); pass "" for an unfiltered scan. [LAW:dataflow-not-control-flow]
+func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any) ([]model.IssueEvent, error) {
+	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, c.field, c.from_value, c.to_value
+		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
+	if whereClause != "" {
+		q += " WHERE " + whereClause
+	}
+	q += " ORDER BY e.created_at ASC, e.id ASC"
+	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
+	// Ordered list of events; idx maps event ID to its position in out so each
+	// change row can be appended to the right event without a second query.
 	out := []model.IssueEvent{}
-	var ids []string
 	idx := map[string]int{}
 	for rows.Next() {
-		var event model.IssueEvent
-		var createdAt string
-		var action sql.NullString
-		if err := rows.Scan(&event.ID, &event.IssueID, &action, &event.Reason, &event.Assignee, &createdAt); err != nil {
+		var evtID, evtIssueID, evtReason, evtActor, evtCreatedAt string
+		var action, cField, cFrom, cTo sql.NullString
+		if err := rows.Scan(&evtID, &evtIssueID, &action, &evtReason, &evtActor, &evtCreatedAt, &cField, &cFrom, &cTo); err != nil {
 			return nil, err
 		}
-		if action.Valid {
-			event.Action = action.String
+		i, seen := idx[evtID]
+		if !seen {
+			t, err := scanTime(evtCreatedAt)
+			if err != nil {
+				return nil, err
+			}
+			event := model.IssueEvent{
+				ID:        evtID,
+				IssueID:   evtIssueID,
+				Reason:    evtReason,
+				Actor:     evtActor,
+				CreatedAt: t,
+				Changes:   []model.FieldChange{},
+			}
+			if action.Valid {
+				event.Action = action.String
+			}
+			i = len(out)
+			idx[evtID] = i
+			out = append(out, event)
 		}
-		t, err := scanTime(createdAt)
-		if err != nil {
-			return nil, err
+		if cField.Valid {
+			change := model.FieldChange{Field: cField.String}
+			if cFrom.Valid {
+				change.From = cFrom.String
+			}
+			if cTo.Valid {
+				change.To = cTo.String
+			}
+			out[i].Changes = append(out[i].Changes, change)
 		}
-		event.CreatedAt = t
-		event.Changes = []model.FieldChange{}
-		idx[event.ID] = len(out)
-		ids = append(ids, event.ID)
-		out = append(out, event)
 	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	if len(ids) == 0 {
-		return out, nil
-	}
-	placeholders := strings.Repeat("?,", len(ids))
-	placeholders = placeholders[:len(placeholders)-1]
-	changeArgs := make([]any, len(ids))
-	for i, id := range ids {
-		changeArgs[i] = id
-	}
-	changeRows, err := s.db.QueryContext(ctx, `SELECT event_id, field, from_value, to_value FROM issue_event_changes WHERE event_id IN (`+placeholders+`)`, changeArgs...)
-	if err != nil {
-		return nil, fmt.Errorf("query issue event changes: %w", err)
-	}
-	defer changeRows.Close()
-	for changeRows.Next() {
-		var eventID, field string
-		var fromVal, toVal sql.NullString
-		if err := changeRows.Scan(&eventID, &field, &fromVal, &toVal); err != nil {
-			return nil, err
-		}
-		i, ok := idx[eventID]
-		if !ok {
-			continue
-		}
-		change := model.FieldChange{Field: field}
-		if fromVal.Valid {
-			change.From = fromVal.String
-		}
-		if toVal.Valid {
-			change.To = toVal.String
-		}
-		out[i].Changes = append(out[i].Changes, change)
-	}
-	return out, changeRows.Err()
+	return out, rows.Err()
 }
 
 type issueScanner interface{ Scan(dest ...any) error }

@@ -941,7 +941,7 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			IssueID:   "issue-replaced",
 			Action:    "created",
 			Reason:    "imported from sync",
-			Assignee:  "sync",
+			Actor:     "sync",
 			CreatedAt: time.Now().UTC(),
 			Changes: []model.FieldChange{
 				{Field: "status", From: "", To: "open"},

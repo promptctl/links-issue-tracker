@@ -99,7 +99,7 @@ func (s *Store) migrate(ctx context.Context) error {
 			issue_id VARCHAR(191) NOT NULL,
 			action VARCHAR(64) NULL,
 			reason TEXT NOT NULL,
-			assignee TEXT NOT NULL,
+			actor TEXT NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
 		);`,
@@ -126,6 +126,18 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS issue_history`); err != nil {
 		return fmt.Errorf("drop legacy issue_history table: %w", err)
 	}
+	// issue_events.assignee was renamed to actor. Probe-gated rename keeps the
+	// migration idempotent across fresh / migrated databases.
+	actorColumnChanged, err := s.execReconciliationUpdate(
+		ctx,
+		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issue_events' AND column_name = 'assignee' LIMIT 1`,
+		`ALTER TABLE issue_events RENAME COLUMN assignee TO actor`,
+		"rename issue_events.assignee to actor",
+	)
+	if err != nil {
+		return err
+	}
+	changed = changed || actorColumnChanged
 	rankColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
 	if err != nil {
 		return err

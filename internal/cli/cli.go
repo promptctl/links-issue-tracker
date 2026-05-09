@@ -765,20 +765,21 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
-	if visited["reason"] && !visited["status"] {
-		return errors.New("--reason requires --status")
-	}
-	if visited["by"] && !visited["status"] {
-		return errors.New("--by requires --status")
-	}
 	if visited["status"] && strings.TrimSpace(*status) == "" {
 		return errors.New("--status requires a non-empty value")
 	}
 
 	// [LAW:dataflow-not-control-flow] Always build one UpdateInput; variability lives in empty fields/status, not in which branch runs.
+	// --by and --reason apply to both transitions (TransitionBy/Reason) and
+	// plain field updates (Fields.By/Reason) so every mutation consistently
+	// records the actor. [LAW:single-enforcer]
 	in := store.ApplyUpdateInput{
 		TransitionReason: strings.TrimSpace(*reason),
 		TransitionBy:     *by,
+		Fields: store.UpdateIssueInput{
+			By:     *by,
+			Reason: strings.TrimSpace(*reason),
+		},
 	}
 	if visited["status"] {
 		in.TargetStatus = *status

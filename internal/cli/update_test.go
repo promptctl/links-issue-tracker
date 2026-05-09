@@ -470,11 +470,11 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	}
 }
 
-func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
+func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Validation",
 		Topic:     "validation",
 		IssueType: "task",
@@ -484,13 +484,12 @@ func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 
+	// --reason alone (no field flags and no --status) must still be rejected
+	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "not allowed", "--json"})
+	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here", "--json"})
 	if err == nil {
-		t.Fatal("runUpdate(--reason without --status) error = nil, want validation error")
-	}
-	if err.Error() != "--reason requires --status" {
-		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--reason requires --status")
+		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
 	}
 }
 

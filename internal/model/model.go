@@ -435,7 +435,7 @@ type IssueEvent struct {
 	IssueID   string        `json:"issue_id"`
 	Action    string        `json:"action,omitempty"`
 	Reason    string        `json:"reason"`
-	Assignee  string        `json:"assignee"`
+	Actor     string        `json:"actor"`
 	CreatedAt time.Time     `json:"created_at"`
 	Changes   []FieldChange `json:"changes"`
 }
@@ -461,4 +461,66 @@ type Export struct {
 	Comments    []Comment    `json:"comments"`
 	Labels      []Label      `json:"labels"`
 	Events      []IssueEvent `json:"events"`
+}
+
+// v1ExportHistory is the legacy history row produced by Version 1 exports.
+// Version 2 replaces the "history" array with the richer "events" schema.
+type v1ExportHistory struct {
+	IssueID    string    `json:"issue_id"`
+	Action     string    `json:"action"`
+	FromStatus string    `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Reason     string    `json:"reason"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// UnmarshalJSON handles both v1 (history array) and v2 (events array) export
+// formats so old sync files and backup restores remain readable after the
+// schema upgrade to Version 2.
+// [LAW:single-enforcer] Version dispatch lives here; every JSON decode path
+// (syncfile, backup, store tests) inherits it through json.Unmarshal.
+func (e *Export) UnmarshalJSON(data []byte) error {
+	type rawExport struct {
+		Version     int               `json:"version"`
+		WorkspaceID string            `json:"workspace_id"`
+		ExportedAt  time.Time         `json:"exported_at"`
+		Issues      []Issue           `json:"issues"`
+		Relations   []Relation        `json:"relations"`
+		Comments    []Comment         `json:"comments"`
+		Labels      []Label           `json:"labels"`
+		Events      []IssueEvent      `json:"events"`
+		History     []v1ExportHistory `json:"history"`
+	}
+	var raw rawExport
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*e = Export{
+		Version:     raw.Version,
+		WorkspaceID: raw.WorkspaceID,
+		ExportedAt:  raw.ExportedAt,
+		Issues:      raw.Issues,
+		Relations:   raw.Relations,
+		Comments:    raw.Comments,
+		Labels:      raw.Labels,
+		Events:      raw.Events,
+	}
+	// v1 exports carry "history" rows instead of "events". Convert each row to
+	// an IssueEvent with a single status field-change so ReplaceFromExport and
+	// merging work without special-casing the version downstream.
+	if raw.Version < 2 && len(raw.History) > 0 {
+		for i, h := range raw.History {
+			e.Events = append(e.Events, IssueEvent{
+				ID:        fmt.Sprintf("evt-v1-%d", i),
+				IssueID:   h.IssueID,
+				Action:    h.Action,
+				Reason:    h.Reason,
+				Actor:     h.CreatedBy,
+				CreatedAt: h.CreatedAt,
+				Changes:   []FieldChange{{Field: "status", From: h.FromStatus, To: h.ToStatus}},
+			})
+		}
+	}
+	return nil
 }

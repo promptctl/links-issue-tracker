@@ -99,7 +99,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: 1, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
+	return model.Export{Version: 2, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
@@ -390,8 +390,8 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 			if event.Action != "" {
 				actionArg = event.Action
 			}
-			if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, assignee, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-				event.ID, event.IssueID, actionArg, event.Reason, event.Assignee, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+				event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
 				return fmt.Errorf("restore issue event %s: %w", event.ID, err)
 			}
 			for _, change := range event.Changes {
