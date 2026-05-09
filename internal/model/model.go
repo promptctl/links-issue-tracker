@@ -1,6 +1,8 @@
 package model
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -414,36 +416,123 @@ type Label struct {
 	CreatedBy string    `json:"created_by"`
 }
 
-type IssueHistory struct {
-	ID         string    `json:"id"`
-	IssueID    string    `json:"issue_id"`
-	Action     string    `json:"action"`
-	Reason     string    `json:"reason"`
-	FromStatus string    `json:"from_status"`
-	ToStatus   string    `json:"to_status"`
-	CreatedAt  time.Time `json:"created_at"`
-	CreatedBy  string    `json:"created_by"`
+// FieldChange describes a single field's transition within an IssueEvent.
+// Both From and To are stringified (TEXT in the database) so the schema is
+// field-agnostic — every issue field, regardless of its native type, lands
+// in the same shape.
+type FieldChange struct {
+	Field string `json:"field"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+// IssueEvent is the field-agnostic history record. Every mutation to an
+// issue — status transitions, archive/delete flips, plain field updates —
+// produces one event with the actor + reason and N field-change rows for
+// the fields that actually moved. Action is optional intent metadata
+// populated by named status transitions (start/done/close/reopen/etc.) and
+// left empty for plain field updates; per-field actions do not exist.
+type IssueEvent struct {
+	ID        string        `json:"id"`
+	IssueID   string        `json:"issue_id"`
+	Action    string        `json:"action,omitempty"`
+	Reason    string        `json:"reason"`
+	Actor     string        `json:"actor"`
+	CreatedAt time.Time     `json:"created_at"`
+	Changes   []FieldChange `json:"changes"`
 }
 
 type IssueDetail struct {
-	Issue     Issue          `json:"issue"`
-	Relations []Relation     `json:"relations"`
-	Comments  []Comment      `json:"comments"`
-	Children  []Issue        `json:"children"`
-	DependsOn []Issue        `json:"depends_on"`
-	Related   []Issue        `json:"related"`
-	Blocks    []Issue        `json:"blocks"`
-	Parent    *Issue         `json:"parent,omitempty"`
-	History   []IssueHistory `json:"history"`
+	Issue     Issue        `json:"issue"`
+	Relations []Relation   `json:"relations"`
+	Comments  []Comment    `json:"comments"`
+	Children  []Issue      `json:"children"`
+	DependsOn []Issue      `json:"depends_on"`
+	Related   []Issue      `json:"related"`
+	Blocks    []Issue      `json:"blocks"`
+	Parent    *Issue       `json:"parent,omitempty"`
+	Events    []IssueEvent `json:"events"`
 }
 
 type Export struct {
-	Version     int            `json:"version"`
-	WorkspaceID string         `json:"workspace_id"`
-	ExportedAt  time.Time      `json:"exported_at"`
-	Issues      []Issue        `json:"issues"`
-	Relations   []Relation     `json:"relations"`
-	Comments    []Comment      `json:"comments"`
-	Labels      []Label        `json:"labels"`
-	History     []IssueHistory `json:"history"`
+	Version     int          `json:"version"`
+	WorkspaceID string       `json:"workspace_id"`
+	ExportedAt  time.Time    `json:"exported_at"`
+	Issues      []Issue      `json:"issues"`
+	Relations   []Relation   `json:"relations"`
+	Comments    []Comment    `json:"comments"`
+	Labels      []Label      `json:"labels"`
+	Events      []IssueEvent `json:"events"`
+}
+
+// v1ExportHistory is the legacy history row produced by Version 1 exports.
+// Version 2 replaces the "history" array with the richer "events" schema.
+type v1ExportHistory struct {
+	IssueID    string    `json:"issue_id"`
+	Action     string    `json:"action"`
+	FromStatus string    `json:"from_status"`
+	ToStatus   string    `json:"to_status"`
+	Reason     string    `json:"reason"`
+	CreatedBy  string    `json:"created_by"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// v1EventID derives a deterministic, collision-resistant ID from a v1 history
+// row's content so that merging two v1 exports never produces duplicate IDs
+// for different events. Identical rows produce the same ID (safe dedup); rows
+// with any differing field produce a distinct ID (safe merge).
+func v1EventID(issueID, action, fromStatus, toStatus, createdBy string, createdAt time.Time) string {
+	key := strings.Join([]string{issueID, action, fromStatus, toStatus, createdBy, createdAt.Format(time.RFC3339Nano)}, "|")
+	sum := sha256.Sum256([]byte(key))
+	return "evt-v1-" + hex.EncodeToString(sum[:8])
+}
+
+// UnmarshalJSON handles both v1 (history array) and v2 (events array) export
+// formats so old sync files and backup restores remain readable after the
+// schema upgrade to Version 2.
+// [LAW:single-enforcer] Version dispatch lives here; every JSON decode path
+// (syncfile, backup, store tests) inherits it through json.Unmarshal.
+func (e *Export) UnmarshalJSON(data []byte) error {
+	type rawExport struct {
+		Version     int               `json:"version"`
+		WorkspaceID string            `json:"workspace_id"`
+		ExportedAt  time.Time         `json:"exported_at"`
+		Issues      []Issue           `json:"issues"`
+		Relations   []Relation        `json:"relations"`
+		Comments    []Comment         `json:"comments"`
+		Labels      []Label           `json:"labels"`
+		Events      []IssueEvent      `json:"events"`
+		History     []v1ExportHistory `json:"history"`
+	}
+	var raw rawExport
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	*e = Export{
+		Version:     raw.Version,
+		WorkspaceID: raw.WorkspaceID,
+		ExportedAt:  raw.ExportedAt,
+		Issues:      raw.Issues,
+		Relations:   raw.Relations,
+		Comments:    raw.Comments,
+		Labels:      raw.Labels,
+		Events:      raw.Events,
+	}
+	// v1 exports carry "history" rows instead of "events". Convert each row to
+	// an IssueEvent with a single status field-change so ReplaceFromExport and
+	// merging work without special-casing the version downstream.
+	if raw.Version < 2 && len(raw.History) > 0 {
+		for _, h := range raw.History {
+			e.Events = append(e.Events, IssueEvent{
+				ID:        v1EventID(h.IssueID, h.Action, h.FromStatus, h.ToStatus, h.CreatedBy, h.CreatedAt),
+				IssueID:   h.IssueID,
+				Action:    h.Action,
+				Reason:    h.Reason,
+				Actor:     h.CreatedBy,
+				CreatedAt: h.CreatedAt,
+				Changes:   []FieldChange{{Field: "status", From: h.FromStatus, To: h.ToStatus}},
+			})
+		}
+	}
+	return nil
 }

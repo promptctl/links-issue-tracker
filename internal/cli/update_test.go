@@ -37,7 +37,7 @@ func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -68,7 +68,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -107,7 +107,7 @@ func TestRunTransitionDoneApplyWithoutTokenRefusesWithShortMessage(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -140,7 +140,7 @@ func TestRunTransitionDoneApplyEmptyValueIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestRunTransitionDonePreGuidanceMissingTokenPlaceholderRefusesAtLoad(t *tes
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -206,7 +206,7 @@ func TestRunTransitionDoneApplyWithWrongTokenRefusesWithShortMessage(t *testing.
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -231,7 +231,7 @@ func TestRunTransitionDoneTokenInvalidatedByDriftBetweenPreviewAndApply(t *testi
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -282,7 +282,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(ctx, &stdout, ap, []string{epic.ID}, "start")
+	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--assignee", "tester"}, "start")
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
@@ -290,7 +290,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("runTransition(start epic) error = %q, want no start action available", err.Error())
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	var started model.Issue
@@ -333,7 +333,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closed child) error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -372,7 +372,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress --json) error = %v", err)
 	}
 
@@ -388,10 +388,10 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.History) < 2 {
-		t.Fatalf("len(detail.History) = %d, want >= 2", len(detail.History))
+	if len(detail.Events) < 2 {
+		t.Fatalf("len(detail.Events) = %d, want >= 2", len(detail.Events))
 	}
-	last := detail.History[len(detail.History)-1]
+	last := detail.Events[len(detail.Events)-1]
 	if last.Action != "start" {
 		t.Fatalf("last.Action = %q, want start", last.Action)
 	}
@@ -470,11 +470,11 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	}
 }
 
-func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
+func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Validation",
 		Topic:     "validation",
 		IssueType: "task",
@@ -484,13 +484,12 @@ func TestRunUpdateRejectsReasonWithoutStatus(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 
+	// --reason alone (no field flags and no --status) must still be rejected
+	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "not allowed", "--json"})
+	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here", "--json"})
 	if err == nil {
-		t.Fatal("runUpdate(--reason without --status) error = nil, want validation error")
-	}
-	if err.Error() != "--reason requires --status" {
-		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--reason requires --status")
+		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
 	}
 }
 
@@ -532,10 +531,10 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	for _, h := range detail.History {
+	for _, h := range detail.Events {
 		switch h.Action {
 		case "start", "done", "close", "reopen":
-			t.Fatalf("field-only update on container produced transition action %q; history: %#v", h.Action, detail.History)
+			t.Fatalf("field-only update on container produced transition action %q; events: %#v", h.Action, detail.Events)
 		}
 	}
 }

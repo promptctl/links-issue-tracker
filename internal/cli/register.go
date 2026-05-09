@@ -156,6 +156,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(appAccessWrite, runRank)},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
 			Run: r.transitionCmd("start")},
+		{Name: "assign", Summary: "Reassign an issue to a different agent (without changing status)", GroupID: "operations",
+			Run: r.appCmd(appAccessWrite, runAssign)},
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
 			Run: r.transitionCmd("done")},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
