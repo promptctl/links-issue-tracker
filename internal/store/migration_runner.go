@@ -199,6 +199,9 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 			return false, s.revertWithQuarantine(ctx, safety, "up", m.version, fmt.Errorf("apply migration v%d: %w", m.version, err))
 		}
 		if !dryRun {
+			// Write success row before commitMigration so it lands in the
+			// same Dolt commit as the migration's schema changes.
+			s.writeMigrationLogSuccess(ctx, m.version, m.name, result.Duration.Milliseconds())
 			if err := s.commitMigration(ctx, result); err != nil {
 				return false, s.revertWithQuarantine(ctx, safety, "up", m.version, fmt.Errorf("commit migration v%d: %w", m.version, err))
 			}
@@ -289,6 +292,44 @@ func (s *Store) commitMigration(ctx context.Context, result *goose.MigrationResu
 	return nil
 }
 
+// writeMigrationLogSuccess writes a success row to migration_log. It is
+// called BEFORE commitMigration so the row is included in the same Dolt
+// commit as the migration's schema changes. Best-effort: if migration_log
+// does not yet exist (migrations 1 and 2 run before migration 3 creates it)
+// the write fails silently via the event log.
+func (s *Store) writeMigrationLogSuccess(ctx context.Context, version int64, name string, durationMs int64) {
+	finishedAt := time.Now().UTC()
+	startedAt := finishedAt.Add(-time.Duration(durationMs) * time.Millisecond)
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO migration_log
+			(version, name, started_at, finished_at, duration_ms, status, error_text, rows_affected)
+		 VALUES (?, ?, ?, ?, ?, 'success', NULL, 0)`,
+		version, name, startedAt, finishedAt, durationMs); err != nil {
+		emitMigrationEvent("migration_log.write_failed", map[string]any{
+			"version": version,
+			"error":   err.Error(),
+		})
+	}
+}
+
+// writeMigrationLogFailure writes a failure row to migration_log. It is
+// called AFTER ResetToCheckpoint in revertWithQuarantine so the row survives
+// the reset and is committed alongside the quarantine row. Best-effort: same
+// table-existence caveat as writeMigrationLogSuccess.
+func (s *Store) writeMigrationLogFailure(ctx context.Context, version int64, errText string) {
+	now := time.Now().UTC()
+	if _, err := s.db.ExecContext(ctx,
+		`INSERT INTO migration_log
+			(version, name, started_at, finished_at, duration_ms, status, error_text, rows_affected)
+		 VALUES (?, '', ?, ?, 0, 'failure', ?, 0)`,
+		version, now, now, errText); err != nil {
+		emitMigrationEvent("migration_log.write_failed", map[string]any{
+			"version": version,
+			"error":   err.Error(),
+		})
+	}
+}
+
 // migrationSourceName extracts a human-readable migration name from a goose
 // Source. SQL files follow the "NNNNN_name.sql" convention; Go migrations
 // registered via WithGoMigrations have an empty path and fall back to a
@@ -344,6 +385,9 @@ func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, pha
 		})
 		return me
 	}
+	// Write failure row after reset so it survives alongside the quarantine
+	// commit. Best-effort: if migration_log doesn't exist yet, silently drops.
+	s.writeMigrationLogFailure(ctx, version, cause.Error())
 	if cerr := s.commitWorkingSet(ctx, fmt.Sprintf("Quarantine migration version %d", version)); cerr != nil {
 		emitMigrationEvent("quarantine.commit_failed", map[string]any{
 			"version": version,

@@ -93,3 +93,16 @@ CREATE TABLE `migration_quarantine` (
   PRIMARY KEY (`version_id`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE `migration_log` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `version` bigint NOT NULL,
+  `name` text NOT NULL,
+  `started_at` datetime(3) NOT NULL,
+  `finished_at` datetime(3),
+  `duration_ms` bigint,
+  `status` varchar(10) NOT NULL,
+  `error_text` text,
+  `rows_affected` bigint,
+  PRIMARY KEY (`id`)
+) ENGINE=InnoDB AUTO_INCREMENT=2 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+

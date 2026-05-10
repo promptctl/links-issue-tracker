@@ -52,8 +52,9 @@ func TestPreGooseWorkspaceIsAdoptedAndStamped(t *testing.T) {
 	// true pre-goose state (schema only at baseline shape). Without this,
 	// adoption stamps version 1 and goose then tries to apply 2+ against a
 	// schema that already has those tables. Update this list whenever a new
-	// post-baseline migration ships.
-	for _, postBaselineTable := range []string{"migration_quarantine"} {
+	// post-baseline migration ships. [LAW:one-source-of-truth] applicationTables
+	// in schema_snapshot.go is the canonical list; mirror post-baseline tables here.
+	for _, postBaselineTable := range []string{"migration_quarantine", "migration_log"} {
 		if _, err := first.db.ExecContext(ctx, "DROP TABLE IF EXISTS "+postBaselineTable); err != nil {
 			t.Fatalf("drop post-baseline table %s error = %v", postBaselineTable, err)
 		}
@@ -204,8 +205,8 @@ func TestDryRunSucceedsWithNoPendingMigrations(t *testing.T) {
 	}
 }
 
-// TestPerMigrationCommitsInVersionOrder verifies that 3 pending migrations
-// produce 3 distinct Dolt commits attributed to migrationCommitAuthor, emitted
+// TestPerMigrationCommitsInVersionOrder verifies that 4 pending migrations
+// produce 4 distinct Dolt commits attributed to migrationCommitAuthor, emitted
 // in ascending version order.
 func TestPerMigrationCommitsInVersionOrder(t *testing.T) {
 	ctx := context.Background()
@@ -241,14 +242,14 @@ func TestPerMigrationCommitsInVersionOrder(t *testing.T) {
 	defer st.Close()
 
 	committed := parseMigrationCommittedEvents(t, buf.String())
-	if len(committed) != 3 {
-		t.Fatalf("expected 3 migrate.committed events, got %d: %v\nraw:\n%s", len(committed), committed, buf.String())
+	if len(committed) != 4 {
+		t.Fatalf("expected 4 migrate.committed events, got %d: %v\nraw:\n%s", len(committed), committed, buf.String())
 	}
-	if committed[0] != 1 || committed[1] != 2 || committed[2] != 99998 {
+	if committed[0] != 1 || committed[1] != 2 || committed[2] != 3 || committed[3] != 99998 {
 		t.Fatalf("committed versions not in ascending order: %v", committed)
 	}
 
-	// Verify dolt_log shows 3 commits carrying the "migrate: v" subject prefix.
+	// Verify dolt_log shows 4 commits carrying the "migrate: v" subject prefix.
 	// dolt_log.committer stores the name portion only (not "name <email>"), so
 	// filtering by message prefix is the reliable cross-version approach.
 	var commitCount int
@@ -256,8 +257,8 @@ func TestPerMigrationCommitsInVersionOrder(t *testing.T) {
 		"SELECT COUNT(*) FROM dolt_log WHERE message LIKE 'migrate: v%'").Scan(&commitCount); err != nil {
 		t.Fatalf("dolt_log count query error = %v", err)
 	}
-	if commitCount != 3 {
-		t.Fatalf("expected 3 migration commits in dolt_log, got %d", commitCount)
+	if commitCount != 4 {
+		t.Fatalf("expected 4 migration commits in dolt_log, got %d", commitCount)
 	}
 }
 
@@ -403,6 +404,152 @@ func TestMigrationCommitMessageFormat(t *testing.T) {
 			t.Errorf("duration_ms=%q is not a non-negative integer", val)
 		}
 	}
+}
+
+// TestMigrationLogSuccessRow verifies that after a successful Open the
+// migration_log table contains at least one row with status='success', NULL
+// error_text, and rows_affected set (even if 0).
+func TestMigrationLogSuccessRow(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "miglog-success-ws-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	type row struct {
+		version      int64
+		status       string
+		errorText    *string
+		rowsAffected int64
+		finishedAt   *string
+	}
+	var got row
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT version, status, error_text, rows_affected, finished_at
+		 FROM migration_log WHERE status = 'success' LIMIT 1`).Scan(
+		&got.version, &got.status, &got.errorText, &got.rowsAffected, &got.finishedAt,
+	); err != nil {
+		t.Fatalf("query migration_log success row error = %v", err)
+	}
+	if got.status != "success" {
+		t.Errorf("status = %q, want 'success'", got.status)
+	}
+	if got.errorText != nil {
+		t.Errorf("error_text = %q, want NULL", *got.errorText)
+	}
+	// rows_affected is defined (not NULL); value is 0 for DDL migrations.
+	if got.finishedAt == nil {
+		t.Error("finished_at is NULL, want a timestamp")
+	}
+}
+
+// TestMigrationLogFailureRow verifies that after a failed migration the
+// migration_log table contains a row with status='failure', error_text
+// populated, and finished_at set. Because DOLT_RESET rolls back any writes
+// made before the reset, the failure row is written after the reset (alongside
+// the quarantine commit) so it survives.
+func TestMigrationLogFailureRow(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// First open: apply real migrations so migration_log exists.
+	first, err := Open(ctx, doltRoot, "miglog-fail-ws-id")
+	if err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("first Close() error = %v", err)
+	}
+
+	// Second open with an injected failing migration.
+	const failVersion int64 = 99777
+	t.Cleanup(installBadMigration(failVersion, errors.New("synthetic log test failure")))
+
+	_, err = Open(ctx, doltRoot, "miglog-fail-ws-id")
+	if err == nil {
+		t.Fatal("Open() succeeded, want MigrationError")
+	}
+	var me *MigrationError
+	if !errors.As(err, &me) {
+		t.Fatalf("got %T, want *MigrationError", err)
+	}
+
+	// Re-open without the injected migration to get a valid store handle.
+	extraMigrationProviderOptions = nil
+	st, err := Open(ctx, doltRoot, "miglog-fail-ws-id")
+	if err != nil {
+		t.Fatalf("recovery Open() = %v", err)
+	}
+	defer st.Close()
+
+	var status, errorText string
+	var finishedAt *string
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT status, error_text, finished_at
+		 FROM migration_log WHERE version = ? AND status = 'failure' LIMIT 1`,
+		failVersion).Scan(&status, &errorText, &finishedAt); err != nil {
+		t.Fatalf("query migration_log failure row error = %v (no failure row persisted after reset?)", err)
+	}
+	if status != "failure" {
+		t.Errorf("status = %q, want 'failure'", status)
+	}
+	if errorText == "" {
+		t.Error("error_text is empty, want a non-empty error message")
+	}
+	if finishedAt == nil {
+		t.Error("finished_at is NULL, want a timestamp")
+	}
+}
+
+// TestMigrationLogNotReadByProductionCode verifies that no production code
+// reads migration_log to drive behavior — it is write-only observability.
+// This test is a compile-time / grep assertion: if it finds a SELECT FROM
+// migration_log in non-test source files, it fails.
+func TestMigrationLogNotReadByProductionCode(t *testing.T) {
+	// Walk the Go source tree for SELECT ... FROM migration_log in
+	// non-test files. The test uses the go list tool to find source files.
+	out, err := runGrepInProductionCode(t, "migration_log")
+	if err != nil {
+		t.Fatalf("grep error: %v", err)
+	}
+	for _, line := range out {
+		if strings.Contains(strings.ToLower(line), "select") &&
+			strings.Contains(strings.ToLower(line), "migration_log") {
+			t.Errorf("production code reads migration_log (SELECT found):\n  %s", line)
+		}
+	}
+}
+
+// runGrepInProductionCode searches non-test Go source files in the store
+// package for the given pattern. Returns matching lines.
+func runGrepInProductionCode(t *testing.T, pattern string) ([]string, error) {
+	t.Helper()
+	// Enumerate production (non-_test.go) .go files in the current package
+	// directory (internal/store).
+	pkgDir := "." // tests run with working dir = package dir
+	entries, err := os.ReadDir(pkgDir)
+	if err != nil {
+		return nil, err
+	}
+	var matches []string
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".go") || strings.HasSuffix(e.Name(), "_test.go") {
+			continue
+		}
+		data, err := os.ReadFile(pkgDir + "/" + e.Name())
+		if err != nil {
+			return nil, err
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			if strings.Contains(line, pattern) {
+				matches = append(matches, e.Name()+": "+line)
+			}
+		}
+	}
+	return matches, nil
 }
 
 // TestEventLinesAreValidJSON verifies that every line written to
