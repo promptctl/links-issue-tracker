@@ -503,7 +503,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	})
 }
 
-func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.App, args []string) error {
+func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("ready")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	issueType := fs.String("type", "", "Filter by issue type")
@@ -530,15 +530,6 @@ func runReady(ctx context.Context, stdout io.Writer, stderr io.Writer, ap *app.A
 	}
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
-	// Coaching preamble goes to stderr so stdout stays parseable: a script piping
-	// `lit ready | parser` reads only the data, while a TTY user sees both streams
-	// merged. JSON output skips the preamble entirely — structured consumers don't
-	// need prose.
-	if !*jsonOut {
-		if err := writeReadyPreamble(stderr); err != nil {
-			return err
-		}
-	}
 	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
 		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})

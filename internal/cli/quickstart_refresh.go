@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/templates"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
@@ -154,10 +155,25 @@ func quickstartHookRefreshItem(result hookInstallResult) quickstartRefreshItem {
 	}
 }
 
+// soilSection is the SOIL marker guidance appended to quickstart output when
+// quickstart.soil_mode = true in config.toml. Not in the default template because
+// it is an opt-in personal convention, not consumer-facing guidance.
+const soilSection = `
+## Soil
+<agent-instructions>When you notice how well — or poorly — this loop was *prepared* for you by what came before (the ticket's clarity, a doc's currency, a skill's presence, a deposit left), record it inline in chat as ` + "`" + `[SOIL:<judgement>]` + "`" + ` in your own words. This is about inherited preparation conditions, not transient in-the-moment friction or your own ongoing thinking — soil, not wind. Don't investigate; just express the judgement and continue. Chat only — never commit messages or code. The corpus is the only signal we have that garden-tending is doing anything; trivially cheap and disproportionately effective.</agent-instructions>`
+
 func renderQuickstartGuidance(workspaceRoot string) (string, error) {
-	template, err := templates.Load(templates.QuickstartTemplateName, workspaceRoot)
+	tmpl, err := templates.Load(templates.QuickstartTemplateName, workspaceRoot)
 	if err != nil {
 		return "", fmt.Errorf("load quickstart guidance: %w", err)
 	}
-	return strings.TrimSpace(template), nil
+	cfg, err := config.Load(workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("load config for quickstart guidance: %w", err)
+	}
+	out := strings.TrimSpace(tmpl)
+	if cfg.Quickstart.SoilMode {
+		out += soilSection
+	}
+	return out, nil
 }

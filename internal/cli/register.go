@@ -43,9 +43,7 @@ var commandGroups = []GroupSpec{
 	{ID: "guidance", Title: "Guidance & Tooling"},
 }
 
-// appRunFn is the canonical signature for app-mode handlers. The few commands
-// that need additional writers (e.g. runReady taking stderr) supply an inline
-// adapter at the spec entry rather than expanding this type.
+// appRunFn is the canonical signature for app-mode handlers.
 type appRunFn func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error
 
 // wsRunFn is the canonical signature for workspace-mode handlers.
@@ -102,9 +100,7 @@ func withValidation(validate func([]string) error, run CommandRunner) CommandRun
 func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []CommandSpec {
 	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
 
-	readyRun := r.appCmd(appAccessRead, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runReady(ctx, stdout, r.stderr, ap, args)
-	})
+	readyRun := r.appCmd(appAccessRead, runReady)
 
 	completionRun := func(args []string) error {
 		return runCompletion(stdout, args)

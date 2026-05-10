@@ -12,10 +12,11 @@ import (
 
 // Config holds user-level settings loaded from ~/.config/links-issue-tracker/config.toml.
 type Config struct {
-	Logging   LoggingConfig   `mapstructure:"logging"`
-	Init      InitConfig      `mapstructure:"init"`
-	Migration MigrationConfig `mapstructure:"migration"`
-	Ready     ReadyConfig     `mapstructure:"ready"`
+	Logging    LoggingConfig    `mapstructure:"logging"`
+	Init       InitConfig       `mapstructure:"init"`
+	Migration  MigrationConfig  `mapstructure:"migration"`
+	Ready      ReadyConfig      `mapstructure:"ready"`
+	Quickstart QuickstartConfig `mapstructure:"quickstart"`
 }
 
 type LoggingConfig struct {
@@ -34,6 +35,10 @@ type MigrationConfig struct {
 
 type ReadyConfig struct {
 	RequiredFields []string `mapstructure:"required_fields"`
+}
+
+type QuickstartConfig struct {
+	SoilMode bool `mapstructure:"soil_mode"`
 }
 
 const (
@@ -65,6 +70,7 @@ func Load(workspaceRoot ...string) (Config, error) {
 	v.SetDefault("init.install_agents", true)
 	v.SetDefault("migration.auto_apply", false)
 	v.SetDefault("ready.required_fields", []string{})
+	v.SetDefault("quickstart.soil_mode", false)
 
 	// [LAW:single-enforcer] Global/project config precedence is resolved once at load time.
 	globalRequired, err := mergeConfigFile(v, globalConfigPath())
