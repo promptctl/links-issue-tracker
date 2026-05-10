@@ -34,6 +34,9 @@ func TestLoadDefaults(t *testing.T) {
 	if len(cfg.Ready.RequiredFields) != 0 {
 		t.Fatalf("expected no required fields by default, got %#v", cfg.Ready.RequiredFields)
 	}
+	if cfg.Quickstart.SoilMode {
+		t.Fatal("expected soil_mode=false by default")
+	}
 }
 
 func TestLoadFromTOML(t *testing.T) {
@@ -56,6 +59,9 @@ auto_apply = true
 
 [ready]
 required_fields = ["description"]
+
+[quickstart]
+soil_mode = true
 `
 	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
@@ -84,6 +90,9 @@ required_fields = ["description"]
 	}
 	if !reflect.DeepEqual(cfg.Ready.RequiredFields, []string{"description"}) {
 		t.Fatalf("required fields = %#v, want [description]", cfg.Ready.RequiredFields)
+	}
+	if !cfg.Quickstart.SoilMode {
+		t.Fatal("expected soil_mode=true from file")
 	}
 }
 

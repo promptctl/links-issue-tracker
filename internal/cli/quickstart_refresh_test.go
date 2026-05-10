@@ -286,6 +286,43 @@ func TestQuickstartRefreshShowsProjectSourceForAgentsSection(t *testing.T) {
 	}
 }
 
+func TestRenderQuickstartGuidanceAppendsSoilSectionWhenEnabled(t *testing.T) {
+	xdg := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg)
+	configDir := filepath.Join(xdg, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatalf("MkdirAll(config dir) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[quickstart]\nsoil_mode = true\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(config.toml) error = %v", err)
+	}
+
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	got, err := renderQuickstartGuidance(repo)
+	if err != nil {
+		t.Fatalf("renderQuickstartGuidance() error = %v", err)
+	}
+	if !strings.Contains(got, "## Soil") {
+		t.Fatalf("renderQuickstartGuidance() with soil_mode=true: output missing Soil section\ngot: %s", got)
+	}
+	if !strings.Contains(got, "[SOIL:") {
+		t.Fatalf("renderQuickstartGuidance() with soil_mode=true: output missing SOIL marker syntax\ngot: %s", got)
+	}
+
+	// Verify default (no config) does not include the soil section.
+	xdg2 := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdg2)
+	gotDefault, err := renderQuickstartGuidance(repo)
+	if err != nil {
+		t.Fatalf("renderQuickstartGuidance() default error = %v", err)
+	}
+	if strings.Contains(gotDefault, "## Soil") {
+		t.Fatalf("renderQuickstartGuidance() with soil_mode=false (default): output must not include Soil section\ngot: %s", gotDefault)
+	}
+}
+
 func runQuickstartRefresh(t *testing.T) string {
 	t.Helper()
 	var stdout bytes.Buffer
