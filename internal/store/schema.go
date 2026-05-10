@@ -64,7 +64,7 @@ func createIssuesTableStmt() string {
 // what varies is what the runner has to do (apply baseline / adopt / no-op)
 // and whether the compat check returns a typed error or nil.
 func (s *Store) migrate(ctx context.Context) error {
-	if err := checkCompatWindow(ctx, s.db, codeVersion); err != nil {
+	if err := checkCompatWindow(ctx, s.db, effectiveCodeVersion()); err != nil {
 		return err
 	}
 	migrated, err := s.runMigrations(ctx)

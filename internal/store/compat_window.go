@@ -20,6 +20,23 @@ import (
 // drift between them.
 const codeVersion int64 = 3
 
+// testBinaryCodeVersionOverride, when non-nil, replaces codeVersion for the
+// duration of a test so skew tests can simulate an older or newer binary
+// without building a separate binary.
+//
+// [LAW:no-shared-mutable-globals] Test-only seam; always restored by t.Cleanup.
+var testBinaryCodeVersionOverride *int64
+
+// effectiveCodeVersion returns the binary's code version for the compat-window
+// check. In production it is the codeVersion const; in tests it may be
+// overridden via testBinaryCodeVersionOverride.
+func effectiveCodeVersion() int64 {
+	if testBinaryCodeVersionOverride != nil {
+		return *testBinaryCodeVersionOverride
+	}
+	return codeVersion
+}
+
 // migrationMinCodeVersions declares the minimum binary codeVersion each
 // migration's *schema or data shape* requires. A migration omitted from this
 // map defaults to 1 — any binary that knows about goose at all can run it.
