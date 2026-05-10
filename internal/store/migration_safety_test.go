@@ -60,7 +60,7 @@ func TestRunnerAutoRevertsBrokenMigration(t *testing.T) {
 	}
 
 	emitted := buf.String()
-	for _, want := range []string{"safety_branch.created", "migrate.failed", "safety_branch.reverted"} {
+	for _, want := range []string{"safety_branch.created", "migrate.error", "safety_branch.reverted"} {
 		if !strings.Contains(emitted, want) {
 			t.Errorf("expected event %q in stderr, got:\n%s", want, emitted)
 		}
@@ -142,9 +142,13 @@ func TestQuarantinedVersionIsSkippedOnNextOpen(t *testing.T) {
 	defer second.Close()
 
 	emitted := buf.String()
-	want := fmt.Sprintf("migrate.skipped_quarantined version=%d", quarantinedVersion)
-	if !strings.Contains(emitted, want) {
-		t.Errorf("expected event %q in stderr, got:\n%s", want, emitted)
+	// JSON format: {"event":"migrate.skipped_quarantined","ts":"...","version":77}
+	if !strings.Contains(emitted, `"migrate.skipped_quarantined"`) {
+		t.Errorf("expected migrate.skipped_quarantined event in stderr, got:\n%s", emitted)
+	}
+	wantVersion := fmt.Sprintf(`"version":%d`, quarantinedVersion)
+	if !strings.Contains(emitted, wantVersion) {
+		t.Errorf("expected %s in migrate.skipped_quarantined event, got:\n%s", wantVersion, emitted)
 	}
 
 	// Read the quarantine to confirm the row survived the second Open's

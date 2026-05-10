@@ -3,13 +3,14 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
+	"time"
 
 	"github.com/pressly/goose/v3"
 
@@ -85,21 +86,21 @@ var migrationEventWriter io.Writer = os.Stderr
 // in via this hook.
 var extraMigrationProviderOptions func() []goose.ProviderOption
 
-// emitMigrationEvent writes one line of `name k1=v1 k2=v2`, keys sorted so
-// tests can match exact strings. [LAW:single-enforcer] One emission helper —
-// every event in the runner routes through here.
-func emitMigrationEvent(name string, fields map[string]string) {
-	var b strings.Builder
-	b.WriteString(name)
-	keys := make([]string, 0, len(fields))
-	for k := range fields {
-		keys = append(keys, k)
+// emitMigrationEvent writes one single-line JSON object to migrationEventWriter.
+// Every field in `fields` is merged into the top-level object alongside the
+// mandatory "ts" (RFC3339) and "event" keys. Numeric and boolean values should
+// be passed as their native Go types (int64, bool) so the JSON representation
+// is correct. [LAW:single-enforcer] One emission helper — every event in the
+// runner routes through here.
+func emitMigrationEvent(name string, fields map[string]any) {
+	m := make(map[string]any, len(fields)+2)
+	m["ts"] = time.Now().UTC().Format(time.RFC3339)
+	m["event"] = name
+	for k, v := range fields {
+		m[k] = v
 	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		fmt.Fprintf(&b, " %s=%s", k, fields[k])
-	}
-	fmt.Fprintln(migrationEventWriter, b.String())
+	b, _ := json.Marshal(m)
+	fmt.Fprintln(migrationEventWriter, string(b))
 }
 
 // runMigrations brings the workspace's schema to the latest registered goose
@@ -131,8 +132,8 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, &MigrationError{Phase: "checkpoint", Cause: fmt.Errorf("create pre-migrate safety branch: %w", err)}
 	}
-	emitMigrationEvent("safety_branch.created", map[string]string{
-		"branch": safety.Name,
+	emitMigrationEvent("safety_branch.created", map[string]any{
+		"name":   safety.Name,
 		"commit": safety.CommitSHA,
 	})
 
@@ -141,8 +142,8 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		return false, &MigrationError{Phase: "quarantine_read", Cause: err}
 	}
 	for _, v := range quarantined {
-		emitMigrationEvent("migrate.skipped_quarantined", map[string]string{
-			"version": fmt.Sprintf("%d", v),
+		emitMigrationEvent("migrate.skipped_quarantined", map[string]any{
+			"version": v,
 		})
 	}
 
@@ -152,6 +153,11 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 			return false, s.revertDryRun(ctx, safety, "adoption", 0, fmt.Errorf("adopt pre-goose workspace: %w", err))
 		}
 		return false, s.revertWithQuarantine(ctx, safety, "adoption", 0, fmt.Errorf("adopt pre-goose workspace: %w", err))
+	}
+	if adopted {
+		emitMigrationEvent("adopt.pre_goose", map[string]any{
+			"stamped_to": int64(baselineVersion),
+		})
 	}
 
 	opts := []goose.ProviderOption{}
@@ -171,7 +177,7 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	// Apply migrations one at a time so each successful migration gets its
 	// own Dolt commit. goose's Provider has no per-migration commit hook, so
 	// we drive it with ApplyVersion in version order.
-	pending, err := pendingMigrationVersions(ctx, provider)
+	pending, err := pendingMigrations(ctx, provider)
 	if err != nil {
 		if dryRun {
 			return false, s.revertDryRun(ctx, safety, "status", 0, fmt.Errorf("get pending migrations: %w", err))
@@ -180,17 +186,21 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	}
 
 	var results []*goose.MigrationResult
-	for _, version := range pending {
-		result, err := provider.ApplyVersion(ctx, version, true)
+	for _, m := range pending {
+		emitMigrationEvent("migrate.start", map[string]any{
+			"version": m.version,
+			"name":    m.name,
+		})
+		result, err := provider.ApplyVersion(ctx, m.version, true)
 		if err != nil {
 			if dryRun {
-				return false, s.revertDryRun(ctx, safety, "up", version, fmt.Errorf("apply migration v%d: %w", version, err))
+				return false, s.revertDryRun(ctx, safety, "up", m.version, fmt.Errorf("apply migration v%d: %w", m.version, err))
 			}
-			return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("apply migration v%d: %w", version, err))
+			return false, s.revertWithQuarantine(ctx, safety, "up", m.version, fmt.Errorf("apply migration v%d: %w", m.version, err))
 		}
 		if !dryRun {
 			if err := s.commitMigration(ctx, result); err != nil {
-				return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("commit migration v%d: %w", version, err))
+				return false, s.revertWithQuarantine(ctx, safety, "up", m.version, fmt.Errorf("commit migration v%d: %w", m.version, err))
 			}
 		}
 		results = append(results, result)
@@ -201,10 +211,10 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
 			return false, &MigrationError{Phase: "dry_run_reset", Cause: fmt.Errorf("dry-run reset to safety branch: %w", err)}
 		}
-		emitMigrationEvent("migrate.dry_run_complete", map[string]string{
-			"count": fmt.Sprintf("%d", len(results)),
+		emitMigrationEvent("dry_run.summary", map[string]any{
+			"pending":   len(results),
+			"validated": len(results),
 		})
-		fmt.Fprintf(migrationEventWriter, "DRY RUN: %d pending migrations validated, no changes committed\n", len(results))
 		return false, ErrDryRun
 	}
 
@@ -216,18 +226,27 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	return adopted || len(results) > 0 || floorChanged, nil
 }
 
-// pendingMigrationVersions returns the ordered list of version IDs that are
-// registered but not yet applied. Order matches goose's ascending-version
-// application order.
-func pendingMigrationVersions(ctx context.Context, provider *goose.Provider) ([]int64, error) {
+// pendingMigration pairs a migration version with its human-readable name so
+// the caller can emit migrate.start events without re-querying provider.Status.
+type pendingMigration struct {
+	version int64
+	name    string
+}
+
+// pendingMigrations returns the ordered list of migrations that are registered
+// but not yet applied, paired with their human-readable names.
+func pendingMigrations(ctx context.Context, provider *goose.Provider) ([]pendingMigration, error) {
 	statuses, err := provider.Status(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("query migration status: %w", err)
 	}
-	var pending []int64
+	var pending []pendingMigration
 	for _, s := range statuses {
 		if s.State == goose.StatePending && s.Source != nil {
-			pending = append(pending, s.Source.Version)
+			pending = append(pending, pendingMigration{
+				version: s.Source.Version,
+				name:    migrationSourceName(s.Source),
+			})
 		}
 	}
 	return pending, nil
@@ -253,17 +272,19 @@ func (s *Store) commitMigration(ctx context.Context, result *goose.MigrationResu
 	var commitHash string
 	if err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?, '--author', ?)`, msg, migrationCommitAuthor).Scan(&commitHash); err != nil {
 		if strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
-			emitMigrationEvent("migrate.committed", map[string]string{
-				"noop":    "true",
-				"version": fmt.Sprintf("%d", result.Source.Version),
+			emitMigrationEvent("migrate.commit", map[string]any{
+				"version":     result.Source.Version,
+				"duration_ms": result.Duration.Milliseconds(),
+				"noop":        true,
 			})
 			return nil
 		}
 		return fmt.Errorf("commit migration v%d: %w", result.Source.Version, err)
 	}
-	emitMigrationEvent("migrate.committed", map[string]string{
-		"commit":  commitHash,
-		"version": fmt.Sprintf("%d", result.Source.Version),
+	emitMigrationEvent("migrate.commit", map[string]any{
+		"version":     result.Source.Version,
+		"duration_ms": result.Duration.Milliseconds(),
+		"commit":      commitHash,
 	})
 	return nil
 }
@@ -295,37 +316,37 @@ func migrationSourceName(source *goose.Source) string {
 // error — so no read is lost by reverting first.
 func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, phase string, version int64, cause error) *MigrationError {
 	me := &MigrationError{Phase: phase, Version: version, Cause: cause}
-	emitMigrationEvent("migrate.failed", map[string]string{
+	emitMigrationEvent("migrate.error", map[string]any{
 		"phase":   phase,
-		"version": fmt.Sprintf("%d", version),
+		"version": version,
 		"error":   cause.Error(),
 	})
 	if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
-		emitMigrationEvent("safety_branch.revert_failed", map[string]string{
-			"branch": safety.Name,
-			"error":  err.Error(),
+		emitMigrationEvent("safety_branch.revert_failed", map[string]any{
+			"name":  safety.Name,
+			"error": err.Error(),
 		})
 		me.Cause = fmt.Errorf("%w; revert to safety branch %s also failed: %v", cause, safety.Name, err)
 		return me
 	}
-	emitMigrationEvent("safety_branch.reverted", map[string]string{
-		"branch":  safety.Name,
+	emitMigrationEvent("safety_branch.reverted", map[string]any{
+		"name":    safety.Name,
 		"phase":   phase,
-		"version": fmt.Sprintf("%d", version),
+		"version": version,
 	})
 	if version <= 0 {
 		return me
 	}
 	if qerr := s.recordQuarantine(ctx, version, fmt.Sprintf("auto-reverted by migration runner: %v", cause)); qerr != nil {
-		emitMigrationEvent("quarantine.write_failed", map[string]string{
-			"version": fmt.Sprintf("%d", version),
+		emitMigrationEvent("quarantine.write_failed", map[string]any{
+			"version": version,
 			"error":   qerr.Error(),
 		})
 		return me
 	}
 	if cerr := s.commitWorkingSet(ctx, fmt.Sprintf("Quarantine migration version %d", version)); cerr != nil {
-		emitMigrationEvent("quarantine.commit_failed", map[string]string{
-			"version": fmt.Sprintf("%d", version),
+		emitMigrationEvent("quarantine.commit_failed", map[string]any{
+			"version": version,
 			"error":   cerr.Error(),
 		})
 	}
@@ -337,23 +358,23 @@ func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, pha
 // so no permanent quarantine record should be written.
 func (s *Store) revertDryRun(ctx context.Context, safety Checkpoint, phase string, version int64, cause error) *MigrationError {
 	me := &MigrationError{Phase: phase, Version: version, Cause: cause}
-	emitMigrationEvent("migrate.failed", map[string]string{
+	emitMigrationEvent("migrate.error", map[string]any{
 		"phase":   phase,
-		"version": fmt.Sprintf("%d", version),
+		"version": version,
 		"error":   cause.Error(),
 	})
 	if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
-		emitMigrationEvent("safety_branch.revert_failed", map[string]string{
-			"branch": safety.Name,
-			"error":  err.Error(),
+		emitMigrationEvent("safety_branch.revert_failed", map[string]any{
+			"name":  safety.Name,
+			"error": err.Error(),
 		})
 		me.Cause = fmt.Errorf("%w; dry-run revert to safety branch %s also failed: %v", cause, safety.Name, err)
 		return me
 	}
-	emitMigrationEvent("safety_branch.reverted", map[string]string{
-		"branch":  safety.Name,
+	emitMigrationEvent("safety_branch.reverted", map[string]any{
+		"name":    safety.Name,
 		"phase":   phase,
-		"version": fmt.Sprintf("%d", version),
+		"version": version,
 	})
 	return me
 }

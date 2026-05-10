@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -404,6 +405,125 @@ func TestMigrationCommitMessageFormat(t *testing.T) {
 	}
 }
 
+// TestEventLinesAreValidJSON verifies that every line written to
+// migrationEventWriter during a fresh Open parses as valid JSON and carries the
+// mandatory "ts" and "event" fields.
+func TestEventLinesAreValidJSON(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	var buf bytes.Buffer
+	origWriter := migrationEventWriter
+	migrationEventWriter = &buf
+	t.Cleanup(func() { migrationEventWriter = origWriter })
+
+	st, err := Open(ctx, doltRoot, "event-json-ws-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	lines := strings.Split(strings.TrimRight(buf.String(), "\n"), "\n")
+	if len(lines) == 0 {
+		t.Fatal("no event lines captured")
+	}
+	for i, line := range lines {
+		if line == "" {
+			continue
+		}
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			t.Errorf("line %d is not valid JSON: %v\nline: %s", i+1, err, line)
+			continue
+		}
+		if _, ok := evt["ts"]; !ok {
+			t.Errorf("line %d missing 'ts' field: %s", i+1, line)
+		}
+		if _, ok := evt["event"]; !ok {
+			t.Errorf("line %d missing 'event' field: %s", i+1, line)
+		}
+	}
+}
+
+// TestMigrationTimelineReconstructable verifies that event lines emitted during
+// a normal Open contain enough information to reconstruct the migration timeline:
+// migrate.start before migrate.commit, safety_branch.created first, and
+// numeric version values in both events.
+func TestMigrationTimelineReconstructable(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	var buf bytes.Buffer
+	origWriter := migrationEventWriter
+	migrationEventWriter = &buf
+	t.Cleanup(func() { migrationEventWriter = origWriter })
+
+	st, err := Open(ctx, doltRoot, "timeline-ws-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	type migEvt struct {
+		Event   string  `json:"event"`
+		Version float64 `json:"version"`
+		Name    string  `json:"name"`
+	}
+	var events []migEvt
+	for _, line := range strings.Split(buf.String(), "\n") {
+		if line == "" {
+			continue
+		}
+		var e migEvt
+		if err := json.Unmarshal([]byte(line), &e); err != nil {
+			continue
+		}
+		events = append(events, e)
+	}
+
+	// First event must be safety_branch.created.
+	if len(events) == 0 || events[0].Event != "safety_branch.created" {
+		first := ""
+		if len(events) > 0 {
+			first = events[0].Event
+		}
+		t.Fatalf("first event = %q, want safety_branch.created", first)
+	}
+
+	// For each version that has a migrate.commit, there must be a migrate.start
+	// earlier in the sequence with the same version.
+	startSeen := make(map[int64]int) // version → index of migrate.start
+	for i, e := range events {
+		if e.Event == "migrate.start" {
+			startSeen[int64(e.Version)] = i
+		}
+		if e.Event == "migrate.commit" {
+			startIdx, ok := startSeen[int64(e.Version)]
+			if !ok {
+				t.Errorf("migrate.commit for v%d has no preceding migrate.start", int64(e.Version))
+			}
+			if startIdx >= i {
+				t.Errorf("migrate.start (idx=%d) not before migrate.commit (idx=%d) for v%d", startIdx, i, int64(e.Version))
+			}
+			// migrate.start must carry the "name" field.
+			if events[startIdx].Name == "" {
+				t.Errorf("migrate.start for v%d has empty name field", int64(e.Version))
+			}
+		}
+	}
+	// At least one migrate.commit must be present (we applied v1 baseline).
+	found := false
+	for _, e := range events {
+		if e.Event == "migrate.commit" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatal("no migrate.commit event found in timeline")
+	}
+}
+
 // TestDryRunFailingMigrationLeavesWorkspaceUntouched verifies that a migration
 // that errors during dry-run returns a non-ErrDryRun error and leaves the
 // workspace in a state that can be opened fresh afterward.
@@ -442,24 +562,26 @@ func TestDryRunFailingMigrationLeavesWorkspaceUntouched(t *testing.T) {
 	requireGooseVersionPresent(t, ctx, st, baselineVersion)
 }
 
-// parseMigrationCommittedEvents scans migrationEventWriter output for
-// "migrate.committed" lines and returns the version numbers in the order they
-// appear.  Used by per-migration-commit tests to assert order and completeness
-// without depending on dolt_log state after a rollback.
+// parseMigrationCommittedEvents scans migrationEventWriter output for JSON
+// lines with event="migrate.commit" and returns the version numbers in the
+// order they appear.  Used by per-migration-commit tests to assert order and
+// completeness without depending on dolt_log state after a rollback.
 func parseMigrationCommittedEvents(t *testing.T, output string) []int64 {
 	t.Helper()
 	var versions []int64
 	for _, line := range strings.Split(output, "\n") {
-		if !strings.HasPrefix(line, "migrate.committed") {
+		if line == "" {
 			continue
 		}
-		for _, field := range strings.Fields(line) {
-			if strings.HasPrefix(field, "version=") {
-				v, err := strconv.ParseInt(strings.TrimPrefix(field, "version="), 10, 64)
-				if err == nil {
-					versions = append(versions, v)
-				}
-			}
+		var evt map[string]any
+		if err := json.Unmarshal([]byte(line), &evt); err != nil {
+			continue
+		}
+		if evt["event"] != "migrate.commit" {
+			continue
+		}
+		if v, ok := evt["version"].(float64); ok {
+			versions = append(versions, int64(v))
 		}
 	}
 	return versions
