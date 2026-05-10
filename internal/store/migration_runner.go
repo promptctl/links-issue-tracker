@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -167,13 +168,32 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		}
 		return false, s.revertWithQuarantine(ctx, safety, "provider", 0, fmt.Errorf("build goose provider: %w", err))
 	}
-	results, err := provider.Up(ctx)
+	// Apply migrations one at a time so each successful migration gets its
+	// own Dolt commit. goose's Provider has no per-migration commit hook, so
+	// we drive it with ApplyVersion in version order.
+	pending, err := pendingMigrationVersions(ctx, provider)
 	if err != nil {
-		version := versionFromGooseError(err)
 		if dryRun {
-			return false, s.revertDryRun(ctx, safety, "up", version, fmt.Errorf("apply pending migrations: %w", err))
+			return false, s.revertDryRun(ctx, safety, "status", 0, fmt.Errorf("get pending migrations: %w", err))
 		}
-		return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("apply pending migrations: %w", err))
+		return false, s.revertWithQuarantine(ctx, safety, "status", 0, fmt.Errorf("get pending migrations: %w", err))
+	}
+
+	var results []*goose.MigrationResult
+	for _, version := range pending {
+		result, err := provider.ApplyVersion(ctx, version, true)
+		if err != nil {
+			if dryRun {
+				return false, s.revertDryRun(ctx, safety, "up", version, fmt.Errorf("apply migration v%d: %w", version, err))
+			}
+			return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("apply migration v%d: %w", version, err))
+		}
+		if !dryRun {
+			if err := s.commitMigration(ctx, result); err != nil {
+				return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("commit migration v%d: %w", version, err))
+			}
+		}
+		results = append(results, result)
 	}
 
 	// Both paths ran all migration bodies. Now commit or rollback by mode.
@@ -194,6 +214,73 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		return false, s.revertWithQuarantine(ctx, safety, "advance_floor", 0, fmt.Errorf("advance code_compat_floor: %w", err))
 	}
 	return adopted || len(results) > 0 || floorChanged, nil
+}
+
+// pendingMigrationVersions returns the ordered list of version IDs that are
+// registered but not yet applied. Order matches goose's ascending-version
+// application order.
+func pendingMigrationVersions(ctx context.Context, provider *goose.Provider) ([]int64, error) {
+	statuses, err := provider.Status(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("query migration status: %w", err)
+	}
+	var pending []int64
+	for _, s := range statuses {
+		if s.State == goose.StatePending && s.Source != nil {
+			pending = append(pending, s.Source.Version)
+		}
+	}
+	return pending, nil
+}
+
+// migrationCommitAuthor is the stable Dolt author identity used for per-
+// migration commits so they are visually distinct from user-driven mutations
+// in `dolt log`.
+const migrationCommitAuthor = "lit-migrate <bot@local>"
+
+// commitMigration writes a structured Dolt commit for a single applied
+// migration. The commit message body carries machine-parseable key=value
+// fields for forensic log inspection. Author is always migrationCommitAuthor.
+func (s *Store) commitMigration(ctx context.Context, result *goose.MigrationResult) error {
+	if result == nil || result.Source == nil {
+		return nil
+	}
+	name := migrationSourceName(result.Source)
+	msg := fmt.Sprintf("migrate: v%d %s\n\nduration_ms=%d\nsource=%s",
+		result.Source.Version, name,
+		result.Duration.Milliseconds(),
+		result.Source.Path)
+	var commitHash string
+	if err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?, '--author', ?)`, msg, migrationCommitAuthor).Scan(&commitHash); err != nil {
+		if strings.Contains(strings.ToLower(err.Error()), "nothing to commit") {
+			emitMigrationEvent("migrate.committed", map[string]string{
+				"noop":    "true",
+				"version": fmt.Sprintf("%d", result.Source.Version),
+			})
+			return nil
+		}
+		return fmt.Errorf("commit migration v%d: %w", result.Source.Version, err)
+	}
+	emitMigrationEvent("migrate.committed", map[string]string{
+		"commit":  commitHash,
+		"version": fmt.Sprintf("%d", result.Source.Version),
+	})
+	return nil
+}
+
+// migrationSourceName extracts a human-readable migration name from a goose
+// Source. SQL files follow the "NNNNN_name.sql" convention; Go migrations
+// registered via WithGoMigrations have an empty path and fall back to a
+// version-based placeholder.
+func migrationSourceName(source *goose.Source) string {
+	if source.Path == "" {
+		return fmt.Sprintf("v%d", source.Version)
+	}
+	base := strings.TrimSuffix(filepath.Base(source.Path), filepath.Ext(source.Path))
+	if idx := strings.Index(base, "_"); idx != -1 {
+		return base[idx+1:]
+	}
+	return base
 }
 
 // revertWithQuarantine resets to the safety branch and quarantines the

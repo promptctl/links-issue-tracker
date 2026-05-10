@@ -1,11 +1,14 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
@@ -200,6 +203,207 @@ func TestDryRunSucceedsWithNoPendingMigrations(t *testing.T) {
 	}
 }
 
+// TestPerMigrationCommitsInVersionOrder verifies that 3 pending migrations
+// produce 3 distinct Dolt commits attributed to migrationCommitAuthor, emitted
+// in ascending version order.
+func TestPerMigrationCommitsInVersionOrder(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Inject a third migration (v99998) that inserts a meta row so DOLT_COMMIT
+	// sees a real change and produces an actual commit (not "nothing to commit").
+	// RunTx is required: goose holds the sole connection (MaxOpenConns=1) via
+	// sql.Conn for the lifetime of ApplyVersion; RunTx reuses that conn's
+	// transaction rather than acquiring a second connection and deadlocking.
+	m3 := goose.NewGoMigration(99998, &goose.GoFunc{
+		RunTx: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO meta (meta_key, meta_value) VALUES (?, ?)",
+				"test_migration_v99998", "1")
+			return err
+		},
+	}, nil)
+	extraMigrationProviderOptions = func() []goose.ProviderOption {
+		return []goose.ProviderOption{goose.WithGoMigrations(m3)}
+	}
+	t.Cleanup(func() { extraMigrationProviderOptions = nil })
+
+	var buf bytes.Buffer
+	origWriter := migrationEventWriter
+	migrationEventWriter = &buf
+	t.Cleanup(func() { migrationEventWriter = origWriter })
+
+	st, err := Open(ctx, doltRoot, "per-migration-order-ws-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	committed := parseMigrationCommittedEvents(t, buf.String())
+	if len(committed) != 3 {
+		t.Fatalf("expected 3 migrate.committed events, got %d: %v\nraw:\n%s", len(committed), committed, buf.String())
+	}
+	if committed[0] != 1 || committed[1] != 2 || committed[2] != 99998 {
+		t.Fatalf("committed versions not in ascending order: %v", committed)
+	}
+
+	// Verify dolt_log shows 3 commits carrying the "migrate: v" subject prefix.
+	// dolt_log.committer stores the name portion only (not "name <email>"), so
+	// filtering by message prefix is the reliable cross-version approach.
+	var commitCount int
+	if err := st.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM dolt_log WHERE message LIKE 'migrate: v%'").Scan(&commitCount); err != nil {
+		t.Fatalf("dolt_log count query error = %v", err)
+	}
+	if commitCount != 3 {
+		t.Fatalf("expected 3 migration commits in dolt_log, got %d", commitCount)
+	}
+}
+
+// TestMiddleMigrationFailureNoCommitForFailed verifies that when a migration in
+// the middle of the sequence fails: (a) all successfully-applied migrations
+// before it emitted a migrate.committed event, (b) the failing migration did not
+// emit a committed event, and (c) subsequent versions are never attempted.
+func TestMiddleMigrationFailureNoCommitForFailed(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// v99997: succeeds and mutates state so its commit is real.
+	// v99998: fails — middle of the injected sequence.
+	// v99999: would succeed but must not be attempted after v99998 fails.
+	// RunTx is required for DML migrations: goose holds the sole connection via
+	// sql.Conn; RunTx reuses that conn's transaction rather than deadlocking.
+	const failVersion int64 = 99998
+	mOk := goose.NewGoMigration(99997, &goose.GoFunc{
+		RunTx: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO meta (meta_key, meta_value) VALUES (?, ?)",
+				"test_migration_v99997", "1")
+			return err
+		},
+	}, nil)
+	mFail := goose.NewGoMigration(failVersion, &goose.GoFunc{
+		RunTx: func(_ context.Context, _ *sql.Tx) error {
+			return errors.New("intentional middle-migration failure")
+		},
+	}, nil)
+	mAfter := goose.NewGoMigration(99999, &goose.GoFunc{
+		RunTx: func(ctx context.Context, tx *sql.Tx) error {
+			_, err := tx.ExecContext(ctx,
+				"INSERT INTO meta (meta_key, meta_value) VALUES (?, ?)",
+				"test_migration_v99999", "1")
+			return err
+		},
+	}, nil)
+	extraMigrationProviderOptions = func() []goose.ProviderOption {
+		return []goose.ProviderOption{goose.WithGoMigrations(mOk, mFail, mAfter)}
+	}
+	t.Cleanup(func() { extraMigrationProviderOptions = nil })
+
+	var buf bytes.Buffer
+	origWriter := migrationEventWriter
+	migrationEventWriter = &buf
+	t.Cleanup(func() { migrationEventWriter = origWriter })
+
+	_, err := Open(ctx, doltRoot, "middle-fail-ws-id")
+	if err == nil {
+		t.Fatal("Open() succeeded, want MigrationError")
+	}
+	var me *MigrationError
+	if !errors.As(err, &me) || me.Version != failVersion {
+		t.Fatalf("Open() error = %v, want MigrationError for v%d", err, failVersion)
+	}
+
+	output := buf.String()
+	committed := parseMigrationCommittedEvents(t, output)
+
+	// The failing version must not appear in committed events.
+	for _, v := range committed {
+		if v == failVersion {
+			t.Fatalf("migrate.committed emitted for failing version %d; expected none", failVersion)
+		}
+	}
+	// v99999 must not appear (not attempted).
+	for _, v := range committed {
+		if v == 99999 {
+			t.Fatalf("migrate.committed emitted for v99999 which should not have been attempted")
+		}
+	}
+	// At least v1 and v2 (real SQL migrations) committed before the failure.
+	if len(committed) == 0 {
+		t.Fatal("expected at least one migrate.committed event before the failing migration")
+	}
+
+	// Second Open: remove the injected migrations entirely. After the rollback,
+	// migration_quarantine does not exist yet (it was created by v2 which was
+	// rolled back) so the quarantine record for v99998 could not be written.
+	// Clearing the injected set lets the workspace recover cleanly by applying
+	// only the real SQL migrations.
+	buf.Reset()
+	extraMigrationProviderOptions = nil
+	st, err := Open(ctx, doltRoot, "middle-fail-ws-id")
+	if err != nil {
+		t.Fatalf("second Open() = %v, want success (injected migrations removed, workspace recoverable)", err)
+	}
+	defer st.Close()
+	requireGooseVersionPresent(t, ctx, st, baselineVersion)
+}
+
+// TestMigrationCommitMessageFormat verifies that migration commit messages
+// follow the machine-parseable structured format:
+//
+//	migrate: v<N> <name>
+//
+//	duration_ms=<n>
+//	source=<path>
+func TestMigrationCommitMessageFormat(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "commit-format-ws-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	// Grab the earliest migration commit message (v1 baseline). Filter by message
+	// prefix because dolt_log.committer stores the name portion only, not the
+	// full "name <email>" string used in DOLT_COMMIT --author.
+	var message string
+	if err := st.db.QueryRowContext(ctx,
+		"SELECT message FROM dolt_log WHERE message LIKE 'migrate: v%' ORDER BY date ASC LIMIT 1").Scan(&message); err != nil {
+		t.Fatalf("dolt_log message query error = %v", err)
+	}
+
+	lines := strings.SplitN(message, "\n", -1)
+	if len(lines) < 4 {
+		t.Fatalf("commit message has too few lines (%d):\n%s", len(lines), message)
+	}
+	// Subject: "migrate: v1 baseline"
+	if !strings.HasPrefix(lines[0], "migrate: v1 ") {
+		t.Errorf("subject line %q does not start with 'migrate: v1 '", lines[0])
+	}
+	// Blank separator line.
+	if lines[1] != "" {
+		t.Errorf("expected blank line after subject, got %q", lines[1])
+	}
+	// Body key=value fields.
+	body := strings.Join(lines[2:], "\n")
+	for _, field := range []string{"duration_ms=", "source="} {
+		if !strings.Contains(body, field) {
+			t.Errorf("commit message body missing %q field\nbody:\n%s", field, body)
+		}
+	}
+	// duration_ms must be a non-negative integer.
+	if idx := strings.Index(body, "duration_ms="); idx >= 0 {
+		raw := strings.Fields(body[idx:])[0]
+		val := strings.TrimPrefix(raw, "duration_ms=")
+		if n, err := strconv.ParseInt(val, 10, 64); err != nil || n < 0 {
+			t.Errorf("duration_ms=%q is not a non-negative integer", val)
+		}
+	}
+}
+
 // TestDryRunFailingMigrationLeavesWorkspaceUntouched verifies that a migration
 // that errors during dry-run returns a non-ErrDryRun error and leaves the
 // workspace in a state that can be opened fresh afterward.
@@ -236,4 +440,27 @@ func TestDryRunFailingMigrationLeavesWorkspaceUntouched(t *testing.T) {
 	}
 	defer st.Close()
 	requireGooseVersionPresent(t, ctx, st, baselineVersion)
+}
+
+// parseMigrationCommittedEvents scans migrationEventWriter output for
+// "migrate.committed" lines and returns the version numbers in the order they
+// appear.  Used by per-migration-commit tests to assert order and completeness
+// without depending on dolt_log state after a rollback.
+func parseMigrationCommittedEvents(t *testing.T, output string) []int64 {
+	t.Helper()
+	var versions []int64
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "migrate.committed") {
+			continue
+		}
+		for _, field := range strings.Fields(line) {
+			if strings.HasPrefix(field, "version=") {
+				v, err := strconv.ParseInt(strings.TrimPrefix(field, "version="), 10, 64)
+				if err == nil {
+					versions = append(versions, v)
+				}
+			}
+		}
+	}
+	return versions
 }
