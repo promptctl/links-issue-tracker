@@ -61,6 +61,13 @@ func (e *MigrationError) Error() string {
 
 func (e *MigrationError) Unwrap() error { return e.Cause }
 
+// ErrDryRun is the sentinel returned by Open when LIT_MIGRATE_DRY_RUN=1 and
+// all pending migrations validated cleanly. It is not an error in the usual
+// sense — the binary should exit 0 when it sees this. Open refused to return
+// a functional store so no workspace state is left in a partially-migrated
+// condition.
+var ErrDryRun = errors.New("dry-run validation complete")
+
 // migrationEventWriter is where the runner emits structured-ish event lines.
 // .7 (structured stderr events) will replace the current `name k=v` plain
 // text with JSON; until then, this hook lets tests capture and assert on the
@@ -114,6 +121,11 @@ func emitMigrationEvent(name string, fields map[string]string) {
 // reuses the same primitives but as a separate code path on a separate
 // trigger.
 func (s *Store) runMigrations(ctx context.Context) (bool, error) {
+	// [LAW:dataflow-not-control-flow] dryRun is a value that selects the
+	// commit vs rollback path at the end; migration bodies run the same
+	// code path regardless.
+	dryRun := os.Getenv("LIT_MIGRATE_DRY_RUN") == "1"
+
 	safety, err := s.CreateCheckpoint(ctx, preMigrateCheckpointPrefix, preMigrateCheckpointRetain)
 	if err != nil {
 		return false, &MigrationError{Phase: "checkpoint", Cause: fmt.Errorf("create pre-migrate safety branch: %w", err)}
@@ -135,6 +147,9 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 
 	adopted, err := s.adoptPreGooseWorkspace(ctx)
 	if err != nil {
+		if dryRun {
+			return false, s.revertDryRun(ctx, safety, "adoption", 0, fmt.Errorf("adopt pre-goose workspace: %w", err))
+		}
 		return false, s.revertWithQuarantine(ctx, safety, "adoption", 0, fmt.Errorf("adopt pre-goose workspace: %w", err))
 	}
 
@@ -147,13 +162,32 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	}
 	provider, err := goose.NewProvider(gooseDialect, s.db, migrations.FS, opts...)
 	if err != nil {
+		if dryRun {
+			return false, s.revertDryRun(ctx, safety, "provider", 0, fmt.Errorf("build goose provider: %w", err))
+		}
 		return false, s.revertWithQuarantine(ctx, safety, "provider", 0, fmt.Errorf("build goose provider: %w", err))
 	}
 	results, err := provider.Up(ctx)
 	if err != nil {
 		version := versionFromGooseError(err)
+		if dryRun {
+			return false, s.revertDryRun(ctx, safety, "up", version, fmt.Errorf("apply pending migrations: %w", err))
+		}
 		return false, s.revertWithQuarantine(ctx, safety, "up", version, fmt.Errorf("apply pending migrations: %w", err))
 	}
+
+	// Both paths ran all migration bodies. Now commit or rollback by mode.
+	if dryRun {
+		if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
+			return false, &MigrationError{Phase: "dry_run_reset", Cause: fmt.Errorf("dry-run reset to safety branch: %w", err)}
+		}
+		emitMigrationEvent("migrate.dry_run_complete", map[string]string{
+			"count": fmt.Sprintf("%d", len(results)),
+		})
+		fmt.Fprintf(migrationEventWriter, "DRY RUN: %d pending migrations validated, no changes committed\n", len(results))
+		return false, ErrDryRun
+	}
+
 	settled := collectSettledVersions(adopted, results)
 	floorChanged, err := s.advanceCompatFloor(ctx, settled)
 	if err != nil {
@@ -208,6 +242,32 @@ func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, pha
 			"error":   cerr.Error(),
 		})
 	}
+	return me
+}
+
+// revertDryRun resets to the safety branch without quarantining the failed
+// version. Used by dry-run mode: the migration ran as a validation exercise
+// so no permanent quarantine record should be written.
+func (s *Store) revertDryRun(ctx context.Context, safety Checkpoint, phase string, version int64, cause error) *MigrationError {
+	me := &MigrationError{Phase: phase, Version: version, Cause: cause}
+	emitMigrationEvent("migrate.failed", map[string]string{
+		"phase":   phase,
+		"version": fmt.Sprintf("%d", version),
+		"error":   cause.Error(),
+	})
+	if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
+		emitMigrationEvent("safety_branch.revert_failed", map[string]string{
+			"branch": safety.Name,
+			"error":  err.Error(),
+		})
+		me.Cause = fmt.Errorf("%w; dry-run revert to safety branch %s also failed: %v", cause, safety.Name, err)
+		return me
+	}
+	emitMigrationEvent("safety_branch.reverted", map[string]string{
+		"branch":  safety.Name,
+		"phase":   phase,
+		"version": fmt.Sprintf("%d", version),
+	})
 	return me
 }
 

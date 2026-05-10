@@ -2,8 +2,13 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
+	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pressly/goose/v3"
 )
 
 // TestFreshWorkspaceStampsBaselineViaGoose verifies that opening an empty
@@ -130,4 +135,105 @@ func countGooseVersionRows(t *testing.T, ctx context.Context, st *Store) int {
 		t.Fatalf("count %s error = %v", gooseVersionTable, err)
 	}
 	return n
+}
+
+// TestDryRunSucceedsWithPendingMigrations verifies that LIT_MIGRATE_DRY_RUN=1
+// runs all pending migrations, returns ErrDryRun, and leaves the workspace
+// untouched (goose_db_version absent means no migration was committed).
+func TestDryRunSucceedsWithPendingMigrations(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	t.Setenv("LIT_MIGRATE_DRY_RUN", "1")
+
+	_, err := Open(ctx, doltRoot, "dry-run-pending-ws-id")
+	if !errors.Is(err, ErrDryRun) {
+		t.Fatalf("Open() = %v, want ErrDryRun", err)
+	}
+
+	// Workspace is untouched: open without dry-run succeeds, proving the
+	// workspace was not left in a partially-migrated state.
+	if err := os.Unsetenv("LIT_MIGRATE_DRY_RUN"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(ctx, doltRoot, "dry-run-pending-ws-id")
+	if err != nil {
+		t.Fatalf("second Open() = %v, want success (workspace untouched after dry-run)", err)
+	}
+	defer st.Close()
+	requireGooseVersionPresent(t, ctx, st, baselineVersion)
+}
+
+// TestDryRunSucceedsWithNoPendingMigrations verifies that LIT_MIGRATE_DRY_RUN=1
+// on a workspace that is already fully migrated (0 pending) returns ErrDryRun
+// and leaves state unchanged.
+func TestDryRunSucceedsWithNoPendingMigrations(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Apply all migrations normally.
+	first, err := Open(ctx, doltRoot, "dry-run-none-ws-id")
+	if err != nil {
+		t.Fatalf("first Open() error = %v", err)
+	}
+	rowsBefore := countGooseVersionRows(t, ctx, first)
+	first.Close()
+
+	// Dry-run with 0 pending.
+	t.Setenv("LIT_MIGRATE_DRY_RUN", "1")
+	_, err = Open(ctx, doltRoot, "dry-run-none-ws-id")
+	if !errors.Is(err, ErrDryRun) {
+		t.Fatalf("dry-run Open() = %v, want ErrDryRun", err)
+	}
+
+	// Verify state unchanged: re-open normally.
+	if err := os.Unsetenv("LIT_MIGRATE_DRY_RUN"); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Open(ctx, doltRoot, "dry-run-none-ws-id")
+	if err != nil {
+		t.Fatalf("third Open() = %v, want success", err)
+	}
+	defer second.Close()
+	rowsAfter := countGooseVersionRows(t, ctx, second)
+	if rowsAfter != rowsBefore {
+		t.Fatalf("goose_db_version rows changed after dry-run: before=%d after=%d", rowsBefore, rowsAfter)
+	}
+}
+
+// TestDryRunFailingMigrationLeavesWorkspaceUntouched verifies that a migration
+// that errors during dry-run returns a non-ErrDryRun error and leaves the
+// workspace in a state that can be opened fresh afterward.
+func TestDryRunFailingMigrationLeavesWorkspaceUntouched(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Inject a failing Go migration via the test seam.
+	failing := goose.NewGoMigration(99999, &goose.GoFunc{
+		RunDB: func(_ context.Context, _ *sql.DB) error {
+			return errors.New("intentional dry-run test failure")
+		},
+	}, nil)
+	extraMigrationProviderOptions = func() []goose.ProviderOption {
+		return []goose.ProviderOption{goose.WithGoMigrations(failing)}
+	}
+	t.Cleanup(func() { extraMigrationProviderOptions = nil })
+
+	t.Setenv("LIT_MIGRATE_DRY_RUN", "1")
+	_, err := Open(ctx, doltRoot, "dry-run-fail-ws-id")
+	if err == nil || errors.Is(err, ErrDryRun) {
+		t.Fatalf("Open() = %v, want a migration failure error", err)
+	}
+
+	// Workspace is untouched: remove the failing migration and clear dry-run,
+	// then verify a clean open succeeds.
+	extraMigrationProviderOptions = nil
+	if err := os.Unsetenv("LIT_MIGRATE_DRY_RUN"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := Open(ctx, doltRoot, "dry-run-fail-ws-id")
+	if err != nil {
+		t.Fatalf("second Open() = %v, want success (workspace untouched)", err)
+	}
+	defer st.Close()
+	requireGooseVersionPresent(t, ctx, st, baselineVersion)
 }
