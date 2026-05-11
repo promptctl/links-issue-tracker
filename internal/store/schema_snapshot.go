@@ -69,16 +69,45 @@ func showCreateTable(ctx context.Context, db *sql.DB, table string) (string, err
 	return ddl, nil
 }
 
-// normalizeCreateTable strips trailing whitespace per line and any
-// statement-terminating semicolon Dolt may have appended. Line-by-line
-// normalization is enough because Dolt's SHOW CREATE TABLE output is
-// otherwise deterministic for a given schema state. If that ever stops
-// being true, deeper canonicalization (key ordering, quoting) goes here.
+// normalizeCreateTable strips trailing whitespace per line, the
+// statement-terminating semicolon Dolt may have appended, and any
+// `AUTO_INCREMENT=<n>` clause in the table-options tail. The clause carries
+// the next sequence value, which advances every time a row is inserted; if
+// it leaked into the snapshot the file would depend on incidental row
+// counts (e.g., `migration_log` rows the runner writes during Open) and
+// drift even when the declared schema is unchanged. [LAW:one-source-of-truth]
+// the snapshot is a function of declared schema only.
 func normalizeCreateTable(s string) string {
 	lines := strings.Split(s, "\n")
 	for i, line := range lines {
-		lines[i] = strings.TrimRight(line, " \t\r")
+		lines[i] = stripAutoIncrementClause(strings.TrimRight(line, " \t\r"))
 	}
 	out := strings.TrimRight(strings.Join(lines, "\n"), "\n;")
 	return out
+}
+
+// stripAutoIncrementClause removes the `AUTO_INCREMENT=<n>` clause that
+// MySQL/Dolt may emit in the table-options tail of SHOW CREATE TABLE. The
+// surrounding spaces are collapsed so the result keeps the same shape as a
+// table that never had the clause. Returns the input unchanged when no
+// clause is present.
+func stripAutoIncrementClause(line string) string {
+	const marker = "AUTO_INCREMENT="
+	idx := strings.Index(line, marker)
+	if idx < 0 {
+		return line
+	}
+	end := idx + len(marker)
+	for end < len(line) && (line[end] >= '0' && line[end] <= '9') {
+		end++
+	}
+	prefix := strings.TrimRight(line[:idx], " ")
+	suffix := strings.TrimLeft(line[end:], " ")
+	if prefix == "" {
+		return suffix
+	}
+	if suffix == "" {
+		return prefix
+	}
+	return prefix + " " + suffix
 }
