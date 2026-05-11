@@ -70,10 +70,11 @@ func (e *MigrationError) Unwrap() error { return e.Cause }
 // condition.
 var ErrDryRun = errors.New("dry-run validation complete")
 
-// migrationEventWriter is where the runner emits structured-ish event lines.
-// .7 (structured stderr events) will replace the current `name k=v` plain
-// text with JSON; until then, this hook lets tests capture and assert on the
-// rendered output.
+// migrationEventWriter is where the runner emits structured event lines.
+// Every line is one JSON object carrying an RFC3339 "ts" field, an "event"
+// name, and any arbitrary fields the call site passes through
+// emitMigrationEvent. Defaults to stderr; tests reroute through a bytes
+// buffer via this hook to capture and assert on the rendered output.
 var migrationEventWriter io.Writer = os.Stderr
 
 // extraMigrationProviderOptions is a test-only seam: when non-nil, the
@@ -158,6 +159,22 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		emitMigrationEvent("adopt.pre_goose", map[string]any{
 			"stamped_to": int64(baselineVersion),
 		})
+		// Isolate adoption from the per-migration commits that follow.
+		// Without this, the first `migrate: v<N>` commit would also carry
+		// the goose_db_version table creation, baseline-stamp rows, and
+		// the legacy meta.schema_version delete — making per-migration
+		// commits non-isolated for forensic log inspection.
+		// [LAW:single-enforcer] each migration commit must contain only
+		// its own changes. Dry-run skips this because the safety branch
+		// reset undoes everything regardless.
+		if !dryRun {
+			if cerr := s.commitWorkingSet(ctx, fmt.Sprintf("Adopt pre-goose workspace to baseline (v%d)", baselineVersion)); cerr != nil {
+				return false, s.revertWithQuarantine(ctx, safety, "adoption_commit", 0, fmt.Errorf("commit adoption: %w", cerr))
+			}
+			emitMigrationEvent("adopt.commit", map[string]any{
+				"stamped_to": int64(baselineVersion),
+			})
+		}
 	}
 
 	opts := []goose.ProviderOption{}
@@ -393,6 +410,13 @@ func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, pha
 			"version": version,
 			"error":   cerr.Error(),
 		})
+		// Surface the commit failure to the caller so operators see that
+		// the quarantine record did not persist. Without this, the same
+		// bad migration would be retried on the next Open with no log of
+		// why the previous run failed. Mirrors the reset-failed pattern
+		// above. [LAW:single-enforcer] operator-facing error surface owns
+		// the full failure story.
+		me.Cause = fmt.Errorf("%w; quarantine commit for v%d also failed: %v", cause, version, cerr)
 	}
 	return me
 }
