@@ -117,7 +117,7 @@ func TestSkewNoMigrationsWhenCurrentVersion(t *testing.T) {
 	}
 	defer second.Close()
 
-	committed := parseMigrationCommittedEvents(t, buf.String())
+	committed := parseMigrateCommitEvents(t, buf.String())
 	if len(committed) != 0 {
 		t.Fatalf("expected 0 migrate.commit events on second open, got %d: %v", len(committed), committed)
 	}

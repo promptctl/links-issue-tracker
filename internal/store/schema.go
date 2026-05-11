@@ -53,8 +53,16 @@ func createIssuesTableStmt() string {
 // migrate is the per-Open schema entry point. It refuses out-of-window
 // workspaces, dispatches to the goose-backed runner (which handles fresh /
 // pre-goose / already-on-goose shapes), then writes the always-current
-// workspace_id meta fixture. Commits the working set exactly once if
-// anything changed.
+// workspace_id meta fixture.
+//
+// Commit topology across one Open:
+//   - inside runMigrations: one Dolt commit per applied migration; one
+//     additional commit isolating adoption when a pre-goose workspace is
+//     adopted; on failure, a quarantine-row commit after the safety-branch
+//     reset (see migration_runner.go).
+//   - here, in migrate: one trailing "Migrate links schema" commit captures
+//     the workspace_id and code_compat_floor meta updates — but only when
+//     either changed, so an idempotent re-open writes nothing.
 //
 // [LAW:single-enforcer] Every workspace shape funnels through runMigrations
 // for schema convergence; the per-Open meta fixture is the only thing that

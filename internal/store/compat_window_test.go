@@ -133,11 +133,15 @@ func TestCompatWindowRefusesAtFloorBoundary(t *testing.T) {
 		t.Fatalf("first Open() error = %v", err)
 	}
 	// Write floor exactly at codeVersion. Allowed.
+	// [LAW:behavior-not-structure] reference codeVersion directly so the
+	// test tracks the constant — a literal "1" would silently stop
+	// exercising the boundary the moment codeVersion advances.
+	atBoundary := strconv.FormatInt(codeVersion, 10)
 	if _, err := first.db.ExecContext(ctx,
 		`INSERT INTO meta (meta_key, meta_value) VALUES (?, ?)
 		 ON DUPLICATE KEY UPDATE meta_value = VALUES(meta_value)`,
-		codeCompatFloorMetaKey, "1"); err != nil {
-		t.Fatalf("write floor=1 error = %v", err)
+		codeCompatFloorMetaKey, atBoundary); err != nil {
+		t.Fatalf("write floor=%s error = %v", atBoundary, err)
 	}
 	if err := first.commitWorkingSet(ctx, "test: floor at boundary"); err != nil {
 		t.Fatalf("commit error = %v", err)
