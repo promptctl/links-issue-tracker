@@ -93,6 +93,13 @@ var extraMigrationProviderOptions func() []goose.ProviderOption
 // be passed as their native Go types (int64, bool) so the JSON representation
 // is correct. [LAW:single-enforcer] One emission helper — every event in the
 // runner routes through here.
+//
+// `fields` is `map[string]any`, which admits non-JSON-marshalable values
+// (channels, functions, cyclic structures). On marshal failure, emit a
+// minimal fallback JSON line carrying `ts`, the original `event` name, and
+// an `_emit_error` field describing the failure — never produce a non-JSON
+// line that would break downstream log parsing. [LAW:types-are-the-program]
+// every line is one valid JSON object regardless of what callers pass.
 func emitMigrationEvent(name string, fields map[string]any) {
 	m := make(map[string]any, len(fields)+2)
 	m["ts"] = time.Now().UTC().Format(time.RFC3339)
@@ -100,7 +107,16 @@ func emitMigrationEvent(name string, fields map[string]any) {
 	for k, v := range fields {
 		m[k] = v
 	}
-	b, _ := json.Marshal(m)
+	b, err := json.Marshal(m)
+	if err != nil {
+		fallback, _ := json.Marshal(map[string]any{
+			"ts":           m["ts"],
+			"event":        name,
+			"_emit_error":  err.Error(),
+		})
+		fmt.Fprintln(migrationEventWriter, string(fallback))
+		return
+	}
 	fmt.Fprintln(migrationEventWriter, string(b))
 }
 

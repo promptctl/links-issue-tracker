@@ -38,13 +38,21 @@ var smokeProbes = []smokeProbe{
 // first failing probe's name plus its error. Empty name means all probes
 // passed. [LAW:dataflow-not-control-flow] every probe always runs the same
 // query+close pair; only the SELECT text varies.
+//
+// Close errors are surfaced: this probe is the workspace-health signal, so
+// driver/connection failures observed at row-close time are part of the
+// truth Doctor reports. Discarding them would let Doctor claim "ok" while
+// the underlying connection is flaky. [LAW:types-are-the-program] probe
+// result is the strongest true theorem about what happened.
 func (s *Store) runSmokeTests(ctx context.Context) (string, error) {
 	for _, p := range smokeProbes {
 		rows, err := s.db.QueryContext(ctx, p.SQL)
 		if err != nil {
 			return p.Name, err
 		}
-		rows.Close()
+		if cerr := rows.Close(); cerr != nil {
+			return p.Name, cerr
+		}
 	}
 	return "", nil
 }

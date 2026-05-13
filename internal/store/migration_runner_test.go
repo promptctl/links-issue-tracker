@@ -518,7 +518,9 @@ func TestMigrationLogFailureRow(t *testing.T) {
 // contract, so they don't need to satisfy the proxy.
 func TestMigrationLogNotReadByProductionCode(t *testing.T) {
 	// Walk the Go source tree for SELECT ... FROM migration_log in
-	// non-test files. The test uses the go list tool to find source files.
+	// non-test files. runGrepInProductionCode enumerates files via
+	// os.ReadDir on the package directory (tests run with cwd = the
+	// package dir), then scans each non-_test.go file for the pattern.
 	out, err := runGrepInProductionCode(t, "migration_log")
 	if err != nil {
 		t.Fatalf("grep error: %v", err)
