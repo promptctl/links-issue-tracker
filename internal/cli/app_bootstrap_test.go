@@ -98,6 +98,8 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 		{name: "fix all implies write", args: []string{"--fix"}, want: appAccessWrite},
 		{name: "fix named implies write", args: []string{"--fix", "rank"}, want: appAccessWrite},
 		{name: "fix with json implies write", args: []string{"--fix", "--json"}, want: appAccessWrite},
+		{name: "reset-to-pre-migration implies write", args: []string{"--reset-to-pre-migration"}, want: appAccessWrite},
+		{name: "reset-to-pre-migration with json implies write", args: []string{"--reset-to-pre-migration", "--json"}, want: appAccessWrite},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

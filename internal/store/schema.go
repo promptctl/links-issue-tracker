@@ -50,8 +50,55 @@ func createIssuesTableStmt() string {
 		);`, canonicalStatusCheckClause, priorityCheckClause)
 }
 
+// migrate is the per-Open schema entry point. It refuses out-of-window
+// workspaces, dispatches to the goose-backed runner (which handles fresh /
+// pre-goose / already-on-goose shapes), then writes the always-current
+// workspace_id meta fixture.
+//
+// Commit topology across one Open:
+//   - inside runMigrations: one Dolt commit per applied migration; one
+//     additional commit isolating adoption when a pre-goose workspace is
+//     adopted; on failure, a quarantine-row commit after the safety-branch
+//     reset (see migration_runner.go).
+//   - here, in migrate: one trailing "Migrate links schema" commit captures
+//     the workspace_id and code_compat_floor meta updates — but only when
+//     either changed, so an idempotent re-open writes nothing.
+//
+// [LAW:single-enforcer] Every workspace shape funnels through runMigrations
+// for schema convergence; the per-Open meta fixture is the only thing that
+// runs unconditionally outside that path. The compat-window check is the
+// only thing that runs *before* the runner and can refuse the entire Open.
+// [LAW:dataflow-not-control-flow] The same operations execute every Open;
+// what varies is what the runner has to do (apply baseline / adopt / no-op)
+// and whether the compat check returns a typed error or nil.
 func (s *Store) migrate(ctx context.Context) error {
-	changed := false
+	if err := checkCompatWindow(ctx, s.db, effectiveCodeVersion()); err != nil {
+		return err
+	}
+	migrated, err := s.runMigrations(ctx)
+	if err != nil {
+		return err
+	}
+	workspaceChanged, err := s.ensureMetaValue(ctx, "workspace_id", s.workspaceID)
+	if err != nil {
+		return err
+	}
+	if !migrated && !workspaceChanged {
+		return nil
+	}
+	return s.commitWorkingSet(ctx, "Migrate links schema")
+}
+
+// reconcileLegacySchema is the probe-gated reconciliation that brings a
+// pre-goose workspace to the converged shape encoded in 00001_baseline.sql.
+// It runs only during adoption (adoptPreGooseWorkspace); fresh workspaces
+// reach the converged shape directly via baseline.sql, and already-on-goose
+// workspaces evolve through registered goose migrations.
+//
+// The CREATE TABLE / ALTER ADD COLUMN statements are idempotent via
+// execIgnoreAlreadyExists, so even a pre-goose workspace already at the
+// converged shape traverses this safely without rewrites.
+func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 	schema := []string{
 		`CREATE TABLE meta (
 			meta_key VARCHAR(191) PRIMARY KEY,
@@ -114,11 +161,9 @@ func (s *Store) migrate(ctx context.Context) error {
 		`CREATE INDEX idx_issue_events_issue_created ON issue_events(issue_id, created_at);`,
 	}
 	for _, stmt := range schema {
-		stmtChanged, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
-		if err != nil {
+		if _, err := execIgnoreAlreadyExists(ctx, s.db, stmt); err != nil {
 			return err
 		}
-		changed = changed || stmtChanged
 	}
 	// [LAW:one-source-of-truth] issue_history is superseded by
 	// issue_events + issue_event_changes. Existing repos may still have it;
@@ -128,96 +173,57 @@ func (s *Store) migrate(ctx context.Context) error {
 	}
 	// issue_events.assignee was renamed to actor. Probe-gated rename keeps the
 	// migration idempotent across fresh / migrated databases.
-	actorColumnChanged, err := s.execReconciliationUpdate(
+	if _, err := s.execReconciliationUpdate(
 		ctx,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issue_events' AND column_name = 'assignee' LIMIT 1`,
 		`ALTER TABLE issue_events RENAME COLUMN assignee TO actor`,
 		"rename issue_events.assignee to actor",
-	)
-	if err != nil {
+	); err != nil {
 		return err
 	}
-	changed = changed || actorColumnChanged
-	rankColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
-	if err != nil {
+	if _, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`); err != nil {
 		return err
 	}
-	changed = changed || rankColumnChanged
-	rankIndexChanged, err := execIgnoreAlreadyExists(ctx, s.db, `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`)
-	if err != nil {
+	if _, err := execIgnoreAlreadyExists(ctx, s.db, `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`); err != nil {
 		return err
 	}
-	changed = changed || rankIndexChanged
-	topicColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`)
-	if err != nil {
+	if _, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`); err != nil {
 		return err
 	}
-	changed = changed || topicColumnChanged
 	// Workspaces predating the rename still have the old `prompt` column.
-	// Probe-gated rename keeps migration idempotent across fresh / migrated /
-	// pre-rename workspace states. `prompt` is reserved in Dolt's MySQL parser,
-	// so the source-side identifier is backtick-quoted; `agent_prompt` is not
-	// reserved and needs no quoting.
-	promptRenamedChanged, err := s.execReconciliationUpdate(
+	// Probe-gated rename keeps adoption idempotent across pre-rename and
+	// post-rename pre-goose shapes. `prompt` is reserved in Dolt's MySQL
+	// parser, so the source-side identifier is backtick-quoted; `agent_prompt`
+	// is not reserved and needs no quoting.
+	if _, err := s.execReconciliationUpdate(
 		ctx,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'prompt' LIMIT 1`,
 		"ALTER TABLE issues RENAME COLUMN `prompt` TO agent_prompt",
 		"rename prompt column to agent_prompt",
-	)
-	if err != nil {
+	); err != nil {
 		return err
 	}
-	changed = changed || promptRenamedChanged
-	promptColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`")
-	if err != nil {
+	if _, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`"); err != nil {
 		return err
 	}
-	changed = changed || promptColumnChanged
 	// Workspaces where the column was added before the NULL declaration took
 	// effect still have it as NOT NULL, which makes `lit new` fail at the DB
 	// layer when no --prompt is supplied. Relax to NULL the same way
 	// ensureUnifiedStatusSchema relaxes status; the helper swallows the no-op
 	// error when the column is already nullable.
-	promptRelaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL")
-	if err != nil {
+	if _, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL"); err != nil {
 		return err
 	}
-	changed = changed || promptRelaxedChanged
-	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
-	if err != nil {
+	if _, err := s.ensureUnifiedStatusSchema(ctx); err != nil {
 		return err
 	}
-	changed = changed || statusChanged
-	topicChanged, err := s.ensureIssueTopics(ctx)
-	if err != nil {
+	if _, err := s.ensureIssueTopics(ctx); err != nil {
 		return err
 	}
-	changed = changed || topicChanged
-	rankChanged, err := s.ensureIssueRanks(ctx)
-	if err != nil {
+	if _, err := s.ensureIssueRanks(ctx); err != nil {
 		return err
 	}
-	changed = changed || rankChanged
-	priorityChanged, err := s.resetPrioritiesToNormal(ctx)
-	if err != nil {
-		return err
-	}
-	changed = changed || priorityChanged
-	workspaceChanged, err := s.ensureMetaValue(ctx, "workspace_id", s.workspaceID)
-	if err != nil {
-		return err
-	}
-	changed = changed || workspaceChanged
-	schemaVersionChanged, err := s.ensureMetaDefault(ctx, "schema_version", "1")
-	if err != nil {
-		return err
-	}
-	changed = changed || schemaVersionChanged
-	if !changed {
-		return nil
-	}
-	// [LAW:dataflow-not-control-flow] Startup migration always runs the same reconciliation stages; only the derived `changed` value selects commit input.
-	if err := s.commitWorkingSet(ctx, "Initialize links schema"); err != nil {
+	if _, err := s.resetPrioritiesToNormal(ctx); err != nil {
 		return err
 	}
 	return nil

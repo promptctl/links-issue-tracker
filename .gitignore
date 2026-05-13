@@ -2,3 +2,4 @@ artifacts/
 .claude/worktrees/
 tools/session-analysis/processed/
 __pycache__/
+.claude/scheduled_tasks.lock

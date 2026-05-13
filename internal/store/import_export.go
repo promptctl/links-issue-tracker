@@ -67,6 +67,7 @@ type ImportLabel struct {
 
 type HealthReport struct {
 	IntegrityCheck     string   `json:"integrity_check"`
+	SmokeTest          string   `json:"smoke_test"`
 	ForeignKeyIssues   int      `json:"foreign_key_issues"`
 	InvalidRelatedRows int      `json:"invalid_related_rows"`
 	OrphanHistoryRows  int      `json:"orphan_history_rows"`
@@ -107,7 +108,26 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 		Errors:   []string{},
 		Warnings: []string{},
 	}
-	report.IntegrityCheck = "ok"
+	// Run schema smoke probes first so a structurally broken workspace
+	// surfaces with a recovery hint rather than a generic constraint error
+	// from the integrity check below. [LAW:types-are-the-program] Each
+	// status field is set only after its check actually runs, so the value
+	// is the strongest true theorem about what happened — never "ok"
+	// before the work that would justify "ok" has completed.
+	if probe, smokeErr := s.runSmokeTests(ctx); smokeErr != nil {
+		lastVersion, lastTs, _ := readLastAppliedMigration(ctx, s.db)
+		hint := formatRecoveryHint(probe, lastVersion, lastTs)
+		report.SmokeTest = hint
+		// Short-circuit: when the schema is structurally broken, the
+		// integrity / FK / rank queries below will spew secondary errors
+		// referencing the same missing column. Returning the smoke
+		// failure alone keeps the surface focused on the recovery action.
+		// IntegrityCheck reports "skipped" because the probe never ran.
+		report.IntegrityCheck = "skipped"
+		report.Errors = append(report.Errors, fmt.Sprintf("%s: %v", hint, smokeErr))
+		return report, nil
+	}
+	report.SmokeTest = "ok"
 	var violations int
 	if err := s.db.QueryRowContext(ctx, `CALL DOLT_VERIFY_CONSTRAINTS()`).Scan(&violations); err != nil {
 		return report, fmt.Errorf("verify constraints: %w", err)
@@ -115,6 +135,8 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	if violations > 0 {
 		report.IntegrityCheck = "constraint_violations"
 		report.Errors = append(report.Errors, fmt.Sprintf("constraint violations: %d", violations))
+	} else {
+		report.IntegrityCheck = "ok"
 	}
 	for _, query := range []string{
 		`SELECT COUNT(*) FROM relations r LEFT JOIN issues s ON s.id = r.src_id LEFT JOIN issues d ON d.id = r.dst_id WHERE s.id IS NULL OR d.id IS NULL`,
