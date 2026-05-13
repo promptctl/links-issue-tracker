@@ -73,9 +73,17 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if *resetPreMigration {
-		// Reset is a destructive recovery surface — run it before any
-		// other doctor work so a broken-schema workspace can't fail in
-		// the smoke probes below.
+		// Reset is a destructive recovery surface that conflicts with
+		// the in-place repairs --fix runs. Combining the two would
+		// either silently drop the requested fixes or apply them
+		// against a workspace that's about to be reset — neither is
+		// useful, so reject the combination explicitly rather than
+		// pick one and surprise the operator.
+		if *fix != "" {
+			return fmt.Errorf("--reset-to-pre-migration and --fix are mutually exclusive; run them in separate invocations")
+		}
+		// Reset before any other doctor work so a broken-schema workspace
+		// can't fail in the smoke probes below.
 		return runDoctorResetToPreMigration(ctx, stdout, ap, *jsonOut)
 	}
 	if *fix != "" {

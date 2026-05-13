@@ -241,7 +241,11 @@ func TestDryRunFailingMigrationLeavesWorkspaceUntouched(t *testing.T) {
 	defer st.Close()
 	requireGooseVersionPresent(t, ctx, st, baselineVersion)
 }
-// in ascending version order.
+// TestPerMigrationCommitsInVersionOrder verifies that every applied
+// migration in a single Open produces a distinct Dolt commit attributed
+// to migrationCommitAuthor, that the commits land in ascending version
+// order, and that dolt_log records the same count as the runner's
+// event stream emitted.
 func TestPerMigrationCommitsInVersionOrder(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -589,8 +593,9 @@ func TestMigrationTimelineReconstructable(t *testing.T) {
 		t.Fatal("no migrate.commit event found in timeline")
 	}
 }
-// migration_log table contains at least one row with status='success', NULL
-// error_text, and rows_affected set (even if 0).
+// TestMigrationLogSuccessRow verifies that after a successful Open the
+// migration_log table contains at least one row with status='success',
+// NULL error_text, and a non-NULL finished_at timestamp.
 func TestMigrationLogSuccessRow(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

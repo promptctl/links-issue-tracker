@@ -316,6 +316,14 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		if err := s.ResetToCheckpoint(ctx, safety.Name); err != nil {
 			return false, &MigrationError{Phase: "dry_run_reset", Cause: fmt.Errorf("dry-run reset to safety branch: %w", err)}
 		}
+		// Dry-run validations don't represent real migration work, so the
+		// safety branch they created should not consume retention budget
+		// or surface as a recovery target via `lit doctor --reset-to-pre-
+		// migration`. Best-effort delete: a leak here is a noise problem,
+		// not a correctness problem (the next Open's CreateCheckpoint
+		// prune would eventually evict it), so we log the failure as an
+		// event but don't fail the dry-run.
+		s.deleteCheckpointBestEffort(ctx, safety.Name, "dry_run_cleanup")
 		emitMigrationEvent("dry_run.summary", map[string]any{
 			"pending":   len(results),
 			"validated": len(results),
@@ -565,7 +573,27 @@ func (s *Store) revertDryRun(ctx context.Context, safety Checkpoint, phase strin
 		"phase":   phase,
 		"version": version,
 	})
+	// Failed dry-runs leave nothing of value on the safety branch — the
+	// validation aborted before any real work landed. Delete the branch
+	// best-effort so it doesn't consume retention budget or pollute the
+	// recovery surface.
+	s.deleteCheckpointBestEffort(ctx, safety.Name, "dry_run_cleanup")
 	return me
+}
+
+// deleteCheckpointBestEffort removes a checkpoint branch via DOLT_BRANCH -D
+// and emits a tagged event if the deletion fails. Used by dry-run paths
+// where the branch is known not to represent a recovery target; a leak is
+// noise (next CreateCheckpoint's prune would eventually evict it) rather
+// than a correctness issue, so failure is logged but not propagated.
+func (s *Store) deleteCheckpointBestEffort(ctx context.Context, name, reason string) {
+	if _, err := s.db.ExecContext(ctx, "CALL DOLT_BRANCH('-D', ?)", name); err != nil {
+		emitMigrationEvent("safety_branch.cleanup_failed", map[string]any{
+			"name":   name,
+			"reason": reason,
+			"error":  err.Error(),
+		})
+	}
 }
 
 // versionFromGooseError extracts the failing version from goose's
