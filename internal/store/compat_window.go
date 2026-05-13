@@ -18,7 +18,7 @@ import (
 // are the two writers of "what version range this binary supports". The
 // compat-window gate (checkCompatWindow) is the runtime check that catches
 // drift between them.
-const codeVersion int64 = 1
+const codeVersion int64 = 2
 
 // testBinaryCodeVersionOverride, when non-nil, replaces codeVersion for the
 // duration of a test so skew tests can simulate an older or newer binary
@@ -46,6 +46,9 @@ func effectiveCodeVersion() int64 {
 // this number. The compat-window gate enforces that.
 var migrationMinCodeVersions = map[int64]int64{
 	// 1: 1 — baseline; default. Listed for documentation only.
+	// 2: 1 — migration_quarantine table; runner-managed, no new code surface
+	//        callers depend on, so an older binary can still operate workspaces
+	//        where it is present (the runner just sees the empty table).
 }
 
 // minCodeVersionFor returns the minimum binary codeVersion required to
@@ -211,15 +214,3 @@ func (s *Store) advanceCompatFloor(ctx context.Context, applied []int64) (bool, 
 	return s.ensureMetaValue(ctx, codeCompatFloorMetaKey, strconv.FormatInt(target, 10))
 }
 
-// collectSettledVersions returns the set of migration versions that ended up
-// applied in this Open: every version goose just ran plus, when an adoption
-// stamped them, baselineVersion. Used by advanceCompatFloor to determine
-// whether the workspace's code_compat_floor needs to advance.
-func collectSettledVersions(adopted bool, results []int64) []int64 {
-	versions := make([]int64, 0, len(results)+1)
-	if adopted {
-		versions = append(versions, baselineVersion)
-	}
-	versions = append(versions, results...)
-	return versions
-}

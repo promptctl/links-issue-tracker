@@ -19,10 +19,11 @@ func resolveDoctorAccessMode(args []string) appAccessMode {
 	fix := cmd.Flags().String("fix", "", "")
 	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	cmd.Flags().Bool("json", false, "")
+	resetPreMigration := cmd.Flags().Bool("reset-to-pre-migration", false, "")
 	if err := cmd.ParseFlags(args); err != nil {
 		return appAccessWrite
 	}
-	if *fix != "" {
+	if *fix != "" || *resetPreMigration {
 		return appAccessWrite
 	}
 	return appAccessRead
@@ -66,8 +67,16 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	jsonOut := fs.Bool("json", false, "Output JSON")
+	resetPreMigration := fs.Bool("reset-to-pre-migration", false,
+		"Revert to the most recent pre-migrate safety branch and quarantine the migrations applied since")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
+	}
+	if *resetPreMigration {
+		// Reset is a destructive recovery surface — run it before any
+		// other doctor work so a broken-schema workspace can't fail in
+		// the smoke probes below.
+		return runDoctorResetToPreMigration(ctx, stdout, ap, *jsonOut)
 	}
 	if *fix != "" {
 		fixNames := allDoctorFixNames()
@@ -92,7 +101,14 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
 		r := v.(store.HealthReport)
-		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
+		// smoke_test is rendered with %q so the value stays a single
+		// quoted token. SmokeTest carries multi-word recovery hints on
+		// failure ("smoke test \"issues\" failed; run `lit doctor …`"),
+		// which would otherwise break key=value parsing on this line.
+		// [LAW:types-are-the-program] — the field's runtime shape
+		// (free-form string) and the text-mode line's required shape
+		// (one token per key=value) only align when the value is quoted.
+		_, err := fmt.Fprintf(w, "integrity_check=%s smoke_test=%q foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.SmokeTest, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
 		return err
 	}); err != nil {
 		return err
@@ -102,4 +118,30 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return CorruptionError{Message: strings.Join(report.Errors, "; ")}
 	}
 	return nil
+}
+
+// runDoctorResetToPreMigration drives the recovery surface for agents whose
+// schema is broken at HEAD. The Store implements the actual revert +
+// quarantine; the CLI just renders the result so the agent sees what
+// happened. [LAW:single-enforcer] The recovery flow lives in the store
+// (ResetToPreMigration); the CLI is a thin renderer.
+func runDoctorResetToPreMigration(ctx context.Context, stdout io.Writer, ap *app.App, jsonOut bool) error {
+	result, err := ap.Store.ResetToPreMigration(ctx)
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, result, jsonOut, func(w io.Writer, v any) error {
+		r := v.(store.ResetToPreMigrationResult)
+		versions := make([]string, 0, len(r.QuarantinedVersions))
+		for _, ver := range r.QuarantinedVersions {
+			versions = append(versions, fmt.Sprintf("%d", ver))
+		}
+		quarantined := "(none)"
+		if len(versions) > 0 {
+			quarantined = strings.Join(versions, ",")
+		}
+		_, err := fmt.Fprintf(w, "Reset to %s (created %s); quarantined versions: %s\n",
+			r.Checkpoint, r.CheckpointTimestamp, quarantined)
+		return err
+	})
 }

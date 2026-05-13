@@ -71,7 +71,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	root.SilenceErrors = true
 	root.SilenceUsage = true
 	err = root.ExecuteContext(ctx)
-	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) {
+	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) || errors.Is(err, store.ErrDryRun) {
 		return nil
 	}
 	return err
