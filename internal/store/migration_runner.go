@@ -400,6 +400,14 @@ func (s *Store) revertWithQuarantine(ctx context.Context, safety Checkpoint, pha
 			"version": version,
 			"error":   qerr.Error(),
 		})
+		// Sister case to the quarantine-commit failure path below: a
+		// failed write leaves the workspace reverted with no durable
+		// quarantine record, so the same bad migration would be retried
+		// on the next Open. Wrap into me.Cause so operators see the full
+		// failure story — symmetric with the commit-failure handling.
+		// [LAW:single-enforcer] operator-facing error surface owns both
+		// write- and commit-stage failures.
+		me.Cause = fmt.Errorf("%w; quarantine write for v%d also failed: %v", cause, version, qerr)
 		return me
 	}
 	// Write failure row after reset so it survives alongside the quarantine

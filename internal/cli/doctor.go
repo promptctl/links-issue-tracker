@@ -101,7 +101,14 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
 		r := v.(store.HealthReport)
-		_, err := fmt.Fprintf(w, "integrity_check=%s smoke_test=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.SmokeTest, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
+		// smoke_test is rendered with %q so the value stays a single
+		// quoted token. SmokeTest carries multi-word recovery hints on
+		// failure ("smoke test \"issues\" failed; run `lit doctor …`"),
+		// which would otherwise break key=value parsing on this line.
+		// [LAW:types-are-the-program] — the field's runtime shape
+		// (free-form string) and the text-mode line's required shape
+		// (one token per key=value) only align when the value is quoted.
+		_, err := fmt.Fprintf(w, "integrity_check=%s smoke_test=%q foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.SmokeTest, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
 		return err
 	}); err != nil {
 		return err

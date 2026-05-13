@@ -5,8 +5,11 @@ package migrations
 
 import "embed"
 
-// FS is the registry that goose reads. Add a new migration by dropping a file
-// named `NNNNN_<name>.sql` (or `.go`) into this directory.
+// FS is the registry that goose reads. Add a new SQL migration by dropping
+// a file named `NNNNN_<name>.sql` into this directory — the embed below
+// picks it up automatically. Go migrations are not loaded by this FS; they
+// must be registered programmatically via `goose.WithGoMigrations` on the
+// provider in `migration_runner.go`.
 //
 //go:embed *.sql
 var FS embed.FS

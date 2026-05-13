@@ -49,10 +49,12 @@ func (s *Store) runSmokeTests(ctx context.Context) (string, error) {
 	return "", nil
 }
 
-// readLastAppliedMigration returns the highest applied version (skipping
-// goose's seed version 0) and its tstamp string, or zero values if no real
-// migration is recorded. Used by the smoke-test failure message so the
-// agent sees which migration the breakage likely came from.
+// readLastAppliedMigration returns the most recently applied migration
+// version (skipping goose's seed version 0) and its tstamp string, or zero
+// values if no real migration is recorded. "Most recently" is by row id —
+// the temporal insertion order goose writes, which is what the smoke-test
+// failure message wants to surface ("which migration was just run when
+// the schema broke?"), not the numerically highest version_id.
 func readLastAppliedMigration(ctx context.Context, db *sql.DB) (int64, string, error) {
 	exists, err := tableExists(ctx, db, gooseVersionTable)
 	if err != nil {
