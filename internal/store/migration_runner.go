@@ -34,9 +34,19 @@ const gooseVersionTable = "goose_db_version"
 const baselineVersion = 1
 
 // preMigrateCheckpointPrefix names the safety-branch family the runner
-// creates before every Open's migration step. Listed here, not in the
-// checkpoint primitive, so the primitive remains migration-agnostic.
+// creates before applying real (non-dry-run) migrations. Listed here, not
+// in the checkpoint primitive, so the primitive remains migration-agnostic.
 const preMigrateCheckpointPrefix = "pre-migrate"
+
+// preMigrateDryRunCheckpointPrefix is a separate family for dry-run
+// validations. Routing dry-runs through a distinct prefix keeps their
+// pruning isolated from the real safety-branch retention budget — a
+// dry-run that runs while the workspace already has 5 real pre-migrate
+// checkpoints must not evict one of those to make room for itself.
+// Dry-run paths always delete their own checkpoint after the reset, so
+// this set should stay empty in steady state; the prefix exists to
+// scope the prune window during the dry-run's transient lifetime.
+const preMigrateDryRunCheckpointPrefix = "pre-migrate-dryrun"
 
 // preMigrateCheckpointRetain is the retention budget for safety branches.
 // Five was the spec's choice; large enough to walk back across a small
@@ -138,10 +148,15 @@ func emitMigrationEvent(name string, fields map[string]any) {
 //     reconciles the legacy schema then stamps baseline as applied.
 //   - already-on-goose → goose runs any pending migrations beyond baseline.
 //
-// [LAW:dataflow-not-control-flow] Same operations every Open: create
-// checkpoint, read quarantine, adopt, build provider, Up, advance floor.
-// Variability is in the data — what's pending, what's quarantined, whether
-// adoption fires — never in whether each step executes.
+// [LAW:dataflow-not-control-flow] Same probe sequence every Open: read
+// quarantine, probe adoption need, query pending. The work block
+// (checkpoint, adopt, Up, advance floor) only fires when those probes
+// say there's something to mutate — a no-op Open performs the probes,
+// advances the floor if needed, and returns without consuming a
+// retention slot. Variability still lives in the data (what's pending,
+// what's quarantined, whether adoption fires), but the gate that
+// suppresses the work block is itself driven by that data, not by an
+// out-of-band flag.
 // [LAW:single-enforcer] Auto-revert is the only writer of "undo a partially
 // applied migration"; manual recovery (`lit doctor --reset-to-pre-migration`)
 // reuses the same primitives but as a separate code path on a separate
@@ -218,7 +233,13 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 		}
 	}
 
-	safety, err := s.CreateCheckpoint(ctx, preMigrateCheckpointPrefix, preMigrateCheckpointRetain)
+	// Route dry-runs through their own checkpoint family so the prune
+	// pass on creation can't evict a real pre-migrate recovery branch.
+	checkpointPrefix := preMigrateCheckpointPrefix
+	if dryRun {
+		checkpointPrefix = preMigrateDryRunCheckpointPrefix
+	}
+	safety, err := s.CreateCheckpoint(ctx, checkpointPrefix, preMigrateCheckpointRetain)
 	if err != nil {
 		return false, &MigrationError{Phase: "checkpoint", Cause: fmt.Errorf("create pre-migrate safety branch: %w", err)}
 	}
