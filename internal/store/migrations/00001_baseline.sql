@@ -8,16 +8,24 @@
 --
 -- [LAW:one-source-of-truth] goose_db_version is the authority for "applied".
 
+-- All CREATE TABLE statements use IF NOT EXISTS so the migration is idempotent
+-- against a workspace where a prior partial run left some tables on disk.
+-- Re-applying the migration over a fully-converged schema is a no-op.
+-- [LAW:single-enforcer] ensureCanonicalSchema in Go is the canonical reconcile;
+-- these IF NOT EXISTS guards are belt-and-suspenders so goose ApplyVersion
+-- never errors when the safety-branch revert in Dolt leaves DDL partially
+-- intact.
+
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE meta (
+CREATE TABLE IF NOT EXISTS meta (
     meta_key VARCHAR(191) PRIMARY KEY,
     meta_value TEXT NOT NULL
 );
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE issues (
+CREATE TABLE IF NOT EXISTS issues (
     id VARCHAR(191) PRIMARY KEY,
     title TEXT NOT NULL,
     description TEXT NOT NULL,
@@ -43,7 +51,7 @@ CREATE TABLE issues (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE relations (
+CREATE TABLE IF NOT EXISTS relations (
     src_id VARCHAR(191) NOT NULL,
     dst_id VARCHAR(191) NOT NULL,
     type VARCHAR(32) NOT NULL,
@@ -57,7 +65,7 @@ CREATE TABLE relations (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE comments (
+CREATE TABLE IF NOT EXISTS comments (
     id VARCHAR(191) PRIMARY KEY,
     issue_id VARCHAR(191) NOT NULL,
     body TEXT NOT NULL,
@@ -68,7 +76,7 @@ CREATE TABLE comments (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE labels (
+CREATE TABLE IF NOT EXISTS labels (
     issue_id VARCHAR(191) NOT NULL,
     label VARCHAR(191) NOT NULL,
     created_at VARCHAR(64) NOT NULL,
@@ -82,7 +90,7 @@ CREATE TABLE labels (
 -- for every issue field; issue_event_changes records per-field deltas.
 -- Replaces the legacy issue_history shape (status-only, from/to columns).
 -- +goose StatementBegin
-CREATE TABLE issue_events (
+CREATE TABLE IF NOT EXISTS issue_events (
     id VARCHAR(191) PRIMARY KEY,
     issue_id VARCHAR(191) NOT NULL,
     action VARCHAR(64) NULL,
@@ -94,7 +102,7 @@ CREATE TABLE issue_events (
 -- +goose StatementEnd
 
 -- +goose StatementBegin
-CREATE TABLE issue_event_changes (
+CREATE TABLE IF NOT EXISTS issue_event_changes (
     event_id VARCHAR(191) NOT NULL,
     field VARCHAR(64) NOT NULL,
     from_value TEXT NULL,

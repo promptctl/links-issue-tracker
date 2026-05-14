@@ -29,7 +29,7 @@ var priorityCheckClause = fmt.Sprintf("priority >= %d AND priority <= %d", model
 const canonicalStatusCheckClause = `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
 
 func createIssuesTableStmt() string {
-	return fmt.Sprintf(`CREATE TABLE issues (
+	return fmt.Sprintf(`CREATE TABLE IF NOT EXISTS issues (
 			id VARCHAR(191) PRIMARY KEY,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
@@ -44,6 +44,7 @@ func createIssuesTableStmt() string {
 			closed_at VARCHAR(64) NULL,
 			archived_at VARCHAR(64) NULL,
 			deleted_at VARCHAR(64) NULL,
+			item_rank TEXT NOT NULL DEFAULT '',
 			CHECK(%s),
 			CHECK(%s),
 			CHECK(issue_type IN ('task','feature','bug','chore','epic'))
@@ -83,29 +84,89 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if !migrated && !workspaceChanged {
-		return nil
+	if migrated || workspaceChanged {
+		if err := s.commitWorkingSet(ctx, "Migrate links schema"); err != nil {
+			return err
+		}
 	}
-	return s.commitWorkingSet(ctx, "Migrate links schema")
+	// Final gate: every Open must produce a workspace that satisfies the
+	// canonical smoke probes. If the converge in runMigrations could not
+	// heal a divergence (e.g., a missing column that's not part of the
+	// idempotent CREATE TABLE set), fail Open loudly here rather than
+	// hand back a broken handle that 1146s on the next mutation.
+	// [LAW:verifiable-goals] The "Open succeeded" claim is checkable.
+	if probe, err := s.runSmokeTests(ctx); err != nil {
+		return fmt.Errorf("workspace smoke failed after migrate (probe %q): %w", probe, err)
+	}
+	return nil
 }
 
-// reconcileLegacySchema is the probe-gated reconciliation that brings a
-// pre-goose workspace to the converged shape encoded in 00001_baseline.sql.
-// It runs only during adoption (adoptPreGooseWorkspace); fresh workspaces
-// reach the converged shape directly via baseline.sql, and already-on-goose
-// workspaces evolve through registered goose migrations.
+// infraSchemaStatements are the runner-infrastructure tables —
+// migration_quarantine and migration_log — that the runner itself needs to
+// be present before any safety branch is created. They are CREATEd
+// idempotently and outside the goose batch precisely so the safety-branch
+// revert cannot erase them: if v3 fails and revert undoes v1 and v2, the
+// quarantine table the runner is about to write to would be gone too.
+// [LAW:single-enforcer] Single bootstrap step for runner infra; the rest
+// of the canonical schema waits until after goose has done its work.
+func infraSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS migration_quarantine (
+			version_id BIGINT PRIMARY KEY,
+			reason TEXT NOT NULL,
+			quarantined_at DATETIME NOT NULL
+		);`,
+		`CREATE TABLE IF NOT EXISTS migration_log (
+			id      BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			version BIGINT          NOT NULL,
+			name    TEXT            NOT NULL,
+			started_at  DATETIME(3)  NOT NULL,
+			finished_at DATETIME(3),
+			duration_ms BIGINT,
+			status      VARCHAR(10)  NOT NULL,
+			error_text  TEXT,
+			rows_affected BIGINT,
+			PRIMARY KEY (id)
+		);`,
+	}
+}
+
+// bootstrapInfraSchema runs the infrastructure-tables reconcile. It is the
+// FIRST thing runMigrations does — before reading the quarantine list,
+// before the safety branch, before any goose work — so the runner can
+// always count on those two tables existing regardless of what the
+// workspace's goose stamp or disk truth says.
+func (s *Store) bootstrapInfraSchema(ctx context.Context) (bool, error) {
+	changed := false
+	for _, stmt := range infraSchemaStatements() {
+		c, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
+		if err != nil {
+			return false, fmt.Errorf("bootstrap infra schema: %w", err)
+		}
+		changed = changed || c
+	}
+	return changed, nil
+}
+
+// canonicalSchemaStatements returns the ordered list of CREATE TABLE / CREATE
+// INDEX statements that bring a workspace to the canonical application
+// shape. Every statement is safe to re-execute — tables use CREATE TABLE IF
+// NOT EXISTS, indexes are wrapped with the duplicate-key-name swallow in
+// execIgnoreAlreadyExists.
 //
-// The CREATE TABLE / ALTER ADD COLUMN statements are idempotent via
-// execIgnoreAlreadyExists, so even a pre-goose workspace already at the
-// converged shape traverses this safely without rewrites.
-func (s *Store) reconcileLegacySchema(ctx context.Context) error {
-	schema := []string{
-		`CREATE TABLE meta (
+// [LAW:one-source-of-truth] This list is the canonical application schema
+// shared by ensureCanonicalSchema (post-Up unconditional reconcile) and
+// the migration files (00001_baseline.sql for fresh workspaces). Adding
+// a new table to the schema requires adding it here AND to smoke.go's
+// smokeProbes — both have a coverage commitment.
+func canonicalSchemaStatements() []string {
+	return []string{
+		`CREATE TABLE IF NOT EXISTS meta (
 			meta_key VARCHAR(191) PRIMARY KEY,
 			meta_value TEXT NOT NULL
 		);`,
 		createIssuesTableStmt(),
-		`CREATE TABLE relations (
+		`CREATE TABLE IF NOT EXISTS relations (
 			src_id VARCHAR(191) NOT NULL,
 			dst_id VARCHAR(191) NOT NULL,
 			type VARCHAR(32) NOT NULL,
@@ -116,7 +177,7 @@ func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 			FOREIGN KEY (dst_id) REFERENCES issues(id) ON DELETE CASCADE,
 			CHECK(type IN ('blocks','parent-child','related-to'))
 		);`,
-		`CREATE TABLE comments (
+		`CREATE TABLE IF NOT EXISTS comments (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
 			body TEXT NOT NULL,
@@ -124,7 +185,7 @@ func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 			created_by TEXT NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
 		);`,
-		`CREATE TABLE labels (
+		`CREATE TABLE IF NOT EXISTS labels (
 			issue_id VARCHAR(191) NOT NULL,
 			label VARCHAR(191) NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
@@ -132,16 +193,8 @@ func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 			PRIMARY KEY (issue_id, label),
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
 		);`,
-		`CREATE INDEX idx_issues_status_priority ON issues(status, priority, updated_at);`,
-		`CREATE INDEX idx_relations_src_type ON relations(src_id, type);`,
-		`CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`,
-		`CREATE INDEX idx_comments_issue_created ON comments(issue_id, created_at);`,
-		`CREATE INDEX idx_labels_issue ON labels(issue_id, label);`,
-		`CREATE INDEX idx_labels_name ON labels(label, issue_id);`,
-		// [LAW:one-source-of-truth] issue_events is the canonical mutation log
-		// for every issue field. The legacy issue_history schema (status-only,
-		// from/to columns that lied for archive/delete) is dropped below.
-		`CREATE TABLE issue_events (
+		// issue_events + issue_event_changes are the canonical mutation log.
+		`CREATE TABLE IF NOT EXISTS issue_events (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
 			action VARCHAR(64) NULL,
@@ -150,7 +203,7 @@ func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 			created_at VARCHAR(64) NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
 		);`,
-		`CREATE TABLE issue_event_changes (
+		`CREATE TABLE IF NOT EXISTS issue_event_changes (
 			event_id VARCHAR(191) NOT NULL,
 			field VARCHAR(64) NOT NULL,
 			from_value TEXT NULL,
@@ -158,72 +211,183 @@ func (s *Store) reconcileLegacySchema(ctx context.Context) error {
 			PRIMARY KEY (event_id, field),
 			FOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE
 		);`,
+		// Indexes — execIgnoreAlreadyExists swallows the "duplicate key name"
+		// error that fires when these already exist.
+		//
+		// idx_issues_rank is intentionally NOT here: it references the
+		// item_rank column, which on legacy pre-goose workspaces is added
+		// by reconcileLegacySchema's ALTER ADD COLUMN step AFTER this list
+		// runs. Creating the index here would fail with "key column doesn't
+		// exist" against those workspaces. reconcileLegacySchema and
+		// baseline.sql remain the two places idx_issues_rank is created.
+		`CREATE INDEX idx_issues_status_priority ON issues(status, priority, updated_at);`,
+		`CREATE INDEX idx_relations_src_type ON relations(src_id, type);`,
+		`CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`,
+		`CREATE INDEX idx_comments_issue_created ON comments(issue_id, created_at);`,
+		`CREATE INDEX idx_labels_issue ON labels(issue_id, label);`,
+		`CREATE INDEX idx_labels_name ON labels(label, issue_id);`,
 		`CREATE INDEX idx_issue_events_issue_created ON issue_events(issue_id, created_at);`,
 	}
-	for _, stmt := range schema {
-		if _, err := execIgnoreAlreadyExists(ctx, s.db, stmt); err != nil {
-			return err
+}
+
+// ensureCanonicalSchema brings the workspace to the canonical schema shape
+// regardless of what goose_db_version claims. Every statement is idempotent
+// (CREATE TABLE IF NOT EXISTS, plus execIgnoreAlreadyExists swallowing
+// duplicate-key-name on CREATE INDEX), so calling this on a healthy workspace
+// is a no-op.
+//
+// It exists to break the false-equivalence between
+// "goose stamped version N applied" and "the tables version N created exist
+// on disk." Dolt's safety-branch revert can leave that pair inconsistent
+// — orphan tables after a revert, missing tables after a partial undo —
+// and the runner trusts goose by default. This function is the trust-but-
+// verify step.
+//
+// Runs as the FIRST thing in runMigrations, before any safety branch is
+// created, so that critical infra tables (migration_quarantine, migration_log)
+// are present in the pre-migration state and survive a revert.
+//
+// [LAW:single-enforcer] Single function defining the canonical schema; both
+// the migration files and reconcileLegacySchema delegate here.
+// [LAW:types-are-the-program] Workspace shape divergence (goose claim vs
+// disk truth) is converged into a single legal state by construction.
+func (s *Store) ensureCanonicalSchema(ctx context.Context) (bool, error) {
+	changed := false
+	for _, stmt := range canonicalSchemaStatements() {
+		c, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
+		if err != nil {
+			return false, fmt.Errorf("ensure canonical schema: %w", err)
 		}
+		changed = changed || c
 	}
-	// [LAW:one-source-of-truth] issue_history is superseded by
-	// issue_events + issue_event_changes. Existing repos may still have it;
-	// drop it (existing history rows are discarded — issues are untouched).
-	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS issue_history`); err != nil {
-		return fmt.Errorf("drop legacy issue_history table: %w", err)
-	}
-	// issue_events.assignee was renamed to actor. Probe-gated rename keeps the
-	// migration idempotent across fresh / migrated databases.
-	if _, err := s.execReconciliationUpdate(
+	return changed, nil
+}
+
+// convergeLegacyAlterations runs the probe-gated ALTER / RENAME / data-backfill
+// steps that bring legacy columns into the canonical shape. Every operation
+// is idempotent (probe-and-execute or execIgnoreAlreadyExists), so running
+// this on a fully-converged workspace is a no-op.
+//
+// Why this runs every Open (not just during adoption): a workspace adopted
+// at an earlier date carried whatever the legacy reconciliation looked like
+// THEN. New legacy renames added later (e.g., issue_events.assignee →
+// actor when field-history landed) would never apply to already-adopted
+// workspaces because the adoption path skipped on re-Open.
+// [LAW:single-enforcer] One reconcile pass, one set of probe-gated ALTERs,
+// runs on every Open. The "is this a legacy workspace" question is answered
+// per-probe, not by a global adoption flag.
+func (s *Store) convergeLegacyAlterations(ctx context.Context) (bool, error) {
+	changed := false
+	// Workspaces predating field-history's column rename still have
+	// issue_events.assignee. The probe-gated rename keeps adoption
+	// idempotent across pre-rename and post-rename shapes.
+	renamed, err := s.execReconciliationUpdate(
 		ctx,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issue_events' AND column_name = 'assignee' LIMIT 1`,
 		`ALTER TABLE issue_events RENAME COLUMN assignee TO actor`,
 		"rename issue_events.assignee to actor",
-	); err != nil {
-		return err
+	)
+	if err != nil {
+		return false, err
 	}
-	if _, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`); err != nil {
-		return err
+	changed = changed || renamed
+
+	// item_rank was added to issues post-baseline. ADD COLUMN IF NOT EXISTS
+	// isn't portable, so probe-and-execute via execIgnoreAlreadyExists.
+	addedRank, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
+	if err != nil {
+		return false, err
 	}
-	if _, err := execIgnoreAlreadyExists(ctx, s.db, `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`); err != nil {
-		return err
+	changed = changed || addedRank
+
+	addedRankIdx, err := execIgnoreAlreadyExists(ctx, s.db, `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`)
+	if err != nil {
+		return false, err
 	}
-	if _, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`); err != nil {
-		return err
+	changed = changed || addedRankIdx
+
+	addedTopic, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`)
+	if err != nil {
+		return false, err
 	}
-	// Workspaces predating the rename still have the old `prompt` column.
-	// Probe-gated rename keeps adoption idempotent across pre-rename and
-	// post-rename pre-goose shapes. `prompt` is reserved in Dolt's MySQL
-	// parser, so the source-side identifier is backtick-quoted; `agent_prompt`
-	// is not reserved and needs no quoting.
-	if _, err := s.execReconciliationUpdate(
+	changed = changed || addedTopic
+
+	// Workspaces predating the prompt rename still have the old `prompt`
+	// column. `prompt` is reserved in Dolt's MySQL parser; backtick-quote
+	// the source identifier.
+	renamedPrompt, err := s.execReconciliationUpdate(
 		ctx,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'prompt' LIMIT 1`,
 		"ALTER TABLE issues RENAME COLUMN `prompt` TO agent_prompt",
 		"rename prompt column to agent_prompt",
-	); err != nil {
+	)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || renamedPrompt
+
+	addedPrompt, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`")
+	if err != nil {
+		return false, err
+	}
+	changed = changed || addedPrompt
+
+	// Earlier add-column ran before the NULL declaration took effect on
+	// some workspaces. Re-relax idempotently.
+	relaxedPrompt, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL")
+	if err != nil {
+		return false, err
+	}
+	changed = changed || relaxedPrompt
+
+	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || statusChanged
+
+	topicsChanged, err := s.ensureIssueTopics(ctx)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || topicsChanged
+
+	ranksChanged, err := s.ensureIssueRanks(ctx)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || ranksChanged
+
+	priorityChanged, err := s.resetPrioritiesToNormal(ctx)
+	if err != nil {
+		return false, err
+	}
+	changed = changed || priorityChanged
+
+	// Workspaces created on the pre-canonical issue_history schema may
+	// still have that legacy table. Drop is safe and idempotent.
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS issue_history`); err != nil {
+		return false, fmt.Errorf("drop legacy issue_history table: %w", err)
+	}
+
+	return changed, nil
+}
+
+// reconcileLegacySchema is the probe-gated reconciliation that brings a
+// pre-goose workspace to the converged shape encoded in 00001_baseline.sql.
+// It runs only during adoption (adoptPreGooseWorkspace); fresh workspaces
+// reach the converged shape directly via baseline.sql, and already-on-goose
+// workspaces evolve through registered goose migrations.
+//
+// Now a thin wrapper around ensureCanonicalSchema + convergeLegacyAlterations
+// — the two unconditional passes that runMigrations also calls every Open.
+// Kept as a named entry point because the adoption path is the documented
+// place this convergence happens, and tests reference it.
+func (s *Store) reconcileLegacySchema(ctx context.Context) error {
+	if _, err := s.ensureCanonicalSchema(ctx); err != nil {
 		return err
 	}
-	if _, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`"); err != nil {
-		return err
-	}
-	// Workspaces where the column was added before the NULL declaration took
-	// effect still have it as NOT NULL, which makes `lit new` fail at the DB
-	// layer when no --prompt is supplied. Relax to NULL the same way
-	// ensureUnifiedStatusSchema relaxes status; the helper swallows the no-op
-	// error when the column is already nullable.
-	if _, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL"); err != nil {
-		return err
-	}
-	if _, err := s.ensureUnifiedStatusSchema(ctx); err != nil {
-		return err
-	}
-	if _, err := s.ensureIssueTopics(ctx); err != nil {
-		return err
-	}
-	if _, err := s.ensureIssueRanks(ctx); err != nil {
-		return err
-	}
-	if _, err := s.resetPrioritiesToNormal(ctx); err != nil {
+	if _, err := s.convergeLegacyAlterations(ctx); err != nil {
 		return err
 	}
 	return nil

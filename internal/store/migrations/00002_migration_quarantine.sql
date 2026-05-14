@@ -11,7 +11,7 @@
 
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE migration_quarantine (
+CREATE TABLE IF NOT EXISTS migration_quarantine (
     version_id BIGINT PRIMARY KEY,
     reason TEXT NOT NULL,
     quarantined_at DATETIME NOT NULL

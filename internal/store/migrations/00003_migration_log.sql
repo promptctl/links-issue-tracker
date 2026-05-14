@@ -11,7 +11,7 @@
 
 -- +goose Up
 -- +goose StatementBegin
-CREATE TABLE migration_log (
+CREATE TABLE IF NOT EXISTS migration_log (
     id      BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
     version BIGINT          NOT NULL,
     name    TEXT            NOT NULL,

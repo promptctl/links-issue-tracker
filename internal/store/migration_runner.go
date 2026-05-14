@@ -167,6 +167,22 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	// code path regardless.
 	dryRun := os.Getenv("LIT_MIGRATE_DRY_RUN") == "1"
 
+	// Bootstrap the runner's own infrastructure tables BEFORE the safety
+	// branch is created so they end up in the pre-migration state and
+	// survive any revert. Without this, a failure in the same batch that
+	// creates migration_quarantine (v2) would revert that table out of
+	// existence, leaving revertWithQuarantine unable to record the
+	// quarantine row.
+	infraChanged, err := s.bootstrapInfraSchema(ctx)
+	if err != nil {
+		return false, &MigrationError{Phase: "bootstrap_infra", Cause: err}
+	}
+	if infraChanged && !dryRun {
+		if err := s.commitWorkingSet(ctx, "Bootstrap runner infrastructure tables"); err != nil {
+			return false, &MigrationError{Phase: "bootstrap_infra_commit", Cause: fmt.Errorf("commit infra bootstrap: %w", err)}
+		}
+	}
+
 	quarantined, err := readQuarantinedVersions(ctx, s.db)
 	if err != nil {
 		return false, &MigrationError{Phase: "quarantine_read", Cause: err}
@@ -229,7 +245,28 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 				})
 				return false, ErrDryRun
 			}
-			return floorChanged, nil
+			// Heal stamped-but-missing divergence: goose claims everything
+			// applied but an application table might be absent on disk
+			// (e.g., dropped manually, eaten by a partial revert in a prior
+			// run). ensureCanonicalSchema re-CREATEs IF NOT EXISTS so the
+			// claim matches reality before we hand back a store handle.
+			// convergeLegacyAlterations follows so probe-gated renames /
+			// ADD COLUMNs that were added to the code AFTER the workspace
+			// was adopted still apply.
+			canonicalChanged, err := s.ensureCanonicalSchema(ctx)
+			if err != nil {
+				return false, &MigrationError{Phase: "ensure_canonical", Cause: err}
+			}
+			legacyChanged, err := s.convergeLegacyAlterations(ctx)
+			if err != nil {
+				return false, &MigrationError{Phase: "converge_legacy", Cause: err}
+			}
+			if canonicalChanged || legacyChanged {
+				if err := s.commitWorkingSet(ctx, "Heal canonical schema (idempotent reconcile)"); err != nil {
+					return false, &MigrationError{Phase: "ensure_canonical_commit", Cause: fmt.Errorf("commit canonical heal: %w", err)}
+				}
+			}
+			return floorChanged || canonicalChanged || legacyChanged, nil
 		}
 	}
 
@@ -357,7 +394,28 @@ func (s *Store) runMigrations(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, s.revertWithQuarantine(ctx, safety, "advance_floor", 0, fmt.Errorf("advance code_compat_floor: %w", err))
 	}
-	return adopted || len(results) > 0 || floorChanged, nil
+
+	// Final heal: every Open ends with a canonical-schema reconcile so
+	// stamped-but-missing tables are recreated even when goose found
+	// nothing to do on this path, and probe-gated legacy renames that
+	// shipped AFTER this workspace was adopted finally apply. Errors
+	// here are not migration failures (we already passed the goose loop);
+	// they are workspace-corruption signals and surface as their own
+	// phase for triage.
+	canonicalChanged, err := s.ensureCanonicalSchema(ctx)
+	if err != nil {
+		return false, &MigrationError{Phase: "ensure_canonical", Cause: err}
+	}
+	legacyChanged, err := s.convergeLegacyAlterations(ctx)
+	if err != nil {
+		return false, &MigrationError{Phase: "converge_legacy", Cause: err}
+	}
+	if canonicalChanged || legacyChanged {
+		if err := s.commitWorkingSet(ctx, "Heal canonical schema (idempotent reconcile)"); err != nil {
+			return false, &MigrationError{Phase: "ensure_canonical_commit", Cause: fmt.Errorf("commit canonical heal: %w", err)}
+		}
+	}
+	return adopted || len(results) > 0 || floorChanged || canonicalChanged || legacyChanged, nil
 }
 
 // pendingMigration pairs a migration version with its human-readable name so
