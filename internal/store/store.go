@@ -249,7 +249,7 @@ func openStoreConnection(doltRootDir string, workspaceID string) (*Store, error)
 		db:             db,
 		workspaceID:    workspaceID,
 		doltRootDir:    doltRootDir,
-		commitLockPath: filepath.Join(filepath.Clean(doltRootDir), ".links-commit.lock"),
+		commitLockPath: commitLockPathForDolt(doltRootDir),
 		telemetryDir:   filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}, nil
 }

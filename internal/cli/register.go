@@ -194,6 +194,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
 		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
 			Run: withValidation(validateBackupCommandPath, r.appCmdDynamic(backupAccess, runBackup))},
+		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
+			Run: withValidation(validateSnapshotsCommandPath, r.wsCmd(runSnapshots))},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
 			Run: r.appCmd(appAccessWrite, runRecover)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
