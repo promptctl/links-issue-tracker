@@ -55,6 +55,7 @@ func Take(databaseDir, snapshotsDir, label string) (Snapshot, error) {
 	if err != nil {
 		return Snapshot{}, err
 	}
+	defer os.Remove(reserved.reservePath)
 	if err := cloneTree(databaseDir, reserved.tmpPath); err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
@@ -66,23 +67,29 @@ func Take(databaseDir, snapshotsDir, label string) (Snapshot, error) {
 	return Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, nil
 }
 
-// reservedPaths bundles the four values a successful path reservation produces.
+// reservedPaths bundles the four paths a successful reservation produces. The
+// .reserve sentinel is the atomic claim on a slot; tmpPath is where cloneTree
+// writes; finalPath is where Rename installs the snapshot on success.
 type reservedPaths struct {
-	created   time.Time
-	name      string
-	finalPath string
-	tmpPath   string
+	created     time.Time
+	name        string
+	finalPath   string
+	tmpPath     string
+	reservePath string
 }
 
-// reserveSnapshotPaths finds an unused (<name>, <name>.tmp) pair under
-// snapshotsDir by incrementing the wall-clock timestamp by 1ns until both
-// candidates are free. Bounded by maxReserveAttempts so a runaway never spins.
+// reserveSnapshotPaths atomically claims a free (<name>, <name>.tmp,
+// <name>.reserve) triple under snapshotsDir by os.Mkdir-ing the .reserve
+// sentinel. The Mkdir call is the kernel-atomic primitive that fails with
+// EEXIST under any contention (in-process, cross-process, cross-host on a
+// shared FS), eliminating the check-then-use race. On EEXIST we increment
+// the candidate by 1ns and retry. Bounded by maxReserveAttempts.
 //
-// Why this exists: time.Now().UTC().UnixNano() is monotonic within Go's
-// monotonic clock but the wall clock can stand still on the same tick (coarse
-// OS resolution), and cross-process races have no upper bound at all.
-// Incrementing-on-collision keeps natural sort order intact while preventing
-// the second Take from clobbering the first.
+// finalPath/tmpPath are also stat-checked under the held reservation as a
+// paranoia gate against stale leftovers (e.g. a crash that left .tmp behind
+// without holding .reserve). The .reserve sentinel sits at a sibling path so
+// the Darwin Clonefile fast path (which requires dst not to exist) is
+// unaffected.
 const maxReserveAttempts = 1024
 
 func reserveSnapshotPaths(snapshotsDir, label string) (reservedPaths, error) {
@@ -90,19 +97,37 @@ func reserveSnapshotPaths(snapshotsDir, label string) (reservedPaths, error) {
 	for attempt := 0; attempt < maxReserveAttempts; attempt++ {
 		name := formatName(candidate, label)
 		finalPath := filepath.Join(snapshotsDir, name)
+		reservePath := finalPath + ".reserve"
 		tmpPath := finalPath + ".tmp"
-		finalFree, err := pathFree(finalPath)
-		if err != nil {
-			return reservedPaths{}, err
+		switch err := os.Mkdir(reservePath, 0o755); {
+		case err == nil:
+			finalFree, statErr := pathFree(finalPath)
+			if statErr != nil {
+				_ = os.Remove(reservePath)
+				return reservedPaths{}, statErr
+			}
+			tmpFree, statErr := pathFree(tmpPath)
+			if statErr != nil {
+				_ = os.Remove(reservePath)
+				return reservedPaths{}, statErr
+			}
+			if !finalFree || !tmpFree {
+				_ = os.Remove(reservePath)
+				candidate = candidate.Add(time.Nanosecond)
+				continue
+			}
+			return reservedPaths{
+				created:     candidate,
+				name:        name,
+				finalPath:   finalPath,
+				tmpPath:     tmpPath,
+				reservePath: reservePath,
+			}, nil
+		case errors.Is(err, fs.ErrExist):
+			candidate = candidate.Add(time.Nanosecond)
+		default:
+			return reservedPaths{}, fmt.Errorf("reserve %s: %w", reservePath, err)
 		}
-		tmpFree, err := pathFree(tmpPath)
-		if err != nil {
-			return reservedPaths{}, err
-		}
-		if finalFree && tmpFree {
-			return reservedPaths{created: candidate, name: name, finalPath: finalPath, tmpPath: tmpPath}, nil
-		}
-		candidate = candidate.Add(time.Nanosecond)
 	}
 	return reservedPaths{}, fmt.Errorf("dbsnapshot: no free snapshot name after %d attempts", maxReserveAttempts)
 }
@@ -139,7 +164,7 @@ func List(snapshotsDir string) ([]Snapshot, error) {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(name, ".tmp") {
+		if strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".reserve") {
 			continue
 		}
 		created, ok := parseName(name)

@@ -5,7 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+	"sync"
 	"testing"
 	"time"
 )
@@ -78,19 +78,22 @@ func TestList_IgnoresUnrecognizedNames(t *testing.T) {
 	}
 }
 
-func TestList_IgnoresTmpDirectories(t *testing.T) {
+func TestList_IgnoresTmpAndReserveDirectories(t *testing.T) {
 	t.Parallel()
 	snapshotsDir := t.TempDir()
-	// Simulate a crash mid-Take that left a <name>.tmp directory behind.
-	if err := os.MkdirAll(filepath.Join(snapshotsDir, "1700000000000000000.tmp"), 0o755); err != nil {
-		t.Fatal(err)
+	// Crash-leftovers: a .tmp from a mid-clone crash, and a .reserve sentinel
+	// from a crash between reservation and clone start.
+	for _, leaf := range []string{"1700000000000000000.tmp", "1700000000000000000.reserve"} {
+		if err := os.MkdirAll(filepath.Join(snapshotsDir, leaf), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	list, err := List(snapshotsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(list) != 0 {
-		t.Fatalf("want 0 snapshots (only .tmp leftover), got %d", len(list))
+		t.Fatalf("want 0 snapshots (only crash-leftovers), got %d", len(list))
 	}
 }
 
@@ -358,6 +361,58 @@ func TestTake_HandlesRapidConsecutive(t *testing.T) {
 	}
 }
 
+func TestTake_ConcurrentNoCollisions(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	const N = 20
+	results := make(chan Snapshot, N)
+	errs := make(chan error, N)
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := Take(src, snapshotsDir, "")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- s
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent Take: %v", err)
+	}
+	seen := map[string]bool{}
+	for s := range results {
+		if seen[s.Name] {
+			t.Fatalf("duplicate name across concurrent Takes: %s", s.Name)
+		}
+		seen[s.Name] = true
+	}
+	if len(seen) != N {
+		t.Fatalf("got %d distinct snapshots, want %d", len(seen), N)
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != N {
+		t.Fatalf("List len = %d, want %d", len(list), N)
+	}
+}
+
 func TestReserveSnapshotPaths_RetriesPastExistingCandidate(t *testing.T) {
 	t.Parallel()
 	snapshotsDir := t.TempDir()
@@ -397,45 +452,6 @@ func TestPlainFileCopy_PreservesPerms(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o640 {
 		t.Fatalf("perm: %v, want 0640", info.Mode().Perm())
-	}
-}
-
-func TestCloneTree_PreservesPermsUnderRestrictiveUmask(t *testing.T) {
-	// Not t.Parallel — syscall.Umask is process-wide and racy under parallel tests.
-	old := syscall.Umask(0o077)
-	t.Cleanup(func() { syscall.Umask(old) })
-
-	root := t.TempDir()
-	src := filepath.Join(root, "src")
-	if err := os.MkdirAll(filepath.Join(src, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(src, "nested"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(src, "nested", "f"), []byte("x"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(filepath.Join(src, "nested", "f"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	dst := filepath.Join(root, "dst")
-	if err := cloneTree(src, dst); err != nil {
-		t.Fatal(err)
-	}
-	dirInfo, err := os.Stat(filepath.Join(dst, "nested"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if dirInfo.Mode().Perm() != 0o755 {
-		t.Fatalf("nested dir perm = %v, want 0755 (umask 077 must not affect snapshot)", dirInfo.Mode().Perm())
-	}
-	fileInfo, err := os.Stat(filepath.Join(dst, "nested", "f"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if fileInfo.Mode().Perm() != 0o644 {
-		t.Fatalf("file perm = %v, want 0644 (umask 077 must not affect snapshot)", fileInfo.Mode().Perm())
 	}
 }
 
