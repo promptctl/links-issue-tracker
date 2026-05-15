@@ -45,6 +45,14 @@ func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args
 // so a clone/restore can't interleave with concurrent writes from `lit update`
 // or any other in-process mutation. Routes through store.LockCommitPath so the
 // lock primitive stays single-source.
+//
+// KNOWN LIMITATION: the commit lock serializes against writers but not against
+// concurrent readers (`lit ls` / `lit show` open a Dolt SQL connection that
+// outlives any held lock). A concurrent reader during `lit snapshots restore`
+// can observe a renamed-out-from-under-it database directory; the failure mode
+// is a query error, not silent corruption. A workspace-exclusivity lock that
+// every Store holds for its lifetime is tracked under
+// links-schema-rebuild-r5v9.7.
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
