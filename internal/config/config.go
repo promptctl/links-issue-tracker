@@ -17,6 +17,7 @@ type Config struct {
 	Migration  MigrationConfig  `mapstructure:"migration"`
 	Ready      ReadyConfig      `mapstructure:"ready"`
 	Quickstart QuickstartConfig `mapstructure:"quickstart"`
+	Snapshot   SnapshotConfig   `mapstructure:"snapshot"`
 }
 
 type LoggingConfig struct {
@@ -39,6 +40,10 @@ type ReadyConfig struct {
 
 type QuickstartConfig struct {
 	SoilMode bool `mapstructure:"soil_mode"`
+}
+
+type SnapshotConfig struct {
+	RetentionBudget int `mapstructure:"retention_budget"`
 }
 
 const (
@@ -71,6 +76,7 @@ func Load(workspaceRoot ...string) (Config, error) {
 	v.SetDefault("migration.auto_apply", false)
 	v.SetDefault("ready.required_fields", []string{})
 	v.SetDefault("quickstart.soil_mode", false)
+	v.SetDefault("snapshot.retention_budget", 5)
 
 	// [LAW:single-enforcer] Global/project config precedence is resolved once at load time.
 	globalRequired, err := mergeConfigFile(v, globalConfigPath())
