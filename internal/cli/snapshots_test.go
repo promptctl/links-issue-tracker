@@ -166,6 +166,51 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 	}
 }
 
+func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
+	// Pins the contract that the commit lock lives outside the rotated dolt
+	// directory. Pre-fix: lock path was <databaseDir>/.links-commit.lock,
+	// rotated away with the database dir during Restore, leaving the canonical
+	// path empty for another process to grab while the in-flight restore's
+	// release would later delete that other process's lock file.
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	lockPath := store.CommitLockPath(ws.DatabasePath)
+	if filepath.Dir(lockPath) == filepath.Clean(ws.DatabasePath) {
+		t.Fatalf("lock path %q lives inside the rotated database dir; rotation would clobber it", lockPath)
+	}
+
+	// Take a snapshot via the CLI, then restore it. The lock path should be
+	// stable across the rotation (no lock file there afterwards because the
+	// restore released the lock, but the path semantics are unchanged).
+	captureRun(t, "snapshots", "new", "--json")
+	var listOut bytes.Buffer
+	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list", "--json"}); err != nil {
+		t.Fatalf("snapshots list: %v", err)
+	}
+	var listed []struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(listOut.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed) == 0 {
+		t.Fatal("expected at least one snapshot")
+	}
+
+	captureRun(t, "snapshots", "restore", listed[0].Name, "--json")
+
+	if pathDir := filepath.Dir(store.CommitLockPath(ws.DatabasePath)); pathDir != filepath.Dir(lockPath) {
+		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
+	}
+	// And another lock acquisition succeeds at the same path afterwards.
+	release, err := store.LockCommitPath(context.Background(), store.CommitLockPath(ws.DatabasePath))
+	if err != nil {
+		t.Fatalf("acquire commit lock after restore: %v", err)
+	}
+	release()
+}
+
 func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)

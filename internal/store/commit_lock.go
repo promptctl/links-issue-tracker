@@ -180,14 +180,21 @@ func LockCommitPath(ctx context.Context, lockPath string) (func(), error) {
 }
 
 // CommitLockPath returns the conventional commit-lock path for a workspace's
-// Dolt root directory. Equivalent to filepath.Join(databasePath,
-// ".links-commit.lock") — exposed so callers outside the Store don't
+// Dolt root directory. The lock sits one level above the dolt directory (i.e.
+// in the workspace storage dir) so that `lit snapshots restore` — which
+// rotates the dolt directory itself — does not move the lock file out from
+// under concurrent acquirers. Exposed so callers outside the Store don't
 // reconstruct the path independently.
 //
 // [LAW:one-source-of-truth] The lock-file naming convention lives here; if it
 // ever changes, Store and external callers move together.
 func CommitLockPath(databasePath string) string {
-	return filepath.Join(filepath.Clean(databasePath), ".links-commit.lock")
+	return commitLockPathForDolt(databasePath)
+}
+
+func commitLockPathForDolt(databasePath string) string {
+	cleaned := filepath.Clean(databasePath)
+	return filepath.Join(filepath.Dir(cleaned), ".links-commit.lock")
 }
 
 func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), error) {
