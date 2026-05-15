@@ -100,6 +100,12 @@ func Load(workspaceRoot ...string) (Config, error) {
 		mergedRequired = cfg.Ready.RequiredFields
 	}
 	cfg.Ready.RequiredFields = mergedRequired
+	// [LAW:single-enforcer] snapshot.retention_budget is validated once at the
+	// trust boundary; downstream callers (lit snapshots new, future migration
+	// callers of dbsnapshot.Prune) trust the value is > 0.
+	if cfg.Snapshot.RetentionBudget <= 0 {
+		return Config{}, fmt.Errorf("config: snapshot.retention_budget must be > 0, got %d", cfg.Snapshot.RetentionBudget)
+	}
 	return cfg, nil
 }
 

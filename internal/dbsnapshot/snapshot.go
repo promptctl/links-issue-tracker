@@ -114,6 +114,9 @@ func List(snapshotsDir string) ([]Snapshot, error) {
 // a documented invariant; we don't detect or close on the caller's behalf. The
 // CLI wires this via r.wsCmd, which structurally cannot open a connection.
 func Restore(databaseDir, snapshotsDir, name string) (string, error) {
+	if err := validateSnapshotName(name); err != nil {
+		return "", err
+	}
 	snapshotPath := filepath.Join(snapshotsDir, name)
 	info, err := os.Stat(snapshotPath)
 	if err != nil {
@@ -170,6 +173,29 @@ func formatName(t time.Time, label string) string {
 		return base
 	}
 	return base + "-" + clean
+}
+
+// validateSnapshotName rejects user-supplied names that would let Restore
+// target anything outside the canonical <snapshotsDir>/<name> path. The two
+// checks compose:
+//   - name == filepath.Base(name): rejects path separators, "..", and absolute
+//     paths (filepath.Base collapses them to a final component).
+//   - parseName(name) ok: rejects ".tmp" leftovers, legacy snap-<ts>-<hash>/
+//     directories, and any other non-canonical entry that List would skip.
+//
+// [LAW:single-enforcer] All Restore-time name validation flows through this
+// one gate; callers don't reimplement path-safety checks.
+func validateSnapshotName(name string) error {
+	if name == "" {
+		return errors.New("dbsnapshot: snapshot name is empty")
+	}
+	if name != filepath.Base(name) {
+		return fmt.Errorf("dbsnapshot: snapshot name must be a single path component: %q", name)
+	}
+	if _, ok := parseName(name); !ok {
+		return fmt.Errorf("dbsnapshot: snapshot name does not match the <unix-ns>[-<label>] scheme: %q", name)
+	}
+	return nil
 }
 
 func parseName(name string) (time.Time, bool) {

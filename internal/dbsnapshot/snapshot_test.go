@@ -169,6 +169,40 @@ func TestRestore_SurvivesMissingDatabaseDir(t *testing.T) {
 	}
 }
 
+func TestRestore_RejectsUnsafeNames(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	// Pre-create an irrelevant sibling so a successful traversal would
+	// have something to hit; the assertion is that Restore refuses to look.
+	sibling := filepath.Join(root, "sibling")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		"",
+		".",
+		"..",
+		"../sibling",
+		"sub/dir",
+		"/etc/passwd",
+		"1700000000-../etc",        // parseName head digits, but contains separator
+		"snap-1700000000-abc",      // legacy naming scheme from prior PR
+		"1700000000000000000.tmp",  // crash-leftover form
+		"trailing/",
+	}
+	for _, name := range cases {
+		_, err := Restore(src, snapshotsDir, name)
+		if err == nil {
+			t.Fatalf("Restore(%q) accepted unsafe name", name)
+		}
+	}
+}
+
 func TestRestore_MissingSnapshotReturnsSentinel(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

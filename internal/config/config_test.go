@@ -37,6 +37,30 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Quickstart.SoilMode {
 		t.Fatal("expected soil_mode=false by default")
 	}
+	if cfg.Snapshot.RetentionBudget != 5 {
+		t.Fatalf("expected snapshot.retention_budget=5 by default, got %d", cfg.Snapshot.RetentionBudget)
+	}
+}
+
+func TestLoadRejectsNonPositiveRetentionBudget(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		"[snapshot]\nretention_budget = 0\n",
+		"[snapshot]\nretention_budget = -1\n",
+	}
+	for _, body := range cases {
+		if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("XDG_CONFIG_HOME", dir)
+		if _, err := Load(); err == nil {
+			t.Fatalf("Load() with body %q expected error, got nil", body)
+		}
+	}
 }
 
 func TestLoadFromTOML(t *testing.T) {
