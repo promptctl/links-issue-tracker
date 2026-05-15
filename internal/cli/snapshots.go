@@ -10,6 +10,7 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/config"
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
+	"github.com/bmf/links-issue-tracker/internal/store"
 	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
@@ -24,23 +25,36 @@ func snapshotsDirFor(ws workspace.Info) string {
 	return filepath.Join(ws.StorageDir, "snapshots")
 }
 
-func runSnapshots(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: lit snapshots <new|list|restore> ...")
 	}
 	switch args[0] {
 	case "new":
-		return runSnapshotsNew(stdout, ws, args[1:])
+		return runSnapshotsNew(ctx, stdout, ws, args[1:])
 	case "list":
 		return runSnapshotsList(stdout, ws, args[1:])
 	case "restore":
-		return runSnapshotsRestore(stdout, ws, args[1:])
+		return runSnapshotsRestore(ctx, stdout, ws, args[1:])
 	default:
 		return errors.New("usage: lit snapshots <new|list|restore> ...")
 	}
 }
 
-func runSnapshotsNew(stdout io.Writer, ws workspace.Info, args []string) error {
+// withCommitLock acquires the path-based commit lock used by Store mutations
+// so a clone/restore can't interleave with concurrent writes from `lit update`
+// or any other in-process mutation. Routes through store.LockCommitPath so the
+// lock primitive stays single-source.
+func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
+	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
+	if err != nil {
+		return err
+	}
+	defer release()
+	return fn()
+}
+
+func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -51,11 +65,15 @@ func runSnapshotsNew(stdout io.Writer, ws workspace.Info, args []string) error {
 	if err != nil {
 		return err
 	}
-	snap, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), strings.TrimSpace(*label))
-	if err != nil {
-		return err
-	}
-	if err := dbsnapshot.Prune(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget); err != nil {
+	var snap dbsnapshot.Snapshot
+	if err := withCommitLock(ctx, ws, func() error {
+		s, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), strings.TrimSpace(*label))
+		if err != nil {
+			return err
+		}
+		snap = s
+		return dbsnapshot.Prune(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget)
+	}); err != nil {
 		return err
 	}
 	return printValue(stdout, snap, *jsonOut, func(w io.Writer, v any) error {
@@ -86,7 +104,7 @@ func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error 
 	})
 }
 
-func runSnapshotsRestore(stdout io.Writer, ws workspace.Info, args []string) error {
+func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("snapshots restore")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -100,8 +118,15 @@ func runSnapshotsRestore(stdout io.Writer, ws workspace.Info, args []string) err
 	if name == "" {
 		return errors.New("usage: lit snapshots restore <name> [--json]")
 	}
-	rotated, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
-	if err != nil {
+	var rotated string
+	if err := withCommitLock(ctx, ws, func() error {
+		r, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
+		if err != nil {
+			return err
+		}
+		rotated = r
+		return nil
+	}); err != nil {
 		return err
 	}
 	payload := map[string]string{

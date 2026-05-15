@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -159,37 +160,65 @@ func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(),
 	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
 		return ctx, func() {}, nil
 	}
+	release, err := acquireCommitLockAtPath(ctx, s.commitLockPath)
+	if err != nil {
+		return ctx, nil, err
+	}
+	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
+}
 
+// LockCommitPath acquires the writer-exclusion commit lock at lockPath without
+// requiring an open Store. Callers outside the Store (e.g. `lit snapshots
+// new`/`restore`, which must operate without a Dolt SQL connection) use this
+// to quiesce concurrent mutations for the duration of a filesystem operation.
+// Returns a release function that the caller must defer.
+//
+// [LAW:single-enforcer] Routes through the same acquireCommitLockAtPath
+// primitive Store uses, so writer serialization stays at one boundary.
+func LockCommitPath(ctx context.Context, lockPath string) (func(), error) {
+	return acquireCommitLockAtPath(ctx, lockPath)
+}
+
+// CommitLockPath returns the conventional commit-lock path for a workspace's
+// Dolt root directory. Equivalent to filepath.Join(databasePath,
+// ".links-commit.lock") — exposed so callers outside the Store don't
+// reconstruct the path independently.
+//
+// [LAW:one-source-of-truth] The lock-file naming convention lives here; if it
+// ever changes, Store and external callers move together.
+func CommitLockPath(databasePath string) string {
+	return filepath.Join(filepath.Clean(databasePath), ".links-commit.lock")
+}
+
+func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), error) {
 	processCommitMutex.Lock()
-	locked, err := tryAcquireFileLock(s.commitLockPath)
+	locked, err := tryAcquireFileLock(lockPath)
 	for errors.Is(err, os.ErrExist) && !locked {
-		if staleErr := removeStaleCommitLock(s.commitLockPath, commitLockStaleAfter); staleErr != nil {
+		if staleErr := removeStaleCommitLock(lockPath, commitLockStaleAfter); staleErr != nil {
 			processCommitMutex.Unlock()
-			return ctx, nil, fmt.Errorf("acquire commit lock: %w", staleErr)
+			return nil, fmt.Errorf("acquire commit lock: %w", staleErr)
 		}
 		if waitErr := waitWithContext(ctx, transientManifestRetryBaseDelay); waitErr != nil {
 			processCommitMutex.Unlock()
-			return ctx, nil, waitErr
+			return nil, waitErr
 		}
-		locked, err = tryAcquireFileLock(s.commitLockPath)
+		locked, err = tryAcquireFileLock(lockPath)
 	}
 	if err != nil {
 		processCommitMutex.Unlock()
-		return ctx, nil, fmt.Errorf("acquire commit lock: %w", err)
+		return nil, fmt.Errorf("acquire commit lock: %w", err)
 	}
 	if !locked {
 		processCommitMutex.Unlock()
 		if ctxErr := ctx.Err(); ctxErr != nil {
-			return ctx, nil, ctxErr
+			return nil, ctxErr
 		}
-		return ctx, nil, errors.New("acquire commit lock: lock not acquired")
+		return nil, errors.New("acquire commit lock: lock not acquired")
 	}
-
-	release := func() {
-		_ = os.Remove(s.commitLockPath)
+	return func() {
+		_ = os.Remove(lockPath)
 		processCommitMutex.Unlock()
-	}
-	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
+	}, nil
 }
 
 func tryAcquireFileLock(path string) (bool, error) {

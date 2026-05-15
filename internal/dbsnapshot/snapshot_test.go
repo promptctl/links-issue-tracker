@@ -204,6 +204,41 @@ func TestRestore_RejectsUnsafeNames(t *testing.T) {
 	}
 }
 
+func TestRestore_RejectsSymlinkAtSnapshotPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Plant a directory outside the snapshots tree (the "attacker target") and
+	// a symlink inside snapshotsDir with a canonical-looking name pointing at it.
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkName := "1700000000000000000"
+	if err := os.Symlink(target, filepath.Join(snapshotsDir, symlinkName)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Restore(src, snapshotsDir, symlinkName)
+	if err == nil {
+		t.Fatal("Restore should refuse a symlink at the snapshot path")
+	}
+	// Database dir should still exist at src (no rotation should have happened).
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("database dir went missing after rejected restore: %v", err)
+	}
+	// Symlink should still be at snapshotsDir (Restore must not have moved it).
+	if _, err := os.Lstat(filepath.Join(snapshotsDir, symlinkName)); err != nil {
+		t.Fatalf("symlink should still be present, got %v", err)
+	}
+}
+
 func TestRestore_MissingSnapshotReturnsSentinel(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

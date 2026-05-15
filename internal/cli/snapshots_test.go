@@ -8,6 +8,9 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/bmf/links-issue-tracker/internal/store"
 )
 
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
@@ -125,6 +128,41 @@ func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
 		if stderr.Len() != 0 {
 			t.Fatalf("%v stderr should be empty, got: %q", args, stderr.String())
 		}
+	}
+}
+
+func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
+	// Pin the contract that `lit snapshots new` serializes against the
+	// store-level commit lock. We hold the lock externally, then race a
+	// `snapshots new` against a lock release on a goroutine. If the command
+	// did not acquire the lock, it would complete before the release fires.
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	release, err := store.LockCommitPath(context.Background(), store.CommitLockPath(ws.DatabasePath))
+	if err != nil {
+		t.Fatalf("acquire commit lock: %v", err)
+	}
+
+	releaseTime := make(chan time.Time, 1)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(200 * time.Millisecond)
+		releaseTime <- time.Now()
+		release()
+	}()
+
+	start := time.Now()
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"}); err != nil {
+		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
+	}
+	elapsed := time.Since(start)
+	<-done
+	released := <-releaseTime
+	if elapsed < 200*time.Millisecond {
+		t.Fatalf("snapshots new completed in %v; expected to wait at least 200ms for the lock release at %v", elapsed, released)
 	}
 }
 

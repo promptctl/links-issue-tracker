@@ -195,14 +195,17 @@ func Restore(databaseDir, snapshotsDir, name string) (string, error) {
 		return "", err
 	}
 	snapshotPath := filepath.Join(snapshotsDir, name)
-	info, err := os.Stat(snapshotPath)
+	// Lstat (not Stat) so a symlink at snapshotPath fails the IsDir check rather
+	// than being followed to whatever the attacker pointed it at. os.Rename
+	// would otherwise install the symlink itself as the database directory.
+	info, err := os.Lstat(snapshotPath)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
 			return "", ErrSnapshotMissing
 		}
 		return "", fmt.Errorf("stat snapshot: %w", err)
 	}
-	if !info.IsDir() {
+	if !info.Mode().IsDir() {
 		return "", fmt.Errorf("snapshot is not a directory: %s", snapshotPath)
 	}
 	rotatedPath := ""
