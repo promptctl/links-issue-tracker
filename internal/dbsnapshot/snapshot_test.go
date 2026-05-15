@@ -1,0 +1,526 @@
+package dbsnapshot
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestTake_RejectsMissingSource(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	_, err := Take(filepath.Join(snapshotsDir, "nonexistent"), snapshotsDir, "")
+	if err == nil {
+		t.Fatalf("Take against missing source should error")
+	}
+	entries, _ := os.ReadDir(snapshotsDir)
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".tmp") {
+			t.Fatalf("leftover .tmp directory after failed Take: %s", e.Name())
+		}
+	}
+}
+
+func TestTakeAndList_NewestFirst(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("hello"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	for i := 0; i < 3; i++ {
+		if _, err := Take(src, snapshotsDir, ""); err != nil {
+			t.Fatalf("Take %d: %v", i, err)
+		}
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("List len=%d, want 3", len(list))
+	}
+	if list[0].Created.Before(list[1].Created) || list[1].Created.Before(list[2].Created) {
+		t.Fatalf("not newest-first: %v, %v, %v", list[0].Created, list[1].Created, list[2].Created)
+	}
+}
+
+func TestList_IgnoresUnrecognizedNames(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	// Names that don't start with <digits>: leftover from prior snapshot designs.
+	for _, junk := range []string{"snap-old-junk", "backup_2024", "README.txt"} {
+		path := filepath.Join(snapshotsDir, junk)
+		if strings.HasSuffix(junk, ".txt") {
+			if err := os.WriteFile(path, []byte("note"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			continue
+		}
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("want 0 recognized snapshots, got %d", len(list))
+	}
+}
+
+func TestList_IgnoresTmpAndReserveDirectories(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	// Crash-leftovers: a .tmp from a mid-clone crash, and a .reserve sentinel
+	// from a crash between reservation and clone start.
+	for _, leaf := range []string{"1700000000000000000.tmp", "1700000000000000000.reserve"} {
+		if err := os.MkdirAll(filepath.Join(snapshotsDir, leaf), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 0 {
+		t.Fatalf("want 0 snapshots (only crash-leftovers), got %d", len(list))
+	}
+}
+
+func TestRestore_RoundTrip(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(filepath.Join(src, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "top.txt"), []byte("top"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "sub", "deep.txt"), []byte("deep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	snap, err := Take(src, snapshotsDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Mutate the source after snapshot: delete a subtree, rewrite a file.
+	if err := os.RemoveAll(filepath.Join(src, "sub")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "top.txt"), []byte("MUTATED"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := Restore(src, snapshotsDir, snap.Name)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if rotated == "" {
+		t.Fatal("rotated path should be non-empty when src existed")
+	}
+	if got, err := os.ReadFile(filepath.Join(src, "top.txt")); err != nil || string(got) != "top" {
+		t.Fatalf("top.txt after restore: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(src, "sub", "deep.txt")); err != nil || string(got) != "deep" {
+		t.Fatalf("sub/deep.txt after restore: %q err=%v", got, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(rotated, "top.txt")); err != nil || string(got) != "MUTATED" {
+		t.Fatalf("rotated top.txt: %q err=%v", got, err)
+	}
+}
+
+func TestRestore_SurvivesMissingDatabaseDir(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a.txt"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	snap, err := Take(src, snapshotsDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.RemoveAll(src); err != nil {
+		t.Fatal(err)
+	}
+	rotated, err := Restore(src, snapshotsDir, snap.Name)
+	if err != nil {
+		t.Fatalf("Restore: %v", err)
+	}
+	if rotated != "" {
+		t.Fatalf("rotated should be empty when src absent, got %q", rotated)
+	}
+	if got, err := os.ReadFile(filepath.Join(src, "a.txt")); err != nil || string(got) != "a" {
+		t.Fatalf("restored content: %q err=%v", got, err)
+	}
+}
+
+func TestRestore_RejectsUnsafeNames(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	// Pre-create an irrelevant sibling so a successful traversal would
+	// have something to hit; the assertion is that Restore refuses to look.
+	sibling := filepath.Join(root, "sibling")
+	if err := os.MkdirAll(sibling, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cases := []string{
+		"",
+		".",
+		"..",
+		"../sibling",
+		"sub/dir",
+		"/etc/passwd",
+		"1700000000-../etc",        // parseName head digits, but contains separator
+		"snap-1700000000-abc",      // legacy naming scheme from prior PR
+		"1700000000000000000.tmp",  // crash-leftover form
+		"trailing/",
+	}
+	for _, name := range cases {
+		_, err := Restore(src, snapshotsDir, name)
+		if err == nil {
+			t.Fatalf("Restore(%q) accepted unsafe name", name)
+		}
+	}
+}
+
+func TestRestore_RejectsSymlinkAtSnapshotPath(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Plant a directory outside the snapshots tree (the "attacker target") and
+	// a symlink inside snapshotsDir with a canonical-looking name pointing at it.
+	target := filepath.Join(root, "target")
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	symlinkName := "1700000000000000000"
+	if err := os.Symlink(target, filepath.Join(snapshotsDir, symlinkName)); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Restore(src, snapshotsDir, symlinkName)
+	if err == nil {
+		t.Fatal("Restore should refuse a symlink at the snapshot path")
+	}
+	// Database dir should still exist at src (no rotation should have happened).
+	if _, err := os.Stat(src); err != nil {
+		t.Fatalf("database dir went missing after rejected restore: %v", err)
+	}
+	// Symlink should still be at snapshotsDir (Restore must not have moved it).
+	if _, err := os.Lstat(filepath.Join(snapshotsDir, symlinkName)); err != nil {
+		t.Fatalf("symlink should still be present, got %v", err)
+	}
+}
+
+func TestRestore_MissingSnapshotReturnsSentinel(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "db")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	_, err := Restore(src, filepath.Join(root, "snapshots"), "1700000000000000000")
+	if !errors.Is(err, ErrSnapshotMissing) {
+		t.Fatalf("want ErrSnapshotMissing, got %v", err)
+	}
+}
+
+func TestPrune_KeepsExactlyN(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	for i := 0; i < 7; i++ {
+		if _, err := Take(src, snapshotsDir, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := Prune(snapshotsDir, 3); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 3 {
+		t.Fatalf("len=%d after prune, want 3", len(list))
+	}
+	entries, _ := os.ReadDir(snapshotsDir)
+	dirCount := 0
+	for _, e := range entries {
+		if e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") {
+			dirCount++
+		}
+	}
+	if dirCount != 3 {
+		t.Fatalf("on-disk dir count=%d after prune, want 3", dirCount)
+	}
+}
+
+func TestPrune_RejectsNonPositive(t *testing.T) {
+	t.Parallel()
+	if err := Prune(t.TempDir(), 0); err == nil {
+		t.Fatal("want error for keep=0")
+	}
+	if err := Prune(t.TempDir(), -1); err == nil {
+		t.Fatal("want error for keep=-1")
+	}
+}
+
+func TestPrune_EmptyDirIsNoop(t *testing.T) {
+	t.Parallel()
+	if err := Prune(t.TempDir(), 5); err != nil {
+		t.Fatalf("Prune on empty dir: %v", err)
+	}
+}
+
+func TestTake_LabelAppearsInName(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	snap, err := Take(src, filepath.Join(root, "snapshots"), "pre-migration #5 / foo!")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(snap.Name, "-") {
+		t.Fatalf("expected sanitized label suffix in name: %s", snap.Name)
+	}
+	if _, err := os.Stat(snap.Path); err != nil {
+		t.Fatalf("stat snapshot path: %v", err)
+	}
+}
+
+func TestCloneTree_PreservesContentAndStructure(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	dst := filepath.Join(root, "dst")
+	if err := os.MkdirAll(filepath.Join(src, "nested", "deeper"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("alpha"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "nested", "b"), []byte("beta"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "nested", "deeper", "c"), []byte("gamma"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := cloneTree(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		path string
+		want string
+	}{
+		{filepath.Join(dst, "a"), "alpha"},
+		{filepath.Join(dst, "nested", "b"), "beta"},
+		{filepath.Join(dst, "nested", "deeper", "c"), "gamma"},
+	}
+	for _, tc := range cases {
+		got, err := os.ReadFile(tc.path)
+		if err != nil {
+			t.Fatalf("read %s: %v", tc.path, err)
+		}
+		if string(got) != tc.want {
+			t.Fatalf("%s: %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}
+
+func TestTake_HandlesRapidConsecutive(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	seen := map[string]bool{}
+	for i := 0; i < 50; i++ {
+		s, err := Take(src, snapshotsDir, "")
+		if err != nil {
+			t.Fatalf("Take %d: %v", i, err)
+		}
+		if seen[s.Name] {
+			t.Fatalf("duplicate name at iteration %d: %s", i, s.Name)
+		}
+		seen[s.Name] = true
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 50 {
+		t.Fatalf("List len=%d, want 50", len(list))
+	}
+}
+
+func TestTake_ConcurrentNoCollisions(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	const N = 20
+	results := make(chan Snapshot, N)
+	errs := make(chan error, N)
+	var wg sync.WaitGroup
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			s, err := Take(src, snapshotsDir, "")
+			if err != nil {
+				errs <- err
+				return
+			}
+			results <- s
+		}()
+	}
+	wg.Wait()
+	close(results)
+	close(errs)
+	for err := range errs {
+		t.Fatalf("concurrent Take: %v", err)
+	}
+	seen := map[string]bool{}
+	for s := range results {
+		if seen[s.Name] {
+			t.Fatalf("duplicate name across concurrent Takes: %s", s.Name)
+		}
+		seen[s.Name] = true
+	}
+	if len(seen) != N {
+		t.Fatalf("got %d distinct snapshots, want %d", len(seen), N)
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != N {
+		t.Fatalf("List len = %d, want %d", len(list), N)
+	}
+}
+
+func TestReserveSnapshotPaths_RetriesPastExistingCandidate(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	// Pre-create the directory at the lowest plausible candidate so the next
+	// Take must increment; the assertion is that reservation finds a free name
+	// rather than blowing up on collision.
+	first, err := reserveSnapshotPaths(snapshotsDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(first.finalPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	second, err := reserveSnapshotPaths(snapshotsDir, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second.finalPath == first.finalPath {
+		t.Fatalf("reservation returned colliding path: %s", second.finalPath)
+	}
+}
+
+func TestPlainFileCopy_PreservesPerms(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "a")
+	if err := os.WriteFile(src, []byte("x"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	dst := filepath.Join(root, "b")
+	if err := plainFileCopy(src, dst); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(dst)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0o640 {
+		t.Fatalf("perm: %v, want 0640", info.Mode().Perm())
+	}
+}
+
+func TestParseName(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		name string
+		ok   bool
+	}{
+		{"1700000000000000000", true},
+		{"1700000000000000000-label", true},
+		{"1700000000000000000-pre-migration-foo", true},
+		{"snap-1700000000-abc", false},
+		{"abc-def", false},
+		{"", false},
+		{"0", false},
+	}
+	for _, tc := range cases {
+		_, ok := parseName(tc.name)
+		if ok != tc.ok {
+			t.Errorf("parseName(%q) ok=%v, want %v", tc.name, ok, tc.ok)
+		}
+	}
+}
+
+func TestFormatName_RoundTripsThroughParseName(t *testing.T) {
+	t.Parallel()
+	created := time.Date(2026, 5, 14, 12, 0, 0, 123456789, time.UTC)
+	name := formatName(created, "")
+	parsed, ok := parseName(name)
+	if !ok {
+		t.Fatalf("parseName(%q) failed", name)
+	}
+	if !parsed.Equal(created) {
+		t.Fatalf("round trip: parsed=%v want=%v", parsed, created)
+	}
+}
