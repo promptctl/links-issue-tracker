@@ -167,9 +167,31 @@ type TransitionIssueInput struct {
 }
 
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+	preExisted := doltDirHasContent(doltRootDir)
 	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
+
+	// Filesystem-level snapshot for disaster recovery. Taken before any SQL
+	// connection opens so the on-disk Dolt state is quiescent. Only fires
+	// when the workspace already had content (skip on fresh init — there's
+	// nothing meaningful to back up). Snapshot failure is logged but
+	// non-fatal: losing a backup is bad, refusing to run is worse.
+	// [LAW:single-enforcer] takeFsSnapshot is the canonical pre-Open
+	// disaster-recovery primitive. The Dolt safety branch protects against
+	// migration mistakes; this protects against repo-level corruption.
+	if preExisted && !openFsSnapshotDisabled() {
+		if name, err := takeFsSnapshot(doltRootDir); err != nil {
+			emitMigrationEvent("fs_snapshot.failed", map[string]any{
+				"reason": err.Error(),
+			})
+		} else {
+			emitMigrationEvent("fs_snapshot.created", map[string]any{
+				"name": name,
+			})
+		}
+	}
+
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
@@ -189,6 +211,22 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*
 	if _, err := os.Stat(doltRootDir); errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
 	}
+
+	// Same snapshot policy as Open: the read path also invokes migrate(),
+	// which can mutate schema if auto-heal detects divergence. The snapshot
+	// is what makes the auto-heal safe to run unconditionally.
+	if !openFsSnapshotDisabled() {
+		if name, err := takeFsSnapshot(doltRootDir); err != nil {
+			emitMigrationEvent("fs_snapshot.failed", map[string]any{
+				"reason": err.Error(),
+			})
+		} else {
+			emitMigrationEvent("fs_snapshot.created", map[string]any{
+				"name": name,
+			})
+		}
+	}
+
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
@@ -207,6 +245,31 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 		return false, err
 	}
 	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
+}
+
+// doltDirHasContent reports whether the dolt root dir exists and contains a
+// Dolt repo (presence of .dolt subdir or any regular file). Used by Open to
+// distinguish first-init (no snapshot needed) from subsequent opens (which
+// should be snapshotted before any auto-heal runs).
+func doltDirHasContent(doltRootDir string) bool {
+	info, err := os.Stat(doltRootDir)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	entries, err := os.ReadDir(doltRootDir)
+	if err != nil {
+		return false
+	}
+	return len(entries) > 0
+}
+
+// openFsSnapshotDisabled returns true when the environment opts out of the
+// pre-Open filesystem snapshot. Set LIT_NO_FS_SNAPSHOT=1 to skip — useful
+// for tests that explicitly synthesize corrupted state and don't want the
+// snapshot to interfere, and for CI hot paths where the protection is
+// redundant with external backup.
+func openFsSnapshotDisabled() bool {
+	return os.Getenv("LIT_NO_FS_SNAPSHOT") == "1"
 }
 
 func validateOpenArgs(doltRootDir string, workspaceID string) error {
