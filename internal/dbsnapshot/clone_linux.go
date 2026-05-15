@@ -35,10 +35,11 @@ func ficloneOrCopy(src, dst string) error {
 	}
 	defer dstF.Close()
 	if err := unix.IoctlFileClone(int(dstF.Fd()), int(srcF.Fd())); err == nil {
-		return nil
+		// OpenFile's mode is filtered by umask; Chmod forces exact source perms.
+		return dstF.Chmod(info.Mode().Perm())
 	}
 	if _, err := io.Copy(dstF, srcF); err != nil {
 		return err
 	}
-	return nil
+	return dstF.Chmod(info.Mode().Perm())
 }

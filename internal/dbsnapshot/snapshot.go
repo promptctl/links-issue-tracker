@@ -51,19 +51,71 @@ func Take(databaseDir, snapshotsDir, label string) (Snapshot, error) {
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		return Snapshot{}, fmt.Errorf("create snapshots dir: %w", err)
 	}
-	created := time.Now().UTC()
-	name := formatName(created, label)
-	finalPath := filepath.Join(snapshotsDir, name)
-	tmpPath := finalPath + ".tmp"
-	if err := cloneTree(databaseDir, tmpPath); err != nil {
-		_ = os.RemoveAll(tmpPath)
+	reserved, err := reserveSnapshotPaths(snapshotsDir, label)
+	if err != nil {
+		return Snapshot{}, err
+	}
+	if err := cloneTree(databaseDir, reserved.tmpPath); err != nil {
+		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
 	}
-	if err := os.Rename(tmpPath, finalPath); err != nil {
-		_ = os.RemoveAll(tmpPath)
+	if err := os.Rename(reserved.tmpPath, reserved.finalPath); err != nil {
+		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("rename tmp to final: %w", err)
 	}
-	return Snapshot{Path: finalPath, Name: name, Created: created}, nil
+	return Snapshot{Path: reserved.finalPath, Name: reserved.name, Created: reserved.created}, nil
+}
+
+// reservedPaths bundles the four values a successful path reservation produces.
+type reservedPaths struct {
+	created   time.Time
+	name      string
+	finalPath string
+	tmpPath   string
+}
+
+// reserveSnapshotPaths finds an unused (<name>, <name>.tmp) pair under
+// snapshotsDir by incrementing the wall-clock timestamp by 1ns until both
+// candidates are free. Bounded by maxReserveAttempts so a runaway never spins.
+//
+// Why this exists: time.Now().UTC().UnixNano() is monotonic within Go's
+// monotonic clock but the wall clock can stand still on the same tick (coarse
+// OS resolution), and cross-process races have no upper bound at all.
+// Incrementing-on-collision keeps natural sort order intact while preventing
+// the second Take from clobbering the first.
+const maxReserveAttempts = 1024
+
+func reserveSnapshotPaths(snapshotsDir, label string) (reservedPaths, error) {
+	candidate := time.Now().UTC()
+	for attempt := 0; attempt < maxReserveAttempts; attempt++ {
+		name := formatName(candidate, label)
+		finalPath := filepath.Join(snapshotsDir, name)
+		tmpPath := finalPath + ".tmp"
+		finalFree, err := pathFree(finalPath)
+		if err != nil {
+			return reservedPaths{}, err
+		}
+		tmpFree, err := pathFree(tmpPath)
+		if err != nil {
+			return reservedPaths{}, err
+		}
+		if finalFree && tmpFree {
+			return reservedPaths{created: candidate, name: name, finalPath: finalPath, tmpPath: tmpPath}, nil
+		}
+		candidate = candidate.Add(time.Nanosecond)
+	}
+	return reservedPaths{}, fmt.Errorf("dbsnapshot: no free snapshot name after %d attempts", maxReserveAttempts)
+}
+
+func pathFree(p string) (bool, error) {
+	switch _, err := os.Stat(p); {
+	case err == nil:
+		return false, nil
+	case errors.Is(err, fs.ErrNotExist):
+		return true, nil
+	default:
+		return false, fmt.Errorf("stat %s: %w", p, err)
+	}
 }
 
 // List returns snapshots in snapshotsDir, newest-first. Entries that don't
@@ -242,7 +294,12 @@ func walkAndCopy(src, dst string, copyFile func(src, dst string) error) error {
 			if infoErr != nil {
 				return infoErr
 			}
-			return os.MkdirAll(dstPath, info.Mode().Perm())
+			if err := os.MkdirAll(dstPath, info.Mode().Perm()); err != nil {
+				return err
+			}
+			// MkdirAll honors the process umask; Chmod forces exact source perms
+			// so the snapshot is mode-identical regardless of who took it.
+			return os.Chmod(dstPath, info.Mode().Perm())
 		case d.Type()&os.ModeSymlink != 0:
 			target, readErr := os.Readlink(srcPath)
 			if readErr != nil {
@@ -277,5 +334,6 @@ func plainFileCopy(src, dst string) error {
 	if _, err := io.Copy(dstF, srcF); err != nil {
 		return err
 	}
-	return nil
+	// OpenFile's mode is filtered by umask; Chmod forces exact source perms.
+	return dstF.Chmod(info.Mode().Perm())
 }
