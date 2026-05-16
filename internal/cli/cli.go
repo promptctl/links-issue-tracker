@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -127,12 +128,10 @@ func validateNestedCommandPath(args []string, usage string, commands ...string) 
 	if subcommand == "" || subcommand == "--help" || subcommand == "-h" || strings.HasPrefix(subcommand, "-") {
 		return errors.New(usage)
 	}
-	for _, command := range commands {
-		if subcommand == command {
-			return nil
-		}
+	if !slices.Contains(commands, subcommand) {
+		return errors.New(usage)
 	}
-	return errors.New(usage)
+	return nil
 }
 
 func validateHooksCommandPath(args []string) error {
@@ -197,21 +196,19 @@ func parseGlobalOutputMode(args []string, _ io.Writer) ([]string, outputMode, er
 	mode := outputModeText
 	index := 0
 	for index < len(args) {
-		switch {
-		case args[index] == "--":
+		arg := args[index]
+		switch arg {
+		case "--":
 			index++
 			goto done
-		case args[index] == "--json":
+		case "--json":
 			mode = outputModeJSON
 			index++
-		case args[index] == "--output":
+		case "--output":
 			return nil, "", unsupportedOutputFlagError()
 		default:
-			if strings.HasPrefix(args[index], "--output=") {
+			if strings.HasPrefix(arg, "--output=") {
 				return nil, "", unsupportedOutputFlagError()
-			}
-			if args[index] == "--help" || args[index] == "-h" {
-				goto done
 			}
 			goto done
 		}

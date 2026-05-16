@@ -218,7 +218,7 @@ func TestAcquireCommitLockContextCancellation(t *testing.T) {
 	s := &Store{commitLockPath: lockPath}
 
 	// Hold the lock externally with current PID (live owner).
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", os.Getpid())), 0o600); err != nil {
+	if err := os.WriteFile(lockPath, fmt.Appendf(nil, "%d\n", os.Getpid()), 0o600); err != nil {
 		t.Fatalf("WriteFile error = %v", err)
 	}
 
