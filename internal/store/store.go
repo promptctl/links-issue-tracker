@@ -92,7 +92,7 @@ type ApplyUpdateInput struct {
 	TargetStatus        string // empty = no status change
 	TransitionReason    string
 	TransitionBy        string
-	TransitionAssignee  string // required when TargetStatus resolves to "start"
+	TransitionAssignee  string // optional; stamped when TargetStatus resolves to "start"
 }
 
 func (a ApplyUpdateInput) IsEmpty() bool {
@@ -956,9 +956,6 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	if newAssignee != "" && action != "start" {
 		return model.Issue{}, fmt.Errorf("assignee is only accepted on the start action, not %q", action)
 	}
-	if action == "start" && newAssignee == "" {
-		return model.Issue{}, errors.New("start requires --assignee: an unclaimed in_progress ticket has no owner")
-	}
 	if parsed, err := model.ParseAction(action); err == nil {
 		return s.writeStatusTransition(ctx, issue, actor, reason, parsed, newAssignee)
 	}
@@ -1081,7 +1078,19 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		return model.Issue{}, err
 	}
 	updated.UpdatedAt = now
-	return updated, nil
+	// [LAW:one-source-of-truth] The DB row carries the post-write assignee; the
+	// returned in-memory lifecycle must match it so JSON output and callers see
+	// the same value the next read would yield. Apply() preserved the prior
+	// assignee on the OwnedStatus copy; re-hydrate with the value just written.
+	rehydrated, err := model.UpdateStatusCapability(updated, model.StatusView{
+		Value:    model.DefaultOpen(toStatus),
+		Assignee: postAssignee,
+		ClosedAt: updated.ClosedAtValue(),
+	})
+	if err != nil {
+		return updated, nil
+	}
+	return rehydrated, nil
 }
 
 func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
