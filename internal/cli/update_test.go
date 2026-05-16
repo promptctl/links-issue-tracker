@@ -286,9 +286,6 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
-	if !strings.Contains(err.Error(), "no start action available") {
-		t.Fatalf("runTransition(start epic) error = %q, want no start action available", err.Error())
-	}
 	stdout.Reset()
 	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)

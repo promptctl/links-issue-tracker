@@ -28,48 +28,31 @@ func (o OwnedStatus) Progress() Progress {
 	return progress
 }
 
-func (o OwnedStatus) AvailableActions() []ActionName {
-	switch o.Value {
-	case Open:
-		return []ActionName{ActionStart, ActionClose}
-	case InProgress:
-		return []ActionName{ActionDone, ActionClose}
-	case Closed:
-		return []ActionName{ActionReopen}
-	default:
-		return nil
-	}
-}
-
+// Apply implements the target-state lifecycle model: the action declares the
+// desired terminal state, and Apply produces it. Same-state inputs return the
+// receiver unchanged so the store layer can recognize the call as a no-op (no
+// status field-change, no audit drift on ClosedAt). The only rejection is
+// ParseAction-bypass — a value that is not one of the four known actions.
+// [LAW:types-are-the-program] All from-state preconditions are gone; the only
+// constraint left is "action must name a known target state."
+// [LAW:one-source-of-truth] The action→target mapping is read from
+// ActionTargetState; this function does not maintain a parallel table.
 func (o OwnedStatus) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
-	next := o
-	now := time.Now().UTC()
-	switch name {
-	case ActionStart:
-		if o.Value != Open {
-			return nil, fmt.Errorf("no %s action available on this issue", name)
-		}
-		next.Value = InProgress
-	case ActionDone:
-		if o.Value != InProgress {
-			return nil, fmt.Errorf("no %s action available on this issue", name)
-		}
-		next.Value = Closed
-		next.ClosedAt = &now
-	case ActionClose:
-		if o.Value == Closed {
-			return nil, fmt.Errorf("no %s action available on this issue", name)
-		}
-		next.Value = Closed
-		next.ClosedAt = &now
-	case ActionReopen:
-		if o.Value != Closed {
-			return nil, fmt.Errorf("no %s action available on this issue", name)
-		}
-		next.Value = Open
-		next.ClosedAt = nil
-	default:
+	target, ok := ActionTargetState(name)
+	if !ok {
 		return nil, fmt.Errorf("unsupported lifecycle action %q", name)
+	}
+	if o.Value == target {
+		return o, nil
+	}
+	next := o
+	next.Value = target
+	switch target {
+	case Closed:
+		now := time.Now().UTC()
+		next.ClosedAt = &now
+	case Open:
+		next.ClosedAt = nil
 	}
 	return next, nil
 }
