@@ -798,9 +798,16 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if visited["assignee"] {
 		value := *assignee
 		in.Fields.Assignee = &value
-		// `start` (in_progress) requires an assignee. Thread it through so
-		// ApplyUpdate can pass it to TransitionIssue. [LAW:dataflow-not-control-flow]
+		// `start` (in_progress) stamps the assignee column. Thread the explicit
+		// value through so ApplyUpdate can pass it to TransitionIssue.
+		// [LAW:dataflow-not-control-flow]
 		in.TransitionAssignee = value
+	}
+	// Mirror `lit start`: when the status transition implies a `start` action and
+	// no explicit assignee was given, default to claude_<sessionId> from env.
+	// [LAW:one-source-of-truth] sole producer of the env-derived identity.
+	if in.TransitionAssignee == "" && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
+		in.TransitionAssignee = resolveTransitionAssignee("start", "")
 	}
 	if visited["labels"] {
 		value := splitCSV(*labels)
@@ -914,13 +921,33 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 // passed without `=<token>`. It cannot collide with a real token (which is hex).
 const applyNoTokenSentinel = "__no_token__"
 
+// resolveTransitionAssignee picks the assignee for a status transition. Explicit
+// --assignee wins; otherwise the `start` action auto-derives `claude_<sessionId>`
+// from CLAUDE_CODE_SESSION_ID. Non-start actions never auto-fill so the store's
+// "assignee only on start" invariant still holds without surprise side effects.
+// [LAW:types-are-the-program] env fallback only fires when action carries the
+// claim semantics; every other action passes through unchanged.
+func resolveTransitionAssignee(action, explicit string) string {
+	value := strings.TrimSpace(explicit)
+	if value != "" || action != "start" {
+		return value
+	}
+	sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID"))
+	if sessionID == "" {
+		return ""
+	}
+	return "claude_" + sessionID
+}
+
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "Transition actor")
 	// Only `start` consumes --assignee. Defining the flag for every action
 	// keeps the parser uniform; the store rejects use on non-start actions.
-	assignee := fs.String("assignee", "", "Assignee identity to stamp on `start` (e.g. claude_<sessionId>); rejected on other actions")
+	// When omitted on `start`, the assignee auto-resolves from CLAUDE_CODE_SESSION_ID
+	// (see resolveTransitionAssignee). Agents should not pass this flag explicitly.
+	assignee := fs.String("assignee", "", "Override assignee on `start`; defaults to claude_<sessionId> when CLAUDE_CODE_SESSION_ID is set")
 	// [LAW:types-are-the-program] `--apply` carries the token printed by the
 	// preview phase as its value (`--apply=<token>`). Empty default = preview;
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
@@ -932,9 +959,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	remaining := fs.cmd.Flags().Args()
 	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>] [--apply=<token>]", transitionCommandName(action))
-	if action == "start" {
-		usage = fmt.Sprintf("usage: lit %s <id> --assignee <name> [--reason <text>] [--apply=<token>]", transitionCommandName(action))
-	}
 	if len(remaining) != 1 {
 		return errors.New(usage)
 	}
@@ -997,7 +1021,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		Action:    action,
 		Reason:    *reason,
 		CreatedBy: *by,
-		Assignee:  *assignee,
+		Assignee:  resolveTransitionAssignee(action, *assignee),
 	})
 	if err != nil {
 		return err

@@ -543,7 +543,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Empty status",
 		Topic:     "status",
 		IssueType: "task",
@@ -560,5 +560,104 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 	if err.Error() != "--status requires a non-empty value" {
 		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--status requires a non-empty value")
+	}
+}
+
+func TestResolveTransitionAssignee(t *testing.T) {
+	tests := []struct {
+		name     string
+		action   string
+		explicit string
+		env      string
+		want     string
+	}{
+		{name: "explicit wins on start", action: "start", explicit: "alice", env: "abc-123", want: "alice"},
+		{name: "explicit wins on non-start", action: "done", explicit: "alice", env: "abc-123", want: "alice"},
+		{name: "start falls back to env", action: "start", explicit: "", env: "abc-123", want: "claude_abc-123"},
+		{name: "start empty when env unset", action: "start", explicit: "", env: "", want: ""},
+		{name: "non-start never auto-fills", action: "done", explicit: "", env: "abc-123", want: ""},
+		{name: "whitespace explicit treated as empty", action: "start", explicit: "  ", env: "abc-123", want: "claude_abc-123"},
+		{name: "whitespace env treated as empty", action: "start", explicit: "", env: "   ", want: ""},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
+			got := resolveTransitionAssignee(tc.action, tc.explicit)
+			if got != tc.want {
+				t.Fatalf("resolveTransitionAssignee(%q, %q) = %q, want %q", tc.action, tc.explicit, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "No assignee start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--json"}, "start"); err != nil {
+		t.Fatalf("runTransition(start without --assignee) error = %v", err)
+	}
+	var started model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
+		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	}
+	if started.State() != model.StateInProgress {
+		t.Fatalf("started.State() = %q, want in_progress", started.State())
+	}
+	if got := started.AssigneeValue(); got != "" {
+		t.Fatalf("started.AssigneeValue() = %q, want empty (no env, no flag)", got)
+	}
+}
+
+func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-abc")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Env-stamped start", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--json"}, "start"); err != nil {
+		t.Fatalf("runTransition(start) error = %v", err)
+	}
+	var started model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
+		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	}
+	if got, want := started.AssigneeValue(), "claude_sess-abc"; got != want {
+		t.Fatalf("started.AssigneeValue() = %q, want %q", got, want)
+	}
+}
+
+func TestRunUpdateStatusInProgressUsesSessionEnvAssignee(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-xyz")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Update stamps assignee", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--json"}); err != nil {
+		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
+	}
+	var updated model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	}
+	if got, want := updated.AssigneeValue(), "claude_sess-xyz"; got != want {
+		t.Fatalf("updated.AssigneeValue() = %q, want %q", got, want)
 	}
 }

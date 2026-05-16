@@ -12,7 +12,7 @@ Create tickets: `lit new --title "..." --topic <topic> --type task|bug|feature|c
 <agent-instructions>`--topic`: Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')</agent-instructions>
 
 ## Modify tickets
-Update tickets: `lit update <issue-id> --title "..." --description "..." --priority 1 --assignee <assignee> [--labels a,b]`
+Update tickets: `lit update <issue-id> --title "..." --description "..." --priority 1 [--labels a,b]`
 Rerank tickets: `lit rank <id> [--top] [--bottom] [--above <other-id>] [--below <other-id>]`
 Block/unblock tickets: `lit label add <id> needs-design` `lit label rm <id> needs-design`
 Set parent: `lit parent set <child-id> <parent-id>`
