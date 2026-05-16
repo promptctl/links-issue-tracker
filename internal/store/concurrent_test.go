@@ -30,7 +30,6 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	eg, egCtx := errgroup.WithContext(ctx)
 
 	for i := range goroutines {
-		i := i
 		eg.Go(func() error {
 			issue, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test", 
 				Title:     fmt.Sprintf("Concurrent issue %d", i),
