@@ -1103,14 +1103,31 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("started.State() = %q, want in_progress", started.State())
 	}
 
+	// Under the target-state lifecycle, `start --assignee` is sugar for
+	// "set to InProgress + wire --assignee to the assignee column." A second
+	// start on an already-in-progress issue is therefore a same-state claim
+	// transfer (assignee column rewritten) rather than a verb-strict
+	// rejection. Persistence is the contract — reload from the store to
+	// assert the assignee column, since writeStatusTransition returns the
+	// pre-Apply lifecycle snapshot.
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
 		IssueID:   issue.ID,
 		Action:    "start",
 		Reason:    "competing claim",
 		CreatedBy: "agent-b",
 		Assignee:  "agent-b",
-	}); err == nil {
-		t.Fatal("expected claim conflict when claiming an already in_progress issue")
+	}); err != nil {
+		t.Fatalf("TransitionIssue(start by agent-b) error = %v, want same-state success", err)
+	}
+	reclaimed, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if reclaimed.State() != model.StateInProgress {
+		t.Fatalf("reclaimed.State() = %q, want in_progress", reclaimed.State())
+	}
+	if reclaimed.AssigneeValue() != "agent-b" {
+		t.Fatalf("reclaimed.AssigneeValue() = %q, want agent-b", reclaimed.AssigneeValue())
 	}
 
 	done, err := st.TransitionIssue(ctx, TransitionIssueInput{

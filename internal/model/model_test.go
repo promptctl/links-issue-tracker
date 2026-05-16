@@ -16,64 +16,48 @@ func hydratedIssue(t *testing.T, issue Issue, status State) Issue {
 	return hydrated
 }
 
-func TestApplyRefusesContainerEvenWhenMembersAreActionable(t *testing.T) {
+func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 	childA := hydratedIssue(t, Issue{ID: "a", IssueType: "task"}, StateOpen)
 	childB := hydratedIssue(t, Issue{ID: "b", IssueType: "task"}, StateOpen)
 	container, err := HydrateAllOf(Issue{ID: "epic", IssueType: "epic"}, []Issue{childA, childB})
 	if err != nil {
 		t.Fatalf("HydrateAllOf() error = %v", err)
 	}
-	_, err = container.Apply(ActionStart, "tester", "")
-	if err == nil || err.Error() != "no start action available on this issue" {
-		t.Fatalf("Apply(start) error = %v, want no start action available", err)
+	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen} {
+		if _, err := container.Apply(action, "tester", ""); err == nil {
+			t.Fatalf("Apply(%s on epic) error = nil, want container rejection", action)
+		}
 	}
 }
 
-func TestApplyIdempotentReportsAlreadyInState(t *testing.T) {
-	tests := []struct {
-		name    string
-		state   State
-		action  ActionName
-		wantErr string
-	}{
-		{name: "start on in_progress", state: StateInProgress, action: ActionStart, wantErr: "issue is already in progress"},
-		{name: "done on closed", state: StateClosed, action: ActionDone, wantErr: "issue is already closed"},
-		{name: "close on closed", state: StateClosed, action: ActionClose, wantErr: "issue is already closed"},
-		{name: "reopen on open", state: StateOpen, action: ActionReopen, wantErr: "issue is already open"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, tt.state)
-			_, err := leaf.Apply(tt.action, "tester", "")
-			if err == nil || err.Error() != tt.wantErr {
-				t.Fatalf("Apply(%s on %s) error = %v, want %q", tt.action, tt.state, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestApplyNonIdempotentInvalidTransitionKeepsLegacyMessage(t *testing.T) {
-	// reopen on in_progress is invalid but NOT idempotent — target state of
-	// reopen is Open, not InProgress — so the legacy "no X action available"
-	// message is preserved. Same for done on open and start on closed.
-	tests := []struct {
-		name   string
-		state  State
+// TestApplyTargetStateOnLeafProducesTargetState exercises every (from, action)
+// pair on a hydrated leaf to confirm Issue.Apply now obeys the target-state
+// contract: action determines the post-state regardless of from-state, and
+// same-state pairs succeed as no-ops.
+func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
+	type targetCase struct {
 		action ActionName
-	}{
-		{name: "reopen on in_progress", state: StateInProgress, action: ActionReopen},
-		{name: "done on open", state: StateOpen, action: ActionDone},
-		{name: "start on closed", state: StateClosed, action: ActionStart},
+		target State
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, tt.state)
-			_, err := leaf.Apply(tt.action, "tester", "")
-			want := "no " + string(tt.action) + " action available on this issue"
-			if err == nil || err.Error() != want {
-				t.Fatalf("Apply(%s on %s) error = %v, want %q", tt.action, tt.state, err, want)
-			}
-		})
+	matrix := []targetCase{
+		{ActionStart, StateInProgress},
+		{ActionDone, StateClosed},
+		{ActionClose, StateClosed},
+		{ActionReopen, StateOpen},
+	}
+	for _, from := range []State{StateOpen, StateInProgress, StateClosed} {
+		for _, tc := range matrix {
+			t.Run(string(from)+"_"+string(tc.action), func(t *testing.T) {
+				leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, from)
+				next, err := leaf.Apply(tc.action, "tester", "")
+				if err != nil {
+					t.Fatalf("Apply(%s on %s) error = %v, want success", tc.action, from, err)
+				}
+				if next.State() != tc.target {
+					t.Fatalf("Apply(%s on %s).State() = %q, want %q", tc.action, from, next.State(), tc.target)
+				}
+			})
+		}
 	}
 }
 
@@ -219,9 +203,6 @@ func TestNeedsStoreHydrationLifecycleMethodsReturnZero(t *testing.T) {
 	}
 	if issue.Capabilities() != (Capabilities{}) {
 		t.Fatalf("Capabilities() = %#v, want empty", issue.Capabilities())
-	}
-	if actions := issue.AvailableActions(); actions != nil {
-		t.Fatalf("AvailableActions() = %#v, want nil", actions)
 	}
 }
 

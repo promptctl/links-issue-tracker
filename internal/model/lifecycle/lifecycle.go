@@ -82,7 +82,6 @@ type Container interface {
 
 type Actionable interface {
 	Lifecycle
-	AvailableActions() []ActionName
 	Apply(name ActionName, actor string, reason string) (Lifecycle, error)
 }
 
