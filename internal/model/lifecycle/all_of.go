@@ -34,10 +34,6 @@ func (a AllOf) Progress() Progress {
 	return out
 }
 
-func (a AllOf) AvailableActions() []ActionName {
-	return nil
-}
-
 func (a AllOf) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
 	return nil, fmt.Errorf("no %s action available on this issue", name)
 }

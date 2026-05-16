@@ -124,22 +124,15 @@ func (i Issue) Capabilities() Capabilities {
 	return capabilitiesFrom(lifecycle)
 }
 
-func (i Issue) AvailableActions() []ActionName {
-	root, err := i.lifecycleOrError()
-	if err != nil {
-		return nil
-	}
-	actionable, ok := root.(lifecycle.Actionable)
-	if !ok {
-		return nil
-	}
-	return actionable.AvailableActions()
-}
-
-// Apply is root-only: it only invokes actions exposed by the root lifecycle
-// primitive. Multi-OwnedStatus composition (AllOf containing multiple
-// actionable members) is intentionally unsupported here; that requires a
-// dedicated disambiguation design before AllOf.Apply ever returns non-nil.
+// Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
+// Multi-OwnedStatus composition (AllOf containing multiple actionable members)
+// is intentionally unsupported here; that requires a dedicated disambiguation
+// design before AllOf.Apply ever returns non-nil. Containers (AllOf) reject
+// every action because their state is derived from children.
+// [LAW:types-are-the-program] No idempotent / from-state branching here: the
+// leaf's Apply is target-state, so same-state inputs round-trip through the
+// leaf and back unchanged; the only rejections that survive are the real
+// invariants enforced by the leaf itself (parse-bypass, container).
 func (i Issue) Apply(action ActionName, actor string, reason string) (Issue, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
@@ -147,30 +140,6 @@ func (i Issue) Apply(action ActionName, actor string, reason string) (Issue, err
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
-		return Issue{}, fmt.Errorf("no %s action available on this issue", action)
-	}
-	available := actionable.AvailableActions()
-	matched := false
-	for _, candidate := range available {
-		if candidate == lifecycle.ActionName(action) {
-			matched = true
-			break
-		}
-	}
-	if !matched {
-		// [LAW:dataflow-not-control-flow] The (currentState, targetState) pair
-		// is data; the message is a function of that pair. Idempotent calls —
-		// where the issue is already in the action's target state — produce
-		// the "already X" diagnostic. Non-idempotent rejections (and container
-		// lifecycles whose AvailableActions is empty) keep the original
-		// message; gating on len(available)>0 prevents container types (epics,
-		// whose state is derived from children) from receiving idempotent
-		// wording for an action that conceptually doesn't apply to them.
-		if len(available) > 0 {
-			if target, known := lifecycle.ActionTargetState(lifecycle.ActionName(action)); known && root.State() == target {
-				return Issue{}, fmt.Errorf("issue is already %s", root.State().Display())
-			}
-		}
 		return Issue{}, fmt.Errorf("no %s action available on this issue", action)
 	}
 	next, err := actionable.Apply(lifecycle.ActionName(action), actor, reason)

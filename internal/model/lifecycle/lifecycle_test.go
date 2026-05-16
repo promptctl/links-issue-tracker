@@ -1,24 +1,115 @@
 package lifecycle
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
-func TestOwnedStatusStateAndActions(t *testing.T) {
-	tests := []struct {
-		name    string
-		status  OwnedStatus
-		actions []ActionName
-	}{
-		{name: "open", status: OwnedStatus{Value: Open}, actions: []ActionName{ActionStart, ActionClose}},
-		{name: "in progress", status: OwnedStatus{Value: InProgress}, actions: []ActionName{ActionDone, ActionClose}},
-		{name: "closed", status: OwnedStatus{Value: Closed}, actions: []ActionName{ActionReopen}},
+func TestOwnedStatusStateMirrorsValue(t *testing.T) {
+	for _, state := range []State{Open, InProgress, Closed} {
+		if got := (OwnedStatus{Value: state}).State(); got != state {
+			t.Fatalf("State() = %q, want %q", got, state)
+		}
 	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if tt.status.State() != tt.status.Value {
-				t.Fatalf("State() = %q, want %q", tt.status.State(), tt.status.Value)
-			}
-			assertActions(t, tt.status.AvailableActions(), tt.actions)
-		})
+}
+
+// TestOwnedStatusApplyTargetStateMatrix exercises every (from, action) pair in
+// the 3x4 matrix. Each cell asserts the post-state matches the action's target
+// state — same-state cells (start@InProgress, done@Closed, close@Closed,
+// reopen@Open) are no-ops that preserve the receiver. There are no rejection
+// cells: every cell here is a legal call.
+func TestOwnedStatusApplyTargetStateMatrix(t *testing.T) {
+	allActions := []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen}
+	for _, from := range []State{Open, InProgress, Closed} {
+		for _, action := range allActions {
+			target, _ := ActionTargetState(action)
+			t.Run(string(from)+"_"+string(action), func(t *testing.T) {
+				next, err := OwnedStatus{Value: from}.Apply(action, "tester", "")
+				if err != nil {
+					t.Fatalf("Apply(%s on %s) error = %v, want success", action, from, err)
+				}
+				if got := next.State(); got != target {
+					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action, from, got, target)
+				}
+			})
+		}
+	}
+}
+
+// TestOwnedStatusApplySameStateReturnsReceiverUnchanged pins the no-op contract
+// that downstream store layers depend on: when the action's target equals the
+// current state, Apply returns the receiver verbatim so writeStatusTransition
+// can recognize same-state calls without re-deriving them.
+func TestOwnedStatusApplySameStateReturnsReceiverUnchanged(t *testing.T) {
+	closedAt := time.Unix(1_700_000_000, 0).UTC()
+	cases := []struct {
+		from   State
+		action ActionName
+	}{
+		{Open, ActionReopen},
+		{InProgress, ActionStart},
+		{Closed, ActionDone},
+		{Closed, ActionClose},
+	}
+	for _, tc := range cases {
+		original := OwnedStatus{Value: tc.from, Assignee: "alice", ClosedAt: &closedAt}
+		next, err := original.Apply(tc.action, "tester", "")
+		if err != nil {
+			t.Fatalf("Apply(%s on %s) error = %v", tc.action, tc.from, err)
+		}
+		got, ok := next.(OwnedStatus)
+		if !ok {
+			t.Fatalf("Apply(%s on %s) returned %T, want OwnedStatus", tc.action, tc.from, next)
+		}
+		if got != original {
+			t.Fatalf("Apply(%s on %s) mutated receiver: got %#v, want %#v", tc.action, tc.from, got, original)
+		}
+	}
+}
+
+// TestOwnedStatusApplyClosedAtBookkeeping locks in the ClosedAt invariant:
+// transitions into Closed stamp a timestamp; transitions into Open clear it;
+// transitions into InProgress leave it as-is.
+func TestOwnedStatusApplyClosedAtBookkeeping(t *testing.T) {
+	priorClosed := time.Unix(1_700_000_000, 0).UTC()
+
+	openToClosed, err := OwnedStatus{Value: Open}.Apply(ActionClose, "tester", "")
+	if err != nil {
+		t.Fatalf("Apply(close on open) error = %v", err)
+	}
+	if closedAt := openToClosed.(OwnedStatus).ClosedAt; closedAt == nil {
+		t.Fatal("Apply(close on open).ClosedAt = nil, want stamped")
+	}
+
+	inProgressToClosed, err := OwnedStatus{Value: InProgress}.Apply(ActionDone, "tester", "")
+	if err != nil {
+		t.Fatalf("Apply(done on in_progress) error = %v", err)
+	}
+	if closedAt := inProgressToClosed.(OwnedStatus).ClosedAt; closedAt == nil {
+		t.Fatal("Apply(done on in_progress).ClosedAt = nil, want stamped")
+	}
+
+	closedToOpen, err := OwnedStatus{Value: Closed, ClosedAt: &priorClosed}.Apply(ActionReopen, "tester", "")
+	if err != nil {
+		t.Fatalf("Apply(reopen on closed) error = %v", err)
+	}
+	if closedAt := closedToOpen.(OwnedStatus).ClosedAt; closedAt != nil {
+		t.Fatalf("Apply(reopen on closed).ClosedAt = %v, want nil", closedAt)
+	}
+
+	closedToInProgress, err := OwnedStatus{Value: Closed, ClosedAt: &priorClosed}.Apply(ActionStart, "tester", "")
+	if err != nil {
+		t.Fatalf("Apply(start on closed) error = %v", err)
+	}
+	// start does not target Open or Closed; ClosedAt is preserved untouched.
+	if closedAt := closedToInProgress.(OwnedStatus).ClosedAt; closedAt == nil || !closedAt.Equal(priorClosed) {
+		t.Fatalf("Apply(start on closed).ClosedAt = %v, want preserved %v", closedAt, priorClosed)
+	}
+}
+
+func TestOwnedStatusApplyRejectsParseBypass(t *testing.T) {
+	if _, err := (OwnedStatus{Value: Open}).Apply(ActionName("bogus"), "tester", ""); err == nil {
+		t.Fatal("Apply(bogus) error = nil, want unsupported-action error")
 	}
 }
 
@@ -55,8 +146,14 @@ func TestAllOfProgressAndActions(t *testing.T) {
 	if progress.Open != 1 || progress.InProgress != 1 || progress.Closed != 1 || progress.Total != 3 {
 		t.Fatalf("Progress() = %#v, want 1/1/1 total 3", progress)
 	}
-	if actions := all.AvailableActions(); len(actions) != 0 {
-		t.Fatalf("AvailableActions() = %#v, want empty", actions)
+}
+
+func TestAllOfApplyRejectsEveryAction(t *testing.T) {
+	container := AllOf{Members: []Lifecycle{OwnedStatus{Value: Open}}}
+	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen} {
+		if _, err := container.Apply(action, "tester", ""); err == nil {
+			t.Fatalf("Apply(%s) on container error = nil, want rejection", action)
+		}
 	}
 }
 
@@ -106,18 +203,6 @@ func TestAllOfProgressIncludesNonStatusLeafPrimitives(t *testing.T) {
 	progress := tree.Progress()
 	if progress.Open != 1 || progress.InProgress != 2 || progress.Total != 3 {
 		t.Fatalf("Progress() = %#v, want open=1 in_progress=2 total=3", progress)
-	}
-}
-
-func assertActions(t *testing.T, got []ActionName, want []ActionName) {
-	t.Helper()
-	if len(got) != len(want) {
-		t.Fatalf("actions = %#v, want %#v", got, want)
-	}
-	for i := range want {
-		if got[i] != want[i] {
-			t.Fatalf("actions = %#v, want %#v", got, want)
-		}
 	}
 }
 
