@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/model"
@@ -28,16 +27,17 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("label add")
-		by := fs.String("by", os.Getenv("USER"), "Label author")
+		by := fs.String("by", "", "")
+		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--json]")
 		}
 		if fs.NArg() != 0 {
-			return errors.New("usage: lit label add <issue-id> <label> [--by <user>] [--json]")
+			return errors.New("usage: lit label add <issue-id> <label> [--json]")
 		}
 		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
 		if err != nil {
@@ -75,13 +75,14 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	case "set":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("parent set")
-		by := fs.String("by", os.Getenv("USER"), "Relation creator")
+		by := fs.String("by", "", "")
+		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
 		if len(positional) != 2 {
-			return errors.New("usage: lit parent set <child-id> <parent-id> [--by <user>] [--json]")
+			return errors.New("usage: lit parent set <child-id> <parent-id> [--json]")
 		}
 		rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
 			ChildID:   positional[0],

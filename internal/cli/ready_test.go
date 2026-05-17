@@ -252,7 +252,7 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Alice old",
 		Topic:     "alice",
 		IssueType: "task",
