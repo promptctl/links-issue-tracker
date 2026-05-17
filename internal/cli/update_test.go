@@ -398,6 +398,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 }
 
 func TestRunUpdateSupportsFieldMutations(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -568,13 +569,13 @@ func TestResolveTransitionAssignee(t *testing.T) {
 		env      string
 		want     string
 	}{
-		{name: "explicit wins on start", action: "start", explicit: "alice", env: "abc-123", want: "alice"},
-		{name: "explicit wins on non-start", action: "done", explicit: "alice", env: "abc-123", want: "alice"},
-		{name: "start falls back to env", action: "start", explicit: "", env: "abc-123", want: "claude_abc-123"},
-		{name: "start empty when env unset", action: "start", explicit: "", env: "", want: ""},
-		{name: "non-start never auto-fills", action: "done", explicit: "", env: "abc-123", want: ""},
-		{name: "whitespace explicit treated as empty", action: "start", explicit: "  ", env: "abc-123", want: "claude_abc-123"},
-		{name: "whitespace env treated as empty", action: "start", explicit: "", env: "   ", want: ""},
+		{name: "env overrides explicit on start", action: "start", explicit: "alice", env: "abc-123", want: "claude_abc-123"},
+		{name: "explicit passes through on non-start (gate)", action: "done", explicit: "alice", env: "abc-123", want: "alice"},
+		{name: "start fills from env when explicit empty", action: "start", explicit: "", env: "abc-123", want: "claude_abc-123"},
+		{name: "start empty when env unset and no explicit", action: "start", explicit: "", env: "", want: ""},
+		{name: "non-start never reads env even when explicit empty", action: "done", explicit: "", env: "abc-123", want: ""},
+		{name: "start trims whitespace from env", action: "start", explicit: "", env: "   ", want: ""},
+		{name: "start uses explicit when env unset", action: "start", explicit: "alice", env: "", want: "alice"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -582,6 +583,31 @@ func TestResolveTransitionAssignee(t *testing.T) {
 			got := resolveTransitionAssignee(tc.action, tc.explicit)
 			if got != tc.want {
 				t.Fatalf("resolveTransitionAssignee(%q, %q) = %q, want %q", tc.action, tc.explicit, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveAssigneeIdentity(t *testing.T) {
+	tests := []struct {
+		name     string
+		explicit string
+		env      string
+		want     string
+	}{
+		{name: "env wins over explicit", explicit: "alice", env: "sess-1", want: "claude_sess-1"},
+		{name: "env wins over empty explicit", explicit: "", env: "sess-2", want: "claude_sess-2"},
+		{name: "no env, explicit passes through", explicit: "alice", env: "", want: "alice"},
+		{name: "no env, no explicit, empty result", explicit: "", env: "", want: ""},
+		{name: "whitespace env treated as empty", explicit: "alice", env: "   ", want: "alice"},
+		{name: "whitespace explicit trimmed", explicit: "  alice  ", env: "", want: "alice"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
+			got := resolveAssigneeIdentity(tc.explicit)
+			if got != tc.want {
+				t.Fatalf("resolveAssigneeIdentity(%q) with env=%q = %q, want %q", tc.explicit, tc.env, got, tc.want)
 			}
 		})
 	}

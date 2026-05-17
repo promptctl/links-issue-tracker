@@ -278,6 +278,12 @@ func (fs *cobraFlagSet) Changed(name string) bool {
 	return fs.cmd.Flags().Changed(name)
 }
 
+// Hide marks a flag as hidden so it does not appear in help output. The flag
+// itself remains functional for any caller that still passes it explicitly.
+func (fs *cobraFlagSet) Hide(name string) {
+	_ = fs.cmd.Flags().MarkHidden(name)
+}
+
 func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 	fs.SetOutput(helpOutput)
 	if _, writeErr := fmt.Fprintf(helpOutput, "Usage of %s:\n", fs.cmd.Use); writeErr != nil {
@@ -329,7 +335,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: *assignee, Labels: splitCSV(*labels),
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: resolveAssigneeIdentity(*assignee), Labels: splitCSV(*labels),
 		Prefix: ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
@@ -385,7 +391,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Topic:       resolvedTopic,
 		ParentID:    parent.ID,
 		Priority:    *priority,
-		Assignee:    *assignee,
+		Assignee:    resolveAssigneeIdentity(*assignee),
 		Labels:      splitCSV(*labels),
 		Prefix:      ap.Workspace.IssuePrefix,
 	})
@@ -740,16 +746,17 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	labels := fs.String("labels", "", "Comma-separated labels")
 	status := fs.String("status", "", "Status: open|in_progress|closed")
 	reason := fs.String("reason", "", "Status transition reason")
-	by := fs.String("by", os.Getenv("USER"), "Status transition actor")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--by <user>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -758,9 +765,9 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 
 	// [LAW:dataflow-not-control-flow] Always build one UpdateInput; variability lives in empty fields/status, not in which branch runs.
-	// --by and --reason apply to both transitions (TransitionBy/Reason) and
-	// plain field updates (Fields.By/Reason) so every mutation consistently
-	// records the actor. [LAW:single-enforcer]
+	// The actor and reason values apply to both transitions (TransitionBy/Reason)
+	// and plain field updates (Fields.By/Reason) so every mutation consistently
+	// records them. [LAW:single-enforcer]
 	in := store.ApplyUpdateInput{
 		TransitionReason: strings.TrimSpace(*reason),
 		TransitionBy:     *by,
@@ -793,18 +800,18 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		in.Fields.Priority = &value
 	}
 	if visited["assignee"] {
-		value := *assignee
+		value := resolveAssigneeIdentity(*assignee)
 		in.Fields.Assignee = &value
-		// `start` (in_progress) stamps the assignee column. Thread the explicit
+		// `start` (in_progress) stamps the assignee column. Thread the resolved
 		// value through so ApplyUpdate can pass it to TransitionIssue.
 		// [LAW:dataflow-not-control-flow]
 		in.TransitionAssignee = value
 	}
-	// Mirror `lit start`: when the status transition implies a `start` action and
-	// no explicit assignee was given, default to claude_<sessionId> from env.
-	// [LAW:one-source-of-truth] sole producer of the env-derived identity.
+	// Mirror `lit start`: when the status transition implies a `start` action
+	// and no resolved value is in hand yet, ask the resolver again so a bare
+	// `--status in_progress` still picks up CLAUDE_CODE_SESSION_ID.
 	if in.TransitionAssignee == "" && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
-		in.TransitionAssignee = resolveTransitionAssignee("start", "")
+		in.TransitionAssignee = resolveAssigneeIdentity("")
 	}
 	if visited["labels"] {
 		value := splitCSV(*labels)
@@ -918,33 +925,43 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 // passed without `=<token>`. It cannot collide with a real token (which is hex).
 const applyNoTokenSentinel = "__no_token__"
 
-// resolveTransitionAssignee picks the assignee for a status transition. Explicit
-// --assignee wins; otherwise the `start` action auto-derives `claude_<sessionId>`
-// from CLAUDE_CODE_SESSION_ID. Non-start actions never auto-fill so the store's
-// "assignee only on start" invariant still holds without surprise side effects.
-// [LAW:types-are-the-program] env fallback only fires when action carries the
-// claim semantics; every other action passes through unchanged.
+// resolveAssigneeIdentity returns the assignee identity to use for any
+// command that reads an --assignee flag. When CLAUDE_CODE_SESSION_ID is set
+// the value is always claude_<sessionId>, regardless of what (if anything)
+// the caller passed. When the env var is empty the caller's explicit value
+// (trimmed) passes through.
+// [LAW:one-source-of-truth] sole producer of the agent assignee identity.
+// [LAW:types-are-the-program] env presence is the discriminator; no callsite
+// re-decides precedence or re-parses the env var.
+func resolveAssigneeIdentity(explicit string) string {
+	if sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
+		return "claude_" + sessionID
+	}
+	return strings.TrimSpace(explicit)
+}
+
+// resolveTransitionAssignee wraps resolveAssigneeIdentity with the store's
+// "assignee only on start" invariant (store.go enforces it). For non-start
+// actions the explicit value passes through unchanged so callers can keep
+// using a single helper without leaking env-derived values into actions the
+// store will reject.
 func resolveTransitionAssignee(action, explicit string) string {
-	value := strings.TrimSpace(explicit)
-	if value != "" || action != "start" {
-		return value
+	if action != "start" {
+		return strings.TrimSpace(explicit)
 	}
-	sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID"))
-	if sessionID == "" {
-		return ""
-	}
-	return "claude_" + sessionID
+	return resolveAssigneeIdentity(explicit)
 }
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
-	by := fs.String("by", os.Getenv("USER"), "Transition actor")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
 	// Only `start` consumes --assignee. Defining the flag for every action
 	// keeps the parser uniform; the store rejects use on non-start actions.
-	// When omitted on `start`, the assignee auto-resolves from CLAUDE_CODE_SESSION_ID
-	// (see resolveTransitionAssignee). Agents should not pass this flag explicitly.
-	assignee := fs.String("assignee", "", "Override assignee on `start`; defaults to claude_<sessionId> when CLAUDE_CODE_SESSION_ID is set")
+	// The resolver overrides this with CLAUDE_CODE_SESSION_ID whenever set;
+	// the flag survives only as a fallback for environments without the env var.
+	assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
 	// [LAW:types-are-the-program] `--apply` carries the token printed by the
 	// preview phase as its value (`--apply=<token>`). Empty default = preview;
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
@@ -1048,13 +1065,14 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("assign")
 	reason := fs.String("reason", "", "Reassignment reason (optional)")
-	by := fs.String("by", os.Getenv("USER"), "Actor recording the reassignment")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 2 || fs.NArg() != 0 {
-		return errors.New("usage: lit assign <id> <new-assignee> [--reason <text>] [--by <actor>]")
+		return errors.New("usage: lit assign <id> <new-assignee> [--reason <text>]")
 	}
 	id := positional[0]
 	newAssignee := strings.TrimSpace(positional[1])
@@ -1079,7 +1097,8 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	positional, flagArgs := splitArgs(args[1:], 1)
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
-	by := fs.String("by", os.Getenv("USER"), "Comment author")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
