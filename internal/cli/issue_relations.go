@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/model"
@@ -27,7 +28,7 @@ func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	case "add":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("label add")
-		by := fs.String("by", "", "")
+		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -75,7 +76,7 @@ func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	case "set":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("parent set")
-		by := fs.String("by", "", "")
+		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
