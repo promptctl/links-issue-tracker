@@ -28,7 +28,8 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 		blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
 		blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
-		by := fs.String("by", os.Getenv("USER"), "Relation creator")
+		by := fs.String("by", os.Getenv("USER"), "")
+		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
