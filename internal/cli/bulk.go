@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -29,7 +30,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		fs := newCobraFlagSet("bulk label")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		label := fs.String("label", "", "Label name")
-		by := fs.String("by", "", "")
+		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[2:], stdout); err != nil {
@@ -79,7 +80,7 @@ func runBulk(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		fs := newCobraFlagSet("bulk transition")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
-		by := fs.String("by", "", "")
+		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
 		jsonOut := fs.Bool("json", false, "Output JSON")
 		if err := parseFlagSet(fs, args[1:], stdout); err != nil {

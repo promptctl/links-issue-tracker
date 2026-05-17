@@ -746,7 +746,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	labels := fs.String("labels", "", "Comma-separated labels")
 	status := fs.String("status", "", "Status: open|in_progress|closed")
 	reason := fs.String("reason", "", "Status transition reason")
-	by := fs.String("by", "", "")
+	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -955,7 +955,7 @@ func resolveTransitionAssignee(action, explicit string) string {
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
-	by := fs.String("by", "", "")
+	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
 	// Only `start` consumes --assignee. Defining the flag for every action
 	// keeps the parser uniform; the store rejects use on non-start actions.
@@ -1065,7 +1065,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("assign")
 	reason := fs.String("reason", "", "Reassignment reason (optional)")
-	by := fs.String("by", "", "")
+	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
@@ -1097,7 +1097,7 @@ func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	positional, flagArgs := splitArgs(args[1:], 1)
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
-	by := fs.String("by", "", "")
+	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
