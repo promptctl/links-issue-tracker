@@ -873,6 +873,10 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 // into a real "open" target, which then attempts a transition on a container (StatusValue == "").
 // [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
+// Same-state transitions are NOT skipped: every TransitionIssue call records an issue_events row with
+// the calling Actor, which is the audit substrate for "who interacted with this ticket" history queries.
+// A start on an already-in-progress issue is the canonical agent-claim path; suppressing it would erase
+// that claim from history.
 func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
@@ -881,7 +885,7 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if strings.TrimSpace(in.TargetStatus) != "" {
 		in.TargetStatus = string(model.DefaultOpen(in.TargetStatus))
 	}
-	if in.TargetStatus != "" && in.TargetStatus != current.StatusValue() {
+	if in.TargetStatus != "" {
 		action := canonicalActionForTargetState(model.DefaultOpen(in.TargetStatus))
 		reason := in.TransitionReason
 		if reason == "" {

@@ -1158,22 +1158,25 @@ func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
 	}
 }
 
-// TestApplyUpdateSameTargetStateRecordsNoEvent asserts the same-state short-circuit:
-// `lit update --status X` on an issue already in state X is a no-op (no spurious
-// status event). The leaf OwnedStatus.Apply also handles same-state by returning
-// the receiver unchanged, but ApplyUpdate's early-return keeps the no-op cheap
-// and prevents an empty {status: X -> X} change row in the event log.
-func TestApplyUpdateSameTargetStateRecordsNoEvent(t *testing.T) {
+// TestApplyUpdateSameTargetStateStillRecordsEvent asserts that ApplyUpdate
+// records an event even when TargetStatus matches the current status. The
+// Actor on issue_events is the audit substrate for "list every agent that
+// interacted with this ticket" history queries; suppressing the event for
+// same-state would erase the agent's claim from history. In particular,
+// `lit update --status in_progress` on an already-in_progress issue is the
+// canonical agent-reclaim path — it must record a start event with the new
+// assignee, not silently no-op.
+func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{
-		Prefix: "test", Title: "no-op update", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Prefix: "test", Title: "reclaim via update", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester",
+		IssueID: issue.ID, Action: "start", CreatedBy: "agent-a", Assignee: "agent-a",
 	}); err != nil {
 		t.Fatalf("setup TransitionIssue(start) error = %v", err)
 	}
@@ -1184,8 +1187,9 @@ func TestApplyUpdateSameTargetStateRecordsNoEvent(t *testing.T) {
 	eventsBefore := len(before.Events)
 
 	if _, err := st.ApplyUpdate(ctx, issue.ID, ApplyUpdateInput{
-		TargetStatus: "in_progress",
-		TransitionBy: "tester",
+		TargetStatus:       "in_progress",
+		TransitionBy:       "agent-b",
+		TransitionAssignee: "agent-b",
 	}); err != nil {
 		t.Fatalf("ApplyUpdate(in_progress -> in_progress) error = %v", err)
 	}
@@ -1194,9 +1198,24 @@ func TestApplyUpdateSameTargetStateRecordsNoEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail(after) error = %v", err)
 	}
-	if got, want := len(after.Events), eventsBefore; got != want {
-		t.Fatalf("same-state ApplyUpdate added events: before=%d after=%d, want equal: %#v",
-			want, got, after.Events[eventsBefore:])
+	added := after.Events[eventsBefore:]
+	if len(added) != 1 {
+		t.Fatalf("same-state ApplyUpdate recorded %d events, want exactly 1: %#v", len(added), added)
+	}
+	if added[0].Action != "start" {
+		t.Fatalf("same-state ApplyUpdate action = %q, want %q (claim must be recorded as start)",
+			added[0].Action, "start")
+	}
+	if added[0].Actor != "agent-b" {
+		t.Fatalf("same-state ApplyUpdate actor = %q, want %q (audit substrate must capture caller)",
+			added[0].Actor, "agent-b")
+	}
+	reclaimed, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(reclaimed) error = %v", err)
+	}
+	if got, want := reclaimed.AssigneeValue(), "agent-b"; got != want {
+		t.Fatalf("reclaimed.AssigneeValue() = %q, want %q (start rewrites assignee even same-state)", got, want)
 	}
 }
 
