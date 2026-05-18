@@ -1077,6 +1077,129 @@ func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
 	}
 }
 
+// TestApplyUpdateEveryTargetStateRecordsOneEvent exercises the 3x3-minus-diagonal
+// of the target-state lifecycle: each of the six non-identity (from -> to) pairs
+// must be reachable by a single ApplyUpdate call that records exactly one event
+// with the canonical action for the target state. [LAW:behavior-not-structure]
+// asserts the contract (one transition per --status change, canonical action),
+// not the implementation (no compound action chains, no dispatch table).
+func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
+	cases := []struct {
+		from       model.State
+		to         model.State
+		wantAction string
+	}{
+		{from: model.StateOpen, to: model.StateInProgress, wantAction: "start"},
+		{from: model.StateOpen, to: model.StateClosed, wantAction: "close"},
+		{from: model.StateInProgress, to: model.StateOpen, wantAction: "reopen"},
+		{from: model.StateInProgress, to: model.StateClosed, wantAction: "close"},
+		{from: model.StateClosed, to: model.StateOpen, wantAction: "reopen"},
+		{from: model.StateClosed, to: model.StateInProgress, wantAction: "start"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+			ctx := context.Background()
+			st := openIssueStore(t, ctx)
+			issue, err := st.CreateIssue(ctx, CreateIssueInput{
+				Prefix: "test", Title: "transition", Topic: "lifecycle", IssueType: "task", Priority: 0,
+			})
+			if err != nil {
+				t.Fatalf("CreateIssue() error = %v", err)
+			}
+			// Drive the issue into the from-state via direct TransitionIssue
+			// calls so the setup path is independent of the ApplyUpdate path
+			// under test.
+			if tc.from != model.StateOpen {
+				if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+					IssueID: issue.ID, Action: "start", CreatedBy: "setup", Assignee: "setup",
+				}); err != nil {
+					t.Fatalf("setup TransitionIssue(start) error = %v", err)
+				}
+			}
+			if tc.from == model.StateClosed {
+				if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+					IssueID: issue.ID, Action: "done", CreatedBy: "setup",
+				}); err != nil {
+					t.Fatalf("setup TransitionIssue(done) error = %v", err)
+				}
+			}
+			before, err := st.GetIssueDetail(ctx, issue.ID)
+			if err != nil {
+				t.Fatalf("GetIssueDetail(before) error = %v", err)
+			}
+			eventsBefore := len(before.Events)
+
+			updated, err := st.ApplyUpdate(ctx, issue.ID, ApplyUpdateInput{
+				TargetStatus:       string(tc.to),
+				TransitionBy:       "tester",
+				TransitionAssignee: "tester",
+			})
+			if err != nil {
+				t.Fatalf("ApplyUpdate(%s -> %s) error = %v", tc.from, tc.to, err)
+			}
+			if updated.State() != tc.to {
+				t.Fatalf("updated.State() = %q, want %q", updated.State(), tc.to)
+			}
+
+			after, err := st.GetIssueDetail(ctx, issue.ID)
+			if err != nil {
+				t.Fatalf("GetIssueDetail(after) error = %v", err)
+			}
+			added := after.Events[eventsBefore:]
+			if len(added) != 1 {
+				t.Fatalf("ApplyUpdate(%s -> %s) recorded %d events, want exactly 1: %#v",
+					tc.from, tc.to, len(added), added)
+			}
+			if added[0].Action != tc.wantAction {
+				t.Fatalf("ApplyUpdate(%s -> %s) action = %q, want %q",
+					tc.from, tc.to, added[0].Action, tc.wantAction)
+			}
+		})
+	}
+}
+
+// TestApplyUpdateSameTargetStateRecordsNoEvent asserts the same-state short-circuit:
+// `lit update --status X` on an issue already in state X is a no-op (no spurious
+// status event). The leaf OwnedStatus.Apply also handles same-state by returning
+// the receiver unchanged, but ApplyUpdate's early-return keeps the no-op cheap
+// and prevents an empty {status: X -> X} change row in the event log.
+func TestApplyUpdateSameTargetStateRecordsNoEvent(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{
+		Prefix: "test", Title: "no-op update", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester",
+	}); err != nil {
+		t.Fatalf("setup TransitionIssue(start) error = %v", err)
+	}
+	before, err := st.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(before) error = %v", err)
+	}
+	eventsBefore := len(before.Events)
+
+	if _, err := st.ApplyUpdate(ctx, issue.ID, ApplyUpdateInput{
+		TargetStatus: "in_progress",
+		TransitionBy: "tester",
+	}); err != nil {
+		t.Fatalf("ApplyUpdate(in_progress -> in_progress) error = %v", err)
+	}
+
+	after, err := st.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(after) error = %v", err)
+	}
+	if got, want := len(after.Events), eventsBefore; got != want {
+		t.Fatalf("same-state ApplyUpdate added events: before=%d after=%d, want equal: %#v",
+			want, got, after.Events[eventsBefore:])
+	}
+}
+
 func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
