@@ -99,32 +99,25 @@ func (a ApplyUpdateInput) IsEmpty() bool {
 	return a.TargetStatus == "" && a.Fields.IsEmpty()
 }
 
-type statusTransitionKey struct {
-	From model.State
-	To   model.State
-}
-
-// [LAW:one-source-of-truth] Status transition action map is the single authoritative source for lit update transitions.
-var updateStatusTransitionActions = map[statusTransitionKey]string{
-	{From: model.StateOpen, To: model.StateInProgress}:    "start",
-	{From: model.StateInProgress, To: model.StateClosed}: "done",
-	{From: model.StateOpen, To: model.StateClosed}:        "close",
-	{From: model.StateClosed, To: model.StateOpen}:        "reopen",
-	{From: model.StateClosed, To: model.StateInProgress}: "reopen+start",
-	{From: model.StateInProgress, To: model.StateOpen}:   "done+reopen",
-}
-
-func statusTransitionActionsForApplyUpdate(fromStatus, toStatus string) ([]string, error) {
-	if toStatus == "" || fromStatus == toStatus {
-		return nil, nil
+// canonicalActionForTargetState returns the lifecycle action that lit update
+// records when transitioning to target. lit update is the neutral path and
+// records "close" for Closed; done's two-phase guidance ceremony belongs to
+// lit done, not to a target-state update. The fallthrough is unreachable in
+// practice — DefaultOpen at the call site narrows arbitrary input to one of
+// the three known states — and is left empty so a future bypass surfaces
+// loudly via TransitionIssue's action-rejection rather than silently picking
+// a default. [LAW:one-source-of-truth] Reverse companion to
+// lifecycle.ActionTargetState; both describe the same action↔state map.
+func canonicalActionForTargetState(target model.State) model.ActionName {
+	switch target {
+	case model.StateOpen:
+		return model.ActionReopen
+	case model.StateInProgress:
+		return model.ActionStart
+	case model.StateClosed:
+		return model.ActionClose
 	}
-	from := model.DefaultOpen(fromStatus)
-	to := model.DefaultOpen(toStatus)
-	action, exists := updateStatusTransitionActions[statusTransitionKey{From: from, To: to}]
-	if !exists {
-		return nil, fmt.Errorf("unsupported status transition %q -> %q for lit update", fromStatus, toStatus)
-	}
-	return strings.Split(action, "+"), nil
+	return ""
 }
 
 type SortSpec struct {
@@ -877,7 +870,13 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 // [LAW:dataflow-not-control-flow] ApplyUpdate is the single execution path for all lit update mutations.
 // Variability lives in the input values: empty TargetStatus = no transitions; empty Fields = no field write.
 // Empty TargetStatus must not be normalized — DefaultOpen("") would mutate the "no --status flag" signal
-// into a real "open" target, which then fails the transition lookup for containers (StatusValue == "").
+// into a real "open" target, which then attempts a transition on a container (StatusValue == "").
+// [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
+// no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
+// Same-state transitions are NOT skipped: every TransitionIssue call records an issue_events row with
+// the calling Actor, which is the audit substrate for "who interacted with this ticket" history queries.
+// A start on an already-in-progress issue is the canonical agent-claim path; suppressing it would erase
+// that claim from history.
 func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
@@ -886,26 +885,23 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if strings.TrimSpace(in.TargetStatus) != "" {
 		in.TargetStatus = string(model.DefaultOpen(in.TargetStatus))
 	}
-	actions, err := statusTransitionActionsForApplyUpdate(current.StatusValue(), in.TargetStatus)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	reason := in.TransitionReason
-	if reason == "" && len(actions) > 0 {
-		reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
-	}
-	for _, action := range actions {
-		// TransitionAssignee is only meaningful for "start"; every other action
-		// in a multi-step sequence (e.g. "reopen" in "reopen+start") must
-		// receive an empty assignee or TransitionIssue rejects it.
-		// [LAW:dataflow-not-control-flow] Variability is in the value, not the branch.
+	if in.TargetStatus != "" {
+		action := canonicalActionForTargetState(model.DefaultOpen(in.TargetStatus))
+		reason := in.TransitionReason
+		if reason == "" {
+			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
+		}
+		// [LAW:single-enforcer] TransitionIssue rejects assignee for non-start actions;
+		// the gate here mirrors that contract so cli.go can plumb TransitionAssignee
+		// unconditionally without surprising users who run e.g. `--status closed --assignee X`
+		// (the field-level assignee goes through Fields.Assignee below).
 		assignee := ""
-		if action == "start" {
+		if action == model.ActionStart {
 			assignee = in.TransitionAssignee
 		}
 		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
 			IssueID:   id,
-			Action:    action,
+			Action:    string(action),
 			Reason:    reason,
 			CreatedBy: in.TransitionBy,
 			Assignee:  assignee,
@@ -913,7 +909,6 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 			return model.Issue{}, err
 		}
 	}
-	// UpdateIssue always does a fresh GetIssue internally; it is also a no-op if Fields is empty.
 	return s.UpdateIssue(ctx, id, in.Fields)
 }
 
