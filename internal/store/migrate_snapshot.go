@@ -30,17 +30,49 @@ var migrationPostSnapshotHookForTest func() error
 // itself, not the label, so the label is purely human-facing.
 const migrationSnapshotLabel = "pre-migrate"
 
-// IsMigrationSnapshotName reports whether name is a migration-recovery
-// snapshot (vs. one produced by `lit snapshots new` or some future user
-// flow). Exposed so tests and CLI surfaces classify entries against the
-// same source of truth that produced them, instead of hardcoding the
-// "pre-migrate" string.
+// IsMigrationSnapshotName reports whether name was stamped by the migration
+// system (vs. produced by `lit snapshots new` or some future user flow).
 //
-// [LAW:one-source-of-truth] The migration-snapshot label lives in this
-// package; every classifier — tests, CLI listings, recovery tooling —
-// routes through this predicate so renaming the label moves them together.
+// Snapshot names follow dbsnapshot's <unix-ns>[-<label>] scheme. The
+// migration system always stamps the label as
+//
+//	"<migrationSnapshotLabel>-<unix-ns>"
+//
+// (see formatMigrationSnapshotLabel). A plain substring match on the label
+// would misclassify a user-created snapshot whose --label happened to
+// contain "pre-migrate"; instead, recognize the exact stamped shape:
+// the label component equals migrationSnapshotLabel followed by '-' and an
+// all-digit timestamp suffix. A user reproducing that shape verbatim is
+// indistinguishable from a real migration snapshot — that is the strongest
+// signal a name-based classifier can carry without restructuring the
+// snapshots-directory layout.
+//
+// [LAW:one-source-of-truth] Every classifier — tests, CLI listings,
+// recovery tooling — routes through this predicate so renaming the label
+// moves them together.
+// [LAW:types-are-the-program] The predicate is the exact shape the
+// migration system stamps; "matches by accident" is impossible without a
+// user deliberately mimicking the format.
 func IsMigrationSnapshotName(name string) bool {
-	return strings.Contains(name, migrationSnapshotLabel)
+	idx := strings.IndexByte(name, '-')
+	if idx < 0 {
+		return false
+	}
+	label := name[idx+1:]
+	const prefix = migrationSnapshotLabel + "-"
+	if !strings.HasPrefix(label, prefix) {
+		return false
+	}
+	suffix := label[len(prefix):]
+	if suffix == "" {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // snapshotGuard is migrate()'s single owner of dbsnapshot.Take. Helpers call

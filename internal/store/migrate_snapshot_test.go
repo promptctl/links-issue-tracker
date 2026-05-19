@@ -240,6 +240,37 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	}
 }
 
+// TestIsMigrationSnapshotNameRejectsUserCollisions pins the classifier's
+// precision: a user `lit snapshots new --label <foo>` that happens to
+// embed "pre-migrate" must NOT be misclassified as a migration snapshot.
+// Only names matching the exact "<unix-ns>-pre-migrate-<unix-ns>" stamp
+// produced by formatMigrationSnapshotLabel are migration snapshots.
+func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
+	cases := []struct {
+		name string
+		want bool
+	}{
+		// Real migration snapshot — produced by formatMigrationSnapshotLabel.
+		{"1779217187547513000-pre-migrate-1779217187516039000", true},
+		// User snapshot with no --label (bare timestamp).
+		{"1779217187547513000", false},
+		// User --label that contains the substring but isn't the stamped shape.
+		{"1779217187547513000-pre-migrate", false},
+		{"1779217187547513000-pre-migrate-foo", false},
+		{"1779217187547513000-pre-migrateofy", false},
+		{"1779217187547513000-foo-pre-migrate-1234", false},
+		// User --label that LOOKS like the migration shape — by design,
+		// indistinguishable from a real migration snapshot. Pin this so a
+		// future "stricter" change has to address it deliberately.
+		{"1779217187547513000-pre-migrate-9999999999999999999", true},
+	}
+	for _, c := range cases {
+		if got := IsMigrationSnapshotName(c.name); got != c.want {
+			t.Errorf("IsMigrationSnapshotName(%q) = %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // withSchemaVersionDropped clears the meta.schema_version stamp by opening
 // the store, deleting the row, committing, and closing — driving the next
 // migrate() into the "work to do" branch.
