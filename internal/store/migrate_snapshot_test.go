@@ -398,6 +398,28 @@ func TestHasCanonicalStatusConstraintRejectsDriftedClauses(t *testing.T) {
 			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','blocked'))",
 			want:   false,
 		},
+		{
+			// The drift the reviewer flagged: leaf-arm carries no
+			// issue_type filter, so an epic with status='open' satisfies
+			// the OR via the unguarded leaf branch.
+			name:   "drifted: leaf arm missing NOT-IN epic guard",
+			clause: "(issue_typein('epic')andstatusisnull)or(statusisnotnullandstatusin('open','in_progress','closed'))",
+			want:   false,
+		},
+		{
+			// Dolt rewrite of the canonical with a single-paren negation
+			// "not(issue_typein('epic'))" — still canonical.
+			name:   "dolt-rewritten leaf guard: single-paren negation",
+			clause: "(issue_typein('epic')andstatusisnull)or(not(issue_typein('epic'))andstatusisnotnullandstatusin('open','in_progress','closed'))",
+			want:   true,
+		},
+		{
+			// Dolt's actually-observed double-paren rewrite; pin so a
+			// future Dolt formatting change is caught by tests.
+			name:   "dolt-rewritten leaf guard: double-paren negation",
+			clause: "(((issue_typein('epic'))andstatusisnull)or(((not((issue_typein('epic'))))and(not(statusisnull)))and(statusin('open','in_progress','closed'))))",
+			want:   true,
+		},
 	}
 	for _, c := range cases {
 		got := hasCanonicalStatusConstraint([]issueCheckConstraint{{name: "test", clause: c.clause}})

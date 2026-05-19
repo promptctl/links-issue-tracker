@@ -711,7 +711,45 @@ func hasCanonicalStatusConstraint(constraints []issueCheckConstraint) bool {
 	if !strings.Contains(normalized, "andstatusisnull") {
 		return false
 	}
+	// Leaf-arm type filter: "issue_type NOT IN ('epic')" scopes the
+	// not-null + IN-set check to NON-epic rows. Drop this filter and the
+	// CHECK of (epic AND NULL) OR (NOT NULL AND IN(...)) evaluates TRUE
+	// for an epic with status='open' — the leaf-arm has no type guard so
+	// it matches regardless. Canonical normalizes to
+	// "issue_typenotin('epic')"; Dolt may rewrite as
+	// "not(issue_typein('epic'))" or "not((issue_typein('epic')))" with
+	// extra paren depth, so detect the negation-of-positive form too.
+	if !hasNegatedEpicGuard(normalized) {
+		return false
+	}
 	return true
+}
+
+// hasNegatedEpicGuard reports whether the already-normalized clause carries
+// a leaf-arm filter excluding epic rows. Accepts both the canonical
+// "issue_typenotin('epic')" form and Dolt's "not(...issue_typein('epic')...)"
+// rewrites with arbitrary inner-paren depth.
+func hasNegatedEpicGuard(normalized string) bool {
+	if strings.Contains(normalized, "issue_typenotin('epic')") {
+		return true
+	}
+	const negation = "not("
+	const positive = "issue_typein('epic')"
+	cursor := 0
+	for {
+		offset := strings.Index(normalized[cursor:], negation)
+		if offset < 0 {
+			return false
+		}
+		pos := cursor + offset + len(negation)
+		for pos < len(normalized) && normalized[pos] == '(' {
+			pos++
+		}
+		if strings.HasPrefix(normalized[pos:], positive) {
+			return true
+		}
+		cursor = cursor + offset + 1
+	}
 }
 
 func normalizeConstraintClause(clause string) string {
