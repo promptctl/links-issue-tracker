@@ -1173,7 +1173,7 @@ func (s *Store) setMeta(ctx context.Context, tx *sql.Tx, key, value string) erro
 	return nil
 }
 
-func (s *Store) ensureMetaValue(ctx context.Context, key, value string) (bool, error) {
+func (s *Store) ensureMetaValue(ctx context.Context, guard *snapshotGuard, key, value string) (bool, error) {
 	current, err := s.getMeta(ctx, nil, key)
 	if err != nil {
 		return false, err
@@ -1181,19 +1181,25 @@ func (s *Store) ensureMetaValue(ctx context.Context, key, value string) (bool, e
 	if current == value {
 		return false, nil
 	}
+	if _, err := guard.ensure(); err != nil {
+		return false, fmt.Errorf("ensure meta %s: %w", key, err)
+	}
 	if err := s.setMeta(ctx, nil, key, value); err != nil {
 		return false, err
 	}
 	return true, nil
 }
 
-func (s *Store) ensureMetaDefault(ctx context.Context, key, value string) (bool, error) {
+func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key, value string) (bool, error) {
 	current, err := s.getMeta(ctx, nil, key)
 	if err != nil {
 		return false, err
 	}
 	if strings.TrimSpace(current) != "" {
 		return false, nil
+	}
+	if _, err := guard.ensure(); err != nil {
+		return false, fmt.Errorf("ensure meta %s default: %w", key, err)
 	}
 	// [LAW:one-source-of-truth] Schema-version writes preserve the recorded version as the canonical migration state once it exists.
 	if err := s.setMeta(ctx, nil, key, value); err != nil {

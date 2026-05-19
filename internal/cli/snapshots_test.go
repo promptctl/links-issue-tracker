@@ -11,34 +11,27 @@ import (
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
 
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
+	before := countUserSnapshots(t, ws)
+
 	stderr := captureRun(t, "snapshots", "new", "--json")
 
 	if stderr.Len() != 0 {
 		t.Fatalf("happy path stderr should be empty, got: %q", stderr.String())
 	}
-	entries, err := os.ReadDir(snapshotsDirFor(ws))
-	if err != nil {
-		t.Fatalf("read snapshots dir: %v", err)
-	}
-	count := 0
-	for _, e := range entries {
-		if e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") {
-			count++
-		}
-	}
-	if count != 1 {
-		t.Fatalf("snapshot count on disk = %d, want 1", count)
+	if got := countUserSnapshots(t, ws); got-before != 1 {
+		t.Fatalf("user-snapshot delta = %d, want 1 (before=%d)", got-before, before)
 	}
 }
 
 func TestSnapshotsList_NewestFirst(t *testing.T) {
-	repo, ws := initBootstrapTestRepo(t)
+	repo, _ := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
 	for i := 0; i < 3; i++ {
@@ -53,8 +46,11 @@ func TestSnapshotsList_NewestFirst(t *testing.T) {
 	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
 		t.Fatalf("decode JSON: %v\nraw=%s", err, stdout.String())
 	}
-	if len(listed) != 3 {
-		t.Fatalf("listed=%d, want 3 (raw=%s)", len(listed), stdout.String())
+	// listed includes the migration-recovery snapshot from the bootstrap
+	// Open in addition to the three user snapshots above. The newest-first
+	// invariant must still hold across all entries.
+	if len(listed) < 3 {
+		t.Fatalf("listed=%d, want at least 3 (raw=%s)", len(listed), stdout.String())
 	}
 	prev := ""
 	for i, s := range listed {
@@ -64,7 +60,6 @@ func TestSnapshotsList_NewestFirst(t *testing.T) {
 		}
 		prev = name
 	}
-	_ = ws // referenced for symmetry with other tests; assertion is on listed JSON
 }
 
 func TestSnapshotsRestore_RoundTrip(t *testing.T) {
@@ -215,19 +210,70 @@ func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
+	// Baseline after bootstrap migration; data mutations below must not
+	// move this count. The only producers of snapshots are `lit snapshots
+	// new` and the migration system on first-touch / actually-mutating
+	// Opens — and the bootstrap above already accounts for that.
+	before := snapshotsOnDisk(t, ws)
+
 	// Drive a series of data mutations and reads that must not produce snapshots.
 	captureRun(t, "new", "--title", "test", "--type", "task", "--topic", "test-topic", "--json")
 	captureRun(t, "ls", "--json")
 
+	after := snapshotsOnDisk(t, ws)
+	for _, name := range after {
+		found := false
+		for _, b := range before {
+			if b == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("data mutation produced a new snapshot (%s) — the only producers must be `lit snapshots new` and the migration system, neither of which is exercised by this test", name)
+		}
+	}
+}
+
+// snapshotsOnDisk returns the names of stable snapshot directories under
+// the workspace's snapshot dir. Tests use this to assert deltas rather than
+// totals, since the migration system seeds a baseline snapshot during
+// initBootstrapTestRepo's bootstrap Open.
+func snapshotsOnDisk(t *testing.T, ws workspace.Info) []string {
+	t.Helper()
 	entries, err := os.ReadDir(snapshotsDirFor(ws))
 	if err != nil && !os.IsNotExist(err) {
 		t.Fatalf("read snapshots dir: %v", err)
 	}
+	names := make([]string, 0, len(entries))
 	for _, e := range entries {
-		if e.IsDir() && !strings.HasSuffix(e.Name(), ".tmp") {
-			t.Fatalf("data mutation produced a snapshot (%s) — the only producer must be `lit snapshots new` or the migration system", e.Name())
+		if !e.IsDir() {
+			continue
 		}
+		name := e.Name()
+		if strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".reserve") {
+			continue
+		}
+		names = append(names, name)
 	}
+	return names
+}
+
+// countUserSnapshots counts snapshots whose name doesn't carry the
+// migration-recovery label, i.e. snapshots that originated from `lit
+// snapshots new` (or other future user-facing producers). Tests that
+// specifically count user actions, not migration-driven side effects,
+// route through this helper.
+func countUserSnapshots(t *testing.T, ws workspace.Info) int {
+	t.Helper()
+	count := 0
+	for _, name := range snapshotsOnDisk(t, ws) {
+		if strings.Contains(name, "pre-migrate") {
+			continue
+		}
+		count++
+	}
+	return count
 }
 
 func TestSnapshotsRestore_RequiresName(t *testing.T) {
