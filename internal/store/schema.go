@@ -186,7 +186,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// [LAW:one-source-of-truth] issue_history is superseded by
 	// issue_events + issue_event_changes. Existing repos may still have it;
 	// drop it (existing history rows are discarded — issues are untouched).
-	dropHistoryChanged, err := s.execGatedReconciliation(
+	dropHistoryChanged, err := s.execGatedMutation(
 		ctx,
 		guard,
 		`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'issue_history' LIMIT 1`,
@@ -199,7 +199,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	changed = changed || dropHistoryChanged
 	// issue_events.assignee was renamed to actor. Probe-gated rename keeps the
 	// migration idempotent across fresh / migrated databases.
-	actorColumnChanged, err := s.execGatedReconciliation(
+	actorColumnChanged, err := s.execGatedMutation(
 		ctx,
 		guard,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issue_events' AND column_name = 'assignee' LIMIT 1`,
@@ -236,7 +236,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// pre-rename workspace states. `prompt` is reserved in Dolt's MySQL parser,
 	// so the source-side identifier is backtick-quoted; `agent_prompt` is not
 	// reserved and needs no quoting.
-	promptRenamedChanged, err := s.execGatedReconciliation(
+	promptRenamedChanged, err := s.execGatedMutation(
 		ctx,
 		guard,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'prompt' LIMIT 1`,
@@ -310,8 +310,8 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 // is a belt-and-suspenders against probe/exec races; under normal operation
 // the probe alone determines the no-op case.
 func (s *Store) runGatedCreate(ctx context.Context, guard *snapshotGuard, step ddlStep) (bool, error) {
-	return s.execGatedReconciliationWithSwallow(ctx, guard, step.existsProbe(), step.stmt,
-		fmt.Sprintf("create %s", step.target), false /* invertProbe */)
+	return s.execGatedCreate(ctx, guard, step.existsProbe(), step.stmt,
+		fmt.Sprintf("create %s", step.target))
 }
 
 // execGatedColumnAdd probes for an existing column and runs the ADD only when
@@ -322,51 +322,39 @@ func (s *Store) execGatedColumnAdd(ctx context.Context, guard *snapshotGuard, ta
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '%s' AND column_name = '%s' LIMIT 1`,
 		table, column,
 	)
-	return s.execGatedReconciliationWithSwallow(ctx, guard, probe, stmt,
-		fmt.Sprintf("add column %s.%s", table, column), false /* invertProbe */)
+	return s.execGatedCreate(ctx, guard, probe, stmt,
+		fmt.Sprintf("add column %s.%s", table, column))
 }
 
 // execGatedColumnRelax probes for a NOT NULL column and runs MODIFY only when
 // the column is still declared NOT NULL. is_nullable = 'NO' is the
-// canonical-source discriminator.
+// canonical-source discriminator. A MODIFY that errors signals a structural
+// problem (column missing, type mismatch) — propagate it instead of swallowing.
 func (s *Store) execGatedColumnRelax(ctx context.Context, guard *snapshotGuard, table, column, stmt string) (bool, error) {
 	probe := fmt.Sprintf(
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '%s' AND column_name = '%s' AND is_nullable = 'NO' LIMIT 1`,
 		table, column,
 	)
-	// invertProbe=true: a matching row means "still NOT NULL → modify is
-	// needed", which is the opposite of the existence-skip semantics used by
-	// the create helpers.
-	return s.execGatedReconciliationWithSwallow(ctx, guard, probe, stmt,
-		fmt.Sprintf("relax column %s.%s to nullable", table, column), true /* invertProbe */)
+	return s.execGatedMutation(ctx, guard, probe, stmt,
+		fmt.Sprintf("relax column %s.%s to nullable", table, column))
 }
 
-// execGatedReconciliation runs a probe-then-mutate pair. When the probe
-// matches (rows returned), the mutation is needed: the guard is armed and
-// the statement runs. When the probe yields no rows, the helper returns
-// (false, nil) without running stmt.
+// execGatedCreate gates a CREATE/ADD-style statement on an existence probe.
+// If the probe matches (target already present), the statement is skipped.
+// Otherwise the snapshot guard is armed and the statement runs; an "already
+// exists" / "duplicate column" / "duplicate key name" error after the probe
+// is treated as a benign race (another writer landed the same shape between
+// probe and exec) and silently succeeds.
 //
-// [LAW:single-enforcer] All probe-gated DML in migrate() flows through this
-// helper; per-callsite custom probe/exec sequences would let drift creep in.
-func (s *Store) execGatedReconciliation(ctx context.Context, guard *snapshotGuard, probe, stmt, label string) (bool, error) {
-	return s.execGatedReconciliationWithSwallow(ctx, guard, probe, stmt, label, true /* invertProbe */)
-}
-
-// execGatedReconciliationWithSwallow is the shared driver. invertProbe = true
-// means "probe match → mutation needed"; invertProbe = false means "probe
-// match → already-in-canonical-shape → skip" (the schema-list CREATE
-// contract). Swallowing "already exists" / "duplicate column" / "duplicate
-// key name" handles benign races where the target appeared between probe
-// and exec.
-func (s *Store) execGatedReconciliationWithSwallow(ctx context.Context, guard *snapshotGuard, probe, stmt, label string, invertProbe bool) (bool, error) {
-	var marker int
-	err := s.db.QueryRowContext(ctx, probe).Scan(&marker)
-	probeMatched := err == nil
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return false, fmt.Errorf("%s: probe: %w", label, err)
+// [LAW:single-enforcer] All CREATE-style DDL flows through this driver. The
+// swallow set lives here, in one place, instead of being scattered across
+// the schema-list and ADD-COLUMN callsites.
+func (s *Store) execGatedCreate(ctx context.Context, guard *snapshotGuard, probe, stmt, label string) (bool, error) {
+	exists, err := s.probeYields(ctx, probe, label)
+	if err != nil {
+		return false, err
 	}
-	needed := probeMatched == invertProbe
-	if !needed {
+	if exists {
 		return false, nil
 	}
 	if _, snapErr := guard.ensure(); snapErr != nil {
@@ -380,6 +368,51 @@ func (s *Store) execGatedReconciliationWithSwallow(ctx context.Context, guard *s
 		return false, fmt.Errorf("%s: %w", label, err)
 	}
 	return true, nil
+}
+
+// execGatedMutation gates an UPDATE / RENAME / DROP / MODIFY statement on a
+// "needs work" probe. If the probe matches (work-to-do detected), the
+// snapshot guard is armed and the statement runs. If the statement errors,
+// the error propagates verbatim — these statement classes have no benign
+// "already exists" failure mode, and silencing one would let Open succeed
+// against a drifted schema (the failure shape the post-mortem of PR #119
+// repeatedly warned about).
+//
+// [LAW:single-enforcer] All probe-gated mutation flows through this driver;
+// callsites do not implement probe/exec sequences inline.
+// [LAW:types-are-the-program] The split between this helper and
+// execGatedCreate puts the swallow-vs-propagate semantics in the function
+// name, so the next callsite cannot accidentally get the wrong behavior.
+func (s *Store) execGatedMutation(ctx context.Context, guard *snapshotGuard, probe, stmt, label string) (bool, error) {
+	needed, err := s.probeYields(ctx, probe, label)
+	if err != nil {
+		return false, err
+	}
+	if !needed {
+		return false, nil
+	}
+	if _, snapErr := guard.ensure(); snapErr != nil {
+		return false, fmt.Errorf("%s: %w", label, snapErr)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		return false, fmt.Errorf("%s: %w", label, err)
+	}
+	return true, nil
+}
+
+// probeYields runs probe and reports whether it returned at least one row.
+// A driver-level error other than sql.ErrNoRows propagates wrapped with
+// label for callsite context.
+func (s *Store) probeYields(ctx context.Context, probe, label string) (bool, error) {
+	var marker int
+	err := s.db.QueryRowContext(ctx, probe).Scan(&marker)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, fmt.Errorf("%s: probe: %w", label, err)
 }
 
 type issueCheckConstraint struct {
@@ -447,7 +480,7 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 		},
 	}
 	for _, update := range legacyStatusUpdates {
-		updateChanged, err := s.execGatedReconciliation(ctx, guard, update.probe, update.stmt, update.context)
+		updateChanged, err := s.execGatedMutation(ctx, guard, update.probe, update.stmt, update.context)
 		if err != nil {
 			return false, err
 		}
@@ -463,7 +496,7 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 
 func (s *Store) ensureIssueTopics(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	// [LAW:single-enforcer] Legacy topic repair happens in one SQL reconciliation stage instead of a second Go defaulting path.
-	return s.execGatedReconciliation(
+	return s.execGatedMutation(
 		ctx,
 		guard,
 		`SELECT 1 FROM issues WHERE TRIM(COALESCE(topic, '')) = '' LIMIT 1`,
