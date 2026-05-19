@@ -96,7 +96,11 @@ func (s *Store) migrate(ctx context.Context) error {
 	if _, ok := guard.took(); ok {
 		// [LAW:single-enforcer] Migration-driven prune lives at exactly one
 		// site so the retention budget cannot drift between callers.
-		if err := dbsnapshot.Prune(guard.snapshotsDir, migrationSnapshotRetention); err != nil {
+		// [LAW:one-source-of-truth] Migration retention bounds *migration*
+		// snapshots only; user snapshots from `lit snapshots new` share the
+		// directory but live under an independent retention budget set by
+		// the CLI side. The kind discriminator is IsMigrationSnapshotName.
+		if err := dbsnapshot.PruneMatching(guard.snapshotsDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
 			return fmt.Errorf("prune migration snapshots: %w", err)
 		}
 	}

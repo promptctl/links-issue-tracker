@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
 )
@@ -206,18 +207,19 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 
-	// Manufacture excess snapshots beyond the retention budget.
+	// Manufacture excess *migration-shaped* snapshots beyond the retention
+	// budget. Kind-aware retention spares non-migration snapshots, so the
+	// labels here must satisfy IsMigrationSnapshotName for the prune to
+	// touch them at all.
 	for i := 0; i < migrationSnapshotRetention+5; i++ {
-		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, fmt.Sprintf("synthetic-%d", i)); err != nil {
-			t.Fatalf("Take synthetic %d error = %v", i, err)
+		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
+		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, label); err != nil {
+			t.Fatalf("Take migration-shaped snapshot %d error = %v", i, err)
 		}
 	}
-	before, err := dbsnapshot.List(snapshotsDir)
-	if err != nil {
-		t.Fatalf("List before re-open error = %v", err)
-	}
-	if len(before) <= migrationSnapshotRetention {
-		t.Fatalf("setup invariant: snapshot count = %d, expected > retention=%d", len(before), migrationSnapshotRetention)
+	beforeMigration := countMigrationSnapshots(t, snapshotsDir)
+	if beforeMigration <= migrationSnapshotRetention {
+		t.Fatalf("setup invariant: migration snapshot count = %d, expected > retention=%d", beforeMigration, migrationSnapshotRetention)
 	}
 
 	// Force the migration to do something so Prune runs at the tail.
@@ -231,12 +233,89 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 		t.Fatalf("Close(second) error = %v", err)
 	}
 
-	after, err := dbsnapshot.List(snapshotsDir)
-	if err != nil {
-		t.Fatalf("List after re-open error = %v", err)
+	if got := countMigrationSnapshots(t, snapshotsDir); got > migrationSnapshotRetention {
+		t.Fatalf("post-migrate migration-snapshot count = %d, want <= retention=%d", got, migrationSnapshotRetention)
 	}
-	if len(after) > migrationSnapshotRetention {
-		t.Fatalf("post-migrate snapshot count = %d, want <= retention=%d", len(after), migrationSnapshotRetention)
+}
+
+// countMigrationSnapshots is a test helper that returns the number of
+// snapshots in dir whose name satisfies IsMigrationSnapshotName.
+func countMigrationSnapshots(t *testing.T, dir string) int {
+	t.Helper()
+	list, err := dbsnapshot.List(dir)
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	n := 0
+	for _, s := range list {
+		if IsMigrationSnapshotName(s.Name) {
+			n++
+		}
+	}
+	return n
+}
+
+// TestMigrationPruneSparesUserSnapshots pins the kind-aware retention
+// boundary: migrate() must not evict user snapshots (i.e. snapshots that
+// do not satisfy IsMigrationSnapshotName) under its own retention budget.
+// Without this guarantee, a mutating Open could silently delete recovery
+// artifacts the user explicitly created via `lit snapshots new`.
+func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	snapshotsDir := migrationSnapshotsDir(doltRoot)
+
+	// Bootstrap the workspace so the snapshots dir exists.
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	// Manufacture many user snapshots (label without the migration prefix)
+	// plus several extra migration snapshots beyond the migration retention.
+	const userSnaps = 25
+	for i := 0; i < userSnaps; i++ {
+		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, "user"); err != nil {
+			t.Fatalf("Take user snapshot %d: %v", i, err)
+		}
+	}
+	for i := 0; i < migrationSnapshotRetention+5; i++ {
+		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
+		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, label); err != nil {
+			t.Fatalf("Take migration snapshot %d: %v", i, err)
+		}
+	}
+
+	// Drive another mutating Open so migrate() runs and prunes.
+	withSchemaVersionDropped(t, ctx, doltRoot)
+	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(second) error = %v", err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatalf("Close(second) error = %v", err)
+	}
+
+	listed, err := dbsnapshot.List(snapshotsDir)
+	if err != nil {
+		t.Fatalf("List error = %v", err)
+	}
+	var userKept, migrationKept int
+	for _, s := range listed {
+		if IsMigrationSnapshotName(s.Name) {
+			migrationKept++
+		} else {
+			userKept++
+		}
+	}
+	if userKept != userSnaps {
+		t.Errorf("user snapshots after migration prune = %d, want %d (migration retention should not touch user snapshots)", userKept, userSnaps)
+	}
+	if migrationKept > migrationSnapshotRetention {
+		t.Errorf("migration snapshots after prune = %d, want <= %d", migrationKept, migrationSnapshotRetention)
 	}
 }
 
