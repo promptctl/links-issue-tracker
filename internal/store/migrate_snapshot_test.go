@@ -140,7 +140,11 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 
 	// Inject a synthetic failure so a *new* Open captures a snapshot and
 	// then errors out; the snapshot it captures should restore cleanly.
+	// t.Cleanup guards against early-fail leaks; the explicit reset below
+	// scopes the hook to exactly the failing Open so subsequent Opens in
+	// this test cannot accidentally trigger it.
 	migrationPostSnapshotHookForTest = func() error { return errors.New("synthetic failure") }
+	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
 	// Force re-migration by dropping the schema_version stamp so the
 	// reconciler has work to do; without work the hook never fires.
 	withSchemaVersionDropped(t, ctx, doltRoot)

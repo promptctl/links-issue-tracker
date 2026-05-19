@@ -258,7 +258,7 @@ func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) 
 	}
 	matched := snapshots
 	if match != nil {
-		matched = matched[:0]
+		matched = make([]Snapshot, 0, len(snapshots))
 		for _, s := range snapshots {
 			if match(s.Name) {
 				matched = append(matched, s)
