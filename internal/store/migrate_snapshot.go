@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
@@ -28,6 +29,19 @@ var migrationPostSnapshotHookForTest func() error
 // carries. The pre-restore rotation in dbsnapshot.Restore uses the directory
 // itself, not the label, so the label is purely human-facing.
 const migrationSnapshotLabel = "pre-migrate"
+
+// IsMigrationSnapshotName reports whether name is a migration-recovery
+// snapshot (vs. one produced by `lit snapshots new` or some future user
+// flow). Exposed so tests and CLI surfaces classify entries against the
+// same source of truth that produced them, instead of hardcoding the
+// "pre-migrate" string.
+//
+// [LAW:one-source-of-truth] The migration-snapshot label lives in this
+// package; every classifier — tests, CLI listings, recovery tooling —
+// routes through this predicate so renaming the label moves them together.
+func IsMigrationSnapshotName(name string) bool {
+	return strings.Contains(name, migrationSnapshotLabel)
+}
 
 // snapshotGuard is migrate()'s single owner of dbsnapshot.Take. Helpers call
 // ensure() *before* any DDL/DML they are about to run; the first such call

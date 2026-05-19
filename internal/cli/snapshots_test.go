@@ -264,11 +264,15 @@ func snapshotsOnDisk(t *testing.T, ws workspace.Info) []string {
 // snapshots new` (or other future user-facing producers). Tests that
 // specifically count user actions, not migration-driven side effects,
 // route through this helper.
+//
+// [LAW:one-source-of-truth] Classification uses store.IsMigrationSnapshotName
+// so the test cannot drift from the label the migration system actually
+// stamps.
 func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 	t.Helper()
 	count := 0
 	for _, name := range snapshotsOnDisk(t, ws) {
-		if strings.Contains(name, "pre-migrate") {
+		if store.IsMigrationSnapshotName(name) {
 			continue
 		}
 		count++
