@@ -35,8 +35,8 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 	if len(snaps) != 1 {
 		t.Fatalf("fresh-DB Open snapshot count = %d, want 1; got %+v", len(snaps), snaps)
 	}
-	if !strings.Contains(snaps[0].Name, migrationSnapshotLabel) {
-		t.Fatalf("snapshot label missing %q in %q", migrationSnapshotLabel, snaps[0].Name)
+	if !IsMigrationSnapshotName(snaps[0].Name) {
+		t.Fatalf("snapshot %q does not match the migration-snapshot stamp shape", snaps[0].Name)
 	}
 }
 
@@ -259,6 +259,10 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 		{"1779217187547513000-pre-migrate-foo", false},
 		{"1779217187547513000-pre-migrateofy", false},
 		{"1779217187547513000-foo-pre-migrate-1234", false},
+		// Non-snapshot directory shapes — head must be unix-ns digits.
+		{"foo-pre-migrate-123", false},
+		{"snap-1779217187547513000-pre-migrate-1234", false},
+		{"-pre-migrate-1234", false},
 		// User --label that LOOKS like the migration shape — by design,
 		// indistinguishable from a real migration snapshot. Pin this so a
 		// future "stricter" change has to address it deliberately.

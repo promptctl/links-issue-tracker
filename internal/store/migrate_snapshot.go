@@ -58,16 +58,27 @@ func IsMigrationSnapshotName(name string) bool {
 	if idx < 0 {
 		return false
 	}
-	label := name[idx+1:]
+	head, label := name[:idx], name[idx+1:]
+	if !isAllDigits(head) {
+		return false
+	}
 	const prefix = migrationSnapshotLabel + "-"
 	if !strings.HasPrefix(label, prefix) {
 		return false
 	}
 	suffix := label[len(prefix):]
-	if suffix == "" {
+	return isAllDigits(suffix)
+}
+
+// isAllDigits returns true iff s is a non-empty string of ASCII digits. The
+// head of a dbsnapshot name is a positive unix-ns timestamp; the migration
+// label suffix is the same. Sharing this check keeps the validity rule in
+// one place.
+func isAllDigits(s string) bool {
+	if s == "" {
 		return false
 	}
-	for _, r := range suffix {
+	for _, r := range s {
 		if r < '0' || r > '9' {
 			return false
 		}
