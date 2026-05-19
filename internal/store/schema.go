@@ -694,9 +694,21 @@ func hasCanonicalStatusConstraint(constraints []issueCheckConstraint) bool {
 	if !strings.Contains(normalized, "statusin('open','in_progress','closed')") {
 		return false
 	}
-	// Canonical form: "status IS NOT NULL" → normalizes to "statusisnotnull".
+	// Leaf-arm: "status IS NOT NULL" → normalizes to "statusisnotnull".
 	// Dolt's rewritten form: "NOT(status IS NULL)" → normalizes to "not(statusisnull)".
 	if !strings.Contains(normalized, "statusisnotnull") && !strings.Contains(normalized, "not(statusisnull)") {
+		return false
+	}
+	// Epic-arm: "epic AND status IS NULL" → normalizes to a fragment ending
+	// "...andstatusisnull". This token is the discriminator that rejects a
+	// drifted constraint of the form "(epic AND status IS NOT NULL) OR ..."
+	// — without it, an epic row that carries a non-NULL status would slip
+	// past a constraint named issues_status_check but be wrong. The
+	// leaf-arm's "andstatusisnotnull" and Dolt's rewritten
+	// "and(not(statusisnull))" both fail this substring (the former extends
+	// past "isnull" with "notnull"; the latter inserts "(not(" between
+	// "and" and "statusisnull").
+	if !strings.Contains(normalized, "andstatusisnull") {
 		return false
 	}
 	return true

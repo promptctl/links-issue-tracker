@@ -354,6 +354,59 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 	}
 }
 
+// TestHasCanonicalStatusConstraintRejectsDriftedClauses pins the fingerprint
+// matcher against the drifted-shape problem: a constraint that contains all
+// the canonical *vocabulary* but has the epic-arm and leaf-arm conditions
+// swapped (epic allowed non-NULL status) must NOT be classified as
+// canonical — otherwise migrate cannot detect the drift and repair it.
+//
+// Inputs are pre-normalized (matches normalizeConstraintClause output) so
+// the test asserts the matcher's logic, not Dolt-version-specific rendering.
+func TestHasCanonicalStatusConstraintRejectsDriftedClauses(t *testing.T) {
+	cases := []struct {
+		name    string
+		clause  string // already-normalized clause text
+		want    bool
+	}{
+		{
+			name:   "canonical text form",
+			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed'))",
+			want:   true,
+		},
+		{
+			name:   "dolt-rewritten form (parenthesized, NOT-rewritten)",
+			clause: "(((issue_typein('epic'))andstatusisnull)or(((not((issue_typein('epic'))))and(not(statusisnull)))and(statusin('open','in_progress','closed'))))",
+			want:   true,
+		},
+		{
+			name:   "drifted: epic arm allows non-null status",
+			clause: "(issue_typein('epic')andstatusisnotnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed'))",
+			want:   false,
+		},
+		{
+			name:   "drifted: epic arm missing entirely",
+			clause: "issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed')",
+			want:   false,
+		},
+		{
+			name:   "drifted: leaf arm omits NOT NULL gate",
+			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusin('open','in_progress','closed'))",
+			want:   false,
+		},
+		{
+			name:   "drifted: wrong status set",
+			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','blocked'))",
+			want:   false,
+		},
+	}
+	for _, c := range cases {
+		got := hasCanonicalStatusConstraint([]issueCheckConstraint{{name: "test", clause: c.clause}})
+		if got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 // withSchemaVersionDropped clears the meta.schema_version stamp by opening
 // the store, deleting the row, committing, and closing — driving the next
 // migrate() into the "work to do" branch.
