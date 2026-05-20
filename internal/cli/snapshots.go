@@ -25,6 +25,19 @@ func snapshotsDirFor(ws workspace.Info) string {
 	return filepath.Join(ws.StorageDir, "snapshots")
 }
 
+// isUserSnapshotName reports whether name is a user snapshot (i.e. produced
+// by `lit snapshots new`). It is the precise complement of
+// store.IsMigrationSnapshotName, kept as a separate predicate so the
+// kind-aware Prune call site reads as "prune user snapshots" instead of
+// "prune the not-migration ones".
+//
+// [LAW:one-source-of-truth] Both producers' kind classifiers route through
+// store.IsMigrationSnapshotName; this helper is just the complement,
+// expressed for callsite clarity.
+func isUserSnapshotName(name string) bool {
+	return !store.IsMigrationSnapshotName(name)
+}
+
 func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: lit snapshots <new|list|restore> ...")
@@ -80,7 +93,12 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 			return err
 		}
 		snap = s
-		return dbsnapshot.Prune(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget)
+		// [LAW:single-enforcer] User-snapshot retention bounds *user*
+		// snapshots only; migration snapshots share the directory but are
+		// pruned independently by migrate() under its own budget. Without
+		// the kind filter, `lit snapshots new` could evict a recovery
+		// snapshot the migration system is depending on.
+		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
 	}); err != nil {
 		return err
 	}
