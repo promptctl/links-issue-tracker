@@ -227,7 +227,28 @@ func Restore(databaseDir, snapshotsDir, name string) (string, error) {
 }
 
 // Prune removes oldest snapshots until at most keep remain. keep must be > 0.
+//
+// Operates on the entire snapshots directory. Use PruneMatching when the
+// directory holds multiple producers (e.g. user snapshots + migration
+// snapshots) so each producer's retention budget is bounded independently.
 func Prune(snapshotsDir string, keep int) error {
+	return PruneMatching(snapshotsDir, keep, nil)
+}
+
+// PruneMatching removes oldest snapshots whose name satisfies match, until at
+// most keep matching snapshots remain. Snapshots that do not satisfy match
+// are untouched, regardless of age. match == nil treats every snapshot as
+// matching (equivalent to Prune).
+//
+// [LAW:single-enforcer] The two-producer snapshots directory (user snapshots
+// from `lit snapshots new`; migration snapshots from migrate) is partitioned
+// at the *prune* boundary, not at the directory boundary, so each producer's
+// retention budget is bounded independently and one producer cannot evict
+// the other's snapshots.
+// [LAW:types-are-the-program] The kind discriminator (which producer
+// owns this snapshot) is carried in the name and read by match; the
+// directory traversal is fixed.
+func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) error {
 	if keep <= 0 {
 		return fmt.Errorf("dbsnapshot: keep must be > 0")
 	}
@@ -235,10 +256,19 @@ func Prune(snapshotsDir string, keep int) error {
 	if err != nil {
 		return err
 	}
-	if len(snapshots) <= keep {
+	matched := snapshots
+	if match != nil {
+		matched = make([]Snapshot, 0, len(snapshots))
+		for _, s := range snapshots {
+			if match(s.Name) {
+				matched = append(matched, s)
+			}
+		}
+	}
+	if len(matched) <= keep {
 		return nil
 	}
-	for _, snapshot := range snapshots[keep:] {
+	for _, snapshot := range matched[keep:] {
 		if err := os.RemoveAll(snapshot.Path); err != nil {
 			return fmt.Errorf("remove snapshot %s: %w", snapshot.Path, err)
 		}

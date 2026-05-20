@@ -307,6 +307,93 @@ func TestPrune_EmptyDirIsNoop(t *testing.T) {
 	}
 }
 
+// TestPruneMatching_KindAwareRetention pins the kind-aware retention
+// contract: PruneMatching evicts only snapshots that satisfy the match
+// predicate, and only when the *matching* count exceeds keep. Snapshots
+// failing the predicate are left untouched regardless of age. This is the
+// guarantee the migrate() / `lit snapshots new` two-producer arrangement
+// depends on.
+func TestPruneMatching_KindAwareRetention(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+
+	// Six matching snapshots (label="kind-a") and five non-matching
+	// (label="kind-b"). With keep=2 against an "a" matcher, only "a"
+	// snapshots should be pruned, leaving 2 of them; every "b" must remain.
+	for i := 0; i < 6; i++ {
+		if _, err := Take(src, snapshotsDir, "kind-a"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		if _, err := Take(src, snapshotsDir, "kind-b"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	match := func(name string) bool { return strings.Contains(name, "-kind-a") }
+	if err := PruneMatching(snapshotsDir, 2, match); err != nil {
+		t.Fatal(err)
+	}
+
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var a, b int
+	for _, s := range list {
+		if match(s.Name) {
+			a++
+		} else {
+			b++
+		}
+	}
+	if a != 2 {
+		t.Errorf("matching snapshots after prune = %d, want 2", a)
+	}
+	if b != 5 {
+		t.Errorf("non-matching snapshots after prune = %d, want 5 (must not be touched)", b)
+	}
+}
+
+// TestPruneMatching_NilMatchPrunesAll pins backwards-compatible Prune
+// semantics: PruneMatching(..., nil) treats every snapshot as matching, so
+// it is equivalent to Prune. Prune itself is defined as a thin wrapper.
+func TestPruneMatching_NilMatchPrunesAll(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	for i := 0; i < 5; i++ {
+		if _, err := Take(src, snapshotsDir, ""); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := PruneMatching(snapshotsDir, 2, nil); err != nil {
+		t.Fatal(err)
+	}
+	list, err := List(snapshotsDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list) != 2 {
+		t.Fatalf("len=%d after nil-match prune, want 2", len(list))
+	}
+}
+
 func TestTake_LabelAppearsInName(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()

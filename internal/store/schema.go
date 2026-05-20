@@ -6,10 +6,41 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
+	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
 	"github.com/bmf/links-issue-tracker/internal/model"
 	"github.com/bmf/links-issue-tracker/internal/rank"
 )
+
+// ddlStep names one declarative DDL operation so the schema-list runner can
+// derive its existence probe without parsing the SQL. parent is empty for
+// CREATE TABLE; for CREATE INDEX it carries the table the index lives on.
+//
+// [LAW:dataflow-not-control-flow] The runner runs the same probe→snapshot→
+// exec sequence for every step; per-step variability is carried entirely in
+// the (target, parent, stmt) values, never in a branch on step kind.
+type ddlStep struct {
+	target string
+	parent string
+	stmt   string
+}
+
+// existsProbe returns SQL that yields one row iff this step's target is
+// already present in the schema (i.e. the DDL would be a no-op). When the
+// probe yields no rows, the runner calls guard.ensure() and runs stmt.
+func (d ddlStep) existsProbe() string {
+	if d.parent == "" {
+		return fmt.Sprintf(
+			`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = '%s' LIMIT 1`,
+			d.target,
+		)
+	}
+	return fmt.Sprintf(
+		`SELECT 1 FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = '%s' AND index_name = '%s' LIMIT 1`,
+		d.parent, d.target,
+	)
+}
 
 // priorityCheckClause is the schema-level encoding of the priority range
 // invariant. Derived from the canonical model.Priority* constants and shared
@@ -51,14 +82,49 @@ func createIssuesTableStmt() string {
 }
 
 func (s *Store) migrate(ctx context.Context) error {
-	changed := false
-	schema := []string{
-		`CREATE TABLE meta (
+	guard := newSnapshotGuard(
+		s.doltRootDir,
+		migrationSnapshotsDir(s.doltRootDir),
+		formatMigrationSnapshotLabel(time.Now()),
+	)
+	if err := s.runMigration(ctx, guard); err != nil {
+		if snap, ok := guard.took(); ok {
+			return &MigrationRollbackError{Snapshot: snap, Cause: err}
+		}
+		return err
+	}
+	if _, ok := guard.took(); ok {
+		// [LAW:single-enforcer] Migration-driven prune lives at exactly one
+		// site so the retention budget cannot drift between callers.
+		// [LAW:one-source-of-truth] Migration retention bounds *migration*
+		// snapshots only; user snapshots from `lit snapshots new` share the
+		// directory but live under an independent retention budget set by
+		// the CLI side. The kind discriminator is IsMigrationSnapshotName.
+		if err := dbsnapshot.PruneMatching(guard.snapshotsDir, migrationSnapshotRetention, IsMigrationSnapshotName); err != nil {
+			return fmt.Errorf("prune migration snapshots: %w", err)
+		}
+	}
+	return nil
+}
+
+// runMigration executes every reconcile step in fixed order, threading the
+// snapshot guard through each helper so the first detected mutation triggers
+// exactly one snapshot before that mutation lands. The same sequence runs
+// every Open; variability lives in the probe results, not in branches.
+//
+// [LAW:dataflow-not-control-flow] The runner always walks the full reconcile
+// sequence; per-Open variability is the work-needed bit each helper derives
+// from a probe.
+// [LAW:single-enforcer] runMigration is the one place that orders reconcile
+// stages; callers do not partial-order them themselves.
+func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
+	schema := []ddlStep{
+		{target: "meta", stmt: `CREATE TABLE meta (
 			meta_key VARCHAR(191) PRIMARY KEY,
 			meta_value TEXT NOT NULL
-		);`,
-		createIssuesTableStmt(),
-		`CREATE TABLE relations (
+		);`},
+		{target: "issues", stmt: createIssuesTableStmt()},
+		{target: "relations", stmt: `CREATE TABLE relations (
 			src_id VARCHAR(191) NOT NULL,
 			dst_id VARCHAR(191) NOT NULL,
 			type VARCHAR(32) NOT NULL,
@@ -68,33 +134,33 @@ func (s *Store) migrate(ctx context.Context) error {
 			FOREIGN KEY (src_id) REFERENCES issues(id) ON DELETE CASCADE,
 			FOREIGN KEY (dst_id) REFERENCES issues(id) ON DELETE CASCADE,
 			CHECK(type IN ('blocks','parent-child','related-to'))
-		);`,
-		`CREATE TABLE comments (
+		);`},
+		{target: "comments", stmt: `CREATE TABLE comments (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
 			body TEXT NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			created_by TEXT NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-		);`,
-		`CREATE TABLE labels (
+		);`},
+		{target: "labels", stmt: `CREATE TABLE labels (
 			issue_id VARCHAR(191) NOT NULL,
 			label VARCHAR(191) NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			created_by TEXT NOT NULL,
 			PRIMARY KEY (issue_id, label),
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-		);`,
-		`CREATE INDEX idx_issues_status_priority ON issues(status, priority, updated_at);`,
-		`CREATE INDEX idx_relations_src_type ON relations(src_id, type);`,
-		`CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`,
-		`CREATE INDEX idx_comments_issue_created ON comments(issue_id, created_at);`,
-		`CREATE INDEX idx_labels_issue ON labels(issue_id, label);`,
-		`CREATE INDEX idx_labels_name ON labels(label, issue_id);`,
+		);`},
+		{target: "idx_issues_status_priority", parent: "issues", stmt: `CREATE INDEX idx_issues_status_priority ON issues(status, priority, updated_at);`},
+		{target: "idx_relations_src_type", parent: "relations", stmt: `CREATE INDEX idx_relations_src_type ON relations(src_id, type);`},
+		{target: "idx_relations_dst_type", parent: "relations", stmt: `CREATE INDEX idx_relations_dst_type ON relations(dst_id, type);`},
+		{target: "idx_comments_issue_created", parent: "comments", stmt: `CREATE INDEX idx_comments_issue_created ON comments(issue_id, created_at);`},
+		{target: "idx_labels_issue", parent: "labels", stmt: `CREATE INDEX idx_labels_issue ON labels(issue_id, label);`},
+		{target: "idx_labels_name", parent: "labels", stmt: `CREATE INDEX idx_labels_name ON labels(label, issue_id);`},
 		// [LAW:one-source-of-truth] issue_events is the canonical mutation log
 		// for every issue field. The legacy issue_history schema (status-only,
 		// from/to columns that lied for archive/delete) is dropped below.
-		`CREATE TABLE issue_events (
+		{target: "issue_events", stmt: `CREATE TABLE issue_events (
 			id VARCHAR(191) PRIMARY KEY,
 			issue_id VARCHAR(191) NOT NULL,
 			action VARCHAR(64) NULL,
@@ -102,19 +168,20 @@ func (s *Store) migrate(ctx context.Context) error {
 			actor TEXT NOT NULL,
 			created_at VARCHAR(64) NOT NULL,
 			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-		);`,
-		`CREATE TABLE issue_event_changes (
+		);`},
+		{target: "issue_event_changes", stmt: `CREATE TABLE issue_event_changes (
 			event_id VARCHAR(191) NOT NULL,
 			field VARCHAR(64) NOT NULL,
 			from_value TEXT NULL,
 			to_value TEXT NULL,
 			PRIMARY KEY (event_id, field),
 			FOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE
-		);`,
-		`CREATE INDEX idx_issue_events_issue_created ON issue_events(issue_id, created_at);`,
+		);`},
+		{target: "idx_issue_events_issue_created", parent: "issue_events", stmt: `CREATE INDEX idx_issue_events_issue_created ON issue_events(issue_id, created_at);`},
 	}
-	for _, stmt := range schema {
-		stmtChanged, err := execIgnoreAlreadyExists(ctx, s.db, stmt)
+	changed := false
+	for _, step := range schema {
+		stmtChanged, err := s.runGatedCreate(ctx, guard, step)
 		if err != nil {
 			return err
 		}
@@ -123,13 +190,22 @@ func (s *Store) migrate(ctx context.Context) error {
 	// [LAW:one-source-of-truth] issue_history is superseded by
 	// issue_events + issue_event_changes. Existing repos may still have it;
 	// drop it (existing history rows are discarded — issues are untouched).
-	if _, err := s.db.ExecContext(ctx, `DROP TABLE IF EXISTS issue_history`); err != nil {
-		return fmt.Errorf("drop legacy issue_history table: %w", err)
+	dropHistoryChanged, err := s.execGatedMutation(
+		ctx,
+		guard,
+		`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'issue_history' LIMIT 1`,
+		`DROP TABLE IF EXISTS issue_history`,
+		"drop legacy issue_history table",
+	)
+	if err != nil {
+		return err
 	}
+	changed = changed || dropHistoryChanged
 	// issue_events.assignee was renamed to actor. Probe-gated rename keeps the
 	// migration idempotent across fresh / migrated databases.
-	actorColumnChanged, err := s.execReconciliationUpdate(
+	actorColumnChanged, err := s.execGatedMutation(
 		ctx,
+		guard,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issue_events' AND column_name = 'assignee' LIMIT 1`,
 		`ALTER TABLE issue_events RENAME COLUMN assignee TO actor`,
 		"rename issue_events.assignee to actor",
@@ -138,17 +214,23 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || actorColumnChanged
-	rankColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
+	rankColumnChanged, err := s.execGatedColumnAdd(ctx, guard, "issues", "item_rank",
+		`ALTER TABLE issues ADD COLUMN item_rank TEXT NOT NULL DEFAULT ''`)
 	if err != nil {
 		return err
 	}
 	changed = changed || rankColumnChanged
-	rankIndexChanged, err := execIgnoreAlreadyExists(ctx, s.db, `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`)
+	rankIndexChanged, err := s.runGatedCreate(ctx, guard, ddlStep{
+		target: "idx_issues_rank",
+		parent: "issues",
+		stmt:   `CREATE INDEX idx_issues_rank ON issues(item_rank(191))`,
+	})
 	if err != nil {
 		return err
 	}
 	changed = changed || rankIndexChanged
-	topicColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`)
+	topicColumnChanged, err := s.execGatedColumnAdd(ctx, guard, "issues", "topic",
+		`ALTER TABLE issues ADD COLUMN topic VARCHAR(191) NOT NULL DEFAULT 'misc' AFTER issue_type`)
 	if err != nil {
 		return err
 	}
@@ -158,8 +240,9 @@ func (s *Store) migrate(ctx context.Context) error {
 	// pre-rename workspace states. `prompt` is reserved in Dolt's MySQL parser,
 	// so the source-side identifier is backtick-quoted; `agent_prompt` is not
 	// reserved and needs no quoting.
-	promptRenamedChanged, err := s.execReconciliationUpdate(
+	promptRenamedChanged, err := s.execGatedMutation(
 		ctx,
+		guard,
 		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'prompt' LIMIT 1`,
 		"ALTER TABLE issues RENAME COLUMN `prompt` TO agent_prompt",
 		"rename prompt column to agent_prompt",
@@ -168,47 +251,48 @@ func (s *Store) migrate(ctx context.Context) error {
 		return err
 	}
 	changed = changed || promptRenamedChanged
-	promptColumnChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`")
+	promptColumnChanged, err := s.execGatedColumnAdd(ctx, guard, "issues", "agent_prompt",
+		"ALTER TABLE issues ADD COLUMN agent_prompt TEXT NULL AFTER `description`")
 	if err != nil {
 		return err
 	}
 	changed = changed || promptColumnChanged
 	// Workspaces where the column was added before the NULL declaration took
 	// effect still have it as NOT NULL, which makes `lit new` fail at the DB
-	// layer when no --prompt is supplied. Relax to NULL the same way
-	// ensureUnifiedStatusSchema relaxes status; the helper swallows the no-op
-	// error when the column is already nullable.
-	promptRelaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, "ALTER TABLE issues MODIFY agent_prompt TEXT NULL")
+	// layer when no --prompt is supplied. Relax to NULL by probing the
+	// is_nullable bit and modifying only when needed.
+	promptRelaxedChanged, err := s.execGatedColumnRelax(ctx, guard, "issues", "agent_prompt",
+		"ALTER TABLE issues MODIFY agent_prompt TEXT NULL")
 	if err != nil {
 		return err
 	}
 	changed = changed || promptRelaxedChanged
-	statusChanged, err := s.ensureUnifiedStatusSchema(ctx)
+	statusChanged, err := s.ensureUnifiedStatusSchema(ctx, guard)
 	if err != nil {
 		return err
 	}
 	changed = changed || statusChanged
-	topicChanged, err := s.ensureIssueTopics(ctx)
+	topicChanged, err := s.ensureIssueTopics(ctx, guard)
 	if err != nil {
 		return err
 	}
 	changed = changed || topicChanged
-	rankChanged, err := s.ensureIssueRanks(ctx)
+	rankChanged, err := s.ensureIssueRanks(ctx, guard)
 	if err != nil {
 		return err
 	}
 	changed = changed || rankChanged
-	priorityChanged, err := s.resetPrioritiesToNormal(ctx)
+	priorityChanged, err := s.resetPrioritiesToNormal(ctx, guard)
 	if err != nil {
 		return err
 	}
 	changed = changed || priorityChanged
-	workspaceChanged, err := s.ensureMetaValue(ctx, "workspace_id", s.workspaceID)
+	workspaceChanged, err := s.ensureMetaValue(ctx, guard, "workspace_id", s.workspaceID)
 	if err != nil {
 		return err
 	}
 	changed = changed || workspaceChanged
-	schemaVersionChanged, err := s.ensureMetaDefault(ctx, "schema_version", "1")
+	schemaVersionChanged, err := s.ensureMetaDefault(ctx, guard, "schema_version", "1")
 	if err != nil {
 		return err
 	}
@@ -216,11 +300,123 @@ func (s *Store) migrate(ctx context.Context) error {
 	if !changed {
 		return nil
 	}
-	// [LAW:dataflow-not-control-flow] Startup migration always runs the same reconciliation stages; only the derived `changed` value selects commit input.
-	if err := s.commitWorkingSet(ctx, "Initialize links schema"); err != nil {
-		return err
+	if hook := migrationPostSnapshotHookForTest; hook != nil {
+		if err := hook(); err != nil {
+			return err
+		}
 	}
-	return nil
+	// [LAW:dataflow-not-control-flow] Startup migration always runs the same reconciliation stages; only the derived `changed` value selects commit input.
+	return s.commitWorkingSet(ctx, "Initialize links schema")
+}
+
+// runGatedCreate is the schema-list runner — probes existence, snapshots
+// before first mutation, then runs the CREATE. The "already exists" swallow
+// is a belt-and-suspenders against probe/exec races; under normal operation
+// the probe alone determines the no-op case.
+func (s *Store) runGatedCreate(ctx context.Context, guard *snapshotGuard, step ddlStep) (bool, error) {
+	return s.execGatedCreate(ctx, guard, step.existsProbe(), step.stmt,
+		fmt.Sprintf("create %s", step.target))
+}
+
+// execGatedColumnAdd probes for an existing column and runs the ADD only when
+// it is missing. Swallow handles benign races where the column appeared
+// between probe and exec.
+func (s *Store) execGatedColumnAdd(ctx context.Context, guard *snapshotGuard, table, column, stmt string) (bool, error) {
+	probe := fmt.Sprintf(
+		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '%s' AND column_name = '%s' LIMIT 1`,
+		table, column,
+	)
+	return s.execGatedCreate(ctx, guard, probe, stmt,
+		fmt.Sprintf("add column %s.%s", table, column))
+}
+
+// execGatedColumnRelax probes for a NOT NULL column and runs MODIFY only when
+// the column is still declared NOT NULL. is_nullable = 'NO' is the
+// canonical-source discriminator. A MODIFY that errors signals a structural
+// problem (column missing, type mismatch) — propagate it instead of swallowing.
+func (s *Store) execGatedColumnRelax(ctx context.Context, guard *snapshotGuard, table, column, stmt string) (bool, error) {
+	probe := fmt.Sprintf(
+		`SELECT 1 FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = '%s' AND column_name = '%s' AND is_nullable = 'NO' LIMIT 1`,
+		table, column,
+	)
+	return s.execGatedMutation(ctx, guard, probe, stmt,
+		fmt.Sprintf("relax column %s.%s to nullable", table, column))
+}
+
+// execGatedCreate gates a CREATE/ADD-style statement on an existence probe.
+// If the probe matches (target already present), the statement is skipped.
+// Otherwise the snapshot guard is armed and the statement runs; an "already
+// exists" / "duplicate column" / "duplicate key name" error after the probe
+// is treated as a benign race (another writer landed the same shape between
+// probe and exec) and silently succeeds.
+//
+// [LAW:single-enforcer] All CREATE-style DDL flows through this driver. The
+// swallow set lives here, in one place, instead of being scattered across
+// the schema-list and ADD-COLUMN callsites.
+func (s *Store) execGatedCreate(ctx context.Context, guard *snapshotGuard, probe, stmt, label string) (bool, error) {
+	exists, err := s.probeYields(ctx, probe, label)
+	if err != nil {
+		return false, err
+	}
+	if exists {
+		return false, nil
+	}
+	if _, snapErr := guard.ensure(); snapErr != nil {
+		return false, fmt.Errorf("%s: %w", label, snapErr)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		normalized := strings.ToLower(err.Error())
+		if strings.Contains(normalized, "already exists") || strings.Contains(normalized, "duplicate column") || strings.Contains(normalized, "duplicate key name") {
+			return false, nil
+		}
+		return false, fmt.Errorf("%s: %w", label, err)
+	}
+	return true, nil
+}
+
+// execGatedMutation gates an UPDATE / RENAME / DROP / MODIFY statement on a
+// "needs work" probe. If the probe matches (work-to-do detected), the
+// snapshot guard is armed and the statement runs. If the statement errors,
+// the error propagates verbatim — these statement classes have no benign
+// "already exists" failure mode, and silencing one would let Open succeed
+// against a drifted schema (the failure shape the post-mortem of PR #119
+// repeatedly warned about).
+//
+// [LAW:single-enforcer] All probe-gated mutation flows through this driver;
+// callsites do not implement probe/exec sequences inline.
+// [LAW:types-are-the-program] The split between this helper and
+// execGatedCreate puts the swallow-vs-propagate semantics in the function
+// name, so the next callsite cannot accidentally get the wrong behavior.
+func (s *Store) execGatedMutation(ctx context.Context, guard *snapshotGuard, probe, stmt, label string) (bool, error) {
+	needed, err := s.probeYields(ctx, probe, label)
+	if err != nil {
+		return false, err
+	}
+	if !needed {
+		return false, nil
+	}
+	if _, snapErr := guard.ensure(); snapErr != nil {
+		return false, fmt.Errorf("%s: %w", label, snapErr)
+	}
+	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+		return false, fmt.Errorf("%s: %w", label, err)
+	}
+	return true, nil
+}
+
+// probeYields runs probe and reports whether it returned at least one row.
+// A driver-level error other than sql.ErrNoRows propagates wrapped with
+// label for callsite context.
+func (s *Store) probeYields(ctx context.Context, probe, label string) (bool, error) {
+	var marker int
+	err := s.db.QueryRowContext(ctx, probe).Scan(&marker)
+	if err == nil {
+		return true, nil
+	}
+	if errors.Is(err, sql.ErrNoRows) {
+		return false, nil
+	}
+	return false, fmt.Errorf("%s: probe: %w", label, err)
 }
 
 type issueCheckConstraint struct {
@@ -228,15 +424,16 @@ type issueCheckConstraint struct {
 	clause string
 }
 
-func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
+func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	// [LAW:one-source-of-truth] `status` is the canonical workflow state for
 	// non-container issues. Containers derive state from children and store NULL.
 	changed := false
 	// Existing workspaces created before status was nullable still have the
 	// column declared NOT NULL. Relax it before any backfill that needs to
-	// write NULL. Dolt rejects MODIFY on a column that already matches, so
-	// the helper swallows "already" errors via execIgnoreAlreadyExists.
-	relaxedChanged, err := execIgnoreAlreadyExists(ctx, s.db, `ALTER TABLE issues MODIFY status VARCHAR(32) NULL`)
+	// write NULL. The probe checks is_nullable='NO' so the MODIFY only fires
+	// on workspaces whose schema still carries the non-canonical declaration.
+	relaxedChanged, err := s.execGatedColumnRelax(ctx, guard, "issues", "status",
+		`ALTER TABLE issues MODIFY status VARCHAR(32) NULL`)
 	if err != nil {
 		return false, err
 	}
@@ -287,13 +484,13 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
 		},
 	}
 	for _, update := range legacyStatusUpdates {
-		updateChanged, err := s.execReconciliationUpdate(ctx, update.probe, update.stmt, update.context)
+		updateChanged, err := s.execGatedMutation(ctx, guard, update.probe, update.stmt, update.context)
 		if err != nil {
 			return false, err
 		}
 		changed = changed || updateChanged
 	}
-	constraintChanged, err := s.ensureStatusConstraint(ctx)
+	constraintChanged, err := s.ensureStatusConstraint(ctx, guard)
 	if err != nil {
 		return false, err
 	}
@@ -301,17 +498,18 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context) (bool, error) {
 	return changed, nil
 }
 
-func (s *Store) ensureIssueTopics(ctx context.Context) (bool, error) {
+func (s *Store) ensureIssueTopics(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	// [LAW:single-enforcer] Legacy topic repair happens in one SQL reconciliation stage instead of a second Go defaulting path.
-	return s.execReconciliationUpdate(
+	return s.execGatedMutation(
 		ctx,
+		guard,
 		`SELECT 1 FROM issues WHERE TRIM(COALESCE(topic, '')) = '' LIMIT 1`,
 		`UPDATE issues SET topic = 'misc' WHERE TRIM(COALESCE(topic, '')) = ''`,
 		"backfill legacy issue topics",
 	)
 }
 
-func (s *Store) ensureIssueRanks(ctx context.Context) (bool, error) {
+func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	// Assign ranks to any issues that don't have one yet, preserving the
 	// previous default ordering (status, priority, updated_at, id) as the
 	// initial rank sequence.
@@ -334,6 +532,9 @@ func (s *Store) ensureIssueRanks(ctx context.Context) (bool, error) {
 	if len(ids) == 0 {
 		return false, nil
 	}
+	if _, err := guard.ensure(); err != nil {
+		return false, fmt.Errorf("ensureIssueRanks: %w", err)
+	}
 	current := rank.Initial()
 	for _, id := range ids {
 		if _, err := s.db.ExecContext(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", current, id); err != nil {
@@ -353,13 +554,16 @@ func (s *Store) ensureIssueRanks(ctx context.Context) (bool, error) {
 // the function returns without writing. Otherwise it resets all rows to 0
 // before replacing the CHECK so the new constraint can never reject the
 // existing data. [LAW:dataflow-not-control-flow] [LAW:single-enforcer]
-func (s *Store) resetPrioritiesToNormal(ctx context.Context) (bool, error) {
+func (s *Store) resetPrioritiesToNormal(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	constraints, err := s.listIssuePriorityCheckConstraints(ctx)
 	if err != nil {
 		return false, err
 	}
 	if hasCanonicalPriorityConstraint(constraints) {
 		return false, nil
+	}
+	if _, err := guard.ensure(); err != nil {
+		return false, fmt.Errorf("reset priorities to normal: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf("UPDATE issues SET priority = %d", model.PriorityNormal)); err != nil {
 		return false, fmt.Errorf("reset priorities to normal: %w", err)
@@ -415,13 +619,16 @@ func hasCanonicalPriorityConstraint(constraints []issueCheckConstraint) bool {
 	return strings.Contains(normalized, fmt.Sprintf("priority<=%d", model.PriorityUrgent))
 }
 
-func (s *Store) ensureStatusConstraint(ctx context.Context) (bool, error) {
+func (s *Store) ensureStatusConstraint(ctx context.Context, guard *snapshotGuard) (bool, error) {
 	checks, err := s.listIssueStatusCheckConstraints(ctx)
 	if err != nil {
 		return false, err
 	}
 	if hasCanonicalStatusConstraint(checks) {
 		return false, nil
+	}
+	if _, err := guard.ensure(); err != nil {
+		return false, fmt.Errorf("ensure status constraint: %w", err)
 	}
 	for _, constraint := range checks {
 		if _, err := s.db.ExecContext(ctx, "ALTER TABLE issues DROP CHECK `"+strings.ReplaceAll(constraint.name, "`", "``")+"`"); err != nil {
@@ -468,14 +675,81 @@ func hasCanonicalStatusConstraint(constraints []issueCheckConstraint) bool {
 	if len(constraints) != 1 {
 		return false
 	}
-	// Dolt's information_schema.check_clauses may report the clause with or
-	// without an outer wrapping pair of parentheses depending on how the
-	// constraint was added. Tolerate either side wrapping the other so the
-	// migration stays idempotent across normalization differences. Drift past
-	// this is caught by TestMigrationIsIdempotentOnSecondOpen.
-	actual := normalizeConstraintClause(constraints[0].clause)
-	expected := normalizeConstraintClause(canonicalStatusCheckClause)
-	return strings.Contains(actual, expected) || strings.Contains(expected, actual)
+	// Dolt rewrites the canonical clause into a structurally equivalent but
+	// textually different form on round-trip: NOT IN becomes NOT(.. IN ..),
+	// IS NOT NULL becomes NOT(.. IS NULL), and column refs get backticks. A
+	// full-text comparison fails on the rewritten form, which would force
+	// the migration to drop+re-add the constraint every Open (a Dolt no-op,
+	// but a wasted snapshot under the recovery wire-up). Fingerprint the
+	// structural tokens that uniquely identify the canonical clause and
+	// accept either rendering of NOT-IN / IS-NOT-NULL.
+	//
+	// [LAW:one-source-of-truth] These tokens are derived from
+	// canonicalStatusCheckClause; if that constant changes, this matcher
+	// changes alongside.
+	normalized := normalizeConstraintClause(constraints[0].clause)
+	if !strings.Contains(normalized, "issue_typein('epic')") {
+		return false
+	}
+	if !strings.Contains(normalized, "statusin('open','in_progress','closed')") {
+		return false
+	}
+	// Leaf-arm: "status IS NOT NULL" → normalizes to "statusisnotnull".
+	// Dolt's rewritten form: "NOT(status IS NULL)" → normalizes to "not(statusisnull)".
+	if !strings.Contains(normalized, "statusisnotnull") && !strings.Contains(normalized, "not(statusisnull)") {
+		return false
+	}
+	// Epic-arm: "epic AND status IS NULL" → normalizes to a fragment ending
+	// "...andstatusisnull". This token is the discriminator that rejects a
+	// drifted constraint of the form "(epic AND status IS NOT NULL) OR ..."
+	// — without it, an epic row that carries a non-NULL status would slip
+	// past a constraint named issues_status_check but be wrong. The
+	// leaf-arm's "andstatusisnotnull" and Dolt's rewritten
+	// "and(not(statusisnull))" both fail this substring (the former extends
+	// past "isnull" with "notnull"; the latter inserts "(not(" between
+	// "and" and "statusisnull").
+	if !strings.Contains(normalized, "andstatusisnull") {
+		return false
+	}
+	// Leaf-arm type filter: "issue_type NOT IN ('epic')" scopes the
+	// not-null + IN-set check to NON-epic rows. Drop this filter and the
+	// CHECK of (epic AND NULL) OR (NOT NULL AND IN(...)) evaluates TRUE
+	// for an epic with status='open' — the leaf-arm has no type guard so
+	// it matches regardless. Canonical normalizes to
+	// "issue_typenotin('epic')"; Dolt may rewrite as
+	// "not(issue_typein('epic'))" or "not((issue_typein('epic')))" with
+	// extra paren depth, so detect the negation-of-positive form too.
+	if !hasNegatedEpicGuard(normalized) {
+		return false
+	}
+	return true
+}
+
+// hasNegatedEpicGuard reports whether the already-normalized clause carries
+// a leaf-arm filter excluding epic rows. Accepts both the canonical
+// "issue_typenotin('epic')" form and Dolt's "not(...issue_typein('epic')...)"
+// rewrites with arbitrary inner-paren depth.
+func hasNegatedEpicGuard(normalized string) bool {
+	if strings.Contains(normalized, "issue_typenotin('epic')") {
+		return true
+	}
+	const negation = "not("
+	const positive = "issue_typein('epic')"
+	cursor := 0
+	for {
+		offset := strings.Index(normalized[cursor:], negation)
+		if offset < 0 {
+			return false
+		}
+		pos := cursor + offset + len(negation)
+		for pos < len(normalized) && normalized[pos] == '(' {
+			pos++
+		}
+		if strings.HasPrefix(normalized[pos:], positive) {
+			return true
+		}
+		cursor = cursor + offset + 1
+	}
 }
 
 func normalizeConstraintClause(clause string) string {
@@ -483,27 +757,3 @@ func normalizeConstraintClause(clause string) string {
 	return strings.ToLower(replacer.Replace(clause))
 }
 
-func (s *Store) execReconciliationUpdate(ctx context.Context, probe string, stmt string, contextLabel string) (bool, error) {
-	var matched int
-	if err := s.db.QueryRowContext(ctx, probe).Scan(&matched); err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return false, nil
-		}
-		return false, fmt.Errorf("%s: probe rows: %w", contextLabel, err)
-	}
-	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
-		return false, fmt.Errorf("%s: %w", contextLabel, err)
-	}
-	return true, nil
-}
-
-func execIgnoreAlreadyExists(ctx context.Context, db *sql.DB, stmt string) (bool, error) {
-	if _, err := db.ExecContext(ctx, stmt); err != nil {
-		normalized := strings.ToLower(err.Error())
-		if strings.Contains(normalized, "already exists") || strings.Contains(normalized, "duplicate column") || strings.Contains(normalized, "duplicate key name") {
-			return false, nil
-		}
-		return false, fmt.Errorf("migrate schema: %w", err)
-	}
-	return true, nil
-}
