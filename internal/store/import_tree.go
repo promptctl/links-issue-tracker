@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,6 +32,30 @@ type ImportTreeSpec struct {
 // successful import.
 type ImportTreeResult struct {
 	IDMap map[string]string `json:"id_map"`
+}
+
+// ParseImportTreeSpecs is the deserialization trust boundary for tree-import
+// files: raw bytes in, specs out. It rejects any field the spec schema does
+// not name and any trailing data after the array, so a drifted or typo'd spec
+// fails loudly here instead of silently losing the unrecognized data downstream.
+//
+// [LAW:single-enforcer] The store owns the ImportTreeSpec schema, so the store
+// owns its deserialization — the CLI hands bytes here rather than running its
+// own permissive decode.
+// [LAW:no-silent-fallbacks] DisallowUnknownFields + trailing-data check make
+// the parse total: every byte stream that is not exactly one array of
+// known-field specs is an explicit error.
+func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	var specs []ImportTreeSpec
+	if err := dec.Decode(&specs); err != nil {
+		return nil, fmt.Errorf("import: parse spec: %w", err)
+	}
+	if dec.More() {
+		return nil, errors.New("import: unexpected trailing data after spec array")
+	}
+	return specs, nil
 }
 
 // ImportTree validates and creates a tree of issues described by specs in

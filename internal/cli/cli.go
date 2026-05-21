@@ -1167,9 +1167,9 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return fmt.Errorf("read import spec: %w", err)
 	}
-	var specs []store.ImportTreeSpec
-	if err := json.Unmarshal(data, &specs); err != nil {
-		return fmt.Errorf("parse import spec: %w", err)
+	specs, err := store.ParseImportTreeSpecs(data)
+	if err != nil {
+		return err
 	}
 	result, err := ap.Store.ImportTree(ctx, ap.Workspace.IssuePrefix, specs)
 	if err != nil {
