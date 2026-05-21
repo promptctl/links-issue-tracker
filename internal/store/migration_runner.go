@@ -125,7 +125,10 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		if err := s.adoptPreGooseWorkspace(ctx); err != nil {
 			return err
 		}
-		if err := s.commitWorkingSetOnce(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)); err != nil {
+		// commitWorkingSet (not ...Once) so the adoption stamp gets the
+		// transient-manifest retry wrapper. migrate() already holds the commit
+		// lock, so the nested withCommitLock short-circuits acquisition.
+		if err := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)); err != nil {
 			return fmt.Errorf("commit adoption stamp: %w", err)
 		}
 	}
@@ -148,7 +151,11 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		if err != nil {
 			return fmt.Errorf("apply migration: %w", err)
 		}
-		if err := s.commitWorkingSetOnce(ctx, migrationCommitMessage(result)); err != nil {
+		// commitWorkingSet (not ...Once) so each migration commit gets the
+		// transient-manifest retry — startup migration is a critical path and a
+		// recoverable Dolt manifest blip must not brick Open. The commit lock is
+		// already held, so re-entering withCommitLock short-circuits.
+		if err := s.commitWorkingSet(ctx, migrationCommitMessage(result)); err != nil {
 			return fmt.Errorf("commit migration v%d: %w", result.Source.Version, err)
 		}
 	}
