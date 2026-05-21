@@ -431,14 +431,15 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 	_ = issueC
 
-	// Dependency edge: A blocks B.
+	// Dependency edge: A depends on B (B blocks A).
+	// blocks convention: src_id=dependent, dst_id=dependency.
 	if _, err := st.AddRelation(ctx, AddRelationInput{
 		SrcID:     issueA.ID,
 		DstID:     issueB.ID,
 		Type:      "blocks",
 		CreatedBy: "alice",
 	}); err != nil {
-		t.Fatalf("AddRelation(A blocks B) error = %v", err)
+		t.Fatalf("AddRelation(A depends on B) error = %v", err)
 	}
 
 	// Step 2: Capture the full pre-mutation state.
@@ -479,7 +480,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 	rollback, ok := asMigrationRollbackError(openErr)
 	if !ok {
-		t.Fatalf("error = %v (%T); expected MigrationRollbackError", openErr, openErr)
+		t.Fatalf("error = %v (%T); expected *MigrationRollbackError", openErr, openErr)
 	}
 	if !errors.Is(rollback, sentinel) {
 		t.Fatalf("rollback cause = %v; want to unwrap to sentinel", rollback.Cause)
@@ -489,6 +490,9 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	rotated, err := dbsnapshot.Restore(doltRoot, snapshotsDir, rollback.Snapshot.Name)
 	if err != nil {
 		t.Fatalf("Restore error = %v", err)
+	}
+	if rotated == "" {
+		t.Fatal("Restore returned empty rotated path; expected the pre-restore rotation to exist")
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(rotated) })
 
