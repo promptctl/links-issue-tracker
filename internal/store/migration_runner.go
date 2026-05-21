@@ -25,18 +25,6 @@ const gooseVersionTable = "goose_db_version"
 // without re-running the CREATE TABLEs.
 const baselineVersion = 1
 
-// baselineTables is the canonical table set 00001_baseline.sql creates. It is
-// the expected-shape oracle for adoption: a pre-goose workspace must have all
-// of these to be stamped at baseline.
-//
-// [LAW:one-source-of-truth] baseline.sql defines the schema; this list mirrors
-// the table set it produces. The two are kept coherent by convention today;
-// the planned drift canary (links-migrate-frame-sxsk.4) will enforce it
-// mechanically once it lands.
-var baselineTables = []string{
-	"meta", "issues", "relations", "comments", "labels", "issue_events", "issue_event_changes",
-}
-
 // migrationPhase is the workspace's position relative to the goose registry,
 // derived once from side-effect-free probes. The runner acts on the phase; it
 // never re-derives state from scattered checks.
@@ -185,7 +173,7 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		}
 		return migrationState{phase: phaseManaged, appliedVersion: applied, registryMaxVers: registryMax}, nil
 	}
-	present, missing, err := s.partitionBaselineTables(ctx)
+	present, missing, err := s.verifyBaselineShape(ctx)
 	if err != nil {
 		return migrationState{}, err
 	}
@@ -194,8 +182,9 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	}
 	if len(missing) > 0 {
 		return migrationState{}, fmt.Errorf(
-			"workspace has a partial schema (missing tables: %s) and no goose history; "+
-				"this workspace is not safely adoptable — restore it from a snapshot or recreate it",
+			"workspace has a partial schema (missing: %s) and no goose history; "+
+				"it is at a pre-baseline shape that adoption cannot safely stamp — "+
+				"restore it from a snapshot or recreate it",
 			strings.Join(missing, ", "),
 		)
 	}
@@ -243,21 +232,70 @@ func (s *Store) recordedMigrationVersion(ctx context.Context) (int64, error) {
 	return version, nil
 }
 
-// partitionBaselineTables returns how many baseline tables are present and the
-// names of any that are missing.
-func (s *Store) partitionBaselineTables(ctx context.Context) (present int, missing []string, err error) {
-	for _, table := range baselineTables {
-		exists, err := s.tableExists(ctx, table)
+// verifyBaselineShape compares the live workspace against the baseline schema
+// parsed from 00001_baseline.sql. It returns how many baseline tables are
+// present and a list of every shape gap: a fully-absent table is reported as
+// "<table>", a present table missing a column as "<table>.<column>".
+//
+// Checking column presence (not just table presence) is what makes "adoptable"
+// mean "actually at baseline": a pre-goose workspace can carry every table yet
+// still be pre-converged (e.g. issue_events.assignee never renamed to actor, or
+// issues missing topic), and stamping such a workspace at v1 would permanently
+// mark an incompatible schema as baseline — the PR #119 failure shape.
+//
+// [LAW:one-source-of-truth] The expected shape is parsed from the same baseline
+// file goose applies; there is no hand-maintained table/column list to drift.
+// Column NAMES are compared (not types/constraints): identifiers survive Dolt's
+// DDL round-trip verbatim, so name presence is a robust discriminator without
+// the rewrite brittleness that full-text constraint matching suffers. Exact
+// shape (types, constraints, indexes) is the drift canary's job (sxsk.4).
+func (s *Store) verifyBaselineShape(ctx context.Context) (present int, missing []string, err error) {
+	schema, err := baselineSchema()
+	if err != nil {
+		return 0, nil, err
+	}
+	for _, table := range sortedKeys(schema) {
+		actual, err := s.tableColumns(ctx, table)
 		if err != nil {
 			return 0, nil, err
 		}
-		if exists {
-			present++
+		if len(actual) == 0 {
+			missing = append(missing, table)
 			continue
 		}
-		missing = append(missing, table)
+		present++
+		for _, column := range schema[table] {
+			if !actual[column] {
+				missing = append(missing, table+"."+column)
+			}
+		}
 	}
 	return present, missing, nil
+}
+
+// tableColumns returns the set of column names a table has in the active
+// database. An absent table yields an empty set.
+func (s *Store) tableColumns(ctx context.Context, table string) (map[string]bool, error) {
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT column_name FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ?`,
+		table,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("probe columns of %q: %w", table, err)
+	}
+	defer rows.Close()
+	columns := map[string]bool{}
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("scan column of %q: %w", table, err)
+		}
+		columns[strings.ToLower(name)] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate columns of %q: %w", table, err)
+	}
+	return columns, nil
 }
 
 // tableExists reports whether a table is present in the active database.
@@ -326,4 +364,201 @@ func parseMigrationVersion(name string) (int64, bool) {
 // migration: `migrate: v<N> <file>`.
 func migrationCommitMessage(result *goose.MigrationResult) string {
 	return fmt.Sprintf("migrate: v%d %s", result.Source.Version, filepath.Base(result.Source.Path))
+}
+
+// baselineSchema parses the embedded baseline migration into the table->columns
+// shape it creates — the single oracle for what "at baseline" means. The same
+// file goose applies on a fresh workspace defines what adoption must verify on
+// a pre-goose one.
+func baselineSchema() (map[string][]string, error) {
+	name, err := baselineFileName()
+	if err != nil {
+		return nil, err
+	}
+	data, err := migrations.FS.ReadFile(name)
+	if err != nil {
+		return nil, fmt.Errorf("read baseline migration %q: %w", name, err)
+	}
+	schema := parseCreateTableColumns(gooseUpSection(string(data)))
+	if len(schema) == 0 {
+		return nil, fmt.Errorf("baseline migration %q defines no tables", name)
+	}
+	return schema, nil
+}
+
+// baselineFileName is the registry file whose version is baselineVersion.
+func baselineFileName() (string, error) {
+	entries, err := migrations.FS.ReadDir(".")
+	if err != nil {
+		return "", fmt.Errorf("read migration registry: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		if v, ok := parseMigrationVersion(entry.Name()); ok && v == baselineVersion {
+			return entry.Name(), nil
+		}
+	}
+	return "", fmt.Errorf("no baseline migration (v%d) found in registry", baselineVersion)
+}
+
+// gooseUpSection returns the SQL between the goose Up and Down markers, so the
+// parser never reads the Down (DROP TABLE) statements as table definitions.
+func gooseUpSection(sql string) string {
+	lower := strings.ToLower(sql)
+	up := strings.Index(lower, "-- +goose up")
+	if up < 0 {
+		return sql
+	}
+	body := sql[up:]
+	if down := strings.Index(strings.ToLower(body), "-- +goose down"); down >= 0 {
+		return body[:down]
+	}
+	return body
+}
+
+// parseCreateTableColumns extracts table -> column-names from CREATE TABLE
+// statements. It reads only column identifiers (the first token of each
+// top-level item that is not a table-level constraint keyword); CREATE INDEX
+// and everything else is ignored. ASCII-lowercasing preserves byte indices, so
+// the case-insensitive keyword scan and the original-text slicing stay aligned.
+func parseCreateTableColumns(sql string) map[string][]string {
+	out := map[string][]string{}
+	lower := strings.ToLower(sql)
+	const kw = "create table"
+	for pos := 0; ; {
+		i := strings.Index(lower[pos:], kw)
+		if i < 0 {
+			break
+		}
+		cursor := pos + i + len(kw)
+		name, afterName := firstIdentifier(sql[cursor:])
+		open := strings.IndexByte(afterName, '(')
+		if name == "" || open < 0 {
+			pos = cursor
+			continue
+		}
+		consumedToName := len(sql[cursor:]) - len(afterName)
+		body, blockLen := parenBlock(afterName[open:])
+		out[strings.ToLower(name)] = columnNames(body)
+		pos = cursor + consumedToName + open + blockLen
+	}
+	return out
+}
+
+// columnNames returns the column identifiers in a CREATE TABLE body, skipping
+// table-level constraint clauses.
+func columnNames(body string) []string {
+	var cols []string
+	for _, item := range splitTopLevel(body) {
+		name, _ := firstIdentifier(item)
+		if name == "" || isConstraintKeyword(name) {
+			continue
+		}
+		cols = append(cols, strings.ToLower(name))
+	}
+	return cols
+}
+
+// splitTopLevel splits a CREATE TABLE body at depth-0, unquoted commas, so a
+// CHECK clause's internal commas (inside parens or string literals) do not
+// fragment a single item.
+func splitTopLevel(body string) []string {
+	var parts []string
+	depth, inQuote, start := 0, false, 0
+	for i := 0; i < len(body); i++ {
+		c := body[i]
+		if inQuote {
+			if c == '\'' {
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inQuote = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+		case ',':
+			if depth == 0 {
+				parts = append(parts, body[start:i])
+				start = i + 1
+			}
+		}
+	}
+	return append(parts, body[start:])
+}
+
+// parenBlock takes a string beginning with '(' and returns the content between
+// it and its matching ')', plus the total bytes consumed (including both
+// parens). Quote- and depth-aware. An unbalanced input yields an empty body.
+func parenBlock(s string) (string, int) {
+	depth, inQuote := 0, false
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		if inQuote {
+			if c == '\'' {
+				inQuote = false
+			}
+			continue
+		}
+		switch c {
+		case '\'':
+			inQuote = true
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				return s[1:i], i + 1
+			}
+		}
+	}
+	return "", len(s)
+}
+
+// firstIdentifier returns the leading SQL identifier (backticks stripped) and
+// the remainder after it, skipping leading whitespace.
+func firstIdentifier(s string) (string, string) {
+	i := 0
+	for i < len(s) && (s[i] == ' ' || s[i] == '\t' || s[i] == '\n' || s[i] == '\r') {
+		i++
+	}
+	start := i
+	for i < len(s) && (isIdentByte(s[i]) || s[i] == '`') {
+		i++
+	}
+	return strings.Trim(s[start:i], "`"), s[i:]
+}
+
+func isIdentByte(b byte) bool {
+	return b == '_' ||
+		(b >= 'a' && b <= 'z') ||
+		(b >= 'A' && b <= 'Z') ||
+		(b >= '0' && b <= '9')
+}
+
+// isConstraintKeyword reports whether a CREATE TABLE item's leading token names
+// a table-level constraint clause rather than a column.
+func isConstraintKeyword(token string) bool {
+	switch strings.ToUpper(token) {
+	case "CONSTRAINT", "PRIMARY", "FOREIGN", "KEY", "CHECK", "UNIQUE", "INDEX":
+		return true
+	default:
+		return false
+	}
+}
+
+// sortedKeys returns the map keys in deterministic order so adoption probing and
+// error messages are stable across runs.
+func sortedKeys(m map[string][]string) []string {
+	keys := make([]string, 0, len(m))
+	for k := range m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	return keys
 }
