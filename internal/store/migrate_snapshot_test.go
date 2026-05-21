@@ -418,18 +418,16 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 
 	// Issue C: chore with label.
-	issueC, err := st.CreateIssue(ctx, CreateIssueInput{
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Gamma chore",
 		Topic:     "infra",
 		IssueType: "chore",
 		Priority:  model.PriorityNormal,
 		Labels:    []string{"infra"},
-	})
-	if err != nil {
+	}); err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}
-	_ = issueC
 
 	// Dependency edge: A depends on B (B blocks A).
 	// blocks convention: src_id=dependent, dst_id=dependency.
