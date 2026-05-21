@@ -319,7 +319,9 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 // does NOT filter on status — the canonical "is this issue closed?" predicate
 // lives in the lifecycle (model.Issue.State()), not in the SQL row, because
 // epics store status=NULL by design and their state is derived from children
-// via AllOf (see schema.go canonicalStatusCheckClause). A SQL-side
+// via AllOf (the issues_status_check constraint in migrations/00001_baseline.sql
+// encodes this: epics have status IS NULL; leaves have status in the known
+// set). A SQL-side
 // `status != 'closed'` test evaluates to NULL (not TRUE) for every epic and
 // would silently drop every blocks-edge that points at one. Liveness filtering
 // is therefore done in Go after hydration — see Store.liveRankInversions.

@@ -1424,11 +1424,17 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
-func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
+// TestOpenForReadRefusesPartialPreGooseSchema pins the adoption gate's refusal
+// contract: a workspace carrying SOME canonical tables but missing others, and
+// with no goose history, must NOT be silently stamped at baseline — it fails
+// loudly naming the missing tables. Exercised via OpenForRead; Open shares the
+// same migrate -> classifyMigrationState path, so the contract holds for both.
+// This is the PR #119 bug-class fix — its adoption stamped baseline on
+// workspaces that were not actually at baseline.
+func TestOpenForReadRefusesPartialPreGooseSchema(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	// Create the database without running migration.
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
@@ -1436,43 +1442,24 @@ func TestOpenForReadAutoMigratesExistingSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
-	// Create a bare issues table missing the topic column to simulate a stale schema.
-	_, err = seed.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS issues (
-		id VARCHAR(191) PRIMARY KEY,
-		title TEXT NOT NULL,
-		description TEXT NOT NULL,
-		status VARCHAR(32) NOT NULL,
-		priority INT NOT NULL,
-		issue_type VARCHAR(32) NOT NULL,
-		assignee TEXT NOT NULL,
-		created_at VARCHAR(64) NOT NULL,
-		updated_at VARCHAR(64) NOT NULL,
-		closed_at VARCHAR(64) NULL,
-		archived_at VARCHAR(64) NULL,
-		deleted_at VARCHAR(64) NULL
-	)`)
-	if err != nil {
-		t.Fatalf("create stale schema error = %v", err)
+	// Only the issues table exists; the other six baseline tables are absent.
+	if _, err := seed.db.ExecContext(ctx, `CREATE TABLE issues (id VARCHAR(191) PRIMARY KEY)`); err != nil {
+		_ = seed.Close()
+		t.Fatalf("create partial schema error = %v", err)
 	}
 	if err := seed.Close(); err != nil {
 		t.Fatalf("seed Close() error = %v", err)
 	}
 
-	// OpenForRead should auto-migrate and add the missing topic column.
-	readStore, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("OpenForRead() error = %v", err)
+	_, err = OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		t.Fatal("OpenForRead() on a partial pre-goose schema returned nil error; expected refusal")
 	}
-	defer readStore.Close()
-
-	// Verify migration ran by checking the topic column exists.
-	var topicExists int
-	err = readStore.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'issues' AND column_name = 'topic'`).Scan(&topicExists)
-	if err != nil {
-		t.Fatalf("check topic column error = %v", err)
+	if !strings.Contains(err.Error(), "partial schema") {
+		t.Fatalf("error %q does not explain the partial-schema refusal", err)
 	}
-	if topicExists == 0 {
-		t.Fatal("OpenForRead did not auto-migrate: topic column missing")
+	if !strings.Contains(err.Error(), "meta") {
+		t.Fatalf("error %q does not name a missing baseline table", err)
 	}
 }
 
