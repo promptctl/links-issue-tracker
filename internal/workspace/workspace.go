@@ -90,6 +90,19 @@ func Resolve(cwd string) (Info, error) {
 		}
 		gitCommonDir = filepath.Join(absCwd, gitCommonDir)
 	}
+	// [LAW:one-source-of-truth] A store's identity is its physical directory, not
+	// the path string a caller happened to hold. filepath.Abs makes a path
+	// absolute but does not resolve symlinks, so the same store reached from a
+	// symlinked ancestor (macOS /var -> /private/var) yields two spellings. The
+	// dolt driver caches its environment per path string and serves the second
+	// spelling a read-only handle, so two spellings of one store become a
+	// read-only conflict. Canonicalizing here collapses every spelling to the
+	// physical path before any storage path is derived from it.
+	canonicalCommonDir, err := filepath.EvalSymlinks(gitCommonDir)
+	if err != nil {
+		return Info{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
+	}
+	gitCommonDir = canonicalCommonDir
 	storageDir := filepath.Join(filepath.Clean(gitCommonDir), "links")
 	configPath := filepath.Join(storageDir, "config.json")
 	databasePath := filepath.Join(storageDir, "dolt")

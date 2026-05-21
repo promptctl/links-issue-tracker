@@ -92,6 +92,39 @@ func TestResolveFromSubdirIsCwdDepthIndependent(t *testing.T) {
 	}
 }
 
+func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
+	// A repo reached through a symlinked ancestor (the macOS /var -> /private/var
+	// shape, reproduced portably with an explicit symlink) must resolve to the
+	// same physical store as the unlinked path. Two spellings of one store make
+	// the dolt driver hand the second opener a read-only handle, so Resolve must
+	// collapse both to the physical DatabasePath.
+	physical := t.TempDir()
+	run(t, physical, "git", "init")
+
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(physical, link); err != nil {
+		t.Skipf("symlink unsupported: %v", err)
+	}
+
+	viaPhysical, err := Resolve(physical)
+	if err != nil {
+		t.Fatalf("Resolve(physical) error = %v", err)
+	}
+	viaLink, err := Resolve(link)
+	if err != nil {
+		t.Fatalf("Resolve(link) error = %v", err)
+	}
+
+	if viaLink.DatabasePath != viaPhysical.DatabasePath {
+		t.Fatalf("symlinked spelling resolved a different store: link=%q physical=%q",
+			viaLink.DatabasePath, viaPhysical.DatabasePath)
+	}
+	if resolved, err := filepath.EvalSymlinks(viaLink.StorageDir); err != nil || resolved != viaLink.StorageDir {
+		t.Fatalf("StorageDir %q is not already canonical (resolved=%q err=%v)",
+			viaLink.StorageDir, resolved, err)
+	}
+}
+
 func TestResolveFailsOutsideGit(t *testing.T) {
 	_, err := Resolve(t.TempDir())
 	if err == nil {
