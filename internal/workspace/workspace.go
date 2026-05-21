@@ -71,13 +71,24 @@ func Resolve(cwd string) (Info, error) {
 	if err != nil {
 		return Info{}, ErrNotGitRepo
 	}
-	gitCommonDirRaw, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
+	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
+	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
+	// so a relative result must be anchored to the cwd. The original defect
+	// anchored it to the toplevel instead, which climbed out of the repo and
+	// resolved a subdirectory/worktree invocation to the wrong store. Anchoring
+	// to the cwd is correct on every Git version (no dependency on the newer
+	// --path-format=absolute flag, which would break older Git with a misleading
+	// "not a git repo" error).
+	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return Info{}, ErrNotGitRepo
 	}
-	gitCommonDir := gitCommonDirRaw
 	if !filepath.IsAbs(gitCommonDir) {
-		gitCommonDir = filepath.Join(rootDir, gitCommonDirRaw)
+		absCwd, err := filepath.Abs(cwd)
+		if err != nil {
+			return Info{}, fmt.Errorf("resolve absolute cwd: %w", err)
+		}
+		gitCommonDir = filepath.Join(absCwd, gitCommonDir)
 	}
 	storageDir := filepath.Join(filepath.Clean(gitCommonDir), "links")
 	configPath := filepath.Join(storageDir, "config.json")
