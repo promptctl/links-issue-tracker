@@ -1,7 +1,9 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
+	"github.com/bmf/links-issue-tracker/internal/model"
 )
 
 // TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot pins the "fresh-DB
@@ -355,6 +358,188 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 		if got := IsMigrationSnapshotName(c.name); got != c.want {
 			t.Errorf("IsMigrationSnapshotName(%q) = %v, want %v", c.name, got, c.want)
 		}
+	}
+}
+
+// TestDataSurvivesFailedMigrationSnapshotRestore is the data-survival contract
+// test: a workspace seeded with rich state (N>=3 issues with title, status,
+// priority, topic, labels, and assignee; a dependency edge; a comment; and
+// field-history events) is byte-identical after a failed migration is recovered
+// via dbsnapshot.Restore. [LAW:behavior-not-structure] [LAW:verifiable-goals]
+func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	snapshotsDir := migrationSnapshotsDir(doltRoot)
+
+	// Step 1: Seed the workspace with rich data covering all required fields.
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(seed) error = %v", err)
+	}
+
+	// Issue A: feature, urgent priority, labels, transitions to in_progress with assignee.
+	issueA, err := st.CreateIssue(ctx, CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Alpha feature",
+		Topic:     "feature",
+		IssueType: "feature",
+		Priority:  model.PriorityUrgent,
+		Labels:    []string{"backend", "critical"},
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:   issueA.ID,
+		Action:    "start",
+		CreatedBy: "alice",
+		Assignee:  "alice",
+	}); err != nil {
+		t.Fatalf("TransitionIssue(A start) error = %v", err)
+	}
+
+	// Issue B: task, receives a comment.
+	issueB, err := st.CreateIssue(ctx, CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Beta task",
+		Topic:     "backend",
+		IssueType: "task",
+		Priority:  model.PriorityNormal,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+	if _, err := st.AddComment(ctx, AddCommentInput{
+		IssueID:   issueB.ID,
+		Body:      "Needs review before merge.",
+		CreatedBy: "bob",
+	}); err != nil {
+		t.Fatalf("AddComment(B) error = %v", err)
+	}
+
+	// Issue C: chore with label.
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Gamma chore",
+		Topic:     "infra",
+		IssueType: "chore",
+		Priority:  model.PriorityNormal,
+		Labels:    []string{"infra"},
+	}); err != nil {
+		t.Fatalf("CreateIssue(C) error = %v", err)
+	}
+
+	// Dependency edge: A depends on B (B blocks A).
+	// blocks convention: src_id=dependent, dst_id=dependency.
+	if _, err := st.AddRelation(ctx, AddRelationInput{
+		SrcID:     issueA.ID,
+		DstID:     issueB.ID,
+		Type:      "blocks",
+		CreatedBy: "alice",
+	}); err != nil {
+		t.Fatalf("AddRelation(A depends on B) error = %v", err)
+	}
+
+	// Step 2: Capture the full pre-mutation state.
+	before, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(before) error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(seed) error = %v", err)
+	}
+
+	// Verify the seeded state has the expected shape before relying on it.
+	if n := len(before.Issues); n < 3 {
+		t.Fatalf("seed invariant: issue count = %d, want >= 3", n)
+	}
+	if len(before.Relations) == 0 {
+		t.Fatal("seed invariant: no relations in export")
+	}
+	if len(before.Comments) == 0 {
+		t.Fatal("seed invariant: no comments in export")
+	}
+	if len(before.Events) == 0 {
+		t.Fatal("seed invariant: no events in export")
+	}
+
+	// Step 3: Drop goose history so the next Open re-enters phaseAdopt.
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	// Step 4: Inject a post-snapshot failure so a mutating Open captures a
+	// snapshot then errors, returning a MigrationRollbackError carrying it.
+	sentinel := errors.New("synthetic post-snapshot failure")
+	migrationPostSnapshotHookForTest = func() error { return sentinel }
+	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
+	_, openErr := Open(ctx, doltRoot, "test-workspace-id")
+	migrationPostSnapshotHookForTest = nil
+	if openErr == nil {
+		t.Fatal("Open() after goose-history drop returned nil error; expected MigrationRollbackError")
+	}
+	rollback, ok := asMigrationRollbackError(openErr)
+	if !ok {
+		t.Fatalf("error = %v (%T); expected *MigrationRollbackError", openErr, openErr)
+	}
+	if !errors.Is(rollback, sentinel) {
+		t.Fatalf("rollback cause = %v; want to unwrap to sentinel", rollback.Cause)
+	}
+
+	// Step 5: Restore the snapshot the failure carried.
+	rotated, err := dbsnapshot.Restore(doltRoot, snapshotsDir, rollback.Snapshot.Name)
+	if err != nil {
+		t.Fatalf("Restore error = %v", err)
+	}
+	if rotated == "" {
+		t.Fatal("Restore returned empty rotated path; expected the pre-restore rotation to exist")
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(rotated) })
+
+	// Step 6: Reopen, export, and assert byte-identical state.
+	restored, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(restored) error = %v", err)
+	}
+	defer func() {
+		if err := restored.Close(); err != nil {
+			t.Errorf("Close(restored) error = %v", err)
+		}
+	}()
+
+	after, err := restored.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(after) error = %v", err)
+	}
+	assertExportStateIdentical(t, before, after)
+
+	// Step 7: Assert the restored workspace is writable.
+	if _, err := restored.CreateIssue(ctx, CreateIssueInput{
+		Prefix:    "test",
+		Title:     "Post-restore write check",
+		Topic:     "verify",
+		IssueType: "task",
+	}); err != nil {
+		t.Fatalf("CreateIssue(post-restore) error = %v", err)
+	}
+}
+
+// assertExportStateIdentical compares two Export values by marshaling both to
+// JSON with ExportedAt zeroed. ExportedAt is the only field that legitimately
+// differs between two exports of the same workspace state.
+// [LAW:behavior-not-structure]
+func assertExportStateIdentical(t *testing.T, want, got model.Export) {
+	t.Helper()
+	want.ExportedAt = time.Time{}
+	got.ExportedAt = time.Time{}
+	wantJSON, err := json.Marshal(want)
+	if err != nil {
+		t.Fatalf("marshal want: %v", err)
+	}
+	gotJSON, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("marshal got: %v", err)
+	}
+	if !bytes.Equal(wantJSON, gotJSON) {
+		t.Errorf("exported state after restore differs from pre-mutation state:\nwant: %s\n got: %s", wantJSON, gotJSON)
 	}
 }
 
