@@ -100,7 +100,7 @@ func Resolve(cwd string) (Info, error) {
 	// physical path before any storage path is derived from it.
 	canonicalCommonDir, err := filepath.EvalSymlinks(gitCommonDir)
 	if err != nil {
-		return Info{}, fmt.Errorf("canonicalize git-common-dir: %w", err)
+		return Info{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
 	}
 	gitCommonDir = canonicalCommonDir
 	storageDir := filepath.Join(filepath.Clean(gitCommonDir), "links")
