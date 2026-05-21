@@ -27,10 +27,12 @@ const baselineVersion = 1
 
 // baselineTables is the canonical table set 00001_baseline.sql creates. It is
 // the expected-shape oracle for adoption: a pre-goose workspace must have all
-// of these to be stamped at baseline. The drift canary (.4) keeps this list
-// coherent with 00001_baseline.sql.
+// of these to be stamped at baseline.
+//
 // [LAW:one-source-of-truth] baseline.sql defines the schema; this list mirrors
-// the table set it produces, enforced coherent by CI.
+// the table set it produces. The two are kept coherent by convention today;
+// the planned drift canary (links-migrate-frame-sxsk.4) will enforce it
+// mechanically once it lands.
 var baselineTables = []string{
 	"meta", "issues", "relations", "comments", "labels", "issue_events", "issue_event_changes",
 }
