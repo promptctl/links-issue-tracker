@@ -52,6 +52,46 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	}
 }
 
+func TestResolveFromSubdirIsCwdDepthIndependent(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+	sub := filepath.Join(repo, "nested", "deeper")
+	if err := os.MkdirAll(sub, 0o755); err != nil {
+		t.Fatalf("MkdirAll(sub) error = %v", err)
+	}
+
+	fromRoot, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve(repo) error = %v", err)
+	}
+	fromSub, err := Resolve(sub)
+	if err != nil {
+		t.Fatalf("Resolve(sub) error = %v", err)
+	}
+
+	// The store belongs to the repository, not to how deep lit was invoked. A
+	// relative --git-common-dir ("../.git" from a subdir) joined against the
+	// toplevel climbs out of the repo and resolves a different store; absolute
+	// resolution must yield the same store from any depth.
+	if fromSub.StorageDir != fromRoot.StorageDir {
+		t.Fatalf("storage dir depends on cwd depth: subdir=%q root=%q", fromSub.StorageDir, fromRoot.StorageDir)
+	}
+	if fromSub.WorkspaceID != fromRoot.WorkspaceID {
+		t.Fatalf("workspace id depends on cwd depth: subdir=%q root=%q", fromSub.WorkspaceID, fromRoot.WorkspaceID)
+	}
+	wantStorageDir, err := filepath.EvalSymlinks(filepath.Join(repo, ".git", "links"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(want) error = %v", err)
+	}
+	gotStorageDir, err := filepath.EvalSymlinks(fromSub.StorageDir)
+	if err != nil {
+		t.Fatalf("EvalSymlinks(got) error = %v", err)
+	}
+	if gotStorageDir != wantStorageDir {
+		t.Fatalf("subdir storage dir = %q, want repo-local %q", gotStorageDir, wantStorageDir)
+	}
+}
+
 func TestResolveFailsOutsideGit(t *testing.T) {
 	_, err := Resolve(t.TempDir())
 	if err == nil {
