@@ -71,13 +71,15 @@ func Resolve(cwd string) (Info, error) {
 	if err != nil {
 		return Info{}, ErrNotGitRepo
 	}
-	gitCommonDirRaw, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
+	// [LAW:one-source-of-truth] Git owns repository geometry, so ask it for the
+	// absolute common dir directly. The relative form of --git-common-dir is
+	// emitted relative to the invocation cwd, not the toplevel; reconstructing
+	// an absolute path client-side by joining against the toplevel resolves a
+	// subdirectory (or worktree) invocation to the wrong store. Absolute output
+	// makes that illegal state unrepresentable and removes the join entirely.
+	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--path-format=absolute", "--git-common-dir")
 	if err != nil {
 		return Info{}, ErrNotGitRepo
-	}
-	gitCommonDir := gitCommonDirRaw
-	if !filepath.IsAbs(gitCommonDir) {
-		gitCommonDir = filepath.Join(rootDir, gitCommonDirRaw)
 	}
 	storageDir := filepath.Join(filepath.Clean(gitCommonDir), "links")
 	configPath := filepath.Join(storageDir, "config.json")
