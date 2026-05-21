@@ -22,7 +22,9 @@ import (
 // a non-JSON line. [LAW:one-source-of-truth] Renders the already-resolved
 // workspace.Info; it never re-resolves storage location.
 func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
-	_, err := fmt.Fprintf(w, "workspace: storage_dir=%s workspace_id=%s issue_prefix=%s git_common_dir=%s\n",
+	// Path fields use %q so values containing spaces (e.g. a checkout under
+	// "My Projects") stay unambiguous and copy-pasteable in the key=value line.
+	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%s git_common_dir=%q\n",
 		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix, ws.GitCommonDir)
 	return err
 }
