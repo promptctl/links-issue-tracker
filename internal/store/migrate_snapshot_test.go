@@ -145,14 +145,14 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// this test cannot accidentally trigger it.
 	migrationPostSnapshotHookForTest = func() error { return errors.New("synthetic failure") }
 	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
-	// Force re-migration by dropping the schema_version stamp so the
-	// reconciler has work to do; without work the hook never fires.
-	withSchemaVersionDropped(t, ctx, doltRoot)
+	// Force re-migration by dropping goose's history so the next Open
+	// re-adopts the workspace; without work to do, the hook never fires.
+	withGooseHistoryDropped(t, ctx, doltRoot)
 	failedOpen, openErr := Open(ctx, doltRoot, "test-workspace-id")
 	migrationPostSnapshotHookForTest = nil
 	if openErr == nil {
 		_ = failedOpen.Close()
-		t.Fatal("Open() after schema_version drop returned nil error; expected rollback")
+		t.Fatal("Open() after goose-history drop returned nil error; expected rollback")
 	}
 	rollback, ok := asMigrationRollbackError(openErr)
 	if !ok {
@@ -227,7 +227,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	}
 
 	// Force the migration to do something so Prune runs at the tail.
-	withSchemaVersionDropped(t, ctx, doltRoot)
+	withGooseHistoryDropped(t, ctx, doltRoot)
 
 	second, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -294,7 +294,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	}
 
 	// Drive another mutating Open so migrate() runs and prunes.
-	withSchemaVersionDropped(t, ctx, doltRoot)
+	withGooseHistoryDropped(t, ctx, doltRoot)
 	second, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open(second) error = %v", err)
@@ -358,85 +358,12 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 	}
 }
 
-// TestHasCanonicalStatusConstraintRejectsDriftedClauses pins the fingerprint
-// matcher against the drifted-shape problem: a constraint that contains all
-// the canonical *vocabulary* but has the epic-arm and leaf-arm conditions
-// swapped (epic allowed non-NULL status) must NOT be classified as
-// canonical — otherwise migrate cannot detect the drift and repair it.
-//
-// Inputs are pre-normalized (matches normalizeConstraintClause output) so
-// the test asserts the matcher's logic, not Dolt-version-specific rendering.
-func TestHasCanonicalStatusConstraintRejectsDriftedClauses(t *testing.T) {
-	cases := []struct {
-		name    string
-		clause  string // already-normalized clause text
-		want    bool
-	}{
-		{
-			name:   "canonical text form",
-			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed'))",
-			want:   true,
-		},
-		{
-			name:   "dolt-rewritten form (parenthesized, NOT-rewritten)",
-			clause: "(((issue_typein('epic'))andstatusisnull)or(((not((issue_typein('epic'))))and(not(statusisnull)))and(statusin('open','in_progress','closed'))))",
-			want:   true,
-		},
-		{
-			name:   "drifted: epic arm allows non-null status",
-			clause: "(issue_typein('epic')andstatusisnotnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed'))",
-			want:   false,
-		},
-		{
-			name:   "drifted: epic arm missing entirely",
-			clause: "issue_typenotin('epic')andstatusisnotnullandstatusin('open','in_progress','closed')",
-			want:   false,
-		},
-		{
-			name:   "drifted: leaf arm omits NOT NULL gate",
-			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusin('open','in_progress','closed'))",
-			want:   false,
-		},
-		{
-			name:   "drifted: wrong status set",
-			clause: "(issue_typein('epic')andstatusisnull)or(issue_typenotin('epic')andstatusisnotnullandstatusin('open','blocked'))",
-			want:   false,
-		},
-		{
-			// The drift the reviewer flagged: leaf-arm carries no
-			// issue_type filter, so an epic with status='open' satisfies
-			// the OR via the unguarded leaf branch.
-			name:   "drifted: leaf arm missing NOT-IN epic guard",
-			clause: "(issue_typein('epic')andstatusisnull)or(statusisnotnullandstatusin('open','in_progress','closed'))",
-			want:   false,
-		},
-		{
-			// Dolt rewrite of the canonical with a single-paren negation
-			// "not(issue_typein('epic'))" — still canonical.
-			name:   "dolt-rewritten leaf guard: single-paren negation",
-			clause: "(issue_typein('epic')andstatusisnull)or(not(issue_typein('epic'))andstatusisnotnullandstatusin('open','in_progress','closed'))",
-			want:   true,
-		},
-		{
-			// Dolt's actually-observed double-paren rewrite; pin so a
-			// future Dolt formatting change is caught by tests.
-			name:   "dolt-rewritten leaf guard: double-paren negation",
-			clause: "(((issue_typein('epic'))andstatusisnull)or(((not((issue_typein('epic'))))and(not(statusisnull)))and(statusin('open','in_progress','closed'))))",
-			want:   true,
-		},
-	}
-	for _, c := range cases {
-		got := hasCanonicalStatusConstraint([]issueCheckConstraint{{name: "test", clause: c.clause}})
-		if got != c.want {
-			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
-		}
-	}
-}
-
-// withSchemaVersionDropped clears the meta.schema_version stamp by opening
-// the store, deleting the row, committing, and closing — driving the next
-// migrate() into the "work to do" branch.
-func withSchemaVersionDropped(t *testing.T, ctx context.Context, doltRoot string) {
+// withGooseHistoryDropped removes the goose_db_version table from an existing
+// workspace, leaving the full canonical schema in place. The next Open then
+// classifies the workspace as phaseAdopt (pre-goose schema, no history) and
+// re-stamps the baseline version — a mutating migrate() pass, which is what
+// the snapshot/failure/prune tests need to drive.
+func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string) {
 	t.Helper()
 	prev := migrationPostSnapshotHookForTest
 	migrationPostSnapshotHookForTest = nil
@@ -444,17 +371,17 @@ func withSchemaVersionDropped(t *testing.T, ctx context.Context, doltRoot string
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
-		t.Fatalf("withSchemaVersionDropped Open error = %v", err)
+		t.Fatalf("withGooseHistoryDropped Open error = %v", err)
 	}
-	if err := st.ExecRawForTest(ctx, `DELETE FROM meta WHERE meta_key = 'schema_version'`); err != nil {
+	if err := st.ExecRawForTest(ctx, `DROP TABLE IF EXISTS goose_db_version`); err != nil {
 		_ = st.Close()
-		t.Fatalf("ExecRawForTest delete schema_version error = %v", err)
+		t.Fatalf("ExecRawForTest drop goose_db_version error = %v", err)
 	}
-	if err := st.commitWorkingSet(ctx, "drop schema_version for test"); err != nil {
+	if err := st.commitWorkingSet(ctx, "drop goose history for test"); err != nil {
 		_ = st.Close()
 		t.Fatalf("commitWorkingSet error = %v", err)
 	}
 	if err := st.Close(); err != nil {
-		t.Fatalf("withSchemaVersionDropped Close error = %v", err)
+		t.Fatalf("withGooseHistoryDropped Close error = %v", err)
 	}
 }
