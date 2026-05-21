@@ -12,7 +12,20 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/app"
 	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/bmf/links-issue-tracker/internal/workspace"
 )
+
+// printWorkspaceIdentity writes the resolved store identity so a human can
+// confirm at a glance which store lit opened — the direct answer to "why am I
+// not seeing my issues". It is part of the text report only: --json emits a
+// single JSON document and nothing else, so machine consumers are never handed
+// a non-JSON line. [LAW:one-source-of-truth] Renders the already-resolved
+// workspace.Info; it never re-resolves storage location.
+func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
+	_, err := fmt.Fprintf(w, "workspace: storage_dir=%s workspace_id=%s issue_prefix=%s git_common_dir=%s\n",
+		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix, ws.GitCommonDir)
+	return err
+}
 
 func resolveDoctorAccessMode(args []string) appAccessMode {
 	cmd := &cobra.Command{Use: "doctor"}
@@ -91,6 +104,11 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
+		// The identity header is part of the text rendering only; routing it
+		// through the text closure makes JSON mode structurally unable to emit it.
+		if err := printWorkspaceIdentity(w, ap.Workspace); err != nil {
+			return err
+		}
 		r := v.(store.HealthReport)
 		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
 		return err
