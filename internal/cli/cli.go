@@ -1147,9 +1147,6 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 //	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
 //	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
 //	]
-//
-// YAML support is a follow-up — the indirect yaml.v3 dep would have to become
-// direct, and the spec types already carry yaml struct tags.
 func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("import")
 	path := fs.String("path", "", "Path to JSON tree spec file")

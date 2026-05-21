@@ -15,17 +15,17 @@ import (
 // is opaque — it's used inside the spec to wire Parent and DependsOn refs and
 // is replaced with the generated lit issue ID at import time.
 type ImportTreeSpec struct {
-	LocalID     string   `json:"local_id" yaml:"local_id"`
-	Title       string   `json:"title" yaml:"title"`
-	Description string   `json:"description,omitempty" yaml:"description,omitempty"`
-	Prompt      string   `json:"prompt,omitempty" yaml:"prompt,omitempty"`
-	IssueType   string   `json:"type" yaml:"type"`
-	Topic       string   `json:"topic" yaml:"topic"`
-	Priority    int      `json:"priority" yaml:"priority"`
-	Assignee    string   `json:"assignee,omitempty" yaml:"assignee,omitempty"`
-	Labels      []string `json:"labels,omitempty" yaml:"labels,omitempty"`
-	Parent      string   `json:"parent,omitempty" yaml:"parent,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty" yaml:"depends_on,omitempty"`
+	LocalID     string   `json:"local_id"`
+	Title       string   `json:"title"`
+	Description string   `json:"description,omitempty"`
+	Prompt      string   `json:"prompt,omitempty"`
+	IssueType   string   `json:"type"`
+	Topic       string   `json:"topic"`
+	Priority    int      `json:"priority"`
+	Assignee    string   `json:"assignee,omitempty"`
+	Labels      []string `json:"labels,omitempty"`
+	Parent      string   `json:"parent,omitempty"`
+	DependsOn   []string `json:"depends_on,omitempty"`
 }
 
 // ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a
