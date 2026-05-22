@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"flag"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -159,23 +160,32 @@ func applicationTables(ctx context.Context, db *sql.DB) ([]string, error) {
 	return tables, nil
 }
 
-// showCreateTable returns Dolt's canonical CREATE statement for one table.
+// showCreateTable returns Dolt's canonical CREATE statement for one table. The
+// table name cannot be a bound parameter in SHOW CREATE TABLE, so it is escaped
+// and backtick-quoted — the canonical way to interpolate an identifier, valid
+// for any table name the database reports rather than only backtick-free ones.
 func showCreateTable(ctx context.Context, db *sql.DB, table string) (string, error) {
 	var name, ddl string
-	if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE `"+table+"`").Scan(&name, &ddl); err != nil {
+	quoted := "`" + strings.ReplaceAll(table, "`", "``") + "`"
+	if err := db.QueryRowContext(ctx, "SHOW CREATE TABLE "+quoted).Scan(&name, &ddl); err != nil {
 		return "", err
 	}
 	return ddl, nil
 }
 
 func unifiedSchemaDiff(want, got string) string {
-	out, _ := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
+	out, err := difflib.GetUnifiedDiffString(difflib.UnifiedDiff{
 		A:        difflib.SplitLines(want),
 		B:        difflib.SplitLines(got),
 		FromFile: schemaSnapshotFile + " (checked in)",
 		ToFile:   "live converged schema",
 		Context:  3,
 	})
+	if err != nil {
+		// A failed diff must not collapse to an empty string — the drift would
+		// then be invisible. Surface the error and the full documents instead.
+		return fmt.Sprintf("(unified diff unavailable: %v)\n--- want ---\n%s\n--- got ---\n%s", err, want, got)
+	}
 	return out
 }
 
