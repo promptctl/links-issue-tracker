@@ -16,6 +16,69 @@ import (
 	"github.com/pressly/goose/v3/database"
 )
 
+const migrationCheckpointPrefix    = "pre-migrate"
+const migrationCheckpointRetention = 5
+
+// migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) in
+// applyPendingMigrations. Tests use this to inject migration failures without
+// needing real failing migrations in the embedded registry.
+var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
+
+// CheckpointResetError is returned when a migration body failure triggers an
+// automatic Dolt checkpoint reset. The error message names the checkpoint so
+// the operator can use it as a lightweight forensics anchor alongside the
+// dbsnapshot layer described in the wrapping MigrationRollbackError.
+//
+// [LAW:single-enforcer] The recovery-instruction format lives here so every
+// caller sees the same operator-facing words.
+type CheckpointResetError struct {
+	Version    int64
+	Name       string
+	Checkpoint Checkpoint
+	Cause      error
+}
+
+func (e *CheckpointResetError) Error() string {
+	if e.Version == 0 {
+		return fmt.Sprintf(
+			"migration failed (version unknown): %v\n\n"+
+				"the working set was automatically reset to Dolt checkpoint %q\n"+
+				"restore from the pre-migration recovery snapshot",
+			e.Cause, e.Checkpoint.Name,
+		)
+	}
+	return fmt.Sprintf(
+		"migration v%d %q failed: %v\n\n"+
+			"the working set was automatically reset to Dolt checkpoint %q\n"+
+			"to retry after fixing the migration, clear the quarantine:\n"+
+			"  DELETE FROM migration_quarantine WHERE version = %d",
+		e.Version, e.Name, e.Cause, e.Checkpoint.Name, e.Version,
+	)
+}
+
+func (e *CheckpointResetError) Unwrap() error { return e.Cause }
+
+// QuarantineBlockError is returned when Open finds a pending migration version
+// that has a quarantine record from a previous failed attempt.
+//
+// [LAW:single-enforcer] The quarantine-error format lives here so operator
+// tooling and tests have one place to parse the recovery instructions.
+type QuarantineBlockError struct {
+	Version   int64
+	Name      string
+	ErrorText string // original failure message recorded at quarantine time
+}
+
+func (e *QuarantineBlockError) Error() string {
+	return fmt.Sprintf(
+		"migration v%d %q is quarantined after a previous failure:\n  %s\n\n"+
+			"to recover, either:\n"+
+			"  (a) restore from a dbsnapshot: lit snapshots restore <name>\n"+
+			"  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d",
+		e.Version, e.Name, e.ErrorText, e.Version,
+	)
+}
+
 // gooseVersionTable is goose's history table; its presence is the discriminator
 // between a goose-managed workspace and a pre-goose / fresh one.
 const gooseVersionTable = "goose_db_version"
@@ -113,6 +176,15 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if !state.willMutate() {
 		return nil
 	}
+	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
+	// does not accumulate recovery snapshots on every Open. The check is a no-op
+	// when the table does not exist (phaseFresh — the table is created later).
+	//
+	// [LAW:single-enforcer] The quarantine gate lives here and nowhere else; this
+	// is the only site that calls checkPendingQuarantine.
+	if err := s.quarantineFastFail(ctx, state); err != nil {
+		return err
+	}
 	if _, err := guard.ensure(); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -132,24 +204,76 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 			return fmt.Errorf("commit adoption stamp: %w", err)
 		}
 	}
+	// Ensure the quarantine table exists and is committed before the Dolt
+	// checkpoint is taken inside applyPendingMigrations. This ordering
+	// guarantees the table survives a checkpoint reset: after reset the
+	// working set reverts to the checkpoint state, which already includes
+	// the committed quarantine table.
+	//
+	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
+	// migrations so a goose rollback cannot erase the table it depends on.
+	if err := s.ensureQuarantineTable(ctx); err != nil {
+		return err
+	}
+	if err := s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"); err != nil {
+		return fmt.Errorf("commit quarantine table: %w", err)
+	}
 	return s.applyPendingMigrations(ctx)
 }
 
 // applyPendingMigrations runs each pending migration through goose and records
-// one Dolt commit per applied migration, so `dolt log` carries one entry per
-// schema version.
+// one Dolt commit per applied migration. Before the first migration runs it
+// creates a Dolt checkpoint so a failure can reset the working set. On
+// failure it quarantines the failed version (persisted after the reset) and
+// returns a CheckpointResetError naming both recovery layers.
+//
+// [LAW:single-enforcer] The checkpoint and per-migration commit boundary live
+// here; no other code drives goose.Up or touches Dolt branches for migration
+// purposes. The quarantine check lives in quarantineFastFail (called before
+// the snapshot guard in runMigration) so the gate fires without a snapshot.
+// [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
+// → prune) runs on every call; variability lives in the applied-vs-registry
+// set, not in whether stages execute.
 func (s *Store) applyPendingMigrations(ctx context.Context) error {
+	// Construct the provider before creating the checkpoint so a provider
+	// construction failure leaves no orphaned branch behind.
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
 		return fmt.Errorf("construct migration provider: %w", err)
 	}
+
+	// Create Dolt checkpoint before any mutation. The quarantine table is
+	// already committed (ensureQuarantineTable ran before this call), so
+	// the checkpoint state includes it — the table survives a hard reset.
+	checkpoint, err := s.CreateCheckpoint(ctx, migrationCheckpointPrefix)
+	if err != nil {
+		return fmt.Errorf("create migration checkpoint: %w", err)
+	}
+	upByOne := func(ctx context.Context) (*goose.MigrationResult, error) {
+		if hook := migrationUpByOneForTest; hook != nil {
+			return hook(ctx, provider)
+		}
+		return provider.UpByOne(ctx)
+	}
+
 	for {
-		result, err := provider.UpByOne(ctx)
-		if errors.Is(err, goose.ErrNoNextVersion) {
+		result, gooseErr := upByOne(ctx)
+		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
+			// Success: prune old checkpoints to the retention count.
+			if err := s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention); err != nil {
+				return fmt.Errorf("prune migration checkpoints: %w", err)
+			}
 			return nil
 		}
-		if err != nil {
-			return fmt.Errorf("apply migration: %w", err)
+		if gooseErr != nil {
+			cpErr := s.handleMigrationFailure(ctx, result, gooseErr, checkpoint)
+			// Prune on the failure path too: normal failures insert a quarantine row
+			// so future Opens are blocked before creating a new checkpoint, but
+			// nil-result failures skip quarantine insertion, leaving the door open
+			// for repeated manual retries to accumulate branches. Error ignored —
+			// the migration failure is the primary concern.
+			_ = s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention)
+			return cpErr
 		}
 		// commitWorkingSet (not ...Once) so each migration commit gets the
 		// transient-manifest retry — startup migration is a critical path and a
@@ -159,6 +283,133 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 			return fmt.Errorf("commit migration v%d: %w", result.Source.Version, err)
 		}
 	}
+}
+
+// handleMigrationFailure resets the working set to the pre-migrate checkpoint,
+// records the quarantine row in the post-reset database, and returns a
+// CheckpointResetError naming both recovery surfaces.
+//
+// Ordering: reset first, quarantine second — the reset discards all working-set
+// changes since the checkpoint, but the quarantine table itself was committed
+// before the checkpoint, so it survives and the post-reset INSERT lands cleanly.
+func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, checkpoint Checkpoint) error {
+	var version int64
+	var name string
+	if result != nil && result.Source != nil {
+		version = result.Source.Version
+		name = filepath.Base(result.Source.Path)
+	}
+
+	if resetErr := s.ResetToCheckpoint(ctx, checkpoint.Name); resetErr != nil {
+		return fmt.Errorf(
+			"migration v%d failed and Dolt reset to %q failed (%v); restore from dbsnapshot. Root cause: %w",
+			version, checkpoint.Name, resetErr, cause,
+		)
+	}
+
+	if version > 0 {
+		if recordErr := s.recordQuarantine(ctx, version, name, cause.Error()); recordErr != nil {
+			return fmt.Errorf(
+				"migration v%d failed (reset to %q); quarantine insert failed (%v); restore from dbsnapshot. Root cause: %w",
+				version, checkpoint.Name, recordErr, cause,
+			)
+		}
+		if commitErr := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: quarantine v%d %s", version, name)); commitErr != nil {
+			return fmt.Errorf(
+				"migration v%d failed (reset to %q); quarantine commit failed (%v); restore from dbsnapshot. Root cause: %w",
+				version, checkpoint.Name, commitErr, cause,
+			)
+		}
+	}
+
+	return &CheckpointResetError{
+		Version:    version,
+		Name:       name,
+		Checkpoint: checkpoint,
+		Cause:      cause,
+	}
+}
+
+// ensureQuarantineTable creates migration_quarantine if it does not already
+// exist. The table is created outside the goose migration batch so a goose
+// rollback cannot erase it.
+//
+// [LAW:one-source-of-truth] migration_quarantine is the sole authority on
+// "failed and not to be retried"; it is owned by workspace bootstrap, not
+// by the goose migration log.
+func (s *Store) ensureQuarantineTable(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS migration_quarantine (
+		version    BIGINT NOT NULL,
+		name       TEXT NOT NULL,
+		error_text TEXT NOT NULL,
+		created_at VARCHAR(64) NOT NULL,
+		PRIMARY KEY (version)
+	)`)
+	if err != nil {
+		return fmt.Errorf("ensure migration_quarantine table: %w", err)
+	}
+	return nil
+}
+
+// quarantineFastFail checks for blocking quarantine rows before the snapshot
+// guard fires. It is a no-op when migration_quarantine does not yet exist
+// (phaseFresh — the table is created later inside runMigration).
+//
+// For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
+// migration runs, so the effective applied version is baselineVersion — a
+// quarantine row for the baseline itself must not block after adoption confirms
+// the schema is present.
+//
+// [LAW:single-enforcer] This is the only call site for checkPendingQuarantine.
+// [LAW:dataflow-not-control-flow] The table-exists result is the data that
+// decides behavior; the check always runs when the table is present.
+func (s *Store) quarantineFastFail(ctx context.Context, state migrationState) error {
+	exists, err := s.tableExists(ctx, "migration_quarantine")
+	if err != nil {
+		return fmt.Errorf("migrate: probe quarantine table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	effectiveApplied := state.appliedVersion
+	if state.phase == phaseAdopt {
+		effectiveApplied = baselineVersion
+	}
+	return s.checkPendingQuarantine(ctx, effectiveApplied)
+}
+
+// checkPendingQuarantine returns a QuarantineBlockError if any migration
+// version greater than appliedVersion has a quarantine record.
+func (s *Store) checkPendingQuarantine(ctx context.Context, appliedVersion int64) error {
+	var version int64
+	var name, errorText string
+	err := s.db.QueryRowContext(ctx,
+		`SELECT version, name, error_text FROM migration_quarantine WHERE version > ? ORDER BY version LIMIT 1`,
+		appliedVersion,
+	).Scan(&version, &name, &errorText)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("check pending quarantine: %w", err)
+	}
+	return &QuarantineBlockError{Version: version, Name: name, ErrorText: errorText}
+}
+
+// recordQuarantine upserts a quarantine row for the given migration version.
+// ON DUPLICATE KEY UPDATE handles the case where a previous run already
+// recorded a quarantine row for this version (e.g., operator cleared and
+// retried, failed again).
+func (s *Store) recordQuarantine(ctx context.Context, version int64, name, errorText string) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (?, ?, ?, ?)
+		 ON DUPLICATE KEY UPDATE name = VALUES(name), error_text = VALUES(error_text), created_at = VALUES(created_at)`,
+		version, name, errorText, time.Now().UTC().Format(time.RFC3339Nano),
+	)
+	if err != nil {
+		return fmt.Errorf("record quarantine for v%d: %w", version, err)
+	}
+	return nil
 }
 
 // classifyMigrationState derives the workspace phase using only reads, so a
