@@ -36,7 +36,7 @@ func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (Checkpoint
 	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1`).Scan(&commitSHA); err != nil {
 		return Checkpoint{}, fmt.Errorf("checkpoint: get HEAD hash: %w", err)
 	}
-	ts := time.Now()
+	ts := time.Now().UTC()
 	name := fmt.Sprintf("%s-%d", prefix, ts.UnixNano())
 	if _, err := s.db.ExecContext(ctx, "CALL DOLT_BRANCH(?)", name); err != nil {
 		return Checkpoint{}, fmt.Errorf("checkpoint: create branch %q: %w", name, err)
@@ -129,6 +129,6 @@ func parseCheckpointName(name, prefix string) (Checkpoint, bool) {
 	return Checkpoint{
 		Name:      name,
 		Prefix:    prefix,
-		CreatedAt: time.Unix(0, ns),
+		CreatedAt: time.Unix(0, ns).UTC(),
 	}, true
 }

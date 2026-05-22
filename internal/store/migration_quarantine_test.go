@@ -242,8 +242,10 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 
 // TestMigrationFailureCheckpointPath pins the full failure path: a simulated
 // migration failure creates a Dolt checkpoint, resets the working set, records
-// a quarantine row, and returns a CheckpointResetError. The next Open then
-// returns a QuarantineBlockError because the pending version is quarantined.
+// a quarantine row, and returns a CheckpointResetError wrapped in a
+// MigrationRollbackError. A subsequent Open succeeds (phaseManaged,
+// appliedVersion=registryMax, willMutate=false), and the test verifies the
+// checkpoint branch and quarantine commit persisted across the reset.
 func TestMigrationFailureCheckpointPath(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -453,6 +455,12 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 	}
 	if qErr.Version != 2 {
 		t.Errorf("QuarantineBlockError.Version = %d, want 2", qErr.Version)
+	}
+	// The quarantine fast-fail fires before guard.ensure(), so no recovery
+	// snapshot is created. A MigrationRollbackError wrapper is proof that a
+	// snapshot was taken; its absence pins the no-snapshot-on-quarantine guarantee.
+	if _, ok := asMigrationRollbackError(openErr); ok {
+		t.Errorf("QuarantineBlockError must not be wrapped in MigrationRollbackError; quarantine fast-fail must fire before guard.ensure()")
 	}
 }
 

@@ -176,6 +176,15 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if !state.willMutate() {
 		return nil
 	}
+	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
+	// does not accumulate recovery snapshots on every Open. The check is a no-op
+	// when the table does not exist (phaseFresh — the table is created later).
+	//
+	// [LAW:single-enforcer] The quarantine gate lives here and nowhere else; this
+	// is the only site that calls checkPendingQuarantine.
+	if err := s.quarantineFastFail(ctx, state); err != nil {
+		return err
+	}
 	if _, err := guard.ensure(); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -224,25 +233,14 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 // failure it quarantines the failed version (persisted after the reset) and
 // returns a CheckpointResetError naming both recovery layers.
 //
-// state carries the applied version computed by classifyMigrationState so the
-// quarantine check reuses the already-derived value instead of re-querying
-// the database (which would fail on fresh workspaces where goose_db_version
-// does not yet exist).
-//
-// [LAW:single-enforcer] The checkpoint, quarantine, and per-migration commit
-// boundary all live here; no other code drives goose.Up or touches Dolt
-// branches for migration purposes.
-// [LAW:dataflow-not-control-flow] The same sequence (checkpoint → quarantine
-// check → goose loop → prune) runs on every call; variability lives in the
-// applied-vs-registry set, not in whether stages execute.
+// [LAW:single-enforcer] The checkpoint and per-migration commit boundary live
+// here; no other code drives goose.Up or touches Dolt branches for migration
+// purposes. The quarantine check lives in quarantineFastFail (called before
+// the snapshot guard in runMigration) so the gate fires without a snapshot.
+// [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
+// → prune) runs on every call; variability lives in the applied-vs-registry
+// set, not in whether stages execute.
 func (s *Store) applyPendingMigrations(ctx context.Context, state migrationState) error {
-	// [LAW:one-source-of-truth] appliedVersion was computed by
-	// classifyMigrationState; re-querying here would duplicate the read and
-	// fail for phaseFresh where goose_db_version does not exist yet.
-	if err := s.checkPendingQuarantine(ctx, state.appliedVersion); err != nil {
-		return err
-	}
-
 	// Create Dolt checkpoint before any mutation. The quarantine table is
 	// already committed (ensureQuarantineTable ran before this call), so
 	// the checkpoint state includes it — the table survives a hard reset.
@@ -338,7 +336,7 @@ func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.Migrat
 // by the goose migration log.
 func (s *Store) ensureQuarantineTable(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS migration_quarantine (
-		version    INT NOT NULL,
+		version    BIGINT NOT NULL,
 		name       TEXT NOT NULL,
 		error_text TEXT NOT NULL,
 		created_at VARCHAR(64) NOT NULL,
@@ -348,6 +346,33 @@ func (s *Store) ensureQuarantineTable(ctx context.Context) error {
 		return fmt.Errorf("ensure migration_quarantine table: %w", err)
 	}
 	return nil
+}
+
+// quarantineFastFail checks for blocking quarantine rows before the snapshot
+// guard fires. It is a no-op when migration_quarantine does not yet exist
+// (phaseFresh — the table is created later inside runMigration).
+//
+// For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
+// migration runs, so the effective applied version is baselineVersion — a
+// quarantine row for the baseline itself must not block after adoption confirms
+// the schema is present.
+//
+// [LAW:single-enforcer] This is the only call site for checkPendingQuarantine.
+// [LAW:dataflow-not-control-flow] The table-exists result is the data that
+// decides behavior; the check always runs when the table is present.
+func (s *Store) quarantineFastFail(ctx context.Context, state migrationState) error {
+	exists, err := s.tableExists(ctx, "migration_quarantine")
+	if err != nil {
+		return fmt.Errorf("migrate: probe quarantine table: %w", err)
+	}
+	if !exists {
+		return nil
+	}
+	effectiveApplied := state.appliedVersion
+	if state.phase == phaseAdopt {
+		effectiveApplied = baselineVersion
+	}
+	return s.checkPendingQuarantine(ctx, effectiveApplied)
 }
 
 // checkPendingQuarantine returns a QuarantineBlockError if any migration
