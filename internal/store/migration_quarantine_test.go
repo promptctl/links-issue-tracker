@@ -305,25 +305,40 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 		t.Errorf("error message missing 'lit snapshots restore': %s", msg)
 	}
 
-	// Verify checkpoint branch exists in the repo.
+	// After reset the workspace is phaseManaged (goose_db_version restored by
+	// the checkpoint) with appliedVersion=1=registryMax, so willMutate=false
+	// and this Open succeeds without re-running migrations.
 	secondForList, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
-		// On next Open without the hook, it runs normally (adoption path).
-		// But after the failure, the workspace is at the checkpoint state, so
-		// goose re-runs adoption successfully. This is expected.
+		t.Fatalf("Open after failed migration error = %v", err)
 	}
-	if secondForList != nil {
-		listed, err := secondForList.ListCheckpoints(ctx, migrationCheckpointPrefix)
-		if err != nil {
-			t.Fatalf("ListCheckpoints error = %v", err)
+	defer secondForList.Close()
+
+	// The checkpoint branch created during the failed Open must still exist:
+	// PruneCheckpoints only fires on a successful migration pass, which did
+	// not run on this willMutate=false Open.
+	listed, err := secondForList.ListCheckpoints(ctx, migrationCheckpointPrefix)
+	if err != nil {
+		t.Fatalf("ListCheckpoints error = %v", err)
+	}
+	found := false
+	for _, cp := range listed {
+		if cp.Name == cpErr.Checkpoint.Name {
+			found = true
+			break
 		}
-		_ = secondForList.Close()
-		// At least one checkpoint should exist (created during the failed Open).
-		// After success, it may have been pruned but should still be present
-		// since retention is 5 and only 1 was created.
-		if len(listed) == 0 {
-			t.Log("note: no checkpoints after successful reopen (may have been pruned)")
-		}
+	}
+	if !found {
+		t.Errorf("checkpoint branch %q not found in dolt_branches (listed: %v)", cpErr.Checkpoint.Name, listed)
+	}
+
+	// The top Dolt commit must be the quarantine record written after the reset.
+	var topMessage string
+	if err := secondForList.db.QueryRowContext(ctx, `SELECT message FROM dolt_log() LIMIT 1`).Scan(&topMessage); err != nil {
+		t.Fatalf("query dolt_log error = %v", err)
+	}
+	if !contains(topMessage, "quarantine") {
+		t.Errorf("top dolt commit message %q does not mention quarantine", topMessage)
 	}
 }
 
@@ -382,6 +397,59 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 	}
 	if len(cps) > migrationCheckpointRetention {
 		t.Errorf("checkpoint count = %d, want <= retention=%d", len(cps), migrationCheckpointRetention)
+	}
+}
+
+// TestReopenBlockedByQuarantineOnAdoptionPath pins that Open returns a
+// QuarantineBlockError (inside MigrationRollbackError) when the adoption path
+// (phaseAdopt, appliedVersion=0) encounters a quarantine row for a pending
+// version. This tests criterion 2 end-to-end through Open() itself.
+func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// First Open: bootstrap the workspace (creates quarantine table).
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+
+	// Seed a quarantine row for v1 so checkPendingQuarantine(appliedVersion=0)
+	// finds it on the next adoption-path Open.
+	if err := first.ExecRawForTest(ctx,
+		`INSERT INTO migration_quarantine (version, name, error_text, created_at) VALUES (1, '00001_baseline.sql', 'simulated failure', '2026-01-01T00:00:00Z')`,
+	); err != nil {
+		t.Fatalf("seed quarantine row error = %v", err)
+	}
+	if err := first.commitWorkingSet(ctx, "seed quarantine row for test"); err != nil {
+		t.Fatalf("commit quarantine row error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	// Drop goose history so the next Open classifies as phaseAdopt
+	// (appliedVersion=0). checkPendingQuarantine(0) finds the v1 row and
+	// returns QuarantineBlockError before any migration or checkpoint runs.
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	openErr := func() error {
+		st, err := Open(ctx, doltRoot, "test-workspace-id")
+		if st != nil {
+			_ = st.Close()
+		}
+		return err
+	}()
+	if openErr == nil {
+		t.Fatal("Open() returned nil error; expected QuarantineBlockError")
+	}
+
+	var qErr *QuarantineBlockError
+	if !errors.As(openErr, &qErr) {
+		t.Fatalf("Open() error = %v (%T); expected *QuarantineBlockError in chain", openErr, openErr)
+	}
+	if qErr.Version != 1 {
+		t.Errorf("QuarantineBlockError.Version = %d, want 1", qErr.Version)
 	}
 }
 
