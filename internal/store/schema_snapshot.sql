@@ -87,6 +87,14 @@ CREATE TABLE `meta` (
   PRIMARY KEY (`meta_key`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
 
+CREATE TABLE `migration_quarantine` (
+  `version` bigint NOT NULL,
+  `name` text NOT NULL,
+  `error_text` text NOT NULL,
+  `created_at` varchar(64) NOT NULL,
+  PRIMARY KEY (`version`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_bin;
+
 CREATE TABLE `relations` (
   `src_id` varchar(191) NOT NULL,
   `dst_id` varchar(191) NOT NULL,
