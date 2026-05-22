@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -126,4 +127,115 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 	if present != 0 {
 		t.Fatal("adoption did not delete legacy meta.schema_version key")
 	}
+}
+
+// stampGooseVersionAhead records an applied goose version one past the registry
+// max, simulating a workspace written by a newer binary. It commits the working
+// set so a subsequent Open observes the stamp from the committed working set.
+func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) int64 {
+	t.Helper()
+	registryMax, err := registryMaxVersion()
+	if err != nil {
+		t.Fatalf("registryMaxVersion() error = %v", err)
+	}
+	ahead := registryMax + 1
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(stamp) error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx,
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead,
+	); err != nil {
+		_ = st.Close()
+		t.Fatalf("stamp ahead version error = %v", err)
+	}
+	if err := st.commitWorkingSet(ctx, "stamp ahead version for test"); err != nil {
+		_ = st.Close()
+		t.Fatalf("commit ahead stamp error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(stamp) error = %v", err)
+	}
+	return ahead
+}
+
+// TestOpenRefusesWorkspaceAheadOfBinary pins the forward-compat refusal: a
+// workspace stamped one version past the registry max is refused with a typed
+// error naming both versions, instead of opening silently (the version-ahead
+// path is a willMutate no-op, so without the guard it would slip through).
+func TestOpenRefusesWorkspaceAheadOfBinary(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	if _, err := Open(ctx, doltRoot, "test-workspace-id"); err != nil {
+		t.Fatalf("Open(fresh) error = %v", err)
+	}
+	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
+	registryMax := ahead - 1
+
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		t.Fatal("Open() of workspace-ahead returned nil error; want refusal")
+	}
+	var unsupported *UnsupportedSchemaVersionError
+	if !errors.As(err, &unsupported) {
+		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
+	}
+	if unsupported.WorkspaceVersion != ahead {
+		t.Errorf("WorkspaceVersion = %d, want %d", unsupported.WorkspaceVersion, ahead)
+	}
+	if unsupported.MaxSupported != registryMax {
+		t.Errorf("MaxSupported = %d, want %d", unsupported.MaxSupported, registryMax)
+	}
+}
+
+// TestUnsupportedSchemaVersionMessageShape pins the operator-facing remediation
+// string so it cannot silently regress: it must name both versions and use the
+// forward-only "please upgrade lit" phrasing, never "delete" or "manual SQL".
+func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
+	msg := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
+
+	want := "please upgrade lit (your workspace is at schema version 7; this binary supports up to 3)"
+	if msg != want {
+		t.Fatalf("Error() = %q, want %q", msg, want)
+	}
+	for _, forbidden := range []string{"delete", "DELETE", "manual SQL", "drop", "DROP"} {
+		if strings.Contains(msg, forbidden) {
+			t.Errorf("remediation message contains forbidden phrase %q: %q", forbidden, msg)
+		}
+	}
+}
+
+// TestOpenAllowsWorkspaceExactlyAtMax pins the boundary on the allow side: a
+// workspace stamped exactly at the registry max opens cleanly as a no-op (the
+// guard refuses strictly-greater only).
+func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(fresh) error = %v", err)
+	}
+	registryMax, err := registryMaxVersion()
+	if err != nil {
+		t.Fatalf("registryMaxVersion() error = %v", err)
+	}
+	atMax, err := first.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() error = %v", err)
+	}
+	if atMax != registryMax {
+		t.Fatalf("fresh workspace stamped at %d, want registry max %d", atMax, registryMax)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() of workspace at exactly the max version = %v; want clean open", err)
+	}
+	defer second.Close()
 }
