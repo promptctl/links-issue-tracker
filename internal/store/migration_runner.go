@@ -203,12 +203,6 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		if err := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)); err != nil {
 			return fmt.Errorf("commit adoption stamp: %w", err)
 		}
-		// [LAW:one-source-of-truth] adoption just stamped baselineVersion into
-		// goose_db_version; update the in-memory state so applyPendingMigrations
-		// passes the correct applied version to checkPendingQuarantine. Without
-		// this, appliedVersion stays 0 and a quarantine row for v1 (the baseline
-		// we just confirmed is present) would incorrectly block.
-		state.appliedVersion = baselineVersion
 	}
 	// Ensure the quarantine table exists and is committed before the Dolt
 	// checkpoint is taken inside applyPendingMigrations. This ordering
