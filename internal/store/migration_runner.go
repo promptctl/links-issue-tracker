@@ -16,7 +16,7 @@ import (
 	"github.com/pressly/goose/v3/database"
 )
 
-const migrationCheckpointPrefix    = "pre-migrate"
+const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
 // migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) in
@@ -76,6 +76,28 @@ func (e *QuarantineBlockError) Error() string {
 			"  (a) restore from a dbsnapshot: lit snapshots restore <name>\n"+
 			"  (b) clear the quarantine row (if transient): DELETE FROM migration_quarantine WHERE version = %d",
 		e.Version, e.Name, e.ErrorText, e.Version,
+	)
+}
+
+// UnsupportedSchemaVersionError is returned when Open finds a workspace stamped
+// at a schema version newer than this binary's migration registry can produce.
+// Opening would run the binary against a shape it cannot understand, so migrate
+// refuses before any read or write trusts that schema. Remediation is forward
+// only — upgrade the binary — never "delete the database" or "run manual SQL".
+//
+// [LAW:one-source-of-truth] MaxSupported is registryMaxVersion() — the same
+// value that bounds "pending". There is no second "max supported" constant to
+// drift from the registry, so no startup assertion is needed to keep them
+// coherent: they are the same number.
+type UnsupportedSchemaVersionError struct {
+	WorkspaceVersion int64
+	MaxSupported     int64
+}
+
+func (e *UnsupportedSchemaVersionError) Error() string {
+	return fmt.Sprintf(
+		"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d)",
+		e.WorkspaceVersion, e.MaxSupported,
 	)
 }
 
@@ -172,6 +194,17 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
 		return err
+	}
+	// [LAW:types-are-the-program] A workspace stamped past the registry max is a
+	// shape this binary cannot produce or understand; the two versions are the
+	// discriminator. This refusal precedes the willMutate no-op return because a
+	// workspace-ahead does not mutate — without it, such a workspace would open
+	// silently against an unrecognized schema.
+	if state.appliedVersion > state.registryMaxVers {
+		return &UnsupportedSchemaVersionError{
+			WorkspaceVersion: state.appliedVersion,
+			MaxSupported:     state.registryMaxVers,
+		}
 	}
 	if !state.willMutate() {
 		return nil
