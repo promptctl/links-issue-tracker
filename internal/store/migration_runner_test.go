@@ -160,23 +160,156 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 	return ahead
 }
 
-// TestOpenRefusesWorkspaceAheadOfBinary pins the forward-compat refusal: a
-// workspace stamped one version past the registry max is refused with a typed
-// error naming both versions, instead of opening silently (the version-ahead
-// path is a willMutate no-op, so without the guard it would slip through).
-func TestOpenRefusesWorkspaceAheadOfBinary(t *testing.T) {
+// TestOpenReconcilesAheadOfRegistryWhenBaselineIntact pins the recovery path
+// for the May 23 incident shape: a workspace whose goose_db_version is ahead
+// of this binary's registry but whose live application tables are intact
+// MUST auto-reconcile (trim the bookkeeping log down to the registry max)
+// instead of refusing. Application data is never touched; only the goose
+// rows above registryMax are removed.
+//
+// [LAW:types-are-the-program] The refusal type's MissingBaseline field is
+// the discriminator: this path returns no error because the live schema is
+// intact, so MissingBaseline would be empty. A test for the other branch
+// (corrupt baseline) lives below.
+func TestOpenReconcilesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	if _, err := Open(ctx, doltRoot, "test-workspace-id"); err != nil {
+	fresh, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
 		t.Fatalf("Open(fresh) error = %v", err)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatalf("Close(fresh) error = %v", err)
 	}
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() of recoverable ahead-of-registry workspace returned error = %v; want nil (auto-reconcile)", err)
+	}
+	defer st.Close()
+
+	recorded, err := st.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() error = %v", err)
+	}
+	if recorded != registryMax {
+		t.Errorf("post-reconcile recorded version = %d, want %d (trimmed to registry max)", recorded, registryMax)
+	}
+
+	// Belt-and-suspenders: the ahead row itself must be gone.
+	var aheadCount int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`, registryMax,
+	).Scan(&aheadCount); err != nil {
+		t.Fatalf("query post-reconcile goose rows error = %v", err)
+	}
+	if aheadCount != 0 {
+		t.Errorf("goose_db_version still has %d rows above registry max %d", aheadCount, registryMax)
+	}
+}
+
+// TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt pins the post-DELETE
+// invariant: even if goose_db_version is corrupted (rows at or below registryMax
+// are missing, leaving only the ahead row), reconciliation must leave
+// recordedMigrationVersion equal to registryMaxVers — not 0 or any other value
+// < registryMaxVers. Without the restamp, the next Open would see applied=0
+// and try to re-baseline against an already-initialized schema.
+//
+// [LAW:types-are-the-program] The post-reconcile workspace state must satisfy
+// the invariant "managed at registryMaxVers." This test asserts that invariant
+// holds even when the only goose row at recovery time is the ahead row.
+func TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	fresh, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(fresh) error = %v", err)
+	}
+	if err := fresh.Close(); err != nil {
+		t.Fatalf("Close(fresh) error = %v", err)
+	}
+	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
+	registryMax := ahead - 1
+
+	corrupt, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(corrupt-setup) error = %v; want nil — reconcile ran on prior Open", err)
+	}
+	// Drop every row <= registryMax so the only goose row left is the ahead one
+	// — simulating a workspace whose bookkeeping was corrupted before recovery.
+	// (The previous Open already trimmed the ahead row, so re-insert it.)
+	if err := corrupt.ExecRawForTest(ctx,
+		`DELETE FROM goose_db_version WHERE version_id <= ?`, registryMax,
+	); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("corrupt goose history error = %v", err)
+	}
+	if err := corrupt.ExecRawForTest(ctx,
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead,
+	); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("re-insert ahead row error = %v", err)
+	}
+	if err := corrupt.commitWorkingSet(ctx, "test: corrupt goose history"); err != nil {
+		_ = corrupt.Close()
+		t.Fatalf("commit corruption error = %v", err)
+	}
+	if err := corrupt.Close(); err != nil {
+		t.Fatalf("Close(corrupt) error = %v", err)
+	}
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() of corrupt-but-recoverable workspace returned error = %v; want nil", err)
+	}
+	defer st.Close()
+
+	recorded, err := st.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() error = %v", err)
+	}
+	if recorded != registryMax {
+		t.Errorf("post-reconcile recorded version = %d, want %d (restamped after empty DELETE)", recorded, registryMax)
+	}
+}
+
+// TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt pins the refusal branch:
+// when goose is ahead AND the live baseline shape is genuinely missing
+// (e.g. a baseline column was dropped), Open MUST refuse with the
+// MissingBaseline field populated so the operator can see what the binary
+// cannot operate against. This is the only path that still surfaces
+// UnsupportedSchemaVersionError.
+func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(fresh) error = %v", err)
+	}
+	// Drop a baseline column to simulate genuine schema corruption.
+	if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN title`); err != nil {
+		_ = first.Close()
+		t.Fatalf("drop baseline column error = %v", err)
+	}
+	if err := first.commitWorkingSet(ctx, "test: corrupt baseline shape"); err != nil {
+		_ = first.Close()
+		t.Fatalf("commit corruption error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
+	registryMax := ahead - 1
+
+	_, err = Open(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
-		t.Fatal("Open() of workspace-ahead returned nil error; want refusal")
+		t.Fatal("Open() of corrupt-baseline ahead-of-registry workspace returned nil; want refusal")
 	}
 	var unsupported *UnsupportedSchemaVersionError
 	if !errors.As(err, &unsupported) {
@@ -188,11 +321,26 @@ func TestOpenRefusesWorkspaceAheadOfBinary(t *testing.T) {
 	if unsupported.MaxSupported != registryMax {
 		t.Errorf("MaxSupported = %d, want %d", unsupported.MaxSupported, registryMax)
 	}
+	if len(unsupported.MissingBaseline) == 0 {
+		t.Error("MissingBaseline empty; want at least one entry naming the dropped column")
+	}
+	found := false
+	for _, m := range unsupported.MissingBaseline {
+		if strings.Contains(m, "issues.title") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("MissingBaseline = %v, want an entry naming issues.title", unsupported.MissingBaseline)
+	}
 }
 
 // TestUnsupportedSchemaVersionMessageShape pins the operator-facing remediation
 // string so it cannot silently regress: it must name both versions and use the
 // forward-only "please upgrade lit" phrasing, never "delete" or "manual SQL".
+// When MissingBaseline is populated, the message additionally surfaces the
+// schema gaps so the operator can diagnose the genuine-incompatibility branch.
 func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	msg := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
 
@@ -204,6 +352,18 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 		if strings.Contains(msg, forbidden) {
 			t.Errorf("remediation message contains forbidden phrase %q: %q", forbidden, msg)
 		}
+	}
+
+	withGaps := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion: 7,
+		MaxSupported:     3,
+		MissingBaseline:  []string{"issues.title", "comments"},
+	}).Error()
+	if !strings.Contains(withGaps, "please upgrade lit") {
+		t.Errorf("MissingBaseline message lost the forward-only remediation phrasing: %q", withGaps)
+	}
+	if !strings.Contains(withGaps, "issues.title") || !strings.Contains(withGaps, "comments") {
+		t.Errorf("MissingBaseline message did not name the schema gaps: %q", withGaps)
 	}
 }
 
