@@ -99,6 +99,97 @@ func TestDepAddRmWithPositionalArgs(t *testing.T) {
 	}
 }
 
+func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	siblingA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "A", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(siblingA) error = %v", err)
+	}
+	siblingB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(siblingB) error = %v", err)
+	}
+
+	wantMsg := "Do not set 'blocks' relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "sibling positional", args: []string{"add", "--type", "blocks", siblingA.ID, siblingB.ID}},
+		{name: "sibling named flags", args: []string{"add", "--type", "blocks", "--blocker", siblingA.ID, "--blocked", siblingB.ID}},
+		{name: "epic blocks its own child", args: []string{"add", "--type", "blocks", epic.ID, siblingA.ID}},
+		{name: "epic blocked by its own child", args: []string{"add", "--type", "blocks", siblingA.ID, epic.ID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			err := runDep(ctx, &stdout, ap, tc.args)
+			if err == nil {
+				t.Fatalf("dep add should reject same-epic block, got nil; stdout=%q", stdout.String())
+			}
+			if err.Error() != wantMsg {
+				t.Fatalf("error = %q, want %q", err.Error(), wantMsg)
+			}
+		})
+	}
+}
+
+func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	epicA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicA) error = %v", err)
+	}
+	epicB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicB) error = %v", err)
+	}
+	childOfA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(childOfA) error = %v", err)
+	}
+	childOfB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "dep", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	if err != nil {
+		t.Fatalf("CreateIssue(childOfB) error = %v", err)
+	}
+	floatA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Float A", Topic: "dep", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(floatA) error = %v", err)
+	}
+	floatB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Float B", Topic: "dep", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(floatB) error = %v", err)
+	}
+
+	cases := []struct {
+		name string
+		args []string
+	}{
+		{name: "child of A blocks child of B", args: []string{"add", "--type", "blocks", childOfA.ID, childOfB.ID}},
+		{name: "epic A blocks child of B", args: []string{"add", "--type", "blocks", epicA.ID, childOfB.ID}},
+		{name: "epic A blocks epic B", args: []string{"add", "--type", "blocks", epicA.ID, epicB.ID}},
+		{name: "floating blocks floating", args: []string{"add", "--type", "blocks", floatA.ID, floatB.ID}},
+		{name: "floating blocks child of B", args: []string{"add", "--type", "blocks", floatA.ID, childOfB.ID}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var stdout bytes.Buffer
+			if err := runDep(ctx, &stdout, ap, tc.args); err != nil {
+				t.Fatalf("dep add cross-epic case %q errored = %v", tc.name, err)
+			}
+		})
+	}
+}
+
 func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
