@@ -130,18 +130,24 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 }
 
 // withStore opens the workspace, runs body on the live Store, and closes
-// unconditionally — so each test body reads as straight-line SQL with no
-// teardown ladder. [LAW:dataflow-not-control-flow] cleanup is one defer that
-// always fires, not an `if err != nil { _ = Close() }` site at every call.
-// [LAW:single-enforcer] this is the one place tests open a Store; bodies
-// never call Open themselves and never call Close themselves.
+// unconditionally — so the recovery test bodies that use it read as
+// straight-line SQL with no teardown ladder. [LAW:dataflow-not-control-flow]
+// cleanup is one defer that always fires, not an `if err != nil { _ = Close() }`
+// site at every call. Other tests in this file (TestFreshOpenStampsBaselineVersion,
+// TestPreGooseAdoption*) predate this helper and still call Open directly; they
+// can migrate opportunistically. The deferred Close() asserts its own error so
+// driver/shutdown failures don't get swallowed silently.
 func withStore(t *testing.T, ctx context.Context, doltRoot string, body func(*Store)) {
 	t.Helper()
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	defer st.Close()
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
 	body(st)
 }
 
@@ -235,9 +241,12 @@ func TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt(t *testing.T) {
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	// The prior Open inside stampGooseVersionAhead already reconciled (trimmed
-	// the ahead row); corrupt the history by deleting every row <= registryMax
-	// and re-inserting the ahead row, so the next Open sees only the ahead row.
+	// stampGooseVersionAhead inserted the ahead row but did not reconcile (no
+	// subsequent Open ran). The withStore below opens the workspace, which
+	// invokes recovery and trims the ahead row before the body runs. Inside
+	// the body, delete every row <= registryMax and re-insert the ahead row,
+	// so the next Open sees only the ahead row — the corruption shape the
+	// post-DELETE restamp invariant is meant to handle.
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id <= ?`, registryMax)
 		mustExec(t, ctx, st, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead)
