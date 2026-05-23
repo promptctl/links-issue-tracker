@@ -44,6 +44,14 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if fromID == toID {
 			return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
 		}
+		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
+		// boundary so the store stays a thin substrate. Within one epic, rank is
+		// the canonical ordering; a 'blocks' edge would duplicate that signal.
+		if strings.TrimSpace(*relType) == "blocks" {
+			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
+				return err
+			}
+		}
 		srcID, dstID := depStoreEndpoints(*relType, fromID, toID)
 		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: *relType, CreatedBy: *by})
 		if err != nil {
@@ -155,6 +163,45 @@ func depRelationForCLI(rel model.Relation) model.Relation {
 	}
 	rel.SrcID, rel.DstID = rel.DstID, rel.SrcID
 	return rel
+}
+
+// [LAW:one-source-of-truth] The rejection text is part of the user-facing CLI
+// contract and is asserted verbatim in tests; both sites read it from here so
+// they cannot drift.
+const sameEpicBlocksRejectionMessage = "Do not set 'blocks' relationships between two issues in the same epic.  Use rank to specify that one issue must be completed before another issue"
+
+// rejectSameEpicBlocks errors when both endpoints resolve to the same epic
+// membership.
+func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string) error {
+	fromEpic, err := issueEpicID(ctx, ap, fromID)
+	if err != nil {
+		return err
+	}
+	toEpic, err := issueEpicID(ctx, ap, toID)
+	if err != nil {
+		return err
+	}
+	if fromEpic != "" && fromEpic == toEpic {
+		return errors.New(sameEpicBlocksRejectionMessage)
+	}
+	return nil
+}
+
+// issueEpicID returns the issue's epic membership for the same-epic check:
+// its own ID if it is a container (epic), its parent ID if the parent is a
+// container, otherwise "" (floating — not a member of any epic).
+func issueEpicID(ctx context.Context, ap *app.App, issueID string) (string, error) {
+	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+	if err != nil {
+		return "", err
+	}
+	if detail.Issue.IsContainer() {
+		return detail.Issue.ID, nil
+	}
+	if detail.Parent != nil && detail.Parent.IsContainer() {
+		return detail.Parent.ID, nil
+	}
+	return "", nil
 }
 
 func depRelationLine(rel model.Relation) string {
