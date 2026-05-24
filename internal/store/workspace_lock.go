@@ -28,10 +28,20 @@ import (
 // of latent. Cross-process semantics are enforced by the kernel; per-Store
 // FDs make the same semantics hold inside one process for free.
 
-var errWorkspaceBusy = errors.New("workspace lock contention")
+// ErrWorkspaceBusy is the sentinel every workspace-lock contention error
+// wraps. Callers detect contention with errors.Is(err, ErrWorkspaceBusy)
+// regardless of the specific operator-facing message attached.
+//
+// [LAW:one-source-of-truth] One sentinel for "lock is held by someone else";
+// the wrapping messages differ to give context-appropriate guidance, but the
+// programmatic discriminator is uniform.
+var ErrWorkspaceBusy = errors.New("workspace busy")
 
 const (
-	workspaceSharedRetryAttempts = 100 // 100 * 50ms = 5s wall-clock cap
+	// ~5s wall-clock cap: 100 attempts with 99 inter-attempt sleeps of 50ms
+	// (the loop skips the sleep after the final attempt because there's
+	// nothing to wait for).
+	workspaceSharedRetryAttempts = 100
 	workspaceSharedRetryDelay    = 50 * time.Millisecond
 )
 
@@ -55,8 +65,8 @@ func WorkspaceLockPath(databasePath string) string {
 // a clear "workspace busy" error after the budget elapses.
 func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, syscall.LOCK_SH, workspaceSharedRetryAttempts, workspaceSharedRetryDelay)
-	if errors.Is(err, errWorkspaceBusy) {
-		return nil, fmt.Errorf("workspace busy: lit snapshots restore is rotating the Dolt directory; retry after it completes")
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return nil, fmt.Errorf("%w: lit snapshots restore is rotating the Dolt directory; retry after it completes", ErrWorkspaceBusy)
 	}
 	return release, err
 }
@@ -71,8 +81,8 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 // hold without reconstructing the lock path; no other code should call this.
 func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, syscall.LOCK_EX, 1, 0)
-	if errors.Is(err, errWorkspaceBusy) {
-		return nil, fmt.Errorf("workspace busy: another lit process is using this workspace; close other lit commands and retry")
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return nil, fmt.Errorf("%w: another lit process is using this workspace; close other lit commands and retry", ErrWorkspaceBusy)
 	}
 	return release, err
 }
@@ -112,5 +122,5 @@ func acquireWorkspaceLock(ctx context.Context, doltRootDir string, lockType, max
 		}
 	}
 	_ = file.Close()
-	return nil, errWorkspaceBusy
+	return nil, ErrWorkspaceBusy
 }

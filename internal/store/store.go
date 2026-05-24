@@ -160,7 +160,7 @@ type TransitionIssueInput struct {
 	Assignee string
 }
 
-func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -173,26 +173,41 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, 
 	if err != nil {
 		return nil, err
 	}
-	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
-		_ = release()
+	// [LAW:no-silent-fallbacks] On any failure path before the Store owns
+	// the lock, release the hold AND surface a release error via the named
+	// return — a leaked shared hold would block subsequent restores with
+	// workspace-busy from a vanished caller. success guards the happy path
+	// so the lock survives in the returned Store.
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
-		_ = release()
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
-	if err := s.withCommitLock(ctx, s.migrate); err != nil {
-		_ = s.db.Close()
-		_ = release()
+	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
 		return nil, err
 	}
+	success = true
 	return s, nil
 }
 
-func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -205,23 +220,33 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*
 	if err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(doltRootDir); errors.Is(err, os.ErrNotExist) {
-		_ = release()
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	if _, statErr := os.Stat(doltRootDir); errors.Is(statErr, os.ErrNotExist) {
 		return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
-		_ = release()
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
 	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
 	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
-	if err := s.withCommitLock(ctx, s.migrate); err != nil {
-		_ = s.db.Close()
-		_ = release()
+	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
 		return nil, err
 	}
+	success = true
 	return s, nil
 }
 
@@ -259,12 +284,14 @@ func (s *Store) Close() error {
 	// [LAW:dataflow-not-control-flow] Workspace lock release runs on every
 	// Close, regardless of whether the DB closed cleanly — the shared hold
 	// must end with the Store's lifetime so a subsequent restore is not
-	// pinned by a dead Store.
+	// pinned by a dead Store. errors.Join keeps both failures observable
+	// when db.Close and release both fail; a leaked workspace lock would
+	// silently block every future restore with workspace-busy.
 	if s.releaseWorkspaceLock != nil {
 		release := s.releaseWorkspaceLock
 		s.releaseWorkspaceLock = nil
-		if relErr := release(); relErr != nil && err == nil {
-			err = relErr
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
 		}
 	}
 	return err

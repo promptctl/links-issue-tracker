@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"runtime/debug"
 	"strings"
@@ -44,7 +45,7 @@ type SyncPushResult struct {
 	Message string `json:"message"`
 }
 
-func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if strings.TrimSpace(doltRootDir) == "" {
 		return nil, fmt.Errorf("dolt root dir is required")
 	}
@@ -62,17 +63,25 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (*Sto
 	if err != nil {
 		return nil, err
 	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
-		_ = release()
+	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
-		_ = release()
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	success = true
 	return s, nil
 }
 

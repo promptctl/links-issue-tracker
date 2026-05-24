@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -134,6 +135,56 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 	}
 	if err := release(); err != nil {
 		t.Fatalf("release exclusive error = %v", err)
+	}
+}
+
+// TestWorkspaceBusyErrorsWrapSentinel pins the contract that every
+// workspace-busy error from the public helpers wraps ErrWorkspaceBusy so
+// callers can detect contention with errors.Is — independent of the
+// operator-facing message attached to the specific failure mode.
+//
+// [LAW:one-source-of-truth] One sentinel; the wrapping message varies for
+// context, but the discriminator is uniform.
+func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("bootstrap Open() error = %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("bootstrap Close() error = %v", err)
+	}
+
+	// Hold exclusive to force a workspace-busy refusal from acquireWorkspaceShared.
+	exclusive, err := LockWorkspaceExclusive(ctx, doltRoot)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive() error = %v", err)
+	}
+	shortCtx, cancel := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer cancel()
+	_, sharedErr := acquireWorkspaceShared(shortCtx, doltRoot)
+	if sharedErr == nil {
+		t.Fatal("acquireWorkspaceShared succeeded under exclusive hold; expected refusal")
+	}
+	if !errors.Is(sharedErr, ErrWorkspaceBusy) && !strings.Contains(sharedErr.Error(), "deadline exceeded") {
+		t.Fatalf("acquireWorkspaceShared error %v does not wrap ErrWorkspaceBusy (and isn't a context deadline)", sharedErr)
+	}
+	_ = exclusive()
+
+	// Now hold shared and verify LockWorkspaceExclusive's refusal wraps the sentinel.
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open under no contention error = %v", err)
+	}
+	defer st.Close()
+	_, exclErr := LockWorkspaceExclusive(ctx, doltRoot)
+	if exclErr == nil {
+		t.Fatal("LockWorkspaceExclusive succeeded while shared held; expected refusal")
+	}
+	if !errors.Is(exclErr, ErrWorkspaceBusy) {
+		t.Fatalf("LockWorkspaceExclusive error %v does not wrap ErrWorkspaceBusy", exclErr)
 	}
 }
 
