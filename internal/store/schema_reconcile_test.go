@@ -439,6 +439,72 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	}
 }
 
+// TestReconcileCreatedTablesMatchBaselineConstraintNames pins that a
+// reconcile-built issues / relations table carries the deterministic
+// CHECK constraint names defined in 00001_baseline.sql. If reconcile
+// ever has to CREATE these tables (synthetic shape: meta-but-no-issues),
+// the result must be byte-equivalent to a baseline-applied workspace —
+// otherwise the schema-drift canary breaks and any future migration
+// that references the constraint name fails.
+//
+// [LAW:one-source-of-truth] Both creators (goose applying baseline.sql,
+// reconcile via createIssuesTableStmt) produce the same constraint
+// names; this test pins them in lockstep so silent drift surfaces.
+func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Bootstrap to lay down storage and a `links` database, then strip
+	// EVERY canonical table except meta. The reconcile must then CREATE
+	// issues, relations, comments, labels, issue_events, issue_event_changes.
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	// FK-aware drop order: dependents before parents.
+	stmts := []string{
+		`DROP TABLE issue_event_changes`,
+		`DROP TABLE issue_events`,
+		`DROP TABLE labels`,
+		`DROP TABLE comments`,
+		`DROP TABLE relations`,
+		`DROP TABLE issues`,
+	}
+	for _, stmt := range stmts {
+		if err := first.ExecRawForTest(ctx, stmt); err != nil {
+			_ = first.Close()
+			t.Fatalf("drop %q error = %v", stmt, err)
+		}
+	}
+	// Force phaseAdopt: leave meta in place so verifyBaselineShape sees
+	// >0 canonical tables present, then strip goose so adoption fires.
+	hijackToPreGoose(t, first)
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	st := assertReachedBaseline(t, doltRoot)
+
+	// Probe the actual constraint names reconcile installed. They must
+	// match the names defined in 00001_baseline.sql.
+	expected := []string{
+		"issues_status_check",
+		"issues_priority_check",
+		"issues_type_check",
+		"relations_type_check",
+	}
+	for _, name := range expected {
+		var marker int
+		err := st.db.QueryRowContext(ctx,
+			`SELECT 1 FROM information_schema.table_constraints WHERE table_schema = DATABASE() AND constraint_name = ? AND constraint_type = 'CHECK' LIMIT 1`,
+			name,
+		).Scan(&marker)
+		if err != nil {
+			t.Errorf("constraint %q missing after reconcile-built create — drift canary will fail: %v", name, err)
+		}
+	}
+}
+
 // TestReconcileErrorMessageIsActionable pins the contract that the
 // reconcile, when it cannot bring a shape forward, names the specific
 // operation it failed on. The deleted code's failure message was

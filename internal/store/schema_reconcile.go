@@ -84,15 +84,22 @@ var priorityCheckClause = fmt.Sprintf("priority >= %d AND priority <= %d", model
 const canonicalStatusCheckClause = `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
 
 // createIssuesTableStmt is the v1 canonical shape of the issues table.
-// Mirrors the issues table in 00001_baseline.sql. [LAW:one-source-of-truth]
-// — the two definitions are kept in sync; the schema-drift canary
-// (sxsk.4) catches divergence in CI.
+// Mirrors the issues table in 00001_baseline.sql exactly, including
+// every column (item_rank in particular) and the deterministic
+// constraint names. A reconcile-built issues table must be
+// byte-equivalent to a baseline-applied one or the schema-drift canary
+// (sxsk.4) breaks and downstream migrations that reference the
+// constraint names fail.
+//
+// [LAW:one-source-of-truth] The two definitions (here and
+// 00001_baseline.sql) are kept in sync; the drift canary catches
+// divergence in CI.
 func createIssuesTableStmt() string {
 	return fmt.Sprintf(`CREATE TABLE issues (
 			id VARCHAR(191) PRIMARY KEY,
 			title TEXT NOT NULL,
 			description TEXT NOT NULL,
-			agent_prompt TEXT,
+			agent_prompt TEXT NULL,
 			status VARCHAR(32) NULL,
 			priority INT NOT NULL,
 			issue_type VARCHAR(32) NOT NULL,
@@ -103,9 +110,10 @@ func createIssuesTableStmt() string {
 			closed_at VARCHAR(64) NULL,
 			archived_at VARCHAR(64) NULL,
 			deleted_at VARCHAR(64) NULL,
-			CHECK(%s),
-			CHECK(%s),
-			CHECK(issue_type IN ('task','feature','bug','chore','epic'))
+			item_rank TEXT NOT NULL DEFAULT '',
+			CONSTRAINT issues_status_check CHECK (%s),
+			CONSTRAINT issues_priority_check CHECK (%s),
+			CONSTRAINT issues_type_check CHECK (issue_type IN ('task','feature','bug','chore','epic'))
 		);`, canonicalStatusCheckClause, priorityCheckClause)
 }
 
@@ -140,7 +148,7 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 			PRIMARY KEY (src_id, dst_id, type),
 			FOREIGN KEY (src_id) REFERENCES issues(id) ON DELETE CASCADE,
 			FOREIGN KEY (dst_id) REFERENCES issues(id) ON DELETE CASCADE,
-			CHECK(type IN ('blocks','parent-child','related-to'))
+			CONSTRAINT relations_type_check CHECK (type IN ('blocks','parent-child','related-to'))
 		);`},
 		{target: "comments", stmt: `CREATE TABLE comments (
 			id VARCHAR(191) PRIMARY KEY,
