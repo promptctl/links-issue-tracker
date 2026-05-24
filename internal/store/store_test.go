@@ -1424,14 +1424,24 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
-// TestOpenForReadRefusesPartialPreGooseSchema pins the adoption gate's refusal
-// contract: a workspace carrying SOME canonical tables but missing others, and
-// with no goose history, must NOT be silently stamped at baseline — it fails
-// loudly naming the missing tables. Exercised via OpenForRead; Open shares the
-// same migrate -> classifyMigrationState path, so the contract holds for both.
-// This is the PR #119 bug-class fix — its adoption stamped baseline on
-// workspaces that were not actually at baseline.
-func TestOpenForReadRefusesPartialPreGooseSchema(t *testing.T) {
+// TestOpenForReadRefusesUnreconcilableShape pins the contract that a
+// workspace whose shape is structurally beyond any prior canonical state
+// (here, an issues table with ONLY an id column — no title, no status, no
+// description; far worse than any real historical shape ever had) cannot be
+// forward-migrated and produces a SPECIFIC error naming the actual reconcile
+// failure.
+//
+// Compare to the historical canonical shapes the reconcile handles
+// (TestOpenForwardMigratesPreConvergedColumnShape etc.) which forward-migrate
+// to v1. The discriminator is: a workspace that the reconcile's
+// probe-then-DDL sequence cannot fix produces a specific structural error,
+// not the now-removed "restore from snapshot or recreate" data-destroying
+// guidance.
+//
+// [LAW:no-silent-fallbacks] An unrecoverable shape produces a specific
+// error naming the exact missing piece (here, the status column that
+// idx_issues_status_priority depends on), not a vague refusal.
+func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1442,10 +1452,12 @@ func TestOpenForReadRefusesPartialPreGooseSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
-	// Only the issues table exists; the other six baseline tables are absent.
+	// A structurally impossible issues table: no real workspace shape ever
+	// had issues without status/title/description. Reconcile cannot create
+	// idx_issues_status_priority because it indexes the missing status column.
 	if _, err := seed.db.ExecContext(ctx, `CREATE TABLE issues (id VARCHAR(191) PRIMARY KEY)`); err != nil {
 		_ = seed.Close()
-		t.Fatalf("create partial schema error = %v", err)
+		t.Fatalf("create unreconcilable schema error = %v", err)
 	}
 	if err := seed.Close(); err != nil {
 		t.Fatalf("seed Close() error = %v", err)
@@ -1453,13 +1465,16 @@ func TestOpenForReadRefusesPartialPreGooseSchema(t *testing.T) {
 
 	_, err = OpenForRead(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
-		t.Fatal("OpenForRead() on a partial pre-goose schema returned nil error; expected refusal")
+		t.Fatal("OpenForRead() on an unreconcilable schema returned nil error; expected a specific structural error")
 	}
-	if !strings.Contains(err.Error(), "partial schema") {
-		t.Fatalf("error %q does not explain the partial-schema refusal", err)
+	// The error must name what reconcile couldn't do — not a vague "partial"
+	// or "restore from snapshot" message. The specific failure is that the
+	// status column is missing and an index depending on it can't be created.
+	if !strings.Contains(err.Error(), "status") {
+		t.Fatalf("error %q does not name the structural anomaly (missing status column)", err)
 	}
-	if !strings.Contains(err.Error(), "meta") {
-		t.Fatalf("error %q does not name a missing baseline table", err)
+	if strings.Contains(err.Error(), "restore it from a snapshot or recreate") {
+		t.Fatalf("error %q still contains the data-destroying refusal guidance that was removed", err)
 	}
 }
 
