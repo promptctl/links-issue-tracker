@@ -129,6 +129,45 @@ func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
 	}
 }
 
+// withStore opens the workspace, runs body on the live Store, and closes
+// unconditionally — so the recovery test bodies that use it read as
+// straight-line SQL with no teardown ladder. [LAW:dataflow-not-control-flow]
+// cleanup is one defer that always fires, not an `if err != nil { _ = Close() }`
+// site at every call. Other tests in this file (TestFreshOpenStampsBaselineVersion,
+// TestPreGooseAdoption*) predate this helper and still call Open directly; they
+// can migrate opportunistically. The deferred Close() asserts its own error so
+// driver/shutdown failures don't get swallowed silently.
+func withStore(t *testing.T, ctx context.Context, doltRoot string, body func(*Store)) {
+	t.Helper()
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("Close() error = %v", err)
+		}
+	}()
+	body(st)
+}
+
+// mustExec runs a raw SQL exec, failing the test on error. It exists so that
+// test bodies read as a sequence of SQL statements, not a tower of `if err`.
+func mustExec(t *testing.T, ctx context.Context, st *Store, q string, args ...any) {
+	t.Helper()
+	if err := st.ExecRawForTest(ctx, q, args...); err != nil {
+		t.Fatalf("exec %q: %v", q, err)
+	}
+}
+
+// mustCommit commits the working set, failing the test on error.
+func mustCommit(t *testing.T, ctx context.Context, st *Store, msg string) {
+	t.Helper()
+	if err := st.commitWorkingSet(ctx, msg); err != nil {
+		t.Fatalf("commit %q: %v", msg, err)
+	}
+}
+
 // stampGooseVersionAhead records an applied goose version one past the registry
 // max, simulating a workspace written by a newer binary. It commits the working
 // set so a subsequent Open observes the stamp from the committed working set.
@@ -139,24 +178,10 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 		t.Fatalf("registryMaxVersion() error = %v", err)
 	}
 	ahead := registryMax + 1
-
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(stamp) error = %v", err)
-	}
-	if err := st.ExecRawForTest(ctx,
-		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead,
-	); err != nil {
-		_ = st.Close()
-		t.Fatalf("stamp ahead version error = %v", err)
-	}
-	if err := st.commitWorkingSet(ctx, "stamp ahead version for test"); err != nil {
-		_ = st.Close()
-		t.Fatalf("commit ahead stamp error = %v", err)
-	}
-	if err := st.Close(); err != nil {
-		t.Fatalf("Close(stamp) error = %v", err)
-	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		mustExec(t, ctx, st, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead)
+		mustCommit(t, ctx, st, "stamp ahead version for test")
+	})
 	return ahead
 }
 
@@ -175,40 +200,28 @@ func TestOpenReconcilesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	fresh, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(fresh) error = %v", err)
-	}
-	if err := fresh.Close(); err != nil {
-		t.Fatalf("Close(fresh) error = %v", err)
-	}
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() of recoverable ahead-of-registry workspace returned error = %v; want nil (auto-reconcile)", err)
-	}
-	defer st.Close()
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		recorded, err := st.recordedMigrationVersion(ctx)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		if recorded != registryMax {
+			t.Errorf("post-reconcile recorded version = %d, want %d (trimmed to registry max)", recorded, registryMax)
+		}
 
-	recorded, err := st.recordedMigrationVersion(ctx)
-	if err != nil {
-		t.Fatalf("recordedMigrationVersion() error = %v", err)
-	}
-	if recorded != registryMax {
-		t.Errorf("post-reconcile recorded version = %d, want %d (trimmed to registry max)", recorded, registryMax)
-	}
-
-	// Belt-and-suspenders: the ahead row itself must be gone.
-	var aheadCount int
-	if err := st.db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`, registryMax,
-	).Scan(&aheadCount); err != nil {
-		t.Fatalf("query post-reconcile goose rows error = %v", err)
-	}
-	if aheadCount != 0 {
-		t.Errorf("goose_db_version still has %d rows above registry max %d", aheadCount, registryMax)
-	}
+		var aheadCount int
+		if err := st.db.QueryRowContext(ctx,
+			`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`, registryMax,
+		).Scan(&aheadCount); err != nil {
+			t.Fatalf("query post-reconcile goose rows error = %v", err)
+		}
+		if aheadCount != 0 {
+			t.Errorf("goose_db_version still has %d rows above registry max %d", aheadCount, registryMax)
+		}
+	})
 }
 
 // TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt pins the post-DELETE
@@ -225,56 +238,30 @@ func TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	fresh, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(fresh) error = %v", err)
-	}
-	if err := fresh.Close(); err != nil {
-		t.Fatalf("Close(fresh) error = %v", err)
-	}
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	corrupt, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(corrupt-setup) error = %v; want nil — reconcile ran on prior Open", err)
-	}
-	// Drop every row <= registryMax so the only goose row left is the ahead one
-	// — simulating a workspace whose bookkeeping was corrupted before recovery.
-	// (The previous Open already trimmed the ahead row, so re-insert it.)
-	if err := corrupt.ExecRawForTest(ctx,
-		`DELETE FROM goose_db_version WHERE version_id <= ?`, registryMax,
-	); err != nil {
-		_ = corrupt.Close()
-		t.Fatalf("corrupt goose history error = %v", err)
-	}
-	if err := corrupt.ExecRawForTest(ctx,
-		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead,
-	); err != nil {
-		_ = corrupt.Close()
-		t.Fatalf("re-insert ahead row error = %v", err)
-	}
-	if err := corrupt.commitWorkingSet(ctx, "test: corrupt goose history"); err != nil {
-		_ = corrupt.Close()
-		t.Fatalf("commit corruption error = %v", err)
-	}
-	if err := corrupt.Close(); err != nil {
-		t.Fatalf("Close(corrupt) error = %v", err)
-	}
+	// stampGooseVersionAhead inserted the ahead row but did not reconcile (no
+	// subsequent Open ran). The withStore below opens the workspace, which
+	// invokes recovery and trims the ahead row before the body runs. Inside
+	// the body, delete every row <= registryMax and re-insert the ahead row,
+	// so the next Open sees only the ahead row — the corruption shape the
+	// post-DELETE restamp invariant is meant to handle.
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id <= ?`, registryMax)
+		mustExec(t, ctx, st, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead)
+		mustCommit(t, ctx, st, "test: corrupt goose history")
+	})
 
-	st, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open() of corrupt-but-recoverable workspace returned error = %v; want nil", err)
-	}
-	defer st.Close()
-
-	recorded, err := st.recordedMigrationVersion(ctx)
-	if err != nil {
-		t.Fatalf("recordedMigrationVersion() error = %v", err)
-	}
-	if recorded != registryMax {
-		t.Errorf("post-reconcile recorded version = %d, want %d (restamped after empty DELETE)", recorded, registryMax)
-	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		recorded, err := st.recordedMigrationVersion(ctx)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		if recorded != registryMax {
+			t.Errorf("post-reconcile recorded version = %d, want %d (restamped after empty DELETE)", recorded, registryMax)
+		}
+	})
 }
 
 // TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt pins the refusal branch:
@@ -287,27 +274,15 @@ func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open(fresh) error = %v", err)
-	}
-	// Drop a baseline column to simulate genuine schema corruption.
-	if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN title`); err != nil {
-		_ = first.Close()
-		t.Fatalf("drop baseline column error = %v", err)
-	}
-	if err := first.commitWorkingSet(ctx, "test: corrupt baseline shape"); err != nil {
-		_ = first.Close()
-		t.Fatalf("commit corruption error = %v", err)
-	}
-	if err := first.Close(); err != nil {
-		t.Fatalf("Close(first) error = %v", err)
-	}
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
+		mustCommit(t, ctx, st, "test: corrupt baseline shape")
+	})
 
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	_, err = Open(ctx, doltRoot, "test-workspace-id")
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err == nil {
 		t.Fatal("Open() of corrupt-baseline ahead-of-registry workspace returned nil; want refusal")
 	}
