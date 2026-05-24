@@ -133,18 +133,13 @@ func createIssuesTableStmt() string {
 // [LAW:single-enforcer] reconcileToBaseline is the one place that
 // orders reconcile stages; callers do not partial-order them.
 func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (bool, error) {
-	// [LAW:no-silent-fallbacks] Structurally unrecoverable shapes fail
-	// BEFORE any mutation, so the workspace is not partially altered
-	// by reconcile when the failure is inevitable. The downstream
-	// steps assume an issues table that has at minimum the columns
-	// indexes/backfills reference (status, priority, updated_at).
-	// Without this gate, an issues table with only `id` would let
-	// reconcile create meta/relations/comments/labels before failing
-	// at idx_issues_status_priority — leaving scaffolding tables
-	// behind that have no application meaning.
-	if err := s.verifyIssuesReconcileable(ctx); err != nil {
-		return false, err
-	}
+	// Precondition: verifyIssuesReconcileable was called by runMigration
+	// before the snapshot guard fired, so this function assumes the
+	// issues table (if present) carries the columns downstream steps
+	// reference. Routing the check through the caller — not inside
+	// reconcile itself — keeps the snapshot from firing on workspaces
+	// reconcile cannot help with, so failed Opens don't accumulate
+	// recovery snapshots without bound.
 	schema := []ddlStep{
 		{target: "meta", stmt: `CREATE TABLE meta (
 			meta_key VARCHAR(191) PRIMARY KEY,
@@ -546,8 +541,12 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 			// data left over from the pre-derivation schema. NULL it
 			// so the column stops lying and future readers that touch
 			// i.status on an epic fail loudly.
+			// [LAW:single-enforcer] The UPDATE predicate matches the
+			// probe exactly (also gating on `status IS NOT NULL`) so
+			// the UPDATE writes only inconsistent rows. The probe-only
+			// shape would full-scan the epic set on every reconcile.
 			probe:   `SELECT 1 FROM issues WHERE issue_type IN ('epic') AND status IS NOT NULL LIMIT 1`,
-			stmt:    `UPDATE issues SET status = NULL WHERE issue_type IN ('epic')`,
+			stmt:    `UPDATE issues SET status = NULL WHERE issue_type IN ('epic') AND status IS NOT NULL`,
 			context: "null out container status",
 		},
 	}
