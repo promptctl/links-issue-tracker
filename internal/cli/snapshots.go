@@ -151,11 +151,12 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	// [LAW:no-silent-fallbacks] A release failure is rare but real (e.g.
 	// EBADF on a torn FD) and signals workspace-lock state the operator
 	// needs to know about; surface it via the named return rather than
-	// discarding. Only overwrites a nil err so the primary failure (if
-	// any) remains the returned error.
+	// discarding. errors.Join keeps both observable — a release failure
+	// matters whether or not the restore itself succeeded, because either
+	// way it can leave the workspace stuck busy for subsequent commands.
 	defer func() {
-		if relErr := releaseWorkspace(); relErr != nil && err == nil {
-			err = relErr
+		if relErr := releaseWorkspace(); relErr != nil {
+			err = errors.Join(err, relErr)
 		}
 	}()
 	var rotated string

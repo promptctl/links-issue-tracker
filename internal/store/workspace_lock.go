@@ -100,27 +100,45 @@ func acquireWorkspaceLock(ctx context.Context, doltRootDir string, lockType, max
 		err = syscall.Flock(int(file.Fd()), lockType|syscall.LOCK_NB)
 		if err == nil {
 			fd := file
+			// [LAW:no-silent-fallbacks] Both unlock and close failures
+			// matter (FD leak; lock stuck held) so the release contract
+			// surfaces them jointly via errors.Join instead of picking one.
 			return func() error {
-				flockErr := syscall.Flock(int(fd.Fd()), syscall.LOCK_UN)
-				closeErr := fd.Close()
-				if flockErr != nil {
-					return fmt.Errorf("release workspace lock: %w", flockErr)
+				var flockErr error
+				if e := syscall.Flock(int(fd.Fd()), syscall.LOCK_UN); e != nil {
+					flockErr = fmt.Errorf("release workspace lock: %w", e)
 				}
-				return closeErr
+				var closeErr error
+				if e := fd.Close(); e != nil {
+					closeErr = fmt.Errorf("close workspace lock fd: %w", e)
+				}
+				return errors.Join(flockErr, closeErr)
 			}, nil
 		}
 		if !errors.Is(err, syscall.EWOULDBLOCK) {
-			_ = file.Close()
-			return nil, fmt.Errorf("flock workspace lock: %w", err)
+			return nil, joinWithClose(fmt.Errorf("flock workspace lock: %w", err), file)
 		}
 		if attempt+1 == maxAttempts {
 			break
 		}
 		if waitErr := waitWithContext(ctx, delay); waitErr != nil {
-			_ = file.Close()
-			return nil, waitErr
+			return nil, joinWithClose(waitErr, file)
 		}
 	}
-	_ = file.Close()
-	return nil, ErrWorkspaceBusy
+	return nil, joinWithClose(ErrWorkspaceBusy, file)
+}
+
+// joinWithClose closes the lock file and returns the primary error joined
+// with any close error. Used on every failure path inside
+// acquireWorkspaceLock so an FD leak / close-time error stays observable
+// alongside the failure that triggered the release.
+//
+// [LAW:no-silent-fallbacks] A leaked FD or a close error is real signal —
+// silently dropping it (`_ = file.Close()`) hid debugging information on
+// the exact paths that are hardest to diagnose.
+func joinWithClose(primary error, file *os.File) error {
+	if closeErr := file.Close(); closeErr != nil {
+		return errors.Join(primary, fmt.Errorf("close workspace lock fd: %w", closeErr))
+	}
+	return primary
 }
