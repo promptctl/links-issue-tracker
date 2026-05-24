@@ -42,23 +42,45 @@ gh run watch
 When the workflow finishes, the GitHub Release is published with all artifacts
 above. No manual steps.
 
-### Dry-run a release locally
+### How the pipeline is verified before a tag is ever cut
+
+`.github/workflows/release-validate.yml` runs on every PR and on every push
+to `master`. It executes the SAME goreleaser-cross container release.yml uses,
+produces a real cross-platform `dist/`, runs `mkmanifest` against it, and
+asserts the manifest has every expected platform with a valid SHA256.
+
+If `release-validate` is green, the next `git push <tag>` will produce a
+working GitHub Release. If it's red, the PR doesn't merge. This is the
+single answer to "did the pipeline survive my change."
+
+The workflow also uploads `dist/` as a 7-day workflow artifact on every run,
+so a reviewer can inspect what would be published without re-running the
+workflow.
+
+### Dry-run a release locally (optional)
+
+Local dry-runs require a container runtime — the project uses
+`ghcr.io/goreleaser/goreleaser-cross:v2.16.0` to provide the CGO
+cross-compilers (osxcross for darwin, mingw for windows, glibc for linux).
 
 ```bash
-goreleaser release --snapshot --clean
-# Inspect ./dist/ — you'll see archives, checksums.txt, release-manifest.json.
+podman run --rm -v "$PWD":/go/src/app -w /go/src/app \
+  ghcr.io/goreleaser/goreleaser-cross:v2.16.0 \
+  release --snapshot --clean
+# Inspect ./dist/ — archives, checksums.txt; mkmanifest then writes release-manifest.json.
 ```
 
-This builds everything but does NOT publish. The snapshot version template
-("...-snapshot+<sha>") makes the resulting archives unmistakable from a real
-release.
+Note: cross-compilation requires the goreleaser-cross image; a host without
+it (or without osxcross etc. installed natively) cannot build darwin
+artifacts. The CI workflow always has the right environment; local dry-run
+is convenience, not required.
 
-### Dry-run via the workflow
+### Dry-run via the release workflow
 
-The release workflow exposes `workflow_dispatch` for the same purpose. Trigger
-it from the GitHub Actions UI; it runs `goreleaser release --snapshot --clean`
-and uploads `dist/` as a 7-day workflow artifact for inspection. No release is
-published.
+The release workflow exposes `workflow_dispatch` for re-running the full
+pipeline against the current commit. Trigger it from the GitHub Actions UI;
+it runs the same cross-compile path in --snapshot mode and uploads `dist/`
+as a 7-day workflow artifact. No release is published.
 
 ## What `lit version` reports
 

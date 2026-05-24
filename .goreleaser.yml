@@ -20,8 +20,32 @@ builds:
   - id: lit
     main: ./cmd/lit
     binary: lit
+    # CGO is REQUIRED: Dolt's embedded MySQL library (gozstd, the regex build
+    # tag) does not build with CGO_ENABLED=0. release.yml runs goreleaser
+    # inside the ghcr.io/goreleaser/goreleaser-cross image, which ships with
+    # the C cross-compilers for every target below (osxcross for darwin,
+    # mingw for windows, glibc/musl for linux). Per-target CC is selected via
+    # the template-driven env entries below — that is the standard
+    # goreleaser-cross pattern.
+    #
+    # [LAW:single-enforcer] One Docker image owns the cross-toolchain inventory;
+    # nothing in this repo installs compilers ad-hoc.
     env:
-      - CGO_ENABLED=0
+      - CGO_ENABLED=1
+      - >-
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "amd64" }}CC=o64-clang{{- end }}
+          {{- if eq .Arch "arm64" }}CC=oa64-clang{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
+          {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
+        {{- end -}}
     goos:
       - linux
       - darwin
@@ -49,10 +73,10 @@ archives:
     # `lit_<version>_<goos>_<goarch>.<ext>` (underscore-separated). If this
     # template changes, that parser changes in the same PR.
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    format: tar.gz
+    formats: [tar.gz]
     format_overrides:
       - goos: windows
-        format: zip
+        formats: [zip]
     files:
       - LICENSE*
       - README*
@@ -67,28 +91,20 @@ snapshot:
   # snapshot can never be confused with a tagged release in flight.
   version_template: "{{ incpatch .Version }}-snapshot+{{.ShortCommit}}"
 
-# After goreleaser writes the archives + checksums.txt, run mkmanifest to
-# emit release-manifest.json into dist/, then upload it as an extra release
-# asset alongside the archives.
+# Release publishing is OWNED BY .github/workflows/release.yml, not goreleaser.
+# goreleaser builds artifacts + checksums into dist/; the workflow then runs
+# mkmanifest to emit release-manifest.json, and `gh release create` publishes
+# everything atomically.
 #
-# `extra_files` is a release-level upload list; the manifest joins the
-# artifacts that GitHub Releases will publish.
+# Why split: goreleaser v2 has no hook point between "checksums.txt exists" and
+# "release is published" — we need exactly that point to invoke mkmanifest with
+# the actual checksums it reads. Owning publish in release.yml puts the
+# ordering under explicit control rather than a missing goreleaser hook.
+#
+# [LAW:single-enforcer] release.yml is the one place that knows the sequence
+# build → manifest → publish. goreleaser's job ends at dist/.
 release:
-  extra_files:
-    - glob: ./dist/release-manifest.json
-  draft: false
-  prerelease: auto
-
-after:
-  hooks:
-    - cmd: >
-        go run ./tools/mkmanifest
-        -version {{ .Version }}
-        -commit {{ .ShortCommit }}
-        -date {{ .Date }}
-        -dist ./dist
-        -base-url https://github.com/brandon-fryslie/links-issue-tracker/releases/download
-        -out ./dist/release-manifest.json
+  disable: true
 
 changelog:
   use: github

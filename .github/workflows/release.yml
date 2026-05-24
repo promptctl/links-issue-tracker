@@ -1,8 +1,8 @@
 name: Release
 
-# Triggered by tag push matching `v*.*.*`. Manual `workflow_dispatch` is
-# available for dry-run debugging only — it builds artifacts but does NOT
-# publish a release (goreleaser's release step requires a tag context).
+# Triggered by tag push matching `v*.*.*`. `workflow_dispatch` runs the same
+# pipeline in --snapshot mode (no publish) so the cross-compile + manifest
+# wiring can be exercised on demand without cutting a real release.
 on:
   push:
     tags:
@@ -11,11 +11,16 @@ on:
 
 permissions:
   contents: write    # creates the GitHub Release and uploads assets
-  packages: write    # reserved for future image publishing
 
 concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
+
+env:
+  # Pinned to the goreleaser version used to develop this config. Bump in
+  # lockstep with the goreleaser/goreleaser-cross release cadence; the cross
+  # image's tag tracks the goreleaser binary it bundles.
+  GORELEASER_CROSS_VERSION: v2.16.0
 
 jobs:
   release:
@@ -23,7 +28,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          # goreleaser needs full history to build the changelog.
+          # goreleaser needs full history to build the changelog from git.
           fetch-depth: 0
 
       - uses: actions/setup-go@v5
@@ -31,26 +36,74 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Install Dolt (matches CI version)
+      # Build all per-platform artifacts via goreleaser-cross. The Docker
+      # image owns the C cross-toolchains (osxcross, mingw, glibc), so a
+      # single Linux runner can produce darwin/linux/windows binaries with CGO.
+      # The image's tag matches the goreleaser version embedded in it, pinned
+      # at the top of this file.
+      #
+      # On tag push: --clean (default) — full build, archives, checksums.
+      # On workflow_dispatch: --snapshot --clean — uses a synthetic version so
+      # nothing can be confused with a real release.
+      - name: Build artifacts (goreleaser-cross)
         run: |
-          curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
-          sudo bash install-dolt.sh
-          dolt version
+          set -euo pipefail
+          ARGS="release --clean"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS="release --snapshot --clean"
+          fi
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            ghcr.io/goreleaser/goreleaser-cross:${GORELEASER_CROSS_VERSION} \
+            $ARGS
 
-      # Snapshot mode for workflow_dispatch (no tag context); release mode for
-      # real tags. goreleaser auto-detects which to run from the trigger.
-      - name: Run goreleaser (release on tag, snapshot on dispatch)
-        uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: '~> v2'
-          args: >-
-            ${{ github.event_name == 'workflow_dispatch' && 'release --snapshot --clean' || 'release --clean' }}
+      # mkmanifest runs OUTSIDE the goreleaser-cross image (it only needs Go,
+      # which the runner already has). It reads dist/checksums.txt and emits
+      # dist/release-manifest.json. .goreleaser.yml has release.disable: true,
+      # so goreleaser never tries to publish; this workflow owns publishing
+      # via `gh release create` below.
+      - name: Generate release manifest
+        id: manifest
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            # On dispatch, goreleaser uses a snapshot version derived from the
+            # commit. metadata.json records the exact value it used; mkmanifest
+            # must use the SAME value so its filename parser matches.
+            VERSION=$(jq -r .version dist/metadata.json)
+          else
+            # Tag pushes: github.ref_name is the tag (vX.Y.Z); goreleaser
+            # strips the leading "v" for its .Version template, so the
+            # archives are named lit_<vX.Y.Z-without-v>_<os>_<arch>.<ext>.
+            # mkmanifest must see the same stripped version.
+            VERSION=$(jq -r .version dist/metadata.json)
+          fi
+          echo "Using version: $VERSION"
+          go run ./tools/mkmanifest \
+            -version "$VERSION" \
+            -commit "$(git rev-parse --short HEAD)" \
+            -date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -dist ./dist \
+            -base-url https://github.com/${{ github.repository }}/releases/download \
+            -out ./dist/release-manifest.json
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+
+      # Tag push: publish the GitHub Release with archives + checksums + manifest.
+      # gh release create is atomic over the uploaded asset list — either the
+      # release exists with all assets or it doesn't exist at all.
+      - name: Publish GitHub Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh release create "${{ github.ref_name }}" \
+            ./dist/lit_*.tar.gz ./dist/lit_*.zip ./dist/checksums.txt ./dist/release-manifest.json \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
 
-      # On workflow_dispatch the artifacts are not published; upload them as
-      # workflow artifacts so the dry-run is inspectable.
+      # workflow_dispatch: upload the whole dist/ as a 7-day workflow artifact
+      # so the dry-run is inspectable without creating a release.
       - name: Upload snapshot artifacts (dispatch only)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4

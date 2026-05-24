@@ -1,0 +1,134 @@
+name: Release validate
+
+# Proves the full release pipeline — goreleaser-cross builds for every target
+# platform, mkmanifest emits release-manifest.json, the resulting dist/ has
+# the expected per-platform archives — runs on every PR and every push to
+# master. If this job is green, the next tag push will produce a working
+# GitHub Release; if it's red, the PR does not merge.
+#
+# [LAW:single-enforcer] Exactly one place verifies the release pipeline
+# end-to-end. release.yml's job IS to publish; this workflow's job IS to
+# verify. They share the same underlying container + config so what runs
+# here is what runs at tag push, minus the `gh release create` step.
+#
+# [LAW:verifiable-goals] The acceptance check is a concrete artifact list,
+# not "did goreleaser exit 0" — we assert the manifest names every expected
+# platform with a valid SHA256, so a silent build skip cannot pass.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # Pinned in lockstep with release.yml. Bumping the cross image happens in
+  # one place — actually no, two; if these drift, this workflow proves the
+  # wrong thing. Keep them equal.
+  GORELEASER_CROSS_VERSION: v2.16.0
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Syntax + deprecation check first — cheap, catches the trivial
+      # config-shape errors without spinning up the cross-compile container.
+      - name: goreleaser check (config syntax)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            ghcr.io/goreleaser/goreleaser-cross:${GORELEASER_CROSS_VERSION} \
+            check
+
+      # Full snapshot build via the SAME container release.yml uses. Produces
+      # archives for every (goos, goarch) in .goreleaser.yml, plus checksums.
+      - name: Build snapshot artifacts (goreleaser-cross)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            ghcr.io/goreleaser/goreleaser-cross:${GORELEASER_CROSS_VERSION} \
+            release --snapshot --clean
+
+      # mkmanifest against the snapshot dist/ — proves the producer/consumer
+      # contract holds: every archive goreleaser wrote is named in a shape
+      # mkmanifest accepts, and the resulting manifest parses against
+      # internal/release.Manifest.
+      - name: Generate release manifest
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version dist/metadata.json)
+          go run ./tools/mkmanifest \
+            -version "$VERSION" \
+            -commit "$(git rev-parse --short HEAD)" \
+            -date "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -dist ./dist \
+            -base-url https://github.com/${{ github.repository }}/releases/download \
+            -out ./dist/release-manifest.json
+
+      # Assert the manifest is the shape we claim it is. This is the acceptance
+      # check: if any of these fail, the pipeline IS broken — do not let the
+      # workflow report success on a manifest that's missing platforms or has
+      # garbage SHA256 values.
+      - name: Assert manifest shape
+        run: |
+          set -euo pipefail
+          MANIFEST=./dist/release-manifest.json
+
+          # Parses as JSON matching internal/release.Manifest's schema (the
+          # consumer's view): version present, schema_support populated, at
+          # least one artifact, every artifact has platform/url/sha256.
+          jq -e '
+            .version    | type == "string" and length > 0
+          ' "$MANIFEST" >/dev/null
+
+          jq -e '
+            .schema_support.min  | type == "number" and . >= 1 and
+            .schema_support.max  | type == "number"
+          ' "$MANIFEST" >/dev/null
+
+          jq -e '
+            .artifacts | length > 0 and
+            all(.platform | test("^[a-z0-9]+/[a-z0-9]+$")) and
+            all(.url | startswith("https://github.com/")) and
+            all(.sha256 | test("^[0-9a-f]{64}$"))
+          ' "$MANIFEST" >/dev/null
+
+          # Expected platforms match .goreleaser.yml (windows/arm64 ignored).
+          EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
+          GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "manifest platforms mismatch" >&2
+            echo "  expected: $EXPECTED" >&2
+            echo "  got:      $GOT" >&2
+            exit 1
+          fi
+
+          echo "release-manifest.json shape OK; platforms: $GOT"
+
+      # Surface the full dist/ as a workflow artifact so a reviewer can inspect
+      # what the release would publish without having to re-run the workflow.
+      - name: Upload snapshot dist/ for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validate-dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
