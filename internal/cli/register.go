@@ -138,6 +138,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(appAccessWrite, runFollowup)},
 		{Name: "ready", Summary: "List open work by readiness and rank", GroupID: "operations",
 			Run: readyRun},
+		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
+			Run: r.appCmd(appAccessRead, runBacklog)},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
 			Run: r.appCmd(appAccessRead, runNext)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",

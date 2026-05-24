@@ -5,6 +5,7 @@ Agent instructions for using links issue tracker (lit)
 ## Find work
 If the user asks you to pull a specific ticket: `lit ls --limit [limit] --search [query]`
 If the user asks you to pull without specifying a ticket: `lit ready`
+If the user asks for the backlog or for the ranking rationale: `lit backlog` (every workable item in rank order, blocked items inline so the queue shape is legible)
 Get details for a ticket: `lit show <id>`. Start work: `lit start <id>`.
 
 ## Create tickets

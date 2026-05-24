@@ -521,16 +521,21 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]")
 	}
-	rf := readyFilter{
+	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
 		IssueType: strings.TrimSpace(*issueType),
 		Status:    strings.TrimSpace(*status),
 		Labels:    splitCSV(*labels),
 	}
-	annotated, _, err := gatherReadyAnnotated(ctx, ap, rf)
+	annotated, _, err := gatherWorkableAnnotated(ctx, ap, rf)
 	if err != nil {
 		return err
 	}
+	// [LAW:single-enforcer] Pushing blocked items below unblocked is a
+	// ready-specific presentation choice — `lit backlog` consumes the same
+	// pipeline and wants the unmodified rank order. The sort lives at the
+	// consumer that needs it, not in the shared gather.
+	sortByBlockingAnnotations(annotated)
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
 	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
@@ -538,24 +543,33 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	})
 }
 
-// readyFilter carries the user-supplied narrowing options for `lit ready` and
-// `lit next`. Empty fields mean "no narrowing"; the workable definition
-// (open/in_progress, leaves only) is layered on top by gatherReadyAnnotated.
-type readyFilter struct {
+// workableFilter carries the user-supplied narrowing options for any
+// command that consumes the shared workable pipeline (`lit ready`,
+// `lit next`, `lit backlog`). Empty fields mean "no narrowing"; the
+// workable definition (open/in_progress, leaves only) is layered on top
+// by gatherWorkableAnnotated.
+type workableFilter struct {
 	Assignee  string
 	IssueType string
 	Status    string
 	Labels    []string
 }
 
-// gatherReadyAnnotated runs the shared ready pipeline: list workable leaves,
-// fetch details, annotate, sort by composite rank then readiness, enrich with
-// parent epic refs. Returns the prepared rows and the details map so callers
-// that need extra row context (e.g. `lit next --continue`) avoid a second
-// fetch round-trip.
-// [LAW:single-enforcer] Both `lit ready` and `lit next` read from this single
-// pipeline so their "what is workable, in what order" model cannot drift.
-func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
+// gatherWorkableAnnotated runs the shared workable pipeline: list workable
+// leaves, fetch details, annotate, sort into canonical priority/rank order,
+// enrich with parent epic refs. Returns the prepared rows and the details
+// map so callers that need extra row context (e.g. `lit next --continue`)
+// avoid a second fetch round-trip.
+//
+// The returned order is the canonical backlog order: priority desc, then
+// composite rank asc. Ready-specific presentation (e.g. pushing blocked
+// items to the bottom) is applied by the caller, not here, so consumers
+// that want the unmodified ranking (`lit backlog`) see it as ordered.
+//
+// [LAW:single-enforcer] `lit ready`, `lit next`, and `lit backlog` all
+// read from this single pipeline so their "what is workable, in what
+// order" model cannot drift.
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
 	cfg, err := config.Load(ap.Workspace.RootDir)
 	if err != nil {
 		return nil, nil, err
@@ -563,9 +577,9 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
 	if rf.Status != "" {
 		// User-supplied status overrides the workable default. Unrecognized
-		// values default to Open via DefaultOpen — the ready command is
-		// lenient, matching store/import behavior rather than strict CLI flag
-		// validation.
+		// values default to Open via DefaultOpen — the shared pipeline mirrors
+		// store/import lenient parsing rather than enforcing strict CLI flag
+		// validation. [LAW:comments-explain-why-only]
 		statuses = []model.State{model.DefaultOpen(rf.Status)}
 	}
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
@@ -603,7 +617,6 @@ func gatherReadyAnnotated(ctx context.Context, ap *app.App, rf readyFilter) ([]a
 	}
 	sortByCompositeRank(annotated, details)
 	sortByPriority(annotated)
-	sortByBlockingAnnotations(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
 }
@@ -624,7 +637,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fs.NArg() != 0 {
 		return errors.New("usage: lit next [--continue] [--assignee <user>] [--json]")
 	}
-	annotated, details, err := gatherReadyAnnotated(ctx, ap, readyFilter{Assignee: strings.TrimSpace(*assignee)})
+	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{Assignee: strings.TrimSpace(*assignee)})
 	if err != nil {
 		return err
 	}
