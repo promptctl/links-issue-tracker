@@ -280,6 +280,57 @@ func countUserSnapshots(t *testing.T, ws workspace.Info) int {
 	return count
 }
 
+// TestSnapshotsRestore_RefusesWhileWorkspaceBusy pins the workspace-exclusivity
+// contract end-to-end: while an open Store holds the shared workspace lock
+// (the shape an `lit ls` reader would take), `lit snapshots restore` must
+// refuse with a clear workspace-busy error instead of rotating the Dolt
+// directory out from under the reader.
+//
+// This is the headline acceptance criterion for links-schema-rebuild-r5v9.7
+// — the failure mode pre-fix was a query error mid-read or, depending on
+// platform/timing, inconsistent results from mmap'd inodes.
+func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	// Produce a snapshot to restore.
+	var newOut bytes.Buffer
+	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new", "--json"}); err != nil {
+		t.Fatalf("snapshots new: %v", err)
+	}
+	var snap struct {
+		Name string `json:"name"`
+	}
+	if err := json.Unmarshal(newOut.Bytes(), &snap); err != nil {
+		t.Fatalf("decode new JSON: %v\nraw=%s", err, newOut.String())
+	}
+
+	// Open a long-lived Store that holds the shared workspace lock — the
+	// concrete shape of an `lit ls`/`lit show` reader.
+	reader, err := store.OpenForRead(context.Background(), ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("OpenForRead: %v", err)
+	}
+	defer reader.Close()
+
+	var stdout, stderr bytes.Buffer
+	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "restore", snap.Name, "--json"})
+	if err == nil {
+		t.Fatalf("snapshots restore succeeded while a reader was open; expected workspace-busy refusal\nstdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "workspace busy") {
+		t.Fatalf("restore error %q must name the workspace-busy condition", err.Error())
+	}
+	// The Dolt directory must NOT have been rotated.
+	rotations, globErr := filepath.Glob(ws.DatabasePath + ".pre-restore-*")
+	if globErr != nil {
+		t.Fatalf("glob rotations: %v", globErr)
+	}
+	if len(rotations) != 0 {
+		t.Fatalf("restore rotated the Dolt directory despite the workspace-busy refusal: %v", rotations)
+	}
+}
+
 func TestSnapshotsRestore_RequiresName(t *testing.T) {
 	repo, _ := initBootstrapTestRepo(t)
 	chdir(t, repo)
