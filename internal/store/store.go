@@ -28,11 +28,12 @@ const (
 )
 
 type Store struct {
-	db             *sql.DB
-	workspaceID    string
-	doltRootDir    string
-	commitLockPath string
-	telemetryDir   string
+	db                   *sql.DB
+	workspaceID          string
+	doltRootDir          string
+	commitLockPath       string
+	telemetryDir         string
+	releaseWorkspaceLock func() error
 }
 
 type NotFoundError struct {
@@ -159,39 +160,100 @@ type TransitionIssueInput struct {
 	Assignee string
 }
 
-func Open(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
-	if _, err := EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
-		return nil, err
-	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
-	if err := s.withCommitLock(ctx, s.migrate); err != nil {
-		_ = s.db.Close()
-		return nil, err
-	}
-	return s, nil
-}
-
-func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (*Store, error) {
+func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	if _, err := os.Stat(doltRootDir); errors.Is(err, os.ErrNotExist) {
-		return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
+	// [LAW:single-enforcer] Workspace shared lock is acquired BEFORE
+	// EnsureDatabase because ensureDoltDatabase opens Dolt SQL connections
+	// to create/initialize the database. Acquiring after would leave a
+	// window in which `lit snapshots restore` could rotate the Dolt
+	// directory while those bootstrap connections were live.
+	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	// [LAW:no-silent-fallbacks] On any failure path before the Store owns
+	// the lock, release the hold AND surface a release error via the named
+	// return — a leaked shared hold would block subsequent restores with
+	// workspace-busy from a vanished caller. success guards the happy path
+	// so the lock survives in the returned Store.
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
+		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID)
 	if err != nil {
 		return nil, err
 	}
-	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
-	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
-	if err := s.withCommitLock(ctx, s.migrate); err != nil {
-		_ = s.db.Close()
+	s.releaseWorkspaceLock = release
+	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
+	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
 		return nil, err
 	}
+	success = true
+	return s, nil
+}
+
+func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
+	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
+		return nil, err
+	}
+	// [LAW:dataflow-not-control-flow] Acquire the workspace shared lock
+	// BEFORE the existence stat so the stat cannot observe the transient
+	// ENOENT that dbsnapshot.Restore opens between rotate-away and
+	// install-snapshot. The lock blocks until restore releases its
+	// exclusive hold, after which the stat sees a real result every time.
+	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	success := false
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	if _, statErr := os.Stat(doltRootDir); statErr != nil {
+		// [LAW:no-silent-fallbacks] Only ENOENT means "uninitialized";
+		// every other stat error (EACCES, EIO, ELOOP, etc.) is its own
+		// failure mode the operator needs to see, not a vague downstream
+		// Dolt-connection error.
+		if errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
+		}
+		return nil, fmt.Errorf("stat database dir: %w", statErr)
+	}
+	s, err := openStoreConnection(doltRootDir, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	s.releaseWorkspaceLock = release
+	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
+	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
+	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
+		return nil, err
+	}
+	success = true
 	return s, nil
 }
 
@@ -224,7 +286,20 @@ func (s *Store) Close() error {
 	err := s.db.Close()
 	// [LAW:single-enforcer] Benign driver shutdown cancellation is normalized at the Store boundary so callers see one close contract.
 	if errors.Is(err, context.Canceled) {
-		return nil
+		err = nil
+	}
+	// [LAW:dataflow-not-control-flow] Workspace lock release runs on every
+	// Close, regardless of whether the DB closed cleanly — the shared hold
+	// must end with the Store's lifetime so a subsequent restore is not
+	// pinned by a dead Store. errors.Join keeps both failures observable
+	// when db.Close and release both fail; a leaked workspace lock would
+	// silently block every future restore with workspace-busy.
+	if s.releaseWorkspaceLock != nil {
+		release := s.releaseWorkspaceLock
+		s.releaseWorkspaceLock = nil
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
 	}
 	return err
 }

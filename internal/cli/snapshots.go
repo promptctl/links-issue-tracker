@@ -59,13 +59,9 @@ func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args
 // or any other in-process mutation. Routes through store.LockCommitPath so the
 // lock primitive stays single-source.
 //
-// KNOWN LIMITATION: the commit lock serializes against writers but not against
-// concurrent readers (`lit ls` / `lit show` open a Dolt SQL connection that
-// outlives any held lock). A concurrent reader during `lit snapshots restore`
-// can observe a renamed-out-from-under-it database directory; the failure mode
-// is a query error, not silent corruption. A workspace-exclusivity lock that
-// every Store holds for its lifetime is tracked under
-// links-schema-rebuild-r5v9.7.
+// Reader-vs-restore exclusion is owned by the workspace-busy lock acquired in
+// store.Open / store.OpenForRead (shared) and by runSnapshotsRestore
+// (exclusive); this commit lock remains the writer-vs-writer gate only.
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
@@ -130,7 +126,7 @@ func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error 
 	})
 }
 
-func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) (err error) {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("snapshots restore")
 	jsonOut := fs.Bool("json", false, "Output JSON")
@@ -144,6 +140,25 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	if name == "" {
 		return errors.New("usage: lit snapshots restore <name> [--json]")
 	}
+	// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
+	// exclusion; commit lock (held inside withCommitLock below) owns
+	// writer-vs-restore exclusion. Both held while the Dolt directory is
+	// rotated so no Store — open or about to open — can observe the rename.
+	releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, ws.DatabasePath)
+	if err != nil {
+		return err
+	}
+	// [LAW:no-silent-fallbacks] A release failure is rare but real (e.g.
+	// EBADF on a torn FD) and signals workspace-lock state the operator
+	// needs to know about; surface it via the named return rather than
+	// discarding. errors.Join keeps both observable — a release failure
+	// matters whether or not the restore itself succeeded, because either
+	// way it can leave the workspace stuck busy for subsequent commands.
+	defer func() {
+		if relErr := releaseWorkspace(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	var rotated string
 	if err := withCommitLock(ctx, ws, func() error {
 		r, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
