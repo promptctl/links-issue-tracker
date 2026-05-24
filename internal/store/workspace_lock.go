@@ -66,7 +66,12 @@ func WorkspaceLockPath(databasePath string) string {
 func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, syscall.LOCK_SH, workspaceSharedRetryAttempts, workspaceSharedRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
-		return nil, fmt.Errorf("%w: lit snapshots restore is rotating the Dolt directory; retry after it completes", ErrWorkspaceBusy)
+		// [LAW:no-silent-fallbacks] Wrap the original error (which may
+		// itself be an errors.Join containing close-side diagnostics
+		// from joinWithClose) instead of replacing with a fresh sentinel.
+		// errors.Is(err, ErrWorkspaceBusy) continues to detect contention;
+		// any additional diagnostics survive.
+		return nil, fmt.Errorf("lit snapshots restore is rotating the Dolt directory; retry after it completes: %w", err)
 	}
 	return release, err
 }
@@ -82,7 +87,10 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, syscall.LOCK_EX, 1, 0)
 	if errors.Is(err, ErrWorkspaceBusy) {
-		return nil, fmt.Errorf("%w: another lit process is using this workspace; close other lit commands and retry", ErrWorkspaceBusy)
+		// Wrap the original (potentially errors.Join'd) error so any
+		// close-side diagnostics survive; same reasoning as
+		// acquireWorkspaceShared above.
+		return nil, fmt.Errorf("another lit process is using this workspace; close other lit commands and retry: %w", err)
 	}
 	return release, err
 }
