@@ -1,10 +1,40 @@
--- 00001_baseline.sql is the single authoritative definition of schema v1: the
--- converged shape every prior reconcile helper collectively produced. A fresh
--- workspace applies this; a pre-goose workspace already at this shape is
--- adopted (stamped v1) without re-running it. CHECK constraints carry explicit
--- deterministic names so SHOW CREATE TABLE is stable across applies (the drift
--- canary depends on it). Priority bounds mirror model.PriorityNormal (0) and
--- model.PriorityUrgent (1).
+-- FROZEN FILE — DO NOT EDIT. Active since PR #145 (commit 8bc1e8e).
+--
+-- 00001_baseline.sql is the immutable definition of schema v1: the converged
+-- shape every prior reconcile helper collectively produced. Once shipped, the
+-- bytes of this file ARE the meaning of "v1" for every binary that embeds
+-- them. Editing the file after release silently changes that meaning, which
+-- bricks every workspace last-touched before the edit shipped (see PR #143 /
+-- PR #145 — the recovery for the 2026-05-21 retcon incident that stranded
+-- unreal-3d-maps and cc-nerf-buster).
+--
+-- Structural changes go in a NEW numbered migration file (00002_*.sql,
+-- 00003_*.sql, ...). The frozen-file gate (TestBaselineFileIsFrozen in
+-- baseline_frozen_test.go) enforces this; updating the pinned hash to make
+-- the test pass is NOT the correct response — open a new migration file
+-- instead. This applies even to comment-only or whitespace edits: the
+-- binary's identity is tied to the file's bytes, and the gate cannot
+-- distinguish "harmless" edits from structural ones (that distinction is
+-- exactly what failed in the original incident).
+--
+-- A fresh workspace applies this; a pre-goose workspace already at this
+-- shape is adopted (stamped v1) without re-running it. CHECK constraints
+-- carry explicit deterministic names so SHOW CREATE TABLE is stable across
+-- applies (the drift canary depends on it). Priority bounds mirror
+-- model.PriorityNormal (0) and model.PriorityUrgent (1).
+--
+-- [LAW:one-source-of-truth] This file is the canonical definition of "what
+-- v1 was when v1 shipped." A mutable baseline is not a single source — it's
+-- a moving target, and what schema a binary's v1 produces depends on which
+-- commit of the file the binary was built from.
+-- [LAW:single-enforcer] The frozen-file test is the single enforcer of this
+-- discipline. Reviewer attention and documentation discipline both failed
+-- for the original incident; neither is the enforcer.
+-- [LAW:types-are-the-program] The strongest theorem about a migration
+-- registry is "each version_id maps to exactly one schema shape." A
+-- rewritten baseline weakens it to "version_id maps to schema shape AT a
+-- specific binary build," which the integer cannot encode. The gate keeps
+-- the strong theorem true at the boundary.
 
 -- +goose Up
 -- +goose StatementBegin
