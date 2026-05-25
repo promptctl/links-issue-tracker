@@ -80,19 +80,36 @@ func main() {
 	// runs when several are missing, making the failure non-reproducible.
 	// [LAW:dataflow-not-control-flow] the ordering of the diagnostic is data
 	// (this slice), not whichever key Go's runtime picked first.
-	required := []struct{ name, val string }{
-		{"-version", *ver},
-		{"-tag", *tag},
-		{"-commit", *commit},
-		{"-date", *date},
-		{"-base-url", *baseURL},
-		{"-out", *outPath},
+	//
+	// Each entry holds a pointer to the flag-bound string so we can trim
+	// in place at the boundary. Previously the loop checked TrimSpace for
+	// emptiness but downstream code used the untrimmed value — padded
+	// values like `-version "0.1.0 "` passed validation and silently
+	// produced URLs/filenames with embedded whitespace. Trimming in place
+	// gives downstream code one canonical form to consume.
+	// [LAW:one-source-of-truth] every flag value flows downstream in one
+	// normalized form, not two.
+	required := []struct {
+		name string
+		ptr  *string
+	}{
+		{"-version", ver},
+		{"-tag", tag},
+		{"-commit", commit},
+		{"-date", date},
+		{"-base-url", baseURL},
+		{"-out", outPath},
 	}
 	for _, r := range required {
-		if strings.TrimSpace(r.val) == "" {
+		*r.ptr = strings.TrimSpace(*r.ptr)
+		if *r.ptr == "" {
 			die("required flag %s missing", r.name)
 		}
 	}
+	// -dist is optional (has a default) but still flows into filepath.Join,
+	// so apply the same boundary normalization for one-canonical-form
+	// consistency.
+	*distDir = strings.TrimSpace(*distDir)
 
 	if err := validateVerTag(*ver, *tag); err != nil {
 		die("%v", err)
