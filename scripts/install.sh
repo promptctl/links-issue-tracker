@@ -112,8 +112,14 @@ done
 # modes do NOT require Go, so the go-env path must degrade gracefully.
 
 TARGET_DIR=""
-if command -v lit >/dev/null 2>&1; then
-    EXISTING="$(command -v lit)"
+# `type -P` returns ONLY a filesystem path — empty string for shell
+# functions, aliases, and builtins. `command -v` would return the name
+# itself in those cases, which `realpath_compat`/`dirname` would treat
+# as relative to CWD and silently install into the repo. [LAW:types-are-the-program]
+# the value flowing into TARGET_DIR has to be a real executable path or
+# unset; we narrow the predicate so the wrong shape can't reach the body.
+EXISTING="$(type -P lit 2>/dev/null || true)"
+if [ -n "$EXISTING" ] && [ -x "$EXISTING" ]; then
     # Resolve symlinks so we update the real file, not a dangling link.
     REAL_EXISTING="$(realpath_compat "$EXISTING")"
     TARGET_DIR="$(dirname "$REAL_EXISTING")"
