@@ -49,11 +49,15 @@ realpath_compat() {
         readlink -f "$path"
         return
     fi
-    # Pure-shell: walk symlinks (cap depth at 40, matching POSIX SYMLOOP_MAX),
-    # then canonicalize the directory portion via `cd ... && pwd -P`.
-    # Arithmetic loop, not `seq` — `seq` is not POSIX (absent on busybox /
-    # minimal alpine), and this branch exists precisely for environments
-    # where the preferred tools are missing.
+    # Pure-shell branch (no preferred-resolver dependency): walk symlinks
+    # with bare `readlink` (POSIX, distinct from the GNU `readlink -f`
+    # extension probed above), then canonicalize the directory portion via
+    # `cd ... && pwd -P`. The only commands invoked here are POSIX-required
+    # (`readlink`, `dirname`, `basename`, `pwd`) — those ship with every
+    # busybox/alpine variant, so the branch is portable to the minimal
+    # environments that lack `realpath` and GNU `readlink -f`.
+    # Arithmetic loop, not `seq` — `seq` is not POSIX.
+    # Cap depth at 40, matching POSIX SYMLOOP_MAX.
     local target="$path" i=0 link dir
     while [ "$i" -lt 40 ]; do
         [ -L "$target" ] || break
@@ -168,6 +172,19 @@ case "$mode" in
             fi
             echo "Latest release: $release_tag"
         fi
+
+        # Normalize the tag at the boundary: strip any leading `v` then
+        # always prepend one. Idempotent — accepts both `v0.1.0` (canonical,
+        # how the user reads tags on the Releases page) and `0.1.0` (what
+        # they get from `git describe --abbrev=0 --tags` minus the prefix)
+        # and produces the canonical v-prefixed form the rest of the script
+        # speaks. Skipping this is what caused 404 download URLs when a
+        # user passed `--from-release 0.1.0` (the URL path segment is the
+        # *tag*, v-prefixed; the archive filename uses the *version*, v-
+        # stripped — see archive_version below). [LAW:types-are-the-program]
+        # the boundary normalizer makes the v-stripped input shape map to
+        # the same canonical value as the v-prefixed input shape.
+        release_tag="v${release_tag#v}"
 
         # Resolve current platform → goreleaser archive name. Must mirror
         # .goreleaser.yml's name_template: lit_<version>_<goos>_<goarch>.<ext>
