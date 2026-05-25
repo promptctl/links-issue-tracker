@@ -70,11 +70,13 @@ jobs:
             lit-release-builder:local \
             $ARGS
 
-      # mkmanifest reads dist/metadata.json for the version goreleaser used
-      # (handles both real-tag and snapshot cases identically).
+      # mkmanifest reads dist/metadata.json for the version goreleaser used.
+      # dist/ was written by docker-run-as-root; chown back to runner user
+      # so mkmanifest (which runs natively on the runner) can write into it.
       - name: Generate release manifest
         run: |
           set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" dist
           VERSION=$(jq -r .version dist/metadata.json)
           go run ./tools/mkmanifest \
             -version "$VERSION" \

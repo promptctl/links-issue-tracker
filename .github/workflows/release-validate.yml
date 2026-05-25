@@ -80,11 +80,14 @@ jobs:
             lit-release-builder:local \
             release --snapshot --clean
 
-      # mkmanifest runs OUTSIDE the container (only needs Go, which the
-      # runner already has). Reads dist/checksums.txt, emits release-manifest.json.
+      # mkmanifest runs OUTSIDE the container (only needs Go, which the runner
+      # already has). The docker run that produced dist/ ran as root inside
+      # the container, so dist/ is owned by root on the host bind-mount;
+      # chown back to the runner user before mkmanifest tries to write into it.
       - name: Generate release manifest
         run: |
           set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" dist
           VERSION=$(jq -r .version dist/metadata.json)
           go run ./tools/mkmanifest \
             -version "$VERSION" \
