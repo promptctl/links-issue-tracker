@@ -98,6 +98,14 @@ builds:
       # arm64-windows until there is a real consumer to justify the test matrix.
       - goos: windows
         goarch: arm64
+      # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
+      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Building
+      # x86_64 darwin from Linux is not possible with this image; Intel Mac
+      # users `go install` from source. If demand surfaces, the path is
+      # either custom cctools-x86_64 layers in build/Dockerfile.release or
+      # switching to zig cc.
+      - goos: darwin
+        goarch: amd64
     flags:
       - -trimpath
       - -buildvcs=false
