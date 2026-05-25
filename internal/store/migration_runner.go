@@ -231,6 +231,21 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if err := s.quarantineFastFail(ctx, state); err != nil {
 		return err
 	}
+	// [LAW:no-silent-fallbacks] Verify reconcile prerequisites BEFORE
+	// the snapshot guard fires, so a workspace whose shape reconcile
+	// cannot recover from does not accumulate a recovery snapshot per
+	// Open. The check is gated to phaseAdopt because that is the only
+	// phase where reconcile actually runs — phaseFresh has no issues
+	// table to verify, and phaseManaged has already passed v1
+	// adoption so its issues table shape is governed by the goose
+	// registry, not by reconcile preconditions. Running the probe in
+	// non-adopt phases would either no-op pointlessly or produce a
+	// misleadingly-wrapped error.
+	if state.phase == phaseAdopt {
+		if err := s.verifyIssuesReconcilable(ctx); err != nil {
+			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
+		}
+	}
 	if _, err := guard.ensure(); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
@@ -240,6 +255,45 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		}
 	}
 	if state.phase == phaseAdopt {
+		// [LAW:single-enforcer] Pre-goose workspaces at any historical
+		// canonical shape forward-migrate through reconcileToBaseline
+		// BEFORE the adoption stamp lands. The reconcile is idempotent:
+		// a workspace already at v1 sees every probe return "present"
+		// and reconcile no-ops; a workspace at an earlier shape (e.g.
+		// missing issue_events or agent_prompt) gets its gaps filled.
+		//
+		// This is the recovery from commit 254f86b, which deleted the
+		// reconcile and left pre-v1 workspaces bricked. The reconcile
+		// is a HISTORICAL ARTIFACT — no new operations get added here.
+		// Goose owns v1 → vN going forward.
+		if _, err := s.reconcileToBaseline(ctx, guard); err != nil {
+			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
+		}
+		// [LAW:no-silent-fallbacks] After reconcile, verify the
+		// workspace shape actually matches the baseline before
+		// stamping. The reconcile's CREATE TABLE steps are gated on
+		// table presence, NOT column presence — so a workspace that
+		// has a malformed non-issues table (e.g. relations exists but
+		// is missing the type column) would have reconcile skip the
+		// CREATE and the malformed table would persist. Stamping v1
+		// on that workspace would be a lie, recreating the PR #119
+		// failure shape that adoption was supposed to prevent.
+		// verifyBaselineShape compares against the baseline file and
+		// names every remaining gap; if any gaps survive, refuse with
+		// a structural error before the stamp lands.
+		_, missing, err := s.verifyBaselineShape(ctx)
+		if err != nil {
+			return fmt.Errorf("verify post-reconcile baseline shape: %w", err)
+		}
+		if len(missing) > 0 {
+			return fmt.Errorf(
+				"post-reconcile workspace shape still differs from baseline "+
+					"(remaining gaps: %s); reconcile cannot bring this workspace "+
+					"to v1 — the shape is structurally beyond what pre-goose "+
+					"reconcile can recover",
+				strings.Join(missing, ", "),
+			)
+		}
 		if err := s.adoptPreGooseWorkspace(ctx); err != nil {
 			return err
 		}
@@ -551,9 +605,29 @@ func (s *Store) recoverAheadOfRegistry(ctx context.Context, guard *snapshotGuard
 	return nil
 }
 
-// classifyMigrationState derives the workspace phase using only reads, so a
-// no-op Open performs no writes (it must take no snapshot). It refuses a
-// partial pre-goose schema — the failure shape PR #119's adoption swallowed.
+// classifyMigrationState derives the workspace phase using only reads,
+// so a no-op Open performs no writes (it must take no snapshot).
+//
+// Three phases:
+//   - phaseManaged: goose_db_version table present; goose owns the workspace.
+//   - phaseFresh:   no goose table AND no canonical tables; brand new.
+//   - phaseAdopt:   no goose table BUT at least one canonical table present.
+//                   The workspace is pre-goose at SOME historical canonical
+//                   shape (current or earlier). reconcileToBaseline (a
+//                   resurrected, idempotent, probe-driven forward migrator)
+//                   brings any earlier shape forward to v1 before adoption
+//                   stamps. There is no "partial-and-illegal" refusal —
+//                   any presence of canonical tables means "pre-goose
+//                   workspace, reconcile-then-adopt."
+//
+// [LAW:types-are-the-program] Three phases, each with a forward path. No
+// refusal branch. The "partial schema, restore or recreate" failure mode
+// the prior implementation had — which destroyed real user data with old
+// canonical shapes — does not exist by construction here.
+//
+// [LAW:dataflow-not-control-flow] The classify function reads facts about
+// the workspace; the runner reacts to them. No flags, no modes, no
+// "what kind of corruption is this" guessing.
 func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, error) {
 	registryMax, err := registryMaxVersion()
 	if err != nil {
@@ -570,20 +644,12 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		}
 		return migrationState{phase: phaseManaged, appliedVersion: applied, registryMaxVers: registryMax}, nil
 	}
-	present, missing, err := s.verifyBaselineShape(ctx)
+	present, _, err := s.verifyBaselineShape(ctx)
 	if err != nil {
 		return migrationState{}, err
 	}
 	if present == 0 {
 		return migrationState{phase: phaseFresh, registryMaxVers: registryMax}, nil
-	}
-	if len(missing) > 0 {
-		return migrationState{}, fmt.Errorf(
-			"workspace has a partial schema (missing: %s) and no goose history; "+
-				"it is at a pre-baseline shape that adoption cannot safely stamp — "+
-				"restore it from a snapshot or recreate it",
-			strings.Join(missing, ", "),
-		)
 	}
 	return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
 }
