@@ -51,14 +51,18 @@ realpath_compat() {
     fi
     # Pure-shell: walk symlinks (cap depth at 40, matching POSIX SYMLOOP_MAX),
     # then canonicalize the directory portion via `cd ... && pwd -P`.
-    local target="$path" i link dir
-    for i in $(seq 1 40); do
+    # Arithmetic loop, not `seq` — `seq` is not POSIX (absent on busybox /
+    # minimal alpine), and this branch exists precisely for environments
+    # where the preferred tools are missing.
+    local target="$path" i=0 link dir
+    while [ "$i" -lt 40 ]; do
         [ -L "$target" ] || break
         link="$(readlink "$target")"
         case "$link" in
             /*) target="$link" ;;
             *)  target="$(dirname "$target")/$link" ;;
         esac
+        i=$((i + 1))
     done
     dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P || true)"
     if [ -n "$dir" ]; then
@@ -218,11 +222,18 @@ case "$mode" in
             echo "error: $archive not found in checksums.txt" >&2
             exit 1
         fi
-        # sha256sum (Linux) or shasum -a 256 (macOS).
+        # sha256sum (GNU coreutils / Linux) or shasum -a 256 (Perl / macOS).
+        # Fail loudly with a specific error if neither is present, rather than
+        # letting `set -e` surface the second tool's "command not found" —
+        # that lower-level error doesn't tell the operator what to install.
         if command -v sha256sum >/dev/null 2>&1; then
             actual="$(sha256sum "$tmp/$archive" | awk '{print $1}')"
-        else
+        elif command -v shasum >/dev/null 2>&1; then
             actual="$(shasum -a 256 "$tmp/$archive" | awk '{print $1}')"
+        else
+            echo "error: install.sh release-download mode requires either 'sha256sum' (GNU coreutils) or 'shasum' (Perl, default on macOS)" >&2
+            echo "       install one of those tools, or use the source build: bash scripts/install.sh   (omit --from-release)" >&2
+            exit 1
         fi
         if [ "$actual" != "$expected" ]; then
             echo "error: SHA256 mismatch for $archive" >&2
