@@ -49,25 +49,29 @@ realpath_compat() {
         readlink -f "$path"
         return
     fi
-    # Pure-shell branch (no preferred-resolver dependency): walk symlinks
-    # with bare `readlink` (POSIX, distinct from the GNU `readlink -f`
-    # extension probed above), then canonicalize the directory portion via
-    # `cd ... && pwd -P`. The only commands invoked here are POSIX-required
-    # (`readlink`, `dirname`, `basename`, `pwd`) — those ship with every
-    # busybox/alpine variant, so the branch is portable to the minimal
-    # environments that lack `realpath` and GNU `readlink -f`.
+    # Pure-shell branch (no preferred-resolver dependency): if bare `readlink`
+    # exists, walk the symlink chain with it; either way, canonicalize the
+    # final directory portion via `cd ... && pwd -P`. `readlink` (without
+    # flags) is NOT POSIX — it's a BSD/GNU/busybox extension — so when it's
+    # absent we degrade by skipping the symlink walk and canonicalizing the
+    # input path directly. Non-symlinked paths get the correct answer either
+    # way; symlinked paths on a system without any of `realpath`, GNU
+    # `readlink -f`, or bare `readlink` return as-given, which is the best
+    # we can do with only POSIX tools (`cd`, `pwd -P`, `dirname`, `basename`).
     # Arithmetic loop, not `seq` — `seq` is not POSIX.
     # Cap depth at 40, matching POSIX SYMLOOP_MAX.
     local target="$path" i=0 link dir
-    while [ "$i" -lt 40 ]; do
-        [ -L "$target" ] || break
-        link="$(readlink "$target")"
-        case "$link" in
-            /*) target="$link" ;;
-            *)  target="$(dirname "$target")/$link" ;;
-        esac
-        i=$((i + 1))
-    done
+    if command -v readlink >/dev/null 2>&1; then
+        while [ "$i" -lt 40 ]; do
+            [ -L "$target" ] || break
+            link="$(readlink "$target")"
+            case "$link" in
+                /*) target="$link" ;;
+                *)  target="$(dirname "$target")/$link" ;;
+            esac
+            i=$((i + 1))
+        done
+    fi
     dir="$(cd "$(dirname "$target")" 2>/dev/null && pwd -P || true)"
     if [ -n "$dir" ]; then
         echo "$dir/$(basename "$target")"
