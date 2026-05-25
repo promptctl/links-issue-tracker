@@ -1,0 +1,12 @@
+# SQL files are byte-compared by Go gates (TestBaselineFileIsFrozen pins the
+# sha256 of internal/store/migrations/00001_baseline.sql; the drift canary
+# byte-compares internal/store/schema_snapshot.sql against a regeneration).
+# Force LF normalization on checkout so a contributor on Windows with
+# core.autocrlf=true cannot trip those gates with a phantom CRLF rewrite they
+# never authored.
+#
+# [LAW:one-source-of-truth] The bytes on disk must equal the bytes the embed
+# package sees, on every platform, every checkout. A platform-dependent
+# normalization is a second source the gates cannot distinguish from a real
+# edit.
+*.sql text eol=lf
