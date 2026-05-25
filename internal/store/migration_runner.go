@@ -85,7 +85,7 @@ func (e *QuarantineBlockError) Error() string {
 // merely ahead of the registry but whose application tables are intact does
 // NOT yield this error; that case is auto-reconciled (see recoverAheadOfRegistry).
 //
-// [LAW:one-source-of-truth] MaxSupported is registryMaxVersion() — the same
+// [LAW:one-source-of-truth] MaxSupported is migrations.MaxVersion() — the same
 // value that bounds "pending". There is no second "max supported" constant to
 // drift from the registry, so no startup assertion is needed to keep them
 // coherent: they are the same number.
@@ -119,10 +119,14 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 // between a goose-managed workspace and a pre-goose / fresh one.
 const gooseVersionTable = "goose_db_version"
 
-// baselineVersion is the version 00001_baseline.sql stamps. A pre-goose
-// workspace already at the baseline shape is adopted by recording this version
-// without re-running the CREATE TABLEs.
-const baselineVersion = 1
+// baselineVersion re-exports migrations.Baseline at the same name the runner
+// already used everywhere. The const lives in the migrations package because
+// it is a property of the embedded registry; this alias keeps the existing
+// store-internal call sites readable without re-typing the import path.
+//
+// [LAW:one-source-of-truth] One numeric definition (migrations.Baseline); this
+// is a typed reference, not a duplicate value.
+const baselineVersion = migrations.Baseline
 
 // migrationPhase is the workspace's position relative to the goose registry,
 // derived once from side-effect-free probes. The runner acts on the phase; it
@@ -629,7 +633,7 @@ func (s *Store) recoverAheadOfRegistry(ctx context.Context, guard *snapshotGuard
 // the workspace; the runner reacts to them. No flags, no modes, no
 // "what kind of corruption is this" guessing.
 func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, error) {
-	registryMax, err := registryMaxVersion()
+	registryMax, err := migrations.MaxVersion()
 	if err != nil {
 		return migrationState{}, err
 	}
@@ -806,46 +810,6 @@ func newGooseProvider(db *sql.DB) (*goose.Provider, error) {
 	return goose.NewProvider(goose.DialectMySQL, db, migrations.FS)
 }
 
-// registryMaxVersion is the highest version in the embedded registry. It bounds
-// "pending" without touching the database.
-func registryMaxVersion() (int64, error) {
-	entries, err := migrations.FS.ReadDir(".")
-	if err != nil {
-		return 0, fmt.Errorf("read migration registry: %w", err)
-	}
-	var versions []int64
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		v, ok := parseMigrationVersion(entry.Name())
-		if !ok {
-			return 0, fmt.Errorf("migration file %q does not begin with a numeric version", entry.Name())
-		}
-		versions = append(versions, v)
-	}
-	if len(versions) == 0 {
-		return 0, errors.New("migration registry is empty")
-	}
-	sort.Slice(versions, func(i, j int) bool { return versions[i] < versions[j] })
-	return versions[len(versions)-1], nil
-}
-
-// parseMigrationVersion extracts the leading numeric version from a goose
-// migration filename (e.g. "00002_add_foo.sql" -> 2).
-func parseMigrationVersion(name string) (int64, bool) {
-	base := filepath.Base(name)
-	idx := strings.IndexByte(base, '_')
-	if idx <= 0 {
-		return 0, false
-	}
-	var version int64
-	if _, err := fmt.Sscanf(base[:idx], "%d", &version); err != nil {
-		return 0, false
-	}
-	return version, true
-}
-
 // migrationCommitMessage is the one-line Dolt commit message for an applied
 // migration: `migrate: v<N> <file>`.
 func migrationCommitMessage(result *goose.MigrationResult) string {
@@ -857,7 +821,7 @@ func migrationCommitMessage(result *goose.MigrationResult) string {
 // file goose applies on a fresh workspace defines what adoption must verify on
 // a pre-goose one.
 func baselineSchema() (map[string][]string, error) {
-	name, err := baselineFileName()
+	name, err := migrations.BaselineFileName()
 	if err != nil {
 		return nil, err
 	}
@@ -870,23 +834,6 @@ func baselineSchema() (map[string][]string, error) {
 		return nil, fmt.Errorf("baseline migration %q defines no tables", name)
 	}
 	return schema, nil
-}
-
-// baselineFileName is the registry file whose version is baselineVersion.
-func baselineFileName() (string, error) {
-	entries, err := migrations.FS.ReadDir(".")
-	if err != nil {
-		return "", fmt.Errorf("read migration registry: %w", err)
-	}
-	for _, entry := range entries {
-		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
-			continue
-		}
-		if v, ok := parseMigrationVersion(entry.Name()); ok && v == baselineVersion {
-			return entry.Name(), nil
-		}
-	}
-	return "", fmt.Errorf("no baseline migration (v%d) found in registry", baselineVersion)
 }
 
 // gooseUpSection returns the SQL between the goose Up and Down markers, so the

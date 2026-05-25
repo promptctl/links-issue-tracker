@@ -1,0 +1,215 @@
+# goreleaser config for lit.
+#
+# CONFIG VERSION: goreleaser v2 syntax. The cross-compile image tag is
+# `goreleaser-cross:v1.26.2-3` — that "v1.x.y" naming is the cross-image
+# release line, NOT the bundled goreleaser version. The image bundles
+# goreleaser v2 (the v1.26.2-3 build picked up "feat: bump goreleaser to
+# v2.16.0" from goreleaser-cross master). release-validate proved this:
+# trying to run it without `version: 2` here failed with "only version: 2
+# configuration files are supported". Do not be tempted by the v1 tag name.
+#
+# CGO is required by gozstd in Dolt; the cross image owns the per-target C
+# toolchains (osxcross / mingw / glibc), invoked via the per-target CC env
+# entries below.
+#
+# [LAW:one-source-of-truth] The version/commit/date a release reports come from
+# a single place: the ldflags injected here. internal/version.{Version,Commit,Date}
+# are the only sinks; no other code computes those fields.
+#
+# [LAW:single-enforcer] release-validate.yml is the one place that proves this
+# config produces a working release; release.yml is the one place that
+# publishes. Same Docker image tag exercises both.
+
+version: 2
+
+project_name: lit
+
+# No `before.hooks` — earlier iterations ran `go mod tidy` here, but that
+# can mutate go.mod/go.sum during a tagged release build, so artifacts
+# would be built from a working tree that no longer matches the tagged
+# commit. [LAW:single-enforcer] tidiness is enforced ONCE, in CI on every
+# PR/master push (.github/workflows/ci.yml "go mod tidy check"), BEFORE a
+# tag is cut — not at release time when mutation is destructive.
+
+builds:
+  - id: lit
+    main: ./cmd/lit
+    binary: lit
+    # CGO is REQUIRED: Dolt's embedded MySQL library (gozstd, the regex build
+    # tag) does not build with CGO_ENABLED=0. release.yml runs goreleaser
+    # inside the ghcr.io/goreleaser/goreleaser-cross image, which ships with
+    # the C cross-compilers for every target below (osxcross for darwin,
+    # mingw for windows, glibc/musl for linux). Per-target CC is selected via
+    # the template-driven env entries below — that is the standard
+    # goreleaser-cross pattern.
+    #
+    # [LAW:single-enforcer] One Docker image owns the cross-toolchain inventory;
+    # nothing in this repo installs compilers ad-hoc.
+    env:
+      - CGO_ENABLED=1
+      # CC + CXX per target — both required because go-icu-regex has C++ source
+      # (file.cpp). Without CXX, Go falls back to the host's default g++ which
+      # produces "unrecognized -arch" errors when linking cross-targets.
+      # Selects the right cross-compiler from the goreleaser-cross base image
+      # (osxcross for darwin, mingw for windows, gnu-gcc for linux).
+      - >-
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "arm64" }}CC=oa64-clang{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "arm64" }}CXX=oa64-clang++{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" }}CXX=x86_64-w64-mingw32-g++{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
+          {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" }}CXX=x86_64-linux-gnu-g++{{- end }}
+          {{- if eq .Arch "arm64" }}CXX=aarch64-linux-gnu-g++{{- end }}
+        {{- end -}}
+      # CGO include + link paths per target — points cgo at the ICU prefix
+      # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Empty
+      # for linux/amd64 because that target uses the system libicu-dev which
+      # is already on the default include/lib search path.
+      #
+      # We set CGO_CPPFLAGS (preprocessor: -I) so the include path applies to
+      # BOTH C and C++ source. go-icu-regex has file.cpp; CGO_CFLAGS alone
+      # is C-only and would leave the C++ include search path empty (-> the
+      # observed "unicode/regex.h not found" failure mode).
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
+          CGO_CPPFLAGS=
+        {{- else -}}
+          CGO_CPPFLAGS=-I/opt/icu/{{ .Os }}_{{ .Arch }}/include
+        {{- end -}}
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
+          CGO_LDFLAGS=
+        {{- else -}}
+          CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib
+        {{- end -}}
+      # icu_static build tag: the cross-builds produce ONLY static libs
+      # (--enable-static --disable-shared), so go-icu-regex's static-link
+      # cgo recipe is the one we want. The linux/amd64 native build uses
+      # the system dynamic libs, which is its non-static recipe — handled
+      # by leaving the tag unset for that target only.
+      - >-
+        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
+        {{- else -}}
+          GOFLAGS=-tags=icu_static
+        {{- end -}}
+    # goos/goarch enumerate every target we know how to build; the active
+    # set ships only those NOT in the ignore: block below. Listing windows
+    # here even though it's currently ignored keeps the goreleaser config
+    # forward-looking for when links-downgrade-t244.7 re-enables it (single
+    # ignore-line removal, no goos restructure).
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ignore:
+      # Windows: internal/store/workspace_lock.go uses POSIX flock primitives
+      # (syscall.Flock / LOCK_SH / LOCK_EX / LOCK_NB / LOCK_UN) which do not
+      # exist on Windows. Adding Windows release support requires factoring
+      # workspace_lock.go behind a build-tagged interface (POSIX + LockFileEx
+      # implementations). Tracked as a follow-up under the downgrade epic.
+      - goos: windows
+        goarch: amd64
+      - goos: windows
+        goarch: arm64
+      # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
+      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Cross-
+      # compiling Intel-Mac binaries from Linux requires either custom
+      # cctools-x86_64 layers in build/Dockerfile.release or switching to
+      # zig cc. Tracked as a follow-up under the downgrade epic.
+      - goos: darwin
+        goarch: amd64
+    flags:
+      - -trimpath
+      - -buildvcs=false
+    ldflags:
+      - -s -w
+      # [LAW:one-source-of-truth] {{ .Version }} (NOT {{ .Tag }}) used in all
+      # three places a version appears: ldflag, archive filename, manifest
+      # field. For a tagged release vX.Y.Z, goreleaser's .Version is X.Y.Z
+      # (v stripped); for snapshot mode, it's the snapshot template's output
+      # (e.g. 0.0.1-snapshot+abc1234). Using one template across all surfaces
+      # means the binary's reported version, the archive's version segment,
+      # and the manifest's `version` field are bit-identical — no drift.
+      # Cosmetic note: `lit version` therefore reports "lit 0.1.0", not
+      # "lit v0.1.0" — same convention as kubectl/helm/terraform.
+      - -X github.com/bmf/links-issue-tracker/internal/version.Version={{ .Version }}
+      - -X github.com/bmf/links-issue-tracker/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/bmf/links-issue-tracker/internal/version.Date={{ .Date }}
+
+archives:
+  - id: lit
+    # name_template MUST match tools/mkmanifest's platformFromFilename parser:
+    # `lit_<version>_<goos>_<goarch>.<ext>` (underscore-separated). If this
+    # template changes, that parser changes in the same PR.
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    # Pin the flat-archive shape explicitly. scripts/install.sh's pre-extraction
+    # validator rejects any entry containing `/` (path-traversal defense), which
+    # means a wrapped-in-directory archive would be rejected as malformed.
+    # Goreleaser's current default is `false`, but a default change or an
+    # accidental edit here would silently desync the producer/consumer contract.
+    # [LAW:single-enforcer] the producer declares the invariant the consumer's
+    # validator depends on, so the consumer is verifying a *documented* shape.
+    wrap_in_directory: false
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  # Default name: checksums.txt. mkmanifest reads this exact file.
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+snapshot:
+  # Local --snapshot invocation gets a clearly-non-release version so a
+  # snapshot can never be confused with a tagged release in flight.
+  version_template: "{{ incpatch .Version }}-snapshot+{{.ShortCommit}}"
+
+# Release publishing is OWNED BY .github/workflows/release.yml, not goreleaser.
+# goreleaser builds artifacts + checksums into dist/; the workflow then runs
+# mkmanifest to emit release-manifest.json, and `gh release create` publishes
+# everything atomically.
+#
+# Why split: goreleaser has no hook point between "checksums.txt exists" and
+# "release is published" — we need exactly that point to invoke mkmanifest
+# with the actual checksums it reads. Owning publish in release.yml puts the
+# ordering under explicit control rather than a missing goreleaser hook.
+#
+# [LAW:single-enforcer] release.yml is the one place that knows the sequence
+# build → manifest → publish. goreleaser's job ends at dist/.
+release:
+  disable: true
+
+changelog:
+  use: github
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch

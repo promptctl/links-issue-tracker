@@ -24,6 +24,20 @@ jobs:
         with:
           go-version-file: go.mod
 
+      # Enforce module-file tidiness BEFORE a release tag can be cut. The
+      # release pipeline (.goreleaser.yml) no longer runs `go mod tidy` as
+      # a before-hook because that would mutate go.mod/go.sum at release
+      # time, divorcing the published artifacts from the tagged commit.
+      # [LAW:single-enforcer] this is the one place tidiness is checked.
+      - name: go mod tidy check
+        run: |
+          set -euo pipefail
+          go mod tidy
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::go.mod/go.sum are not tidy. Run 'go mod tidy' locally and commit the diff above." >&2
+            exit 1
+          fi
+
       - name: Install Dolt
         run: |
           curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh

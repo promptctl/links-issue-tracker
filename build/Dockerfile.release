@@ -1,0 +1,133 @@
+# Lit's release-builder image: goreleaser-cross + ICU built from source for
+# every target platform Lit ships. We need this because the underlying
+# `go-icu-regex` package (transitive Dolt dep) hard-requires the ICU C library
+# headers and shared objects at link time, and no stock cross-toolchain ships
+# ICU for darwin or mingw targets.
+#
+# Supported targets (matches the goos/goarch matrix in .goreleaser.yml):
+#   - linux/amd64   (native, uses apt's system libicu-dev)
+#   - linux/arm64   (cross from amd64, uses aarch64-linux-gnu binutils)
+#   - darwin/arm64  (cross via osxcross, aarch64-apple-darwin*-* tools)
+#
+# DELIBERATELY UNSUPPORTED (both tracked as follow-ups under the downgrade epic):
+#
+#   darwin/amd64 (Intel Mac): goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
+#     x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Returning Intel
+#     Mac to the matrix needs either custom cctools-x86_64 layers here or a
+#     swap to zig cc.
+#
+#   windows/amd64: lit's internal/store/workspace_lock.go uses POSIX flock
+#     primitives that don't exist on Windows. The blocker is in lit's source,
+#     not the toolchain — the goreleaser-cross image's mingw works fine and
+#     we previously had a working ICU cross-build for windows here. Returning
+#     Windows to the matrix needs workspace_lock.go factored behind a
+#     build-tagged interface (POSIX + LockFileEx implementations).
+#
+# STRUCTURE: multi-stage build. The three cross-* stages each depend only on
+# `native-icu` (which provides the bootstrap install ICU needs for cross-builds)
+# and run IN PARALLEL during `docker buildx build`. The `final` stage then
+# COPYs each /opt/icu/<target>/ prefix from its source stage into one image.
+#
+# Why parallel: ICU is ~3 min per cross-build on a 4-vcpu runner. Sequential =
+# ~9 min for three targets; parallel via stages ≈ ~4 min. Per-stage caching
+# also means editing one target does not invalidate the other two.
+#
+# [LAW:single-enforcer] release-validate.yml builds this image once per
+# Dockerfile change (GHA layer cache reuses unchanged stages); release.yml
+# uses the same Dockerfile. One source.
+# [LAW:one-source-of-truth] ICU version is pinned via build args; the
+# .goreleaser.yml does not duplicate it.
+
+# -----------------------------------------------------------------------------
+# Stage: base
+# Common apt deps + ICU source download. Every downstream stage starts here.
+# -----------------------------------------------------------------------------
+FROM ghcr.io/goreleaser/goreleaser-cross:v1.26.2-3 AS base
+
+ARG ICU_MAJOR=75
+ARG ICU_MINOR=1
+
+RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        build-essential \
+        libicu-dev \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /tmp/icu-build
+RUN curl -fsSL \
+      "https://github.com/unicode-org/icu/releases/download/release-${ICU_MAJOR}-${ICU_MINOR}/icu4c-${ICU_MAJOR}_${ICU_MINOR}-src.tgz" \
+      -o icu.tgz \
+    && mkdir -p src \
+    && tar -xzf icu.tgz -C src --strip-components=1 \
+    && rm icu.tgz
+
+COPY build/icu-cross-build.sh /usr/local/bin/icu-cross-build
+RUN chmod +x /usr/local/bin/icu-cross-build
+
+# -----------------------------------------------------------------------------
+# Stage: native-icu
+# Native amd64 ICU build — every cross-build needs this as --with-cross-build
+# bootstrap because ICU's build system runs its own tools mid-configure.
+# -----------------------------------------------------------------------------
+FROM base AS native-icu
+RUN cp -r /tmp/icu-build/src /tmp/icu-build/native-build \
+    && cd /tmp/icu-build/native-build/source \
+    && ./runConfigureICU Linux \
+        --enable-static --disable-shared \
+        --disable-tests --disable-samples \
+    && make -j"$(nproc)"
+
+# -----------------------------------------------------------------------------
+# Stage: cross-linux-arm64
+# Runs in parallel with the other cross-* stages.
+# -----------------------------------------------------------------------------
+FROM native-icu AS cross-linux-arm64
+RUN icu-cross-build linux arm64 \
+    aarch64-linux-gnu \
+    aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ \
+    /usr/bin/aarch64-linux-gnu \
+    ""
+
+# -----------------------------------------------------------------------------
+# Stage: cross-darwin-arm64
+# -----------------------------------------------------------------------------
+FROM native-icu AS cross-darwin-arm64
+RUN icu-cross-build darwin arm64 \
+    aarch64-apple-darwin \
+    oa64-clang oa64-clang++ \
+    "/usr/local/osxcross/bin/aarch64-apple-darwin*" \
+    /usr/local/osxcross/bin
+
+# -----------------------------------------------------------------------------
+# Stage: final
+# Assembles the per-target ICU prefixes from the parallel cross-* stages into
+# the single image that release-validate / release will run goreleaser against.
+# -----------------------------------------------------------------------------
+FROM base AS final
+# Docker RUN defaults to /bin/sh -c, which on Debian-based images is dash.
+# The sanity-check RUN below relies on `set -o pipefail` (bash) and on
+# pipelines whose exit status must propagate. Pin the shell for this stage
+# so the build's correctness does not depend on whichever /bin/sh the base
+# image happens to ship. [LAW:types-are-the-program] the stage's shell is
+# part of its type; subsequent RUNs do not re-declare it.
+SHELL ["/bin/bash", "-c"]
+COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
+COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
+
+# Sanity check at image-build time — fail loudly if any prefix is missing
+# headers/libs the consumer expects. [LAW:verifiable-goals]
+RUN set -euo pipefail; \
+    for target in linux_arm64 darwin_arm64; do \
+        test -f "/opt/icu/${target}/include/unicode/regex.h" \
+            || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
+        ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \
+            || { echo "MISSING: ICU libraries in /opt/icu/${target}/lib/" >&2; exit 1; }; \
+    done; \
+    echo "ICU prefixes verified for all targets."
+
+WORKDIR /go/src/app
