@@ -37,6 +37,27 @@
 
 FROM ghcr.io/goreleaser/goreleaser-cross:v1.26.2-3
 
+# DISCOVERY: print what cross-toolchain binaries this image actually ships,
+# so the cross_build calls below reference real paths instead of guesses.
+# Output appears in the buildx log; consult it when updating the AR/RANLIB
+# globs below.
+RUN set -euo pipefail; \
+    echo "=== osxcross-related paths and files ==="; \
+    ls -la /osxcross 2>/dev/null || echo "  /osxcross: absent"; \
+    ls -la /osxcross/bin 2>/dev/null | head -10 || echo "  /osxcross/bin: absent"; \
+    echo "=== which clang/ar wrappers are on PATH ==="; \
+    for tool in o64-clang oa64-clang o64-ar oa64-ar; do \
+        which "$tool" 2>/dev/null && "$tool" --version 2>/dev/null | head -1 || echo "  $tool: not on PATH"; \
+    done; \
+    echo "=== any darwin-named binaries anywhere ==="; \
+    find / -maxdepth 5 -name '*-apple-darwin*-ar' -type f 2>/dev/null | head -20 || true; \
+    find / -maxdepth 5 -name '*-apple-darwin*-ranlib' -type f 2>/dev/null | head -20 || true; \
+    echo "=== mingw + linux-gnu ar/ranlib (sanity) ==="; \
+    ls -la /usr/bin/x86_64-w64-mingw32-ar /usr/bin/x86_64-w64-mingw32-ranlib 2>/dev/null || echo "  mingw: not at /usr/bin"; \
+    ls -la /usr/bin/aarch64-linux-gnu-ar /usr/bin/aarch64-linux-gnu-ranlib 2>/dev/null || echo "  aarch64-linux: not at /usr/bin"; \
+    echo "=== DISCOVERY-ONLY ITERATION; intentionally failing so the slow ICU build does not run before we know the right tool paths ==="; \
+    exit 1
+
 # Pin ICU version. Bumped manually when the go-icu-regex package upgrades its
 # minimum requirement OR when a security fix needs to land. The native libicu-dev
 # from apt is whatever Debian ships; it is used only for the linux/amd64 build
