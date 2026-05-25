@@ -15,9 +15,12 @@ Each tagged release (`vX.Y.Z`) creates a GitHub Release containing:
 | `release-manifest.json`                    | Machine-readable index linking the version → its schema-support range → per-platform artifacts. |
 
 The manifest schema is the Go type `release.Manifest` in
-`internal/release/manifest.go`. Producer (`tools/mkmanifest`) and consumers
-(`lit version`'s embedded view, future `lit downgrade`) share that one type;
-the JSON on disk and the type in code cannot drift.
+`internal/release/manifest.go`. The producer (`tools/mkmanifest`) emits
+JSON conforming to that type; future consumers (the `lit downgrade`
+command landing in `.4`) decode it back into the same type, so the JSON
+on disk and the type in code cannot drift. (`lit version` reports
+`version.Info` only — it does not currently embed the full manifest;
+embedding can be added later via `go:embed` without changing the schema.)
 
 ## Cutting a release
 
@@ -75,12 +78,17 @@ podman run --rm -v "$PWD":/go/src/app -w /go/src/app \
   lit-release-builder:local \
   release --snapshot --clean
 
-# Then run mkmanifest against dist/ to produce release-manifest.json
+# Then run mkmanifest against dist/ to produce release-manifest.json.
+# `tag` (v-prefixed) and `version` (v-stripped) are BOTH required —
+# tag becomes the URL path segment, version goes into archive filenames.
+# Mirrors the release.yml step exactly so the dry-run matches CI.
 VERSION=$(jq -r .version dist/metadata.json)
+TAG=$(jq -r .tag dist/metadata.json)
 COMMIT=$(jq -r .commit dist/metadata.json | cut -c1-7)
 DATE=$(jq -r .date dist/metadata.json)
 go run ./tools/mkmanifest \
   -version "$VERSION" \
+  -tag "$TAG" \
   -commit "$COMMIT" \
   -date "$DATE" \
   -dist ./dist \
@@ -103,8 +111,10 @@ as a 7-day workflow artifact. No release is published.
 
 ## What `lit version` reports
 
-After a tagged build, the binary's `lit version` reports the tag, short SHA,
-and build timestamp — injected by goreleaser via `-ldflags -X`:
+After a tagged build, the binary's `lit version` reports the version
+(goreleaser's `.Version` — the tag with the leading `v` stripped), the
+short SHA, and the build timestamp — injected by goreleaser via
+`-ldflags -X`:
 
 ```
 $ lit version
