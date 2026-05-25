@@ -8,11 +8,20 @@
 #   - linux/amd64   (native, uses apt's system libicu-dev)
 #   - linux/arm64   (cross from amd64, uses aarch64-linux-gnu binutils)
 #   - darwin/arm64  (cross via osxcross, aarch64-apple-darwin*-* tools)
-#   - windows/amd64 (cross via mingw, x86_64-w64-mingw32-* tools)
 #
-# DELIBERATELY UNSUPPORTED: darwin/amd64. goreleaser-cross v1.26.2-3 ships
-# osxcross WITHOUT x86_64-apple-darwin cctools (Apple's Intel-Mac sunset).
-# Intel Mac users `go install` from source.
+# DELIBERATELY UNSUPPORTED (both tracked as follow-ups under the downgrade epic):
+#
+#   darwin/amd64 (Intel Mac): goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
+#     x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Returning Intel
+#     Mac to the matrix needs either custom cctools-x86_64 layers here or a
+#     swap to zig cc.
+#
+#   windows/amd64: lit's internal/store/workspace_lock.go uses POSIX flock
+#     primitives that don't exist on Windows. The blocker is in lit's source,
+#     not the toolchain — the goreleaser-cross image's mingw works fine and
+#     we previously had a working ICU cross-build for windows here. Returning
+#     Windows to the matrix needs workspace_lock.go factored behind a
+#     build-tagged interface (POSIX + LockFileEx implementations).
 #
 # STRUCTURE: multi-stage build. The three cross-* stages each depend only on
 # `native-icu` (which provides the bootstrap install ICU needs for cross-builds)
@@ -85,16 +94,6 @@ RUN icu-cross-build linux arm64 \
     ""
 
 # -----------------------------------------------------------------------------
-# Stage: cross-windows-amd64
-# -----------------------------------------------------------------------------
-FROM native-icu AS cross-windows-amd64
-RUN icu-cross-build windows amd64 \
-    x86_64-w64-mingw32 \
-    x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ \
-    /usr/bin/x86_64-w64-mingw32 \
-    ""
-
-# -----------------------------------------------------------------------------
 # Stage: cross-darwin-arm64
 # -----------------------------------------------------------------------------
 FROM native-icu AS cross-darwin-arm64
@@ -111,13 +110,12 @@ RUN icu-cross-build darwin arm64 \
 # -----------------------------------------------------------------------------
 FROM base AS final
 COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
-COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
 COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
 
 # Sanity check at image-build time — fail loudly if any prefix is missing
 # headers/libs the consumer expects. [LAW:verifiable-goals]
 RUN set -euo pipefail; \
-    for target in linux_arm64 darwin_arm64 windows_amd64; do \
+    for target in linux_arm64 darwin_arm64; do \
         test -f "/opt/icu/${target}/include/unicode/regex.h" \
             || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
         ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \

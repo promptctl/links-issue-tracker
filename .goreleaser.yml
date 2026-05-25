@@ -114,16 +114,20 @@ builds:
       - amd64
       - arm64
     ignore:
-      # Windows on arm64: Dolt's MySQL driver path is exercised on amd64; skip
-      # arm64-windows until there is a real consumer to justify the test matrix.
+      # Windows: internal/store/workspace_lock.go uses POSIX flock primitives
+      # (syscall.Flock / LOCK_SH / LOCK_EX / LOCK_NB / LOCK_UN) which do not
+      # exist on Windows. Adding Windows release support requires factoring
+      # workspace_lock.go behind a build-tagged interface (POSIX + LockFileEx
+      # implementations). Tracked as a follow-up under the downgrade epic.
+      - goos: windows
+        goarch: amd64
       - goos: windows
         goarch: arm64
       # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
-      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Building
-      # x86_64 darwin from Linux is not possible with this image; Intel Mac
-      # users `go install` from source. If demand surfaces, the path is
-      # either custom cctools-x86_64 layers in build/Dockerfile.release or
-      # switching to zig cc.
+      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Cross-
+      # compiling Intel-Mac binaries from Linux requires either custom
+      # cctools-x86_64 layers in build/Dockerfile.release or switching to
+      # zig cc. Tracked as a follow-up under the downgrade epic.
       - goos: darwin
         goarch: amd64
     flags:
