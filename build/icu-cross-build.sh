@@ -54,7 +54,17 @@ PATH="${path_extra:+${path_extra}:}${PATH}" \
     ./configure --host="$triplet" --prefix="$prefix" \
         --with-cross-build=/tmp/icu-build/native-build/source \
         --enable-static --disable-shared \
-        --disable-tests --disable-samples
+        --disable-tests --disable-samples \
+        --disable-tools --disable-extras --disable-icuio --disable-layoutex
+        # --disable-tools: the only consumer of /opt/icu/<target>/ is
+        #   go-icu-regex, which only links libicuuc/libicui18n/libicudata.
+        #   ICU's own makeconv/genrb tools are build-time bootstrap (the
+        #   native build provides them via --with-cross-build); building
+        #   them again for the cross target failed for mingw because their
+        #   target-side link line uses Windows-specific lib names that
+        #   ICU's static-cross-build doesn't produce.
+        # --disable-extras / --disable-icuio / --disable-layoutex: same
+        #   reasoning — we don't link them, so don't build them.
 make -j"$(nproc)"
 make install
 rm -rf "$builddir"
