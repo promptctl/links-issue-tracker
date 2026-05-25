@@ -82,9 +82,21 @@ realpath_compat() {
 
 mode="source"
 release_tag=""
+# `mode_flag_seen` tracks whether a mode-selecting flag has been passed.
+# `--from-release` and `--latest-release` are mutually exclusive — accepting
+# both silently (last-wins) means an accidental extra flag changes the
+# install source without warning. [LAW:no-mode-explosion] one mode per
+# invocation; conflicts are a usage error, not last-wins.
+mode_flag_seen=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --from-release)
+            if [ -n "$mode_flag_seen" ]; then
+                echo "error: cannot combine $mode_flag_seen with --from-release" >&2
+                echo "usage: $0 [--from-release <tag>|--latest-release]" >&2
+                exit 2
+            fi
+            mode_flag_seen="--from-release"
             mode="release"
             release_tag="${2:-}"
             if [ -z "$release_tag" ]; then
@@ -94,6 +106,12 @@ while [ $# -gt 0 ]; do
             shift 2
             ;;
         --latest-release)
+            if [ -n "$mode_flag_seen" ]; then
+                echo "error: cannot combine $mode_flag_seen with --latest-release" >&2
+                echo "usage: $0 [--from-release <tag>|--latest-release]" >&2
+                exit 2
+            fi
+            mode_flag_seen="--latest-release"
             mode="latest"
             shift
             ;;
