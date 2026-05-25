@@ -44,21 +44,36 @@ builds:
     # nothing in this repo installs compilers ad-hoc.
     env:
       - CGO_ENABLED=1
-      # CC per target — selects the right cross-compiler from the goreleaser-cross
-      # base image (osxcross for darwin, mingw for windows, gnu-gcc for linux).
+      # CC + CXX per target — both required because go-icu-regex has C++ source
+      # (file.cpp). Without CXX, Go falls back to the host's default g++ which
+      # produces "unrecognized -arch" errors when linking cross-targets.
+      # Selects the right cross-compiler from the goreleaser-cross base image
+      # (osxcross for darwin, mingw for windows, gnu-gcc for linux).
       - >-
         {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "amd64" }}CC=o64-clang{{- end }}
           {{- if eq .Arch "arm64" }}CC=oa64-clang{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "darwin" -}}
+          {{- if eq .Arch "arm64" }}CXX=oa64-clang++{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "windows" -}}
           {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
         {{- end -}}
       - >-
+        {{- if eq .Os "windows" -}}
+          {{- if eq .Arch "amd64" }}CXX=x86_64-w64-mingw32-g++{{- end }}
+        {{- end -}}
+      - >-
         {{- if eq .Os "linux" -}}
           {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
           {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
+        {{- end -}}
+      - >-
+        {{- if eq .Os "linux" -}}
+          {{- if eq .Arch "amd64" }}CXX=x86_64-linux-gnu-g++{{- end }}
+          {{- if eq .Arch "arm64" }}CXX=aarch64-linux-gnu-g++{{- end }}
         {{- end -}}
       # CGO_CFLAGS / CGO_LDFLAGS per target — points cgo at the ICU prefix
       # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Empty
