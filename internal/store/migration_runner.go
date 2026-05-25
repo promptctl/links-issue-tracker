@@ -633,6 +633,29 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	if err != nil {
 		return migrationState{}, err
 	}
+	// [LAW:types-are-the-program] Disk shape outranks goose bookkeeping
+	// when the two disagree. issue_history is a pre-goose-only table —
+	// the canonical baseline does not create it; reconcileToBaseline
+	// drops it as part of the legacy→v1 bridge. Its presence is
+	// conclusive evidence the workspace last reached a pre-goose
+	// canonical shape, regardless of what goose_db_version claims.
+	//
+	// This probe re-routes "buggy older binary fabricated goose rows on
+	// a pre-goose workspace" — which used to trap in phaseManaged with
+	// recoverAheadOfRegistry refusal — back into phaseAdopt where the
+	// bridge can run. The fabricated rows are wiped by reconcile and
+	// adoption restamps cleanly.
+	//
+	// [LAW:one-source-of-truth] The live schema is canonical; the
+	// goose log is derived state that should reflect it. When they
+	// disagree, the schema wins and the log is reconciled to match.
+	legacyMarker, err := s.tableExists(ctx, "issue_history")
+	if err != nil {
+		return migrationState{}, err
+	}
+	if legacyMarker {
+		return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
+	}
 	gooseManaged, err := s.tableExists(ctx, gooseVersionTable)
 	if err != nil {
 		return migrationState{}, err
