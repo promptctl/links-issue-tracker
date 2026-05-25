@@ -1,0 +1,138 @@
+name: Release
+
+# Triggered by tag push matching `v*.*.*`. Builds the custom release-builder
+# image (goreleaser-cross + ICU cross-toolchains for every Lit target), runs
+# goreleaser inside it to produce per-platform archives + checksums, runs
+# mkmanifest, then publishes everything atomically via `gh release create`.
+#
+# release-validate.yml exercises this exact path on every PR + master push, so
+# the only way this workflow surprises is when the tag context differs (e.g.,
+# the changelog generation) — those differences are deliberately small.
+#
+# workflow_dispatch runs the same build path in --snapshot mode (no publish)
+# so the pipeline can be exercised on-demand against the current commit
+# without cutting a real release.
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+  workflow_dispatch:
+
+permissions:
+  contents: write    # creates the GitHub Release and uploads assets
+  packages: read     # pull goreleaser-cross base image from ghcr
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # The `tags: v*.*.*` filter is a glob — it matches `v0.1.0-rc1` too,
+    # because the trailing `*` accepts `0-rc1`. We don't want prerelease
+    # tags to publish a real release, so guard the entire job: on tag push,
+    # only run when the tag name is a clean semver (no `-`). On
+    # workflow_dispatch the guard no-ops (ref_name is the branch, no `-`
+    # convention applies). [LAW:types-are-the-program] the glob's accept
+    # shape is wider than the concept "formal release version"; the guard
+    # tightens the boundary so prerelease tags are rejected by construction.
+    if: github.event_name == 'workflow_dispatch' || !contains(github.ref_name, '-')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same custom image release-validate uses. GHA layer cache is shared
+      # across workflows (scope=release-builder) so the slow ICU cross-build
+      # layers are typically already populated by a recent validate run.
+      - name: Build release-builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile.release
+          tags: lit-release-builder:local
+          load: true
+          cache-from: type=gha,scope=release-builder
+          cache-to: type=gha,scope=release-builder,mode=max
+
+      # On tag push: full clean build (no --snapshot — uses the real tag).
+      # On workflow_dispatch: --snapshot --clean (uses a synthetic version).
+      - name: Build artifacts
+        run: |
+          set -euo pipefail
+          ARGS="release --clean"
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ARGS="release --snapshot --clean"
+          fi
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            lit-release-builder:local \
+            $ARGS
+
+      # mkmanifest reads version/tag/commit/date from dist/metadata.json — the
+      # SAME values goreleaser injected into the binaries via ldflags. Computing
+      # them freshly here (git rev-parse / date -u) would drift from what
+      # `lit version` reports, breaking the [LAW:one-source-of-truth] contract
+      # the manifest schema rests on. `tag` (v-prefixed) is distinct from
+      # `version` (v-stripped) — the former is the URL path segment
+      # `gh release create` publishes under; mixing them produces 404 URLs.
+      # dist/ was written by docker-run-as-root; chown back to runner user so
+      # mkmanifest can write into it.
+      - name: Generate release manifest
+        run: |
+          set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" dist
+          VERSION=$(jq -r .version dist/metadata.json)
+          TAG=$(jq -r .tag dist/metadata.json)
+          COMMIT=$(jq -r .commit dist/metadata.json | cut -c1-7)
+          DATE=$(jq -r .date dist/metadata.json)
+          go run ./tools/mkmanifest \
+            -version "$VERSION" \
+            -tag "$TAG" \
+            -commit "$COMMIT" \
+            -date "$DATE" \
+            -dist ./dist \
+            -base-url https://github.com/${{ github.repository }}/releases/download \
+            -out ./dist/release-manifest.json
+
+      # Tag push: publish the GitHub Release with archives + checksums + manifest.
+      - name: Publish GitHub Release (tag only)
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          # Asset glob mirrors goreleaser's archive name_template exactly:
+          # `lit_<version>_<goos>_<goarch>.tar.gz` — four underscore-separated
+          # parts. The triple-* glob requires that shape, which rejects any
+          # other tar.gz that lands in dist/ (e.g. a future source archive
+          # `lit-<version>.tar.gz`, or anything goreleaser might emit that
+          # isn't a per-platform archive). [LAW:enumeration-gap] the glob's
+          # accept-shape mirrors the producer's actual output, not a looser
+          # superset. windows/amd64 is currently ignored (see ignore: block
+          # in .goreleaser.yml); re-add ./dist/lit_*_*_*.zip alongside when
+          # Windows comes back via links-downgrade-t244.7.
+          gh release create "${{ github.ref_name }}" \
+            ./dist/lit_*_*_*.tar.gz ./dist/checksums.txt ./dist/release-manifest.json \
+            --title "${{ github.ref_name }}" \
+            --generate-notes
+
+      # workflow_dispatch: upload the snapshot dist/ as a 7-day workflow
+      # artifact so the dry-run is inspectable without creating a release.
+      - name: Upload snapshot artifacts (dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-artifact@v4
+        with:
+          name: lit-snapshot-${{ github.sha }}
+          path: dist/
+          retention-days: 7

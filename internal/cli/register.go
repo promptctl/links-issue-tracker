@@ -106,6 +106,10 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		return runCompletion(stdout, args)
 	}
 
+	versionRun := func(args []string) error {
+		return runVersion(stdout, args)
+	}
+
 	depAccess := func(args []string) appAccessMode {
 		if len(args) > 0 && args[0] == "ls" {
 			return appAccessRead
@@ -126,6 +130,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.wsCmd(runQuickstart)},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
 			Run: completionRun},
+		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
+			Run: versionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
 			Run: withValidation(validateHooksCommandPath, r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runHooks(stdout, ws, args)

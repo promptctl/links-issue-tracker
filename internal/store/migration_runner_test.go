@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
+	"github.com/bmf/links-issue-tracker/internal/store/migrations"
 )
 
 // TestFreshOpenStampsBaselineVersion pins the fresh-workspace acceptance: Open
@@ -173,9 +174,9 @@ func mustCommit(t *testing.T, ctx context.Context, st *Store, msg string) {
 // set so a subsequent Open observes the stamp from the committed working set.
 func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) int64 {
 	t.Helper()
-	registryMax, err := registryMaxVersion()
+	registryMax, err := migrations.MaxVersion()
 	if err != nil {
-		t.Fatalf("registryMaxVersion() error = %v", err)
+		t.Fatalf("migrations.MaxVersion() error = %v", err)
 	}
 	ahead := registryMax + 1
 	withStore(t, ctx, doltRoot, func(st *Store) {
@@ -353,9 +354,9 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(fresh) error = %v", err)
 	}
-	registryMax, err := registryMaxVersion()
+	registryMax, err := migrations.MaxVersion()
 	if err != nil {
-		t.Fatalf("registryMaxVersion() error = %v", err)
+		t.Fatalf("migrations.MaxVersion() error = %v", err)
 	}
 	atMax, err := first.recordedMigrationVersion(ctx)
 	if err != nil {

@@ -1,0 +1,162 @@
+name: Release validate
+
+# Proves the full release pipeline end-to-end on every PR and every push to
+# master: builds the custom release-builder image (goreleaser-cross + ICU
+# cross-toolchains for every target Lit ships), runs goreleaser inside it
+# to produce per-platform archives + checksums, runs mkmanifest, and asserts
+# the resulting manifest has every expected platform with a valid SHA256.
+#
+# If this job is green, the next `v*.*.*` tag push will produce a working
+# GitHub Release; if it's red, the PR doesn't merge.
+#
+# [LAW:single-enforcer] Exactly one workflow proves the pipeline; release.yml
+# does the publish using the IDENTICAL build path (same Dockerfile, same
+# goreleaser invocation, same mkmanifest call). They differ only in what
+# happens after dist/ exists.
+#
+# [LAW:verifiable-goals] The acceptance check is a concrete artifact list +
+# manifest shape, not "did goreleaser exit 0" — a silent build skip cannot
+# pass jq's per-field assertions below.
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+  packages: read    # required to pull goreleaser-cross base image from ghcr
+
+concurrency:
+  group: release-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Build the custom release-builder image. GHA layer cache makes
+      # subsequent runs reuse the (slow) ICU cross-build layers — only
+      # Dockerfile edits or ARG bumps invalidate them.
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build release-builder image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile.release
+          tags: lit-release-builder:local
+          load: true                       # make the image available to docker run
+          cache-from: type=gha,scope=release-builder
+          cache-to: type=gha,scope=release-builder,mode=max
+
+      # goreleaser check first — cheap config-syntax validation.
+      - name: goreleaser check (config syntax)
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            lit-release-builder:local \
+            check
+
+      # Full snapshot build inside the image; produces archives + checksums
+      # for every target in .goreleaser.yml.
+      - name: Build snapshot artifacts
+        run: |
+          set -euo pipefail
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            lit-release-builder:local \
+            release --snapshot --clean
+
+      # mkmanifest runs OUTSIDE the container (only needs Go, which the runner
+      # already has). The docker run that produced dist/ ran as root inside
+      # the container, so dist/ is owned by root on the host bind-mount;
+      # chown back to the runner user before mkmanifest tries to write into it.
+      #
+      # All four identity fields (version/tag/commit/date) come from
+      # goreleaser's dist/metadata.json — the SAME values goreleaser injected
+      # into the binaries via ldflags. Computing them freshly from git/date
+      # here would introduce drift between what `lit version` reports and
+      # what the manifest records. `tag` (v-prefixed) is distinct from
+      # `version` (v-stripped) — see mkmanifest's docstring for why both are
+      # required (URL segment vs filename match).
+      - name: Generate release manifest
+        run: |
+          set -euo pipefail
+          sudo chown -R "$(id -u):$(id -g)" dist
+          VERSION=$(jq -r .version dist/metadata.json)
+          TAG=$(jq -r .tag dist/metadata.json)
+          COMMIT=$(jq -r .commit dist/metadata.json | cut -c1-7)
+          DATE=$(jq -r .date dist/metadata.json)
+          go run ./tools/mkmanifest \
+            -version "$VERSION" \
+            -tag "$TAG" \
+            -commit "$COMMIT" \
+            -date "$DATE" \
+            -dist ./dist \
+            -base-url https://github.com/${{ github.repository }}/releases/download \
+            -out ./dist/release-manifest.json
+
+      # Assert the manifest is the shape we claim it is — concrete enough
+      # that a silent build skip fails this check, not just that goreleaser
+      # exited zero.
+      - name: Assert manifest shape
+        run: |
+          set -euo pipefail
+          MANIFEST=./dist/release-manifest.json
+
+          # jq predicates: every step uses an explicit value, NOT a bare `.`
+          # that rebinds across `|`. (`.x | type == "string" and length > 0`
+          # parses as `(.x | type) == "string" and (length > 0)` — the
+          # `length > 0` would be computed against the WHOLE manifest, not
+          # against .x. Be explicit.)
+          jq -e '(.version | type) == "string" and (.version | length) > 0' "$MANIFEST" >/dev/null
+          jq -e '
+            (.schema_support.min | type) == "number" and (.schema_support.min) >= 1 and
+            (.schema_support.max | type) == "number"
+          ' "$MANIFEST" >/dev/null
+          # URL shape: `<base>/<tag>/<filename>` where tag comes from
+          # dist/metadata.json. We assert the tag segment is literally
+          # present in every URL — that's what would have caught the bug
+          # where mkmanifest had been using the v-stripped version as the
+          # URL segment (producing /releases/download/0.1.0/... 404s
+          # instead of the correct /releases/download/v0.1.0/...).
+          TAG=$(jq -r .tag dist/metadata.json)
+          jq -e --arg tag "$TAG" '
+            (.artifacts | length) > 0 and
+            ((.artifacts) | all(.platform | test("^[a-z0-9]+/[a-z0-9]+$"))) and
+            ((.artifacts) | all(.url | startswith("https://github.com/"))) and
+            ((.artifacts) | all(.url | contains("/" + $tag + "/"))) and
+            ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
+          ' "$MANIFEST" >/dev/null
+
+          EXPECTED='["darwin/arm64","linux/amd64","linux/arm64"]'
+          GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
+          if [ "$GOT" != "$EXPECTED" ]; then
+            echo "manifest platforms mismatch" >&2
+            echo "  expected: $EXPECTED" >&2
+            echo "  got:      $GOT" >&2
+            exit 1
+          fi
+
+          echo "release-manifest.json shape OK; platforms: $GOT"
+
+      - name: Upload snapshot dist/ for inspection
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-validate-dist-${{ github.sha }}
+          path: dist/
+          retention-days: 7
