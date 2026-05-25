@@ -161,8 +161,19 @@ if [ -z "$TARGET_DIR" ] && command -v go >/dev/null 2>&1; then
     fi
 fi
 
-# Universal fallback. Works without Go installed.
-TARGET_DIR="${TARGET_DIR:-$HOME/.local/bin}"
+# Universal fallback. Works without Go installed. `${TARGET_DIR:-$HOME/...}`
+# only escape-hatches an unset TARGET_DIR; $HOME inside the default body is
+# evaluated under normal substitution rules, so an unset HOME (minimal /
+# non-login environments) would trip `set -u` with an unhelpful unbound-
+# variable error. Probe HOME explicitly and emit a targeted message instead.
+if [ -z "$TARGET_DIR" ]; then
+    if [ -z "${HOME:-}" ]; then
+        echo "error: cannot determine install directory — \$HOME is unset and no other source identified one" >&2
+        echo "       options: set GOBIN, or install Go (so GOPATH resolves), or run with HOME defined" >&2
+        exit 1
+    fi
+    TARGET_DIR="$HOME/.local/bin"
+fi
 mkdir -p "$TARGET_DIR"
 
 # --- mode dispatch -----------------------------------------------------------
