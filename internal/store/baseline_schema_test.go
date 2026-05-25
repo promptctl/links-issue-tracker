@@ -48,12 +48,19 @@ func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
 	}
 }
 
-// TestOpenRefusesPreConvergedColumnShape pins the column-level adoption gate: a
-// workspace carrying every baseline table but with a pre-converged column shape
-// (here, issues missing the topic column that the baseline requires)
-// must be refused, not silently stamped at v1. Table presence alone is not
-// "at baseline" — this is the deeper PR #119 failure shape.
-func TestOpenRefusesPreConvergedColumnShape(t *testing.T) {
+// TestOpenForwardMigratesPreConvergedColumnShape pins the contract that a
+// workspace carrying every baseline table but with a pre-converged column
+// shape (here, issues missing the topic column the baseline requires) is
+// FORWARD-MIGRATED to v1 — not refused. This is the recovery from the
+// commit-254f86b deletion that stranded such workspaces in "partial schema,
+// restore or recreate" (destroy your data) refusals.
+//
+// [LAW:no-silent-fallbacks] Old workspaces at any prior canonical shape
+// reach v1 by forward migration, not by being told to recreate themselves.
+// [LAW:dataflow-not-control-flow] The reconcile is idempotent and probe-
+// driven; the missing column gets filled regardless of which earlier shape
+// the workspace was at.
+func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -61,8 +68,13 @@ func TestOpenRefusesPreConvergedColumnShape(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	// Make the workspace pre-converged: drop a column the baseline requires,
-	// then remove goose history so the next Open hits the adoption gate.
+	// Seed a real issue so the forward migration must preserve it.
+	if _, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0}); err != nil {
+		_ = first.Close()
+		t.Fatalf("seed CreateIssue error = %v", err)
+	}
+	// Simulate a pre-converged shape: drop a column the baseline requires
+	// and remove goose history so the next Open hits the adoption path.
 	if err := first.ExecRawForTest(ctx, `ALTER TABLE issues DROP COLUMN topic`); err != nil {
 		_ = first.Close()
 		t.Fatalf("drop topic column error = %v", err)
@@ -79,14 +91,37 @@ func TestOpenRefusesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("Close(first) error = %v", err)
 	}
 
-	_, err = Open(ctx, doltRoot, "test-workspace-id")
-	if err == nil {
-		t.Fatal("Open() on a pre-converged workspace returned nil error; expected refusal")
+	// Reopen — reconcile must forward-migrate the workspace, NOT refuse it.
+	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(second) error = %v — reconcile must forward-migrate pre-converged workspaces, not refuse", err)
 	}
-	if !strings.Contains(err.Error(), "partial schema") {
-		t.Fatalf("error %q does not explain the partial-schema refusal", err)
+	defer second.Close()
+	// topic column is back at the canonical shape; verifyBaselineShape says yes.
+	_, missing, err := second.verifyBaselineShape(ctx)
+	if err != nil {
+		t.Fatalf("verifyBaselineShape() error = %v", err)
 	}
-	if !strings.Contains(err.Error(), "issues.topic") {
-		t.Fatalf("error %q does not name the missing issues.topic column", err)
+	if len(missing) != 0 {
+		t.Fatalf("after forward migration, baseline shape is still missing: %v", missing)
+	}
+	// goose was stamped at v1 by adoption.
+	v, err := second.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() error = %v", err)
+	}
+	if v != baselineVersion {
+		t.Fatalf("goose version = %d, want %d", v, baselineVersion)
+	}
+	// The seeded row survived the forward migration with its data intact.
+	issues, err := second.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"Pre-migration issue"}})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	if len(issues) != 1 {
+		t.Fatalf("expected 1 issue to survive forward migration, got %d", len(issues))
+	}
+	if issues[0].Title != "Pre-migration issue" {
+		t.Fatalf("issue title corrupted by migration: got %q", issues[0].Title)
 	}
 }
