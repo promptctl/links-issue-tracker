@@ -231,6 +231,32 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 		return changed, err
 	}
 	changed = changed || dropHistoryChanged
+	// [LAW:single-enforcer] Reconcile is the legacy→v1 bridge and owns
+	// BOTH schema translation AND bookkeeping cleanup. A workspace that
+	// reaches this function was classified phaseAdopt — by definition
+	// NOT phaseManaged — so any rows present in goose_db_version are
+	// fabricated: an older buggy binary inserted them without the
+	// migrations actually running (field signature: every row carries
+	// the same tstamp, evidence of a single INSERT loop). Drop the
+	// table; adoptPreGooseWorkspace recreates it and stamps the
+	// baseline cleanly.
+	//
+	// [LAW:types-are-the-program] The pre-condition for adoption is
+	// "no goose log, or a goose log we know is empty"; this gate
+	// enforces that pre-condition by construction so adoption's
+	// CreateVersionTable + Insert(baseline) cannot collide with lying
+	// rows the workspace carried in.
+	dropFabricatedGooseLog, err := s.execGatedMutation(
+		ctx,
+		guard,
+		`SELECT 1 FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'goose_db_version' LIMIT 1`,
+		`DROP TABLE goose_db_version`,
+		"drop fabricated goose_db_version (legacy workspace carried lying bookkeeping)",
+	)
+	if err != nil {
+		return changed, err
+	}
+	changed = changed || dropFabricatedGooseLog
 	// issue_events.assignee was renamed to actor. Probe-gated rename
 	// keeps the migration idempotent across fresh / migrated / pre-rename
 	// workspace states.

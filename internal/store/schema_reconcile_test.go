@@ -401,6 +401,106 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	}
 }
 
+// TestReconcileRecoversFromFabricatedGooseRows pins the contract for
+// workspaces that an older buggy binary partially-upgraded: the legacy
+// issue_history table is still present AND goose_db_version carries
+// fabricated rows (rows inserted at one tstamp without the migrations
+// actually running). Such workspaces were previously trapped in
+// phaseManaged → recoverAheadOfRegistry refusal, because the lying log
+// claimed a v1+ shape the workspace never had.
+//
+// Fix shape: disk-truth classification. issue_history's presence routes
+// the workspace through the legacy bridge regardless of goose
+// bookkeeping; reconcile drops the lying log along with issue_history;
+// adoption stamps a clean v1.
+//
+// [LAW:types-are-the-program] The accept-shape of "pre-goose workspace"
+// is "has issue_history," not "lacks goose_db_version." A workspace
+// that satisfies the first but violates the second is still pre-goose
+// — the goose log was fabricated, not produced by migrations.
+func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0})
+	if err != nil {
+		_ = first.Close()
+		t.Fatalf("seed CreateIssue error = %v", err)
+	}
+	// Reproduce the field shape: legacy issue_history table present
+	// AND a goose_db_version log claiming versions beyond this binary's
+	// registry (the "stamped at v=2 by a buggy older binary" pattern
+	// seen in cc-nerf-buster).
+	if err := first.ExecRawForTest(ctx, `CREATE TABLE issue_history (id VARCHAR(191) PRIMARY KEY, issue_id VARCHAR(191) NOT NULL)`); err != nil {
+		_ = first.Close()
+		t.Fatalf("create legacy issue_history error = %v", err)
+	}
+	if err := first.ExecRawForTest(ctx, `DELETE FROM goose_db_version`); err != nil {
+		_ = first.Close()
+		t.Fatalf("clear real goose row error = %v", err)
+	}
+	// Three rows at one tstamp = the field-observed fabrication shape
+	// (a single INSERT loop, not real goose apply traces).
+	fabricated := []string{
+		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (0, 1, '2026-05-08 23:33:37')`,
+		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (1, 1, '2026-05-08 23:33:37')`,
+		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (2, 1, '2026-05-08 23:33:37')`,
+	}
+	for _, stmt := range fabricated {
+		if err := first.ExecRawForTest(ctx, stmt); err != nil {
+			_ = first.Close()
+			t.Fatalf("insert fabricated row error = %v", err)
+		}
+	}
+	if err := first.commitWorkingSet(ctx, "test: fabricated goose rows + legacy issue_history"); err != nil {
+		_ = first.Close()
+		t.Fatalf("commit fabricated state error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	// Next Open must classify phaseAdopt via disk-truth (issue_history
+	// present), reconcile (drops issue_history + fabricated goose log),
+	// then adopt to a clean v=baseline stamp.
+	st := assertReachedBaseline(t, doltRoot)
+
+	// issue_history dropped.
+	histExists, err := st.tableExists(ctx, "issue_history")
+	if err != nil {
+		t.Fatalf("tableExists(issue_history) error = %v", err)
+	}
+	if histExists {
+		t.Fatal("issue_history not dropped during fabricated-goose recovery")
+	}
+	// goose_db_version has no rows claiming versions beyond the
+	// baseline. The three fabricated rows (including the v=2 row that
+	// previously trapped the workspace in recoverAheadOfRegistry refusal)
+	// must be gone.
+	var aheadRows int
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`,
+		baselineVersion,
+	).Scan(&aheadRows); err != nil {
+		t.Fatalf("count goose rows error = %v", err)
+	}
+	if aheadRows != 0 {
+		t.Fatalf("goose_db_version still has %d rows beyond baseline; fabricated rows survived recovery", aheadRows)
+	}
+	// Seeded issue survives unchanged.
+	got, err := st.GetIssue(ctx, seeded.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "Survives fabricated-goose recovery" {
+		t.Fatalf("issue title corrupted: %q", got.Title)
+	}
+}
+
 // TestReconcileIsIdempotent pins that running reconcile on a workspace
 // already at v1 (the no-op case for every step) writes nothing and the
 // adoption path proceeds normally. This guards against the reconcile
