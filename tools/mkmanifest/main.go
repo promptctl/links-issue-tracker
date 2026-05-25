@@ -166,7 +166,14 @@ func collectArtifacts(distDir, baseURL, ver string) ([]release.Artifact, error) 
 }
 
 // platformFromFilename extracts "<goos>/<goarch>" from a goreleaser archive
-// name like "lit_v0.1.0_darwin_arm64.tar.gz".
+// name like "lit_0.1.0_darwin_arm64.tar.gz".
+//
+// Version segment naming note: goreleaser's `.Version` template strips the
+// leading "v" from a tag (vX.Y.Z -> X.Y.Z), so the archive's version segment
+// has NO leading v. The release.yml / release-validate.yml workflows read the
+// version from dist/metadata.json (which contains the same stripped value)
+// and pass that as -version to this tool, so production matching is exact.
+// Test fixtures use the stripped form ("0.1.0", not "v0.1.0") to match.
 //
 // [LAW:types-are-the-program] The accept-shape mirrors the producer exactly:
 // `lit_<version>_<goos>_<goarch>.<ext>` with a recognized archive extension

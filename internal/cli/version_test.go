@@ -41,15 +41,20 @@ func TestVersionJSONMatchesGetOutput(t *testing.T) {
 // TestVersionJSONIsStrictMachineContract pins [memory: json-mode-strict-machine-contract]:
 // `--json` emits exactly one JSON document and nothing else (no banners, no
 // trailing prose, no log lines on the buffer). A hidden header would slip
-// past plain `json.Valid` (which only checks the first document) but break a
-// `jq` pipeline downstream.
+// past plain `json.Valid` (which only checks the first document) but break
+// a `jq` pipeline downstream.
 //
-// Implementation note: we cannot `bytes.Buffer.String()` after decoding,
-// because json.Decoder buffers reads from its source — the underlying buffer
-// still contains every byte you wrote, including bytes the decoder hasn't
-// read. Instead we decode from an io.Reader and then assert (a) the decoder
-// has no more JSON values to give us, and (b) the decoder's own buffered
-// remainder + the rest of the reader together contain only whitespace.
+// Implementation: decode from a bytes.NewReader, then read EVERYTHING left
+// — both bytes the decoder buffered ahead but didn't consume AND bytes the
+// underlying reader still hasn't yielded. The combined leftover is the
+// canonical "what came after the first JSON document"; only whitespace is
+// allowed there (json.Encoder appends a trailing newline).
+//
+// (Note: we cannot inspect stdout.String() after Decode — json.Decoder
+// buffers reads ahead, so the source bytes.Buffer still contains every byte
+// written. Reading from dec.Buffered() ALONE is also insufficient when the
+// decoder hasn't read past the first document. The combined dec.Buffered()
+// + remainder-of-source via MultiReader is the robust shape.)
 func TestVersionJSONIsStrictMachineContract(t *testing.T) {
 	var stdout bytes.Buffer
 	if err := runVersion(&stdout, []string{"--json"}); err != nil {
@@ -57,33 +62,21 @@ func TestVersionJSONIsStrictMachineContract(t *testing.T) {
 	}
 
 	raw := stdout.Bytes()
-	dec := json.NewDecoder(bytes.NewReader(raw))
+	reader := bytes.NewReader(raw)
+	dec := json.NewDecoder(reader)
 	var first version.Info
 	if err := dec.Decode(&first); err != nil {
 		t.Fatalf("first decode error = %v", err)
 	}
 
-	// dec.More() reports whether there's another JSON value waiting (after
-	// any whitespace). If true, --json emitted more than one document.
-	if dec.More() {
-		var extra json.RawMessage
-		_ = dec.Decode(&extra)
-		t.Errorf("--json emitted a second JSON document: %s", extra)
-	}
-
-	// Drain anything left in the decoder's internal buffer + the underlying
-	// reader. Whitespace is acceptable (a trailing newline from an encoder);
-	// anything else is contraband.
-	leftover, err := io.ReadAll(dec.Buffered())
+	// Drain decoder-buffered bytes + anything still unread on the reader.
+	leftover, err := io.ReadAll(io.MultiReader(dec.Buffered(), reader))
 	if err != nil {
-		t.Fatalf("read buffered: %v", err)
+		t.Fatalf("read leftover: %v", err)
 	}
-	rest, err := io.ReadAll(dec.Buffered())
-	_ = rest
-	_ = err
 	tail := strings.TrimSpace(string(leftover))
 	if tail != "" {
-		t.Errorf("--json emitted trailing non-whitespace bytes: %q", tail)
+		t.Errorf("--json emitted trailing non-whitespace after the JSON document: %q", tail)
 	}
 }
 
