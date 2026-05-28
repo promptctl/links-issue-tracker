@@ -110,10 +110,7 @@ builds:
           GOFLAGS=-tags=icu_static
         {{- end -}}
     # goos/goarch enumerate every target we know how to build; the active
-    # set ships only those NOT in the ignore: block below. Listing windows
-    # here even though it's currently ignored keeps the goreleaser config
-    # forward-looking for when links-downgrade-t244.7 re-enables it (single
-    # ignore-line removal, no goos restructure).
+    # set ships only those NOT in the ignore: block below.
     goos:
       - linux
       - darwin
@@ -122,13 +119,8 @@ builds:
       - amd64
       - arm64
     ignore:
-      # Windows: internal/store/workspace_lock.go uses POSIX flock primitives
-      # (syscall.Flock / LOCK_SH / LOCK_EX / LOCK_NB / LOCK_UN) which do not
-      # exist on Windows. Adding Windows release support requires factoring
-      # workspace_lock.go behind a build-tagged interface (POSIX + LockFileEx
-      # implementations). Tracked as a follow-up under the downgrade epic.
-      - goos: windows
-        goarch: amd64
+      # Windows on arm64: Dolt's MySQL driver path is exercised on amd64; skip
+      # arm64-windows until there is a real consumer to justify the test matrix.
       - goos: windows
         goarch: arm64
       # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT

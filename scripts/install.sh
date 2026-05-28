@@ -24,6 +24,17 @@ cd "$ROOT_DIR"
 REPO_DOWNLOAD_BASE="https://github.com/brandon-fryslie/links-issue-tracker/releases/download"
 REPO_LATEST_API="https://api.github.com/repos/brandon-fryslie/links-issue-tracker/releases/latest"
 
+# [LAW:one-source-of-truth] One variable names the on-disk binary across every
+# mode: from-release extraction validation, atomic rename, the stale-binary
+# scan that walks PATH, and the post-install version check. On windows the
+# executable is `lit.exe` (goreleaser appends .exe for windows archives; Go
+# does the same when compiling for GOOS=windows). Detect once at script start
+# so downstream code does not branch on OS.
+case "$(uname -s | tr '[:upper:]' '[:lower:]')" in
+    mingw*|msys*|cygwin*) BIN_NAME="lit.exe" ;;
+    *) BIN_NAME="lit" ;;
+esac
+
 # realpath_compat — resolve a symlink chain to its canonical absolute path.
 #
 # [LAW:single-enforcer] One resolver used by both the target-dir lookup and
@@ -205,7 +216,7 @@ case "$mode" in
         pkg="github.com/bmf/links-issue-tracker/internal/version"
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
             -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${commit} -X ${pkg}.Date=${date}" \
-            -o "$TARGET_DIR/lit" ./cmd/lit
+            -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit
         ;;
     release|latest)
         # curl is the single transport for release-download mode. Probe it
@@ -285,13 +296,25 @@ case "$mode" in
                     exit 1
                 fi
                 ;;
-            mingw*|msys*|cygwin*) os="windows"; ext="zip"
-                # Same: windows not in the matrix yet (links-downgrade-t244.7).
-                echo "error: Windows is not currently in the release matrix" >&2
-                echo "       build from source: bash scripts/install.sh" >&2
-                exit 1
-                ;;
+            mingw*|msys*|cygwin*) os="windows"; ext="zip" ;;
             *) echo "error: unsupported OS: $os" >&2; exit 1 ;;
+        esac
+        # Probe the extractor for the chosen ext explicitly so a missing
+        # tool gets a targeted install hint instead of `set -e` surfacing
+        # a generic "command not found" later. Mirrors the curl probe shape.
+        case "$ext" in
+            tar.gz)
+                if ! command -v tar >/dev/null 2>&1; then
+                    echo "error: release-download mode requires tar to extract '${ext}' archives" >&2
+                    exit 1
+                fi
+                ;;
+            zip)
+                if ! command -v unzip >/dev/null 2>&1; then
+                    echo "error: release-download mode requires unzip to extract '${ext}' archives (install unzip in your Git Bash/MSYS environment)" >&2
+                    exit 1
+                fi
+                ;;
         esac
         archive="lit_${archive_version}_${os}_${arch}.${ext}"
         url="${REPO_DOWNLOAD_BASE}/${release_tag}/${archive}"
@@ -390,25 +413,49 @@ case "$mode" in
                 ;;
         esac
 
-        # Extract into the temp dir; goreleaser archives contain a top-level `lit` binary.
+        # Extract into the temp dir; goreleaser archives contain a top-level
+        # `lit` (or `lit.exe` on windows) binary.
         if [ "$ext" = "tar.gz" ]; then
             tar -xzf "$tmp/$archive" -C "$tmp"
         else
             unzip -q "$tmp/$archive" -d "$tmp"
         fi
-        if [ ! -x "$tmp/lit" ]; then
-            echo "error: extracted archive did not contain a 'lit' binary" >&2
+        # Reject a symlink at the binary path — `-f` (and the subsequent
+        # `chmod +x`) follow symlinks, so a malicious archive containing
+        # `lit` as a symlink could redirect the chmod onto an arbitrary
+        # path the extractor's user can write to. The tar-path entry
+        # validator already rejects non-regular entries by file-type char;
+        # this is the parallel guard for the zip path (and a belt-and-braces
+        # check for tar). [LAW:no-silent-fallbacks] reject the unsafe shape
+        # explicitly instead of acting on it.
+        if [ -L "$tmp/$BIN_NAME" ]; then
+            echo "error: extracted '$BIN_NAME' is a symlink; archive rejected" >&2
+            exit 1
+        fi
+        if [ ! -f "$tmp/$BIN_NAME" ]; then
+            echo "error: extracted archive did not contain a '$BIN_NAME' binary" >&2
+            exit 1
+        fi
+        # Zip's mode bits aren't reliably preserved (the windows path uses
+        # `unzip`, and even POSIX tar archives can lose +x under restrictive
+        # umask). Set the executable bit explicitly before validating so a
+        # successful install always yields a runnable binary. mingw/msys
+        # bash treats `chmod +x` on `.exe` as a no-op without erroring; `-x`
+        # on `.exe` returns true regardless of mode bits.
+        chmod +x "$tmp/$BIN_NAME"
+        if [ ! -x "$tmp/$BIN_NAME" ]; then
+            echo "error: extracted '$BIN_NAME' is not executable" >&2
             exit 1
         fi
 
         # Atomic rename within $TARGET_DIR (mktemp put us on the same FS).
-        mv -f "$tmp/lit" "$TARGET_DIR/lit"
+        mv -f "$tmp/$BIN_NAME" "$TARGET_DIR/$BIN_NAME"
         ;;
 esac
 
 # Stale `lnks` symlink/binary from previous installs is removed; `lit` is the
 # only entrypoint going forward.
-rm -f "$TARGET_DIR/lnks"
+rm -f "$TARGET_DIR/lnks" "$TARGET_DIR/lnks.exe"
 
 # Detect any *other* `lit` on PATH that we did NOT just overwrite — those are
 # the stale binaries that cause "the fix landed but the bug came back" reports.
@@ -419,12 +466,12 @@ rm -f "$TARGET_DIR/lnks"
 # and the binary we just wrote would be flagged stale.
 # [LAW:types-are-the-program] both sides of the comparison are canonical
 # absolute paths, so "is this the same file?" is well-defined.
-INSTALLED_REAL="$(realpath_compat "$TARGET_DIR/lit")"
+INSTALLED_REAL="$(realpath_compat "$TARGET_DIR/$BIN_NAME")"
 STALE=()
 IFS=':' read -r -a PATH_ENTRIES <<< "$PATH"
 for dir in "${PATH_ENTRIES[@]}"; do
     [ -z "$dir" ] && continue
-    candidate="$dir/lit"
+    candidate="$dir/$BIN_NAME"
     [ -x "$candidate" ] || continue
     real="$(realpath_compat "$candidate")"
     if [ "$real" != "$INSTALLED_REAL" ]; then
@@ -432,8 +479,8 @@ for dir in "${PATH_ENTRIES[@]}"; do
     fi
 done
 
-echo "Installed lit -> $TARGET_DIR/lit"
-"$TARGET_DIR/lit" version 2>/dev/null || true
+echo "Installed lit -> $TARGET_DIR/$BIN_NAME"
+"$TARGET_DIR/$BIN_NAME" version 2>/dev/null || true
 if [ "${#STALE[@]}" -gt 0 ]; then
     echo
     echo "WARNING: other 'lit' binaries found on PATH that were NOT updated:"
