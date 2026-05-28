@@ -34,9 +34,15 @@ func tryLockFile(file *os.File, exclusive bool) error {
 	}
 	ol := new(windows.Overlapped)
 	err := windows.LockFileEx(windows.Handle(file.Fd()), flags, 0, lockfileBytesLockLow, lockfileBytesLockHigh, ol)
-	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) || errors.Is(err, windows.ERROR_IO_PENDING) {
+	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
 		return errLockWouldBlock
 	}
+	// LOCKFILE_FAIL_IMMEDIATELY makes LockFileEx synchronous: it either
+	// acquires the byte range immediately or returns ERROR_LOCK_VIOLATION.
+	// ERROR_IO_PENDING would only be possible without FAIL_IMMEDIATELY (the
+	// kernel queued an async lock backed by this Overlapped, which the caller
+	// must then wait/cancel). Surfacing it as a real error here keeps the
+	// invariant honest — a pending lock must never be silently abandoned.
 	return err
 }
 
