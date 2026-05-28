@@ -17,31 +17,64 @@ import (
 // [LAW:one-source-of-truth] The predicate works on the same bytes goose reads.
 // There is no parallel "registry of invertible migrations" that could drift.
 func hasDownSection(data []byte) bool {
-	lower := strings.ToLower(string(data))
-	idx := strings.Index(lower, "-- +goose down")
-	if idx < 0 {
+	// Strip /* ... */ block comments first so a directive-looking substring
+	// inside a block comment cannot be misread as a real goose directive.
+	// Goose itself only recognizes directives on a real source line, so the
+	// predicate must do the same.
+	stripped := stripBlockComments(string(data))
+	lines := strings.Split(stripped, "\n")
+
+	// Find the line index of the `+goose Down` directive — and only count a
+	// line as the directive if the trimmed line IS the directive, not if it
+	// merely contains the substring (a longer comment that happens to embed
+	// "-- +goose Down" must not match).
+	downLine := -1
+	for i, line := range lines {
+		if isGooseDirective(line, "down") {
+			downLine = i
+			break
+		}
+	}
+	if downLine < 0 {
 		return false
 	}
-	body := lower[idx+len("-- +goose down"):]
-	// Truncate at the next `+goose Up` marker (defensive — goose files are
-	// Up-then-Down by convention, but the predicate must not get confused if
-	// some future file embeds an Up after the Down).
-	if next := strings.Index(body, "-- +goose up"); next >= 0 {
-		body = body[:next]
-	}
-	// Strip /* ... */ block comments first (they may span lines). The Down
-	// section is rejected if everything between markers is whitespace and
-	// comments — the runtime gate cannot prove "this Down does work" if the
-	// section has no executable bytes.
-	body = stripBlockComments(body)
-	for _, line := range strings.Split(body, "\n") {
-		line = strings.TrimSpace(stripLineComment(line))
-		if line == "" {
+
+	// Scan after the Down directive for an executable line. Stop at a
+	// subsequent `+goose Up` directive (defensive — files are Up-then-Down
+	// by convention, but the predicate must not get confused if a future
+	// file embeds an Up after the Down).
+	for _, line := range lines[downLine+1:] {
+		if isGooseDirective(line, "up") {
+			return false
+		}
+		if isGooseDirective(line, "down") {
+			// Duplicate Down directive — keep scanning; the body before it
+			// might be empty but content might come after. Goose itself
+			// would error on the duplicate, but that's the runtime gate's
+			// problem to surface; the static gate only cares about presence
+			// of executable bytes anywhere after the FIRST Down directive.
+			continue
+		}
+		stripped := strings.TrimSpace(stripLineComment(line))
+		if stripped == "" {
 			continue
 		}
 		return true
 	}
 	return false
+}
+
+// isGooseDirective reports whether a source line is exactly the `+goose <kind>`
+// directive (case-insensitive, surrounding whitespace tolerated). The accept
+// shape mirrors what goose actually parses: a `-- +goose <kind>` line, not
+// any line that happens to contain the substring.
+func isGooseDirective(line, kind string) bool {
+	trimmed := strings.TrimSpace(line)
+	if !strings.HasPrefix(strings.ToLower(trimmed), "-- ") {
+		return false
+	}
+	body := strings.TrimSpace(trimmed[len("-- "):])
+	return strings.EqualFold(body, "+goose "+kind)
 }
 
 // stripBlockComments removes /* ... */ comment spans, including ones that
@@ -182,6 +215,16 @@ func TestHasDownSectionRejectsMissingShapes(t *testing.T) {
 			name: "down marker with statement-block-wrapped DROP",
 			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- +goose Down\n-- +goose StatementBegin\nDROP TABLE x;\n-- +goose StatementEnd\n",
 			want: true,
+		},
+		{
+			name: "directive-looking substring inside a block comment does not count",
+			body: "-- +goose Up\nCREATE TABLE x (id INT);\n/* this block mentions -- +goose Down but is not a directive */\n",
+			want: false,
+		},
+		{
+			name: "directive-looking substring as part of a longer comment line does not count",
+			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- TODO: someday add a -- +goose Down section\n",
+			want: false,
 		},
 		{
 			name: "case-insensitive marker",
