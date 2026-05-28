@@ -12,9 +12,19 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
 	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/bmf/links-issue-tracker/internal/version"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 )
+
+// producerBinaryVersionMetaKey names the meta row that records the lit
+// version which last successfully advanced this workspace's schema. The
+// downgrade-refusal message reads it to suggest a specific binary version
+// to reinstall for a lossless `lit downgrade`.
+//
+// [LAW:one-source-of-truth] Producer version lives in this one meta row,
+// not derived from migration history heuristics.
+const producerBinaryVersionMetaKey = "producer_binary_version"
 
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
@@ -99,20 +109,48 @@ type UnsupportedSchemaVersionError struct {
 	WorkspaceVersion int64
 	MaxSupported     int64
 	MissingBaseline  []string
+	// SnapshotName is the most recent migration-recovery snapshot present in
+	// this workspace, when one exists. Populating it offers the user a lossy
+	// rollback path; emptying it means no such snapshot is available.
+	// [LAW:types-are-the-program] Which recovery line the message emits is
+	// encoded by which optional field is populated, not by a flag.
+	SnapshotName string
+	// ProducerBinaryVersion is the lit version that last advanced this
+	// workspace's schema (recorded in meta.producer_binary_version). It names
+	// the binary the user should reinstall to perform a lossless `lit
+	// downgrade` instead of the lossy snapshot-restore path.
+	ProducerBinaryVersion string
 }
 
 func (e *UnsupportedSchemaVersionError) Error() string {
-	if len(e.MissingBaseline) == 0 {
-		return fmt.Sprintf(
-			"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d)",
-			e.WorkspaceVersion, e.MaxSupported,
-		)
-	}
-	return fmt.Sprintf(
-		"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d; "+
-			"the live schema is also missing baseline shape: %s)",
-		e.WorkspaceVersion, e.MaxSupported, strings.Join(e.MissingBaseline, ", "),
+	var b strings.Builder
+	fmt.Fprintf(&b,
+		"please upgrade lit (your workspace is at schema version %d; this binary supports up to %d",
+		e.WorkspaceVersion, e.MaxSupported,
 	)
+	if len(e.MissingBaseline) > 0 {
+		fmt.Fprintf(&b, "; the live schema is also missing baseline shape: %s",
+			strings.Join(e.MissingBaseline, ", "))
+	}
+	b.WriteString(")")
+	// [LAW:dataflow-not-control-flow] Same renderer every invocation; the
+	// populated optional fields decide which recovery lines appear.
+	if e.SnapshotName == "" && e.ProducerBinaryVersion == "" {
+		return b.String()
+	}
+	if e.SnapshotName != "" {
+		fmt.Fprintf(&b,
+			"\n\nif you are stuck and need to roll back this workspace to match this binary:\n  lit snapshots restore %s\n\nthis is a LOSSY recovery — any data written under the newer binary will be discarded.",
+			e.SnapshotName)
+	} else {
+		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
+	}
+	if e.ProducerBinaryVersion != "" {
+		fmt.Fprintf(&b,
+			"\n\nto preserve that data, install the newer binary again and run:\n  lit downgrade --to %s     # the version that wrote this workspace\n\n(this is the supported path. snapshot-restore is the unsupported escape hatch.)",
+			e.ProducerBinaryVersion)
+	}
+	return b.String()
 }
 
 // gooseVersionTable is goose's history table; its presence is the discriminator
@@ -322,7 +360,23 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if err := s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"); err != nil {
 		return fmt.Errorf("commit quarantine table: %w", err)
 	}
-	return s.applyPendingMigrations(ctx)
+	if err := s.applyPendingMigrations(ctx); err != nil {
+		return err
+	}
+	// [LAW:one-source-of-truth] After every successful schema-advancing
+	// migrate, stamp this binary's version into meta. An older binary that
+	// later refuses this workspace reads it to name a specific `lit
+	// downgrade --to` target instead of the generic "please upgrade".
+	// [LAW:dataflow-not-control-flow] Always called; the value decides
+	// whether anything is written (dev builds with no stamped Version skip).
+	wrote, err := s.recordProducerBinaryVersion(ctx)
+	if err != nil {
+		return err
+	}
+	if !wrote {
+		return nil
+	}
+	return s.commitWorkingSet(ctx, "migrate: record producer binary version")
 }
 
 // applyPendingMigrations runs each pending migration through goose and records
@@ -552,9 +606,11 @@ func (s *Store) recoverAheadOfRegistry(ctx context.Context, guard *snapshotGuard
 	}
 	if present == 0 || len(missing) > 0 {
 		return &UnsupportedSchemaVersionError{
-			WorkspaceVersion: state.appliedVersion,
-			MaxSupported:     state.registryMaxVers,
-			MissingBaseline:  missing,
+			WorkspaceVersion:      state.appliedVersion,
+			MaxSupported:          state.registryMaxVers,
+			MissingBaseline:       missing,
+			SnapshotName:          s.mostRecentMigrationSnapshotName(),
+			ProducerBinaryVersion: s.readProducerBinaryVersion(ctx),
 		}
 	}
 	// Snapshot-before-mutate: this IS a mutation (goose_db_version DELETE), so
@@ -994,4 +1050,65 @@ func sortedKeys(m map[string][]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+// mostRecentMigrationSnapshotName returns the name of the newest snapshot in
+// this workspace that was stamped by the migration system, or "" if none
+// exists. Used by recoverAheadOfRegistry to populate the lossy-rollback hint
+// on UnsupportedSchemaVersionError. Errors listing the directory degrade to
+// "" — the refusal message must still surface, with the snapshot line absent.
+//
+// [LAW:one-source-of-truth] IsMigrationSnapshotName is the kind discriminator
+// shared with pruning; this lookup does not re-encode the naming rule.
+// [LAW:dataflow-not-control-flow] Caller always asks; the data (presence /
+// absence of a matching snapshot) decides which line the message emits.
+func (s *Store) mostRecentMigrationSnapshotName() string {
+	snaps, err := dbsnapshot.List(migrationSnapshotsDir(s.doltRootDir))
+	if err != nil {
+		return ""
+	}
+	for _, snap := range snaps {
+		if IsMigrationSnapshotName(snap.Name) {
+			return snap.Name
+		}
+	}
+	return ""
+}
+
+// readProducerBinaryVersion returns the version of the lit binary that last
+// advanced this workspace's schema, or "" if no producer version has been
+// recorded (older workspaces, or recovery paths that bypass the migrate tail).
+// Errors degrade to "" — the refusal must still surface; the downgrade line
+// is suppressed when the value is unavailable.
+//
+// [LAW:one-source-of-truth] meta.producer_binary_version is the authority;
+// this is a typed reader over that single row.
+func (s *Store) readProducerBinaryVersion(ctx context.Context) string {
+	value, err := s.getMeta(ctx, nil, producerBinaryVersionMetaKey)
+	if err != nil {
+		return ""
+	}
+	return value
+}
+
+// recordProducerBinaryVersion stamps this binary's version into meta as the
+// most recent producer of the workspace's schema. Called at the tail of a
+// successful migrate(); a dev build (Version == "") records no row so a stray
+// dev binary does not overwrite a real release stamp.
+//
+// [LAW:one-source-of-truth] One writer (this function), one reader
+// (readProducerBinaryVersion), one row in meta — the producer-version field
+// has a single canonical representation.
+func (s *Store) recordProducerBinaryVersion(ctx context.Context) (wrote bool, err error) {
+	info, err := version.Get()
+	if err != nil {
+		return false, fmt.Errorf("read version info: %w", err)
+	}
+	if info.IsDev {
+		return false, nil
+	}
+	if err := s.setMeta(ctx, nil, producerBinaryVersionMetaKey, info.Version); err != nil {
+		return false, fmt.Errorf("record producer binary version: %w", err)
+	}
+	return true, nil
 }
