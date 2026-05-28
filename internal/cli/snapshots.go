@@ -26,16 +26,17 @@ func snapshotsDirFor(ws workspace.Info) string {
 }
 
 // isUserSnapshotName reports whether name is a user snapshot (i.e. produced
-// by `lit snapshots new`). It is the precise complement of
-// store.IsMigrationSnapshotName, kept as a separate predicate so the
-// kind-aware Prune call site reads as "prune user snapshots" instead of
-// "prune the not-migration ones".
+// by `lit snapshots new`). It excludes every system-stamped kind so each
+// producer's retention budget governs only its own snapshots — the user
+// budget cannot collect a migration recovery point or a downgrade recovery
+// point.
 //
-// [LAW:one-source-of-truth] Both producers' kind classifiers route through
-// store.IsMigrationSnapshotName; this helper is just the complement,
-// expressed for callsite clarity.
+// [LAW:one-source-of-truth] Each system producer owns its own kind predicate
+// (store.IsMigrationSnapshotName, store.IsDowngradeSnapshotName); this helper
+// composes those — adding a new producer means adding the predicate to this
+// disjunction, in exactly one place.
 func isUserSnapshotName(name string) bool {
-	return !store.IsMigrationSnapshotName(name)
+	return !store.IsMigrationSnapshotName(name) && !store.IsDowngradeSnapshotName(name)
 }
 
 func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {

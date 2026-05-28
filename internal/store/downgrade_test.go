@@ -233,6 +233,65 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 	}
 }
 
+// TestDowngradeIncompleteWhenGooseExhausted pins the no-silent-fallback
+// guarantee for the registry-vs-target mismatch case: if goose returns
+// ErrNoNextVersion while the recorded version is still above target, the
+// loop must NOT report success — it raises DowngradeIncompleteError so the
+// operator sees the gap.
+func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openWorkspaceForDowngrade(t)
+	registryMax, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("MaxVersion() = %v", err)
+	}
+	stampGooseVersion(t, ctx, st, registryMax+1)
+	if err := st.commitWorkingSet(ctx, "test: seed fake version"); err != nil {
+		t.Fatalf("commit seed = %v", err)
+	}
+	migrationDownForTest = func(ctx context.Context, _ *goose.Provider) (*goose.MigrationResult, error) {
+		return nil, goose.ErrNoNextVersion
+	}
+	t.Cleanup(func() { migrationDownForTest = nil })
+
+	err = st.Downgrade(ctx, registryMax)
+	var rb *DowngradeRollbackError
+	if !errors.As(err, &rb) {
+		t.Fatalf("err = %v, want *DowngradeRollbackError wrapping DowngradeIncompleteError", err)
+	}
+	var incomplete *DowngradeIncompleteError
+	if !errors.As(rb.Cause, &incomplete) {
+		t.Fatalf("rb.Cause = %v, want *DowngradeIncompleteError", rb.Cause)
+	}
+	if incomplete.Current != registryMax+1 || incomplete.Target != registryMax {
+		t.Fatalf("incomplete = {Current:%d Target:%d}, want {%d %d}",
+			incomplete.Current, incomplete.Target, registryMax+1, registryMax)
+	}
+}
+
+// TestIsDowngradeSnapshotNameSymmetry pins the disjointness of the two
+// system-kind predicates: every migration snapshot name fails the downgrade
+// predicate and vice versa. The CLI's user-snapshot classifier depends on
+// these two predicates being non-overlapping — overlap would mean a
+// downgrade snapshot is also classified as a migration snapshot, breaking
+// the "each producer owns its own retention" invariant.
+func TestIsDowngradeSnapshotNameSymmetry(t *testing.T) {
+	migName := "1700000000000000000-pre-migrate-1700000000000000001"
+	dgName := "1700000000000000000-lit-downgrade-1700000000000000001"
+	if !IsMigrationSnapshotName(migName) {
+		t.Fatalf("IsMigrationSnapshotName(%q) = false, want true", migName)
+	}
+	if IsDowngradeSnapshotName(migName) {
+		t.Fatalf("IsDowngradeSnapshotName(%q) = true, want false (overlap with migration kind)", migName)
+	}
+	if !IsDowngradeSnapshotName(dgName) {
+		t.Fatalf("IsDowngradeSnapshotName(%q) = false, want true", dgName)
+	}
+	if IsMigrationSnapshotName(dgName) {
+		t.Fatalf("IsMigrationSnapshotName(%q) = true, want false (overlap with downgrade kind)", dgName)
+	}
+}
+
 // TestDowngradeUntouchedOpen pins the isolation acceptance: a workspace that
 // rode Downgrade back to baseline re-opens cleanly — Open's migrate() sees no
 // version-ahead condition and performs no work beyond the no-op classify path.
@@ -276,9 +335,10 @@ func TestDowngradeUntouchedOpen(t *testing.T) {
 
 // TestDowngradeRequiresGooseManaged pins the phase guard: a workspace whose
 // classify step does not yield phaseManaged refuses without taking a
-// snapshot. This is structurally impossible after Open succeeds (Open always
-// converges to phaseManaged), so we exercise it by constructing a bare Store
-// over an empty Dolt database.
+// snapshot. Open always converges to phaseManaged on success, so we exercise
+// the guard by opening normally and then dropping goose_db_version — that
+// reverts the workspace to a phaseAdopt-shaped classification (canonical
+// tables present, no goose history), which Downgrade has nothing to act on.
 func TestDowngradeRequiresGooseManaged(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

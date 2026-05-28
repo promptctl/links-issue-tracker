@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
@@ -23,10 +24,46 @@ var migrationDownForTest func(ctx context.Context, provider *goose.Provider) (*g
 //
 // [LAW:single-enforcer] migrate() owns forward convergence at Open and stamps
 // snapshots with migrationSnapshotLabel; Downgrade() owns user-invoked reverse
-// and stamps with downgradeSnapshotLabel. The IsMigrationSnapshotName predicate
-// matches only the former, so migrate()'s prune sweep cannot collect downgrade
-// snapshots and vice versa.
+// and stamps with downgradeSnapshotLabel. The IsMigrationSnapshotName and
+// IsDowngradeSnapshotName predicates are disjoint, so each owner's prune
+// budget governs exactly its own snapshots.
 const downgradeSnapshotLabel = "lit-downgrade"
+
+// downgradeSnapshotRetention bounds how many downgrade-recovery snapshots are
+// kept on disk. Independent of migrationSnapshotRetention so the two reverse
+// boundaries (forward at Open, reverse at user-invoked downgrade) can evolve
+// their retention policies separately.
+const downgradeSnapshotRetention = 10
+
+// IsDowngradeSnapshotName reports whether name was stamped by Downgrade
+// (vs. migrate(), `lit snapshots new`, or any other producer).
+//
+// Mirrors IsMigrationSnapshotName: dbsnapshot's <unix-ns>-<label> scheme with
+// the label component equal to "<downgradeSnapshotLabel>-<unix-ns>".
+//
+// [LAW:one-source-of-truth] Every classifier — tests, CLI listings, downgrade
+// pruning — routes through this predicate so renaming the label moves them
+// together. The user-snapshot classifier (cli/snapshots.go) excludes both
+// migration and downgrade kinds, so each producer's snapshots only roll off
+// under their own retention budget.
+// [LAW:types-are-the-program] The predicate is the exact shape Downgrade
+// stamps; "matches by accident" is impossible without a user deliberately
+// mimicking the format.
+func IsDowngradeSnapshotName(name string) bool {
+	idx := strings.IndexByte(name, '-')
+	if idx < 0 {
+		return false
+	}
+	head, label := name[:idx], name[idx+1:]
+	if !isAllDigits(head) {
+		return false
+	}
+	const prefix = downgradeSnapshotLabel + "-"
+	if !strings.HasPrefix(label, prefix) {
+		return false
+	}
+	return isAllDigits(label[len(prefix):])
+}
 
 // downgradeMigrationFailedError carries the underlying goose error from a Down
 // step. It exists so DowngradeRollbackError.Unwrap can reach the original cause
@@ -42,9 +79,10 @@ func (e *downgradeMigrationFailedError) Error() string {
 
 func (e *downgradeMigrationFailedError) Unwrap() error { return e.Cause }
 
-// DowngradeTargetAheadError reports that the requested target is at or above
-// the workspace's current version — there is nothing to roll back. The forward
-// upgrade path lives on Open; downgrade refuses to impersonate it.
+// DowngradeTargetAheadError reports that the requested target sits strictly
+// above the workspace's current applied version. The forward upgrade path
+// lives on Open; downgrade refuses to impersonate it. (target == current is
+// a no-op handled in Downgrade itself, not this error type.)
 //
 // [LAW:types-are-the-program] Distinct refusal causes are distinct types, not
 // a kind field on a generic DowngradeError.
@@ -63,7 +101,8 @@ func (e *DowngradeTargetAheadError) Error() string {
 // DowngradeBelowBaselineError reports that the requested target sits below the
 // embedded baseline. Running Down past baseline drops every table; Downgrade
 // refuses before invoking goose so the destructive baseline Down is unreachable
-// from this entry point. Recovery is dbsnapshot restore.
+// from this entry point. Recovery is the same `lit snapshots restore` command
+// the runtime rollback path advertises.
 type DowngradeBelowBaselineError struct {
 	Target int64
 }
@@ -71,7 +110,7 @@ type DowngradeBelowBaselineError struct {
 func (e *DowngradeBelowBaselineError) Error() string {
 	return fmt.Sprintf(
 		"cannot downgrade past baseline (v%d) — this would destroy the workspace; "+
-			"restore from a `dbsnapshot` instead",
+			"restore a pre-upgrade snapshot via `lit snapshots restore <name>` instead",
 		baselineVersion,
 	)
 }
@@ -97,10 +136,36 @@ func (e *DowngradeRollbackError) Error() string {
 
 func (e *DowngradeRollbackError) Unwrap() error { return e.Cause }
 
+// DowngradeIncompleteError reports that goose ran out of reversible
+// migrations before reaching target — recorded version remains above target
+// even though Down returned ErrNoNextVersion. A silent success in this case
+// would lie to the operator that the downgrade reached the target.
+//
+// [LAW:no-silent-fallbacks] ErrNoNextVersion with current > target is a
+// registry-vs-target mismatch, not "we're done"; it must surface so the
+// operator can investigate which versions are missing inversions.
+type DowngradeIncompleteError struct {
+	Current int64
+	Target  int64
+}
+
+func (e *DowngradeIncompleteError) Error() string {
+	return fmt.Sprintf(
+		"downgrade incomplete: goose has no more reversible migrations but recorded version v%d still above target v%d",
+		e.Current, e.Target,
+	)
+}
+
 // Downgrade reverses migrations to bring the workspace to targetSchemaVersion,
 // taking a recovery snapshot first and committing one Dolt commit per reversed
 // migration. It is invoked only by the future `lit downgrade` command (ticket
 // .4); no Open-path code reaches it.
+//
+// The entire pipeline runs under the store's writer-exclusion commit lock —
+// classify, snapshot, and the Down loop are serialized against every other
+// writer just like migrate()'s mutations are. Acquisition is reentrant: the
+// per-step commitWorkingSet calls inside applyDownMigrations short-circuit
+// because the lock is already held.
 //
 // Refusals (no snapshot taken):
 //   - target == current applied: no-op, returns nil.
@@ -114,14 +179,25 @@ func (e *DowngradeRollbackError) Unwrap() error { return e.Cause }
 //
 // [LAW:single-enforcer] This is the sole reverse-migration boundary; migrate()
 // remains untouched and owns only forward convergence. They share primitives
-// (newGooseProvider, the snapshotGuard type) but never share control flow.
+// (newGooseProvider, the snapshotGuard type, withCommitLock) but never share
+// control flow.
 // [LAW:dataflow-not-control-flow] The same sequence — classify → refuse-or-
-// snapshot → loop-Down-and-commit — runs every invocation. Variability lives
-// in targetSchemaVersion and the recorded version, not in which stages execute.
+// snapshot → loop-Down-and-commit → prune — runs every invocation. Variability
+// lives in targetSchemaVersion and the recorded version, not in which stages
+// execute.
 // [LAW:one-source-of-truth] goose_db_version remains the applied-state
 // authority for both directions; this loop reads it via recordedMigrationVersion
 // and lets goose mutate it the same way Up does.
 func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) error {
+	return s.withCommitLock(ctx, func(ctx context.Context) error {
+		return s.downgradeLocked(ctx, targetSchemaVersion)
+	})
+}
+
+// downgradeLocked is the body of Downgrade executed under the commit lock.
+// Split out so the lock acquisition stays a thin wrapper and the pipeline
+// itself reads as the residue of its constraints.
+func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) error {
 	state, err := s.classifyMigrationState(ctx)
 	if err != nil {
 		return err
@@ -141,9 +217,10 @@ func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) error 
 		return &DowngradeBelowBaselineError{Target: targetSchemaVersion}
 	}
 
+	snapshotsDir := migrationSnapshotsDir(s.doltRootDir)
 	guard := newSnapshotGuard(
 		s.doltRootDir,
-		migrationSnapshotsDir(s.doltRootDir),
+		snapshotsDir,
 		formatDowngradeSnapshotLabel(time.Now()),
 	)
 	snap, err := guard.ensure()
@@ -154,16 +231,26 @@ func (s *Store) Downgrade(ctx context.Context, targetSchemaVersion int64) error 
 	if err := s.applyDownMigrations(ctx, targetSchemaVersion); err != nil {
 		return &DowngradeRollbackError{Snapshot: snap, Cause: err}
 	}
+	// [LAW:single-enforcer] Downgrade owns the prune budget for its own
+	// snapshots. IsDowngradeSnapshotName is disjoint from
+	// IsMigrationSnapshotName, so this sweep cannot collect migration
+	// snapshots and migrate()'s sweep cannot collect downgrade ones.
+	if err := dbsnapshot.PruneMatching(snapshotsDir, downgradeSnapshotRetention, IsDowngradeSnapshotName); err != nil {
+		return fmt.Errorf("prune downgrade snapshots: %w", err)
+	}
 	return nil
 }
 
 // applyDownMigrations steps the workspace from its recorded version down to
 // target, one migration at a time, with one Dolt commit per reversed step.
 // Symmetric with applyPendingMigrations: a single goose provider drives the
-// loop and commitWorkingSet records each step under the commit lock.
+// loop and commitWorkingSet records each step. The commit lock is already
+// held by Downgrade, so commitWorkingSet's withCommitLock short-circuits.
 //
-// [LAW:single-enforcer] commitWorkingSet acquires the commit lock per step,
-// matching the forward path; no second lock-acquisition pattern is introduced.
+// [LAW:no-silent-fallbacks] ErrNoNextVersion with current > target is a
+// registry-vs-target mismatch, not a successful exit; it raises
+// DowngradeIncompleteError so the operator sees that the target was never
+// reached.
 func (s *Store) applyDownMigrations(ctx context.Context, target int64) error {
 	provider, err := newGooseProvider(s.db)
 	if err != nil {
@@ -186,7 +273,7 @@ func (s *Store) applyDownMigrations(ctx context.Context, target int64) error {
 		result, err := downOne(ctx)
 		if err != nil {
 			if errors.Is(err, goose.ErrNoNextVersion) {
-				return nil
+				return &DowngradeIncompleteError{Current: current, Target: target}
 			}
 			return &downgradeMigrationFailedError{Version: current, Cause: err}
 		}
