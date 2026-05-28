@@ -57,8 +57,8 @@ varies is **how it represents the loss**:
 ### Option A — refuse with a typed error
 
 If the loss is irrecoverable (the dropped column had no derivable replacement
-on disk), the refusal lives at the user-invoked boundary `Downgrade()` —
-landing with the `links-downgrade-t244.3` ticket — so it is symmetric with
+on disk), the refusal lives at the user-invoked boundary `Downgrade()` (see
+`internal/store/downgrade.go`) — so it is symmetric with
 other downgrade refusals (e.g. "downgrade past baseline would destroy the
 workspace"). That boundary refuses *before* invoking goose, so the file's
 Down section is unreachable from the user-facing `lit downgrade` command.
@@ -130,5 +130,7 @@ because:
    exercise the down-to-zero path explicitly.
 
 The refusal of "downgrade past baseline" is `Downgrade()`'s responsibility,
-not the baseline file's. See ticket `links-downgrade-t244.3` for the
-refusal shape; the implementing file will land with that ticket.
+not the baseline file's. See `internal/store/downgrade.go` (the
+`DowngradeBelowBaselineError` path) for the refusal shape — it fires before
+goose is invoked, so the baseline's destructive Down is unreachable from
+the user-facing `lit downgrade` command.
