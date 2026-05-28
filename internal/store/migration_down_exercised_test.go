@@ -105,7 +105,11 @@ func registryVersionsDescending() ([]int64, error) {
 		}
 		v, ok := migrations.ParseVersion(e.Name())
 		if !ok {
-			continue
+			// [LAW:one-source-of-truth] Match migrations.MaxVersion's
+			// strictness: a non-parseable *.sql in the registry is a
+			// registry-shape error, not a skip. Allowing it through here
+			// would let a misnamed file evade the runtime gate silently.
+			return nil, fmt.Errorf("migration file %q does not begin with a numeric version", e.Name())
 		}
 		versions = append(versions, v)
 	}
