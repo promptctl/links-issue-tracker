@@ -9,6 +9,7 @@ import (
 
 	"github.com/bmf/links-issue-tracker/internal/doltcli"
 	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/bmf/links-issue-tracker/internal/version"
 )
 
 // TestFreshOpenStampsBaselineVersion pins the fresh-workspace acceptance: Open
@@ -24,12 +25,12 @@ func TestFreshOpenStampsBaselineVersion(t *testing.T) {
 	}
 	defer st.Close()
 
-	version, err := st.recordedMigrationVersion(ctx)
+	appliedVersion, err := st.recordedMigrationVersion(ctx)
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if version != baselineVersion {
-		t.Fatalf("recorded version = %d, want %d", version, baselineVersion)
+	if appliedVersion != baselineVersion {
+		t.Fatalf("recorded version = %d, want %d", appliedVersion, baselineVersion)
 	}
 
 	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
@@ -75,12 +76,12 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	}
 	defer second.Close()
 
-	version, err := second.recordedMigrationVersion(ctx)
+	appliedVersion, err := second.recordedMigrationVersion(ctx)
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if version != baselineVersion {
-		t.Fatalf("post-adoption version = %d, want %d", version, baselineVersion)
+	if appliedVersion != baselineVersion {
+		t.Fatalf("post-adoption version = %d, want %d", appliedVersion, baselineVersion)
 	}
 	var seeded string
 	if err := second.db.QueryRowContext(ctx, `SELECT title FROM issues WHERE id = 'keep-me'`).Scan(&seeded); err != nil {
@@ -318,29 +319,177 @@ func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 // When MissingBaseline is populated, the message additionally surfaces the
 // schema gaps so the operator can diagnose the genuine-incompatibility branch.
 func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
-	msg := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
-
-	want := "please upgrade lit (your workspace is at schema version 7; this binary supports up to 3)"
-	if msg != want {
-		t.Fatalf("Error() = %q, want %q", msg, want)
-	}
-	for _, forbidden := range []string{"delete", "DELETE", "manual SQL", "drop", "DROP"} {
-		if strings.Contains(msg, forbidden) {
-			t.Errorf("remediation message contains forbidden phrase %q: %q", forbidden, msg)
+	forbidden := []string{"delete", "DELETE", "manual SQL", "drop", "DROP"}
+	assertForbiddenAbsent := func(t *testing.T, msg string) {
+		t.Helper()
+		for _, f := range forbidden {
+			if strings.Contains(msg, f) {
+				t.Errorf("remediation message contains forbidden phrase %q: %q", f, msg)
+			}
 		}
 	}
+	const upgradeHead = "please upgrade lit (your workspace is at schema version 7; this binary supports up to 3"
 
+	// Bare refusal: no recovery data — only the upgrade phrase, no recovery
+	// block. Pin exact equality so the bare form cannot silently grow.
+	bare := (&UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}).Error()
+	if bare != upgradeHead+")" {
+		t.Fatalf("bare Error() = %q, want %q", bare, upgradeHead+")")
+	}
+	assertForbiddenAbsent(t, bare)
+
+	// MissingBaseline preserved from sxsk.5: gap names surface inside the
+	// parenthetical alongside the upgrade phrase.
 	withGaps := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
 		MaxSupported:     3,
 		MissingBaseline:  []string{"issues.title", "comments"},
 	}).Error()
-	if !strings.Contains(withGaps, "please upgrade lit") {
+	if !strings.HasPrefix(withGaps, upgradeHead) {
 		t.Errorf("MissingBaseline message lost the forward-only remediation phrasing: %q", withGaps)
 	}
 	if !strings.Contains(withGaps, "issues.title") || !strings.Contains(withGaps, "comments") {
 		t.Errorf("MissingBaseline message did not name the schema gaps: %q", withGaps)
 	}
+	assertForbiddenAbsent(t, withGaps)
+
+	// Snapshot only: lossy-rollback line surfaces the verbatim snapshot
+	// name; the proactive lit-downgrade line is suppressed because no
+	// producer version is recorded.
+	snapOnly := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion: 7,
+		MaxSupported:     3,
+		SnapshotName:     "1700000000-pre-migrate-1700000000",
+	}).Error()
+	if !strings.HasPrefix(snapOnly, upgradeHead) {
+		t.Errorf("snapshot-only message lost the upgrade phrase: %q", snapOnly)
+	}
+	if !strings.Contains(snapOnly, "lit snapshots restore 1700000000-pre-migrate-1700000000") {
+		t.Errorf("snapshot-only message did not surface the snapshot name verbatim: %q", snapOnly)
+	}
+	if !strings.Contains(snapOnly, "LOSSY") {
+		t.Errorf("snapshot-only message did not flag the rollback as lossy: %q", snapOnly)
+	}
+	if strings.Contains(snapOnly, "lit downgrade --to") {
+		t.Errorf("snapshot-only message included downgrade line without producer version: %q", snapOnly)
+	}
+	assertForbiddenAbsent(t, snapOnly)
+
+	// Producer version only: lit-downgrade line surfaces the verbatim
+	// version; the lossy-rollback path is named as unavailable so the user
+	// knows reinstall is their only path.
+	verOnly := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion:      7,
+		MaxSupported:          3,
+		ProducerBinaryVersion: "v0.4.2",
+	}).Error()
+	if !strings.Contains(verOnly, "lit downgrade --to v0.4.2") {
+		t.Errorf("producer-only message did not surface the version verbatim: %q", verOnly)
+	}
+	if !strings.Contains(verOnly, "no pre-upgrade snapshot available") {
+		t.Errorf("producer-only message did not declare the snapshot path unavailable: %q", verOnly)
+	}
+	assertForbiddenAbsent(t, verOnly)
+
+	// Both populated: every recovery line surfaces.
+	both := (&UnsupportedSchemaVersionError{
+		WorkspaceVersion:      7,
+		MaxSupported:          3,
+		SnapshotName:          "1700000000-pre-migrate-1700000000",
+		ProducerBinaryVersion: "v0.4.2",
+	}).Error()
+	if !strings.Contains(both, "lit snapshots restore 1700000000-pre-migrate-1700000000") {
+		t.Errorf("both-populated message missing snapshot line: %q", both)
+	}
+	if !strings.Contains(both, "lit downgrade --to v0.4.2") {
+		t.Errorf("both-populated message missing downgrade line: %q", both)
+	}
+	assertForbiddenAbsent(t, both)
+}
+
+// TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
+// remediation hints: when a binary built from a known release version opens a
+// workspace, it stamps meta.producer_binary_version on a successful migrate;
+// when a later refusal fires, recoverAheadOfRegistry reads that row and the
+// most recent migration-recovery snapshot, and surfaces both verbatim in the
+// UnsupportedSchemaVersionError. Without this end-to-end probe the unit test
+// for Error() rendering passes while the lookup layer that populates the
+// fields could regress silently.
+func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
+	const sentinel = "vSENTINEL-0.4.2"
+	prev := version.Version
+	version.Version = sentinel
+	t.Cleanup(func() { version.Version = prev })
+
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	// Fresh open: runs the baseline migration -> takes a recovery snapshot
+	// AND writes meta.producer_binary_version = sentinel.
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		got, err := st.getMeta(ctx, nil, producerBinaryVersionMetaKey)
+		if err != nil {
+			t.Fatalf("getMeta(%q) error = %v", producerBinaryVersionMetaKey, err)
+		}
+		if got != sentinel {
+			t.Errorf("meta.%s = %q, want %q (recordProducerBinaryVersion did not run on fresh migrate)",
+				producerBinaryVersionMetaKey, got, sentinel)
+		}
+		// Corrupt the baseline so the next Open's reconcile path classifies
+		// the workspace as genuinely incompatible.
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN title`)
+		mustCommit(t, ctx, st, "test: corrupt baseline shape")
+	})
+
+	stampGooseVersionAhead(t, ctx, doltRoot)
+
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		t.Fatal("Open() returned nil; want UnsupportedSchemaVersionError")
+	}
+	var refusal *UnsupportedSchemaVersionError
+	if !errors.As(err, &refusal) {
+		t.Fatalf("Open() error = %v (%T); want *UnsupportedSchemaVersionError", err, err)
+	}
+	if refusal.ProducerBinaryVersion != sentinel {
+		t.Errorf("ProducerBinaryVersion = %q, want %q", refusal.ProducerBinaryVersion, sentinel)
+	}
+	if refusal.SnapshotName == "" {
+		t.Errorf("SnapshotName empty; want a migration-recovery snapshot name (one was taken on fresh Open)")
+	}
+	if !IsMigrationSnapshotName(refusal.SnapshotName) {
+		t.Errorf("SnapshotName %q does not match the migration-stamped shape", refusal.SnapshotName)
+	}
+	msg := refusal.Error()
+	if !strings.Contains(msg, "lit downgrade --to "+sentinel) {
+		t.Errorf("Error() did not surface the producer version verbatim: %q", msg)
+	}
+	if !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {
+		t.Errorf("Error() did not surface the snapshot name verbatim: %q", msg)
+	}
+}
+
+// TestProducerBinaryVersionUnstampedForDevBuild pins the dev-build guard: a
+// binary with no link-time Version (IsDev == true) must NOT write a producer
+// row, so a stray local build does not overwrite a real release stamp.
+func TestProducerBinaryVersionUnstampedForDevBuild(t *testing.T) {
+	prev := version.Version
+	version.Version = ""
+	t.Cleanup(func() { version.Version = prev })
+
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		got, err := st.getMeta(ctx, nil, producerBinaryVersionMetaKey)
+		if err != nil {
+			t.Fatalf("getMeta error = %v", err)
+		}
+		if got != "" {
+			t.Errorf("meta.%s = %q on dev build; want empty (no stamp)",
+				producerBinaryVersionMetaKey, got)
+		}
+	})
 }
 
 // TestOpenAllowsWorkspaceExactlyAtMax pins the boundary on the allow side: a
