@@ -69,7 +69,11 @@ func TestSignatureIsOptional(t *testing.T) {
 	m := Manifest{
 		// Version: v-stripped goreleaser .Version — matches the produced shape.
 		Info:      version.Info{Version: "0.1.0", Schema: version.SchemaSupport{Min: 1, Max: 1}},
-		Artifacts: []Artifact{{Platform: "linux/amd64", URL: "u", SHA256: "s"}},
+		Artifacts: []Artifact{{
+			Platform: "linux/amd64",
+			URL:      "https://example/lit_0.1.0_linux_amd64.tar.gz",
+			SHA256:   "0000000000000000000000000000000000000000000000000000000000000001",
+		}},
 	}
 	encoded, err := json.Marshal(&m)
 	if err != nil {

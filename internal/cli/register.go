@@ -206,6 +206,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: withValidation(validateSnapshotsCommandPath, r.wsCmd(runSnapshots))},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
 			Run: r.appCmd(appAccessWrite, runRecover)},
+		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
+			Run: r.appCmd(appAccessWrite, runDowngrade)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
 			Run: withValidation(validateBulkCommandPath, r.appCmd(appAccessWrite, runBulk))},
 	}
