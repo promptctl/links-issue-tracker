@@ -71,13 +71,11 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 		client = http.DefaultClient
 	}
 
-	archive, err := downloadAndVerify(ctx, client, target.Artifact)
-	if err != nil {
-		return err
-	}
-
-	// Temp file on the same filesystem as targetPath so os.Rename is genuinely
-	// atomic. Cross-FS rename falls back to copy+unlink, which is not atomic.
+	// [LAW:dataflow-not-control-flow] Create the temp file BEFORE downloading
+	// so a non-writable install dir (e.g. /usr/local/bin without sudo) fails
+	// fast and doesn't burn bandwidth fetching an archive we couldn't have
+	// installed anyway. Temp file lives on the same filesystem as targetPath
+	// so the eventual os.Rename is genuinely atomic.
 	targetDir := filepath.Dir(targetPath)
 	tmp, err := os.CreateTemp(targetDir, ".lit-downgrade-*.tmp")
 	if err != nil {
@@ -90,6 +88,12 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 			_ = os.Remove(tmpPath)
 		}
 	}()
+
+	archive, err := downloadAndVerify(ctx, client, target.Artifact)
+	if err != nil {
+		_ = tmp.Close()
+		return err
+	}
 
 	if err := extractLitBinary(archive, tmp); err != nil {
 		_ = tmp.Close()
@@ -123,7 +127,11 @@ func downloadAndVerify(ctx context.Context, client *http.Client, a Artifact) ([]
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("release: fetch %s: HTTP %d", a.URL, resp.StatusCode)
+		// [LAW:one-source-of-truth] Same diagnostic shape as resolver.Resolve
+		// — include a size-limited body snippet so operators can distinguish
+		// GitHub's "Not Found" page from auth/ratelimit HTML, etc.
+		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+		return nil, fmt.Errorf("release: fetch %s: HTTP %d: %s", a.URL, resp.StatusCode, strings.TrimSpace(string(snippet)))
 	}
 	// [LAW:types-are-the-program] Decode the expected SHA256 BEFORE downloading
 	// so a malformed manifest digest fails fast (and never lets us trust a
@@ -163,6 +171,37 @@ func downloadAndVerify(ctx context.Context, client *http.Client, a Artifact) ([]
 // uncompressed bound too, or a 1 MiB tar.gz of zeros could fill the disk.
 const maxUncompressedBytes = 256 << 20
 
+// maxTotalUncompressedBytes bounds the SUM of bytes read from the gunzip
+// stream while scanning the archive. The per-entry cap alone can't catch a
+// many-small-entries bomb (N entries of cap-1 bytes each); a stream-level
+// cap refuses that shape by construction. Set to 2x the per-entry cap so
+// a legitimate `lit` + LICENSE + README archive is comfortably under it.
+const maxTotalUncompressedBytes = 2 * maxUncompressedBytes
+
+// boundedReader wraps a Reader and returns errStreamCap once total bytes
+// read exceed cap. Used to refuse archive streams whose total uncompressed
+// size would balloon past maxTotalUncompressedBytes regardless of per-entry
+// sizes.
+type boundedReader struct {
+	r     io.Reader
+	cap   int64
+	read  int64
+}
+
+var errStreamCap = errors.New("release: uncompressed archive stream exceeds total cap")
+
+func (b *boundedReader) Read(p []byte) (int, error) {
+	if b.read >= b.cap {
+		return 0, errStreamCap
+	}
+	if int64(len(p)) > b.cap-b.read {
+		p = p[:b.cap-b.read]
+	}
+	n, err := b.r.Read(p)
+	b.read += int64(n)
+	return n, err
+}
+
 // extractLitBinary scans the tar.gz for a flat `lit` entry of regular-file
 // type and writes its contents to dest. The accept shape is intentionally
 // tighter than scripts/install.sh's: this implementation rejects any
@@ -182,7 +221,10 @@ func extractLitBinary(archive []byte, dest io.Writer) error {
 		return fmt.Errorf("release: open gzip: %w", err)
 	}
 	defer gzr.Close()
-	tr := tar.NewReader(gzr)
+	// [LAW:enumeration-gap] The per-entry cap doesn't bound the sum across
+	// many entries; this stream-level cap refuses a many-small-entries gzip
+	// bomb by construction. Any tar Read() past the cap errors out.
+	tr := tar.NewReader(&boundedReader{r: gzr, cap: maxTotalUncompressedBytes})
 	found := false
 	for {
 		h, err := tr.Next()
