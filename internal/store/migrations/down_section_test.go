@@ -17,57 +17,56 @@ import (
 // [LAW:one-source-of-truth] The predicate works on the same bytes goose reads.
 // There is no parallel "registry of invertible migrations" that could drift.
 func hasDownSection(data []byte) bool {
-	// Strip /* ... */ block comments first so a directive-looking substring
-	// inside a block comment cannot be misread as a real goose directive.
-	// Goose itself only recognizes directives on a real source line, so the
-	// predicate must do the same.
-	stripped := stripBlockComments(string(data))
-	lines := strings.Split(stripped, "\n")
-
-	// Find the line index of the `+goose Down` directive — and only count a
-	// line as the directive if the trimmed line IS the directive, not if it
-	// merely contains the substring (a longer comment that happens to embed
-	// "-- +goose Down" must not match).
-	downLine := -1
-	for i, line := range lines {
-		if isGooseDirective(line, "down") {
-			downLine = i
-			break
-		}
-	}
-	if downLine < 0 {
-		return false
-	}
-
-	// Scan after the Down directive for an executable line. Stop at a
-	// subsequent `+goose Up` directive (defensive — files are Up-then-Down
-	// by convention, but the predicate must not get confused if a future
-	// file embeds an Up after the Down).
-	for _, line := range lines[downLine+1:] {
-		if isGooseDirective(line, "up") {
-			return false
-		}
-		if isGooseDirective(line, "down") {
-			// Duplicate Down directive — keep scanning; the body before it
-			// might be empty but content might come after. Goose itself
-			// would error on the duplicate, but that's the runtime gate's
-			// problem to surface; the static gate only cares about presence
-			// of executable bytes anywhere after the FIRST Down directive.
+	// Walk the file line-by-line, carrying block-comment state across lines.
+	// Directives are recognized only when they appear as a real source line
+	// (not inside /* ... */); executable content is recognized only outside
+	// every comment form. The shape mirrors what goose actually parses, so
+	// adversarial inputs like `-- +goose D/*x*/own` cannot fabricate a
+	// directive by collapsing under a naive substring strip.
+	lines := strings.Split(string(data), "\n")
+	inBlock := false
+	downSeen := false
+	for _, line := range lines {
+		// First: account for any open block comment that started on a
+		// previous line. We do not advance the block-comment state via
+		// directive detection or content extraction; lineContent does both.
+		content, exitedBlock := lineContent(line, inBlock)
+		// Directive detection: only on lines that were NOT inside a block
+		// comment at start. A directive cannot live inside /* ... */; if
+		// the line opens a block comment partway through, the directive
+		// would have to come before that opening, which is what
+		// rawNonBlockPrefix preserves before any stripping. We re-derive
+		// it cheaply: a directive must be the entire (trimmed) line, with
+		// no /* ... */ artifacts.
+		if !inBlock && isGooseDirective(line, "down") {
+			downSeen = true
+			inBlock = exitedBlock
 			continue
 		}
-		stripped := strings.TrimSpace(stripLineComment(line))
-		if stripped == "" {
+		if !inBlock && isGooseDirective(line, "up") {
+			if downSeen {
+				// Down section ended without yielding executable content.
+				return false
+			}
+			inBlock = exitedBlock
 			continue
 		}
-		return true
+		inBlock = exitedBlock
+		if !downSeen {
+			continue
+		}
+		if strings.TrimSpace(content) != "" {
+			return true
+		}
 	}
 	return false
 }
 
 // isGooseDirective reports whether a source line is exactly the `+goose <kind>`
 // directive (case-insensitive, surrounding whitespace tolerated). The accept
-// shape mirrors what goose actually parses: a `-- +goose <kind>` line, not
-// any line that happens to contain the substring.
+// shape mirrors what goose actually parses: a `-- +goose <kind>` line whose
+// trimmed body is literally that directive, not any line that contains the
+// substring or whose interior `/* ... */` could be stripped to match.
 func isGooseDirective(line, kind string) bool {
 	trimmed := strings.TrimSpace(line)
 	if !strings.HasPrefix(strings.ToLower(trimmed), "-- ") {
@@ -77,43 +76,68 @@ func isGooseDirective(line, kind string) bool {
 	return strings.EqualFold(body, "+goose "+kind)
 }
 
-// stripBlockComments removes /* ... */ comment spans, including ones that
-// span multiple lines. Unterminated block comments are treated as comment to
-// EOF — the same shape MySQL's parser uses — so a runaway /* with no */ does
-// not silently slip through as "executable bytes."
-func stripBlockComments(s string) string {
+// lineContent strips comments from one source line and returns the executable
+// content plus the inBlock state at end-of-line. Stripping rules:
+//   - If inBlock at start, search for `*/`; bytes before the closer are
+//     comment; bytes after are processed normally on the rest of the line.
+//   - Outside a block, the FIRST occurrence of `--`, `#`, or `/*` wins:
+//     `--` and `#` terminate the line as comment; `/*` opens a block (and
+//     `lineContent` recurses on whatever comes after a same-line `*/`).
+//   - Quote-string awareness is out of scope: migrations don't legitimately
+//     embed comment markers inside string literals in their Down sections,
+//     and if one does, the gate is conservative (extra stripping → reject),
+//     which is safe given the gate's purpose.
+func lineContent(line string, inBlock bool) (string, bool) {
 	var out strings.Builder
+	rest := line
+	if inBlock {
+		idx := strings.Index(rest, "*/")
+		if idx < 0 {
+			return "", true
+		}
+		rest = rest[idx+2:]
+	}
 	for {
-		i := strings.Index(s, "/*")
-		if i < 0 {
-			out.WriteString(s)
-			return out.String()
+		// Find the earliest of `--`, `#`, `/*`.
+		lineDash := strings.Index(rest, "--")
+		hash := strings.Index(rest, "#")
+		block := strings.Index(rest, "/*")
+		next, kind := earliest(lineDash, hash, block)
+		if next < 0 {
+			out.WriteString(rest)
+			return out.String(), false
 		}
-		out.WriteString(s[:i])
-		s = s[i+2:]
-		j := strings.Index(s, "*/")
-		if j < 0 {
-			return out.String()
+		out.WriteString(rest[:next])
+		switch kind {
+		case "--", "#":
+			return out.String(), false
+		case "/*":
+			rest = rest[next+2:]
+			closer := strings.Index(rest, "*/")
+			if closer < 0 {
+				return out.String(), true
+			}
+			rest = rest[closer+2:]
 		}
-		s = s[j+2:]
 	}
 }
 
-// stripLineComment trims trailing line comments (`-- ...` or `# ...`). Both
-// forms are valid in MySQL / Dolt; goose itself only writes `--`, but the
-// gate must reject any comment-only Down regardless of which form a future
-// author reaches for. Quoted-string handling is omitted because no migration
-// has a reason to embed `--` or `#` inside a string literal in the Down
-// section; if one does, it still has non-comment bytes left for the predicate
-// to find.
-func stripLineComment(line string) string {
-	if i := strings.Index(line, "--"); i >= 0 {
-		line = line[:i]
+func earliest(a, b, c int) (int, string) {
+	pick := -1
+	kind := ""
+	for _, p := range []struct {
+		idx  int
+		kind string
+	}{{a, "--"}, {b, "#"}, {c, "/*"}} {
+		if p.idx < 0 {
+			continue
+		}
+		if pick < 0 || p.idx < pick {
+			pick = p.idx
+			kind = p.kind
+		}
 	}
-	if i := strings.Index(line, "#"); i >= 0 {
-		line = line[:i]
-	}
-	return line
+	return pick, kind
 }
 
 // TestEveryMigrationHasDownSection enforces the +goose Down discipline that
@@ -225,6 +249,21 @@ func TestHasDownSectionRejectsMissingShapes(t *testing.T) {
 			name: "directive-looking substring as part of a longer comment line does not count",
 			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- TODO: someday add a -- +goose Down section\n",
 			want: false,
+		},
+		{
+			name: "block-comment-spliced fake directive must not collapse into a real one",
+			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- +goose D/*x*/own\nDROP TABLE x;\n",
+			want: false,
+		},
+		{
+			name: "unterminated block comment after down marker eats the rest",
+			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- +goose Down\n/* unterminated\nDROP TABLE x;\n",
+			want: false,
+		},
+		{
+			name: "multi-line block comment then a real DROP after the closer",
+			body: "-- +goose Up\nCREATE TABLE x (id INT);\n-- +goose Down\n/* multi\n line block */\nDROP TABLE x;\n",
+			want: true,
 		},
 		{
 			name: "case-insensitive marker",
