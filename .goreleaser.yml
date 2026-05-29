@@ -1,16 +1,15 @@
 # goreleaser config for lit.
 #
-# CONFIG VERSION: goreleaser v2 syntax. The cross-compile image tag is
-# `goreleaser-cross:v1.26.2-3` — that "v1.x.y" naming is the cross-image
-# release line, NOT the bundled goreleaser version. The image bundles
-# goreleaser v2 (the v1.26.2-3 build picked up "feat: bump goreleaser to
-# v2.16.0" from goreleaser-cross master). release-validate proved this:
-# trying to run it without `version: 2` here failed with "only version: 2
-# configuration files are supported". Do not be tempted by the v1 tag name.
+# CONFIG VERSION: goreleaser v2 syntax. `version: 2` below is required —
+# release-validate proved it: running without it fails with "only version: 2
+# configuration files are supported". The release build runs goreleaser inside
+# build/Dockerfile.release, which installs goreleaser v2.16.0 + zig 0.14.0 as
+# the single cross-toolchain (a pinned macOS SDK supplies the Apple frameworks
+# zig omits, link-only).
 #
-# CGO is required by gozstd in Dolt; the cross image owns the per-target C
-# toolchains (osxcross / mingw / glibc), invoked via the per-target CC env
-# entries below.
+# CGO is required by gozstd in Dolt; that Dockerfile image owns the per-target C
+# toolchains (zig cc for darwin + windows + linux/arm64, native gcc for
+# linux/amd64), invoked via the per-target CC env entries below.
 #
 # [LAW:one-source-of-truth] The version/commit/date a release reports come from
 # a single place: the ldflags injected here. internal/version.{Version,Commit,Date}
@@ -37,11 +36,10 @@ builds:
     binary: lit
     # CGO is REQUIRED: Dolt's embedded MySQL library (gozstd, the regex build
     # tag) does not build with CGO_ENABLED=0. release.yml runs goreleaser
-    # inside the ghcr.io/goreleaser/goreleaser-cross image, which ships with
-    # the C cross-compilers for every target below (osxcross for darwin,
-    # mingw for windows, glibc/musl for linux). Per-target CC is selected via
-    # the template-driven env entries below — that is the standard
-    # goreleaser-cross pattern.
+    # inside the build/Dockerfile.release image, which installs zig 0.14.0 as
+    # the single cross-toolchain for every non-native target (darwin arm64/amd64
+    # and windows via zig cc; linux/amd64 uses the image's native gcc).
+    # Per-target CC/CXX is selected via the template-driven env entries below.
     #
     # [LAW:single-enforcer] One Docker image owns the cross-toolchain inventory;
     # nothing in this repo installs compilers ad-hoc.
@@ -50,33 +48,38 @@ builds:
       # CC + CXX per target — both required because go-icu-regex has C++ source
       # (file.cpp). Without CXX, Go falls back to the host's default g++ which
       # produces "unrecognized -arch" errors when linking cross-targets.
-      # Selects the right cross-compiler from the goreleaser-cross base image
-      # (osxcross for darwin, mingw for windows, gnu-gcc for linux).
+      # Wrapper scripts installed by build/Dockerfile.release call
+      # `zig cc -target <triple>` / `zig c++ -target <triple>` for each
+      # non-native target; linux/amd64 uses the image's native system gcc.
+      # [LAW:one-source-of-truth] the actual zig target triples live only in
+      # the wrapper definitions in Dockerfile.release; these are just names.
       - >-
         {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "arm64" }}CC=oa64-clang{{- end }}
+          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-apple-darwin{{- end -}}
+          {{- if eq .Arch "amd64" }}CC=zig-cc-x86_64-apple-darwin{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "arm64" }}CXX=oa64-clang++{{- end }}
+          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-apple-darwin{{- end -}}
+          {{- if eq .Arch "amd64" }}CXX=zig-cxx-x86_64-apple-darwin{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
+          {{- if eq .Arch "amd64" }}CC=zig-cc-x86_64-windows-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" }}CXX=x86_64-w64-mingw32-g++{{- end }}
+          {{- if eq .Arch "amd64" }}CXX=zig-cxx-x86_64-windows-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
-          {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
+          {{- if eq .Arch "amd64" }}CC=gcc{{- end -}}
+          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-linux-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CXX=x86_64-linux-gnu-g++{{- end }}
-          {{- if eq .Arch "arm64" }}CXX=aarch64-linux-gnu-g++{{- end }}
+          {{- if eq .Arch "amd64" }}CXX=g++{{- end -}}
+          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-linux-gnu{{- end }}
         {{- end -}}
       # CGO include + link paths per target — points cgo at the ICU prefix
       # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Empty
@@ -123,13 +126,6 @@ builds:
       # arm64-windows until there is a real consumer to justify the test matrix.
       - goos: windows
         goarch: arm64
-      # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
-      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Cross-
-      # compiling Intel-Mac binaries from Linux requires either custom
-      # cctools-x86_64 layers in build/Dockerfile.release or switching to
-      # zig cc. Tracked as a follow-up under the downgrade epic.
-      - goos: darwin
-        goarch: amd64
     flags:
       - -trimpath
       - -buildvcs=false

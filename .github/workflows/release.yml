@@ -1,13 +1,14 @@
 name: Release
 
 # Triggered by tag push matching `v*.*.*`. Builds the custom release-builder
-# image (goreleaser-cross + ICU cross-toolchains for every Lit target), runs
+# image (zig cross-toolchain + ICU cross-builds for every Lit target), runs
 # goreleaser inside it to produce per-platform archives + checksums, runs
 # mkmanifest, then publishes everything atomically via `gh release create`.
 #
-# release-validate.yml exercises this exact path on every PR + master push, so
-# the only way this workflow surprises is when the tag context differs (e.g.,
-# the changelog generation) — those differences are deliberately small.
+# release-validate.yml exercises this exact path out-of-band (every master push
+# + on demand), so the only way this workflow surprises is when the tag context
+# differs (e.g., the changelog generation) — those differences are deliberately
+# small. (PRs run only the fast native smoke, release-smoke.yml.)
 #
 # workflow_dispatch runs the same build path in --snapshot mode (no publish)
 # so the pipeline can be exercised on-demand against the current commit
@@ -21,7 +22,8 @@ on:
 
 permissions:
   contents: write    # creates the GitHub Release and uploads assets
-  packages: read     # pull goreleaser-cross base image from ghcr
+                     # (no packages scope: image is golang:bookworm + direct
+                     # downloads, not a GHCR pull)
 
 concurrency:
   group: release-${{ github.ref }}
@@ -48,6 +50,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # setup-go RESTORES a module cache keyed on go.sum; it does not run any
+      # `go` command, so on a cold cache (first build of a new go.sum) GOMODCACHE
+      # is empty. The release build mounts it :ro into the container, where
+      # goreleaser cannot then download the missing modules. Populate it here so
+      # the read-only mount is correct by construction rather than depending on a
+      # warm Actions cache. [LAW:one-source-of-truth] this step is the populated
+      # GOMODCACHE; the :ro mount consumes it.
+      - name: Populate module cache
+        run: go mod download
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -76,6 +88,7 @@ jobs:
           fi
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
+            -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
             lit-release-builder:local \
             $ARGS
 
@@ -112,18 +125,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Asset glob mirrors goreleaser's archive name_template exactly:
-          # `lit_<version>_<goos>_<goarch>.tar.gz` — four underscore-separated
-          # parts. The triple-* glob requires that shape, which rejects any
-          # other tar.gz that lands in dist/ (e.g. a future source archive
-          # `lit-<version>.tar.gz`, or anything goreleaser might emit that
-          # isn't a per-platform archive). [LAW:enumeration-gap] the glob's
-          # accept-shape mirrors the producer's actual output, not a looser
-          # superset. windows/amd64 is currently ignored (see ignore: block
-          # in .goreleaser.yml); re-add ./dist/lit_*_*_*.zip alongside when
-          # Windows comes back via links-downgrade-t244.7.
+          # Asset globs mirror goreleaser's archive name_template exactly:
+          # `lit_<version>_<goos>_<goarch>.<ext>` — four underscore-separated
+          # parts. The triple-* globs require that shape, which rejects any
+          # other archive that lands in dist/ (e.g. a future source archive
+          # `lit-<version>.tar.gz`). [LAW:enumeration-gap] each glob's
+          # accept-shape mirrors the producer's actual output format.
+          # tar.gz covers linux/darwin; zip covers windows/amd64.
           gh release create "${{ github.ref_name }}" \
-            ./dist/lit_*_*_*.tar.gz ./dist/checksums.txt ./dist/release-manifest.json \
+            ./dist/lit_*_*_*.tar.gz ./dist/lit_*_*_*.zip \
+            ./dist/checksums.txt ./dist/release-manifest.json \
             --title "${{ github.ref_name }}" \
             --generate-notes
 
