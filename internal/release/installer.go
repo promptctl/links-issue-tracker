@@ -61,11 +61,13 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 		return errors.New("release: nil target")
 	}
 	if !strings.HasSuffix(target.Artifact.URL, ".tar.gz") {
-		// [LAW:types-are-the-program] goreleaser writes .tar.gz for every
-		// platform lit currently ships (.zip would only appear if windows
-		// builds came back); reject anything else at the boundary so the
-		// extract path can assume tar.gz.
-		return fmt.Errorf("release: unsupported archive extension in %q (want .tar.gz)", target.Artifact.URL)
+		// This installer extracts tar.gz only. windows/amd64 ships as .zip
+		// (goreleaser format_override in .goreleaser.yml), so `lit downgrade` is
+		// not yet supported on windows through this path. Reject at the boundary
+		// with a clear error rather than mis-extracting; the extract path below
+		// can then assume tar.gz. Adding zip support is tracked in
+		// links-downgrade-t244.8.
+		return fmt.Errorf("release: unsupported archive extension in %q (want .tar.gz; windows .zip downgrade not yet supported — see links-downgrade-t244.8)", target.Artifact.URL)
 	}
 	client := i.Client
 	if client == nil {

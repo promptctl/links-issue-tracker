@@ -9,11 +9,15 @@
 #        no `--host=` prefix; the script adds the flag itself.
 #   $4 = CC
 #   $5 = CXX
-#   $6 = AR_GLOB — shell glob that resolves to the cross-ar binary. ICU
-#        needs the cross-toolchain's ar (osxcross / mingw / gnu-binutils) so
-#        its static archives are in the format the cross-linker accepts; the
-#        host's GNU ar produces archives macOS ld rejects.
-#   $7 = extra PATH dir (e.g. /usr/local/osxcross/bin) or empty
+#   $6 = AR  — archiver command (e.g. `zig-ar`, `aarch64-linux-gnu-ar`).
+#        Must be a single executable name or path — no embedded spaces.
+#   $7 = RANLIB — ranlib command (e.g. `zig-ranlib`). Same constraint as AR.
+#   $8 = extra_cppflags (optional) — -D/-I flags set as CPPFLAGS for
+#        ./configure (this is the sole CPPFLAGS source — nothing is inherited).
+#        Use to override ICU's platform.h defaults when
+#        the cross-toolchain's SDK differs from what ICU expects.
+#        Example: "-DU_HAVE_TZFILE_H=0" for zig-based macOS targets whose
+#        bundled SDK omits tzfile.h.
 #
 # Reads:
 #   /tmp/icu-build/src/                       — ICU source tree
@@ -29,30 +33,16 @@
 # without significant slowdown vs the wall-clock win of parallelism.
 set -euo pipefail
 
-goos="$1"; goarch="$2"; triplet="$3"; cc="$4"; cxx="$5"; ar_glob="$6"; path_extra="$7"
+goos="$1"; goarch="$2"; triplet="$3"; cc="$4"; cxx="$5"; ar="$6"; ranlib="$7"
+extra_cppflags="${8:-}"
 prefix="/opt/icu/${goos}_${goarch}"
 builddir="/tmp/icu-build/cross-${goos}-${goarch}"
 
-# Resolve AR/RANLIB from the glob.
-shopt -s nullglob
-ar_matches=( ${ar_glob}-ar )
-ranlib_matches=( ${ar_glob}-ranlib )
-shopt -u nullglob
-if [ ${#ar_matches[@]} -eq 0 ] || [ ${#ranlib_matches[@]} -eq 0 ]; then
-    echo "FATAL: no ar/ranlib for glob '${ar_glob}'" >&2
-    echo "available tools matching the prefix:" >&2
-    ls -1 ${ar_glob}* 2>/dev/null | head -20 >&2 || echo "(none)" >&2
-    exit 1
-fi
-AR_BIN="${ar_matches[0]}"
-RANLIB_BIN="${ranlib_matches[0]}"
-
 echo "=== ICU cross-build for ${goos}/${goarch}"
-echo "    host=${triplet} cc=${cc} ar=${AR_BIN} ranlib=${RANLIB_BIN}"
+echo "    host=${triplet} cc=${cc} ar=${ar} ranlib=${ranlib}"
 cp -r /tmp/icu-build/src "$builddir"
 cd "$builddir/source"
-PATH="${path_extra:+${path_extra}:}${PATH}" \
-    CC="$cc" CXX="$cxx" AR="$AR_BIN" RANLIB="$RANLIB_BIN" \
+CC="$cc" CXX="$cxx" AR="$ar" RANLIB="$ranlib" CPPFLAGS="${extra_cppflags}" \
     ./configure --host="$triplet" --prefix="$prefix" \
         --with-cross-build=/tmp/icu-build/native-build/source \
         --enable-static --disable-shared \

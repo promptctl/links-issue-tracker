@@ -287,15 +287,7 @@ case "$mode" in
         esac
         case "$os" in
             linux)  ext="tar.gz" ;;
-            darwin) ext="tar.gz"
-                # Reject Intel Mac immediately — the release pipeline does not
-                # produce a darwin/amd64 artifact (tracked as links-downgrade-t244.6).
-                if [ "$arch" = "amd64" ]; then
-                    echo "error: Intel Mac (darwin/amd64) is not currently in the release matrix" >&2
-                    echo "       build from source: bash scripts/install.sh   (omit --from-release)" >&2
-                    exit 1
-                fi
-                ;;
+            darwin) ext="tar.gz" ;;
             mingw*|msys*|cygwin*) os="windows"; ext="zip" ;;
             *) echo "error: unsupported OS: $os" >&2; exit 1 ;;
         esac

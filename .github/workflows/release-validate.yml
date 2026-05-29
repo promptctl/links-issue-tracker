@@ -1,32 +1,35 @@
 name: Release validate
 
-# Proves the full release pipeline end-to-end on every PR and every push to
-# master: builds the custom release-builder image (goreleaser-cross + ICU
-# cross-toolchains for every target Lit ships), runs goreleaser inside it
-# to produce per-platform archives + checksums, runs mkmanifest, and asserts
-# the resulting manifest has every expected platform with a valid SHA256.
+# Proves the full release pipeline end-to-end: builds the custom release-builder
+# image (zig cross-toolchain + ICU cross-builds for every target Lit ships), runs
+# goreleaser inside it to produce per-platform archives + checksums, runs
+# mkmanifest, and asserts the resulting manifest has every expected platform with
+# a valid SHA256.
 #
-# If this job is green, the next `v*.*.*` tag push will produce a working
-# GitHub Release; if it's red, the PR doesn't merge.
+# This runs OUT-OF-BAND, never on pull_request — the full cross-build takes ~35
+# minutes, which must never sit on the PR feedback loop. PRs get the fast native
+# smoke (release-smoke.yml) instead. The full proof runs post-merge on master
+# (so a broken pipeline is caught before any tag is cut) and on demand via
+# workflow_dispatch. If this is green on master, the next `v*.*.*` tag push will
+# produce a working GitHub Release.
 #
-# [LAW:single-enforcer] Exactly one workflow proves the pipeline; release.yml
-# does the publish using the IDENTICAL build path (same Dockerfile, same
-# goreleaser invocation, same mkmanifest call). They differ only in what
-# happens after dist/ exists.
+# [LAW:single-enforcer] this workflow owns the *release-level* invariant (do all
+# five cross-targets + the manifest assemble?); release-smoke.yml owns the fast
+# *code-level* invariant on PRs. release.yml publishes using the IDENTICAL build
+# path (same Dockerfile, same goreleaser invocation, same mkmanifest call).
 #
 # [LAW:verifiable-goals] The acceptance check is a concrete artifact list +
 # manifest shape, not "did goreleaser exit 0" — a silent build skip cannot
 # pass jq's per-field assertions below.
 
 on:
-  pull_request:
-    branches: [master]
   push:
     branches: [master]
+  workflow_dispatch: {}    # on-demand: run the full proof against any branch
 
 permissions:
-  contents: read
-  packages: read    # required to pull goreleaser-cross base image from ghcr
+  contents: read    # least privilege: image is golang:bookworm + direct
+                    # downloads (no GHCR pull), so no packages scope is needed
 
 concurrency:
   group: release-validate-${{ github.ref }}
@@ -44,6 +47,16 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+
+      # setup-go RESTORES a module cache keyed on go.sum; it does not run any
+      # `go` command, so on a cold cache (first build of a new go.sum) GOMODCACHE
+      # is empty. The snapshot build mounts it :ro into the container, where
+      # goreleaser cannot then download the missing modules. Populate it here so
+      # the read-only mount is correct by construction rather than depending on a
+      # warm Actions cache. [LAW:one-source-of-truth] this step is the populated
+      # GOMODCACHE; the :ro mount consumes it.
+      - name: Populate module cache
+        run: go mod download
 
       # Build the custom release-builder image. GHA layer cache makes
       # subsequent runs reuse the (slow) ICU cross-build layers — only
@@ -67,16 +80,21 @@ jobs:
           set -euo pipefail
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
+            -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
             lit-release-builder:local \
             check
 
       # Full snapshot build inside the image; produces archives + checksums
       # for every target in .goreleaser.yml.
+      # GOMODCACHE is populated by the `go mod download` step above; mount it
+      # read-only so goreleaser reuses the cached modules and the container
+      # (running as root) cannot mutate the host cache.
       - name: Build snapshot artifacts
         run: |
           set -euo pipefail
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
+            -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
             lit-release-builder:local \
             release --snapshot --clean
 
@@ -142,7 +160,7 @@ jobs:
             ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
           ' "$MANIFEST" >/dev/null
 
-          EXPECTED='["darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
+          EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
           GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
           if [ "$GOT" != "$EXPECTED" ]; then
             echo "manifest platforms mismatch" >&2
