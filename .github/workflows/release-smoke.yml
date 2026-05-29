@@ -1,0 +1,62 @@
+name: Release smoke
+
+# Fast PR gate for the release path. Builds ONE native target (linux/amd64) with
+# goreleaser, so a PR proves the things that break per code change — Go compiles,
+# the cgo + ICU link recipe works, and .goreleaser.yml parses — without paying
+# for the cross-toolchain.
+#
+# [LAW:single-enforcer] this workflow owns the *code-level* release invariant
+# (does a goreleaser build of this commit produce a binary?); release-validate.yml
+# owns the *release-level* invariant (do all five cross-targets + the manifest
+# assemble?) and runs out-of-band. Splitting them by change-reason keeps the PR
+# feedback loop fast: the 5-platform cross-build is a release-time cost, not a
+# per-PR cost, so it must never sit on this path.
+#
+# linux/amd64 is the native target — CC=gcc, system libicu-dev, no zig, no SDK,
+# no /opt/icu prefix (the .goreleaser.yml env block leaves CGO_*FLAGS empty and
+# the icu_static tag unset for exactly this target). goreleaser --single-target
+# builds only the runner's GOOS/GOARCH, so none of the cross-target env (zig CC,
+# /opt/icu paths) is evaluated.
+
+on:
+  pull_request:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0    # goreleaser derives the snapshot version from git
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # System ICU for the native linux/amd64 cgo link — the same libs the
+      # release image's base stage installs. gcc is already on the runner.
+      - name: Install ICU
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libicu-dev pkg-config
+
+      # Same goreleaser major as the release image, so config semantics match.
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "2.16.0"
+          install-only: true
+
+      # --single-target builds only linux/amd64 (the runner arch); --snapshot
+      # avoids needing a tag. This is the whole point: no cross-build, fast.
+      - name: Build native target (snapshot)
+        run: goreleaser build --single-target --snapshot --clean

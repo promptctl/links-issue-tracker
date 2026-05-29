@@ -10,7 +10,7 @@ Each tagged release (`vX.Y.Z`) creates a GitHub Release containing:
 
 | Asset                                      | Purpose                                                                                       |
 |--------------------------------------------|-----------------------------------------------------------------------------------------------|
-| `lit_X.Y.Z_<goos>_<goarch>.tar.gz` | Per-platform binary archive (no leading `v` in version segment — goreleaser strips it). |
+| `lit_X.Y.Z_<goos>_<goarch>.<ext>` | Per-platform binary archive — `.tar.gz` for linux/darwin, `.zip` for windows (no leading `v` in version segment — goreleaser strips it). |
 | `checksums.txt`                            | SHA256 of every archive above (`<sha256>  <filename>` per line).                              |
 | `release-manifest.json`                    | Machine-readable index linking the version → its schema-support range → per-platform artifacts. |
 
@@ -45,27 +45,34 @@ gh run watch
 When the workflow finishes, the GitHub Release is published with all artifacts
 above. No manual steps.
 
-### How the pipeline is verified before a tag is ever cut
+### How the pipeline is verified
 
-`.github/workflows/release-validate.yml` runs on every PR and on every push
-to `master`. It executes the SAME goreleaser-cross container release.yml uses,
-produces a real cross-platform `dist/`, runs `mkmanifest` against it, and
-asserts the manifest has every expected platform with a valid SHA256.
+Two tiers, split by cost so the per-PR loop stays fast:
 
-If `release-validate` is green, the next `git push <tag>` will produce a
-working GitHub Release. If it's red, the PR doesn't merge. This is the
-single answer to "did the pipeline survive my change."
+- **Per PR (fast, ~2-3 min):** `.github/workflows/release-smoke.yml` builds the
+  native `linux/amd64` target with `goreleaser build --single-target --snapshot`.
+  It proves the things that break per code change — the code compiles, the
+  cgo + ICU link works, and `.goreleaser.yml` parses — without the cross-build.
+  The full ~35-minute 5-platform build is deliberately NOT on the PR path.
+- **Out-of-band (full):** `.github/workflows/release-validate.yml` builds the
+  release-builder image and runs the SAME goreleaser invocation release.yml uses,
+  producing a real cross-platform `dist/`, running `mkmanifest`, and asserting
+  the manifest has every expected platform with a valid SHA256. It runs on every
+  push to `master` (catching a broken pipeline before any tag is cut) and on
+  demand via `workflow_dispatch` — never on `pull_request`.
 
-The workflow also uploads `dist/` as a 7-day workflow artifact on every run,
-so a reviewer can inspect what would be published without re-running the
-workflow.
+If `release-validate` is green on `master`, the next `git push <tag>` will
+produce a working GitHub Release. That workflow also uploads `dist/` as a
+workflow artifact on every run, so you can inspect what would be published
+without re-running it.
 
 ### Dry-run a release locally (optional)
 
 Local dry-runs require a container runtime + the custom release-builder
-image. The image extends `ghcr.io/goreleaser/goreleaser-cross:v1.26.2-3`
-with ICU built from source for every cross-target (osxcross for darwin/arm64,
-glibc for linux/arm64; linux/amd64 uses the system libicu-dev directly).
+image. The image starts from `golang:1.25.7-bookworm` and installs zig 0.14.0
+as the single cross-compiler for every non-native target (a pinned macOS SDK
+supplies the Apple frameworks zig omits, used link-only), with ICU built from
+source per target; linux/amd64 uses the system libicu-dev directly.
 
 Build the image once, then use it:
 
