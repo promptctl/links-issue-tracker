@@ -101,6 +101,8 @@ builds:
       - >-
         {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
           CGO_LDFLAGS=
+        {{- else if eq .Os "darwin" -}}
+          CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib -Wl,-undefined,dynamic_lookup
         {{- else -}}
           CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib
         {{- end -}}
