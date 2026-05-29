@@ -76,27 +76,35 @@ RUN printf '#!/bin/sh\nexec zig ar "$@"\n' > /usr/local/bin/zig-ar \
     && printf '#!/bin/sh\nexec zig ranlib "$@"\n' > /usr/local/bin/zig-ranlib \
     && chmod +x /usr/local/bin/zig-ar /usr/local/bin/zig-ranlib
 
-# Minimal tzfile.h stub for zig macOS cross-compile targets.
-# [LAW:one-source-of-truth] ICU 75.1 putil.cpp unconditionally includes
-# tzfile.h when U_PLATFORM_IS_DARWIN_BASED is set (which zig sets via
-# __APPLE__); the only symbol ICU uses is TZDIR. zig's bundled macOS SDK
-# omits tzfile.h (removed from modern Apple SDKs). We provide a stub with
-# just that define, injected via -isystem in the darwin wrapper scripts.
-RUN mkdir -p /usr/local/include/zig-macos-stubs \
-    && printf '/* tzfile.h stub for zig macOS cross-compile: ICU uses TZDIR and TZDEFAULT */\n#ifndef TZFILE_H\n#define TZFILE_H\n#ifndef TZDIR\n#define TZDIR "/var/db/timezone/zoneinfo"\n#endif\n#ifndef TZDEFAULT\n#define TZDEFAULT "/etc/localtime"\n#endif\n#endif\n' \
-        > /usr/local/include/zig-macos-stubs/tzfile.h
+# zig macOS cross-compile stubs — header and library shims that zig's bundled
+# SDK omits. [LAW:one-source-of-truth] all stubs live here; the darwin wrapper
+# scripts below inject them via -isystem / -L so every darwin compile+link
+# invocation sees them without any per-callsite coordination.
+#
+# tzfile.h: ICU 75.1 putil.cpp includes it unconditionally under __APPLE__;
+#   zig's SDK dropped it in modern macOS. Provides TZDIR + TZDEFAULT.
+# libresolv.tbd: Go's net package links -lresolv; zig validates library
+#   existence before invoking its linker, searching only explicit -L paths.
+#   Without a stub it fails with "unable to find dynamic system library resolv".
+#   The TBD stub tells zig "this dylib exists at /usr/lib/libresolv.9.dylib";
+#   all symbols are resolved at runtime from macOS's libSystem/libresolv.
+RUN mkdir -p /usr/local/include/zig-macos-stubs /usr/local/lib/zig-macos-stubs \
+    && printf '/* tzfile.h stub: ICU needs TZDIR and TZDEFAULT */\n#ifndef TZFILE_H\n#define TZFILE_H\n#ifndef TZDIR\n#define TZDIR "/var/db/timezone/zoneinfo"\n#endif\n#ifndef TZDEFAULT\n#define TZDEFAULT "/etc/localtime"\n#endif\n#endif\n' \
+        > /usr/local/include/zig-macos-stubs/tzfile.h \
+    && printf '--- !tapi-tbd\ntbd-version:     4\ntargets:         [ arm64-macos, x86_64-macos ]\ninstall-name:    '"'"'/usr/lib/libresolv.9.dylib'"'"'\ncurrent-version: 1.0\ncompatibility-version: 1.0\nexports:\n  - targets:         [ arm64-macos, x86_64-macos ]\n    symbols:         [ dn_comp, dn_expand, dn_skipname, res_close, res_getservers, res_init, res_mkquery, res_ndestroy, res_ninit, res_nmkquery, res_nquery, res_nsearch, res_nsend, res_query, res_search, res_send, res_setservers ]\n...\n' \
+        > /usr/local/lib/zig-macos-stubs/libresolv.tbd
 
 # Create zig cc/c++ wrappers for each cross-compile target.
 # Names match the CC/CXX env entries in .goreleaser.yml.
 # [LAW:one-source-of-truth] target triples here are the single definition;
 # .goreleaser.yml references the wrapper names, not the triples directly.
-# Non-darwin targets get plain wrappers; darwin targets additionally pass
-# -isystem to inject the tzfile.h stub (see above).
+# Darwin wrappers inject -isystem (headers) and -L (library stubs) from the
+# zig-macos-stubs directories above. Non-darwin targets get plain wrappers.
 RUN for pair in \
         "aarch64-linux-gnu:aarch64-linux-gnu:" \
         "x86_64-windows-gnu:x86_64-windows-gnu:" \
-        "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs" \
-        "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs"; do \
+        "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs -L/usr/local/lib/zig-macos-stubs" \
+        "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs -L/usr/local/lib/zig-macos-stubs"; do \
         name="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"; extra="${rest##*:}"; \
         printf '#!/bin/sh\nexec zig cc -target %s %s "$@"\n' "$target" "$extra" \
             > "/usr/local/bin/zig-cc-${name}" && \
