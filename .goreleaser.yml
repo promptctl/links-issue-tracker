@@ -50,33 +50,38 @@ builds:
       # CC + CXX per target — both required because go-icu-regex has C++ source
       # (file.cpp). Without CXX, Go falls back to the host's default g++ which
       # produces "unrecognized -arch" errors when linking cross-targets.
-      # Selects the right cross-compiler from the goreleaser-cross base image
-      # (osxcross for darwin, mingw for windows, gnu-gcc for linux).
+      # Wrapper scripts installed by build/Dockerfile.release call
+      # `zig cc -target <triple>` / `zig c++ -target <triple>` for each
+      # non-native target; linux/amd64 uses the image's native system gcc.
+      # [LAW:one-source-of-truth] the actual zig target triples live only in
+      # the wrapper definitions in Dockerfile.release; these are just names.
       - >-
         {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "arm64" }}CC=oa64-clang{{- end }}
+          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-apple-darwin{{- end -}}
+          {{- if eq .Arch "amd64" }}CC=zig-cc-x86_64-apple-darwin{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "darwin" -}}
-          {{- if eq .Arch "arm64" }}CXX=oa64-clang++{{- end }}
+          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-apple-darwin{{- end -}}
+          {{- if eq .Arch "amd64" }}CXX=zig-cxx-x86_64-apple-darwin{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" }}CC=x86_64-w64-mingw32-gcc{{- end }}
+          {{- if eq .Arch "amd64" }}CC=zig-cc-x86_64-windows-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "windows" -}}
-          {{- if eq .Arch "amd64" }}CXX=x86_64-w64-mingw32-g++{{- end }}
+          {{- if eq .Arch "amd64" }}CXX=zig-cxx-x86_64-windows-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CC=x86_64-linux-gnu-gcc{{- end }}
-          {{- if eq .Arch "arm64" }}CC=aarch64-linux-gnu-gcc{{- end }}
+          {{- if eq .Arch "amd64" }}CC=gcc{{- end -}}
+          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-linux-gnu{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CXX=x86_64-linux-gnu-g++{{- end }}
-          {{- if eq .Arch "arm64" }}CXX=aarch64-linux-gnu-g++{{- end }}
+          {{- if eq .Arch "amd64" }}CXX=g++{{- end -}}
+          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-linux-gnu{{- end }}
         {{- end -}}
       # CGO include + link paths per target — points cgo at the ICU prefix
       # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Empty
@@ -123,13 +128,6 @@ builds:
       # arm64-windows until there is a real consumer to justify the test matrix.
       - goos: windows
         goarch: arm64
-      # Intel Mac: goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
-      # x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Cross-
-      # compiling Intel-Mac binaries from Linux requires either custom
-      # cctools-x86_64 layers in build/Dockerfile.release or switching to
-      # zig cc. Tracked as a follow-up under the downgrade epic.
-      - goos: darwin
-        goarch: amd64
     flags:
       - -trimpath
       - -buildvcs=false

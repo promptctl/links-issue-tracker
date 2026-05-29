@@ -142,7 +142,7 @@ jobs:
             ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
           ' "$MANIFEST" >/dev/null
 
-          EXPECTED='["darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
+          EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
           GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
           if [ "$GOT" != "$EXPECTED" ]; then
             echo "manifest platforms mismatch" >&2

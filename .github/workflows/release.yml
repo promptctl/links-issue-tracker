@@ -112,18 +112,16 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          # Asset glob mirrors goreleaser's archive name_template exactly:
-          # `lit_<version>_<goos>_<goarch>.tar.gz` — four underscore-separated
-          # parts. The triple-* glob requires that shape, which rejects any
-          # other tar.gz that lands in dist/ (e.g. a future source archive
-          # `lit-<version>.tar.gz`, or anything goreleaser might emit that
-          # isn't a per-platform archive). [LAW:enumeration-gap] the glob's
-          # accept-shape mirrors the producer's actual output, not a looser
-          # superset. windows/amd64 is currently ignored (see ignore: block
-          # in .goreleaser.yml); re-add ./dist/lit_*_*_*.zip alongside when
-          # Windows comes back via links-downgrade-t244.7.
+          # Asset globs mirror goreleaser's archive name_template exactly:
+          # `lit_<version>_<goos>_<goarch>.<ext>` — four underscore-separated
+          # parts. The triple-* globs require that shape, which rejects any
+          # other archive that lands in dist/ (e.g. a future source archive
+          # `lit-<version>.tar.gz`). [LAW:enumeration-gap] each glob's
+          # accept-shape mirrors the producer's actual output format.
+          # tar.gz covers linux/darwin; zip covers windows/amd64.
           gh release create "${{ github.ref_name }}" \
-            ./dist/lit_*_*_*.tar.gz ./dist/checksums.txt ./dist/release-manifest.json \
+            ./dist/lit_*_*_*.tar.gz ./dist/lit_*_*_*.zip \
+            ./dist/checksums.txt ./dist/release-manifest.json \
             --title "${{ github.ref_name }}" \
             --generate-notes
 

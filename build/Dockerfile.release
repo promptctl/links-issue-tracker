@@ -1,45 +1,49 @@
-# Lit's release-builder image: goreleaser-cross + ICU built from source for
-# every target platform Lit ships. We need this because the underlying
-# `go-icu-regex` package (transitive Dolt dep) hard-requires the ICU C library
-# headers and shared objects at link time, and no stock cross-toolchain ships
-# ICU for darwin or mingw targets.
+# Lit's release-builder image: Go + goreleaser + zig cross-toolchain + ICU
+# built from source for every target platform Lit ships. We need ICU because
+# the `go-icu-regex` package (transitive Dolt dep) hard-requires the ICU C
+# library headers and shared objects at link time.
+#
+# We use zig cc as the cross-compiler for all non-native targets because:
+# - zig bundles macOS SDK headers for both arm64 and amd64 — no osxcross needed
+# - zig bundles a MinGW-compatible Windows toolchain — no mingw package needed
+# - zig ships zig-ar / zig-ranlib that work for all target archive formats
+# - one substrate eliminates the per-toolchain maintenance each osxcross/mingw
+#   update previously required
 #
 # Supported targets (matches the goos/goarch matrix in .goreleaser.yml):
-#   - linux/amd64   (native, uses apt's system libicu-dev)
-#   - linux/arm64   (cross from amd64, uses aarch64-linux-gnu binutils)
-#   - darwin/arm64  (cross via osxcross, aarch64-apple-darwin*-* tools)
-#   - windows/amd64 (cross via mingw, x86_64-w64-mingw32-* tools)
+#   - linux/amd64   (native, system gcc, system libicu-dev)
+#   - linux/arm64   (zig cc -target aarch64-linux-gnu)
+#   - darwin/arm64  (zig cc -target aarch64-macos.11.0-none)
+#   - darwin/amd64  (zig cc -target x86_64-macos.10.15-none)
+#   - windows/amd64 (zig cc -target x86_64-windows-gnu)
 #
-# DELIBERATELY UNSUPPORTED:
-#
-#   darwin/amd64 (Intel Mac): goreleaser-cross v1.26.2-3 ships osxcross WITHOUT
-#     x86_64-apple-darwin cctools (Apple's Intel-Mac sunset). Returning Intel
-#     Mac to the matrix needs either custom cctools-x86_64 layers here or a
-#     swap to zig cc. Tracked as a follow-up under the downgrade epic.
-#
-# STRUCTURE: multi-stage build. The three cross-* stages each depend only on
-# `native-icu` (which provides the bootstrap install ICU needs for cross-builds)
-# and run IN PARALLEL during `docker buildx build`. The `final` stage then
-# COPYs each /opt/icu/<target>/ prefix from its source stage into one image.
-#
-# Why parallel: ICU is ~3 min per cross-build on a 4-vcpu runner. Sequential =
-# ~9 min for three targets; parallel via stages ≈ ~4 min. Per-stage caching
-# also means editing one target does not invalidate the other two.
+# STRUCTURE: multi-stage build. The four cross-* stages each depend only on
+# `native-icu` and run IN PARALLEL during `docker buildx build`. The `final`
+# stage COPYs each /opt/icu/<target>/ prefix into one image.
 #
 # [LAW:single-enforcer] release-validate.yml builds this image once per
 # Dockerfile change (GHA layer cache reuses unchanged stages); release.yml
 # uses the same Dockerfile. One source.
-# [LAW:one-source-of-truth] ICU version is pinned via build args; the
-# .goreleaser.yml does not duplicate it.
+# [LAW:one-source-of-truth] ICU version and tool versions are pinned via
+# build args; .goreleaser.yml does not duplicate them.
+
+ARG GO_VERSION=1.25.7
+ARG GORELEASER_VERSION=v2.16.0
+ARG ZIG_VERSION=0.14.0
+ARG ICU_MAJOR=75
+ARG ICU_MINOR=1
 
 # -----------------------------------------------------------------------------
 # Stage: base
-# Common apt deps + ICU source download. Every downstream stage starts here.
+# Common apt deps, goreleaser, zig, zig cc wrappers, ICU source download.
+# Every downstream stage starts here.
 # -----------------------------------------------------------------------------
-FROM ghcr.io/goreleaser/goreleaser-cross:v1.26.2-3 AS base
+FROM golang:${GO_VERSION}-bookworm AS base
 
-ARG ICU_MAJOR=75
-ARG ICU_MINOR=1
+ARG GORELEASER_VERSION
+ARG ZIG_VERSION
+ARG ICU_MAJOR
+ARG ICU_MINOR
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         autoconf \
@@ -48,9 +52,46 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         pkg-config \
         build-essential \
         libicu-dev \
-        gcc-aarch64-linux-gnu \
-        g++-aarch64-linux-gnu \
+        xz-utils \
     && rm -rf /var/lib/apt/lists/*
+
+# Install goreleaser (v2 binary release for Linux x86_64).
+RUN curl -fsSL \
+      "https://github.com/goreleaser/goreleaser/releases/download/${GORELEASER_VERSION}/goreleaser_Linux_x86_64.tar.gz" \
+      | tar -xz -C /usr/local/bin goreleaser \
+    && chmod +x /usr/local/bin/goreleaser
+
+# Install zig. The entire extracted directory must remain in /opt because the
+# zig binary requires its sibling lib/ tree at runtime; only the binary is
+# symlinked into PATH.
+RUN curl -fsSL \
+      "https://ziglang.org/download/${ZIG_VERSION}/zig-linux-x86_64-${ZIG_VERSION}.tar.xz" \
+      | tar -xJ -C /opt \
+    && ln -s "/opt/zig-linux-x86_64-${ZIG_VERSION}/zig" /usr/local/bin/zig
+
+# Create zig ar/ranlib wrappers. ICU's Makefiles expand $(AR) and $(RANLIB) as
+# bare tokens, so the command must be a single executable with no embedded
+# spaces — `zig ar` (two words) would break. A wrapper script is the clean fix.
+RUN printf '#!/bin/sh\nexec zig ar "$@"\n' > /usr/local/bin/zig-ar \
+    && printf '#!/bin/sh\nexec zig ranlib "$@"\n' > /usr/local/bin/zig-ranlib \
+    && chmod +x /usr/local/bin/zig-ar /usr/local/bin/zig-ranlib
+
+# Create zig cc/c++ wrappers for each cross-compile target.
+# Names match the CC/CXX env entries in .goreleaser.yml.
+# [LAW:one-source-of-truth] target triples here are the single definition;
+# .goreleaser.yml references the wrapper names, not the triples directly.
+RUN for pair in \
+        "aarch64-linux-gnu:aarch64-linux-gnu" \
+        "x86_64-windows-gnu:x86_64-windows-gnu" \
+        "aarch64-apple-darwin:aarch64-macos.11.0-none" \
+        "x86_64-apple-darwin:x86_64-macos.10.15-none"; do \
+        name="${pair%%:*}"; target="${pair##*:}"; \
+        printf '#!/bin/sh\nexec zig cc -target %s "$@"\n' "$target" \
+            > "/usr/local/bin/zig-cc-${name}" && \
+        printf '#!/bin/sh\nexec zig c++ -target %s "$@"\n' "$target" \
+            > "/usr/local/bin/zig-cxx-${name}" && \
+        chmod +x "/usr/local/bin/zig-cc-${name}" "/usr/local/bin/zig-cxx-${name}"; \
+    done
 
 WORKDIR /tmp/icu-build
 RUN curl -fsSL \
@@ -83,9 +124,8 @@ RUN cp -r /tmp/icu-build/src /tmp/icu-build/native-build \
 FROM native-icu AS cross-linux-arm64
 RUN icu-cross-build linux arm64 \
     aarch64-linux-gnu \
-    aarch64-linux-gnu-gcc aarch64-linux-gnu-g++ \
-    /usr/bin/aarch64-linux-gnu \
-    ""
+    zig-cc-aarch64-linux-gnu zig-cxx-aarch64-linux-gnu \
+    zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
 # Stage: cross-windows-amd64
@@ -93,9 +133,8 @@ RUN icu-cross-build linux arm64 \
 FROM native-icu AS cross-windows-amd64
 RUN icu-cross-build windows amd64 \
     x86_64-w64-mingw32 \
-    x86_64-w64-mingw32-gcc x86_64-w64-mingw32-g++ \
-    /usr/bin/x86_64-w64-mingw32 \
-    ""
+    zig-cc-x86_64-windows-gnu zig-cxx-x86_64-windows-gnu \
+    zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
 # Stage: cross-darwin-arm64
@@ -103,9 +142,17 @@ RUN icu-cross-build windows amd64 \
 FROM native-icu AS cross-darwin-arm64
 RUN icu-cross-build darwin arm64 \
     aarch64-apple-darwin \
-    oa64-clang oa64-clang++ \
-    "/usr/local/osxcross/bin/aarch64-apple-darwin*" \
-    /usr/local/osxcross/bin
+    zig-cc-aarch64-apple-darwin zig-cxx-aarch64-apple-darwin \
+    zig-ar zig-ranlib
+
+# -----------------------------------------------------------------------------
+# Stage: cross-darwin-amd64
+# -----------------------------------------------------------------------------
+FROM native-icu AS cross-darwin-amd64
+RUN icu-cross-build darwin amd64 \
+    x86_64-apple-darwin \
+    zig-cc-x86_64-apple-darwin zig-cxx-x86_64-apple-darwin \
+    zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
 # Stage: final
@@ -113,21 +160,19 @@ RUN icu-cross-build darwin arm64 \
 # the single image that release-validate / release will run goreleaser against.
 # -----------------------------------------------------------------------------
 FROM base AS final
-# Docker RUN defaults to /bin/sh -c, which on Debian-based images is dash.
-# The sanity-check RUN below relies on `set -o pipefail` (bash) and on
-# pipelines whose exit status must propagate. Pin the shell for this stage
-# so the build's correctness does not depend on whichever /bin/sh the base
-# image happens to ship. [LAW:types-are-the-program] the stage's shell is
-# part of its type; subsequent RUNs do not re-declare it.
+# [LAW:types-are-the-program] pin the shell so `set -o pipefail` and pipeline
+# exit semantics are defined by this stage, not by whichever /bin/sh the base
+# ships.
 SHELL ["/bin/bash", "-c"]
 COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
 COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
 COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
+COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
 
 # Sanity check at image-build time — fail loudly if any prefix is missing
 # headers/libs the consumer expects. [LAW:verifiable-goals]
 RUN set -euo pipefail; \
-    for target in linux_arm64 darwin_arm64 windows_amd64; do \
+    for target in linux_arm64 darwin_arm64 darwin_amd64 windows_amd64; do \
         test -f "/opt/icu/${target}/include/unicode/regex.h" \
             || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
         ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \
@@ -136,3 +181,4 @@ RUN set -euo pipefail; \
     echo "ICU prefixes verified for all targets."
 
 WORKDIR /go/src/app
+ENTRYPOINT ["/usr/local/bin/goreleaser"]
