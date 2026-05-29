@@ -4,11 +4,20 @@
 # library headers and shared objects at link time.
 #
 # We use zig cc as the cross-compiler for all non-native targets because:
-# - zig bundles macOS SDK headers for both arm64 and amd64 — no osxcross needed
-# - zig bundles a MinGW-compatible Windows toolchain — no mingw package needed
-# - zig ships zig-ar / zig-ranlib that work for all target archive formats
+# - zig bundles libc + macOS libc headers for arm64 and amd64, plus a
+#   MinGW-compatible Windows toolchain — one compiler substrate, no osxcross or
+#   mingw packages to maintain.
+# - zig ships zig-ar / zig-ranlib that work for all target archive formats.
 # - one substrate eliminates the per-toolchain maintenance each osxcross/mingw
-#   update previously required
+#   update previously required.
+#
+# zig does NOT bundle the Apple *frameworks* (CoreFoundation, Security) that the
+# final darwin cgo link needs — Go's crypto/x509 links Security, ICU's locale
+# code links CoreFoundation. Without them `zig cc -target *-macos` aborts at link
+# with "unable to find framework". So we vendor ONE pinned MacOSX SDK and put its
+# Frameworks/ + usr/lib on the darwin linker search path (-F/-L). This is
+# link-only: compilation still uses zig's bundled headers, so the (working) ICU
+# cross-compile path is unchanged.
 #
 # Supported targets (matches the goos/goarch matrix in .goreleaser.yml):
 #   - linux/amd64   (native, system gcc, system libicu-dev)
@@ -32,6 +41,10 @@ ARG GORELEASER_VERSION=v2.16.0
 ARG ZIG_VERSION=0.14.0
 ARG ICU_MAJOR=75
 ARG ICU_MINOR=1
+# Pinned macOS SDK supplying the Apple frameworks zig omits. Used link-only by
+# the darwin wrappers below; building for older deployment targets (10.15/11.0,
+# set by the zig target triple) against a newer SDK is supported via availability.
+ARG MACOS_SDK_VERSION=13.3
 
 # -----------------------------------------------------------------------------
 # Stage: base
@@ -44,6 +57,7 @@ ARG GORELEASER_VERSION
 ARG ZIG_VERSION
 ARG ICU_MAJOR
 ARG ICU_MINOR
+ARG MACOS_SDK_VERSION
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         autoconf \
@@ -69,6 +83,20 @@ RUN curl -fsSL \
       | tar -xJ -C /opt \
     && ln -s "/opt/zig-linux-x86_64-${ZIG_VERSION}/zig" /usr/local/bin/zig
 
+# Vendor the macOS SDK that supplies the Apple frameworks zig omits (see header
+# comment). Extracts to /opt/MacOSX<ver>.sdk; /opt/macos-sdk is the stable path
+# the darwin wrappers reference, so a version bump touches only the build arg.
+# The post-extract tests fail the image build loudly if the download did not
+# produce the frameworks the darwin link depends on — a missing framework here
+# is far cheaper to diagnose than a 14-minute link failure downstream.
+RUN curl -fsSL \
+      "https://github.com/joseluisq/macosx-sdks/releases/download/${MACOS_SDK_VERSION}/MacOSX${MACOS_SDK_VERSION}.sdk.tar.xz" \
+      | tar -xJ -C /opt \
+    && ln -s "/opt/MacOSX${MACOS_SDK_VERSION}.sdk" /opt/macos-sdk \
+    && test -d /opt/macos-sdk/System/Library/Frameworks/CoreFoundation.framework \
+    && test -d /opt/macos-sdk/System/Library/Frameworks/Security.framework \
+    && test -d /opt/macos-sdk/usr/lib
+
 # Create zig ar/ranlib wrappers. ICU's Makefiles expand $(AR) and $(RANLIB) as
 # bare tokens, so the command must be a single executable with no embedded
 # spaces — `zig ar` (two words) would break. A wrapper script is the clean fix.
@@ -76,31 +104,32 @@ RUN printf '#!/bin/sh\nexec zig ar "$@"\n' > /usr/local/bin/zig-ar \
     && printf '#!/bin/sh\nexec zig ranlib "$@"\n' > /usr/local/bin/zig-ranlib \
     && chmod +x /usr/local/bin/zig-ar /usr/local/bin/zig-ranlib
 
-# zig macOS cross-compile stubs — header and library shims that zig's bundled
-# SDK omits. [LAW:one-source-of-truth] stubs live in build/zig-macos-stubs/;
-# the darwin wrapper scripts below inject them via -isystem / -L so every
-# darwin compile+link invocation sees them without per-callsite coordination.
+# zig macOS cross-compile header stub. [LAW:one-source-of-truth] it lives in
+# build/zig-macos-stubs/; the darwin wrappers below inject it via -isystem so
+# every darwin compile sees it without per-callsite coordination.
 #
-# tzfile.h: ICU 75.1 putil.cpp includes it unconditionally under __APPLE__;
-#   zig's SDK dropped it in modern macOS. Provides TZDIR + TZDEFAULT.
-# libresolv.tbd: Go's net package links -lresolv; zig validates library
-#   existence before invoking its linker, searching only explicit -L paths.
-#   The TBD stub tells zig "this dylib exists at /usr/lib/libresolv.9.dylib";
-#   symbols resolve at runtime from macOS's libresolv/libSystem.
+# tzfile.h: ICU 75.1 putil.cpp includes it unconditionally under __APPLE__, but
+#   it is a private header absent from both zig's bundled headers and the
+#   vendored macOS SDK. Provides the TZDIR + TZDEFAULT defines ICU reads from it.
+#   (-lresolv needs no stub — the vendored SDK ships libresolv.tbd in usr/lib.)
 COPY build/zig-macos-stubs/tzfile.h    /usr/local/include/zig-macos-stubs/tzfile.h
-COPY build/zig-macos-stubs/libresolv.tbd /usr/local/lib/zig-macos-stubs/libresolv.tbd
 
 # Create zig cc/c++ wrappers for each cross-compile target.
 # Names match the CC/CXX env entries in .goreleaser.yml.
 # [LAW:one-source-of-truth] target triples here are the single definition;
 # .goreleaser.yml references the wrapper names, not the triples directly.
-# Darwin wrappers inject -isystem (headers) and -L (library stubs) from the
-# zig-macos-stubs directories above. Non-darwin targets get plain wrappers.
-RUN for pair in \
+# Darwin wrappers inject, for every darwin compile+link: -isystem (the tzfile.h
+# header stub) for the compile, plus -F/-L into the vendored macOS SDK so the
+# final cgo link resolves -framework CoreFoundation / Security (and -lresolv)
+# against the real SDK. The SDK paths are link-only; headers still come from
+# zig + the tzfile.h stub, so the working ICU compile is unchanged. Non-darwin
+# targets get plain wrappers.
+RUN SDK_FLAGS="-F/opt/macos-sdk/System/Library/Frameworks -L/opt/macos-sdk/usr/lib"; \
+    for pair in \
         "aarch64-linux-gnu:aarch64-linux-gnu:" \
         "x86_64-windows-gnu:x86_64-windows-gnu:" \
-        "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs -L/usr/local/lib/zig-macos-stubs" \
-        "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs -L/usr/local/lib/zig-macos-stubs"; do \
+        "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}" \
+        "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}"; do \
         name="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"; extra="${rest##*:}"; \
         printf '#!/bin/sh\nexec zig cc -target %s %s "$@"\n' "$target" "$extra" \
             > "/usr/local/bin/zig-cc-${name}" && \
