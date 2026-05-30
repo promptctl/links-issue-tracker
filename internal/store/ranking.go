@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -428,6 +429,165 @@ func (s *Store) liveRankInversions(ctx context.Context) ([]rankInversion, error)
 	return filterLiveInversions(candidates, liveIDs), nil
 }
 
+// blocksEdge is one blocks relation hydrated as a precedence constraint: the
+// dependent must be ranked below the dependency, i.e. the dependency comes
+// first. A rank order is a total order over issues, and a total order that
+// satisfies every blocks edge exists if and only if the precedence graph is
+// acyclic. A cycle is therefore not a transient rank stall but an
+// unsatisfiable constraint set — no assignment can place every dependency
+// above its dependent once the dependencies form a loop.
+type blocksEdge struct {
+	dependent  string // src — ranked below
+	dependency string // dst — ranked above
+}
+
+// loadBlocksEdges returns every blocks relation whose endpoints are both
+// non-deleted. Unlike loadInversionCandidates it does not pre-filter on rank,
+// because cycle detection asks about the constraint graph itself, not the
+// current rank assignment.
+func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
+	// ORDER BY makes edge iteration — and therefore the adjacency order that
+	// findBlocksCycle's DFS follows — stable across runs and engines, so the
+	// reported cycle path is deterministic.
+	rows, err := q.QueryContext(ctx, `SELECT r.src_id, r.dst_id FROM relations r
+		JOIN issues src ON src.id = r.src_id
+		JOIN issues dst ON dst.id = r.dst_id
+		WHERE r.type = 'blocks'
+		AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
+		ORDER BY r.src_id, r.dst_id`)
+	if err != nil {
+		return nil, fmt.Errorf("query blocks edges: %w", err)
+	}
+	defer rows.Close()
+	edges := make([]blocksEdge, 0)
+	for rows.Next() {
+		var e blocksEdge
+		if err := rows.Scan(&e.dependent, &e.dependency); err != nil {
+			return nil, fmt.Errorf("scan blocks edge: %w", err)
+		}
+		edges = append(edges, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("blocks edges rows: %w", err)
+	}
+	return edges, nil
+}
+
+// blocksPrecedenceAdj builds the precedence adjacency dependency -> []dependent.
+func blocksPrecedenceAdj(edges []blocksEdge) map[string][]string {
+	adj := make(map[string][]string, len(edges))
+	for _, e := range edges {
+		adj[e.dependency] = append(adj[e.dependency], e.dependent)
+	}
+	return adj
+}
+
+// blocksPrecedes reports whether `from` already precedes `to` through a chain
+// of blocks edges — i.e. existing relations already force `from` to be ranked
+// ahead of `to`. Adding a `to`-precedes-`from` edge on top of that would close
+// a cycle.
+func blocksPrecedes(adj map[string][]string, from, to string) bool {
+	seen := make(map[string]struct{})
+	var walk func(string) bool
+	walk = func(n string) bool {
+		for _, next := range adj[n] {
+			if next == to {
+				return true
+			}
+			if _, ok := seen[next]; ok {
+				continue
+			}
+			seen[next] = struct{}{}
+			if walk(next) {
+				return true
+			}
+		}
+		return false
+	}
+	return walk(from)
+}
+
+// filterLiveBlocksEdges keeps only edges whose endpoints are both
+// lifecycle-live, mirroring filterLiveInversions: a cycle through closed work
+// cannot block the rank order of live work.
+func filterLiveBlocksEdges(edges []blocksEdge, liveIDs map[string]struct{}) []blocksEdge {
+	out := make([]blocksEdge, 0, len(edges))
+	for _, e := range edges {
+		_, depLive := liveIDs[e.dependency]
+		_, dependentLive := liveIDs[e.dependent]
+		if depLive && dependentLive {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// findBlocksCycle returns one cycle in the blocks precedence graph as an
+// ordered, repeated-endpoint path (a -> b -> ... -> a), or nil when the graph
+// is acyclic. Node iteration is sorted so the reported cycle is deterministic.
+func findBlocksCycle(edges []blocksEdge) []string {
+	adj := blocksPrecedenceAdj(edges)
+	nodes := make([]string, 0, len(adj))
+	for n := range adj {
+		nodes = append(nodes, n)
+	}
+	sort.Strings(nodes)
+	const (
+		white = 0
+		gray  = 1
+		black = 2
+	)
+	color := make(map[string]int)
+	var stack []string
+	var dfs func(string) []string
+	dfs = func(n string) []string {
+		color[n] = gray
+		stack = append(stack, n)
+		for _, m := range adj[n] {
+			switch color[m] {
+			case gray:
+				for i, s := range stack {
+					if s == m {
+						return append(append([]string(nil), stack[i:]...), m)
+					}
+				}
+			case white:
+				if c := dfs(m); c != nil {
+					return c
+				}
+			}
+		}
+		stack = stack[:len(stack)-1]
+		color[n] = black
+		return nil
+	}
+	for _, n := range nodes {
+		if color[n] == white {
+			if c := dfs(n); c != nil {
+				return c
+			}
+		}
+	}
+	return nil
+}
+
+// liveBlocksCycle returns the issue IDs forming a blocks dependency cycle among
+// lifecycle-live issues, or nil if none. Doctor reports it and
+// FixRankInversions refuses on it; both route through this one classifier so
+// they cannot disagree about whether the store holds an unsatisfiable cycle.
+// [LAW:single-enforcer]
+func (s *Store) liveBlocksCycle(ctx context.Context) ([]string, error) {
+	liveIDs, err := s.liveIssueIDs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	edges, err := loadBlocksEdges(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("load blocks edges: %w", err)
+	}
+	return findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)), nil
+}
+
 // FixRankInversions finds all blocks relations where the dependency is ranked
 // below the dependent and ranks each dependency above its dependent. Returns
 // the number of dependency issues that were re-ranked.
@@ -458,6 +618,20 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 	}
 	rerankedCount := 0
 	if err := s.withMutation(ctx, "fix rank inversions", func(ctx context.Context, tx *sql.Tx) error {
+		// A blocks cycle is unsatisfiable by any rank order: ranking each
+		// dependency above its dependent would require placing every cycle
+		// member above itself. Detect it before the rerank loop and fail with
+		// the offending members, rather than oscillating between two equally
+		// invalid states until the snapshot guard trips on an opaque message.
+		// [LAW:types-are-the-program] The loop below assumes a DAG; this guard
+		// is the constraint that makes that assumption true on entry.
+		edges, err := loadBlocksEdges(ctx, tx)
+		if err != nil {
+			return fmt.Errorf("fix rank inversions: load blocks edges: %w", err)
+		}
+		if cycle := findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)); cycle != nil {
+			return fmt.Errorf("fix rank inversions: blocks dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(cycle, " -> "))
+		}
 		seenSnapshots := map[string]struct{}{}
 		for {
 			inversions, err := loadInversions(ctx, tx)
