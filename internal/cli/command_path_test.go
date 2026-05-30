@@ -24,7 +24,7 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 		args    []string
 		wantErr string
 	}{
-		{args: []string{"comment"}, wantErr: "usage: lit comment add <id> --body <text>"},
+		{args: []string{"comment"}, wantErr: "usage: lit comment <add|rm> ..."},
 		{args: []string{"label", "--help"}, wantErr: "usage: lit label <add|rm> ..."},
 		{args: []string{"dep", "unknown"}, wantErr: "usage: lit dep <add|rm|ls> ..."},
 		{args: []string{"sync", "unknown"}, wantErr: "usage: lit sync <status|remote|fetch|pull|push> ..."},

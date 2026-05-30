@@ -89,11 +89,11 @@ func (u UpdateIssueInput) IsEmpty() bool {
 // ApplyUpdateInput is the single input for the unified update path.
 // TargetStatus == "" means no transition; empty Fields means no field mutations.
 type ApplyUpdateInput struct {
-	Fields              UpdateIssueInput
-	TargetStatus        string // empty = no status change
-	TransitionReason    string
-	TransitionBy        string
-	TransitionAssignee  string // optional; stamped when TargetStatus resolves to "start"
+	Fields             UpdateIssueInput
+	TargetStatus       string // empty = no status change
+	TransitionReason   string
+	TransitionBy       string
+	TransitionAssignee string // optional; stamped when TargetStatus resolves to "start"
 }
 
 func (a ApplyUpdateInput) IsEmpty() bool {
@@ -1009,6 +1009,40 @@ func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comme
 		return model.Comment{}, err
 	}
 	return comment, nil
+}
+
+func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comment, error) {
+	id := strings.TrimSpace(commentID)
+	if id == "" {
+		return model.Comment{}, errors.New("comment id is required")
+	}
+	var deleted model.Comment
+	// [LAW:single-enforcer] Existence is verified by the SELECT inside the same mutation that deletes,
+	// so the row proven present is the row removed — no TOCTOU gap, no separate guard.
+	if err := s.withMutation(ctx, "delete comment", func(ctx context.Context, tx *sql.Tx) error {
+		var createdAt string
+		row := tx.QueryRowContext(ctx, `SELECT id, issue_id, body, created_at, created_by FROM comments WHERE id = ?`, id)
+		if err := row.Scan(&deleted.ID, &deleted.IssueID, &deleted.Body, &createdAt, &deleted.CreatedBy); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
+				// so callers detect not-found via errors.As instead of string-matching the message.
+				return NotFoundError{Entity: "comment", ID: id}
+			}
+			return fmt.Errorf("read comment: %w", err)
+		}
+		t, err := scanTime(createdAt)
+		if err != nil {
+			return err
+		}
+		deleted.CreatedAt = t
+		if _, err := tx.ExecContext(ctx, `DELETE FROM comments WHERE id = ?`, id); err != nil {
+			return fmt.Errorf("delete comment: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return model.Comment{}, err
+	}
+	return deleted, nil
 }
 
 func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {

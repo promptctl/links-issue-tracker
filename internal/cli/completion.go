@@ -6,7 +6,7 @@ _lit_completions() {
   _init_completion || return
 
   local commands="init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctor backup recover bulk workspace hooks quickstart completion version help"
-  local comment_subcommands="add"
+  local comment_subcommands="add rm"
   local label_subcommands="add rm"
   local parent_subcommands="set clear"
   local dep_subcommands="add rm ls"
@@ -121,7 +121,7 @@ _lit() {
     subcommand)
       case $line[1] in
         comment)
-          _values 'comment commands' add
+          _values 'comment commands' add rm
           ;;
         label)
           _values 'label commands' add rm
@@ -162,7 +162,7 @@ _lit "$@"
 
 const fishCompletionScript = `complete -c lit -f
 complete -c lit -n '__fish_use_subcommand' -a 'init ready new ls show update rank start done close open archive delete unarchive restore comment label parent children dep export sync doctor backup recover bulk workspace hooks quickstart completion version help'
-complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add'
+complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from label' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from parent' -a 'set clear'
 complete -c lit -n '__fish_seen_subcommand_from dep' -a 'add rm ls'
