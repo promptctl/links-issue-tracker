@@ -139,7 +139,7 @@ func validateHooksCommandPath(args []string) error {
 }
 
 func validateCommentCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit comment add <id> --body <text>", "add")
+	return validateNestedCommandPath(args, "usage: lit comment <add|rm> ...", "add", "rm")
 }
 
 func runWithWorkspace(run func(workspace.Info) error) error {
@@ -1104,33 +1104,58 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 || args[0] != "add" {
-		return errors.New("usage: lit comment add <id> --body <text>")
+	if len(args) == 0 {
+		return errors.New("usage: lit comment <add|rm> ...")
 	}
-	positional, flagArgs := splitArgs(args[1:], 1)
-	fs := newCobraFlagSet("comment add")
-	body := fs.String("body", "", "Comment body")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
+	switch args[0] {
+	case "add":
+		positional, flagArgs := splitArgs(args[1:], 1)
+		fs := newCobraFlagSet("comment add")
+		body := fs.String("body", "", "Comment body")
+		by := fs.String("by", os.Getenv("USER"), "")
+		fs.Hide("by")
+		jsonOut := fs.Bool("json", false, "Output JSON")
+		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+			return err
+		}
+		if len(positional) != 1 {
+			return errors.New("usage: lit comment add <id> --body <text>")
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: lit comment add <id> --body <text>")
+		}
+		comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
+		if err != nil {
+			return err
+		}
+		return printValue(stdout, comment, *jsonOut, printComment)
+	case "rm":
+		positional, flagArgs := splitArgs(args[1:], 1)
+		fs := newCobraFlagSet("comment rm")
+		jsonOut := fs.Bool("json", false, "Output JSON")
+		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+			return err
+		}
+		if len(positional) != 1 {
+			return errors.New("usage: lit comment rm <comment-id> [--json]")
+		}
+		if fs.NArg() != 0 {
+			return errors.New("usage: lit comment rm <comment-id> [--json]")
+		}
+		comment, err := ap.Store.DeleteComment(ctx, positional[0])
+		if err != nil {
+			return err
+		}
+		return printValue(stdout, comment, *jsonOut, printComment)
+	default:
+		return errors.New("usage: lit comment <add|rm> ...")
 	}
-	if len(positional) != 1 {
-		return errors.New("usage: lit comment add <id> --body <text>")
-	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: lit comment add <id> --body <text>")
-	}
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
-	if err != nil {
-		return err
-	}
-	return printValue(stdout, comment, *jsonOut, func(w io.Writer, v any) error {
-		c := v.(model.Comment)
-		_, err := fmt.Fprintf(w, "%s %s\n", c.IssueID, c.ID)
-		return err
-	})
+}
+
+func printComment(w io.Writer, v any) error {
+	c := v.(model.Comment)
+	_, err := fmt.Fprintf(w, "%s %s\n", c.IssueID, c.ID)
+	return err
 }
 
 func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
