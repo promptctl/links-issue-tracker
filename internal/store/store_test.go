@@ -454,6 +454,121 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	}
 }
 
+// A blocks cycle has no valid rank order, so the only durable fix is to keep
+// it from existing. AddRelation rejects the edge that would close the loop.
+func TestAddRelationRejectsBlocksCycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "cycle", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	b, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "B", Topic: "cycle", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: a.ID, DstID: b.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(A blocks B) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: b.ID, DstID: a.ID, Type: "blocks", CreatedBy: "tester"}); err == nil {
+		t.Fatal("AddRelation(B blocks A) = nil, want cycle rejection")
+	} else if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("AddRelation(B blocks A) error = %v, want cycle rejection", err)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(report.DependencyCycle) != 0 {
+		t.Fatalf("Doctor().DependencyCycle = %v, want empty (cycle never persisted)", report.DependencyCycle)
+	}
+}
+
+// The cycle guard must follow transitive precedence, not just the direct edge:
+// A->B->C means adding C->A closes a 3-cycle.
+func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	mk := func(title string) string {
+		issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "cycle", IssueType: "task", Priority: 0})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		return issue.ID
+	}
+	a, b, c := mk("A"), mk("B"), mk("C")
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: a, DstID: b, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(A blocks B) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: b, DstID: c, Type: "blocks", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(B blocks C) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: c, DstID: a, Type: "blocks", CreatedBy: "tester"}); err == nil {
+		t.Fatal("AddRelation(C blocks A) = nil, want transitive cycle rejection")
+	}
+}
+
+func TestAddRelationRejectsSelfBlock(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "cycle", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: a.ID, DstID: a.ID, Type: "blocks", CreatedBy: "tester"}); err == nil {
+		t.Fatal("AddRelation(A blocks A) = nil, want self-block rejection")
+	}
+}
+
+// Cycles that slip past AddRelation (e.g. bulk import, which bypasses the
+// interactive guard) must be diagnosable. Doctor names the cycle and
+// FixRankInversions refuses with an actionable message instead of looping into
+// the opaque "unable to converge" failure.
+func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "cycle", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	b, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "B", Topic: "cycle", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+	// Insert the mutually-blocking pair directly, simulating data that entered
+	// through a path that does not run the AddRelation cycle guard.
+	for _, e := range [][2]string{{a.ID, b.ID}, {b.ID, a.ID}} {
+		if _, err := st.db.ExecContext(ctx,
+			`INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'blocks', ?, 'import')`,
+			e[0], e[1], time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+			t.Fatalf("seed cyclic edge %v error = %v", e, err)
+		}
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if len(report.DependencyCycle) == 0 {
+		t.Fatal("Doctor().DependencyCycle is empty, want the cyclic members")
+	}
+
+	_, err = st.FixRankInversions(ctx)
+	if err == nil {
+		t.Fatal("FixRankInversions() = nil, want actionable cycle error")
+	}
+	if !strings.Contains(err.Error(), "cycle") {
+		t.Fatalf("FixRankInversions() error = %v, want it to name the cycle", err)
+	}
+	if strings.Contains(err.Error(), "unable to converge") {
+		t.Fatalf("FixRankInversions() error = %v, want actionable message, not opaque non-convergence", err)
+	}
+}
+
 func TestStoreRejectsInvalidIssueType(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -476,7 +591,7 @@ func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:       "Renderer cleanup",
 		Description: "Normalize issue IDs with beads.",
 		Topic:       "renderer",
@@ -500,13 +615,13 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	created, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	created, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:       "Render the cube",
 		Description: "Standard scene fixture.",
 		Prompt:      "Run the renderer at 1024x768 and assert no NaNs in the depth buffer.",
 		Topic:       "renderer",
 		IssueType:   "task",
-		Priority:  0,
+		Priority:    0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
@@ -623,7 +738,7 @@ func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	parent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	parent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cleanup",
 		Topic:     "renderer",
 		IssueType: "epic",
@@ -633,7 +748,7 @@ func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 
-	childOne, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	childOne, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:     "Fix first race",
 		Topic:     "renderer",
 		ParentID:  parent.ID,
@@ -643,7 +758,7 @@ func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(childOne) error = %v", err)
 	}
-	childTwo, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	childTwo, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:     "Fix second race",
 		Topic:     "renderer",
 		ParentID:  parent.ID,
@@ -673,7 +788,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issueA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	issueA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:       "Renderer contract cleanup",
 		Description: "Fix the renderer contract for draw prep.",
 		Topic:       "renderer",
@@ -685,12 +800,12 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue issueA error = %v", err)
 	}
-	issueB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	issueB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:       "Fluid defaults",
 		Description: "Tune the fluid presets.",
 		Topic:       "fluid",
 		IssueType:   "feature",
-		Priority:  0,
+		Priority:    0,
 		Assignee:    "e-prawn",
 	})
 	if err != nil {
@@ -843,7 +958,7 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cleanup",
 		Topic:     "renderer",
 		IssueType: "task",
@@ -924,7 +1039,7 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 			ID:          "issue-replaced",
 			Title:       "Imported issue",
 			Description: "from file sync",
-			Priority:  0,
+			Priority:    0,
 			IssueType:   "task",
 			Labels:      []string{"imported"},
 			CreatedAt:   time.Now().UTC(),

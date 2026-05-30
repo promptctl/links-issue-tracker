@@ -71,6 +71,7 @@ type HealthReport struct {
 	InvalidRelatedRows int      `json:"invalid_related_rows"`
 	OrphanHistoryRows  int      `json:"orphan_history_rows"`
 	RankInversions     int      `json:"rank_inversions"`
+	DependencyCycle    []string `json:"dependency_cycle"`
 	Errors             []string `json:"errors"`
 	Warnings           []string `json:"warnings"`
 }
@@ -104,8 +105,9 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 
 func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	report := HealthReport{
-		Errors:   []string{},
-		Warnings: []string{},
+		DependencyCycle: []string{},
+		Errors:          []string{},
+		Warnings:        []string{},
 	}
 	report.IntegrityCheck = "ok"
 	var violations int
@@ -157,6 +159,18 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	report.RankInversions = len(inversions)
 	if report.RankInversions > 0 {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("rank inversions: %d (dependencies ranked below dependents)", report.RankInversions))
+	}
+	// A blocks dependency cycle is the root cause behind a rank inversion that
+	// --fix can never clear: it is unsatisfiable by any rank order. Surface the
+	// members so the operator knows exactly which edge to remove.
+	// [LAW:single-enforcer] Same classifier FixRankInversions refuses on.
+	cycle, err := s.liveBlocksCycle(ctx)
+	if err != nil {
+		return report, fmt.Errorf("detect blocks dependency cycle: %w", err)
+	}
+	if len(cycle) > 0 {
+		report.DependencyCycle = cycle
+		report.Warnings = append(report.Warnings, fmt.Sprintf("blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
 	}
 	return report, nil
 }

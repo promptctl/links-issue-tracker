@@ -51,6 +51,18 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "add relation", func(ctx context.Context, tx *sql.Tx) error {
+		// [LAW:types-are-the-program] The blocks subgraph must stay acyclic: a
+		// rank order is a total order, and one that honors every blocks edge
+		// exists iff there is no cycle. Rejecting a cycle-closing edge at this
+		// single write boundary makes the unsatisfiable state unrepresentable,
+		// so neither Doctor nor FixRankInversions has to compensate for it.
+		// [LAW:single-enforcer] AddRelation is the only interactive creator of
+		// blocks edges; bulk import is a trust boundary that Doctor re-checks.
+		if rel.Type == "blocks" {
+			if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
+				return err
+			}
+		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
 			return fmt.Errorf("insert relation: %w", err)
 		}
@@ -59,6 +71,26 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 		return model.Relation{}, err
 	}
 	return rel, nil
+}
+
+// rejectBlocksCycle errors if inserting the blocks edge dependent->dependency
+// would close a cycle in the precedence graph. A self-edge is the degenerate
+// 1-cycle; a longer cycle exists when the new dependent already precedes the
+// new dependency through existing blocks edges, since the new edge asserts the
+// reverse. The check runs inside the mutation tx so it sees a consistent
+// snapshot of existing edges.
+func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency string) error {
+	if dependent == dependency {
+		return fmt.Errorf("blocks: %s cannot block itself", dependent)
+	}
+	edges, err := loadBlocksEdges(ctx, tx)
+	if err != nil {
+		return fmt.Errorf("blocks cycle check: %w", err)
+	}
+	if blocksPrecedes(blocksPrecedenceAdj(edges), dependent, dependency) {
+		return fmt.Errorf("blocks: cannot add %s depends-on %s — %s already depends on %s (directly or transitively), so this edge would close a dependency cycle, which has no valid rank order", dependent, dependency, dependency, dependent)
+	}
+	return nil
 }
 
 func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string) error {

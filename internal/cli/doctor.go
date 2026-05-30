@@ -112,7 +112,11 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			return err
 		}
 		r := v.(store.HealthReport)
-		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions)
+		dependencyCycle := "none"
+		if len(r.DependencyCycle) > 0 {
+			dependencyCycle = strings.Join(r.DependencyCycle, "->")
+		}
+		_, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions, dependencyCycle)
 		return err
 	}); err != nil {
 		return err
