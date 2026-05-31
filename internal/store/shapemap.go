@@ -43,12 +43,19 @@ func (c ColumnRef) String() string { return c.Table + "." + c.Column }
 // never defends against them.
 type Disposition interface{ isDisposition() }
 
-// MappedTo carries a source cell onto one domain field, transforming the value
-// en route. Target must resolve in targetRegistry; Transform must be a known
-// Transform. Both are checked at the Validate boundary.
+// MappedTo carries a source cell onto one domain field. Target must resolve in
+// targetRegistry, which is checked at the Validate boundary.
+//
+// [LAW:one-source-of-truth] The value conversion is NOT carried here: there is
+// exactly one correct transform per target field (a timestamp field is always
+// parsed, a status field is always canonicalized, everything else passes
+// through), so the transform is a property of the target, looked up from the
+// registry. Storing it alongside Target would be a second representation that
+// could diverge — e.g. a timestamp target tagged "identity", which would slip
+// an unparsed string past the timestamp check. Deriving it makes that
+// unrepresentable.
 type MappedTo struct {
-	Target    TargetKey
-	Transform Transform
+	Target TargetKey
 }
 
 // Dropped records that a source column has no domain target, and why. The
@@ -102,8 +109,9 @@ const (
 )
 
 type targetField struct {
-	coll  collection
-	field string
+	coll      collection
+	field     string
+	transform Transform
 }
 
 // targetRegistry is the closed set of legal mapping targets: the
@@ -118,32 +126,42 @@ var targetRegistry = buildTargetRegistry()
 
 func buildTargetRegistry() map[TargetKey]targetField {
 	reg := map[TargetKey]targetField{}
-	add := func(c collection, fields ...string) {
+	add := func(c collection, t Transform, fields ...string) {
 		for _, f := range fields {
-			reg[TargetKey(string(c)+"."+f)] = targetField{coll: c, field: f}
+			reg[TargetKey(string(c)+"."+f)] = targetField{coll: c, field: f, transform: t}
 		}
 	}
-	add(collIssues, "id", "title", "description", "prompt", "status", "assignee",
-		"closed_at", "priority", "issue_type", "topic", "rank", "created_at",
-		"updated_at", "archived_at", "deleted_at")
-	add(collRelations, "src_id", "dst_id", "type", "created_at", "created_by")
-	add(collComments, "id", "issue_id", "body", "created_at", "created_by")
-	add(collLabels, "issue_id", "name", "created_at", "created_by")
-	add(collEvents, "id", "issue_id", "action", "reason", "actor", "created_at")
-	add(collEventChanges, "event_id", "field", "from", "to")
+	// The transform is fixed per field: timestamps are parsed, status is
+	// canonicalized (idempotent on canonical values), everything else passes
+	// through. Priority is identity here; the out-of-range clamp lives at the
+	// import boundary. [LAW:single-enforcer]
+	add(collIssues, TransformIdentity, "id", "title", "description", "prompt", "assignee", "priority", "issue_type", "topic", "rank")
+	add(collIssues, TransformTimestamp, "closed_at", "created_at", "updated_at", "archived_at", "deleted_at")
+	add(collIssues, TransformLegacyStatus, "status")
+	add(collRelations, TransformIdentity, "src_id", "dst_id", "type", "created_by")
+	add(collRelations, TransformTimestamp, "created_at")
+	add(collComments, TransformIdentity, "id", "issue_id", "body", "created_by")
+	add(collComments, TransformTimestamp, "created_at")
+	add(collLabels, TransformIdentity, "issue_id", "name", "created_by")
+	add(collLabels, TransformTimestamp, "created_at")
+	add(collEvents, TransformIdentity, "id", "issue_id", "action", "reason", "actor")
+	add(collEvents, TransformTimestamp, "created_at")
+	add(collEventChanges, TransformIdentity, "event_id", "field", "from", "to")
 	return reg
 }
 
-func knownTransform(t Transform) bool {
-	return t == TransformIdentity || t == TransformLegacyStatus || t == TransformTimestamp
-}
-
-// Validate is the single totality enforcer. [LAW:single-enforcer] It is the one
-// trust boundary that decides whether a mapping (from an LLM or a deterministic
-// mapper) may be applied: it rejects any source column with no disposition, any
-// mapping key that names a column the dump does not have, any target that does
-// not resolve, and any unknown transform. After Validate succeeds, Apply treats
-// the mapping as total and well-formed.
+// Validate is the single well-formedness enforcer. [LAW:single-enforcer] It is
+// the one trust boundary that decides whether a mapping (from an LLM or a
+// deterministic mapper) may be applied. It rejects:
+//   - a source column with no disposition, or a mapping key naming a column the
+//     dump does not have (coverage totality);
+//   - a disposition that is neither a well-formed MappedTo (target resolves) nor
+//     a well-formed Dropped (known provenance);
+//   - a source table whose mapped columns straddle more than one collection, or
+//     two columns mapping to the same target field (which would silently
+//     overwrite one another during assembly).
+//
+// After Validate succeeds, Apply treats the mapping as total and well-formed.
 func Validate(dump RawDump, m ShapeMapping) error {
 	dumpCols := map[ColumnRef]bool{}
 	var unaccounted []string
@@ -178,9 +196,6 @@ func Validate(dump RawDump, m ShapeMapping) error {
 			if _, ok := targetRegistry[d.Target]; !ok {
 				problems = append(problems, fmt.Sprintf("%s: unknown target %q", ref, d.Target))
 			}
-			if !knownTransform(d.Transform) {
-				problems = append(problems, fmt.Sprintf("%s: unknown transform %q", ref, d.Transform))
-			}
 		case Dropped:
 			if d.Provenance != DropIntended && d.Provenance != DropUnexplained {
 				problems = append(problems, fmt.Sprintf("%s: unknown drop provenance %q", ref, d.Provenance))
@@ -189,11 +204,45 @@ func Validate(dump RawDump, m ShapeMapping) error {
 			problems = append(problems, fmt.Sprintf("%s: disposition is neither MappedTo nor Dropped", ref))
 		}
 	}
+	problems = append(problems, tableShapeProblems(dump, m)...)
 	if len(problems) > 0 {
 		sort.Strings(problems)
 		return fmt.Errorf("mapping is malformed: %s", strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// tableShapeProblems reports the per-table structural faults that make a
+// mapping unassemblable: a table feeding more than one collection, or two of
+// its columns claiming the same target field. Both would otherwise surface as
+// silent loss — the second cell overwriting the first, or an ambiguous record
+// shape — so they are rejected before any row is read.
+func tableShapeProblems(dump RawDump, m ShapeMapping) []string {
+	var problems []string
+	for _, table := range dump.Tables {
+		coll := collection("")
+		var collFound bool
+		seenTarget := map[TargetKey]string{}
+		for _, col := range table.Columns {
+			mapped, ok := m.Columns[ColumnRef{Table: table.Name, Column: col}].(MappedTo)
+			if !ok {
+				continue
+			}
+			tf, ok := targetRegistry[mapped.Target]
+			if !ok {
+				continue // already reported as an unknown target above
+			}
+			if collFound && tf.coll != coll {
+				problems = append(problems, fmt.Sprintf("table %q maps into multiple collections (%q and %q); one source table must map to one collection", table.Name, coll, tf.coll))
+			}
+			coll, collFound = tf.coll, true
+			if prior, dup := seenTarget[mapped.Target]; dup {
+				problems = append(problems, fmt.Sprintf("table %q: columns %q and %q both map to %q", table.Name, prior, col, mapped.Target))
+			}
+			seenTarget[mapped.Target] = col
+		}
+	}
+	return problems
 }
 
 // Apply is the pure applier: it folds a RawDump through a validated mapping into
@@ -211,10 +260,7 @@ func Apply(dump RawDump, m ShapeMapping) (model.Export, error) {
 	}
 	records := map[collection][]map[string]any{}
 	for _, table := range dump.Tables {
-		coll, mappedCols, err := tableTarget(table, m)
-		if err != nil {
-			return model.Export{}, err
-		}
+		coll, mappedCols := tableTarget(table, m)
 		if len(mappedCols) == 0 {
 			// Every column dropped: the table contributes no domain records.
 			continue
@@ -242,29 +288,24 @@ type mappedColumn struct {
 	transform Transform
 }
 
-// tableTarget resolves the single domain collection a source table feeds and
-// the resolved mapped columns within it. [LAW:types-are-the-program] A source
-// table maps into exactly one collection; a table whose columns straddle two
-// collections is an illegal shape the applier refuses rather than guessing how
-// to assemble a record from it.
-func tableTarget(table RawTable, m ShapeMapping) (collection, []mappedColumn, error) {
+// tableTarget resolves the collection a source table feeds and its mapped
+// columns, each with the field and transform read from the target registry. It
+// is a pure resolver: Validate has already guaranteed the table feeds a single
+// collection and that no two columns claim the same field, so there is nothing
+// here to reject.
+func tableTarget(table RawTable, m ShapeMapping) (collection, []mappedColumn) {
 	var coll collection
-	var found bool
 	var cols []mappedColumn
 	for i, name := range table.Columns {
-		disp := m.Columns[ColumnRef{Table: table.Name, Column: name}]
-		mapped, ok := disp.(MappedTo)
+		mapped, ok := m.Columns[ColumnRef{Table: table.Name, Column: name}].(MappedTo)
 		if !ok {
 			continue
 		}
 		tf := targetRegistry[mapped.Target]
-		if found && tf.coll != coll {
-			return "", nil, fmt.Errorf("table %q maps into multiple collections (%q and %q); one source table must map to one collection", table.Name, coll, tf.coll)
-		}
-		coll, found = tf.coll, true
-		cols = append(cols, mappedColumn{index: i, field: tf.field, transform: mapped.Transform})
+		coll = tf.coll
+		cols = append(cols, mappedColumn{index: i, field: tf.field, transform: tf.transform})
 	}
-	return coll, cols, nil
+	return coll, cols
 }
 
 // assembleExport turns the collected per-collection records into the typed

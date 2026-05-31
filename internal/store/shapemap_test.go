@@ -15,7 +15,7 @@ func TestValidateRejectsIncompleteMapping(t *testing.T) {
 	}}
 
 	missingTitle := ShapeMapping{Columns: map[ColumnRef]Disposition{
-		{Table: "issues", Column: "id"}: keep("issues.id"),
+		{Table: "issues", Column: "id"}: to("issues.id"),
 	}}
 	err := Validate(dump, missingTitle)
 	if err == nil {
@@ -37,22 +37,16 @@ func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
 	}{
 		"stale key": {
 			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}:    keep("issues.id"),
-				{Table: "issues", Column: "ghost"}: keep("issues.title"),
+				{Table: "issues", Column: "id"}:    to("issues.id"),
+				{Table: "issues", Column: "ghost"}: to("issues.title"),
 			}},
 			want: "does not have",
 		},
 		"unknown target": {
 			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}: MappedTo{Target: "issues.nope", Transform: TransformIdentity},
+				{Table: "issues", Column: "id"}: MappedTo{Target: "issues.nope"},
 			}},
 			want: "unknown target",
-		},
-		"unknown transform": {
-			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}: MappedTo{Target: "issues.id", Transform: "made-up"},
-			}},
-			want: "unknown transform",
 		},
 		"nil disposition": {
 			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
@@ -74,6 +68,30 @@ func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
 				t.Fatalf("want error containing %q, got %v", tc.want, err)
 			}
 		})
+	}
+}
+
+// TestRejectsDuplicateTargets proves a table whose two columns claim the same
+// domain field is rejected rather than letting one silently overwrite the other
+// — and that the deterministic mapper declines such a dump (a half-renamed
+// workspace carrying both prompt and agent_prompt) instead of emitting a lossy
+// mapping.
+func TestRejectsDuplicateTargets(t *testing.T) {
+	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
+		{Name: "issues", Columns: []string{"prompt", "agent_prompt"}, Rows: [][]any{{"a", "b"}}},
+	}}
+
+	ambiguous := ShapeMapping{Columns: map[ColumnRef]Disposition{
+		{Table: "issues", Column: "prompt"}:       to("issues.prompt"),
+		{Table: "issues", Column: "agent_prompt"}: to("issues.prompt"),
+	}}
+	err := Validate(dump, ambiguous)
+	if err == nil || !strings.Contains(err.Error(), "both map to") {
+		t.Fatalf("Validate must reject two columns mapping to one field; got %v", err)
+	}
+
+	if _, ok := DeterministicMap(dump); ok {
+		t.Fatal("DeterministicMap must decline a dump that maps two columns to one field")
 	}
 }
 

@@ -50,75 +50,81 @@ func DeterministicMap(dump RawDump) (ShapeMapping, bool) {
 			}
 		}
 	}
+	// [LAW:single-enforcer] ok=true must mean "a valid mapping": route the
+	// proposal through Validate rather than re-deriving its rules here. A dump
+	// mid-rename that carries both a v1 name and its pre-goose alias (e.g.
+	// prompt and agent_prompt) maps both onto one field — an ambiguity Validate
+	// rejects — so the mapper declines it to the loop's LLM/human path instead
+	// of emitting a lossy mapping.
+	if Validate(dump, out) != nil {
+		return ShapeMapping{}, false
+	}
 	return out, true
 }
 
-func mapTo(target TargetKey, t Transform) Disposition { return MappedTo{Target: target, Transform: t} }
-
-// keep maps a source column straight onto a domain field, no value conversion.
-func keep(target TargetKey) Disposition { return mapTo(target, TransformIdentity) }
-
-// ts maps a stored timestamp string onto a domain time field; a non-NULL value
-// that does not parse fails the apply rather than vanishing.
-func ts(target TargetKey) Disposition { return mapTo(target, TransformTimestamp) }
+// to maps a source column onto a domain target field. The value conversion is
+// not named here — it is a property of the target, read from the target
+// registry — so this table is purely the source-name → domain-field
+// correspondence.
+func to(target TargetKey) Disposition { return MappedTo{Target: target} }
 
 // knownSourceColumns is the correspondence table: per domain source table, the
-// disposition of each source column name the deterministic mapper recognizes.
-// Aliases (a v1 name and its pre-goose predecessor) point at the same domain
-// field; only one is present in any given dump, so they never collide.
+// domain field each recognized source column name maps onto. Aliases (a v1 name
+// and its pre-goose predecessor) point at the same domain field; only one is
+// present in any given dump, so they never collide.
 var knownSourceColumns = map[string]map[string]Disposition{
 	"issues": {
-		"id":           keep("issues.id"),
-		"title":        keep("issues.title"),
-		"description":  keep("issues.description"),
-		"agent_prompt": keep("issues.prompt"),                         // v1 name
-		"prompt":       keep("issues.prompt"),                         // pre-goose, pre-rename
-		"status":       mapTo("issues.status", TransformLegacyStatus), // legacy vocab → canonical (idempotent)
-		"priority":     keep("issues.priority"),                       // legacy out-of-range clamped at the import boundary
-		"issue_type":   keep("issues.issue_type"),
-		"topic":        keep("issues.topic"),
-		"assignee":     keep("issues.assignee"),
-		"created_at":   ts("issues.created_at"),
-		"updated_at":   ts("issues.updated_at"),
-		"closed_at":    ts("issues.closed_at"),
-		"archived_at":  ts("issues.archived_at"),
-		"deleted_at":   ts("issues.deleted_at"),
-		"item_rank":    keep("issues.rank"), // v1 name
+		"id":           to("issues.id"),
+		"title":        to("issues.title"),
+		"description":  to("issues.description"),
+		"agent_prompt": to("issues.prompt"), // v1 name
+		"prompt":       to("issues.prompt"), // pre-goose, pre-rename
+		"status":       to("issues.status"),
+		"priority":     to("issues.priority"),
+		"issue_type":   to("issues.issue_type"),
+		"topic":        to("issues.topic"),
+		"assignee":     to("issues.assignee"),
+		"created_at":   to("issues.created_at"),
+		"updated_at":   to("issues.updated_at"),
+		"closed_at":    to("issues.closed_at"),
+		"archived_at":  to("issues.archived_at"),
+		"deleted_at":   to("issues.deleted_at"),
+		"item_rank":    to("issues.rank"), // v1 name
 	},
 	"relations": {
-		"src_id":     keep("relations.src_id"),
-		"dst_id":     keep("relations.dst_id"),
-		"type":       keep("relations.type"),
-		"created_at": ts("relations.created_at"),
-		"created_by": keep("relations.created_by"),
+		"src_id":     to("relations.src_id"),
+		"dst_id":     to("relations.dst_id"),
+		"type":       to("relations.type"),
+		"created_at": to("relations.created_at"),
+		"created_by": to("relations.created_by"),
 	},
 	"comments": {
-		"id":         keep("comments.id"),
-		"issue_id":   keep("comments.issue_id"),
-		"body":       keep("comments.body"),
-		"created_at": ts("comments.created_at"),
-		"created_by": keep("comments.created_by"),
+		"id":         to("comments.id"),
+		"issue_id":   to("comments.issue_id"),
+		"body":       to("comments.body"),
+		"created_at": to("comments.created_at"),
+		"created_by": to("comments.created_by"),
 	},
 	"labels": {
-		"issue_id":   keep("labels.issue_id"),
-		"label":      keep("labels.name"),
-		"created_at": ts("labels.created_at"),
-		"created_by": keep("labels.created_by"),
+		"issue_id":   to("labels.issue_id"),
+		"label":      to("labels.name"),
+		"created_at": to("labels.created_at"),
+		"created_by": to("labels.created_by"),
 	},
 	"issue_events": {
-		"id":         keep("events.id"),
-		"issue_id":   keep("events.issue_id"),
-		"action":     keep("events.action"),
-		"reason":     keep("events.reason"),
-		"actor":      keep("events.actor"), // v1 name
-		"assignee":   keep("events.actor"), // pre-goose, pre-rename
-		"created_at": ts("events.created_at"),
+		"id":         to("events.id"),
+		"issue_id":   to("events.issue_id"),
+		"action":     to("events.action"),
+		"reason":     to("events.reason"),
+		"actor":      to("events.actor"), // v1 name
+		"assignee":   to("events.actor"), // pre-goose, pre-rename
+		"created_at": to("events.created_at"),
 	},
 	"issue_event_changes": {
-		"event_id":   keep("event_changes.event_id"),
-		"field":      keep("event_changes.field"),
-		"from_value": keep("event_changes.from"),
-		"to_value":   keep("event_changes.to"),
+		"event_id":   to("event_changes.event_id"),
+		"field":      to("event_changes.field"),
+		"from_value": to("event_changes.from"),
+		"to_value":   to("event_changes.to"),
 	},
 }
 
