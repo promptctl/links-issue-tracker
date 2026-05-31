@@ -42,7 +42,7 @@ func runLifeboatDump(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit lifeboat dump [--json]")
+		return errors.New("usage: lit lifeboat dump")
 	}
 	dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
