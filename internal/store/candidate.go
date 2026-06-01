@@ -32,6 +32,16 @@ type Candidate struct {
 	root  string
 }
 
+// ErrInvalidMapping marks a RebuildCandidate failure caused by the MAPPING — a
+// malformed or inapplicable ShapeMapping the applier rejected — as distinct from
+// an infrastructure failure (filesystem, store I/O) that can only occur once the
+// mapping is known good. [LAW:types-are-the-program] The cause is carried in the
+// error itself, so the recovery loop routes a mapping problem back as repair
+// feedback while a build failure surfaces loudly — without re-deriving which kind
+// it was. [LAW:no-silent-fallbacks] A disk or store error must never be relabeled
+// as mapping feedback and silently retried.
+var ErrInvalidMapping = errors.New("mapping is not applicable to the dump")
+
 // RebuildCandidate is the mechanical applier's lifecycle: it turns a validated
 // (dump, mapping) into a fresh candidate workspace, or rejects. No LLM is in
 // this path — deterministic and LLM mappers alike produce a ShapeMapping that
@@ -57,7 +67,10 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 	// boundary — so a rejection here is exactly "the mapping is invalid/incomplete".
 	export, err := Apply(dump, mapping)
 	if err != nil {
-		return nil, fmt.Errorf("apply mapping: %w", err)
+		// [LAW:types-are-the-program] Tag mapping rejections so a caller can tell
+		// "the mapping was bad" from "the rebuild failed for an infrastructure
+		// reason"; everything below this point is filesystem/store I/O.
+		return nil, fmt.Errorf("%w: %w", ErrInvalidMapping, err)
 	}
 
 	root, err := os.MkdirTemp(parentDir, "lit-candidate-*")
@@ -99,6 +112,33 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 // conservation Export against the dump). The candidate is the owner; the gate is
 // a read-only consumer.
 func (c *Candidate) Store() *Store { return c.store }
+
+// detachForPromotion closes the candidate's store and surrenders its Dolt
+// directory, transferring that directory out of the candidate's ownership so a
+// promotion can rename it to the canonical path. The candidate still owns its
+// root's scratch siblings (the workspace lock, migration snapshots), which a
+// subsequent Discard removes; only the Dolt directory leaves. [LAW:types-are-the-program]
+// Clearing store here makes a later Discard's store-close a no-op by its own
+// state, so detach + Discard compose without a double-close.
+func (c *Candidate) detachForPromotion() (string, error) {
+	// [LAW:no-silent-fallbacks] An empty root means the candidate was already
+	// discarded (or is a zero value); filepath.Join("", "workspace") would hand
+	// back a cwd-relative "workspace" path that a promotion would then rename into
+	// the canonical location. Fail loudly rather than operate on an unintended
+	// directory. (root is a value that explicitly represents ownership — Discard
+	// clears it — so this is a real precondition, not a guard on an impossible
+	// state.)
+	if c.root == "" {
+		return "", errors.New("candidate has no workspace to promote (already discarded or never built)")
+	}
+	doltDir := filepath.Join(c.root, "workspace")
+	var err error
+	if c.store != nil {
+		err = c.store.Close()
+		c.store = nil
+	}
+	return doltDir, err
+}
 
 // Discard releases the candidate's two resources: the open store handle and the
 // on-disk root tree. [LAW:types-are-the-program] Each field's non-empty value IS

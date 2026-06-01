@@ -206,7 +206,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: withValidation(validateSnapshotsCommandPath, r.wsCmd(runSnapshots))},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
 			Run: r.appCmd(appAccessWrite, runRecover)},
-		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version", GroupID: "maintenance",
+		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
 			Run: withValidation(validateLifeboatCommandPath, r.wsCmd(runLifeboat))},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(appAccessWrite, runDowngrade)},
