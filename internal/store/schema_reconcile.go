@@ -404,12 +404,12 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 // reconcile steps assume is present:
 //
 //   - status       — idx_issues_status_priority, ensureUnifiedStatusSchema
-//                    backfills, status CHECK clause
+//     backfills, status CHECK clause
 //   - priority     — idx_issues_status_priority, resetPrioritiesToNormal,
-//                    priority CHECK clause
+//     priority CHECK clause
 //   - updated_at   — idx_issues_status_priority, ensureIssueRanks ordering
 //   - issue_type   — ensureUnifiedStatusSchema (epic carve-out),
-//                    topic ADD COLUMN AFTER issue_type, type CHECK clause
+//     topic ADD COLUMN AFTER issue_type, type CHECK clause
 //   - closed_at    — ensureUnifiedStatusSchema (closed_at consistency)
 //
 // Reconcile adds the columns it knows are not part of every historical
@@ -420,6 +420,14 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 // hold.
 // [LAW:no-silent-fallbacks] A specific, named structural error is
 // emitted before any mutation; the operator sees the actual anomaly.
+// reconcileRequiredIssueColumns is the column set reconcile's downstream steps
+// read from the existing issues table: an issues table missing any of them is
+// the synthetic-corruption shape reconcile cannot forward-migrate. (The data
+// lifeboat enforces its own analogous "recognizable shape" notion via required
+// targets in the shapemap registry, derived from the domain model rather than
+// from reconcile's step prerequisites.)
+var reconcileRequiredIssueColumns = []string{"status", "priority", "updated_at", "issue_type", "closed_at", "description"}
+
 func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
 	cols, err := s.tableColumns(ctx, "issues")
 	if err != nil {
@@ -433,9 +441,8 @@ func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
 	// description appears in the ALTER TABLE issues ADD COLUMN
 	// agent_prompt ... AFTER `description` step, so reconcile fails
 	// mid-flight if it is missing.
-	required := []string{"status", "priority", "updated_at", "issue_type", "closed_at", "description"}
 	var missing []string
-	for _, c := range required {
+	for _, c := range reconcileRequiredIssueColumns {
 		if !cols[c] {
 			missing = append(missing, c)
 		}
@@ -669,7 +676,7 @@ func canonicalEventAction(v sql.NullString) any {
 }
 
 // canonicalEventReason mirrors recordEvent's reason canonicalization:
-// TrimSpace, with NULL input coerced to '' (the column is NOT NULL).
+// TrimSpace, with NULL input coerced to "" (the column is NOT NULL).
 func canonicalEventReason(v sql.NullString) string {
 	if !v.Valid {
 		return ""
