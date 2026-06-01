@@ -92,8 +92,16 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	}
 }
 
-func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) error {
-	defer o.Candidate.Discard()
+func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
+	// [LAW:no-silent-fallbacks] Promotion has succeeded once PromoteCandidate
+	// returns, but a failure to remove the candidate's scratch tree leaves residue
+	// in the storage dir the operator must see; join it to the return rather than
+	// discard it — the same shape snapshots restore uses for its deferred release.
+	defer func() {
+		if discErr := o.Candidate.Discard(); discErr != nil {
+			err = errors.Join(err, fmt.Errorf("discard candidate scratch after promotion: %w", discErr))
+		}
+	}()
 	result, err := store.PromoteCandidate(ctx, ws.DatabasePath, o.Candidate)
 	if err != nil {
 		return err
