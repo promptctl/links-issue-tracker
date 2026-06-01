@@ -42,10 +42,13 @@ type PromotionResult struct {
 // original is moved aside and never wiped, so "pre-recovery data destroyed" is
 // likewise unrepresentable — the original is always one rename from restored.
 func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candidate) (_ PromotionResult, err error) {
-	// [LAW:single-enforcer] Reject an empty path before deriving the lock path and
-	// backup names from it, so the swap never creates artifacts in an unintended
-	// (cwd-relative) directory — the same boundary Open/DumpRaw enforce.
-	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+	// [LAW:single-enforcer][LAW:one-source-of-truth] Validate and canonicalize the
+	// path before deriving the lock path, backup names, and rename target from it,
+	// so the swap never creates artifacts in an unintended (cwd-relative) directory
+	// and a trailing separator can't make backup naming and backup scanning target
+	// different directories — every derivation flows from this one cleaned form.
+	canonicalDoltDir, err = validateDoltRootDir(canonicalDoltDir)
+	if err != nil {
 		return PromotionResult{}, err
 	}
 	// Close the candidate store and surrender its Dolt directory before any
@@ -116,9 +119,13 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 // is unreachable after a crash, because the read path gates on the canonical
 // directory existing.
 func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
-	// [LAW:single-enforcer] An empty path would put .links-workspace.lock in cwd
-	// and scan cwd for backups; reject it at this exported boundary like the rest.
-	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+	// [LAW:single-enforcer][LAW:one-source-of-truth] Validate and canonicalize: an
+	// empty path would put .links-workspace.lock in cwd and scan cwd for backups,
+	// and a trailing separator would make healCanonical/newestBackup look in the
+	// wrong directory. The cleaned form is what the lock and the backup scan agree
+	// on.
+	canonicalDoltDir, err = validateDoltRootDir(canonicalDoltDir)
+	if err != nil {
 		return err
 	}
 	release, err := LockWorkspaceExclusive(ctx, canonicalDoltDir)

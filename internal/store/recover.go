@@ -114,10 +114,14 @@ func Recover(ctx context.Context, canonicalDoltDir string, dump RawDump, mapper 
 	if maxAttempts < 1 {
 		return nil, fmt.Errorf("recovery attempt budget must be at least 1, got %d", maxAttempts)
 	}
-	// [LAW:single-enforcer] An empty path would stage candidates under "." — the
-	// same trust boundary Open/DumpRaw enforce, applied here so recovery scratch
-	// never lands cwd-relative.
-	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+	// [LAW:single-enforcer] Validate and canonicalize the path at this boundary —
+	// the same check Open/DumpRaw enforce. An empty path would stage candidates
+	// under "."; a trailing separator would make filepath.Dir return the canonical
+	// dir itself, staging candidates INSIDE it so a later promotion rename (source
+	// becomes a descendant of destination) fails. The cleaned form derives a parent
+	// reliably adjacent to the canonical workspace.
+	canonicalDoltDir, err := validateDoltRootDir(canonicalDoltDir)
+	if err != nil {
 		return nil, err
 	}
 	parentDir := filepath.Dir(canonicalDoltDir)

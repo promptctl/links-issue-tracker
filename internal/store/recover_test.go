@@ -189,6 +189,23 @@ func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
 	}
 }
 
+// TestValidateDoltRootDirCleansPath locks the shared boundary's two jobs: reject
+// an empty path, and canonicalize the rest so equivalent paths differing only by a
+// trailing separator derive identical lock, backup, and staging locations.
+func TestValidateDoltRootDirCleansPath(t *testing.T) {
+	if _, err := validateDoltRootDir("   "); err == nil {
+		t.Error("empty path must be rejected")
+	}
+	withSep := filepath.Join("foo", "dolt") + string(filepath.Separator)
+	got, err := validateDoltRootDir(withSep)
+	if err != nil {
+		t.Fatalf("validateDoltRootDir: %v", err)
+	}
+	if want := filepath.Clean(withSep); got != want {
+		t.Fatalf("path not canonicalized: got %q, want %q", got, want)
+	}
+}
+
 // TestRebuildCandidateTagsMappingRejection locks the discriminator the loop relies
 // on: a mapping the applier rejects is tagged ErrInvalidMapping, so the loop can
 // route it back as feedback while leaving every other (infrastructure) build
