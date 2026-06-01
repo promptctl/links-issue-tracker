@@ -106,7 +106,14 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 	if err != nil {
 		return err
 	}
-	_, err = fmt.Fprintf(stdout, "recovered: rebuilt workspace promoted to %s (previous contents preserved at %s)\n", result.Canonical, result.Backup)
+	// The preservation clause is a function of whether a backup was actually made:
+	// PromoteCandidate returns an empty Backup when the canonical directory did not
+	// exist at swap time, and printing "preserved at " with a blank path would lie.
+	preserved := "no previous contents to preserve"
+	if result.Backup != "" {
+		preserved = fmt.Sprintf("previous contents preserved at %s", result.Backup)
+	}
+	_, err = fmt.Fprintf(stdout, "recovered: rebuilt workspace promoted to %s (%s)\n", result.Canonical, preserved)
 	return err
 }
 
