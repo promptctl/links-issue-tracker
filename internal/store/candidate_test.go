@@ -62,7 +62,7 @@ func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebuildCandidate rejected a valid mapping: %v", err)
 	}
-	defer cand.Discard()
+	t.Cleanup(func() { _ = cand.Discard() })
 
 	report, err := cand.Store().Doctor(ctx)
 	if err != nil {
@@ -103,6 +103,10 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebuildCandidate rejected a valid mapping after a prior reject: %v", err)
 	}
+	// Always release the candidate even if an assertion below exits via Fatalf,
+	// so no open store or workspace lock leaks into the rest of the package run.
+	// Idempotent with the explicit Discard the zero-residue assertion uses.
+	t.Cleanup(func() { _ = cand.Discard() })
 	export, err := cand.Store().Export(ctx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
@@ -142,6 +146,7 @@ func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}
+	t.Cleanup(func() { _ = cand.Discard() })
 
 	// Removing an entry needs write permission on its parent; drop it so the
 	// candidate directory cannot be unlinked and RemoveAll fails.
@@ -177,11 +182,12 @@ func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first RebuildCandidate: %v", err)
 	}
+	t.Cleanup(func() { _ = first.Discard() })
 	second, err := RebuildCandidate(ctx, parent, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("second RebuildCandidate: %v", err)
 	}
-	defer second.Discard()
+	t.Cleanup(func() { _ = second.Discard() })
 
 	if err := first.Discard(); err != nil {
 		t.Fatalf("Discard first: %v", err)
