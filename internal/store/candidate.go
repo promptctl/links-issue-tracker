@@ -100,6 +100,23 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 // a read-only consumer.
 func (c *Candidate) Store() *Store { return c.store }
 
+// detachForPromotion closes the candidate's store and surrenders its Dolt
+// directory, transferring that directory out of the candidate's ownership so a
+// promotion can rename it to the canonical path. The candidate still owns its
+// root's scratch siblings (the workspace lock, migration snapshots), which a
+// subsequent Discard removes; only the Dolt directory leaves. [LAW:types-are-the-program]
+// Clearing store here makes a later Discard's store-close a no-op by its own
+// state, so detach + Discard compose without a double-close.
+func (c *Candidate) detachForPromotion() (string, error) {
+	doltDir := filepath.Join(c.root, "workspace")
+	var err error
+	if c.store != nil {
+		err = c.store.Close()
+		c.store = nil
+	}
+	return doltDir, err
+}
+
 // Discard releases the candidate's two resources: the open store handle and the
 // on-disk root tree. [LAW:types-are-the-program] Each field's non-empty value IS
 // "this resource is still held", so each is released against its own state — not
