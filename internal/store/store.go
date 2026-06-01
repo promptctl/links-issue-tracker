@@ -265,13 +265,30 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 }
 
 func validateOpenArgs(doltRootDir string, workspaceID string) error {
-	if strings.TrimSpace(doltRootDir) == "" {
-		return errors.New("dolt root dir is required")
+	if _, err := validateDoltRootDir(doltRootDir); err != nil {
+		return err
 	}
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace id is required")
 	}
 	return nil
+}
+
+// validateDoltRootDir validates a Dolt root path argument and returns its cleaned,
+// canonical form. [LAW:single-enforcer][LAW:one-source-of-truth] One definition of
+// "a usable root path", reached by every exported entry point that takes one:
+// Open/OpenForRead/OpenSync/DumpRaw via validateOpenArgs, and
+// Recover/PromoteCandidate/HealWorkspace directly. It rejects empty input (so a
+// path never silently degrades into cwd-relative scratch, lock, and backup
+// artifacts) and normalizes the rest, so equivalent paths that differ only by a
+// trailing separator derive the SAME lock path, backup names, staging parent, and
+// rename target — making "write the backup at one spelling, scan for it at
+// another" unrepresentable.
+func validateDoltRootDir(doltRootDir string) (string, error) {
+	if strings.TrimSpace(doltRootDir) == "" {
+		return "", errors.New("dolt root dir is required")
+	}
+	return filepath.Clean(doltRootDir), nil
 }
 
 // ExecRawForTest executes a raw SQL statement without acquiring the commit lock
