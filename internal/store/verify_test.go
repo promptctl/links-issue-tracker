@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"sort"
 	"strings"
 	"testing"
 
@@ -121,6 +122,32 @@ func TestIDStabilityFindingsDetectsLostAndExtraIDs(t *testing.T) {
 		if f.Law != LawIDStability {
 			t.Fatalf("expected id_stability law, got %q", f.Law)
 		}
+	}
+}
+
+// TestSourceValuesForAggregatesAcrossTables guards the conserved-value set
+// against the first-match bug: when more than one table maps a column onto the
+// same target (legal — Validate's duplicate-target check is per-table, and count
+// conservation sums across tables), the reference set is the UNION of every
+// contributing column, so id stability does not flag a second table's ids as
+// spuriously extra.
+func TestSourceValuesForAggregatesAcrossTables(t *testing.T) {
+	dump := RawDump{Tables: []RawTable{
+		{Name: "issues", Columns: []string{"id"}, Rows: [][]any{{"i1"}, {"i2"}}},
+		{Name: "issues_overflow", Columns: []string{"id"}, Rows: [][]any{{"i3"}}},
+	}}
+	m := ShapeMapping{Columns: map[ColumnRef]Disposition{
+		{Table: "issues", Column: "id"}:          MappedTo{Target: "issues.id"},
+		{Table: "issues_overflow", Column: "id"}: MappedTo{Target: "issues.id"},
+	}}
+
+	values, ok := sourceValuesFor(dump, m, "issues.id")
+	if !ok {
+		t.Fatal("expected a column mapped to issues.id")
+	}
+	sort.Strings(values)
+	if strings.Join(values, ",") != "i1,i2,i3" {
+		t.Fatalf("sourceValuesFor did not aggregate across tables; got %v", values)
 	}
 }
 

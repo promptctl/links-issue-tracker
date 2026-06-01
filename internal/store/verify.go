@@ -192,15 +192,14 @@ func countFindings(dump RawDump, m ShapeMapping, export model.Export) []VerifyFi
 }
 
 // idStabilityFindings checks that issue ids survive the rebuild unchanged.
-// [LAW:types-are-the-program] The reference is the RAW cells of whichever source
-// column maps onto issues.id — not the candidate re-derived through the mapping —
-// so comparing that raw set to the ids read back catches identity loss in the
-// write path (a collision silently merging two rows, a value the write path
-// rewrote). It cannot catch the id column itself being mis-identified, because no
-// deterministic check knows which source column "should" be the id without
-// guessing; that is the honest ceiling, and count conservation guards the
-// adjacent row-loss case. Validate guarantees at most one column maps to a given
-// target, so the first match is the only match.
+// [LAW:types-are-the-program] The reference is the RAW cells of every source
+// column mapping onto issues.id — not the candidate re-derived through the
+// mapping — so comparing that raw set to the ids read back catches identity loss
+// in the write path (a collision silently merging two rows, a value the write
+// path rewrote). It cannot catch the id column itself being mis-identified,
+// because no deterministic check knows which source column "should" be the id
+// without guessing; that is the honest ceiling, and count conservation guards the
+// adjacent row-loss case.
 func idStabilityFindings(dump RawDump, m ShapeMapping, export model.Export) []VerifyFinding {
 	sourceIDs, mapped := sourceValuesFor(dump, m, "issues.id")
 	if !mapped {
@@ -284,24 +283,32 @@ func rankFindings(export model.Export) []VerifyFinding {
 	return out
 }
 
-// sourceValuesFor returns the raw cell values of the source column mapped onto
-// target, as strings, and whether such a column exists. It is the raw-dump
-// reference the round-trip conservation laws compare against.
+// sourceValuesFor returns the raw cell values of EVERY source column mapped onto
+// target, across all tables, as strings, and whether any such column exists. It
+// is the raw-dump reference the round-trip conservation laws compare against.
+//
+// [LAW:one-source-of-truth] Multiple tables may legally map into one collection —
+// Validate's duplicate-target check is per-table, and countFindings already sums
+// row counts across the contributing tables — so the conserved value set for a
+// target is the UNION over every contributing column, not the first match.
+// Aggregating here keeps id stability consistent with count conservation; an
+// early return would wrongly flag a second table's ids as "extra".
 func sourceValuesFor(dump RawDump, m ShapeMapping, target TargetKey) ([]string, bool) {
+	var values []string
+	found := false
 	for _, table := range dump.Tables {
 		for i, col := range table.Columns {
 			mapped, ok := m.Columns[ColumnRef{Table: table.Name, Column: col}].(MappedTo)
 			if !ok || mapped.Target != target {
 				continue
 			}
-			values := make([]string, 0, len(table.Rows))
+			found = true
 			for _, row := range table.Rows {
 				values = append(values, cellString(row[i]))
 			}
-			return values, true
 		}
 	}
-	return nil, false
+	return values, found
 }
 
 // setDifference returns the sorted members of a not present in b.
