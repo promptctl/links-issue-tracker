@@ -40,6 +40,28 @@ func Initial() string {
 	return string(alphabet[base/2]) // "V"
 }
 
+// Valid reports whether s is a well-formed, stored rank value: a non-empty
+// string whose every byte is a member of the ordering alphabet. The empty
+// string is not a stored rank — it denotes "unranked" — so it is not Valid.
+//
+// This predicate is for validating PERSISTED rank values (e.g. checking a
+// rebuilt workspace). It is NOT the input contract of the ordering primitives:
+// Midpoint/Before/After deliberately accept an empty bound as a sentinel
+// ("before/after everything"), so callers must not pre-screen those bounds with
+// Valid. Callers checking a stored rank consult this one definition rather than
+// re-deriving the alphabet.
+func Valid(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if charIndex[s[i]] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Midpoint returns a string that sorts strictly between a and b.
 // Precondition: a < b (lexicographic). Returns an error if a >= b.
 // Either a or b (but not both) may be empty: empty-a means "before everything",
