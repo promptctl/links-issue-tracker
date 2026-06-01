@@ -42,6 +42,12 @@ type PromotionResult struct {
 // original is moved aside and never wiped, so "pre-recovery data destroyed" is
 // likewise unrepresentable — the original is always one rename from restored.
 func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candidate) (_ PromotionResult, err error) {
+	// [LAW:single-enforcer] Reject an empty path before deriving the lock path and
+	// backup names from it, so the swap never creates artifacts in an unintended
+	// (cwd-relative) directory — the same boundary Open/DumpRaw enforce.
+	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+		return PromotionResult{}, err
+	}
 	// Close the candidate store and surrender its Dolt directory before any
 	// rename: an open handle blocks a directory rename on Windows, and the
 	// promoted store is reopened fresh from the canonical path regardless.
@@ -111,6 +117,11 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 // is unreachable after a crash, because the read path gates on the canonical
 // directory existing.
 func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
+	// [LAW:single-enforcer] An empty path would put .links-workspace.lock in cwd
+	// and scan cwd for backups; reject it at this exported boundary like the rest.
+	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+		return err
+	}
 	release, err := LockWorkspaceExclusive(ctx, canonicalDoltDir)
 	if err != nil {
 		return err

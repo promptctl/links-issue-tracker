@@ -114,6 +114,12 @@ func Recover(ctx context.Context, canonicalDoltDir string, dump RawDump, mapper 
 	if maxAttempts < 1 {
 		return nil, fmt.Errorf("recovery attempt budget must be at least 1, got %d", maxAttempts)
 	}
+	// [LAW:single-enforcer] An empty path would stage candidates under "." — the
+	// same trust boundary Open/DumpRaw enforce, applied here so recovery scratch
+	// never lands cwd-relative.
+	if err := validateDoltRootDir(canonicalDoltDir); err != nil {
+		return nil, err
+	}
 	parentDir := filepath.Dir(canonicalDoltDir)
 	feedback := ""
 	for attempt := 1; attempt <= maxAttempts; attempt++ {

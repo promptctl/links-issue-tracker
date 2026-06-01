@@ -173,6 +173,22 @@ func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
 	}
 }
 
+// TestRecoveryEntryPointsRejectEmptyPath locks the shared trust boundary: every
+// exported recovery entry refuses an empty canonical path rather than degrading to
+// cwd-relative scratch, lock, and backup artifacts.
+func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
+	ctx := context.Background()
+	if _, err := Recover(ctx, "  ", preGooseDump(), DeterministicMapper, 1); err == nil {
+		t.Error("Recover must reject an empty canonical path")
+	}
+	if _, err := PromoteCandidate(ctx, "  ", nil); err == nil {
+		t.Error("PromoteCandidate must reject an empty canonical path")
+	}
+	if err := HealWorkspace(ctx, "  "); err == nil {
+		t.Error("HealWorkspace must reject an empty canonical path")
+	}
+}
+
 // TestRebuildCandidateTagsMappingRejection locks the discriminator the loop relies
 // on: a mapping the applier rejects is tagged ErrInvalidMapping, so the loop can
 // route it back as feedback while leaving every other (infrastructure) build

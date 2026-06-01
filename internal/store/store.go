@@ -265,11 +265,24 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 }
 
 func validateOpenArgs(doltRootDir string, workspaceID string) error {
-	if strings.TrimSpace(doltRootDir) == "" {
-		return errors.New("dolt root dir is required")
+	if err := validateDoltRootDir(doltRootDir); err != nil {
+		return err
 	}
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace id is required")
+	}
+	return nil
+}
+
+// validateDoltRootDir is the single check for "a usable Dolt root path argument".
+// [LAW:single-enforcer] One definition of a valid root path, shared by every
+// exported store entry point (Open/OpenForRead/DumpRaw via validateOpenArgs, plus
+// Recover/PromoteCandidate/HealWorkspace), so none drifts on what "empty" means or
+// silently degrades an empty path into cwd-relative scratch, lock, and backup
+// artifacts.
+func validateDoltRootDir(doltRootDir string) error {
+	if strings.TrimSpace(doltRootDir) == "" {
+		return errors.New("dolt root dir is required")
 	}
 	return nil
 }
