@@ -93,7 +93,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 func TestHealCanonicalRestoresInterruptedSwap(t *testing.T) {
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
-	backup := canonical + ".backup-00000000000000001"
+	backup := canonical + ".backup-1700000000000000001"
 	markerDir(t, backup, "original")
 	// canonical is deliberately absent: the crash window between the two renames.
 
@@ -113,14 +113,32 @@ func TestHealCanonicalRestoresInterruptedSwap(t *testing.T) {
 func TestHealCanonicalPicksNewestBackup(t *testing.T) {
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
-	markerDir(t, canonical+".backup-00000000000000001", "older")
-	markerDir(t, canonical+".backup-00000000000000002", "newer")
+	markerDir(t, canonical+".backup-1700000000000000001", "older")
+	markerDir(t, canonical+".backup-1700000000000000002", "newer")
 
 	if err := healCanonical(canonical); err != nil {
 		t.Fatalf("healCanonical: %v", err)
 	}
 	if got := readMarker(t, canonical); got != "newer" {
 		t.Fatalf("heal restored the wrong backup: want newer, got %q", got)
+	}
+}
+
+// TestHealCanonicalIgnoresForeignBackupNames proves only producer-stamped backups
+// are restorable: a hand-named directory sharing the prefix is never selected,
+// even though it sorts lexicographically after the numeric stamps and would
+// otherwise roll the workspace back to the wrong contents.
+func TestHealCanonicalIgnoresForeignBackupNames(t *testing.T) {
+	storageDir := t.TempDir()
+	canonical := filepath.Join(storageDir, "dolt")
+	markerDir(t, canonical+".backup-1700000000000000001", "real")
+	markerDir(t, canonical+".backup-manual", "foreign")
+
+	if err := healCanonical(canonical); err != nil {
+		t.Fatalf("healCanonical: %v", err)
+	}
+	if got := readMarker(t, canonical); got != "real" {
+		t.Fatalf("heal selected a foreign backup: want real, got %q", got)
 	}
 }
 
@@ -132,7 +150,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
-	markerDir(t, canonical+".backup-00000000000000007", "pre-crash")
+	markerDir(t, canonical+".backup-1700000000000000007", "pre-crash")
 
 	if err := HealWorkspace(ctx, canonical); err != nil {
 		t.Fatalf("HealWorkspace: %v", err)

@@ -275,11 +275,11 @@ func validateOpenArgs(doltRootDir string, workspaceID string) error {
 }
 
 // validateDoltRootDir is the single check for "a usable Dolt root path argument".
-// [LAW:single-enforcer] One definition of a valid root path, shared by every
-// exported store entry point (Open/OpenForRead/DumpRaw via validateOpenArgs, plus
-// Recover/PromoteCandidate/HealWorkspace), so none drifts on what "empty" means or
-// silently degrades an empty path into cwd-relative scratch, lock, and backup
-// artifacts.
+// [LAW:single-enforcer] One definition of a valid root path, reached by the
+// exported entry points that take one: Open/OpenForRead/OpenSync/DumpRaw via
+// validateOpenArgs, and Recover/PromoteCandidate/HealWorkspace directly. None
+// drifts on what "empty" means or silently degrades an empty path into
+// cwd-relative scratch, lock, and backup artifacts.
 func validateDoltRootDir(doltRootDir string) error {
 	if strings.TrimSpace(doltRootDir) == "" {
 		return errors.New("dolt root dir is required")

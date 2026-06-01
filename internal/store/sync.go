@@ -46,11 +46,12 @@ type SyncPushResult struct {
 }
 
 func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
-	if strings.TrimSpace(doltRootDir) == "" {
-		return nil, fmt.Errorf("dolt root dir is required")
-	}
-	if strings.TrimSpace(workspaceID) == "" {
-		return nil, fmt.Errorf("workspace id is required")
+	// [LAW:single-enforcer] Route through the one argument-validation boundary
+	// rather than re-inlining the same two checks, so OpenSync cannot drift from
+	// the rest of the store's exported entry points on what an acceptable path or
+	// workspace id is.
+	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
+		return nil, err
 	}
 	if err := requireEmbeddedSyncSupport(); err != nil {
 		return nil, err

@@ -88,10 +88,10 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 	}()
 
 	// [LAW:one-source-of-truth] Fixed-width nanosecond stamp so the lexical order
-	// newestBackup relies on is the chronological order — an unpadded %d would let
-	// a shorter (older) stamp sort after a longer (newer) one across digit-count
-	// boundaries.
-	backup := fmt.Sprintf("%s.backup-%019d", canonicalDoltDir, time.Now().UTC().UnixNano())
+	// newestBackup relies on is the chronological order — an unpadded width would
+	// let a shorter (older) stamp sort after a longer (newer) one across digit-count
+	// boundaries. The width is shared with the stamp validator below.
+	backup := fmt.Sprintf("%s.backup-%0*d", canonicalDoltDir, promotionStampWidth, time.Now().UTC().UnixNano())
 	var preserved string
 	preserved, err = moveAside(canonicalDoltDir, backup)
 	if err != nil {
@@ -189,6 +189,29 @@ func healCanonical(canonicalDoltDir string) error {
 	return nil
 }
 
+// promotionStampWidth is the fixed digit width of a promotion backup's
+// nanosecond stamp. [LAW:one-source-of-truth] One constant drives both the name
+// PromoteCandidate writes and the pattern newestBackup accepts, so the producer
+// and the recognizer cannot disagree. 19 digits holds every int64 UnixNano value
+// (the type overflows in 2262, still 19 digits), so the stamps are equal-width
+// and lexical order equals chronological order.
+const promotionStampWidth = 19
+
+// isPromotionBackup reports whether name is a backup PromoteCandidate produced:
+// the backup prefix followed by exactly the fixed-width nanosecond stamp.
+func isPromotionBackup(name, prefix string) bool {
+	suffix, ok := strings.CutPrefix(name, prefix)
+	if !ok || len(suffix) != promotionStampWidth {
+		return false
+	}
+	for _, r := range suffix {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
+}
+
 // newestBackup returns the most recent promotion backup for the canonical path,
 // or "" when none exist. Backups are named with a fixed-width nanosecond stamp,
 // so lexical order is chronological order. [LAW:no-silent-fallbacks] Listing is
@@ -203,10 +226,13 @@ func newestBackup(canonicalDoltDir string) (string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		// [LAW:types-are-the-program] A workspace backup is a directory; a stray
-		// regular file sharing the prefix is not a restorable workspace, and
-		// renaming it into the canonical path would install a broken store.
-		if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
+		// [LAW:types-are-the-program] A restorable backup is exactly what
+		// PromoteCandidate produces: a DIRECTORY named prefix + the fixed-width
+		// nanosecond stamp. A stray regular file, or a hand-named directory like
+		// "<prefix>manual", is not a workspace and must not be selected — it would
+		// break the lexical-is-chronological ordering and could roll the workspace
+		// back to the wrong contents.
+		if e.IsDir() && isPromotionBackup(e.Name(), prefix) {
 			names = append(names, e.Name())
 		}
 	}
