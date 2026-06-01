@@ -112,6 +112,13 @@ type targetField struct {
 	coll      collection
 	field     string
 	transform Transform
+	// optional is true when an absent source column for this target is a
+	// legitimate value (the field is nullable or has a write-path default), so
+	// the recognizable-shape gate does not require it. A non-optional target
+	// absent from a dump would force Apply to fabricate an empty/zero value, so
+	// the gate declines such a table. Requiredness lives here — the single
+	// place targets are defined — so it cannot drift from a parallel list.
+	optional bool
 }
 
 // targetRegistry is the closed set of legal mapping targets: the
@@ -124,29 +131,42 @@ type targetField struct {
 // to nest a change under its event; it is not a model.FieldChange field.
 var targetRegistry = buildTargetRegistry()
 
+const (
+	required = false // !optional
+	optional = true
+)
+
 func buildTargetRegistry() map[TargetKey]targetField {
 	reg := map[TargetKey]targetField{}
-	add := func(c collection, t Transform, fields ...string) {
+	add := func(c collection, t Transform, opt bool, fields ...string) {
 		for _, f := range fields {
-			reg[TargetKey(string(c)+"."+f)] = targetField{coll: c, field: f, transform: t}
+			reg[TargetKey(string(c)+"."+f)] = targetField{coll: c, field: f, transform: t, optional: opt}
 		}
 	}
-	// The transform is fixed per field: timestamps are parsed, status is
-	// canonicalized (idempotent on canonical values), everything else passes
-	// through. Priority is identity here; the out-of-range clamp lives at the
-	// import boundary. [LAW:single-enforcer]
-	add(collIssues, TransformIdentity, "id", "title", "description", "prompt", "assignee", "priority", "issue_type", "topic", "rank")
-	add(collIssues, TransformTimestamp, "closed_at", "created_at", "updated_at", "archived_at", "deleted_at")
-	add(collIssues, TransformLegacyStatus, "status")
-	add(collRelations, TransformIdentity, "src_id", "dst_id", "type", "created_by")
-	add(collRelations, TransformTimestamp, "created_at")
-	add(collComments, TransformIdentity, "id", "issue_id", "body", "created_by")
-	add(collComments, TransformTimestamp, "created_at")
-	add(collLabels, TransformIdentity, "issue_id", "name", "created_by")
-	add(collLabels, TransformTimestamp, "created_at")
-	add(collEvents, TransformIdentity, "id", "issue_id", "action", "reason", "actor")
-	add(collEvents, TransformTimestamp, "created_at")
-	add(collEventChanges, TransformIdentity, "event_id", "field", "from", "to")
+	// Each field carries its transform and its requiredness. The transform is
+	// fixed per field: timestamps are parsed, status is canonicalized
+	// (idempotent on canonical values), everything else passes through.
+	// [LAW:single-enforcer] Requiredness is the gate's one source of truth: a
+	// required target absent from a dump would make Apply fabricate an empty
+	// value, so the deterministic mapper declines such a shape. Optional fields
+	// are nullable or filled by the write path (topic→'misc', rank→bottom,
+	// priority clamp), so their absence is legitimate.
+	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
+	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank")
+	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
+	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
+	add(collIssues, TransformLegacyStatus, required, "status")
+	add(collRelations, TransformIdentity, required, "src_id", "dst_id", "type", "created_by")
+	add(collRelations, TransformTimestamp, required, "created_at")
+	add(collComments, TransformIdentity, required, "id", "issue_id", "body", "created_by")
+	add(collComments, TransformTimestamp, required, "created_at")
+	add(collLabels, TransformIdentity, required, "issue_id", "name", "created_by")
+	add(collLabels, TransformTimestamp, required, "created_at")
+	add(collEvents, TransformIdentity, required, "id", "issue_id", "reason", "actor")
+	add(collEvents, TransformIdentity, optional, "action")
+	add(collEvents, TransformTimestamp, required, "created_at")
+	add(collEventChanges, TransformIdentity, required, "event_id", "field")
+	add(collEventChanges, TransformIdentity, optional, "from", "to")
 	return reg
 }
 

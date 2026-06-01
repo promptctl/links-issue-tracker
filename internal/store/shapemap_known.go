@@ -72,46 +72,29 @@ func DeterministicMap(dump RawDump) (ShapeMapping, bool) {
 	return out, true
 }
 
-// requiredTargets names, per domain source table, the target fields a
-// recognizable historical shape must map. A table covering fewer than these
-// would let the restore path persist fabricated empty values (it does raw
-// inserts, not the Import* required-field checks), so the mapper declines it.
-//
-// The check is on covered TARGETS, not source column names: an aliased source
-// column (pre-goose issue_events.assignee, or pre-rename issues.prompt) covers
-// the same target as its v1 name, so a valid legacy shape passes while a
-// genuinely thin one does not. The issues set derives from the reconcile
-// prerequisite list, prefixed to target keys, so the lifeboat and reconcile
-// agree on what counts as a known issues shape. [LAW:one-source-of-truth]
-var requiredTargets = map[string][]TargetKey{
-	"issues":              issuesRequiredTargets(),
-	"relations":           {"relations.src_id", "relations.dst_id", "relations.type"},
-	"comments":            {"comments.id", "comments.issue_id", "comments.body"},
-	"labels":              {"labels.issue_id", "labels.name"},
-	"issue_events":        {"events.id", "events.issue_id"},
-	"issue_event_changes": {"event_changes.event_id", "event_changes.field"},
-}
-
-func issuesRequiredTargets() []TargetKey {
-	targets := make([]TargetKey, len(reconcileRequiredIssueColumns))
-	for i, col := range reconcileRequiredIssueColumns {
-		targets[i] = TargetKey("issues." + col)
-	}
-	return targets
-}
-
 // coversRequiredTargets reports whether the table's mapped columns cover every
-// required target for its collection, reading the dispositions just assigned
-// into m.
+// required (non-optional) target of the collection it feeds. A table covering
+// fewer would let the restore path persist fabricated empty values for the
+// absent required fields (it does raw inserts, not the Import* required-field
+// checks), so the mapper declines it to the loop's LLM/human path.
+//
+// Requiredness comes from the target registry — the one place targets are
+// defined — so there is no parallel list to omit a field from. The check is on
+// covered TARGETS, not source column names: an aliased source column (pre-goose
+// issue_events.assignee, or pre-rename issues.prompt) covers the same target as
+// its v1 name, so a valid legacy shape passes while a genuinely thin one does
+// not. [LAW:one-source-of-truth]
 func coversRequiredTargets(table RawTable, m ShapeMapping) bool {
 	covered := map[TargetKey]bool{}
+	var coll collection
 	for _, col := range table.Columns {
 		if mapped, ok := m.Columns[ColumnRef{Table: table.Name, Column: col}].(MappedTo); ok {
 			covered[mapped.Target] = true
+			coll = targetRegistry[mapped.Target].coll
 		}
 	}
-	for _, t := range requiredTargets[table.Name] {
-		if !covered[t] {
+	for key, tf := range targetRegistry {
+		if tf.coll == coll && !tf.optional && !covered[key] {
 			return false
 		}
 	}

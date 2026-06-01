@@ -119,6 +119,37 @@ func TestDeterministicMapDeclinesThinNonIssuesTable(t *testing.T) {
 	}
 }
 
+// TestDeterministicMapDeclinesThinRequiredTargets proves the gate requires every
+// non-optional target of a collection (derived from the registry), so no thin
+// table — whatever the collection — reaches Apply and fabricates empty required
+// fields. Optional fields (e.g. issues.topic, events.action) are not required.
+func TestDeterministicMapDeclinesThinRequiredTargets(t *testing.T) {
+	cases := map[string]RawTable{
+		// issues covering the historical-shape columns but missing id/title:
+		// Apply would build an issue with empty id/title.
+		"issues missing id/title": {
+			Name:    "issues",
+			Columns: []string{"description", "status", "priority", "issue_type", "closed_at", "created_at", "updated_at"},
+			Rows:    [][]any{{"", "open", int64(0), "task", nil, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z"}},
+		},
+		// issue_events missing reason/actor: Apply would build an event with
+		// empty reason/actor.
+		"events missing reason/actor": {
+			Name:    "issue_events",
+			Columns: []string{"id", "issue_id", "action", "created_at"},
+			Rows:    [][]any{{"e1", "i1", "done", "2026-01-01T00:00:00Z"}},
+		},
+	}
+	for name, table := range cases {
+		t.Run(name, func(t *testing.T) {
+			dump := RawDump{WorkspaceID: "w", Tables: []RawTable{table}}
+			if _, ok := DeterministicMap(dump); ok {
+				t.Fatalf("DeterministicMap must decline %s", name)
+			}
+		})
+	}
+}
+
 // --- Drop provenance distinguishable from migration history (acceptance #2) ---
 
 func TestClassifyDropDistinguishesProvenance(t *testing.T) {

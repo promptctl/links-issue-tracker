@@ -420,16 +420,12 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 // hold.
 // [LAW:no-silent-fallbacks] A specific, named structural error is
 // emitted before any mutation; the operator sees the actual anomaly.
-// reconcileRequiredIssueColumns is the column set that marks a recognizable
-// historical issues table: the columns reconcile's downstream steps read, and
-// equivalently the columns no real pre-goose shape lacked. An issues table
-// missing any of them is the synthetic-corruption shape, "not a known
-// historical shape."
-//
-// [LAW:one-source-of-truth] One definition of "a recognizable historical issues
-// table", consumed both by the reconcile prerequisite gate here and by the data
-// lifeboat's deterministic mapper (DeterministicMap), so the two cannot drift
-// on what counts as a known shape.
+// reconcileRequiredIssueColumns is the column set reconcile's downstream steps
+// read from the existing issues table: an issues table missing any of them is
+// the synthetic-corruption shape reconcile cannot forward-migrate. (The data
+// lifeboat enforces its own analogous "recognizable shape" notion via required
+// targets in the shapemap registry, derived from the domain model rather than
+// from reconcile's step prerequisites.)
 var reconcileRequiredIssueColumns = []string{"status", "priority", "updated_at", "issue_type", "closed_at", "description"}
 
 func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
