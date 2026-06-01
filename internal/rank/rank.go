@@ -40,6 +40,24 @@ func Initial() string {
 	return string(alphabet[base/2]) // "V"
 }
 
+// Valid reports whether s is a well-formed rank: a non-empty string whose every
+// byte is a member of the ordering alphabet. The empty string is not a rank — it
+// denotes "unranked" — so it is not Valid. Validity is exactly the precondition
+// the ordering primitives (Midpoint/Before/After) rely on, so callers verifying
+// a rank came from this package consult one definition rather than re-deriving
+// the alphabet.
+func Valid(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if charIndex[s[i]] < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 // Midpoint returns a string that sorts strictly between a and b.
 // Precondition: a < b (lexicographic). Returns an error if a >= b.
 // Either a or b (but not both) may be empty: empty-a means "before everything",
