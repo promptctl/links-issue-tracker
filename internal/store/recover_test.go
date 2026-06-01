@@ -156,6 +156,38 @@ func TestRecoverUnconvergedSurfacesResidual(t *testing.T) {
 	}
 }
 
+// TestRecoverRejectsNonPositiveBudget guards Unconverged's residual contract: a
+// budget below one would exit with no pass run and an empty residual, making
+// "failure with no residual" representable. The precondition fails loudly instead.
+func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
+	ctx := context.Background()
+	dump := preGooseDump()
+	for _, n := range []int{0, -1} {
+		outcome, err := Recover(ctx, canonicalUnder(t), dump, DeterministicMapper, n)
+		if err == nil {
+			t.Fatalf("maxAttempts=%d must error, got outcome %T", n, outcome)
+		}
+		if outcome != nil {
+			t.Fatalf("maxAttempts=%d must return no outcome, got %T", n, outcome)
+		}
+	}
+}
+
+// TestRebuildCandidateTagsMappingRejection locks the discriminator the loop relies
+// on: a mapping the applier rejects is tagged ErrInvalidMapping, so the loop can
+// route it back as feedback while leaving every other (infrastructure) build
+// failure to surface as a hard error.
+func TestRebuildCandidateTagsMappingRejection(t *testing.T) {
+	ctx := context.Background()
+	_, err := RebuildCandidate(ctx, t.TempDir(), preGooseDump(), ShapeMapping{Columns: map[ColumnRef]Disposition{}})
+	if err == nil {
+		t.Fatal("a non-total mapping must be rejected")
+	}
+	if !errors.Is(err, ErrInvalidMapping) {
+		t.Fatalf("mapping rejection must be tagged ErrInvalidMapping, got: %v", err)
+	}
+}
+
 // TestRecoverUnconvergedOnPersistentMapperDecline covers the other residual
 // source: a mapper that never produces a proposal (e.g. an unrecognized shape)
 // exhausts the budget with its decline as the residual, not a panic or silence.

@@ -81,14 +81,22 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 		}
 	}()
 
-	backup := fmt.Sprintf("%s.backup-%d", canonicalDoltDir, time.Now().UTC().UnixNano())
-	if err = moveAside(canonicalDoltDir, backup); err != nil {
+	// [LAW:one-source-of-truth] Fixed-width nanosecond stamp so the lexical order
+	// newestBackup relies on is the chronological order — an unpadded %d would let
+	// a shorter (older) stamp sort after a longer (newer) one across digit-count
+	// boundaries.
+	backup := fmt.Sprintf("%s.backup-%019d", canonicalDoltDir, time.Now().UTC().UnixNano())
+	var preserved string
+	preserved, err = moveAside(canonicalDoltDir, backup)
+	if err != nil {
 		return PromotionResult{}, err
 	}
 	if err = os.Rename(src, canonicalDoltDir); err != nil {
 		return PromotionResult{}, fmt.Errorf("install rebuilt workspace at canonical path: %w", err)
 	}
-	return PromotionResult{Canonical: canonicalDoltDir, Backup: backup}, nil
+	// [LAW:types-are-the-program] Backup names a path that exists exactly when one
+	// was made; when nothing pre-existed it is empty, never a phantom path.
+	return PromotionResult{Canonical: canonicalDoltDir, Backup: preserved}, nil
 }
 
 // HealWorkspace repairs a workspace whose canonical directory is absent because a
@@ -115,21 +123,23 @@ func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
 	return healCanonical(canonicalDoltDir)
 }
 
-// moveAside renames the canonical directory to its backup path. An absent
-// canonical (nothing pre-existing to preserve) is a legitimate no-op: the install
-// proceeds with no backup. [LAW:no-silent-fallbacks] Any stat error other than
-// not-exist is a distinct failure mode the operator must see, not a missing dir.
-func moveAside(canonicalDoltDir, backup string) error {
+// moveAside renames the canonical directory to its backup path, returning the
+// backup path it actually created — empty when nothing pre-existed to preserve, so
+// the caller never reports a path that does not exist. An absent canonical is a
+// legitimate no-op: the install proceeds with no backup. [LAW:no-silent-fallbacks]
+// Any stat error other than not-exist is a distinct failure mode the operator must
+// see, not a missing dir.
+func moveAside(canonicalDoltDir, backup string) (string, error) {
 	switch _, statErr := os.Stat(canonicalDoltDir); {
 	case statErr == nil:
 		if err := os.Rename(canonicalDoltDir, backup); err != nil {
-			return fmt.Errorf("move existing workspace aside: %w", err)
+			return "", fmt.Errorf("move existing workspace aside: %w", err)
 		}
-		return nil
+		return backup, nil
 	case errors.Is(statErr, os.ErrNotExist):
-		return nil
+		return "", nil
 	default:
-		return fmt.Errorf("stat canonical workspace: %w", statErr)
+		return "", fmt.Errorf("stat canonical workspace: %w", statErr)
 	}
 }
 
@@ -182,7 +192,10 @@ func newestBackup(canonicalDoltDir string) (string, error) {
 	}
 	var names []string
 	for _, e := range entries {
-		if strings.HasPrefix(e.Name(), prefix) {
+		// [LAW:types-are-the-program] A workspace backup is a directory; a stray
+		// regular file sharing the prefix is not a restorable workspace, and
+		// renaming it into the canonical path would install a broken store.
+		if e.IsDir() && strings.HasPrefix(e.Name(), prefix) {
 			names = append(names, e.Name())
 		}
 	}

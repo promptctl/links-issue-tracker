@@ -32,6 +32,16 @@ type Candidate struct {
 	root  string
 }
 
+// ErrInvalidMapping marks a RebuildCandidate failure caused by the MAPPING — a
+// malformed or inapplicable ShapeMapping the applier rejected — as distinct from
+// an infrastructure failure (filesystem, store I/O) that can only occur once the
+// mapping is known good. [LAW:types-are-the-program] The cause is carried in the
+// error itself, so the recovery loop routes a mapping problem back as repair
+// feedback while a build failure surfaces loudly — without re-deriving which kind
+// it was. [LAW:no-silent-fallbacks] A disk or store error must never be relabeled
+// as mapping feedback and silently retried.
+var ErrInvalidMapping = errors.New("mapping is not applicable to the dump")
+
 // RebuildCandidate is the mechanical applier's lifecycle: it turns a validated
 // (dump, mapping) into a fresh candidate workspace, or rejects. No LLM is in
 // this path — deterministic and LLM mappers alike produce a ShapeMapping that
@@ -57,7 +67,10 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 	// boundary — so a rejection here is exactly "the mapping is invalid/incomplete".
 	export, err := Apply(dump, mapping)
 	if err != nil {
-		return nil, fmt.Errorf("apply mapping: %w", err)
+		// [LAW:types-are-the-program] Tag mapping rejections so a caller can tell
+		// "the mapping was bad" from "the rebuild failed for an infrastructure
+		// reason"; everything below this point is filesystem/store I/O.
+		return nil, fmt.Errorf("%w: %w", ErrInvalidMapping, err)
 	}
 
 	root, err := os.MkdirTemp(parentDir, "lit-candidate-*")

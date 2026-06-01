@@ -106,6 +106,14 @@ type UnexplainedDrop struct {
 // reuses it unchanged, so attempt N's conservation check cannot be contaminated
 // by attempt N-1 (each rejected candidate is discarded whole before the next).
 func Recover(ctx context.Context, canonicalDoltDir string, dump RawDump, mapper Mapper, maxAttempts int) (RecoveryOutcome, error) {
+	// [LAW:types-are-the-program] At least one pass must run, or Unconverged would
+	// carry an empty residual — making "failure with no residual" representable and
+	// breaking the variant's contract. The budget is a caller-supplied programming
+	// value, so a non-positive one is a precondition violation surfaced loudly, not
+	// a silent zero-pass exit.
+	if maxAttempts < 1 {
+		return nil, fmt.Errorf("recovery attempt budget must be at least 1, got %d", maxAttempts)
+	}
 	parentDir := filepath.Dir(canonicalDoltDir)
 	feedback := ""
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
@@ -138,7 +146,15 @@ func runAttempt(ctx context.Context, parentDir string, dump RawDump, mapper Mapp
 	}
 	cand, err := RebuildCandidate(ctx, parentDir, dump, mapping)
 	if err != nil {
-		return nil, fmt.Sprintf("the proposed mapping was rejected before any rebuild: %v", err), nil
+		// [LAW:no-silent-fallbacks] Only a mapping rejection is self-repairable
+		// feedback. A build failure past a valid mapping — filesystem, store I/O,
+		// corrupt source data — cannot be fixed by re-mapping, so it surfaces as a
+		// hard error rather than being relabeled as feedback and silently burning
+		// the retry budget while hiding the real cause.
+		if errors.Is(err, ErrInvalidMapping) {
+			return nil, fmt.Sprintf("the proposed mapping was rejected by the applier: %v", err), nil
+		}
+		return nil, "", fmt.Errorf("rebuild candidate from a valid mapping failed: %w", err)
 	}
 	report, err := VerifyCandidate(ctx, dump, mapping, cand.Store())
 	if err != nil {
