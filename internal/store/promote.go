@@ -87,11 +87,10 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 		}
 	}()
 
-	// [LAW:one-source-of-truth] Fixed-width nanosecond stamp so the lexical order
-	// newestBackup relies on is the chronological order — an unpadded width would
-	// let a shorter (older) stamp sort after a longer (newer) one across digit-count
-	// boundaries. The width is shared with the stamp validator below.
-	backup := fmt.Sprintf("%s.backup-%0*d", canonicalDoltDir, promotionStampWidth, time.Now().UTC().UnixNano())
+	backup, err := uniqueBackupPath(canonicalDoltDir, time.Now().UTC().UnixNano())
+	if err != nil {
+		return PromotionResult{}, err
+	}
 	var preserved string
 	preserved, err = moveAside(canonicalDoltDir, backup)
 	if err != nil {
@@ -187,6 +186,31 @@ func healCanonical(canonicalDoltDir string) error {
 		return fmt.Errorf("restore canonical workspace from backup %q: %w", backup, err)
 	}
 	return nil
+}
+
+// uniqueBackupPath returns a backup path for the canonical dir that does not yet
+// exist, formatted with the fixed-width stamp newestBackup recognizes.
+//
+// [LAW:types-are-the-program] The path is unused BY CONSTRUCTION rather than
+// assumed-unique-because-nanoseconds: a coarse clock could repeat UnixNano for two
+// promotions, and since a backup is the most precious artifact in the flow, the
+// move-aside must never clobber an existing one. PromoteCandidate holds the
+// exclusive lock across this probe and the subsequent rename, so a path found free
+// here stays free until it is used. Stepping the stamp forward keeps it the same
+// fixed width and still chronological (the later promotion's backup is the newer
+// one). [LAW:one-source-of-truth] The same promotionStampWidth drives the format
+// here and the recognizer in isPromotionBackup.
+func uniqueBackupPath(canonicalDoltDir string, nanos int64) (string, error) {
+	for {
+		path := fmt.Sprintf("%s.backup-%0*d", canonicalDoltDir, promotionStampWidth, nanos)
+		switch _, err := os.Stat(path); {
+		case errors.Is(err, os.ErrNotExist):
+			return path, nil
+		case err != nil:
+			return "", fmt.Errorf("probe backup path: %w", err)
+		}
+		nanos++
+	}
 }
 
 // promotionStampWidth is the fixed digit width of a promotion backup's

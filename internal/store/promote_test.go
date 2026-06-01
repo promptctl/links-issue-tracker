@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -121,6 +122,28 @@ func TestHealCanonicalPicksNewestBackup(t *testing.T) {
 	}
 	if got := readMarker(t, canonical); got != "newer" {
 		t.Fatalf("heal restored the wrong backup: want newer, got %q", got)
+	}
+}
+
+// TestUniqueBackupPathStepsPastCollision proves a promotion never reuses an
+// existing backup path even if the nanosecond stamp repeats, so the prior backup —
+// the most precious artifact in the flow — is never clobbered.
+func TestUniqueBackupPathStepsPastCollision(t *testing.T) {
+	storageDir := t.TempDir()
+	canonical := filepath.Join(storageDir, "dolt")
+	const stamp int64 = 1700000000000000001
+	taken := fmt.Sprintf("%s.backup-%019d", canonical, stamp)
+	markerDir(t, taken, "prior")
+
+	got, err := uniqueBackupPath(canonical, stamp)
+	if err != nil {
+		t.Fatalf("uniqueBackupPath: %v", err)
+	}
+	if got == taken {
+		t.Fatalf("must not reuse the existing backup path %q", taken)
+	}
+	if !isPromotionBackup(filepath.Base(got), filepath.Base(canonical)+".backup-") {
+		t.Fatalf("stepped path %q must still be a recognized backup name", got)
 	}
 }
 
