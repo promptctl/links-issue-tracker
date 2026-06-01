@@ -121,6 +121,16 @@ func (c *Candidate) Store() *Store { return c.store }
 // Clearing store here makes a later Discard's store-close a no-op by its own
 // state, so detach + Discard compose without a double-close.
 func (c *Candidate) detachForPromotion() (string, error) {
+	// [LAW:no-silent-fallbacks] An empty root means the candidate was already
+	// discarded (or is a zero value); filepath.Join("", "workspace") would hand
+	// back a cwd-relative "workspace" path that a promotion would then rename into
+	// the canonical location. Fail loudly rather than operate on an unintended
+	// directory. (root is a value that explicitly represents ownership — Discard
+	// clears it — so this is a real precondition, not a guard on an impossible
+	// state.)
+	if c.root == "" {
+		return "", errors.New("candidate has no workspace to promote (already discarded or never built)")
+	}
 	doltDir := filepath.Join(c.root, "workspace")
 	var err error
 	if c.store != nil {

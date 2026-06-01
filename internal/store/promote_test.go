@@ -168,6 +168,33 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	}
 }
 
+// TestPromoteCandidateRejectsDiscardedCandidate proves an already-consumed
+// candidate cannot drive a promotion: detachForPromotion fails loudly rather than
+// handing back a cwd-relative "workspace" path that would rename an unintended
+// directory into the canonical location.
+func TestPromoteCandidateRejectsDiscardedCandidate(t *testing.T) {
+	ctx := context.Background()
+	storageDir := t.TempDir()
+	canonical := filepath.Join(storageDir, "dolt")
+	markerDir(t, canonical, "original")
+
+	cand, err := RebuildCandidate(ctx, storageDir, preGooseDump(), mustMap(t, preGooseDump()))
+	if err != nil {
+		t.Fatalf("RebuildCandidate: %v", err)
+	}
+	if err := cand.Discard(); err != nil {
+		t.Fatalf("Discard: %v", err)
+	}
+
+	if _, err := PromoteCandidate(ctx, canonical, cand); err == nil {
+		t.Fatal("PromoteCandidate must reject a discarded candidate")
+	}
+	// The canonical workspace must be untouched — no swap was attempted.
+	if got := readMarker(t, canonical); got != "original" {
+		t.Fatalf("a rejected promotion disturbed the canonical workspace: marker=%q", got)
+	}
+}
+
 // TestPromoteCandidateRollsBackOnInstallFailure exercises the deferred rollback:
 // when the second rename cannot complete, the moved-aside original is restored to
 // the canonical path and the failure is surfaced — never a half-swapped or empty

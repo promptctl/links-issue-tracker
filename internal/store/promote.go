@@ -53,7 +53,7 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 	// promoted store is reopened fresh from the canonical path regardless.
 	src, err := cand.detachForPromotion()
 	if err != nil {
-		return PromotionResult{}, fmt.Errorf("close candidate store before promotion: %w", err)
+		return PromotionResult{}, fmt.Errorf("surrender candidate workspace for promotion: %w", err)
 	}
 
 	release, err := LockWorkspaceExclusive(ctx, canonicalDoltDir)
