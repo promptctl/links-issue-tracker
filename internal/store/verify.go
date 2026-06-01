@@ -105,6 +105,15 @@ func (r VerifyReport) String() string {
 // Export) and judges it against the immutable source dump under the mapping that
 // built it.
 //
+// [LAW:single-enforcer] Precondition: mapping is the well-formed mapping that
+// built st — RebuildCandidate routes every mapping through Validate (via Apply)
+// before any candidate exists, so a candidate is itself proof its mapping is
+// total and well-formed. The gate therefore does NOT re-validate: re-checking
+// here would be a second well-formedness enforcer that drifts from Validate, and
+// would guard a state — a built candidate from a malformed mapping — that the
+// applier makes unrepresentable. The gate's job is conservation, not
+// well-formedness.
+//
 // [LAW:dataflow-not-control-flow] Every law runs on every call; whether each
 // produces a finding is decided by the data (a count delta, a missing id, a
 // duplicate rank), never by branching around the check. The findings accumulate

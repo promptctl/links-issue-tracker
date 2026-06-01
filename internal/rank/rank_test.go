@@ -12,6 +12,28 @@ func TestInitial(t *testing.T) {
 	}
 }
 
+func TestValid(t *testing.T) {
+	cases := []struct {
+		in   string
+		want bool
+	}{
+		{"", false},       // empty is "unranked", not a stored rank
+		{Initial(), true}, // the package's own starting rank
+		{"V", true},       // single alphabet char
+		{"0z", true},      // multi-byte, alphabet bounds
+		{"aZ09", true},    // mixed multi-byte
+		{"-", false},      // outside the alphabet
+		{"V!", false},     // one bad byte among good
+		{" ", false},      // space is not in the alphabet
+		{"hello world", false},
+	}
+	for _, c := range cases {
+		if got := Valid(c.in); got != c.want {
+			t.Errorf("Valid(%q) = %v, want %v", c.in, got, c.want)
+		}
+	}
+}
+
 func TestMidpointBasic(t *testing.T) {
 	tests := []struct {
 		a, b string
