@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // TestEveryMigrationDownIsExercised proves that every migration in the embedded

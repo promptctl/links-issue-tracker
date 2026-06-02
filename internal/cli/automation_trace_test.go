@@ -6,7 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {

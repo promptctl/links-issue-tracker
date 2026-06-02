@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/templates"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestQuickstartRefreshRewritesManagedAssetsAndIsIdempotent(t *testing.T) {

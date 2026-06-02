@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 // [LAW:types-are-the-program] A two-phase command splits intent (preview) from

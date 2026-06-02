@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 func TestInitReportsAgentsSourceFromEmbeddedDefault(t *testing.T) {

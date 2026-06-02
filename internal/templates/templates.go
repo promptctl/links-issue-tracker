@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/config"
 )
 
 const (

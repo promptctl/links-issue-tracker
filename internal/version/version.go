@@ -15,7 +15,7 @@
 package version
 
 import (
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // Build-time identity. Populated by `-ldflags "-X .../internal/version.Version=...

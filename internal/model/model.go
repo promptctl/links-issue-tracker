@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/model/lifecycle"
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 type State = lifecycle.State
