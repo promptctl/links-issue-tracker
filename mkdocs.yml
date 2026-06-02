@@ -1,8 +1,8 @@
 site_name: links
 site_description: Agent-native issue tracker
-site_url: https://github.com/brandon-fryslie/links-issue-tracker
-repo_url: https://github.com/brandon-fryslie/links-issue-tracker
-repo_name: brandon-fryslie/links-issue-tracker
+site_url: https://github.com/promptctl/links-issue-tracker
+repo_url: https://github.com/promptctl/links-issue-tracker
+repo_name: promptctl/links-issue-tracker
 docs_dir: docs
 
 theme:

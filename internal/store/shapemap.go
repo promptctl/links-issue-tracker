@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // ShapeMapping is the seam between reasoning (an LLM, or a deterministic

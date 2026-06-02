@@ -4,8 +4,8 @@ import (
 	"context"
 	"io"
 
-	"github.com/bmf/links-issue-tracker/internal/app"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 )
 

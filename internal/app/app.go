@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 type App struct {

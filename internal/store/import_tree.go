@@ -8,7 +8,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // ImportTreeSpec is a single record in a declarative tree-import file. LocalID

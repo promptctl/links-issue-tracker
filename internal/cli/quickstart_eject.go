@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 type ejectResult struct {

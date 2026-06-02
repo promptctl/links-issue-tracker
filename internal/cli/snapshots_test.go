@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {

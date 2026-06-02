@@ -13,5 +13,5 @@ linters:
           files:
             - "!**/internal/model/**"
           deny:
-            - pkg: "github.com/bmf/links-issue-tracker/internal/model/lifecycle"
+            - pkg: "github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
               desc: "lifecycle internals are owned by internal/model; use model hydration and capability APIs"

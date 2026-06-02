@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/annotation"
-	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 func (h readyTestHarness) runNextJSON(args ...string) annotation.AnnotatedIssue {

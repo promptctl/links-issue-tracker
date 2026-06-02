@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
-	"github.com/bmf/links-issue-tracker/internal/doltcli"
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/doltcli"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 )

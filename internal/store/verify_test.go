@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // rankedDump is a clean-shape dump carrying an item_rank column with distinct,

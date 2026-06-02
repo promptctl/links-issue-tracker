@@ -58,9 +58,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/release"
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/release"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 func main() {

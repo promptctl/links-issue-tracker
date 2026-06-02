@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/release"
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/release"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // stubResolver returns a fixed Target — no HTTP. The CLI pipeline reads

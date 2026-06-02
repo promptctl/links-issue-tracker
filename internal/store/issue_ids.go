@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/issueid"
+	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
 func newIssueID(ctx context.Context, tx *sql.Tx, prefix string, topic string, title string, description string, createdBy string, createdAt time.Time, parentID string) (string, error) {

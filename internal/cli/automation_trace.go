@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 const (
