@@ -78,6 +78,17 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 		return PromotionResult{}, healErr
 	}
 
+	// [LAW:single-enforcer] The lost-update gate runs under the SAME exclusive lock
+	// that serializes the swap, between heal (canonical now guaranteed present) and
+	// the first rename (nothing on disk has moved yet). Re-reading the live head
+	// here, inside the critical section, is what makes the check atomic with the
+	// install: a check outside the lock would reopen the very dump→promote window
+	// this closes. A mismatch aborts before any rename, so the abort path changes
+	// nothing on disk — the concurrent commit stays live, undisturbed.
+	if headErr := verifyHeadUnchanged(ctx, canonicalDoltDir, cand.workspaceID, cand.expectedHead); headErr != nil {
+		return PromotionResult{}, headErr
+	}
+
 	// [LAW:no-silent-fallbacks] Roll BACK, never forward: any failure between the
 	// two renames restores the known-good original, never the unverified
 	// candidate. The handler fires only on error, so a successful swap is never
@@ -105,6 +116,62 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 	// [LAW:types-are-the-program] Backup names a path that exists exactly when one
 	// was made; when nothing pre-existed it is empty, never a phantom path.
 	return PromotionResult{Canonical: canonicalDoltDir, Backup: preserved}, nil
+}
+
+// ErrWorkspaceAdvanced is the sentinel a lost-update abort wraps: the live
+// workspace moved past the commit the candidate was rebuilt to replace. Callers
+// detect it with errors.Is regardless of the operator-facing detail attached.
+var ErrWorkspaceAdvanced = errors.New("workspace advanced since dump")
+
+// ErrMissingDumpProvenance is the sentinel for a candidate whose dump carries no
+// head — the lost-update gate cannot run because there is no commit to compare
+// against. [LAW:types-are-the-program] "Provenance absent" is a distinct theorem
+// from "workspace advanced": a dump produced by DumpRaw always records its head,
+// so an empty one means the dump crossed a trust boundary that dropped it (an
+// artifact decoded from JSON predating head tracking, or assembled by hand). It
+// gets its own error rather than masquerading as a spurious advance from "".
+var ErrMissingDumpProvenance = errors.New("dump has no recorded head commit")
+
+// verifyHeadUnchanged is the lost-update gate. It re-reads the live workspace's
+// Dolt head below the migration gate and refuses the promotion unless it still
+// matches the head the candidate was rebuilt from.
+//
+// [LAW:single-enforcer] It reuses the one below-the-gate reader (openStoreConnection
+// + readDoltHead) the dump itself used, never a second head-resolution path. The
+// read takes no workspace lock — PromoteCandidate already holds the exclusive hold,
+// so the head cannot move between this read and the swap.
+//
+// [LAW:no-silent-fallbacks] A read failure aborts the promotion: if the live head
+// cannot be confirmed unchanged, installing the candidate could silently regress a
+// concurrent commit, so the safe action is to refuse and surface why. Read-only
+// below the gate, the worst case is a read error with the live workspace untouched.
+func verifyHeadUnchanged(ctx context.Context, canonicalDoltDir, workspaceID, expectedHead string) (err error) {
+	// [LAW:no-silent-fallbacks] A candidate with no recorded head cannot be checked
+	// for staleness; promoting it would gamble the live workspace on an unverifiable
+	// snapshot. Refuse with the provenance-specific error rather than comparing
+	// against "" and reporting a bogus advance.
+	if expectedHead == "" {
+		return fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)
+	}
+	s, err := openStoreConnection(canonicalDoltDir, workspaceID)
+	if err != nil {
+		return fmt.Errorf("re-read live workspace head: %w", err)
+	}
+	defer func() {
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	live, err := readDoltHead(ctx, s.db)
+	if err != nil {
+		return err
+	}
+	if live != expectedHead {
+		return fmt.Errorf("%w: the candidate was rebuilt from %s but the live workspace is now at %s; "+
+			"a concurrent commit landed during recovery — nothing was changed, re-run recovery against the current state",
+			ErrWorkspaceAdvanced, expectedHead, live)
+	}
+	return nil
 }
 
 // HealWorkspace repairs a workspace whose canonical directory is absent because a
