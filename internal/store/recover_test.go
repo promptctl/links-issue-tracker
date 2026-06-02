@@ -16,12 +16,50 @@ func canonicalUnder(t *testing.T) string {
 	return filepath.Join(t.TempDir(), "dolt")
 }
 
-// cloneMapping copies a mapping so a test can perturb one column without mutating
-// the shared deterministic proposal.
+// cloneMapping deep-copies a mapping so a test can perturb one emitter or drop
+// without mutating the shared deterministic proposal.
 func cloneMapping(m ShapeMapping) ShapeMapping {
-	out := ShapeMapping{Columns: make(map[ColumnRef]Disposition, len(m.Columns))}
-	for ref, disp := range m.Columns {
-		out.Columns[ref] = disp
+	out := ShapeMapping{Tables: make([]TableMapping, len(m.Tables))}
+	for i, tm := range m.Tables {
+		ct := TableMapping{Table: tm.Table, Emitters: make([]Emitter, len(tm.Emitters))}
+		for j, em := range tm.Emitters {
+			fields := make(map[string]FieldSource, len(em.Fields))
+			for f, src := range em.Fields {
+				fields[f] = src
+			}
+			ct.Emitters[j] = Emitter{Collection: em.Collection, When: em.When, Fields: fields}
+		}
+		if tm.Drops != nil {
+			ct.Drops = make(map[string]Dropped, len(tm.Drops))
+			for col, d := range tm.Drops {
+				ct.Drops[col] = d
+			}
+		}
+		out.Tables[i] = ct
+	}
+	return out
+}
+
+// withUnexplainedDrop moves a column out of its emitter and records it as an
+// unexplained drop, so a test can drive the RequiresDrop human gate. The column
+// must be optional for the resulting mapping to still conserve.
+func withUnexplainedDrop(m ShapeMapping, table, column string) ShapeMapping {
+	out := cloneMapping(m)
+	for ti := range out.Tables {
+		if out.Tables[ti].Table != table {
+			continue
+		}
+		for _, em := range out.Tables[ti].Emitters {
+			for field, src := range em.Fields {
+				if fc, ok := src.(FromColumn); ok && fc.Column == column {
+					delete(em.Fields, field)
+				}
+			}
+		}
+		if out.Tables[ti].Drops == nil {
+			out.Tables[ti].Drops = map[string]Dropped{}
+		}
+		out.Tables[ti].Drops[column] = Dropped{Provenance: DropUnexplained}
 	}
 	return out
 }
@@ -81,7 +119,7 @@ func TestRecoverSelfRepairsAcrossAttempts(t *testing.T) {
 				t.Errorf("first pass should receive no feedback, got %q", feedback)
 			}
 			// A non-total mapping: the applier rejects it before any rebuild.
-			return ShapeMapping{Columns: map[ColumnRef]Disposition{}}, nil
+			return ShapeMapping{}, nil
 		}
 		if feedback == "" {
 			t.Error("second pass should receive the prior pass's repair feedback, got none")
@@ -111,9 +149,8 @@ func TestRecoverRequiresDropOnUnexplainedDrop(t *testing.T) {
 	ctx := context.Background()
 	dump := preGooseDump()
 
-	mapping := cloneMapping(mustMap(t, dump))
 	dropped := ColumnRef{Table: "issues", Column: "assignee"}
-	mapping.Columns[dropped] = Dropped{Provenance: DropUnexplained}
+	mapping := withUnexplainedDrop(mustMap(t, dump), dropped.Table, dropped.Column)
 
 	outcome, err := Recover(ctx, canonicalUnder(t), dump, staticMapper(mapping), 1)
 	if err != nil {
@@ -212,7 +249,7 @@ func TestValidateDoltRootDirCleansPath(t *testing.T) {
 // failure to surface as a hard error.
 func TestRebuildCandidateTagsMappingRejection(t *testing.T) {
 	ctx := context.Background()
-	_, err := RebuildCandidate(ctx, t.TempDir(), preGooseDump(), ShapeMapping{Columns: map[ColumnRef]Disposition{}})
+	_, err := RebuildCandidate(ctx, t.TempDir(), preGooseDump(), ShapeMapping{})
 	if err == nil {
 		t.Fatal("a non-total mapping must be rejected")
 	}

@@ -91,6 +91,27 @@ func writeMappingFile(t *testing.T, m store.ShapeMapping) string {
 	return path
 }
 
+// dropFieldFedBy removes the emitter field a given source column feeds, so a test
+// can make a deterministic mapping non-total by deleting one column's
+// contribution. Reports whether such a field was found.
+func dropFieldFedBy(m *store.ShapeMapping, table, column string) bool {
+	found := false
+	for ti := range m.Tables {
+		if m.Tables[ti].Table != table {
+			continue
+		}
+		for _, em := range m.Tables[ti].Emitters {
+			for field, src := range em.Fields {
+				if fc, ok := src.(store.FromColumn); ok && fc.Column == column {
+					delete(em.Fields, field)
+					found = true
+				}
+			}
+		}
+	}
+	return found
+}
+
 // mappingForWorkspace dumps a workspace and proposes its deterministic mapping —
 // a known-valid mapping to drive the operator path's wiring without hand-authoring.
 func mappingForWorkspace(t *testing.T, ws workspace.Info) store.ShapeMapping {
@@ -173,10 +194,9 @@ func TestRunLifeboatRecoverIncompleteMappingNamesGaps(t *testing.T) {
 	ws := seedWorkspace(t)
 	m := mappingForWorkspace(t, ws)
 	removed := store.ColumnRef{Table: "issues", Column: "title"}
-	if _, ok := m.Columns[removed]; !ok {
+	if !dropFieldFedBy(&m, removed.Table, removed.Column) {
 		t.Fatalf("fixture assumption broken: %s not in the deterministic mapping", removed)
 	}
-	delete(m.Columns, removed)
 	path := writeMappingFile(t, m)
 
 	var out bytes.Buffer

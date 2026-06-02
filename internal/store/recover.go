@@ -196,9 +196,11 @@ func classifyConverged(cand *Candidate, mapping ShapeMapping) RecoveryOutcome {
 // this does not re-derive "why was it dropped".
 func unexplainedDrops(m ShapeMapping) []UnexplainedDrop {
 	var out []UnexplainedDrop
-	for ref, disp := range m.Columns {
-		if d, ok := disp.(Dropped); ok && d.Provenance == DropUnexplained {
-			out = append(out, UnexplainedDrop{Column: ref})
+	for _, tm := range m.Tables {
+		for col, d := range tm.Drops {
+			if d.Provenance == DropUnexplained {
+				out = append(out, UnexplainedDrop{Column: ColumnRef{Table: tm.Table, Column: col}})
+			}
 		}
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Column.String() < out[j].Column.String() })

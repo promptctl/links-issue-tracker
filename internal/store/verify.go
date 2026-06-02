@@ -161,18 +161,35 @@ var conservationCollections = []collection{
 // The reference is the RAW dump — len(table.Rows) — never the mapping re-applied,
 // so this measures the end-to-end round trip (apply, write, read back) for row
 // loss or duplication, which no value-via-mapping comparison could (that would be
-// circular). A fully-dropped table maps into no collection (tableTarget returns
-// no columns), so it is naturally excluded — the "modulo explicitly-dropped
-// fields" clause needs no special case. event_changes are nested under their
-// events, so their conserved count is the total of nested changes.
+// circular). An Always emitter contributes one record per source row, so its
+// collection's expected count is the sum of contributing tables' row counts. A
+// fully-dropped table has no emitter and so contributes nothing — the
+// "modulo explicitly-dropped fields" clause needs no special case.
+//
+// [LAW:types-are-the-program] A CONDITIONAL emitter (one whose When is not
+// Always) has no raw row-count it must equal: the count of records it produces is
+// a function of the mapping's own condition, so comparing it to a mapping-derived
+// expectation would be the exact circular tautology this gate forbids. Such a
+// collection is therefore excluded from exact count conservation — the honest
+// ceiling, the same class as a free-text field mis-map. Its endpoints are still
+// guarded structurally: every event_changes row must nest under a real event
+// (Doctor's foreign-key check owns that), and the synthesized child is correct by
+// construction (the applier emits it only when its from/to actually differ).
 func countFindings(dump RawDump, m ShapeMapping, export model.Export) []VerifyFinding {
+	mapTables := tablesByName(m)
 	expected := map[collection]int{}
+	exact := map[collection]bool{}
+	for _, c := range conservationCollections {
+		exact[c] = true
+	}
 	for _, table := range dump.Tables {
-		coll, mapped := tableTarget(table, m)
-		if len(mapped) == 0 {
-			continue
+		for _, em := range mapTables[table.Name].Emitters {
+			if _, unconditional := em.When.(Always); unconditional {
+				expected[em.Collection] += len(table.Rows)
+				continue
+			}
+			exact[em.Collection] = false
 		}
-		expected[coll] += len(table.Rows)
 	}
 
 	nestedChanges := 0
@@ -190,6 +207,9 @@ func countFindings(dump RawDump, m ShapeMapping, export model.Export) []VerifyFi
 
 	var out []VerifyFinding
 	for _, coll := range conservationCollections {
+		if !exact[coll] {
+			continue
+		}
 		if expected[coll] != actual[coll] {
 			out = append(out, VerifyFinding{
 				Law:    LawCount,
@@ -303,17 +323,21 @@ func rankFindings(export model.Export) []VerifyFinding {
 // Aggregating here keeps id stability consistent with count conservation; an
 // early return would wrongly flag a second table's ids as "extra".
 func sourceValuesFor(dump RawDump, m ShapeMapping, target TargetKey) ([]string, bool) {
+	mapTables := tablesByName(m)
 	var values []string
 	found := false
 	for _, table := range dump.Tables {
-		for i, col := range table.Columns {
-			mapped, ok := m.Columns[ColumnRef{Table: table.Name, Column: col}].(MappedTo)
-			if !ok || mapped.Target != target {
-				continue
-			}
-			found = true
-			for _, row := range table.Rows {
-				values = append(values, cellString(row[i]))
+		colIndex := rowColumnIndex(table)
+		for _, em := range mapTables[table.Name].Emitters {
+			for field, src := range em.Fields {
+				fc, ok := src.(FromColumn)
+				if !ok || TargetKey(string(em.Collection)+"."+field) != target {
+					continue
+				}
+				found = true
+				for _, row := range table.Rows {
+					values = append(values, cellString(row[colIndex[fc.Column]]))
+				}
 			}
 		}
 	}
