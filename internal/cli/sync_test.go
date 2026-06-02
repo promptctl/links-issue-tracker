@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestMapRemotesByName(t *testing.T) {
@@ -49,24 +49,24 @@ func TestSameRemoteURLIgnoresGitPrefix(t *testing.T) {
 }
 
 func TestSameRemoteURLTreatsSCPLikeAndSSHFormsAsEqual(t *testing.T) {
-	left := "git@github.com:brandon-fryslie/links-issue-tracker.git"
-	right := "git+ssh://git@github.com/./brandon-fryslie/links-issue-tracker.git"
+	left := "git@github.com:promptctl/links-issue-tracker.git"
+	right := "git+ssh://git@github.com/./promptctl/links-issue-tracker.git"
 	if !sameRemoteURL(left, right) {
 		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
 	}
 }
 
 func TestSameRemoteURLDetectsDifferentRemotePaths(t *testing.T) {
-	left := "git@github.com:brandon-fryslie/links-issue-tracker.git"
-	right := "git+ssh://git@github.com/./brandon-fryslie/another.git"
+	left := "git@github.com:promptctl/links-issue-tracker.git"
+	right := "git+ssh://git@github.com/./promptctl/another.git"
 	if sameRemoteURL(left, right) {
 		t.Fatalf("sameRemoteURL(%q, %q) = true, want false", left, right)
 	}
 }
 
 func TestSameRemoteURLSupportsBracketedIPv6SCPLikeHosts(t *testing.T) {
-	left := "git@[fe80::1]:brandon-fryslie/links-issue-tracker.git"
-	right := "ssh://git@[fe80::1]/brandon-fryslie/links-issue-tracker.git"
+	left := "git@[fe80::1]:promptctl/links-issue-tracker.git"
+	right := "ssh://git@[fe80::1]/promptctl/links-issue-tracker.git"
 	if !sameRemoteURL(left, right) {
 		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
 	}

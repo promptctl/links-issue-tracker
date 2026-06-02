@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/doltcli"
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/doltcli"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // TestFreshOpenStampsBaselineVersion pins the fresh-workspace acceptance: Open

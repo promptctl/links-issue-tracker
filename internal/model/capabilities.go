@@ -3,7 +3,7 @@ package model
 import (
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/model/lifecycle"
+	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 // Capabilities reports optional behavior exposed by an issue's root lifecycle

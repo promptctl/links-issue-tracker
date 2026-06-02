@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // fixtureManifest is the manifest the test server returns. Mirrors the shape

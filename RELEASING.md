@@ -99,7 +99,7 @@ go run ./tools/mkmanifest \
   -commit "$COMMIT" \
   -date "$DATE" \
   -dist ./dist \
-  -base-url https://github.com/brandon-fryslie/links-issue-tracker/releases/download \
+  -base-url https://github.com/promptctl/links-issue-tracker/releases/download \
   -out ./dist/release-manifest.json
 
 # Inspect ./dist/

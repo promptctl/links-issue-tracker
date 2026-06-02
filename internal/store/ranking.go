@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
-	"github.com/bmf/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 )
 
 func (s *Store) RankToTop(ctx context.Context, issueID string) error {

@@ -5,7 +5,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // TestManifestRoundTrips pins the JSON contract: marshaling a Manifest and

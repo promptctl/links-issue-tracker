@@ -140,9 +140,9 @@ builds:
       # and the manifest's `version` field are bit-identical — no drift.
       # Cosmetic note: `lit version` therefore reports "lit 0.1.0", not
       # "lit v0.1.0" — same convention as kubectl/helm/terraform.
-      - -X github.com/bmf/links-issue-tracker/internal/version.Version={{ .Version }}
-      - -X github.com/bmf/links-issue-tracker/internal/version.Commit={{ .ShortCommit }}
-      - -X github.com/bmf/links-issue-tracker/internal/version.Date={{ .Date }}
+      - -X github.com/promptctl/links-issue-tracker/internal/version.Version={{ .Version }}
+      - -X github.com/promptctl/links-issue-tracker/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/promptctl/links-issue-tracker/internal/version.Date={{ .Date }}
 
 archives:
   - id: lit

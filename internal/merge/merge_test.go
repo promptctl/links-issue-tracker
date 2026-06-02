@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.Issue {

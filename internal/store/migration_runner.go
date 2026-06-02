@@ -10,9 +10,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
 )

@@ -12,9 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/doltcli"
-	"github.com/bmf/links-issue-tracker/internal/issueid"
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/doltcli"
+	"github.com/promptctl/links-issue-tracker/internal/issueid"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 func openIssueStore(t *testing.T, ctx context.Context) *Store {
