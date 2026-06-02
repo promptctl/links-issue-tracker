@@ -124,6 +124,36 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 	}
 }
 
+// TestRunLifeboatRecoverJSONModeEmitsMachinePayload locks the --json contract:
+// the success path emits a single JSON document and no human text, so a machine
+// consumer of `lit lifeboat recover --json` parses one object and nothing else.
+func TestRunLifeboatRecoverJSONModeEmitsMachinePayload(t *testing.T) {
+	ws := seedWorkspace(t)
+	var out bytes.Buffer
+	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"--json"}); err != nil {
+		t.Fatalf("runLifeboatRecover --json: %v", err)
+	}
+	dec := json.NewDecoder(&out)
+	var got struct {
+		Status    string `json:"status"`
+		Canonical string `json:"canonical"`
+		Backup    string `json:"backup"`
+	}
+	if err := dec.Decode(&got); err != nil {
+		t.Fatalf("output is not a JSON document: %v\nraw: %q", err, out.String())
+	}
+	if got.Status != "recovered" || got.Canonical != ws.DatabasePath {
+		t.Fatalf("unexpected payload: %+v", got)
+	}
+	var trailing json.RawMessage
+	if err := dec.Decode(&trailing); err == nil {
+		t.Fatalf("JSON mode must emit exactly one document, found trailing: %s", trailing)
+	}
+	if strings.Contains(out.String(), "recovered:") {
+		t.Fatalf("JSON mode must not emit human text, got: %q", out.String())
+	}
+}
+
 // TestRunLifeboatRecoverMissingMappingFile locks the trust boundary: a path that
 // does not resolve fails loudly before any workspace mutation.
 func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
