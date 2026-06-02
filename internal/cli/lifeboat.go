@@ -62,7 +62,7 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 	}
 	data, err := os.ReadFile(mappingPath)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("read mapping %s: %w", mappingPath, err)
 	}
 	var mapping store.ShapeMapping
 	if err := json.Unmarshal(data, &mapping); err != nil {
