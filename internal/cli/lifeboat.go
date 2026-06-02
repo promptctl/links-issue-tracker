@@ -91,7 +91,7 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit lifeboat recover [--mapping <file>]")
+		return errors.New("usage: lit lifeboat recover [--mapping <file>] [--json]")
 	}
 	mapper, err := recoverMapper(*mappingPath)
 	if err != nil {
