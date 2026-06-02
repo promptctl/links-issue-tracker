@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -72,5 +73,88 @@ func TestRunLifeboatRecoverRejectsExtraArgs(t *testing.T) {
 	var out bytes.Buffer
 	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"unexpected"}); err == nil {
 		t.Fatal("expected a usage error for extra arguments")
+	}
+}
+
+// writeMappingFile encodes a mapping to a temp JSON file and returns its path —
+// the artifact an operator hands to `lit lifeboat recover --mapping`.
+func writeMappingFile(t *testing.T, m store.ShapeMapping) string {
+	t.Helper()
+	data, err := json.Marshal(m)
+	if err != nil {
+		t.Fatalf("marshal mapping: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "mapping.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write mapping: %v", err)
+	}
+	return path
+}
+
+// mappingForWorkspace dumps a workspace and proposes its deterministic mapping —
+// a known-valid mapping to drive the operator path's wiring without hand-authoring.
+func mappingForWorkspace(t *testing.T, ws workspace.Info) store.ShapeMapping {
+	t.Helper()
+	dump, err := store.DumpRaw(context.Background(), ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		t.Fatalf("dump workspace: %v", err)
+	}
+	m, ok := store.DeterministicMap(dump)
+	if !ok {
+		t.Fatal("deterministic map declined a freshly seeded baseline workspace")
+	}
+	return m
+}
+
+// TestRunLifeboatRecoverWithOperatorMapping is the CLI acceptance for the
+// operator path: a mapping supplied as a file drives the identical
+// dump→apply→verify→promote pipeline to a promoted, Doctor-clean rebuild. This is
+// the door into the recovery engine for any shape the deterministic mapper cannot
+// recognize — exercised here through the real flag and file.
+func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
+	ws := seedWorkspace(t)
+	path := writeMappingFile(t, mappingForWorkspace(t, ws))
+
+	var out bytes.Buffer
+	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", path}); err != nil {
+		t.Fatalf("runLifeboatRecover --mapping: %v", err)
+	}
+	if !strings.Contains(out.String(), "recovered:") {
+		t.Fatalf("expected a recovery confirmation, got: %q", out.String())
+	}
+}
+
+// TestRunLifeboatRecoverMissingMappingFile locks the trust boundary: a path that
+// does not resolve fails loudly before any workspace mutation.
+func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
+	ws := seedWorkspace(t)
+	var out bytes.Buffer
+	err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", filepath.Join(t.TempDir(), "absent.json")})
+	if err == nil {
+		t.Fatal("expected an error for a missing mapping file")
+	}
+}
+
+// TestRunLifeboatRecoverIncompleteMappingNamesGaps is the operator's convergence
+// signal: a mapping missing a source column does not silently drop it — recovery
+// fails loudly and the residual names the unaccounted-for column, which is the
+// operator's worklist for the next edit-and-rerun.
+func TestRunLifeboatRecoverIncompleteMappingNamesGaps(t *testing.T) {
+	ws := seedWorkspace(t)
+	m := mappingForWorkspace(t, ws)
+	removed := store.ColumnRef{Table: "issues", Column: "title"}
+	if _, ok := m.Columns[removed]; !ok {
+		t.Fatalf("fixture assumption broken: %s not in the deterministic mapping", removed)
+	}
+	delete(m.Columns, removed)
+	path := writeMappingFile(t, m)
+
+	var out bytes.Buffer
+	err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", path})
+	if err == nil {
+		t.Fatal("expected recovery to fail on a non-total mapping")
+	}
+	if !strings.Contains(err.Error(), "not total") || !strings.Contains(err.Error(), removed.String()) {
+		t.Fatalf("residual must name the unaccounted-for column %s, got: %v", removed, err)
 	}
 }
