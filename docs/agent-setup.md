@@ -23,7 +23,7 @@ lit version
 **not** need the `dolt` CLI at runtime — the storage engine is compiled into the binary.
 
 ```sh
-git clone https://github.com/brandon-fryslie/links-issue-tracker
+git clone https://github.com/promptctl/links-issue-tracker
 cd links-issue-tracker
 ./scripts/install.sh
 ```
