@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"sort"
 )
 
@@ -102,6 +103,13 @@ func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
 	var wire mappingWire
 	if err := dec.Decode(&wire); err != nil {
 		return err
+	}
+	// A mapping file is one JSON document. Trailing non-whitespace (e.g. a second
+	// object) means the artifact is malformed — the operator concatenated or
+	// edited it wrong — and accepting only the first object would silently ignore
+	// the rest. Require the stream to be exhausted.
+	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+		return fmt.Errorf("shapemapping: unexpected trailing data after the mapping document")
 	}
 	cols := make(map[ColumnRef]Disposition, len(wire.Columns))
 	for _, entry := range wire.Columns {

@@ -163,6 +163,30 @@ func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
 	}
 }
 
+// TestShapeMappingJSONRejectsTrailingData locks the single-document property: a
+// mapping file is one JSON object, so a valid object followed by more
+// non-whitespace bytes is rejected rather than silently decoding only the first.
+// Both decode paths must reject it — json.Unmarshal via its own outer scan, and
+// UnmarshalJSON called directly (the delegated-Decoder path) via its own guard.
+func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
+	bad := `{"columns":[{"table":"issues","column":"id","kind":"map","to":"issues.id"}]}{"columns":[]}`
+
+	var viaUnmarshal ShapeMapping
+	if err := json.Unmarshal([]byte(bad), &viaUnmarshal); err == nil {
+		t.Fatal("json.Unmarshal must reject trailing data after the mapping document")
+	}
+
+	// json.Unmarshal hands UnmarshalJSON only the first value's bytes, so the
+	// method's own trailing-data guard is exercised by calling it directly with
+	// the full multi-object blob — the path a delegated json.Decoder would take.
+	var viaMethod ShapeMapping
+	if err := viaMethod.UnmarshalJSON([]byte(bad)); err == nil {
+		t.Fatal("UnmarshalJSON must reject trailing data when handed a multi-object blob")
+	} else if !strings.Contains(err.Error(), "trailing data") {
+		t.Fatalf("error must name the trailing data, got: %v", err)
+	}
+}
+
 // TestDecodedMappingRecoversNovelAheadShape is the end-to-end proof the operator
 // path turns on: a mapping authored as JSON, decoded through the wire form,
 // recovers a workspace the deterministic mapper DECLINES — Doctor-clean, every
