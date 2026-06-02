@@ -2,9 +2,11 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -36,28 +38,64 @@ func runLifeboat(ctx context.Context, stdout io.Writer, ws workspace.Info, args 
 	}
 }
 
-// deterministicRecoverAttempts is the loop budget for the autonomous path. The
-// deterministic mapper is a pure function of the dump, so re-running it cannot
-// self-repair: one attempt either reconciles or surfaces its residual. The
-// feedback-consuming LLM path (wired later) is the same loop with a larger
-// budget.
-const deterministicRecoverAttempts = 1
+// recoverAttempts is the loop budget for both CLI recovery paths, because both
+// supply a single fixed proposal: the deterministic mapper is a pure function of
+// the dump, and an operator's --mapping is one authored file. Neither can
+// self-repair within a run, so one attempt either reconciles or surfaces its
+// residual. The convergence loop for the operator path is editing the file and
+// re-running: each invocation surfaces what Validate found unaccounted-for,
+// which is the next edit's worklist. (Recover itself takes any budget; a
+// feedback-consuming mapper would pass a larger one.)
+const recoverAttempts = 1
 
-// runLifeboatRecover is the autonomous recovery path: dump the broken workspace
-// below the migration gate, rebuild it at the current baseline through the
-// deterministic mapper, verify conservation, and on success promote the rebuild
-// in place. It realizes the epic's three exits as the CLI contract:
+// recoverMapper selects the recovery mapper from data, not control flow: with
+// no --mapping the autonomous DeterministicMapper drives recovery; with one,
+// the operator's authored mapping does. Either way the downstream
+// dump→apply→verify→promote pipeline is identical — only the mapper value
+// differs. The operator mapping is read here (a trust boundary: external file)
+// and decoded into the one ShapeMapping type; its semantic validity is left to
+// Recover's Validate gate, which names any unaccounted-for column so the
+// operator can complete the mapping and re-run.
+func recoverMapper(mappingPath string) (store.Mapper, error) {
+	if mappingPath == "" {
+		return store.DeterministicMapper, nil
+	}
+	data, err := os.ReadFile(mappingPath)
+	if err != nil {
+		return nil, fmt.Errorf("read mapping %s: %w", mappingPath, err)
+	}
+	var mapping store.ShapeMapping
+	if err := json.Unmarshal(data, &mapping); err != nil {
+		return nil, fmt.Errorf("parse mapping %s: %w", mappingPath, err)
+	}
+	return func(store.RawDump, string) (store.ShapeMapping, error) { return mapping, nil }, nil
+}
+
+// runLifeboatRecover is the recovery path: dump the broken workspace below the
+// migration gate, rebuild it at the current baseline through a mapper, verify
+// conservation, and on success promote the rebuild in place. The mapper is the
+// built-in deterministic one by default, or an operator-authored mapping when
+// --mapping names a file — the latter is how a shape the deterministic mapper
+// cannot recognize (the genuine schema-ahead deadend) is recovered, with the
+// operator reasoning the correspondence the tool cannot. Both route through the
+// identical pipeline. It realizes the epic's three exits as the CLI contract:
 //   - Reconciled    → promote, report the backup path, exit 0.
 //   - RequiresDrop  → notify once and refuse to commit (exit non-zero); the
 //     unexplained drops need a human decision before any data is discarded.
 //   - Unconverged   → loud failure with the residual (exit non-zero).
 func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("lifeboat recover")
+	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
+	jsonOut := fs.Bool("json", false, "Emit the recovery result as JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit lifeboat recover")
+		return errors.New("usage: lit lifeboat recover [--mapping <file>] [--json]")
+	}
+	mapper, err := recoverMapper(*mappingPath)
+	if err != nil {
+		return err
 	}
 	// [LAW:dataflow-not-control-flow] Always heal first: a prior promotion crashed
 	// between its two renames leaves the canonical directory absent, which the
@@ -71,13 +109,13 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	if err != nil {
 		return err
 	}
-	outcome, err := store.Recover(ctx, ws.DatabasePath, dump, store.DeterministicMapper, deterministicRecoverAttempts)
+	outcome, err := store.Recover(ctx, ws.DatabasePath, dump, mapper, recoverAttempts)
 	if err != nil {
 		return err
 	}
 	switch o := outcome.(type) {
 	case store.Reconciled:
-		return promoteReconciled(ctx, stdout, ws, o)
+		return promoteReconciled(ctx, stdout, ws, o, *jsonOut)
 	case store.RequiresDrop:
 		// [LAW:no-silent-fallbacks] Discard the rebuild and refuse to commit: an
 		// unexplained drop silently loses data, so the human is notified and
@@ -92,7 +130,16 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	}
 }
 
-func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
+// recoverResult is the recovery success payload. Backup is omitted when the
+// canonical directory did not exist at swap time, so JSON consumers see its
+// absence rather than an empty string, and the text path can say so explicitly.
+type recoverResult struct {
+	Status    string `json:"status"`
+	Canonical string `json:"canonical"`
+	Backup    string `json:"backup,omitempty"`
+}
+
+func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled, jsonOut bool) (err error) {
 	// [LAW:no-silent-fallbacks] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
 	// in the storage dir the operator must see; join it to the return rather than
@@ -106,15 +153,22 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 	if err != nil {
 		return err
 	}
-	// The preservation clause is a function of whether a backup was actually made:
-	// PromoteCandidate returns an empty Backup when the canonical directory did not
-	// exist at swap time, and printing "preserved at " with a blank path would lie.
-	preserved := "no previous contents to preserve"
-	if result.Backup != "" {
-		preserved = fmt.Sprintf("previous contents preserved at %s", result.Backup)
-	}
-	_, err = fmt.Fprintf(stdout, "recovered: rebuilt workspace promoted to %s (%s)\n", result.Canonical, preserved)
-	return err
+	// [LAW:single-enforcer] Route the success line through printValue so JSON mode
+	// emits the machine payload and never the human text — the same format gate
+	// every dual-mode command passes, honoring the global --json contract.
+	payload := recoverResult{Status: "recovered", Canonical: result.Canonical, Backup: result.Backup}
+	return printValue(stdout, payload, jsonOut, func(w io.Writer, v any) error {
+		p := v.(recoverResult)
+		// The preservation clause is a function of whether a backup was actually
+		// made: an empty Backup means the canonical directory did not exist at
+		// swap time, and printing "preserved at " with a blank path would lie.
+		preserved := "no previous contents to preserve"
+		if p.Backup != "" {
+			preserved = fmt.Sprintf("previous contents preserved at %s", p.Backup)
+		}
+		_, err := fmt.Fprintf(w, "recovered: rebuilt workspace promoted to %s (%s)\n", p.Canonical, preserved)
+		return err
+	})
 }
 
 func formatDrops(drops []store.UnexplainedDrop) string {
