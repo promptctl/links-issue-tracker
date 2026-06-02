@@ -146,24 +146,46 @@ func emitterToWire(table string, em Emitter) (emitterWire, error) {
 	return ew, nil
 }
 
-// sortEmitters orders a table's emitters deterministically by collection, then by
-// their field set, so two emitters into one collection still sort stably.
+// sortEmitters orders a table's emitters by a TOTAL canonical key, so the wire
+// form is reproducible even for a table that legitimately carries more than one
+// emitter into the same collection. [LAW:one-source-of-truth] The key must
+// distinguish every pair of emitters that differ in any encoded byte — collection,
+// condition, and each field's full spec (name, source, column, transform, value).
+// A key on field NAMES alone would tie two emitters that share field names but
+// differ in source or condition, and sort.Slice (unstable) could then swap them,
+// giving one mapping two encodings. Two emitters with equal keys are byte-identical,
+// so their relative order is immaterial.
 func sortEmitters(ems []emitterWire) {
 	sort.Slice(ems, func(i, j int) bool {
-		if ems[i].Collection != ems[j].Collection {
-			return ems[i].Collection < ems[j].Collection
-		}
-		return emitterFieldKey(ems[i]) < emitterFieldKey(ems[j])
+		return emitterSortKey(ems[i]) < emitterSortKey(ems[j])
 	})
 }
 
-func emitterFieldKey(ew emitterWire) string {
-	names := make([]string, len(ew.Fields))
-	for i, f := range ew.Fields {
-		names[i] = f.Field
+// emitterSortKey serializes an emitter's full identity. Fields are already sorted
+// by name (emitterToWire), so iterating them yields a stable byte sequence; NUL
+// and SOH separators keep adjacent fields from aliasing (e.g. "ab"+"c" vs "a"+"bc").
+func emitterSortKey(ew emitterWire) string {
+	var b strings.Builder
+	b.WriteString(ew.Collection)
+	b.WriteByte(0)
+	b.WriteString(string(ew.When.Kind))
+	b.WriteByte(0)
+	b.WriteString(ew.When.FieldA)
+	b.WriteByte(0)
+	b.WriteString(ew.When.FieldB)
+	for _, f := range ew.Fields {
+		b.WriteByte(1)
+		b.WriteString(f.Field)
+		b.WriteByte(0)
+		b.WriteString(string(f.Source))
+		b.WriteByte(0)
+		b.WriteString(f.Column)
+		b.WriteByte(0)
+		b.WriteString(string(f.Transform))
+		b.WriteByte(0)
+		b.WriteString(f.Value)
 	}
-	sort.Strings(names)
-	return strings.Join(names, ",")
+	return b.String()
 }
 
 // UnmarshalJSON builds the in-memory mapping from the wire form, rejecting the

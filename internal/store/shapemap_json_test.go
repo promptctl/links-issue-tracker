@@ -137,6 +137,36 @@ func TestShapeMappingJSONStableOrder(t *testing.T) {
 	}
 }
 
+// TestShapeMappingJSONStableOrderMultiEmitter locks the canonical wire form for
+// the case the field-name-only sort key missed: a table carrying two emitters into
+// the SAME collection that share field names but differ in source/condition. The
+// encoding must be byte-identical regardless of the emitters' in-memory order, so
+// the same mapping never has two encodings.
+func TestShapeMappingJSONStableOrderMultiEmitter(t *testing.T) {
+	emA := Emitter{Collection: collEventChanges, When: Always{}, Fields: map[string]FieldSource{
+		"event_id": col("id", TransformIdentity),
+		"field":    Constant{Value: "status"},
+	}}
+	emB := Emitter{Collection: collEventChanges, When: WhenChanged{FieldA: "field", FieldB: "event_id"}, Fields: map[string]FieldSource{
+		"event_id": col("other", TransformIdentity),
+		"field":    Constant{Value: "priority"},
+	}}
+	forward := ShapeMapping{Tables: []TableMapping{{Table: "t", Emitters: []Emitter{emA, emB}}}}
+	reversed := ShapeMapping{Tables: []TableMapping{{Table: "t", Emitters: []Emitter{emB, emA}}}}
+
+	a, err := json.Marshal(forward)
+	if err != nil {
+		t.Fatalf("Marshal forward: %v", err)
+	}
+	b, err := json.Marshal(reversed)
+	if err != nil {
+		t.Fatalf("Marshal reversed: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("two emitters into one collection encode order-dependently:\n%s\nvs\n%s", a, b)
+	}
+}
+
 // TestShapeMappingJSONRejectsUnknownSource locks the decode boundary: a field
 // source kind with no sealed variant is rejected, not silently coerced. This is
 // what Validate cannot see — by decode time a bad kind would already have become
