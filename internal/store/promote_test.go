@@ -2,11 +2,75 @@ package store
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+// seedRealWorkspace builds a real Dolt workspace at doltRoot carrying one issue
+// per title, then returns its below-the-gate dump. The dump's DoltHead is the
+// workspace's actual live head, so a candidate Recover builds from it promotes
+// cleanly unless the workspace advances afterward — the realistic recover input,
+// unlike a synthetic dump whose head would never match a real canonical.
+func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, titles ...string) RawDump {
+	t.Helper()
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		for _, title := range titles {
+			if _, err := st.CreateIssue(ctx, CreateIssueInput{
+				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links",
+			}); err != nil {
+				t.Fatalf("seed issue %q: %v", title, err)
+			}
+		}
+	})
+	dump, err := DumpRaw(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("DumpRaw seed: %v", err)
+	}
+	return dump
+}
+
+// freshExportIDs reads the issue IDs from the on-disk workspace at src via a
+// never-before-opened path. The embedded Dolt driver caches engine state per path
+// within a process, so reopening a path that was opened and then swapped earlier
+// in the same test can return STALE rows; copying to a fresh path and opening that
+// reflects committed disk state. Production reopens are fresh processes, so this is
+// a test-only concern, but it is load-bearing for asserting a swap actually landed.
+func freshExportIDs(t *testing.T, ctx context.Context, src string) map[string]bool {
+	t.Helper()
+	dst := filepath.Join(t.TempDir(), "freshread")
+	if out, err := exec.Command("cp", "-a", src, dst).CombinedOutput(); err != nil {
+		t.Fatalf("copy %q for fresh read: %v (%s)", src, err, out)
+	}
+	st, err := Open(ctx, dst, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("open fresh copy of %q: %v", src, err)
+	}
+	defer st.Close()
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("export fresh copy of %q: %v", src, err)
+	}
+	ids := map[string]bool{}
+	for _, is := range export.Issues {
+		ids[is.ID] = true
+	}
+	return ids
+}
+
+// hasPromotionBackup reports whether any promotion backup exists beside the
+// canonical dir — the disk evidence that a swap moved the original aside.
+func hasPromotionBackup(t *testing.T, canonicalDoltDir string) bool {
+	t.Helper()
+	backup, err := newestBackup(canonicalDoltDir)
+	if err != nil {
+		t.Fatalf("scan backups: %v", err)
+	}
+	return backup != ""
+}
 
 // markerDir creates a stand-in workspace directory carrying one identifying file,
 // so a test can prove which directory ended up at the canonical path.
@@ -29,22 +93,24 @@ func readMarker(t *testing.T, path string) string {
 	return string(data)
 }
 
-// TestPromoteCandidateEndToEnd is the epic's acceptance: a recognized broken
-// workspace recovers autonomously to a Doctor-clean rebuild promoted in place,
-// with the pre-recovery contents preserved as a backup and the rebuilt data
-// readable at the canonical path afterward.
+// TestPromoteCandidateEndToEnd is the epic's acceptance, run on the workspace
+// shape the lost-update guard protects: a real, openable workspace recovers
+// autonomously to a Doctor-clean rebuild promoted in place — its head unchanged
+// across the recovery — with the pre-recovery contents preserved as a backup and
+// the rebuilt data readable afterward. Because the dump is taken from the live
+// workspace, its recorded head matches at promote time and the lost-update gate
+// passes silently.
 func TestPromoteCandidateEndToEnd(t *testing.T) {
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
 
-	// The deadended workspace at the canonical path — what recovery preserves.
-	// It stands in for a store Open() refuses, so it is a plain directory rather
-	// than a clean workspace: recovery reads its data via DumpRaw (here supplied
-	// directly as the dump), never by opening it.
-	markerDir(t, canonical, "deadended-original")
+	dump := seedRealWorkspace(t, ctx, canonical, "alpha rescue subject", "beta rescue subject")
+	originalIDs := freshExportIDs(t, ctx, canonical)
+	if len(originalIDs) != 2 {
+		t.Fatalf("seed produced %d issues, want 2", len(originalIDs))
+	}
 
-	dump := preGooseDump()
 	outcome, err := Recover(ctx, canonical, dump, DeterministicMapper, 1)
 	if err != nil {
 		t.Fatalf("Recover: %v", err)
@@ -62,14 +128,28 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 		t.Fatalf("discard candidate scratch: %v", err)
 	}
 
-	// The pre-recovery workspace is preserved verbatim, never wiped.
-	if got := readMarker(t, result.Backup); got != "deadended-original" {
-		t.Fatalf("backup did not preserve the original verbatim: marker=%q", got)
+	// The pre-recovery workspace is preserved as a backup, never wiped: every
+	// original issue survives in it.
+	backupIDs := freshExportIDs(t, ctx, result.Backup)
+	for id := range originalIDs {
+		if !backupIDs[id] {
+			t.Fatalf("backup did not preserve original issue %q; backup has %v", id, backupIDs)
+		}
 	}
 
 	// The rebuilt data is now the canonical workspace: readable, Doctor-clean, and
-	// every source issue conserved.
-	st, err := Open(ctx, canonical, "legacy-ws")
+	// every source issue conserved. Read via a fresh path so the assertion reflects
+	// the swapped-in directory on disk, not a cached engine for the canonical path.
+	promotedIDs := freshExportIDs(t, ctx, canonical)
+	if len(promotedIDs) != 2 {
+		t.Fatalf("promoted workspace lost data: want 2 issues, got %d", len(promotedIDs))
+	}
+	for id := range originalIDs {
+		if !promotedIDs[id] {
+			t.Fatalf("rebuild did not conserve original issue %q; promoted has %v", id, promotedIDs)
+		}
+	}
+	st, err := Open(ctx, canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("reopen promoted workspace: %v", err)
 	}
@@ -79,12 +159,57 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 		t.Fatalf("Doctor on promoted workspace: %v", err)
 	}
 	mustClean(t, report)
-	export, err := st.Export(ctx)
+}
+
+// TestPromoteCandidateAbortsOnConcurrentCommit is the j0vl.7 acceptance: when a
+// concurrent commit advances the live workspace between the dump and the
+// promotion, the promote refuses rather than silently regressing the workspace to
+// dump-time state. Nothing on disk changes — no backup is made, and the concurrent
+// commit stays live.
+func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
+	ctx := context.Background()
+	storageDir := t.TempDir()
+	canonical := filepath.Join(storageDir, "dolt")
+
+	dump := seedRealWorkspace(t, ctx, canonical, "original subject")
+	outcome, err := Recover(ctx, canonical, dump, DeterministicMapper, 1)
 	if err != nil {
-		t.Fatalf("Export promoted workspace: %v", err)
+		t.Fatalf("Recover: %v", err)
 	}
-	if len(export.Issues) != 2 {
-		t.Fatalf("promoted workspace lost data: want 2 issues, got %d", len(export.Issues))
+	recon, ok := outcome.(Reconciled)
+	if !ok {
+		t.Fatalf("want Reconciled, got %T", outcome)
+	}
+
+	// A concurrent committer advances the live workspace in place, past the head
+	// the candidate was rebuilt from.
+	var concurrentID string
+	withStore(t, ctx, canonical, func(st *Store) {
+		issue, err := st.CreateIssue(ctx, CreateIssueInput{
+			Title: "landed during recovery", IssueType: "task", Topic: "recovery", Prefix: "links",
+		})
+		if err != nil {
+			t.Fatalf("concurrent commit: %v", err)
+		}
+		concurrentID = issue.ID
+	})
+
+	_, err = PromoteCandidate(ctx, canonical, recon.Candidate)
+	if !errors.Is(err, ErrWorkspaceAdvanced) {
+		t.Fatalf("PromoteCandidate over an advanced workspace: err = %v; want ErrWorkspaceAdvanced", err)
+	}
+	if err := recon.Candidate.Discard(); err != nil {
+		t.Fatalf("discard candidate: %v", err)
+	}
+
+	// Nothing was changed: no backup was made (the abort precedes the move-aside),
+	// and the concurrent commit is still live — not regressed out.
+	if hasPromotionBackup(t, canonical) {
+		t.Fatal("an aborted promotion made a backup; nothing should have moved")
+	}
+	liveIDs := freshExportIDs(t, ctx, canonical)
+	if !liveIDs[concurrentID] {
+		t.Fatalf("the concurrent commit was regressed out of the live workspace; live has %v", liveIDs)
 	}
 }
 
@@ -226,9 +351,13 @@ func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
-	markerDir(t, canonical, "original")
 
-	cand, err := RebuildCandidate(ctx, storageDir, preGooseDump(), mustMap(t, preGooseDump()))
+	// A real workspace at canonical, whose head the candidate is built to match, so
+	// the lost-update gate passes and the install-failure path is the one exercised.
+	dump := seedRealWorkspace(t, ctx, canonical, "original subject")
+	originalIDs := freshExportIDs(t, ctx, canonical)
+
+	cand, err := RebuildCandidate(ctx, storageDir, dump, mustMap(t, dump))
 	if err != nil {
 		t.Fatalf("RebuildCandidate: %v", err)
 	}
@@ -249,8 +378,13 @@ func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
 		t.Fatal("PromoteCandidate must fail when the rebuilt directory is missing")
 	}
 
-	// Rolled back: the original is restored at the canonical path.
-	if got := readMarker(t, canonical); got != "original" {
-		t.Fatalf("rollback did not restore the original: marker=%q", got)
+	// Rolled back: the original workspace is restored at the canonical path with
+	// its data intact (read fresh, since the path was swapped during the failed
+	// install and then restored).
+	restoredIDs := freshExportIDs(t, ctx, canonical)
+	for id := range originalIDs {
+		if !restoredIDs[id] {
+			t.Fatalf("rollback did not restore original issue %q; canonical has %v", id, restoredIDs)
+		}
 	}
 }

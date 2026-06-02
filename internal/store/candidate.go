@@ -30,6 +30,15 @@ import (
 type Candidate struct {
 	store *Store
 	root  string
+	// expectedHead and workspaceID are the dump's provenance, carried so a
+	// promotion can re-check that the live workspace is still at the commit this
+	// candidate was rebuilt to replace (links-recovery-j0vl.7).
+	// [LAW:one-source-of-truth] Both are stamped from the one dump when the
+	// candidate is built, so "candidate built from dump A, promoted against the head
+	// of dump B" is unrepresentable — the head and the rebuilt data cannot disagree
+	// because they have a single origin.
+	expectedHead string
+	workspaceID  string
 }
 
 // ErrInvalidMapping marks a RebuildCandidate failure caused by the MAPPING — a
@@ -105,7 +114,7 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 	}
 
 	success = true
-	return &Candidate{store: st, root: root}, nil
+	return &Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}, nil
 }
 
 // Store hands out the built workspace so the verify gate can inspect it (Doctor,
