@@ -6,98 +6,196 @@ import (
 	"fmt"
 	"io"
 	"sort"
+	"strings"
 )
 
 // This file is the wire form of ShapeMapping: the JSON an operator (the ambient
 // LLM at the recovery boundary) authors and hands to `lit lifeboat recover
-// --mapping`. The in-memory ShapeMapping is keyed by a struct (ColumnRef) and
-// valued by a sealed interface (Disposition) — neither of which encoding/json
-// can carry directly — so the wire form is a flat, ordered list of entries with
-// an explicit kind discriminator.
+// --mapping`. The in-memory ShapeMapping nests sealed interfaces (FieldSource,
+// EmitCondition) and maps that encoding/json cannot carry directly, so the wire
+// form is an ordered, discriminated projection: tables → emitters → fields, plus
+// each table's drops.
 //
 // [LAW:one-source-of-truth] These are Marshal/Unmarshal METHODS on ShapeMapping,
 // not a parallel DTO the rest of the package also knows: the wire shape is a
 // projection of the one type, and decoding produces exactly that type. A second
 // public struct mirroring ShapeMapping could drift from it; a method cannot.
 //
-// [LAW:single-enforcer] Decoding does NOT re-validate semantics. Totality,
-// target resolution, drop-provenance validity, and table-shape are Validate's
-// job — the one trust boundary every producer (deterministic, operator, future
-// LLM) already passes before Apply. Decoding enforces only what Validate cannot
-// see once the bytes have become a map: the kind discriminator that selects the
-// sealed variant, and the absence of duplicate (table,column) keys that would
-// silently overwrite one disposition with another during map assembly.
+// [LAW:single-enforcer] Decoding does NOT re-validate semantics. Totality, target
+// resolution, transform admissibility, collection validity, required coverage,
+// and condition validity are Validate's job — the one trust boundary every
+// producer already passes before Apply. Decoding enforces only what Validate
+// cannot see once the bytes have become typed values: the kind discriminators
+// that select the sealed variants, and the absence of duplicate keys (a table
+// dispositioned twice, a field assigned twice within an emitter, a column dropped
+// twice) that would silently collapse during the projection back into maps.
 
-// dispositionKind is the closed wire discriminator for a Disposition. It names
-// on the wire what the sealed interface names in memory, so "which variant"
-// survives the round-trip explicitly rather than being inferred from which
-// fields happen to be present.
-type dispositionKind string
+// fieldSourceKind is the closed wire discriminator for a FieldSource.
+type fieldSourceKind string
 
 const (
-	kindMapped  dispositionKind = "map"
-	kindDropped dispositionKind = "drop"
+	sourceColumn fieldSourceKind = "column"
+	sourceConst  fieldSourceKind = "const"
 )
 
-// columnWire is one source column's disposition on the wire. Table and Column
-// are the positional key; Kind selects which of the remaining fields are
-// meaningful (To for a map; Provenance/Reason for a drop).
-type columnWire struct {
-	Table      string          `json:"table"`
-	Column     string          `json:"column"`
-	Kind       dispositionKind `json:"kind"`
-	To         TargetKey       `json:"to,omitempty"`
-	Provenance DropProvenance  `json:"provenance,omitempty"`
-	Reason     string          `json:"reason,omitempty"`
+// whenKind is the closed wire discriminator for an EmitCondition.
+type whenKind string
+
+const (
+	whenAlways  whenKind = "always"
+	whenChanged whenKind = "changed"
+)
+
+type fieldWire struct {
+	Field     string          `json:"field"`
+	Source    fieldSourceKind `json:"source"`
+	Column    string          `json:"column,omitempty"`
+	Transform Transform       `json:"transform,omitempty"`
+	Value     string          `json:"value,omitempty"`
+}
+
+type whenWire struct {
+	Kind   whenKind `json:"kind"`
+	FieldA string   `json:"fieldA,omitempty"`
+	FieldB string   `json:"fieldB,omitempty"`
+}
+
+type emitterWire struct {
+	Collection string      `json:"collection"`
+	When       whenWire    `json:"when"`
+	Fields     []fieldWire `json:"fields"`
+}
+
+type dropWire struct {
+	Column     string         `json:"column"`
+	Provenance DropProvenance `json:"provenance"`
+	Reason     string         `json:"reason,omitempty"`
+}
+
+type tableWire struct {
+	Table    string        `json:"table"`
+	Emitters []emitterWire `json:"emitters,omitempty"`
+	Drops    []dropWire    `json:"drops,omitempty"`
 }
 
 type mappingWire struct {
-	Columns []columnWire `json:"columns"`
+	Tables []tableWire `json:"tables"`
 }
 
-// MarshalJSON renders the mapping as an ordered list so the artifact is stable
-// across runs (sorted by table then column) — diffable, and reproducible when
-// `lit lifeboat dump`-derived mappings are checked in or compared.
+// MarshalJSON renders the mapping as ordered, sorted lists so the artifact is
+// stable across runs — diffable, and reproducible when `lit lifeboat dump`-derived
+// mappings are checked in or compared.
 func (m ShapeMapping) MarshalJSON() ([]byte, error) {
-	wire := mappingWire{Columns: make([]columnWire, 0, len(m.Columns))}
-	for ref, disp := range m.Columns {
-		entry := columnWire{Table: ref.Table, Column: ref.Column}
-		switch d := disp.(type) {
-		case MappedTo:
-			entry.Kind = kindMapped
-			entry.To = d.Target
-		case Dropped:
-			entry.Kind = kindDropped
-			entry.Provenance = d.Provenance
-			entry.Reason = d.Reason
-		default:
-			// [LAW:types-are-the-program] Disposition is sealed in this package,
-			// so this arm is unreachable for any value the type system admits;
-			// it errors rather than emitting a kindless entry that would decode
-			// back to nothing.
-			return nil, fmt.Errorf("shapemapping: column %s has unencodable disposition %T", ref, disp)
+	wire := mappingWire{Tables: make([]tableWire, 0, len(m.Tables))}
+	for _, tm := range m.Tables {
+		tw := tableWire{Table: tm.Table}
+		for _, em := range tm.Emitters {
+			ew, err := emitterToWire(tm.Table, em)
+			if err != nil {
+				return nil, err
+			}
+			tw.Emitters = append(tw.Emitters, ew)
 		}
-		wire.Columns = append(wire.Columns, entry)
+		for col, d := range tm.Drops {
+			tw.Drops = append(tw.Drops, dropWire{Column: col, Provenance: d.Provenance, Reason: d.Reason})
+		}
+		sortEmitters(tw.Emitters)
+		sort.Slice(tw.Drops, func(i, j int) bool { return tw.Drops[i].Column < tw.Drops[j].Column })
+		wire.Tables = append(wire.Tables, tw)
 	}
-	sort.Slice(wire.Columns, func(i, j int) bool {
-		if wire.Columns[i].Table != wire.Columns[j].Table {
-			return wire.Columns[i].Table < wire.Columns[j].Table
-		}
-		return wire.Columns[i].Column < wire.Columns[j].Column
-	})
+	sort.Slice(wire.Tables, func(i, j int) bool { return wire.Tables[i].Table < wire.Tables[j].Table })
 	return json.Marshal(wire)
 }
 
-// UnmarshalJSON builds the in-memory mapping from the wire list, rejecting the
-// two malformations the downstream Validate cannot detect: an unrecognized kind
-// (no sealed variant to produce) and a repeated (table,column) entry (which
-// would silently collapse to one disposition).
+func emitterToWire(table string, em Emitter) (emitterWire, error) {
+	ew := emitterWire{Collection: string(em.Collection)}
+	switch w := em.When.(type) {
+	case Always:
+		ew.When = whenWire{Kind: whenAlways}
+	case WhenChanged:
+		ew.When = whenWire{Kind: whenChanged, FieldA: w.FieldA, FieldB: w.FieldB}
+	default:
+		// [LAW:types-are-the-program] EmitCondition is sealed in this package, so
+		// this arm is unreachable for any value the type system admits; it errors
+		// rather than emitting a kindless condition that would decode to nothing.
+		return emitterWire{}, fmt.Errorf("shapemapping: table %q emitter has unencodable condition %T", table, em.When)
+	}
+	for field, src := range em.Fields {
+		fw := fieldWire{Field: field}
+		switch s := src.(type) {
+		case FromColumn:
+			fw.Source = sourceColumn
+			fw.Column = s.Column
+			fw.Transform = s.Transform
+		case Constant:
+			str, ok := s.Value.(string)
+			if !ok {
+				// The wire form carries string constants only — the value domain of
+				// a dump is text, and Validate admits a constant only on a string
+				// passthrough field. A non-string constant is unrepresentable here.
+				return emitterWire{}, fmt.Errorf("shapemapping: table %q field %q constant must be a string, got %T", table, field, s.Value)
+			}
+			fw.Source = sourceConst
+			fw.Value = str
+		default:
+			return emitterWire{}, fmt.Errorf("shapemapping: table %q field %q has unencodable source %T", table, field, src)
+		}
+		ew.Fields = append(ew.Fields, fw)
+	}
+	sort.Slice(ew.Fields, func(i, j int) bool { return ew.Fields[i].Field < ew.Fields[j].Field })
+	return ew, nil
+}
+
+// sortEmitters orders a table's emitters by a TOTAL canonical key, so the wire
+// form is reproducible even for a table that legitimately carries more than one
+// emitter into the same collection. [LAW:one-source-of-truth] The key must
+// distinguish every pair of emitters that differ in any encoded byte — collection,
+// condition, and each field's full spec (name, source, column, transform, value).
+// A key on field NAMES alone would tie two emitters that share field names but
+// differ in source or condition, and sort.Slice (unstable) could then swap them,
+// giving one mapping two encodings. Two emitters with equal keys are byte-identical,
+// so their relative order is immaterial.
+func sortEmitters(ems []emitterWire) {
+	sort.Slice(ems, func(i, j int) bool {
+		return emitterSortKey(ems[i]) < emitterSortKey(ems[j])
+	})
+}
+
+// emitterSortKey serializes an emitter's full identity. Fields are already sorted
+// by name (emitterToWire), so iterating them yields a stable byte sequence; NUL
+// and SOH separators keep adjacent fields from aliasing (e.g. "ab"+"c" vs "a"+"bc").
+func emitterSortKey(ew emitterWire) string {
+	var b strings.Builder
+	b.WriteString(ew.Collection)
+	b.WriteByte(0)
+	b.WriteString(string(ew.When.Kind))
+	b.WriteByte(0)
+	b.WriteString(ew.When.FieldA)
+	b.WriteByte(0)
+	b.WriteString(ew.When.FieldB)
+	for _, f := range ew.Fields {
+		b.WriteByte(1)
+		b.WriteString(f.Field)
+		b.WriteByte(0)
+		b.WriteString(string(f.Source))
+		b.WriteByte(0)
+		b.WriteString(f.Column)
+		b.WriteByte(0)
+		b.WriteString(string(f.Transform))
+		b.WriteByte(0)
+		b.WriteString(f.Value)
+	}
+	return b.String()
+}
+
+// UnmarshalJSON builds the in-memory mapping from the wire form, rejecting the
+// malformations the downstream Validate cannot detect: unknown discriminators (no
+// sealed variant to produce) and repeated keys (which would silently collapse).
 func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
-	// [LAW:no-silent-fallbacks] The mapping file is an operator's authored
-	// artifact at a trust boundary: an unknown field is a typo (e.g. "prov" for
-	// "provenance"), not data to discard. Reject it here, where the byte that is
-	// wrong is still in hand, rather than let json silently drop it and surface a
-	// confusing "unaccounted-for column" three steps downstream in Validate.
+	// [LAW:no-silent-fallbacks] The mapping file is an operator's authored artifact
+	// at a trust boundary: an unknown field is a typo, not data to discard. Reject
+	// it here, where the byte that is wrong is still in hand, rather than let json
+	// silently drop it and surface a confusing error several steps downstream.
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	var wire mappingWire
@@ -106,10 +204,7 @@ func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
 	}
 	// A mapping file is one JSON document. Trailing non-whitespace means the
 	// artifact is malformed — the operator concatenated or edited it wrong — and
-	// accepting only the first object would silently ignore the rest. The stream's
-	// state after the first value is a closed three-way: exhausted (good), a
-	// second well-formed value (trailing data), or bytes that don't parse (the
-	// underlying syntax error carries the operator's location, so preserve it).
+	// accepting only the first object would silently ignore the rest.
 	switch trailing := dec.Decode(new(json.RawMessage)); trailing {
 	case io.EOF:
 	case nil:
@@ -117,22 +212,70 @@ func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
 	default:
 		return fmt.Errorf("shapemapping: malformed trailing data after the mapping document: %w", trailing)
 	}
-	cols := make(map[ColumnRef]Disposition, len(wire.Columns))
-	for _, entry := range wire.Columns {
-		ref := ColumnRef{Table: entry.Table, Column: entry.Column}
-		if _, dup := cols[ref]; dup {
-			return fmt.Errorf("shapemapping: duplicate disposition for column %s", ref)
+
+	tables := make([]TableMapping, 0, len(wire.Tables))
+	seenTable := map[string]bool{}
+	for _, tw := range wire.Tables {
+		if seenTable[tw.Table] {
+			return fmt.Errorf("shapemapping: duplicate disposition for table %q", tw.Table)
 		}
-		switch entry.Kind {
-		case kindMapped:
-			cols[ref] = MappedTo{Target: entry.To}
-		case kindDropped:
-			cols[ref] = Dropped{Provenance: entry.Provenance, Reason: entry.Reason}
-		default:
-			return fmt.Errorf("shapemapping: column %s has unknown kind %q (want %q or %q)",
-				ref, entry.Kind, kindMapped, kindDropped)
+		seenTable[tw.Table] = true
+		tm, err := tableFromWire(tw)
+		if err != nil {
+			return err
+		}
+		tables = append(tables, tm)
+	}
+	m.Tables = tables
+	return nil
+}
+
+func tableFromWire(tw tableWire) (TableMapping, error) {
+	tm := TableMapping{Table: tw.Table}
+	for _, ew := range tw.Emitters {
+		em, err := emitterFromWire(tw.Table, ew)
+		if err != nil {
+			return TableMapping{}, err
+		}
+		tm.Emitters = append(tm.Emitters, em)
+	}
+	if len(tw.Drops) > 0 {
+		tm.Drops = make(map[string]Dropped, len(tw.Drops))
+		for _, dw := range tw.Drops {
+			if _, dup := tm.Drops[dw.Column]; dup {
+				return TableMapping{}, fmt.Errorf("shapemapping: table %q drops column %q more than once", tw.Table, dw.Column)
+			}
+			tm.Drops[dw.Column] = Dropped{Provenance: dw.Provenance, Reason: dw.Reason}
 		}
 	}
-	m.Columns = cols
-	return nil
+	return tm, nil
+}
+
+func emitterFromWire(table string, ew emitterWire) (Emitter, error) {
+	em := Emitter{Collection: collection(ew.Collection)}
+	switch ew.When.Kind {
+	case whenAlways:
+		em.When = Always{}
+	case whenChanged:
+		em.When = WhenChanged{FieldA: ew.When.FieldA, FieldB: ew.When.FieldB}
+	default:
+		return Emitter{}, fmt.Errorf("shapemapping: table %q emitter has unknown condition kind %q (want %q or %q)",
+			table, ew.When.Kind, whenAlways, whenChanged)
+	}
+	em.Fields = make(map[string]FieldSource, len(ew.Fields))
+	for _, fw := range ew.Fields {
+		if _, dup := em.Fields[fw.Field]; dup {
+			return Emitter{}, fmt.Errorf("shapemapping: table %q emitter into %q assigns field %q more than once", table, ew.Collection, fw.Field)
+		}
+		switch fw.Source {
+		case sourceColumn:
+			em.Fields[fw.Field] = FromColumn{Column: fw.Column, Transform: fw.Transform}
+		case sourceConst:
+			em.Fields[fw.Field] = Constant{Value: fw.Value}
+		default:
+			return Emitter{}, fmt.Errorf("shapemapping: table %q field %q has unknown source %q (want %q or %q)",
+				table, fw.Field, fw.Source, sourceColumn, sourceConst)
+		}
+	}
+	return em, nil
 }

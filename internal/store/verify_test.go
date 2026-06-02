@@ -103,6 +103,47 @@ func TestCountFindingsDetectsRowLoss(t *testing.T) {
 	}
 }
 
+// TestCountFindingsExcludesConditionalFanOutChildren proves the non-circularity
+// rule for fan-out: an Always emitter (issue_history → events) is count-conserved
+// against the raw row count, while the CONDITIONAL child collection
+// (event_changes, emitted only on a real status transition) is excluded — its
+// record count is a function of the mapping itself, so comparing it to a
+// mapping-derived expectation would be a tautology. A rebuild whose event count
+// matches the row count must produce no count finding, no matter how many change
+// rows it nests.
+func TestCountFindingsExcludesConditionalFanOutChildren(t *testing.T) {
+	const created = "2026-01-01T10:00:00Z"
+	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
+		{Name: "issue_history",
+			Columns: legacyIssueHistoryColumns,
+			Rows: [][]any{
+				{"h1", "i1", "start", "began", "open", "in_progress", created, "alice"},
+				{"h2", "i1", "close", "shipped", "in_progress", "closed", created, "alice"},
+			}},
+	}}
+	m, ok := DeterministicMap(dump)
+	if !ok {
+		t.Fatal("DeterministicMap declined the canonical issue_history shape")
+	}
+	// Two events (matching the two source rows) but a deliberately odd number of
+	// nested change rows: if event_changes were count-conserved, expected (0, since
+	// no Always emitter feeds it) vs actual (3) would spuriously fire.
+	export := model.Export{Events: []model.IssueEvent{
+		{ID: "h1", Changes: []model.FieldChange{{Field: "status"}, {Field: "status"}}},
+		{ID: "h2", Changes: []model.FieldChange{{Field: "status"}}},
+	}}
+	if findings := countFindings(dump, m, export); len(findings) != 0 {
+		t.Fatalf("conditional fan-out child must be excluded from count conservation; got %+v", findings)
+	}
+
+	// The Always-emitted parent IS conserved: drop an event and the count law fires.
+	lost := model.Export{Events: []model.IssueEvent{{ID: "h1"}}}
+	findings := countFindings(dump, m, lost)
+	if len(findings) != 1 || findings[0].Law != LawCount || !strings.Contains(findings[0].Detail, "events") {
+		t.Fatalf("event count loss must be reported (events is an Always emitter); got %+v", findings)
+	}
+}
+
 // TestIDStabilityFindingsDetectsLostAndExtraIDs exercises the id-stability law in
 // isolation: an id present in the source but missing from the rebuild, and an id
 // the rebuild invented, are each reported.
@@ -136,10 +177,13 @@ func TestSourceValuesForAggregatesAcrossTables(t *testing.T) {
 		{Name: "issues", Columns: []string{"id"}, Rows: [][]any{{"i1"}, {"i2"}}},
 		{Name: "issues_overflow", Columns: []string{"id"}, Rows: [][]any{{"i3"}}},
 	}}
-	m := ShapeMapping{Columns: map[ColumnRef]Disposition{
-		{Table: "issues", Column: "id"}:          MappedTo{Target: "issues.id"},
-		{Table: "issues_overflow", Column: "id"}: MappedTo{Target: "issues.id"},
-	}}
+	idEmitter := func(table string) TableMapping {
+		return TableMapping{Table: table, Emitters: []Emitter{{
+			Collection: collIssues, When: Always{},
+			Fields: map[string]FieldSource{"id": FromColumn{Column: "id", Transform: TransformIdentity}},
+		}}}
+	}
+	m := ShapeMapping{Tables: []TableMapping{idEmitter("issues"), idEmitter("issues_overflow")}}
 
 	values, ok := sourceValuesFor(dump, m, "issues.id")
 	if !ok {
@@ -151,15 +195,36 @@ func TestSourceValuesForAggregatesAcrossTables(t *testing.T) {
 	}
 }
 
-// swapTargets returns a copy of m with the MappedTo targets of two columns
-// exchanged. It models a same-typed column swap — the mis-map class that passes
-// Validate but corrupts values.
+// swapTargets returns a copy of m in which the two named columns feed each
+// other's domain fields. It models a same-typed column swap — the mis-map class
+// that passes Validate (both targets stay covered, identity transforms) but
+// corrupts values. a and b must name columns of the same table that are both
+// FromColumn sources in that table's emitters.
 func swapTargets(m ShapeMapping, a, b ColumnRef) ShapeMapping {
-	out := ShapeMapping{Columns: make(map[ColumnRef]Disposition, len(m.Columns))}
-	for ref, disp := range m.Columns {
-		out.Columns[ref] = disp
+	out := cloneMapping(m)
+	for ti := range out.Tables {
+		if out.Tables[ti].Table != a.Table {
+			continue
+		}
+		for _, em := range out.Tables[ti].Emitters {
+			var fieldA, fieldB string
+			for field, src := range em.Fields {
+				fc, ok := src.(FromColumn)
+				if !ok {
+					continue
+				}
+				if fc.Column == a.Column {
+					fieldA = field
+				}
+				if fc.Column == b.Column {
+					fieldB = field
+				}
+			}
+			if fieldA != "" && fieldB != "" {
+				em.Fields[fieldA], em.Fields[fieldB] = em.Fields[fieldB], em.Fields[fieldA]
+			}
+		}
 	}
-	out.Columns[a], out.Columns[b] = m.Columns[b], m.Columns[a]
 	return out
 }
 

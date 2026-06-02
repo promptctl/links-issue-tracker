@@ -3,56 +3,67 @@ package store
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"strings"
 	"testing"
 )
 
+// col is a FromColumn field source; const fields use Constant directly.
+func col(c string, tr Transform) FieldSource { return FromColumn{Column: c, Transform: tr} }
+
 // aheadColumnMapping is the operator's correspondence for novelAheadDump: every
 // recognizable column mapped, and the renamed `summary` reasoned onto `title` —
-// the disposition the deterministic mapper cannot supply.
+// the disposition the deterministic mapper cannot supply. One Always emitter per
+// table; timestamps and status carry their required transforms so the mapping is
+// valid.
 func aheadColumnMapping() ShapeMapping {
-	return ShapeMapping{Columns: map[ColumnRef]Disposition{
-		{Table: "issues", Column: "id"}:          MappedTo{Target: "issues.id"},
-		{Table: "issues", Column: "summary"}:     MappedTo{Target: "issues.title"},
-		{Table: "issues", Column: "description"}: MappedTo{Target: "issues.description"},
-		{Table: "issues", Column: "prompt"}:      MappedTo{Target: "issues.prompt"},
-		{Table: "issues", Column: "status"}:      MappedTo{Target: "issues.status"},
-		{Table: "issues", Column: "priority"}:    MappedTo{Target: "issues.priority"},
-		{Table: "issues", Column: "issue_type"}:  MappedTo{Target: "issues.issue_type"},
-		{Table: "issues", Column: "assignee"}:    MappedTo{Target: "issues.assignee"},
-		{Table: "issues", Column: "created_at"}:  MappedTo{Target: "issues.created_at"},
-		{Table: "issues", Column: "updated_at"}:  MappedTo{Target: "issues.updated_at"},
-		{Table: "issues", Column: "closed_at"}:   MappedTo{Target: "issues.closed_at"},
-
-		{Table: "relations", Column: "src_id"}:     MappedTo{Target: "relations.src_id"},
-		{Table: "relations", Column: "dst_id"}:     MappedTo{Target: "relations.dst_id"},
-		{Table: "relations", Column: "type"}:       MappedTo{Target: "relations.type"},
-		{Table: "relations", Column: "created_at"}: MappedTo{Target: "relations.created_at"},
-		{Table: "relations", Column: "created_by"}: MappedTo{Target: "relations.created_by"},
-
-		{Table: "comments", Column: "id"}:         MappedTo{Target: "comments.id"},
-		{Table: "comments", Column: "issue_id"}:   MappedTo{Target: "comments.issue_id"},
-		{Table: "comments", Column: "body"}:       MappedTo{Target: "comments.body"},
-		{Table: "comments", Column: "created_at"}: MappedTo{Target: "comments.created_at"},
-		{Table: "comments", Column: "created_by"}: MappedTo{Target: "comments.created_by"},
-
-		{Table: "labels", Column: "issue_id"}:   MappedTo{Target: "labels.issue_id"},
-		{Table: "labels", Column: "label"}:      MappedTo{Target: "labels.name"},
-		{Table: "labels", Column: "created_at"}: MappedTo{Target: "labels.created_at"},
-		{Table: "labels", Column: "created_by"}: MappedTo{Target: "labels.created_by"},
-
-		{Table: "issue_events", Column: "id"}:         MappedTo{Target: "events.id"},
-		{Table: "issue_events", Column: "issue_id"}:   MappedTo{Target: "events.issue_id"},
-		{Table: "issue_events", Column: "action"}:     MappedTo{Target: "events.action"},
-		{Table: "issue_events", Column: "reason"}:     MappedTo{Target: "events.reason"},
-		{Table: "issue_events", Column: "assignee"}:   MappedTo{Target: "events.actor"},
-		{Table: "issue_events", Column: "created_at"}: MappedTo{Target: "events.created_at"},
-
-		{Table: "issue_event_changes", Column: "event_id"}:   MappedTo{Target: "event_changes.event_id"},
-		{Table: "issue_event_changes", Column: "field"}:      MappedTo{Target: "event_changes.field"},
-		{Table: "issue_event_changes", Column: "from_value"}: MappedTo{Target: "event_changes.from"},
-		{Table: "issue_event_changes", Column: "to_value"}:   MappedTo{Target: "event_changes.to"},
+	return ShapeMapping{Tables: []TableMapping{
+		{Table: "issues", Emitters: []Emitter{{Collection: collIssues, When: Always{}, Fields: map[string]FieldSource{
+			"id":          col("id", TransformIdentity),
+			"title":       col("summary", TransformIdentity),
+			"description": col("description", TransformIdentity),
+			"prompt":      col("prompt", TransformIdentity),
+			"status":      col("status", TransformLegacyStatus),
+			"priority":    col("priority", TransformIdentity),
+			"issue_type":  col("issue_type", TransformIdentity),
+			"assignee":    col("assignee", TransformIdentity),
+			"created_at":  col("created_at", TransformTimestamp),
+			"updated_at":  col("updated_at", TransformTimestamp),
+			"closed_at":   col("closed_at", TransformTimestamp),
+		}}}},
+		{Table: "relations", Emitters: []Emitter{{Collection: collRelations, When: Always{}, Fields: map[string]FieldSource{
+			"src_id":     col("src_id", TransformIdentity),
+			"dst_id":     col("dst_id", TransformIdentity),
+			"type":       col("type", TransformIdentity),
+			"created_at": col("created_at", TransformTimestamp),
+			"created_by": col("created_by", TransformIdentity),
+		}}}},
+		{Table: "comments", Emitters: []Emitter{{Collection: collComments, When: Always{}, Fields: map[string]FieldSource{
+			"id":         col("id", TransformIdentity),
+			"issue_id":   col("issue_id", TransformIdentity),
+			"body":       col("body", TransformIdentity),
+			"created_at": col("created_at", TransformTimestamp),
+			"created_by": col("created_by", TransformIdentity),
+		}}}},
+		{Table: "labels", Emitters: []Emitter{{Collection: collLabels, When: Always{}, Fields: map[string]FieldSource{
+			"issue_id":   col("issue_id", TransformIdentity),
+			"name":       col("label", TransformIdentity),
+			"created_at": col("created_at", TransformTimestamp),
+			"created_by": col("created_by", TransformIdentity),
+		}}}},
+		{Table: "issue_events", Emitters: []Emitter{{Collection: collEvents, When: Always{}, Fields: map[string]FieldSource{
+			"id":         col("id", TransformIdentity),
+			"issue_id":   col("issue_id", TransformIdentity),
+			"action":     col("action", TransformIdentity),
+			"reason":     col("reason", TransformIdentity),
+			"actor":      col("assignee", TransformIdentity),
+			"created_at": col("created_at", TransformTimestamp),
+		}}}},
+		{Table: "issue_event_changes", Emitters: []Emitter{{Collection: collEventChanges, When: Always{}, Fields: map[string]FieldSource{
+			"event_id": col("event_id", TransformIdentity),
+			"field":    col("field", TransformIdentity),
+			"from":     col("from_value", TransformIdentity),
+			"to":       col("to_value", TransformIdentity),
+		}}}},
 	}}
 }
 
@@ -83,12 +94,15 @@ func novelAheadDump() RawDump {
 }
 
 // TestShapeMappingJSONRoundTrip locks the wire contract: a mapping survives
-// Marshal→Unmarshal byte-for-byte in meaning. The artifact an operator authors
-// is exactly the mapping the applier consumes — no field silently lost.
+// Marshal→Unmarshal→Marshal byte-for-byte. The artifact an operator authors is
+// exactly the mapping the applier consumes — no field silently lost. Comparing
+// re-encodings (rather than the in-memory structs) is the meaning-preserving
+// equality, since Marshal is canonical/sorted.
 func TestShapeMappingJSONRoundTrip(t *testing.T) {
 	original := aheadColumnMapping()
-	original.Columns[ColumnRef{Table: "issues", Column: "obsolete"}] =
-		Dropped{Provenance: DropUnexplained, Reason: "no target in baseline"}
+	original.Tables[0].Drops = map[string]Dropped{
+		"obsolete": {Provenance: DropUnexplained, Reason: "no target in baseline"},
+	}
 
 	data, err := json.Marshal(original)
 	if err != nil {
@@ -98,8 +112,12 @@ func TestShapeMappingJSONRoundTrip(t *testing.T) {
 	if err := json.Unmarshal(data, &got); err != nil {
 		t.Fatalf("Unmarshal: %v", err)
 	}
-	if !reflect.DeepEqual(original.Columns, got.Columns) {
-		t.Fatalf("round-trip changed the mapping:\nwant %+v\ngot  %+v", original.Columns, got.Columns)
+	reencoded, err := json.Marshal(got)
+	if err != nil {
+		t.Fatalf("Marshal(got): %v", err)
+	}
+	if string(data) != string(reencoded) {
+		t.Fatalf("round-trip changed the mapping:\nwant %s\ngot  %s", data, reencoded)
 	}
 }
 
@@ -119,42 +137,96 @@ func TestShapeMappingJSONStableOrder(t *testing.T) {
 	}
 }
 
-// TestShapeMappingJSONRejectsUnknownKind locks the decode boundary: a disposition
-// kind with no sealed variant is rejected, not silently coerced into a drop or a
-// map. This is what Validate cannot see — by decode time a bad kind would already
-// be a nil interface.
-func TestShapeMappingJSONRejectsUnknownKind(t *testing.T) {
-	bad := `{"columns":[{"table":"issues","column":"id","kind":"transmute","to":"issues.id"}]}`
-	var m ShapeMapping
-	if err := json.Unmarshal([]byte(bad), &m); err == nil {
-		t.Fatal("decode must reject an unknown disposition kind")
-	} else if !strings.Contains(err.Error(), "unknown kind") {
-		t.Fatalf("error must name the unknown kind, got: %v", err)
+// TestShapeMappingJSONStableOrderMultiEmitter locks the canonical wire form for
+// the case the field-name-only sort key missed: a table carrying two emitters into
+// the SAME collection that share field names but differ in source/condition. The
+// encoding must be byte-identical regardless of the emitters' in-memory order, so
+// the same mapping never has two encodings.
+func TestShapeMappingJSONStableOrderMultiEmitter(t *testing.T) {
+	emA := Emitter{Collection: collEventChanges, When: Always{}, Fields: map[string]FieldSource{
+		"event_id": col("id", TransformIdentity),
+		"field":    Constant{Value: "status"},
+	}}
+	emB := Emitter{Collection: collEventChanges, When: WhenChanged{FieldA: "field", FieldB: "event_id"}, Fields: map[string]FieldSource{
+		"event_id": col("other", TransformIdentity),
+		"field":    Constant{Value: "priority"},
+	}}
+	forward := ShapeMapping{Tables: []TableMapping{{Table: "t", Emitters: []Emitter{emA, emB}}}}
+	reversed := ShapeMapping{Tables: []TableMapping{{Table: "t", Emitters: []Emitter{emB, emA}}}}
+
+	a, err := json.Marshal(forward)
+	if err != nil {
+		t.Fatalf("Marshal forward: %v", err)
+	}
+	b, err := json.Marshal(reversed)
+	if err != nil {
+		t.Fatalf("Marshal reversed: %v", err)
+	}
+	if string(a) != string(b) {
+		t.Fatalf("two emitters into one collection encode order-dependently:\n%s\nvs\n%s", a, b)
 	}
 }
 
-// TestShapeMappingJSONRejectsDuplicateColumn locks the other decode-only
-// invariant: two entries for one column would silently collapse to whichever
-// landed last, so the boundary rejects the ambiguity loudly.
-func TestShapeMappingJSONRejectsDuplicateColumn(t *testing.T) {
-	bad := `{"columns":[
-		{"table":"issues","column":"id","kind":"map","to":"issues.id"},
-		{"table":"issues","column":"id","kind":"drop","provenance":"unexplained"}
-	]}`
+// TestShapeMappingJSONRejectsUnknownSource locks the decode boundary: a field
+// source kind with no sealed variant is rejected, not silently coerced. This is
+// what Validate cannot see — by decode time a bad kind would already have become
+// a typed zero value.
+func TestShapeMappingJSONRejectsUnknownSource(t *testing.T) {
+	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"always"},"fields":[{"field":"id","source":"transmute","column":"id"}]}]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
-		t.Fatal("decode must reject a duplicate column disposition")
+		t.Fatal("decode must reject an unknown field source")
+	} else if !strings.Contains(err.Error(), "unknown source") {
+		t.Fatalf("error must name the unknown source, got: %v", err)
+	}
+}
+
+// TestShapeMappingJSONRejectsUnknownConditionKind locks the same boundary for the
+// emit-condition discriminator.
+func TestShapeMappingJSONRejectsUnknownConditionKind(t *testing.T) {
+	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"sometimes"},"fields":[{"field":"id","source":"column","column":"id","transform":"identity"}]}]}]}`
+	var m ShapeMapping
+	if err := json.Unmarshal([]byte(bad), &m); err == nil {
+		t.Fatal("decode must reject an unknown condition kind")
+	} else if !strings.Contains(err.Error(), "unknown condition kind") {
+		t.Fatalf("error must name the unknown condition kind, got: %v", err)
+	}
+}
+
+// TestShapeMappingJSONRejectsDuplicateField locks a decode-only invariant: two
+// entries for one field within an emitter would silently collapse to whichever
+// landed last, so the boundary rejects the ambiguity loudly.
+func TestShapeMappingJSONRejectsDuplicateField(t *testing.T) {
+	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"always"},"fields":[
+		{"field":"id","source":"column","column":"id","transform":"identity"},
+		{"field":"id","source":"column","column":"other","transform":"identity"}
+	]}]}]}`
+	var m ShapeMapping
+	if err := json.Unmarshal([]byte(bad), &m); err == nil {
+		t.Fatal("decode must reject a duplicate field assignment")
+	} else if !strings.Contains(err.Error(), "more than once") {
+		t.Fatalf("error must name the duplicate, got: %v", err)
+	}
+}
+
+// TestShapeMappingJSONRejectsDuplicateTable locks that a table dispositioned twice
+// is rejected — which fate wins would otherwise be ambiguous.
+func TestShapeMappingJSONRejectsDuplicateTable(t *testing.T) {
+	bad := `{"tables":[{"table":"issues","emitters":[]},{"table":"issues","emitters":[]}]}`
+	var m ShapeMapping
+	if err := json.Unmarshal([]byte(bad), &m); err == nil {
+		t.Fatal("decode must reject a duplicate table disposition")
 	} else if !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("error must name the duplicate, got: %v", err)
 	}
 }
 
 // TestShapeMappingJSONRejectsUnknownField locks the trust boundary: an operator
-// typo in a field name (here "prov" for "provenance") is rejected at decode
-// rather than silently dropped, which would otherwise surface as a confusing
-// downstream Validate error far from its cause.
+// typo in a field name (here "prov" for "provenance") is rejected at decode rather
+// than silently dropped, which would otherwise surface as a confusing downstream
+// Validate error far from its cause.
 func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
-	bad := `{"columns":[{"table":"issues","column":"x","kind":"drop","prov":"unexplained"}]}`
+	bad := `{"tables":[{"table":"issues","drops":[{"column":"x","prov":"unexplained"}]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
 		t.Fatal("decode must reject an unknown field name")
@@ -166,10 +238,8 @@ func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
 // TestShapeMappingJSONRejectsTrailingData locks the single-document property: a
 // mapping file is one JSON object, so a valid object followed by more
 // non-whitespace bytes is rejected rather than silently decoding only the first.
-// Both decode paths must reject it — json.Unmarshal via its own outer scan, and
-// UnmarshalJSON called directly (the delegated-Decoder path) via its own guard.
 func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
-	bad := `{"columns":[{"table":"issues","column":"id","kind":"map","to":"issues.id"}]}{"columns":[]}`
+	bad := `{"tables":[]}{"tables":[]}`
 
 	var viaUnmarshal ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &viaUnmarshal); err == nil {
@@ -177,8 +247,8 @@ func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
 	}
 
 	// json.Unmarshal hands UnmarshalJSON only the first value's bytes, so the
-	// method's own trailing-data guard is exercised by calling it directly with
-	// the full multi-object blob — the path a delegated json.Decoder would take.
+	// method's own trailing-data guard is exercised by calling it directly with the
+	// full multi-object blob — the path a delegated json.Decoder would take.
 	var viaMethod ShapeMapping
 	if err := viaMethod.UnmarshalJSON([]byte(bad)); err == nil {
 		t.Fatal("UnmarshalJSON must reject trailing data when handed a multi-object blob")
@@ -186,9 +256,9 @@ func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
 		t.Fatalf("error must name the trailing data, got: %v", err)
 	}
 
-	// Trailing bytes that don't parse must preserve the underlying syntax error,
-	// so the operator gets the location of the junk, not just "there was junk".
-	garbage := `{"columns":[]}@@@nonsense`
+	// Trailing bytes that don't parse must preserve the underlying syntax error, so
+	// the operator gets the location of the junk, not just "there was junk".
+	garbage := `{"tables":[]}@@@nonsense`
 	var viaGarbage ShapeMapping
 	if err := viaGarbage.UnmarshalJSON([]byte(garbage)); err == nil {
 		t.Fatal("UnmarshalJSON must reject unparseable trailing bytes")
