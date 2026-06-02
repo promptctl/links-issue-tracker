@@ -14,14 +14,17 @@ func TestValidateRejectsIncompleteMapping(t *testing.T) {
 		{Name: "issues", Columns: []string{"id", "title"}, Rows: [][]any{{"i1", "T"}}},
 	}}
 
-	missingTitle := ShapeMapping{Columns: map[ColumnRef]Disposition{
-		{Table: "issues", Column: "id"}: to("issues.id"),
-	}}
+	missingTitle := ShapeMapping{Tables: []TableMapping{{
+		Table: "issues",
+		Emitters: []Emitter{{Collection: collIssues, When: Always{}, Fields: map[string]FieldSource{
+			"id": FromColumn{Column: "id", Transform: TransformIdentity},
+		}}},
+	}}}
 	err := Validate(dump, missingTitle)
 	if err == nil {
 		t.Fatal("Validate accepted a mapping missing a source column")
 	}
-	if !strings.Contains(err.Error(), "issues.title") {
+	if !strings.Contains(err.Error(), "title") || !strings.Contains(err.Error(), "unaccounted") {
 		t.Fatalf("error must name the unaccounted column; got %v", err)
 	}
 }
@@ -31,33 +34,43 @@ func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
 		{Name: "issues", Columns: []string{"id"}, Rows: nil},
 	}}
 
+	// issuesEmitter builds a one-emitter issues table from a field map, so each
+	// case states only the fault it exercises.
+	issuesEmitter := func(fields map[string]FieldSource) ShapeMapping {
+		return ShapeMapping{Tables: []TableMapping{{
+			Table:    "issues",
+			Emitters: []Emitter{{Collection: collIssues, When: Always{}, Fields: fields}},
+		}}}
+	}
 	cases := map[string]struct {
 		mapping ShapeMapping
 		want    string
 	}{
-		"stale key": {
-			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}:    to("issues.id"),
-				{Table: "issues", Column: "ghost"}: to("issues.title"),
-			}},
+		"source column the dump lacks": {
+			mapping: issuesEmitter(map[string]FieldSource{
+				"id":    FromColumn{Column: "id", Transform: TransformIdentity},
+				"title": FromColumn{Column: "ghost", Transform: TransformIdentity},
+			}),
 			want: "does not have",
 		},
-		"unknown target": {
-			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}: MappedTo{Target: "issues.nope"},
-			}},
-			want: "unknown target",
+		"unknown target field": {
+			mapping: issuesEmitter(map[string]FieldSource{
+				"nope": FromColumn{Column: "id", Transform: TransformIdentity},
+			}),
+			want: "unknown field",
 		},
-		"nil disposition": {
-			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}: nil,
-			}},
-			want: "neither MappedTo nor Dropped",
+		"unknown collection": {
+			mapping: ShapeMapping{Tables: []TableMapping{{
+				Table:    "issues",
+				Emitters: []Emitter{{Collection: "ghosts", When: Always{}, Fields: map[string]FieldSource{"id": FromColumn{Column: "id", Transform: TransformIdentity}}}},
+			}}},
+			want: "unknown collection",
 		},
 		"unknown drop provenance": {
-			mapping: ShapeMapping{Columns: map[ColumnRef]Disposition{
-				{Table: "issues", Column: "id"}: Dropped{Provenance: "guessed", Reason: "x"},
-			}},
+			mapping: ShapeMapping{Tables: []TableMapping{{
+				Table: "issues",
+				Drops: map[string]Dropped{"id": {Provenance: "guessed", Reason: "x"}},
+			}}},
 			want: "unknown drop provenance",
 		},
 	}
@@ -71,32 +84,46 @@ func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
 	}
 }
 
-// TestRejectsDuplicateTargets proves a table whose two columns claim the same
-// domain field is rejected rather than letting one silently overwrite the other
-// — and that the deterministic mapper declines such a dump (a half-renamed
-// workspace carrying both prompt and agent_prompt) instead of emitting a lossy
-// mapping.
-func TestRejectsDuplicateTargets(t *testing.T) {
+// TestRejectsAmbiguousAlias proves a half-renamed workspace carrying BOTH a v1
+// name and its pre-goose alias for one field is not silently collapsed. In the
+// emitter model two sources cannot fill one field (the field map forbids it), so
+// the ambiguity surfaces as an unaccounted-for column: the deterministic mapper
+// declines rather than emit a mapping that drops one alias's data, and the public
+// boundary rejects a hand-built mapping that leaves the other alias unaccounted.
+func TestRejectsAmbiguousAlias(t *testing.T) {
 	// An otherwise-complete issues table that carries BOTH the v1 name and its
-	// pre-goose alias, so the only fault is the duplicate target (not a missing
-	// required column).
+	// pre-goose alias for the prompt field.
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issues",
 			Columns: []string{"id", "title", "description", "status", "priority", "issue_type", "closed_at", "created_at", "updated_at", "prompt", "agent_prompt"},
 			Rows:    [][]any{{"i1", "T", "", "open", int64(0), "task", nil, "2026-01-01T00:00:00Z", "2026-01-01T00:00:00Z", "a", "b"}}},
 	}}
 
-	ambiguous := ShapeMapping{Columns: map[ColumnRef]Disposition{}}
-	for _, col := range dump.Tables[0].Columns {
-		ambiguous.Columns[ColumnRef{Table: "issues", Column: col}] = knownSourceColumns["issues"][col]
-	}
-	err := Validate(dump, ambiguous)
-	if err == nil || !strings.Contains(err.Error(), "both map to") {
-		t.Fatalf("Validate must reject two columns mapping to one field; got %v", err)
+	if _, ok := DeterministicMap(dump); ok {
+		t.Fatal("DeterministicMap must decline a dump that carries two aliases for one field")
 	}
 
-	if _, ok := DeterministicMap(dump); ok {
-		t.Fatal("DeterministicMap must decline a dump that maps two columns to one field")
+	// A mapping that maps only the v1 name leaves the pre-goose alias unaccounted —
+	// rejected at the public Validate boundary. [LAW:single-enforcer]
+	fields := map[string]FieldSource{
+		"id":          FromColumn{Column: "id", Transform: TransformIdentity},
+		"title":       FromColumn{Column: "title", Transform: TransformIdentity},
+		"description": FromColumn{Column: "description", Transform: TransformIdentity},
+		"status":      FromColumn{Column: "status", Transform: TransformLegacyStatus},
+		"priority":    FromColumn{Column: "priority", Transform: TransformIdentity},
+		"issue_type":  FromColumn{Column: "issue_type", Transform: TransformIdentity},
+		"closed_at":   FromColumn{Column: "closed_at", Transform: TransformTimestamp},
+		"created_at":  FromColumn{Column: "created_at", Transform: TransformTimestamp},
+		"updated_at":  FromColumn{Column: "updated_at", Transform: TransformTimestamp},
+		"prompt":      FromColumn{Column: "agent_prompt", Transform: TransformIdentity},
+	}
+	leavesAliasUnaccounted := ShapeMapping{Tables: []TableMapping{{
+		Table:    "issues",
+		Emitters: []Emitter{{Collection: collIssues, When: Always{}, Fields: fields}},
+	}}}
+	err := Validate(dump, leavesAliasUnaccounted)
+	if err == nil || !strings.Contains(err.Error(), "unaccounted") {
+		t.Fatalf("Validate must reject a mapping that leaves the prompt alias unaccounted; got %v", err)
 	}
 }
 
@@ -121,16 +148,27 @@ func TestDeterministicMapDeclinesThinNonIssuesTable(t *testing.T) {
 	// The same partial shape must be rejected at the public Validate boundary —
 	// an LLM-supplied mapping that omits required targets cannot slip past it.
 	// [LAW:single-enforcer]
-	partial := ShapeMapping{Columns: map[ColumnRef]Disposition{}}
-	for _, table := range dump.Tables {
-		for _, col := range table.Columns {
-			partial.Columns[ColumnRef{Table: table.Name, Column: col}] = knownSourceColumns[table.Name][col]
-		}
-	}
+	partial := ShapeMapping{Tables: []TableMapping{
+		fullIssuesMapping(dump.Tables[0]),
+		{Table: "comments", Emitters: []Emitter{{Collection: collComments, When: Always{}, Fields: map[string]FieldSource{
+			"issue_id": FromColumn{Column: "issue_id", Transform: TransformIdentity},
+		}}}},
+	}}
 	err := Validate(dump, partial)
-	if err == nil || !strings.Contains(err.Error(), "does not cover required target") {
+	if err == nil || !strings.Contains(err.Error(), "does not cover required field") {
 		t.Fatalf("Validate must reject a mapping that omits required targets; got %v", err)
 	}
+}
+
+// fullIssuesMapping builds a complete one-emitter issues TableMapping for a dump
+// table by routing through the deterministic mapper — so tests that need a valid
+// issues table beside an intentionally-faulty other table state only the fault.
+func fullIssuesMapping(table RawTable) TableMapping {
+	tm, ok := simpleEmitter(table, knownSourceColumns["issues"])
+	if !ok {
+		panic("fullIssuesMapping: issues table not recognized")
+	}
+	return tm
 }
 
 // TestDeterministicMapDeclinesThinRequiredTargets proves the gate requires every
@@ -175,10 +213,7 @@ func TestValidateRejectsRowArityMismatch(t *testing.T) {
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issues", Columns: cols, Rows: [][]any{{"i1", "T", "", "open", int64(0), "task", nil, "2026-01-01T00:00:00Z"}}}, // 8 cells, 9 columns
 	}}
-	mapping := ShapeMapping{Columns: map[ColumnRef]Disposition{}}
-	for _, c := range cols {
-		mapping.Columns[ColumnRef{Table: "issues", Column: c}] = knownSourceColumns["issues"][c]
-	}
+	mapping := ShapeMapping{Tables: []TableMapping{fullIssuesMapping(dump.Tables[0])}}
 	err := Validate(dump, mapping)
 	if err == nil || !strings.Contains(err.Error(), "cells, want") {
 		t.Fatalf("Validate must reject a row/column arity mismatch; got %v", err)
