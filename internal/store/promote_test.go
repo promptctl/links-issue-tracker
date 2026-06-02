@@ -4,11 +4,54 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"testing"
 )
+
+// copyTree recursively copies the directory tree at src to dst (which must not
+// exist), preserving file contents and modes. Pure Go — no dependency on an
+// external `cp` binary or platform-specific flags — so the fresh-read assertions
+// it backs run identically on every platform rather than silently skipping where
+// a tool is missing.
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(src, path)
+		if err != nil {
+			return err
+		}
+		target := filepath.Join(dst, rel)
+		info, err := d.Info()
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.MkdirAll(target, info.Mode().Perm())
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
+		if err != nil {
+			return err
+		}
+		if _, err := io.Copy(out, in); err != nil {
+			out.Close()
+			return err
+		}
+		return out.Close()
+	})
+	if err != nil {
+		t.Fatalf("copy tree %q -> %q: %v", src, dst, err)
+	}
+}
 
 // seedRealWorkspace builds a real Dolt workspace at doltRoot carrying one issue
 // per title, then returns its below-the-gate dump. The dump's DoltHead is the
@@ -42,9 +85,7 @@ func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, title
 func freshExportIDs(t *testing.T, ctx context.Context, src string) map[string]bool {
 	t.Helper()
 	dst := filepath.Join(t.TempDir(), "freshread")
-	if out, err := exec.Command("cp", "-a", src, dst).CombinedOutput(); err != nil {
-		t.Fatalf("copy %q for fresh read: %v (%s)", src, err, out)
-	}
+	copyTree(t, src, dst)
 	st, err := Open(ctx, dst, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("open fresh copy of %q: %v", src, err)
@@ -313,6 +354,49 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 	}
 	if got := readMarker(t, canonical); got != "pre-crash" {
 		t.Fatalf("no-op heal disturbed the workspace: marker=%q", got)
+	}
+}
+
+// TestPromoteCandidateRefusesDumpWithoutProvenance proves the provenance gate: a
+// candidate built from a dump carrying no head (e.g. an artifact decoded from JSON
+// that predates head tracking) cannot be promoted, because its staleness is
+// unverifiable. It fails with the provenance-specific error, never a bogus advance
+// from "", and changes nothing on disk.
+func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
+	ctx := context.Background()
+	storageDir := t.TempDir()
+	canonical := filepath.Join(storageDir, "dolt")
+
+	originalIDs := func() map[string]bool {
+		seedRealWorkspace(t, ctx, canonical, "live subject")
+		return freshExportIDs(t, ctx, canonical)
+	}()
+
+	// preGooseDump is a synthetic dump with no recorded DoltHead — the missing-
+	// provenance shape. The candidate it builds carries an empty expected head.
+	cand, err := RebuildCandidate(ctx, storageDir, preGooseDump(), mustMap(t, preGooseDump()))
+	if err != nil {
+		t.Fatalf("RebuildCandidate: %v", err)
+	}
+	t.Cleanup(func() { _ = cand.Discard() })
+
+	_, err = PromoteCandidate(ctx, canonical, cand)
+	if !errors.Is(err, ErrMissingDumpProvenance) {
+		t.Fatalf("PromoteCandidate of a no-provenance candidate: err = %v; want ErrMissingDumpProvenance", err)
+	}
+	if errors.Is(err, ErrWorkspaceAdvanced) {
+		t.Fatal("missing provenance must not masquerade as a concurrent advance")
+	}
+
+	// Nothing moved: no backup, live workspace untouched.
+	if hasPromotionBackup(t, canonical) {
+		t.Fatal("a refused promotion made a backup; nothing should have moved")
+	}
+	liveIDs := freshExportIDs(t, ctx, canonical)
+	for id := range originalIDs {
+		if !liveIDs[id] {
+			t.Fatalf("the live workspace lost issue %q on a refused promotion; live has %v", id, liveIDs)
+		}
 	}
 }
 

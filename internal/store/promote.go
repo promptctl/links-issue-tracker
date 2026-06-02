@@ -123,6 +123,15 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 // detect it with errors.Is regardless of the operator-facing detail attached.
 var ErrWorkspaceAdvanced = errors.New("workspace advanced since dump")
 
+// ErrMissingDumpProvenance is the sentinel for a candidate whose dump carries no
+// head — the lost-update gate cannot run because there is no commit to compare
+// against. [LAW:types-are-the-program] "Provenance absent" is a distinct theorem
+// from "workspace advanced": a dump produced by DumpRaw always records its head,
+// so an empty one means the dump crossed a trust boundary that dropped it (an
+// artifact decoded from JSON predating head tracking, or assembled by hand). It
+// gets its own error rather than masquerading as a spurious advance from "".
+var ErrMissingDumpProvenance = errors.New("dump has no recorded head commit")
+
 // verifyHeadUnchanged is the lost-update gate. It re-reads the live workspace's
 // Dolt head below the migration gate and refuses the promotion unless it still
 // matches the head the candidate was rebuilt from.
@@ -137,6 +146,13 @@ var ErrWorkspaceAdvanced = errors.New("workspace advanced since dump")
 // concurrent commit, so the safe action is to refuse and surface why. Read-only
 // below the gate, the worst case is a read error with the live workspace untouched.
 func verifyHeadUnchanged(ctx context.Context, canonicalDoltDir, workspaceID, expectedHead string) (err error) {
+	// [LAW:no-silent-fallbacks] A candidate with no recorded head cannot be checked
+	// for staleness; promoting it would gamble the live workspace on an unverifiable
+	// snapshot. Refuse with the provenance-specific error rather than comparing
+	// against "" and reporting a bogus advance.
+	if expectedHead == "" {
+		return fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)
+	}
 	s, err := openStoreConnection(canonicalDoltDir, workspaceID)
 	if err != nil {
 		return fmt.Errorf("re-read live workspace head: %w", err)
