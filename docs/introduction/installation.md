@@ -3,20 +3,21 @@
 ## Requirements
 
 - Git repository or worktree
-- Dolt CLI `>= 1.81.10`
-- Go toolchain (for `go install`)
+- Go toolchain (`lit` builds from source)
+
+The `dolt` CLI is **not** required to run `lit` — the Dolt storage engine is compiled into
+the binary. It's only used as a test oracle when developing `lit` itself.
 
 ## Install `lit`
 
 ```sh
+git clone https://github.com/promptctl/links-issue-tracker
+cd links-issue-tracker
 ./scripts/install.sh
 ```
 
-Install from outside a checkout:
-
-```sh
-go install github.com/bmf/links-issue-tracker/cmd/lit@latest
-```
+`install.sh` builds `lit` from the checkout, installs it onto your `PATH`, and warns about
+any stale `lit` binaries that would shadow it.
 
 ### macOS Homebrew note
 
