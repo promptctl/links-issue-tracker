@@ -104,12 +104,18 @@ func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
 	if err := dec.Decode(&wire); err != nil {
 		return err
 	}
-	// A mapping file is one JSON document. Trailing non-whitespace (e.g. a second
-	// object) means the artifact is malformed — the operator concatenated or
-	// edited it wrong — and accepting only the first object would silently ignore
-	// the rest. Require the stream to be exhausted.
-	if err := dec.Decode(new(json.RawMessage)); err != io.EOF {
+	// A mapping file is one JSON document. Trailing non-whitespace means the
+	// artifact is malformed — the operator concatenated or edited it wrong — and
+	// accepting only the first object would silently ignore the rest. The stream's
+	// state after the first value is a closed three-way: exhausted (good), a
+	// second well-formed value (trailing data), or bytes that don't parse (the
+	// underlying syntax error carries the operator's location, so preserve it).
+	switch trailing := dec.Decode(new(json.RawMessage)); trailing {
+	case io.EOF:
+	case nil:
 		return fmt.Errorf("shapemapping: unexpected trailing data after the mapping document")
+	default:
+		return fmt.Errorf("shapemapping: malformed trailing data after the mapping document: %w", trailing)
 	}
 	cols := make(map[ColumnRef]Disposition, len(wire.Columns))
 	for _, entry := range wire.Columns {

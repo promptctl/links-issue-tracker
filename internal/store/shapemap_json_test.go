@@ -185,6 +185,16 @@ func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
 	} else if !strings.Contains(err.Error(), "trailing data") {
 		t.Fatalf("error must name the trailing data, got: %v", err)
 	}
+
+	// Trailing bytes that don't parse must preserve the underlying syntax error,
+	// so the operator gets the location of the junk, not just "there was junk".
+	garbage := `{"columns":[]}@@@nonsense`
+	var viaGarbage ShapeMapping
+	if err := viaGarbage.UnmarshalJSON([]byte(garbage)); err == nil {
+		t.Fatal("UnmarshalJSON must reject unparseable trailing bytes")
+	} else if !strings.Contains(err.Error(), "trailing data") || !strings.Contains(err.Error(), "invalid character") {
+		t.Fatalf("error must name trailing data AND preserve the underlying syntax error, got: %v", err)
+	}
 }
 
 // TestDecodedMappingRecoversNovelAheadShape is the end-to-end proof the operator
