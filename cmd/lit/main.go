@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/bmf/links-issue-tracker/internal/cli"
+	"github.com/promptctl/links-issue-tracker/internal/cli"
 )
 
 func main() {

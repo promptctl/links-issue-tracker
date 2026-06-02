@@ -11,11 +11,11 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/app"
-	"github.com/bmf/links-issue-tracker/internal/backup"
-	"github.com/bmf/links-issue-tracker/internal/model"
-	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/syncfile"
+	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/backup"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 )
 
 func validateBackupCommandPath(args []string) error {

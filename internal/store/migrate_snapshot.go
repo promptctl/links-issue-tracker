@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 )
 
 // migrationSnapshotRetention bounds how many migration-recovery snapshots are

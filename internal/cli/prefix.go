@@ -6,8 +6,8 @@ import (
 	"io"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/issueid"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/issueid"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // prefixSetResult is the JSON-serialisable shape returned by `lit prefix set`.

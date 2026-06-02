@@ -55,7 +55,7 @@ type Resolver interface {
 //
 // [LAW:one-source-of-truth] Same value as scripts/install.sh's
 // REPO_DOWNLOAD_BASE. If the repo moves, both move together.
-const DefaultBaseURL = "https://github.com/brandon-fryslie/links-issue-tracker/releases/download"
+const DefaultBaseURL = "https://github.com/promptctl/links-issue-tracker/releases/download"
 
 // HTTPResolver is the default Resolver. It HTTP-GETs the manifest at
 // <BaseURL>/<tag>/release-manifest.json and decodes it into a Manifest.

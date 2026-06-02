@@ -1,4 +1,4 @@
-module github.com/bmf/links-issue-tracker
+module github.com/promptctl/links-issue-tracker
 
 go 1.25.7
 

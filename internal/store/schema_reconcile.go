@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
-	"github.com/bmf/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 )
 
 // Pre-goose schema reconcile.

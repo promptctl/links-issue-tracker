@@ -21,8 +21,8 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
-REPO_DOWNLOAD_BASE="https://github.com/brandon-fryslie/links-issue-tracker/releases/download"
-REPO_LATEST_API="https://api.github.com/repos/brandon-fryslie/links-issue-tracker/releases/latest"
+REPO_DOWNLOAD_BASE="https://github.com/promptctl/links-issue-tracker/releases/download"
+REPO_LATEST_API="https://api.github.com/repos/promptctl/links-issue-tracker/releases/latest"
 
 # [LAW:one-source-of-truth] One variable names the on-disk binary across every
 # mode: from-release extraction validation, atomic rename, the stale-binary
@@ -213,7 +213,7 @@ case "$mode" in
         ver="${ver#v}"
         commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
         date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-        pkg="github.com/bmf/links-issue-tracker/internal/version"
+        pkg="github.com/promptctl/links-issue-tracker/internal/version"
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
             -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${commit} -X ${pkg}.Date=${date}" \
             -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit

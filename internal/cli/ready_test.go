@@ -11,11 +11,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/bmf/links-issue-tracker/internal/annotation"
-	"github.com/bmf/links-issue-tracker/internal/app"
-	"github.com/bmf/links-issue-tracker/internal/model"
-	"github.com/bmf/links-issue-tracker/internal/store"
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func newTestCLIApp(t *testing.T) *app.App {

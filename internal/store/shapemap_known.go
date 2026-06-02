@@ -4,7 +4,7 @@ import (
 	"io/fs"
 	"regexp"
 
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // This file holds the knowledge that changes as the schema's history grows:

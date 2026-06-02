@@ -6,8 +6,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
-	"github.com/bmf/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 )
 
 // The verify gate is the trust boundary the recovery loop cannot talk its way

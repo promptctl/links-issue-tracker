@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 type kindDef struct {

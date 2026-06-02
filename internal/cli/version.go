@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/bmf/links-issue-tracker/internal/version"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // runVersion is the user-facing surface for the binary's identity. Human and

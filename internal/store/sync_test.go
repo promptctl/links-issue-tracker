@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/doltcli"
+	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 )
 
 func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {

@@ -3,7 +3,7 @@ package version
 import (
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
 // TestGetReportsRegistryBounds is the contract test that pins the single

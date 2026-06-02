@@ -7,9 +7,9 @@ import (
 	"io"
 	"strings"
 
-	"github.com/bmf/links-issue-tracker/internal/annotation"
-	"github.com/bmf/links-issue-tracker/internal/app"
-	"github.com/bmf/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // backlogPreamble explains what the backlog view is so an agent reading top to

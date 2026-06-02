@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 func TestExitCodeMappings(t *testing.T) {

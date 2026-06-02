@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/bmf/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 const (

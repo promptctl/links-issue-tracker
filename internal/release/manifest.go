@@ -21,7 +21,7 @@
 // parallel JSON schema description that could drift from this struct.
 package release
 
-import "github.com/bmf/links-issue-tracker/internal/version"
+import "github.com/promptctl/links-issue-tracker/internal/version"
 
 // Manifest is the per-release index. It embeds version.Info so a release's
 // identity (Version, Commit, Date, Schema) is recorded in exactly the same

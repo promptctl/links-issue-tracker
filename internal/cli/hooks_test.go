@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/bmf/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestHooksInstallWritesPrePushHook(t *testing.T) {
