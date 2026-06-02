@@ -89,7 +89,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 	dump := preGooseDump()
 
 	// An empty mapping is not total over the dump's columns: Apply rejects it.
-	if _, err := RebuildCandidate(ctx, parent, dump, ShapeMapping{Columns: map[ColumnRef]Disposition{}}); err == nil {
+	if _, err := RebuildCandidate(ctx, parent, dump, ShapeMapping{}); err == nil {
 		t.Fatal("RebuildCandidate accepted an incomplete mapping")
 	}
 	if n := dirEntryCount(t, parent); n != 0 {
