@@ -1,6 +1,7 @@
 package store
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -91,8 +92,15 @@ func (m ShapeMapping) MarshalJSON() ([]byte, error) {
 // (no sealed variant to produce) and a repeated (table,column) entry (which
 // would silently collapse to one disposition).
 func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
+	// [LAW:no-silent-fallbacks] The mapping file is an operator's authored
+	// artifact at a trust boundary: an unknown field is a typo (e.g. "prov" for
+	// "provenance"), not data to discard. Reject it here, where the byte that is
+	// wrong is still in hand, rather than let json silently drop it and surface a
+	// confusing "unaccounted-for column" three steps downstream in Validate.
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
 	var wire mappingWire
-	if err := json.Unmarshal(data, &wire); err != nil {
+	if err := dec.Decode(&wire); err != nil {
 		return err
 	}
 	cols := make(map[ColumnRef]Disposition, len(wire.Columns))

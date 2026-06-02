@@ -149,6 +149,20 @@ func TestShapeMappingJSONRejectsDuplicateColumn(t *testing.T) {
 	}
 }
 
+// TestShapeMappingJSONRejectsUnknownField locks the trust boundary: an operator
+// typo in a field name (here "prov" for "provenance") is rejected at decode
+// rather than silently dropped, which would otherwise surface as a confusing
+// downstream Validate error far from its cause.
+func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
+	bad := `{"columns":[{"table":"issues","column":"x","kind":"drop","prov":"unexplained"}]}`
+	var m ShapeMapping
+	if err := json.Unmarshal([]byte(bad), &m); err == nil {
+		t.Fatal("decode must reject an unknown field name")
+	} else if !strings.Contains(err.Error(), "unknown field") {
+		t.Fatalf("error must name the unknown field, got: %v", err)
+	}
+}
+
 // TestDecodedMappingRecoversNovelAheadShape is the end-to-end proof the operator
 // path turns on: a mapping authored as JSON, decoded through the wire form,
 // recovers a workspace the deterministic mapper DECLINES — Doctor-clean, every
