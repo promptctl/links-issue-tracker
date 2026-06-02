@@ -29,12 +29,12 @@ type Checkpoint struct {
 // [LAW:single-enforcer] All Dolt branching for migration checkpoints routes
 // through this method; no other code calls DOLT_BRANCH directly for this.
 func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (Checkpoint, error) {
-	// [LAW:one-source-of-truth] CommitSHA is captured from dolt_log at
-	// creation so the caller has a stable reference independent of later
-	// branch movement.
-	var commitSHA string
-	if err := s.db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1`).Scan(&commitSHA); err != nil {
-		return Checkpoint{}, fmt.Errorf("checkpoint: get HEAD hash: %w", err)
+	// [LAW:one-source-of-truth] CommitSHA is captured from the one HEAD reader at
+	// creation so the caller has a stable reference independent of later branch
+	// movement.
+	commitSHA, err := readDoltHead(ctx, s.db)
+	if err != nil {
+		return Checkpoint{}, fmt.Errorf("checkpoint: %w", err)
 	}
 	ts := time.Now().UTC()
 	name := fmt.Sprintf("%s-%d", prefix, ts.UnixNano())

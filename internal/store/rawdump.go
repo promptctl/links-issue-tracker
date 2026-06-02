@@ -21,8 +21,16 @@ import (
 // or removes columns changes the data the dump carries, never the code that
 // produces it.
 type RawDump struct {
-	WorkspaceID string     `json:"workspace_id"`
-	Tables      []RawTable `json:"tables"`
+	WorkspaceID string `json:"workspace_id"`
+	// DoltHead is the workspace's Dolt HEAD commit at dump time — the commit this
+	// snapshot's rows were read from. It is the dump's provenance: a recovery
+	// rebuilds the workspace as of this commit, so a promotion can refuse to
+	// install over a workspace that has since advanced (links-recovery-j0vl.7).
+	// [LAW:types-are-the-program] Recording it makes "this dump is stale relative
+	// to the live workspace" a representable, checkable fact rather than a silent
+	// lost-update window.
+	DoltHead string     `json:"dolt_head"`
+	Tables   []RawTable `json:"tables"`
 }
 
 // RawTable is one table's complete contents. Columns preserves catalog order so
@@ -83,6 +91,14 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 			err = errors.Join(err, closeErr)
 		}
 	}()
+	// [LAW:no-silent-fallbacks] The head read is part of the dump, not optional: a
+	// snapshot whose provenance commit is unknown cannot be protected against a
+	// concurrent advance, so an unreadable head fails the whole dump loudly rather
+	// than yielding an artifact that silently forfeits the lost-update guarantee.
+	head, err := readDoltHead(ctx, s.db)
+	if err != nil {
+		return RawDump{}, err
+	}
 	names, err := listTables(ctx, s.db)
 	if err != nil {
 		return RawDump{}, err
@@ -95,7 +111,24 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 		}
 		tables = append(tables, table)
 	}
-	return RawDump{WorkspaceID: workspaceID, Tables: tables}, nil
+	return RawDump{WorkspaceID: workspaceID, DoltHead: head, Tables: tables}, nil
+}
+
+// readDoltHead reads the workspace's current Dolt HEAD commit hash. It reads the
+// commit graph (dolt_log), which is version-control metadata independent of the
+// application schema, so it works below the migration gate on any workspace —
+// one store.Open() refuses as readily as a healthy one.
+//
+// [LAW:one-source-of-truth] "Which commit is live" has one reader. The dump's
+// provenance, the promote-time lost-update re-check, and migration checkpointing
+// all resolve the HEAD here rather than re-spelling the query and risking drift
+// (one qualifying the branch, another not).
+func readDoltHead(ctx context.Context, db *sql.DB) (string, error) {
+	var head string
+	if err := db.QueryRowContext(ctx, `SELECT commit_hash FROM dolt_log() LIMIT 1`).Scan(&head); err != nil {
+		return "", fmt.Errorf("read dolt head: %w", err)
+	}
+	return head, nil
 }
 
 // listTables returns every base table in the database in deterministic
