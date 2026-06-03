@@ -131,7 +131,7 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 		})
 		cross.collect(childDetail, internal)
 	}
-	cross.sortStable()
+	cross.sortByEndpoints()
 	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
 }
 
@@ -194,9 +194,11 @@ func openExcluding(others []model.Issue, excluded map[string]struct{}) []model.I
 	return out
 }
 
-// sortStable orders each subsection by (blocked, blocker) so render output is
-// deterministic regardless of child iteration order.
-func (x *crossEpicEdges) sortStable() {
+// sortByEndpoints orders each subsection by (blocked, blocker) so render output
+// is deterministic regardless of child iteration order. (blocked, blocker) is a
+// total order over distinct edges — no two compare equal — so determinism comes
+// from the comparator, not from sort stability.
+func (x *crossEpicEdges) sortByEndpoints() {
 	byEndpoints := func(edges []crossEpicEdge) {
 		sort.Slice(edges, func(i, j int) bool {
 			if edges[i].Blocked != edges[j].Blocked {
