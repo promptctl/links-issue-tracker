@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -143,6 +144,53 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	}
 	cross.sortByEndpoints()
 	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
+}
+
+// epicTarget names the epic whose plan context `lit show` appends for an issue,
+// and the child to mark focused within it ("" for none). It is the resolved
+// answer to "which plan slice does this issue belong to" — a value, so the show
+// path renders unconditionally on its presence rather than re-deriving the
+// cases at the callsite.
+type epicTarget struct {
+	EpicID  string
+	Focused string
+}
+
+// epicViewFor classifies an issue into the epic plan it belongs to. A container
+// (epic) shows its own children with no focus; a leaf under an epic shows that
+// epic's plan with itself focused; an issue in no epic returns nil — the genuine
+// "no plan slice" case, encoded as absence rather than an empty value.
+// [LAW:types-are-the-program] The optionality is the value: nil means no block,
+// so the show path never re-tests the three cases. The container-parent test is
+// the same predicate enrichWithParentEpic uses, so "what counts as an epic
+// parent" has one definition. [LAW:one-source-of-truth]
+func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
+	if issue.IsContainer() {
+		return &epicTarget{EpicID: issue.ID}
+	}
+	if parent != nil && parent.IsContainer() {
+		return &epicTarget{EpicID: parent.ID, Focused: issue.ID}
+	}
+	return nil
+}
+
+// writeEpicContext appends the epic plan block for one shown issue when it
+// belongs to an epic. A leading blank line separates the block from the issue
+// body; an issue in no epic writes nothing. This is the single point where store
+// resolution meets the show text path — the build/render seam stays pure.
+// [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
+// real "no epic membership" case, not a defended-against bug.
+func writeEpicContext(ctx context.Context, st *store.Store, w io.Writer, detail model.IssueDetail) error {
+	target := epicViewFor(detail.Issue, detail.Parent)
+	if target == nil {
+		return nil
+	}
+	ec, err := buildEpicContext(ctx, st, target.EpicID, target.Focused)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "\n%s", renderEpicContext(ec))
+	return err
 }
 
 // epicMemberIDs is the set of ids inside the epic — the epic node itself plus

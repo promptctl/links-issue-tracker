@@ -743,7 +743,11 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	return printValue(stdout, detail, *jsonOut, func(w io.Writer, v any) error {
-		return printIssueDetail(w, v.(model.IssueDetail))
+		d := v.(model.IssueDetail)
+		if err := printIssueDetail(w, d); err != nil {
+			return err
+		}
+		return writeEpicContext(ctx, ap.Store, w, d)
 	})
 }
 
