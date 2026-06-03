@@ -62,8 +62,8 @@ type EpicContext struct {
 const statusMarkerWidth = len("[in_progress]")
 
 // classifyChildStatus maps a child issue and its open-blocker ids to a display
-// status. openBlockers must already be ordered most-direct-first; the first
-// entry names the blocker in a blocked status.
+// status. openBlockers is the child's open blocker ids in a deterministic
+// order; the first entry names the blocker in a blocked status.
 // [LAW:dataflow-not-control-flow] The match is over the child's discriminated
 // lifecycle state; open vs blocked is decided by the blocker-count value, not
 // by whether some branch runs.
@@ -103,7 +103,7 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 }
 
 // openBlockerIDs returns the ids of an issue's still-open direct blockers,
-// ordered by id so the most-direct blocker named in a blocked marker is stable.
+// sorted by id so the blocker named in a blocked marker is deterministic.
 func openBlockerIDs(ctx context.Context, st *store.Store, issueID string) ([]string, error) {
 	detail, err := st.GetIssueDetail(ctx, issueID)
 	if err != nil {
