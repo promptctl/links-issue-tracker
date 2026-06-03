@@ -117,7 +117,7 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	if err != nil {
 		return EpicContext{}, err
 	}
-	internal := childIDSet(detail.Children)
+	internal := epicMemberIDs(detail.Issue.ID, detail.Children)
 	children := make([]epicChild, 0, len(detail.Children))
 	var cross crossEpicEdges
 	for _, child := range detail.Children {
@@ -139,10 +139,13 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
 }
 
-// childIDSet is the set of ids inside the epic — the membership test that
-// decides whether a blocks edge crosses the boundary.
-func childIDSet(children []model.Issue) map[string]struct{} {
-	set := make(map[string]struct{}, len(children))
+// epicMemberIDs is the set of ids inside the epic — the epic node itself plus
+// its children — which is the membership test that decides whether a blocks
+// edge crosses the boundary. The epic id is included so an edge between a child
+// and its own epic is intra-epic, never surfaced as a cross-epic dependency.
+func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
+	set := make(map[string]struct{}, len(children)+1)
+	set[epicID] = struct{}{}
 	for _, child := range children {
 		set[child.ID] = struct{}{}
 	}

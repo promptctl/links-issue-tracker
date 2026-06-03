@@ -269,6 +269,17 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 	}
 }
 
+func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
+	f := newEpicFixture(t, "Epic self edge", "deps")
+	child := f.addChild("Inside")
+	f.block(child, f.epicID) // child depends on its own epic: inside the boundary
+
+	out := f.render("")
+	if strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("an edge between a child and its own epic is intra-epic, not cross-epic:\n%s", out)
+	}
+}
+
 func TestFirstLineStripsHeadingAndBlanks(t *testing.T) {
 	cases := map[string]string{
 		"# Heading\nbody":  "Heading",
