@@ -66,14 +66,15 @@ type ImportLabel struct {
 }
 
 type HealthReport struct {
-	IntegrityCheck     string   `json:"integrity_check"`
-	ForeignKeyIssues   int      `json:"foreign_key_issues"`
-	InvalidRelatedRows int      `json:"invalid_related_rows"`
-	OrphanHistoryRows  int      `json:"orphan_history_rows"`
-	RankInversions     int      `json:"rank_inversions"`
-	DependencyCycle    []string `json:"dependency_cycle"`
-	Errors             []string `json:"errors"`
-	Warnings           []string `json:"warnings"`
+	IntegrityCheck       string   `json:"integrity_check"`
+	ForeignKeyIssues     int      `json:"foreign_key_issues"`
+	InvalidRelatedRows   int      `json:"invalid_related_rows"`
+	OrphanHistoryRows    int      `json:"orphan_history_rows"`
+	RankInversions       int      `json:"rank_inversions"`
+	UpdateDryRunFailures int      `json:"update_dryrun_failures"`
+	DependencyCycle      []string `json:"dependency_cycle"`
+	Errors               []string `json:"errors"`
+	Warnings             []string `json:"warnings"`
 }
 
 func (s *Store) Export(ctx context.Context) (model.Export, error) {
@@ -171,6 +172,25 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	if len(cycle) > 0 {
 		report.DependencyCycle = cycle
 		report.Warnings = append(report.Warnings, fmt.Sprintf("blocks dependency cycle: %s (no rank order exists; remove one edge with 'lit dep rm' to break it)", strings.Join(cycle, " -> ")))
+	}
+	// Updates are an interactive flow, not a state, so a broken ApplyUpdate is
+	// invisible to the integrity counts above — yet any issue whose no-op update
+	// errors is effectively read-only until a user discovers it the hard way.
+	// Dry-run a no-op update against every non-deleted issue (read-only:
+	// validateNoopUpdate never mutates) so a regression of the container-update
+	// bug class fails the doctor before a user hits it. Linear in issue count;
+	// doctor is a maintenance command, so this is run unconditionally rather than
+	// behind a mode. [LAW:single-enforcer] The same transition decision and
+	// validation ApplyUpdate uses is what is exercised here.
+	issues, err := s.ListIssues(ctx, ListIssuesFilter{Limit: 0, IncludeArchived: true})
+	if err != nil {
+		return report, fmt.Errorf("load issues for update dry-run: %w", err)
+	}
+	for _, issue := range issues {
+		if updateErr := validateNoopUpdate(issue); updateErr != nil {
+			report.Errors = append(report.Errors, fmt.Sprintf("no-op update would fail for %s: %v", issue.ID, updateErr))
+			report.UpdateDryRunFailures++
+		}
 	}
 	return report, nil
 }
