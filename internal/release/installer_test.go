@@ -2,6 +2,7 @@ package release
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -45,6 +46,29 @@ func buildTarGz(t *testing.T, entries map[string]string) []byte {
 	}
 	if err := gw.Close(); err != nil {
 		t.Fatalf("gzip close: %v", err)
+	}
+	return buf.Bytes()
+}
+
+// buildZip returns a flat .zip containing one regular-file entry per
+// (name, content) pair. Mirrors goreleaser's windows archive shape (format
+// override → zip) so the installer's zip path is exercised against realistic
+// input. The windows binary entry is lit.exe, not lit.
+func buildZip(t *testing.T, entries map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	for name, body := range entries {
+		w, err := zw.Create(name)
+		if err != nil {
+			t.Fatalf("zip create %q: %v", name, err)
+		}
+		if _, err := w.Write([]byte(body)); err != nil {
+			t.Fatalf("zip write %q: %v", name, err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatalf("zip close: %v", err)
 	}
 	return buf.Bytes()
 }
@@ -147,7 +171,7 @@ func TestHTTPInstallerSHA256MismatchRefuses(t *testing.T) {
 }
 
 func TestHTTPInstallerRejectsUnsafeArchiveEntry(t *testing.T) {
-	// Path-traversal entry. extractLitBinary must refuse before writing.
+	// Path-traversal entry. extractBinary must refuse before writing.
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -184,7 +208,7 @@ func TestHTTPInstallerArchiveMissingBinary(t *testing.T) {
 }
 
 func TestHTTPInstallerRejectsMultipleLitEntries(t *testing.T) {
-	// Two `lit` entries — extractLitBinary must refuse the second, not append.
+	// Two `lit` entries — extractBinary must refuse the second, not append.
 	var buf bytes.Buffer
 	gw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gw)
@@ -265,6 +289,80 @@ func TestHTTPInstallerRejectsOversizedEntryHeader(t *testing.T) {
 	}
 }
 
+func TestHTTPInstallerInstallsZip(t *testing.T) {
+	// windows ships a .zip whose binary entry is lit.exe (not lit). The
+	// installer must select the zip enumerator from the URL suffix and look
+	// for lit.exe — proving format and binary name co-vary.
+	archive := buildZip(t, map[string]string{
+		"lit.exe": "NEW-WINDOWS-BINARY",
+		"LICENSE": "MIT",
+	})
+	srv := newArchiveServer(t, archive)
+
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "lit.exe")
+	if err := os.WriteFile(targetPath, []byte("OLD"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	tgt := &Target{Artifact: Artifact{
+		URL:    srv.URL + "/lit_1.0.0_windows_amd64.zip",
+		SHA256: sha256Hex(archive),
+	}}
+	if err := (&HTTPInstaller{}).Install(context.Background(), tgt, targetPath); err != nil {
+		t.Fatalf("Install zip: %v", err)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != "NEW-WINDOWS-BINARY" {
+		t.Errorf("contents after zip install: got %q want NEW-WINDOWS-BINARY", got)
+	}
+}
+
+func TestHTTPInstallerZipRejectsUnsafeEntry(t *testing.T) {
+	// Zip Slip: an entry escaping via "../". The shared accept-shape must
+	// refuse it on the zip path exactly as it does on tar.
+	archive := buildZip(t, map[string]string{"../evil": "PWND"})
+	srv := newArchiveServer(t, archive)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "lit.exe")
+	_ = os.WriteFile(targetPath, []byte("OLD"), 0o755)
+
+	tgt := &Target{Artifact: Artifact{URL: srv.URL + "/x.zip", SHA256: sha256Hex(archive)}}
+	err := (&HTTPInstaller{}).Install(context.Background(), tgt, targetPath)
+	if err == nil || !strings.Contains(err.Error(), "unsafe path") {
+		t.Fatalf("expected unsafe-path rejection on zip, got %v", err)
+	}
+}
+
+func TestHTTPInstallerZipMissingBinary(t *testing.T) {
+	// A zip carrying "lit" (the tar-platform name) instead of "lit.exe" must
+	// fail: the zip format looks for lit.exe, so the name binding is enforced.
+	archive := buildZip(t, map[string]string{"lit": "WRONG-NAME"})
+	srv := newArchiveServer(t, archive)
+	dir := t.TempDir()
+	targetPath := filepath.Join(dir, "lit.exe")
+	_ = os.WriteFile(targetPath, []byte("OLD"), 0o755)
+
+	tgt := &Target{Artifact: Artifact{URL: srv.URL + "/x.zip", SHA256: sha256Hex(archive)}}
+	err := (&HTTPInstaller{}).Install(context.Background(), tgt, targetPath)
+	if err == nil || !strings.Contains(err.Error(), `"lit.exe"`) {
+		t.Fatalf("expected missing lit.exe error, got %v", err)
+	}
+	got, _ := os.ReadFile(targetPath)
+	if string(got) != "OLD" {
+		t.Errorf("target should be unchanged when binary entry missing, got %q", got)
+	}
+}
+
+func TestHTTPInstallerRejectsUnknownExtension(t *testing.T) {
+	// Neither .tar.gz nor .zip — refused at the boundary before any download.
+	tgt := &Target{Artifact: Artifact{URL: "https://example.test/lit.tar.bz2", SHA256: strings.Repeat("0", 64)}}
+	err := (&HTTPInstaller{}).Install(context.Background(), tgt, filepath.Join(t.TempDir(), "lit"))
+	if err == nil || !strings.Contains(err.Error(), "unsupported archive extension") {
+		t.Fatalf("expected unsupported-extension rejection, got %v", err)
+	}
+}
+
 func TestBoundedReaderEdgeCases(t *testing.T) {
 	// Exactly cap bytes followed by EOF must pass through cleanly.
 	exact := bytes.NewReader(make([]byte, 100))
@@ -329,4 +427,3 @@ func TestHTTPInstallerEnforcesSizeCap(t *testing.T) {
 		t.Fatalf("expected size-cap refusal, got %v", err)
 	}
 }
-
