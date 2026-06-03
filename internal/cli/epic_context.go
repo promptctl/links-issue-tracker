@@ -125,9 +125,13 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 		if err != nil {
 			return EpicContext{}, err
 		}
+		// [LAW:one-source-of-truth] The row's issue, its status, its blockers,
+		// and its cross-epic edges all derive from this one resolved detail —
+		// never the epic-snapshot child, which could disagree if the child's
+		// state changed between the epic fetch and this one.
 		children = append(children, epicChild{
-			Issue:  child,
-			Status: classifyChildStatus(child, openBlockers(childDetail)),
+			Issue:  childDetail.Issue,
+			Status: classifyChildStatus(childDetail.Issue, openBlockers(childDetail)),
 		})
 		cross.collect(childDetail, internal)
 	}
