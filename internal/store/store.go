@@ -746,55 +746,21 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		return model.IssueDetail{}, err
 	}
 
+	// [LAW:one-source-of-truth] Structural edges (parent/child/blocks) are
+	// bucketed by the same helper the batch accessor uses, so the blocks
+	// convention has one definition. Related is GetIssueDetail's own concern.
+	structural := bucketRelations(id, relations, relatedByID)
 	detail := model.IssueDetail{
 		Issue:     issue,
 		Relations: relations,
 		Comments:  comments,
 		Events:    events,
-		Children:  []model.Issue{},
-		DependsOn: []model.Issue{},
-		Related:   []model.Issue{},
-		Blocks:    []model.Issue{},
+		Children:  structural.Children,
+		DependsOn: structural.DependsOn,
+		Blocks:    structural.Blocks,
+		Parent:    structural.Parent,
+		Related:   relatedFrom(id, relations, relatedByID),
 	}
-	for _, rel := range relations {
-		switch rel.Type {
-		case "blocks":
-			// blocks convention: src_id=dependent, dst_id=dependency.
-			if rel.SrcID == id {
-				if dep, ok := relatedByID[rel.DstID]; ok {
-					detail.DependsOn = append(detail.DependsOn, dep)
-				}
-			}
-			if rel.DstID == id {
-				if dependent, ok := relatedByID[rel.SrcID]; ok {
-					detail.Blocks = append(detail.Blocks, dependent)
-				}
-			}
-		case "parent-child":
-			if rel.SrcID == id {
-				if parent, ok := relatedByID[rel.DstID]; ok {
-					detail.Parent = &parent
-				}
-			}
-			if rel.DstID == id {
-				if child, ok := relatedByID[rel.SrcID]; ok {
-					detail.Children = append(detail.Children, child)
-				}
-			}
-		case "related-to":
-			otherID := rel.SrcID
-			if otherID == id {
-				otherID = rel.DstID
-			}
-			if related, ok := relatedByID[otherID]; ok {
-				detail.Related = append(detail.Related, related)
-			}
-		}
-	}
-	sortIssuesByRank(detail.Children)
-	sortIssuesByRank(detail.DependsOn)
-	sortIssuesByRank(detail.Related)
-	sortIssuesByRank(detail.Blocks)
 	return detail, nil
 }
 

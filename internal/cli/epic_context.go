@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"strings"
 
@@ -113,36 +114,102 @@ func classifyChildStatus(child model.Issue, openBlockers []string) childStatus {
 // status classification and the cross-epic edge collection, so there is one
 // resolved source per child rather than a separate fetch per concern.
 func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChildID string) (EpicContext, error) {
-	detail, err := st.GetIssueDetail(ctx, epicID)
+	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
 	if err != nil {
 		return EpicContext{}, err
 	}
-	internal := epicMemberIDs(detail.Issue.ID, detail.Children)
-	children := make([]epicChild, 0, len(detail.Children))
+	// GetRelationsByIDs omits subjects that don't exist; the epic is the subject
+	// and must resolve, so its absence is a NotFound, not a zero-value render.
+	// [LAW:no-defensive-null-guards] This fails loudly at the store boundary
+	// (matching the prior GetIssueDetail path) rather than skipping silently.
+	epic, ok := epicRels[epicID]
+	if !ok {
+		return EpicContext{}, store.NotFoundError{Entity: "issue", ID: epicID}
+	}
+	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
+	childIDs := make([]string, len(epic.Children))
+	for i, child := range epic.Children {
+		childIDs[i] = child.ID
+	}
+	// [LAW:dataflow-not-control-flow] One batch resolves every child's relations
+	// at once; the loop below is pure map lookups, not a fetch per child.
+	childRels, err := st.GetRelationsByIDs(ctx, childIDs)
+	if err != nil {
+		return EpicContext{}, err
+	}
+	children := make([]epicChild, 0, len(epic.Children))
 	var cross crossEpicEdges
 	// [LAW:one-source-of-truth] "Inside the epic" is one boundary used two ways:
 	// epicMemberIDs excludes intra-epic edges, and collect gathers the crossing
 	// ones. The epic node is a member, so its own external edges cross the
-	// boundary exactly as a child's do — collect from the epic detail too, or
-	// the two uses of "inside" would disagree.
-	cross.collect(detail, internal)
-	for _, child := range detail.Children {
-		childDetail, err := st.GetIssueDetail(ctx, child.ID)
-		if err != nil {
-			return EpicContext{}, err
+	// boundary exactly as a child's do — collect from the epic too, or the two
+	// uses of "inside" would disagree.
+	cross.collect(epic, internal)
+	// Children are iterated in epic-rank order; each one's data comes from its
+	// own freshly-resolved bundle, never the epic snapshot.
+	for _, child := range epic.Children {
+		// A child listed as an epic member but absent from the batch is a data
+		// inconsistency, not a row to fabricate — fail loudly rather than append
+		// a zero-value Issue. [LAW:no-defensive-null-guards]
+		childRel, ok := childRels[child.ID]
+		if !ok {
+			return EpicContext{}, store.NotFoundError{Entity: "issue", ID: child.ID}
 		}
-		// [LAW:one-source-of-truth] The row's issue, its status, its blockers,
-		// and its cross-epic edges all derive from this one resolved detail —
-		// never the epic-snapshot child, which could disagree if the child's
-		// state changed between the epic fetch and this one.
 		children = append(children, epicChild{
-			Issue:  childDetail.Issue,
-			Status: classifyChildStatus(childDetail.Issue, openBlockers(childDetail)),
+			Issue:  childRel.Issue,
+			Status: classifyChildStatus(childRel.Issue, openBlockers(childRel)),
 		})
-		cross.collect(childDetail, internal)
+		cross.collect(childRel, internal)
 	}
 	cross.sortByEndpoints()
-	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
+	return EpicContext{Epic: epic.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
+}
+
+// epicTarget names the epic whose plan context `lit show` appends for an issue,
+// and the child to mark focused within it ("" for none). It is the resolved
+// answer to "which plan slice does this issue belong to" — a value, so the show
+// path renders unconditionally on its presence rather than re-deriving the
+// cases at the callsite.
+type epicTarget struct {
+	EpicID  string
+	Focused string
+}
+
+// epicViewFor classifies an issue into the epic plan it belongs to. A container
+// (epic) shows its own children with no focus; a leaf under an epic shows that
+// epic's plan with itself focused; an issue in no epic returns nil — the genuine
+// "no plan slice" case, encoded as absence rather than an empty value.
+// [LAW:types-are-the-program] The optionality is the value: nil means no block,
+// so the show path never re-tests the three cases. The container-parent test is
+// the same predicate enrichWithParentEpic uses, so "what counts as an epic
+// parent" has one definition. [LAW:one-source-of-truth]
+func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
+	if issue.IsContainer() {
+		return &epicTarget{EpicID: issue.ID}
+	}
+	if parent != nil && parent.IsContainer() {
+		return &epicTarget{EpicID: parent.ID, Focused: issue.ID}
+	}
+	return nil
+}
+
+// writeEpicContext appends the epic plan block for one shown issue when it
+// belongs to an epic. A leading blank line separates the block from the issue
+// body; an issue in no epic writes nothing. This is the single point where store
+// resolution meets the show text path — the build/render seam stays pure.
+// [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
+// real "no epic membership" case, not a defended-against bug.
+func writeEpicContext(ctx context.Context, st *store.Store, w io.Writer, detail model.IssueDetail) error {
+	target := epicViewFor(detail.Issue, detail.Parent)
+	if target == nil {
+		return nil
+	}
+	ec, err := buildEpicContext(ctx, st, target.EpicID, target.Focused)
+	if err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(w, "\n%s", renderEpicContext(ec))
+	return err
 }
 
 // epicMemberIDs is the set of ids inside the epic — the epic node itself plus
@@ -163,9 +230,9 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 // deterministic. Same-epic blockers are kept — an inline blocked-by marker
 // names whichever open blocker comes first, sibling or not — so nothing is
 // excluded.
-func openBlockers(detail model.IssueDetail) []string {
+func openBlockers(rel store.IssueRelations) []string {
 	var ids []string
-	for _, dep := range openExcluding(detail.DependsOn, nil) {
+	for _, dep := range openExcluding(rel.DependsOn, nil) {
 		ids = append(ids, dep.ID)
 	}
 	sort.Strings(ids)
@@ -177,7 +244,7 @@ func openBlockers(detail model.IssueDetail) []string {
 // live plan context, so it contributes nothing; same-epic counterparts are
 // excluded because their ordering is already conveyed by rank in the children
 // list, and closed counterparts are dropped by openExcluding.
-func (x *crossEpicEdges) collect(member model.IssueDetail, internal map[string]struct{}) {
+func (x *crossEpicEdges) collect(member store.IssueRelations, internal map[string]struct{}) {
 	if member.Issue.State() == model.StateClosed {
 		return
 	}
