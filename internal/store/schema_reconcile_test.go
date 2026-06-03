@@ -1018,7 +1018,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 // issue_history table is still present AND goose_db_version carries
 // fabricated rows (rows inserted at one tstamp without the migrations
 // actually running). Such workspaces were previously trapped in
-// phaseManaged → recoverAheadOfRegistry refusal, because the lying log
+// phaseManaged with an ahead-of-registry refusal, because the lying log
 // claimed a v1+ shape the workspace never had.
 //
 // Fix shape: disk-truth classification. issue_history's presence routes
@@ -1091,7 +1091,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	}
 	// goose_db_version has no rows claiming versions beyond the
 	// baseline. The three fabricated rows (including the v=2 row that
-	// previously trapped the workspace in recoverAheadOfRegistry refusal)
+	// previously trapped the workspace in an ahead-of-registry refusal)
 	// must be gone.
 	var aheadRows int
 	if err := st.db.QueryRowContext(ctx,
