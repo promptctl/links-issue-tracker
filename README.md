@@ -102,6 +102,10 @@ implementation of that idea with a deliberately minimal, agent-native surface.
 See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the build/test/lint
 commands, and the branch & PR conventions.
 
+## Code of Conduct
+
+This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## License
 
 `links` is released under the [MIT License](LICENSE).
