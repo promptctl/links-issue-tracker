@@ -33,7 +33,7 @@ go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit
 
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH. If you have [`just`](https://github.com/casey/just) installed, the
-[`justfile`](justfile) provides `build` and `install` convenience targets.
+[`Justfile`](Justfile) provides `build` and `install` convenience targets.
 
 The install story is the same one end users follow — see
 [README.md](README.md#install).
