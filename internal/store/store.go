@@ -121,6 +121,54 @@ func canonicalActionForTargetState(target model.State) model.ActionName {
 	return ""
 }
 
+// transitionFor resolves the lifecycle action an ApplyUpdate performs for a
+// target status, and whether any transition occurs at all. A blank target is
+// the "no --status flag" signal and must never be normalized into a real "open"
+// target — doing so attempted a transition on every container and was the
+// container-update bug this package now guards against. [LAW:single-enforcer]
+// ApplyUpdate (which executes the transition) and validateNoopUpdate (which only
+// validates it) resolve the action through this one function, so neither can
+// drift from the other about when a transition happens.
+func transitionFor(targetStatus string) (model.ActionName, bool) {
+	if strings.TrimSpace(targetStatus) == "" {
+		return "", false
+	}
+	return canonicalActionForTargetState(model.DefaultOpen(targetStatus)), true
+}
+
+// applyTransition runs every guard a status transition must pass before it
+// writes — the archived/deleted refusal and the lifecycle Apply (which rejects
+// every action on a container, whose state is derived from children) — and
+// returns the post-transition issue, or the error the write would surface. It
+// never mutates the store. [LAW:single-enforcer] writeStatusTransition consumes
+// the returned issue to perform the write; validateNoopUpdate consumes only the
+// error, so a transition a user could not perform is judged identically by the
+// mutating path and the read-only dry-run.
+func applyTransition(issue model.Issue, action model.ActionName, actor, reason string) (model.Issue, error) {
+	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
+		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
+	}
+	return issue.Apply(action, actor, reason)
+}
+
+// validateNoopUpdate reports the error a no-op `lit update` (empty Fields, no
+// target status) would surface for issue, without mutating. Empty Fields make
+// UpdateIssue a structural no-op, so the only failure surface is the transition
+// the input resolves to — none, for a true no-op. The value is as a regression
+// tripwire: should a change make an empty target resolve to a real transition,
+// transitionFor returns one here too and applyTransition surfaces the rejection
+// that transition would hit (every container, for the original bug). [LAW:dataflow-not-control-flow]
+// transitions is the discriminator the no-op carries; the match on it is the
+// whole logic, not a guard skipping work that should run.
+func validateNoopUpdate(issue model.Issue) error {
+	action, transitions := transitionFor("")
+	if !transitions {
+		return nil
+	}
+	_, err := applyTransition(issue, action, "", "")
+	return err
+}
+
 type SortSpec struct {
 	Field string
 	Desc  bool
@@ -960,9 +1008,8 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 }
 
 // [LAW:dataflow-not-control-flow] ApplyUpdate is the single execution path for all lit update mutations.
-// Variability lives in the input values: empty TargetStatus = no transitions; empty Fields = no field write.
-// Empty TargetStatus must not be normalized — DefaultOpen("") would mutate the "no --status flag" signal
-// into a real "open" target, which then attempts a transition on a container (StatusValue == "").
+// Variability lives in the input values: empty TargetStatus = no transitions (see transitionFor);
+// empty Fields = no field write.
 // [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
 // Same-state transitions are NOT skipped: every TransitionIssue call records an issue_events row with
@@ -974,14 +1021,10 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if err != nil {
 		return model.Issue{}, err
 	}
-	if strings.TrimSpace(in.TargetStatus) != "" {
-		in.TargetStatus = string(model.DefaultOpen(in.TargetStatus))
-	}
-	if in.TargetStatus != "" {
-		action := canonicalActionForTargetState(model.DefaultOpen(in.TargetStatus))
+	if action, transitions := transitionFor(in.TargetStatus); transitions {
 		reason := in.TransitionReason
 		if reason == "" {
-			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), in.TargetStatus)
+			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), model.DefaultOpen(in.TargetStatus))
 		}
 		// [LAW:single-enforcer] TransitionIssue rejects assignee for non-start actions;
 		// the gate here mirrors that contract so cli.go can plumb TransitionAssignee
@@ -1144,10 +1187,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 }
 
 func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string) (model.Issue, error) {
-	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
-		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
-	}
-	updated, err := issue.Apply(action, actor, reason)
+	updated, err := applyTransition(issue, action, actor, reason)
 	if err != nil {
 		return model.Issue{}, err
 	}
