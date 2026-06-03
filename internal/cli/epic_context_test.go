@@ -184,6 +184,91 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	}
 }
 
+// outsider creates an issue outside the fixture's epic (no parent) and returns
+// its id — the external endpoint for cross-epic edge tests.
+func (f epicFixture) outsider(title string) string {
+	f.t.Helper()
+	out, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+		Prefix: "test", Title: title, Topic: "other", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		f.t.Fatalf("CreateIssue(outsider %q) error = %v", title, err)
+	}
+	return out.ID
+}
+
+func TestRenderEpicContextNoCrossEpicEdges(t *testing.T) {
+	f := newEpicFixture(t, "No cross edges", "deps")
+	a := f.addChild("Child A")
+	b := f.addChild("Child B")
+	f.block(b, a) // same-epic edge: conveyed by rank, never the cross-epic section
+
+	out := f.render("")
+	if strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("same-epic edge must not surface a cross-epic section:\n%s", out)
+	}
+}
+
+func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
+	f := newEpicFixture(t, "One direction", "deps")
+	child := f.addChild("Inside")
+	ext := f.outsider("Outside")
+	f.block(child, ext) // inside depends on outside => "Blocked externally"
+
+	out := f.render("")
+	if !strings.Contains(out, "Cross-epic dependencies:") {
+		t.Fatalf("expected cross-epic section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "Blocked externally:\n    "+child+" blocked by "+ext) {
+		t.Errorf("expected inbound edge %q blocked by %q in:\n%s", child, ext, out)
+	}
+	if strings.Contains(out, "Blocks externally:") {
+		t.Errorf("no outbound edge exists, that subsection must be omitted:\n%s", out)
+	}
+}
+
+func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
+	f := newEpicFixture(t, "Both directions", "deps")
+	child := f.addChild("Inside")
+	upstream := f.outsider("Upstream")   // inside depends on it
+	downstream := f.outsider("Downstream") // it depends on inside
+	f.block(child, upstream)
+	f.block(downstream, child)
+
+	out := f.render("")
+	wantLines := []string{
+		"Blocks externally:\n    " + downstream + " blocked by " + child,
+		"Blocked externally:\n    " + child + " blocked by " + upstream,
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing cross-epic line %q in:\n%s", want, out)
+		}
+	}
+	// Both-directions ordering: "Blocks externally" precedes "Blocked externally".
+	if idx(out, "Blocks externally") > idx(out, "Blocked externally") {
+		t.Errorf("subsection order wrong:\n%s", out)
+	}
+}
+
+func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
+	f := newEpicFixture(t, "Closed sides", "deps")
+	openChild := f.addChild("Open inside")
+	closedChild := f.addChild("Closed inside")
+	closedExt := f.outsider("Closed outside")
+	openExt := f.outsider("Open outside")
+
+	f.block(openChild, closedExt)  // external side closed => filtered
+	f.block(closedChild, openExt)  // internal side closed => filtered
+	f.transition(closedChild, "close")
+	f.transition(closedExt, "close")
+
+	out := f.render("")
+	if strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("every cross-epic edge has a closed endpoint; section must be absent:\n%s", out)
+	}
+}
+
 func TestFirstLineStripsHeadingAndBlanks(t *testing.T) {
 	cases := map[string]string{
 		"# Heading\nbody":  "Heading",

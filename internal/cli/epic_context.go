@@ -48,14 +48,38 @@ type epicChild struct {
 }
 
 // EpicContext is the fully-resolved plan slice for one epic: the epic itself
-// plus its children in rank order, each pre-classified, plus the id of the
-// focused child (empty when none). It is the seam between data resolution
-// (buildEpicContext) and rendering (renderEpicContext); siblings extend this
-// value rather than the renderer.
+// plus its children in rank order, each pre-classified, the id of the focused
+// child (empty when none), and the open blocks edges that cross the epic
+// boundary. It is the seam between data resolution (buildEpicContext) and
+// rendering (renderEpicContext); siblings extend this value rather than the
+// renderer.
 type EpicContext struct {
-	Epic     model.Issue
-	Children []epicChild
-	Focused  string
+	Epic      model.Issue
+	Children  []epicChild
+	Focused   string
+	CrossEpic crossEpicEdges
+}
+
+// crossEpicEdge is one direct blocks edge that crosses the epic boundary.
+// Blocked is the id that is blocked; Blocker is the id that blocks. Rendering
+// is identical regardless of which endpoint is inside the epic — the inside
+// endpoint decides only which subsection the edge lands in, never the line
+// format.
+type crossEpicEdge struct {
+	Blocked string
+	Blocker string
+}
+
+// crossEpicEdges partitions the boundary-crossing edges by which side is
+// internal. The partition is the direction: an edge's membership in a slice is
+// the only discriminator the renderer needs, so the render loop never branches
+// on direction.
+// [LAW:types-are-the-program] Two slices rather than one slice tagged with a
+// direction enum: the partition lives in the value, so the renderer cannot
+// misclassify an edge and no callsite re-derives a side it was already told.
+type crossEpicEdges struct {
+	BlocksExternally  []crossEpicEdge // external ticket blocked by an internal one
+	BlockedExternally []crossEpicEdge // internal ticket blocked by an external one
 }
 
 // statusMarkerWidth pads the fixed-form markers ([closed]/[in_progress]/[ready])
@@ -85,41 +109,110 @@ func classifyChildStatus(child model.Issue, openBlockers []string) childStatus {
 
 // buildEpicContext resolves an epic and its children into an EpicContext.
 // focusedChildID is the child the caller is "at" ("" for none, e.g. an
-// epic-level call).
+// epic-level call). Each child's detail is fetched once and feeds both its
+// status classification and the cross-epic edge collection, so there is one
+// resolved source per child rather than a separate fetch per concern.
 func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChildID string) (EpicContext, error) {
 	detail, err := st.GetIssueDetail(ctx, epicID)
 	if err != nil {
 		return EpicContext{}, err
 	}
+	internal := childIDSet(detail.Children)
 	children := make([]epicChild, 0, len(detail.Children))
+	var cross crossEpicEdges
 	for _, child := range detail.Children {
-		blockers, err := openBlockerIDs(ctx, st, child.ID)
+		childDetail, err := st.GetIssueDetail(ctx, child.ID)
 		if err != nil {
 			return EpicContext{}, err
 		}
 		children = append(children, epicChild{
 			Issue:  child,
-			Status: classifyChildStatus(child, blockers),
+			Status: classifyChildStatus(child, openBlockers(childDetail)),
 		})
+		cross.collect(childDetail, internal)
 	}
-	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID}, nil
+	cross.sortStable()
+	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
 }
 
-// openBlockerIDs returns the ids of an issue's still-open direct blockers,
-// sorted by id so the blocker named in a blocked marker is deterministic.
-func openBlockerIDs(ctx context.Context, st *store.Store, issueID string) ([]string, error) {
-	detail, err := st.GetIssueDetail(ctx, issueID)
-	if err != nil {
-		return nil, err
+// childIDSet is the set of ids inside the epic — the membership test that
+// decides whether a blocks edge crosses the boundary.
+func childIDSet(children []model.Issue) map[string]struct{} {
+	set := make(map[string]struct{}, len(children))
+	for _, child := range children {
+		set[child.ID] = struct{}{}
 	}
+	return set
+}
+
+// openBlockers returns the ids of a resolved issue's still-open direct
+// blockers, sorted by id so the blocker named in a blocked marker is
+// deterministic. Same-epic blockers are kept — an inline blocked-by marker
+// names whichever open blocker comes first, sibling or not — so nothing is
+// excluded.
+func openBlockers(detail model.IssueDetail) []string {
 	var ids []string
-	for _, dep := range detail.DependsOn {
-		if dep.State() != model.StateClosed {
-			ids = append(ids, dep.ID)
-		}
+	for _, dep := range openExcluding(detail.DependsOn, nil) {
+		ids = append(ids, dep.ID)
 	}
 	sort.Strings(ids)
-	return ids, nil
+	return ids
+}
+
+// collect appends the boundary-crossing blocks edges incident to one internal
+// child. A closed child carries no live plan context, so it contributes
+// nothing; same-epic counterparts are excluded because their ordering is
+// already conveyed by rank in the children list, and closed counterparts are
+// dropped by openExcluding.
+func (x *crossEpicEdges) collect(child model.IssueDetail, internal map[string]struct{}) {
+	if child.Issue.State() == model.StateClosed {
+		return
+	}
+	id := child.Issue.ID
+	for _, blocker := range openExcluding(child.DependsOn, internal) {
+		x.BlockedExternally = append(x.BlockedExternally, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
+	}
+	for _, dependent := range openExcluding(child.Blocks, internal) {
+		x.BlocksExternally = append(x.BlocksExternally, crossEpicEdge{Blocked: dependent.ID, Blocker: id})
+	}
+}
+
+// openExcluding keeps the issues that are still open and whose ids are not in
+// excluded. A nil excluded set drops nothing by membership, leaving the plain
+// open filter; passing the epic's child ids drops same-epic counterparts so
+// only boundary-crossing ones remain.
+func openExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
+	var out []model.Issue
+	for _, other := range others {
+		if _, skip := excluded[other.ID]; skip {
+			continue
+		}
+		if other.State() != model.StateClosed {
+			out = append(out, other)
+		}
+	}
+	return out
+}
+
+// sortStable orders each subsection by (blocked, blocker) so render output is
+// deterministic regardless of child iteration order.
+func (x *crossEpicEdges) sortStable() {
+	byEndpoints := func(edges []crossEpicEdge) {
+		sort.Slice(edges, func(i, j int) bool {
+			if edges[i].Blocked != edges[j].Blocked {
+				return edges[i].Blocked < edges[j].Blocked
+			}
+			return edges[i].Blocker < edges[j].Blocker
+		})
+	}
+	byEndpoints(x.BlocksExternally)
+	byEndpoints(x.BlockedExternally)
+}
+
+// empty reports whether no boundary-crossing edges exist in either direction —
+// the single value test that decides whether the section renders at all.
+func (x crossEpicEdges) empty() bool {
+	return len(x.BlocksExternally) == 0 && len(x.BlockedExternally) == 0
 }
 
 // renderEpicContext renders an EpicContext as a plain-text block: the epic id,
@@ -131,12 +224,53 @@ func renderEpicContext(ec EpicContext) string {
 	fmt.Fprintf(&b, "Epic: %s — %s\n", ec.Epic.ID, ec.Epic.Title)
 	fmt.Fprintf(&b, "Why: %s\n", firstLine(ec.Epic.Description))
 	b.WriteString("\nChildren:\n")
-	if len(ec.Children) == 0 {
-		b.WriteString("  (none)\n")
-		return b.String()
+	b.WriteString(renderChildren(ec.Children, ec.Focused))
+	b.WriteString(renderCrossEpic(ec.CrossEpic))
+	return b.String()
+}
+
+// renderChildren renders the children block: the rank-ordered rows, or
+// "(none)" when the epic has none. The empty case is a property of the list,
+// not a branch the caller has to remember.
+func renderChildren(children []epicChild, focused string) string {
+	if len(children) == 0 {
+		return "  (none)\n"
 	}
-	for _, child := range ec.Children {
-		b.WriteString(renderChildLine(child, child.Issue.ID == ec.Focused))
+	var b strings.Builder
+	for _, child := range children {
+		b.WriteString(renderChildLine(child, child.Issue.ID == focused))
+	}
+	return b.String()
+}
+
+// renderCrossEpic renders the "Cross-epic dependencies" section: the two
+// direction subsections, each omitted when its slice is empty, and the whole
+// section omitted when no edges cross in either direction. Both subsections
+// share one line format, so the only thing that varies per subsection is its
+// header and which slice it lists — never the rendering of a line.
+func renderCrossEpic(x crossEpicEdges) string {
+	if x.empty() {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\nCross-epic dependencies:\n")
+	b.WriteString(renderCrossSubsection("Blocks externally", x.BlocksExternally))
+	b.WriteString(renderCrossSubsection("Blocked externally", x.BlockedExternally))
+	return b.String()
+}
+
+// renderCrossSubsection renders one direction's edges under a header, or
+// nothing when the slice is empty. The line format is identical for both
+// directions because a cross-epic edge always reads "<blocked> blocked by
+// <blocker>" — the direction lives in which slice supplied the edges.
+func renderCrossSubsection(header string, edges []crossEpicEdge) string {
+	if len(edges) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %s:\n", header)
+	for _, e := range edges {
+		fmt.Fprintf(&b, "    %s blocked by %s\n", e.Blocked, e.Blocker)
 	}
 	return b.String()
 }
