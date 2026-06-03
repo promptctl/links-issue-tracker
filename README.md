@@ -96,3 +96,7 @@ More depth: [docs/introduction/what-is-links.md](docs/introduction/what-is-links
 The core idea — treat issue tracking as part of the repository workflow so humans and agents
 coordinate through a fast local CLI and syncable state — is his. `links` is an independent
 implementation of that idea with a deliberately minimal, agent-native surface.
+
+## License
+
+`links` is released under the [MIT License](LICENSE).
