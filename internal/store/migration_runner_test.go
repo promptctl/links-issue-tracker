@@ -191,8 +191,11 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 // May 23 incident shape: a workspace whose goose_db_version is ahead of this
 // binary's registry but whose live application tables are intact MUST open and
 // operate, NOT refuse. goose treats unknown-ahead rows as nothing-to-apply, so
-// no bookkeeping reconciliation is needed — the ahead log is left intact
-// (honest: those migrations really did run), and re-opening is stable.
+// no bookkeeping reconciliation is needed — the ahead row is left intact, and
+// re-opening is stable. (In the field an ahead row records migrations a newer
+// binary really applied; the fixture synthesizes that row directly via
+// stampGooseVersionAhead — the contract under test is "tolerate it and leave it
+// alone", not whether the recorded migrations were executed here.)
 //
 // [LAW:behavior-not-structure] The contract is "Open succeeds and the workspace
 // is operable", not "the log was surgically trimmed to registryMax". The old
@@ -205,7 +208,7 @@ func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		// The ahead log is left honest — not trimmed back to the registry max.
+		// The ahead row is preserved — not trimmed back to the registry max.
 		recorded, err := st.recordedMigrationVersion(ctx)
 		if err != nil {
 			t.Fatalf("recordedMigrationVersion() error = %v", err)
