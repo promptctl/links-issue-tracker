@@ -87,29 +87,41 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 	}, nil
 }
 
-// fetchIssueDetails fetches IssueDetail for every listed issue into a map.
-// [LAW:single-enforcer] One pre-pass is the single source of per-row detail
+// fetchIssueRelations batch-loads the structural relations for every listed
+// issue in a fixed number of queries.
+// [LAW:single-enforcer] One pre-pass is the single source of per-row relation
 // data for the ready pipeline; both annotation and enrichment read from it.
-// [LAW:dataflow-not-control-flow] The fetch is unconditional and happens
-// once; downstream stages are pure map lookups over the result.
-func fetchIssueDetails(ctx context.Context, st *store.Store, issues []model.Issue) (map[string]model.IssueDetail, error) {
-	details := make(map[string]model.IssueDetail, len(issues))
-	for _, issue := range issues {
-		detail, err := st.GetIssueDetail(ctx, issue.ID)
-		if err != nil {
-			return nil, err
-		}
-		details[issue.ID] = detail
+// [LAW:one-source-of-truth] Uses the same store accessor the epic view does, so
+// "an issue's open blockers / parent epic" has one definition across consumers.
+// [LAW:dataflow-not-control-flow] The fetch is unconditional and happens once;
+// downstream stages are pure map lookups over the result.
+func fetchIssueRelations(ctx context.Context, st *store.Store, issues []model.Issue) (map[string]store.IssueRelations, error) {
+	ids := make([]string, len(issues))
+	for i, issue := range issues {
+		ids[i] = issue.ID
 	}
-	return details, nil
+	relations, err := st.GetRelationsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	// GetRelationsByIDs omits subjects that don't exist; the ready pipeline
+	// requires every workable issue to resolve, so a hole is a NotFound (matching
+	// the prior per-issue GetIssueDetail path), not a silent zero-value row.
+	// [LAW:no-defensive-null-guards] Fail loudly at the store boundary.
+	for _, issue := range issues {
+		if _, ok := relations[issue.ID]; !ok {
+			return nil, store.NotFoundError{Entity: "issue", ID: issue.ID}
+		}
+	}
+	return relations, nil
 }
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
 // and flags rank inversions where a dependency is ranked below the dependent.
-// The annotator is pure: it reads from the shared details map rather than
+// The annotator is pure: it reads from the shared relations map rather than
 // fetching from the store, so fetch cost is paid once upstream in
-// fetchIssueDetails.
-func newBlockerAnnotator(details map[string]model.IssueDetail) annotation.Annotator {
+// fetchIssueRelations.
+func newBlockerAnnotator(details map[string]store.IssueRelations) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -228,7 +240,7 @@ func isRequiredFieldSet(value any) bool {
 // [LAW:dataflow-not-control-flow] Every row flows through the same lookup;
 // variability lives in whether the parent exists and its type, not in whether
 // the enrichment step runs. (links-agent-epic-model-uew.2)
-func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
+func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
 	for i := range rows {
 		detail := details[rows[i].ID]
 		if detail.Parent == nil || !detail.Parent.IsContainer() {
@@ -250,7 +262,7 @@ func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]m
 // [LAW:dataflow-not-control-flow] The sort key is a pure function of each
 // row and the shared details map; variability lives in the values, not in
 // whether some rows skip the sort. (links-agent-epic-model-uew.4)
-func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
+func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
 	epicRank := func(issue model.Issue) string {
 		parent := details[issue.ID].Parent
 		if parent != nil && parent.IsContainer() {
@@ -276,7 +288,6 @@ func sortByPriority(issues []annotation.AnnotatedIssue) {
 		return issues[i].Priority > issues[j].Priority
 	})
 }
-
 
 // sortByBlockingAnnotations places issues without blocking annotations first,
 // preserving the original store ordering within each group. The name is
@@ -306,7 +317,7 @@ func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.Anno
 // key over data, not as a branch in the consumer.
 // [LAW:dataflow-not-control-flow] Same comparator runs over every pair; the
 // parent-epic state decides ordering, not whether the comparator runs.
-func sortByContinueBias(rows []annotation.AnnotatedIssue, details map[string]model.IssueDetail) {
+func sortByContinueBias(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
 	inProgressEpic := func(row annotation.AnnotatedIssue) bool {
 		parent := details[row.ID].Parent
 		return parent != nil && parent.IsContainer() && parent.State() == model.StateInProgress
