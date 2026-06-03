@@ -569,6 +569,125 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	}
 }
 
+// A blank target status is the "no --status flag" signal. transitionFor must
+// resolve it to "no transition" — the container-update bug was a normalization
+// that turned blank into a real "open" target, then attempted a transition on
+// every epic. This is the forcing function: should that normalization return,
+// the blank cases below start reporting a transition and this test fails.
+func TestTransitionForTreatsBlankTargetAsNoTransition(t *testing.T) {
+	for _, blank := range []string{"", "   ", "\t"} {
+		if action, transitions := transitionFor(blank); transitions {
+			t.Fatalf("transitionFor(%q) = (%q, true), want no transition", blank, action)
+		}
+	}
+	for _, tc := range []struct {
+		target string
+		want   model.ActionName
+	}{
+		{"open", model.ActionReopen},
+		{"in_progress", model.ActionStart},
+		{"closed", model.ActionClose},
+	} {
+		action, transitions := transitionFor(tc.target)
+		if !transitions || action != tc.want {
+			t.Fatalf("transitionFor(%q) = (%q, %v), want (%q, true)", tc.target, action, transitions, tc.want)
+		}
+	}
+}
+
+// applyTransition is the validation a no-op dry-run reports through. A container
+// derives its state from children and exposes no action, so any transition
+// resolved against it must error — this is what turns a regression's spurious
+// transition into a reported doctor failure. It must never mutate.
+func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dryrun", IssueType: "epic", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	hydratedEpic, err := st.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(epic) error = %v", err)
+	}
+	if _, err := applyTransition(hydratedEpic, model.ActionReopen, "", ""); err == nil {
+		t.Fatal("applyTransition(container, reopen) = nil, want rejection (containers expose no action)")
+	}
+	// validateNoopUpdate on a healthy container is the post-fix contract: a true
+	// no-op resolves to no transition, so it must pass.
+	if err := validateNoopUpdate(hydratedEpic); err != nil {
+		t.Fatalf("validateNoopUpdate(container) = %v, want nil for a no-op", err)
+	}
+
+	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "dryrun", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(leaf) error = %v", err)
+	}
+	hydratedLeaf, err := st.GetIssue(ctx, leaf.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(leaf) error = %v", err)
+	}
+	if _, err := applyTransition(hydratedLeaf, model.ActionStart, "agent", "claim"); err != nil {
+		t.Fatalf("applyTransition(leaf, start) = %v, want acceptance", err)
+	}
+
+	// The archived/deleted guard refuses a transition regardless of the action's
+	// own legality — an archived issue is frozen.
+	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: leaf.ID, Action: "archive", Reason: "inactive", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	}
+	if _, err := applyTransition(archived, model.ActionClose, "", ""); err == nil {
+		t.Fatal("applyTransition(archived, close) = nil, want refusal (archived issue is frozen)")
+	}
+}
+
+// On a healthy repo every issue — container and leaf — accepts a no-op update,
+// so the dry-run must report zero failures and must not mutate anything.
+func TestDoctorNoopUpdateDryRunPassesHealthyRepoWithoutMutating(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dryrun", IssueType: "epic", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "dryrun", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation error = %v", err)
+	}
+
+	var eventsBefore int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events`).Scan(&eventsBefore); err != nil {
+		t.Fatalf("count events before error = %v", err)
+	}
+
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor() error = %v", err)
+	}
+	if report.UpdateDryRunFailures != 0 {
+		t.Fatalf("Doctor().UpdateDryRunFailures = %d, want 0 (errors: %v)", report.UpdateDryRunFailures, report.Errors)
+	}
+	for _, e := range report.Errors {
+		if strings.Contains(e, "no-op update would fail") {
+			t.Fatalf("Doctor() reported a dry-run failure on a healthy repo: %q", e)
+		}
+	}
+
+	var eventsAfter int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events`).Scan(&eventsAfter); err != nil {
+		t.Fatalf("count events after error = %v", err)
+	}
+	if eventsAfter != eventsBefore {
+		t.Fatalf("Doctor() dry-run mutated history: issue_events %d -> %d", eventsBefore, eventsAfter)
+	}
+}
+
 func TestStoreRejectsInvalidIssueType(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
