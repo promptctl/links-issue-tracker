@@ -31,8 +31,9 @@ golangci-lint run     # lint against .golangci.yml before opening a PR
 go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff
 ```
 
-If you have [`just`](https://github.com/casey/just) installed, `just build` and
-`just install` are shortcuts for the first two commands.
+Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
+your PATH. If you have [`just`](https://github.com/casey/just) installed, the
+[`justfile`](justfile) provides `build` and `install` convenience targets.
 
 The install story is the same one end users follow — see
 [README.md](README.md#install).
