@@ -144,25 +144,32 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	return out, nil
 }
 
-// listRelationsForIDs returns every relation row incident to any of the given
-// ids in one query — the batch counterpart of listRelations.
+// structuralRelationTypes are the edge types bucketRelations interprets and
+// GetRelationsByIDs returns. related-to is excluded so its endpoints are never
+// pulled into the batch's hydration set — that is the whole point of the
+// lightweight accessor vs GetIssueDetail.
+var structuralRelationTypes = []string{"blocks", "parent-child"}
+
+// listRelationsForIDs returns every structural relation row incident to any of
+// the given ids in one query — the batch counterpart of listRelations, scoped to
+// the edge types GetRelationsByIDs serves.
 func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	placeholders := make([]string, len(ids))
-	for i := range ids {
-		placeholders[i] = "?"
-	}
-	clause := strings.Join(placeholders, ",")
-	args := make([]any, 0, len(ids)*2)
+	idClause := strings.Join(repeatPlaceholder(len(ids)), ",")
+	typeClause := strings.Join(repeatPlaceholder(len(structuralRelationTypes)), ",")
+	args := make([]any, 0, len(ids)*2+len(structuralRelationTypes))
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	for _, id := range ids {
 		args = append(args, id)
 	}
-	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id IN (%s) OR dst_id IN (%s) ORDER BY created_at ASC`, clause, clause)
+	for _, relType := range structuralRelationTypes {
+		args = append(args, relType)
+	}
+	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE (src_id IN (%s) OR dst_id IN (%s)) AND type IN (%s) ORDER BY created_at ASC`, idClause, idClause, typeClause)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list relations for ids: %w", err)
@@ -195,6 +202,15 @@ func dedupeStrings(ids []string) []string {
 		}
 		seen[id] = struct{}{}
 		out = append(out, id)
+	}
+	return out
+}
+
+// repeatPlaceholder returns n "?" SQL placeholder tokens.
+func repeatPlaceholder(n int) []string {
+	out := make([]string, n)
+	for i := range out {
+		out[i] = "?"
 	}
 	return out
 }

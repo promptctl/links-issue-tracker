@@ -100,7 +100,20 @@ func fetchIssueRelations(ctx context.Context, st *store.Store, issues []model.Is
 	for i, issue := range issues {
 		ids[i] = issue.ID
 	}
-	return st.GetRelationsByIDs(ctx, ids)
+	relations, err := st.GetRelationsByIDs(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	// GetRelationsByIDs omits subjects that don't exist; the ready pipeline
+	// requires every workable issue to resolve, so a hole is a NotFound (matching
+	// the prior per-issue GetIssueDetail path), not a silent zero-value row.
+	// [LAW:no-defensive-null-guards] Fail loudly at the store boundary.
+	for _, issue := range issues {
+		if _, ok := relations[issue.ID]; !ok {
+			return nil, store.NotFoundError{Entity: "issue", ID: issue.ID}
+		}
+	}
+	return relations, nil
 }
 
 // newBlockerAnnotator returns an annotator that checks open dependency blockers
