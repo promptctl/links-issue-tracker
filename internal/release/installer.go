@@ -2,6 +2,7 @@ package release
 
 import (
 	"archive/tar"
+	"archive/zip"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -30,10 +31,10 @@ type Installer interface {
 	Install(ctx context.Context, target *Target, targetPath string) error
 }
 
-// BinaryName is the file inside the release archive that gets installed —
-// goreleaser writes a flat archive containing exactly this binary plus
-// LICENSE / README files. scripts/install.sh extracts the same name; the
-// constant is the consumer mirror of that producer convention.
+// BinaryName is the binary's stem inside the release archive — goreleaser
+// writes a flat archive containing exactly this binary (suffixed .exe in the
+// windows .zip) plus LICENSE / README files. scripts/install.sh extracts the
+// same names; the constant is the consumer mirror of that producer convention.
 const BinaryName = "lit"
 
 // maxArchiveBytes bounds the in-memory archive size the installer accepts.
@@ -60,14 +61,14 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 	if target == nil {
 		return errors.New("release: nil target")
 	}
-	if !strings.HasSuffix(target.Artifact.URL, ".tar.gz") {
-		// This installer extracts tar.gz only. windows/amd64 ships as .zip
-		// (goreleaser format_override in .goreleaser.yml), so `lit downgrade` is
-		// not yet supported on windows through this path. Reject at the boundary
-		// with a clear error rather than mis-extracting; the extract path below
-		// can then assume tar.gz. Adding zip support is tracked in
-		// links-downgrade-t244.8.
-		return fmt.Errorf("release: unsupported archive extension in %q (want .tar.gz; windows .zip downgrade not yet supported — see links-downgrade-t244.8)", target.Artifact.URL)
+	// [LAW:dataflow-not-control-flow] The archive format is data carried by the
+	// artifact URL, not a mode the caller toggles. Deriving it up front (and
+	// failing fast on an unknown extension) lets the extract stage below run
+	// the same way for every platform, differing only in the enumerator the
+	// format value supplies.
+	format, err := archiveFormatForURL(target.Artifact.URL)
+	if err != nil {
+		return err
 	}
 	client := i.Client
 	if client == nil {
@@ -99,7 +100,7 @@ func (i *HTTPInstaller) Install(ctx context.Context, target *Target, targetPath 
 		return err
 	}
 
-	if err := extractLitBinary(archive, tmp); err != nil {
+	if err := extractBinary(format, archive, tmp); err != nil {
 		_ = tmp.Close()
 		return err
 	}
@@ -230,84 +231,208 @@ func (b *boundedReader) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// extractLitBinary scans the tar.gz for a flat `lit` entry of regular-file
-// type and writes its contents to dest. The accept shape is intentionally
-// tighter than scripts/install.sh's: this implementation rejects any
-// filename containing "..", rejects backslashes as well as forward slashes,
-// requires exactly one BinaryName entry, and caps the uncompressed size of
-// the extracted entry. install.sh applies the same first two checks via
-// shell case-patterns but does not enforce the uncompressed cap; the Go
-// path is stricter by design at the resolver→installer boundary.
+// archiveFormat pairs a release archive's container format with the binary
+// name its producer (goreleaser) writes into it. The two co-vary by goos:
+// windows ships a .zip containing lit.exe; every other platform ships a
+// .tar.gz containing lit. Binding the name to the format means the extractor
+// never has to guess which entry is the binary — the format already knows.
+type archiveFormat struct {
+	binaryName string
+	open       func(archive []byte) (archiveReader, error)
+}
+
+// archiveFormatForURL derives the format from the artifact URL suffix.
 //
-// [LAW:types-are-the-program] The accept shape is "flat archive of regular
-// files containing one entry named lit, of size ≤ maxUncompressedBytes";
-// reject the rest by construction so the rest of Install can assume safe
-// inputs.
-func extractLitBinary(archive []byte, dest io.Writer) error {
+// [LAW:enumeration-gap] The accept shape of a release artifact URL is exactly
+// {.tar.gz, .zip}; any other extension is refused here so the extractor can
+// assume one of the two known shapes rather than mis-extracting.
+func archiveFormatForURL(url string) (archiveFormat, error) {
+	switch {
+	case strings.HasSuffix(url, ".tar.gz"):
+		return archiveFormat{binaryName: BinaryName, open: openTarGz}, nil
+	case strings.HasSuffix(url, ".zip"):
+		return archiveFormat{binaryName: BinaryName + ".exe", open: openZip}, nil
+	default:
+		return archiveFormat{}, fmt.Errorf("release: unsupported archive extension in %q (want .tar.gz or .zip)", url)
+	}
+}
+
+// archiveReader enumerates the entries of a release archive in a format-
+// independent way so the accept-shape lives in exactly one place.
+//
+// [LAW:single-enforcer] The path-safety, single-binary, and size-cap
+// invariants are security-critical (zip-slip, silent-corruption, decompression
+// bombs); duplicating them per container format would let them drift. The
+// formats differ only in how entries are produced — that difference lives in
+// the adapters below, the enforcement lives in extractBinary.
+type archiveReader interface {
+	// next advances to the following entry, returning io.EOF when exhausted.
+	next() (archiveEntry, error)
+	io.Closer
+}
+
+// archiveEntry is one member of a release archive, normalized across formats.
+type archiveEntry struct {
+	name    string
+	regular bool
+	size    int64 // declared uncompressed size
+	// open yields the entry body. The caller invokes it only for the binary
+	// entry and closes the result; for tar the body is valid only until the
+	// next next() call, so extraction happens inline before advancing.
+	open func() (io.ReadCloser, error)
+}
+
+type tarArchive struct {
+	gzr *gzip.Reader
+	tr  *tar.Reader
+}
+
+func openTarGz(archive []byte) (archiveReader, error) {
 	gzr, err := gzip.NewReader(bytes.NewReader(archive))
 	if err != nil {
-		return fmt.Errorf("release: open gzip: %w", err)
+		return nil, fmt.Errorf("release: open gzip: %w", err)
 	}
-	defer gzr.Close()
-	// [LAW:enumeration-gap] The per-entry cap doesn't bound the sum across
-	// many entries; this stream-level cap refuses a many-small-entries gzip
-	// bomb by construction. Any tar Read() past the cap errors out.
+	// [LAW:enumeration-gap] The per-entry cap doesn't bound the sum across many
+	// entries; this stream-level cap refuses a many-small-entries gzip bomb by
+	// construction. Any tar Read() past the cap errors out.
 	tr := tar.NewReader(&boundedReader{r: gzr, cap: maxTotalUncompressedBytes})
+	return &tarArchive{gzr: gzr, tr: tr}, nil
+}
+
+func (a *tarArchive) next() (archiveEntry, error) {
+	h, err := a.tr.Next()
+	if err != nil {
+		return archiveEntry{}, err // includes io.EOF
+	}
+	// tar.TypeRegA (NUL) is the historical alias for regular file; some writers
+	// still emit it. Accept both so otherwise-valid archives pass.
+	regular := h.Typeflag == tar.TypeReg || h.Typeflag == tar.TypeRegA
+	return archiveEntry{
+		name:    h.Name,
+		regular: regular,
+		size:    h.Size,
+		open:    func() (io.ReadCloser, error) { return io.NopCloser(a.tr), nil },
+	}, nil
+}
+
+func (a *tarArchive) Close() error { return a.gzr.Close() }
+
+type zipArchive struct {
+	files []*zip.File
+	idx   int
+}
+
+func openZip(archive []byte) (archiveReader, error) {
+	zr, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
+	if err != nil {
+		return nil, fmt.Errorf("release: open zip: %w", err)
+	}
+	return &zipArchive{files: zr.File}, nil
+}
+
+func (a *zipArchive) next() (archiveEntry, error) {
+	if a.idx >= len(a.files) {
+		return archiveEntry{}, io.EOF
+	}
+	f := a.files[a.idx]
+	a.idx++
+	// A size beyond int64 wraps negative here; the < 0 guard in extractBinary
+	// rejects it, so a lying central-directory size can't slip past the cap.
+	return archiveEntry{
+		name:    f.Name,
+		regular: f.Mode().IsRegular(),
+		size:    int64(f.UncompressedSize64),
+		open:    f.Open,
+	}, nil
+}
+
+func (a *zipArchive) Close() error { return nil }
+
+// extractBinary applies the release-archive accept shape and writes the single
+// binary entry to dest. The accept shape is intentionally tighter than
+// scripts/install.sh's: it rejects any filename containing "..", rejects
+// backslashes as well as forward slashes, requires exactly one
+// format.binaryName entry, and caps the uncompressed size of every entry.
+// install.sh applies the path checks but not the uncompressed cap; the Go path
+// is stricter by design at the resolver→installer boundary.
+//
+// [LAW:types-are-the-program] The accept shape is "flat archive of regular
+// files containing one entry named <binaryName>, each ≤ maxUncompressedBytes";
+// reject the rest by construction so the rest of Install can assume safe input.
+func extractBinary(format archiveFormat, archive []byte, dest io.Writer) error {
+	ar, err := format.open(archive)
+	if err != nil {
+		return err
+	}
+	defer ar.Close()
+
 	found := false
 	for {
-		h, err := tr.Next()
+		e, err := ar.next()
 		if err == io.EOF {
 			break
 		}
 		if err != nil {
-			return fmt.Errorf("release: read tar: %w", err)
+			return fmt.Errorf("release: read archive: %w", err)
 		}
-		name := h.Name
-		if name == "" || name == "." || name == ".." ||
-			strings.ContainsAny(name, `/\`) || strings.Contains(name, "..") {
-			return fmt.Errorf("release: archive entry has unsafe path: %q", name)
+		if !safeFlatName(e.name) {
+			return fmt.Errorf("release: archive entry has unsafe path: %q", e.name)
 		}
-		// tar.TypeRegA (NUL) is the historical alias for regular file; some
-		// writers still emit it. Accept both so otherwise-valid archives pass.
-		if h.Typeflag != tar.TypeReg && h.Typeflag != tar.TypeRegA {
-			return fmt.Errorf("release: archive contains non-regular entry %q (type %c)", name, h.Typeflag)
+		if !e.regular {
+			return fmt.Errorf("release: archive contains non-regular entry %q", e.name)
 		}
-		if name != BinaryName {
-			// Even for non-target entries, refuse a claimed size beyond the
-			// cap — a malicious archive that declares a huge LICENSE could
-			// be a gzip bomb in disguise even though we wouldn't copy it.
-			// Header inspection alone is cheap; the cost lives in Copy.
-			if h.Size > maxUncompressedBytes {
-				return fmt.Errorf("release: archive entry %q declares %d uncompressed bytes (cap %d)", name, h.Size, maxUncompressedBytes)
-			}
+		// Refuse any entry — target or not — that declares more than the cap:
+		// a hostile LICENSE could be a decompression bomb even though we never
+		// copy it. The header check is cheap; refuse before any body read.
+		if e.size < 0 || e.size > maxUncompressedBytes {
+			return fmt.Errorf("release: archive entry %q declares %d uncompressed bytes (cap %d)", e.name, e.size, maxUncompressedBytes)
+		}
+		if e.name != format.binaryName {
 			continue
 		}
 		if found {
-			// [LAW:types-are-the-program] "exactly one lit entry" is the
-			// type-level claim the comment above makes; enforce it here so
-			// a second entry can't silently corrupt the extracted binary by
-			// appending.
-			return fmt.Errorf("release: archive contains multiple %q entries", BinaryName)
+			// [LAW:types-are-the-program] "exactly one binary entry" is the
+			// type-level claim above; a second entry can't be allowed to
+			// silently corrupt the extracted binary by appending.
+			return fmt.Errorf("release: archive contains multiple %q entries", format.binaryName)
 		}
-		// Reject the declared size before streaming; a header-only check
-		// avoids reading the body when it would have failed the cap anyway.
-		if h.Size < 0 || h.Size > maxUncompressedBytes {
-			return fmt.Errorf("release: %q declares %d uncompressed bytes (cap %d)", BinaryName, h.Size, maxUncompressedBytes)
-		}
-		// [LAW:enumeration-gap] CopyN bounds the actual bytes streamed even
-		// if the tar header lies. The +1 lets us distinguish "exactly at the
-		// cap" from "overflow," matching the compressed-byte handling above.
-		n, err := io.CopyN(dest, tr, maxUncompressedBytes+1)
-		if err != nil && err != io.EOF {
-			return fmt.Errorf("release: extract %s: %w", BinaryName, err)
-		}
-		if n > maxUncompressedBytes {
-			return fmt.Errorf("release: %q exceeded uncompressed cap %d", BinaryName, maxUncompressedBytes)
+		if err := copyCappedEntry(dest, e); err != nil {
+			return err
 		}
 		found = true
 	}
 	if !found {
-		return fmt.Errorf("release: archive did not contain a %q entry", BinaryName)
+		return fmt.Errorf("release: archive did not contain a %q entry", format.binaryName)
 	}
 	return nil
+}
+
+// copyCappedEntry streams e's body to dest, refusing a body whose actual size
+// exceeds the cap even when the declared header size was within it.
+func copyCappedEntry(dest io.Writer, e archiveEntry) error {
+	body, err := e.open()
+	if err != nil {
+		return fmt.Errorf("release: open entry %q: %w", e.name, err)
+	}
+	defer body.Close()
+	// [LAW:enumeration-gap] CopyN bounds the actual bytes streamed even if the
+	// header size lied. The +1 distinguishes "exactly at the cap" from
+	// "overflow," matching the compressed-byte handling in downloadAndVerify.
+	n, err := io.CopyN(dest, body, maxUncompressedBytes+1)
+	if err != nil && err != io.EOF {
+		return fmt.Errorf("release: extract %s: %w", e.name, err)
+	}
+	if n > maxUncompressedBytes {
+		return fmt.Errorf("release: %q exceeded uncompressed cap %d", e.name, maxUncompressedBytes)
+	}
+	return nil
+}
+
+// safeFlatName reports whether name is a single flat path component safe to
+// extract — no traversal, no separators of either slash direction.
+func safeFlatName(name string) bool {
+	if name == "" || name == "." || name == ".." {
+		return false
+	}
+	return !strings.ContainsAny(name, `/\`) && !strings.Contains(name, "..")
 }
