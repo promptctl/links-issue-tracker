@@ -172,20 +172,20 @@ func openBlockers(detail model.IssueDetail) []string {
 	return ids
 }
 
-// collect appends the boundary-crossing blocks edges incident to one internal
-// child. A closed child carries no live plan context, so it contributes
-// nothing; same-epic counterparts are excluded because their ordering is
-// already conveyed by rank in the children list, and closed counterparts are
-// dropped by openExcluding.
-func (x *crossEpicEdges) collect(child model.IssueDetail, internal map[string]struct{}) {
-	if child.Issue.State() == model.StateClosed {
+// collect appends the boundary-crossing blocks edges incident to one epic
+// member — the epic node or any of its children. A closed member carries no
+// live plan context, so it contributes nothing; same-epic counterparts are
+// excluded because their ordering is already conveyed by rank in the children
+// list, and closed counterparts are dropped by openExcluding.
+func (x *crossEpicEdges) collect(member model.IssueDetail, internal map[string]struct{}) {
+	if member.Issue.State() == model.StateClosed {
 		return
 	}
-	id := child.Issue.ID
-	for _, blocker := range openExcluding(child.DependsOn, internal) {
+	id := member.Issue.ID
+	for _, blocker := range openExcluding(member.DependsOn, internal) {
 		x.BlockedExternally = append(x.BlockedExternally, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
 	}
-	for _, dependent := range openExcluding(child.Blocks, internal) {
+	for _, dependent := range openExcluding(member.Blocks, internal) {
 		x.BlocksExternally = append(x.BlocksExternally, crossEpicEdge{Blocked: dependent.ID, Blocker: id})
 	}
 }
