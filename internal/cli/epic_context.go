@@ -10,13 +10,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// childStatus is the display state of one epic child. It is a closed set of
-// four variants; each renders its own marker so the render loop never branches
-// on which state a child is in.
-// [LAW:types-are-the-program] Encoding status as a discriminated type makes the
-// illegal combinations unrepresentable by construction — a "blocked" child
-// always carries its blocker id, and closed/in_progress/ready can never carry
-// one — so no callsite has to defend against a blocked-with-no-blocker value.
+// childStatus is the display state of one epic child. The variants defined in
+// this file (closed/in_progress/ready/blocked) each render their own marker, so
+// the render loop never branches on which state a child is in. Go interfaces
+// aren't sealed — exhaustiveness here rests on locality (all variants live in
+// this file), not the compiler.
+// [LAW:types-are-the-program] What the compiler *does* enforce is the per-variant
+// payload: a "blocked" child carries its blocker id in the type, and
+// closed/in_progress/ready have no field to carry one — so the
+// blocked-with-no-blocker state is unrepresentable and no callsite defends
+// against it.
 type childStatus interface {
 	marker() string
 }
