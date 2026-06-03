@@ -24,12 +24,15 @@ You need:
 ## Build, install, test, lint
 
 ```sh
-just build          # go build the lit binary (or: go build ./cmd/lit)
-just install        # build and install onto your PATH (runs scripts/install.sh)
-go test ./...       # run the full test suite (needs the dolt CLI; see above)
-golangci-lint run   # lint against .golangci.yml before opening a PR
-go mod tidy         # CI fails if go.mod/go.sum are not tidy — run and commit any diff
+go build ./cmd/lit    # build the lit binary
+./scripts/install.sh  # build and install onto your PATH
+go test ./...         # run the full test suite (needs the dolt CLI; see above)
+golangci-lint run     # lint against .golangci.yml before opening a PR
+go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff
 ```
+
+If you have [`just`](https://github.com/casey/just) installed, `just build` and
+`just install` are shortcuts for the first two commands.
 
 The install story is the same one end users follow — see
 [README.md](README.md#install).
