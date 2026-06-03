@@ -93,7 +93,8 @@ func (e *QuarantineBlockError) Error() string {
 // schema is genuinely incompatible with this binary — the live tables do not
 // match the binary's baseline shape. A workspace whose goose bookkeeping is
 // merely ahead of the registry but whose application tables are intact does
-// NOT yield this error; that case is auto-reconciled (see recoverAheadOfRegistry).
+// NOT yield this error; an ahead goose log is a tolerated no-op (goose treats
+// unknown-ahead rows as nothing-to-apply), so only a missing baseline refuses.
 //
 // [LAW:one-source-of-truth] MaxSupported is migrations.MaxVersion() — the same
 // value that bounds "pending". There is no second "max supported" constant to
@@ -251,15 +252,17 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if err != nil {
 		return err
 	}
-	// [LAW:types-are-the-program] "Workspace stamped past the registry" is two
-	// distinct states the binary must not collapse: (a) the live application
-	// schema is intact and only goose's bookkeeping row is ahead — recoverable
-	// without touching application data, and (b) the live schema itself is in
-	// a shape this binary cannot operate against — genuinely incompatible.
-	// recoverAheadOfRegistry distinguishes them and either reconciles
-	// (case a) or refuses with MissingBaseline naming the gap (case b).
+	// [LAW:types-are-the-program] A goose log recording a version above this
+	// binary's registry is not a recovery event. goose tolerates unknown-ahead
+	// rows as "nothing to apply", so an ahead log is advisory noise the binary
+	// operates alongside. The one fact that determines operability is whether
+	// the live schema still carries the baseline shape — verified read-only,
+	// then either proceed (the ahead log is honest; leave it) or refuse with
+	// the gap named. There is no bookkeeping mutation: trimming the log would
+	// destroy true "these migrations ran" information and leave the live schema
+	// ahead of a reset log, the landmine a later registry catch-up detonates.
 	if state.appliedVersion > state.registryMaxVers {
-		return s.recoverAheadOfRegistry(ctx, guard, state)
+		return s.refuseIfBaselineMissing(ctx, state)
 	}
 	if !state.willMutate() {
 		return nil
@@ -570,36 +573,26 @@ func (s *Store) recordQuarantine(ctx context.Context, version int64, name, error
 	return nil
 }
 
-// recoverAheadOfRegistry handles the case where goose_db_version records a
-// schema version higher than this binary's registry can produce. It owns the
-// fork between recoverable (live application schema is intact — trim the
-// bookkeeping log to the registry max so this binary can operate) and
-// genuinely incompatible (live schema is missing baseline shape this binary
-// requires — refuse).
-//
-// The "stamped ahead by a non-master binary that the workspace then needs to
-// be opened by master" failure shape is exactly case (a): the unmerged binary
-// added migrations that recorded their version in goose_db_version, but the
-// live tables it created are either also created programmatically by the
-// current binary (migration_quarantine) or are orphans the current binary
-// does not reference. Application data — the rows in issues / comments / etc.
-// — is never touched. The only write is DELETE on the goose bookkeeping log.
+// refuseIfBaselineMissing handles a workspace whose goose log records a version
+// above this binary's registry. goose tolerates ahead rows as a no-op, so the
+// only question that matters is whether the live schema still carries the
+// baseline shape this binary operates against: intact → proceed (the ahead log
+// is honest and is left untouched), missing → refuse with the gap named. This
+// path performs no write — an ahead log needs no reconciliation, and the binary
+// that wrote it owns the lossless reverse via `lit downgrade`.
 //
 // [LAW:types-are-the-program] The discriminator is verifyBaselineShape, the
 // same predicate phaseAdopt uses to decide "is this workspace really at
-// baseline." Reusing it makes the boundary unambiguous: either every baseline
-// table/column the binary needs is present (recover), or some is missing
-// (refuse with MissingBaseline named).
+// baseline." Operability is a fact about the live schema, not about version
+// arithmetic — so the function reads the schema and reacts; it never mutates
+// bookkeeping to make the numbers agree.
 //
-// [LAW:single-enforcer] All schema convergence flows through runMigration;
-// this function is the sole recovery path for the ahead-of-registry case
-// and is called only from runMigration.
-//
-// [LAW:dataflow-not-control-flow] The verify result (present count and
-// missing list) is the data that drives the branch; the function does not
-// take a "mode" parameter — variability lives in the workspace's actual
-// shape, not in flags.
-func (s *Store) recoverAheadOfRegistry(ctx context.Context, guard *snapshotGuard, state migrationState) error {
+// [LAW:no-silent-fallbacks] A binary that cannot find its baseline shape
+// refuses loudly with the missing tables/columns named, rather than operating
+// against a schema it does not understand.
+// [LAW:dataflow-not-control-flow] The verify result (present count and missing
+// list) is the data that drives proceed-vs-refuse; no flag, no mutation.
+func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationState) error {
 	present, missing, err := s.verifyBaselineShape(ctx)
 	if err != nil {
 		return err
@@ -612,55 +605,6 @@ func (s *Store) recoverAheadOfRegistry(ctx context.Context, guard *snapshotGuard
 			SnapshotName:          s.mostRecentMigrationSnapshotName(),
 			ProducerBinaryVersion: s.readProducerBinaryVersion(ctx),
 		}
-	}
-	// Snapshot-before-mutate: this IS a mutation (goose_db_version DELETE), so
-	// the same guarantee that protects forward migrations protects this
-	// reconciliation. The guard is idempotent — migrate() owns retention.
-	if _, err := guard.ensure(); err != nil {
-		return fmt.Errorf("migrate: %w", err)
-	}
-	if _, err := s.db.ExecContext(ctx,
-		`DELETE FROM `+gooseVersionTable+` WHERE version_id > ?`,
-		state.registryMaxVers,
-	); err != nil {
-		return fmt.Errorf("reconcile ahead goose log: %w", err)
-	}
-	// [LAW:types-are-the-program] "Reconciled" means recordedMigrationVersion()
-	// equals registryMaxVers, not "rows above registryMaxVers were deleted." A
-	// corrupted goose history (e.g., only an ahead row, no rows for baseline)
-	// would leave the table empty after the DELETE — the next Open would see
-	// applied=0 and try to re-baseline against an already-initialized schema.
-	// Restamp registryMaxVers if it is not the post-DELETE max, so the type
-	// of the post-reconcile state is "managed at registryMaxVers" — the only
-	// state runMigration's other branches handle correctly.
-	postDelete, err := s.recordedMigrationVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("read goose version after reconcile: %w", err)
-	}
-	if postDelete < state.registryMaxVers {
-		gooseStore, err := database.NewStore(goose.DialectMySQL, gooseVersionTable)
-		if err != nil {
-			return fmt.Errorf("reconcile: construct goose store: %w", err)
-		}
-		if err := gooseStore.Insert(ctx, s.db, database.InsertRequest{Version: state.registryMaxVers}); err != nil {
-			return fmt.Errorf("reconcile: restamp registry max v%d: %w", state.registryMaxVers, err)
-		}
-		// Final verification: the invariant must hold or the next Open lands in
-		// an inconsistent state. Fail loudly here while the operator still has
-		// context, instead of mutating the workspace into a worse position.
-		verified, err := s.recordedMigrationVersion(ctx)
-		if err != nil {
-			return fmt.Errorf("verify goose version after reconcile: %w", err)
-		}
-		if verified != state.registryMaxVers {
-			return fmt.Errorf("reconcile: post-restamp goose version is v%d, want v%d", verified, state.registryMaxVers)
-		}
-	}
-	if err := s.commitWorkingSet(ctx,
-		fmt.Sprintf("migrate: reconcile ahead-of-registry goose log to v%d (was v%d)",
-			state.registryMaxVers, state.appliedVersion),
-	); err != nil {
-		return fmt.Errorf("commit ahead-goose reconciliation: %w", err)
 	}
 	return nil
 }
@@ -701,10 +645,9 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 	// canonical shape, regardless of what goose_db_version claims.
 	//
 	// This probe re-routes "buggy older binary fabricated goose rows on
-	// a pre-goose workspace" — which used to trap in phaseManaged with
-	// recoverAheadOfRegistry refusal — back into phaseAdopt where the
-	// bridge can run. The fabricated rows are wiped by reconcile and
-	// adoption restamps cleanly.
+	// a pre-goose workspace" — which would otherwise trap in phaseManaged —
+	// back into phaseAdopt where the bridge can run. The fabricated rows
+	// are wiped by reconcile and adoption restamps cleanly.
 	//
 	// [LAW:one-source-of-truth] The live schema is canonical; the
 	// goose log is derived state that should reflect it. When they
@@ -1054,7 +997,7 @@ func sortedKeys(m map[string][]string) []string {
 
 // mostRecentMigrationSnapshotName returns the name of the newest snapshot in
 // this workspace that was stamped by the migration system, or "" if none
-// exists. Used by recoverAheadOfRegistry to populate the lossy-rollback hint
+// exists. Used by refuseIfBaselineMissing to populate the lossy-rollback hint
 // on UnsupportedSchemaVersionError. Errors listing the directory degrade to
 // "" — the refusal message must still surface, with the snapshot line absent.
 //

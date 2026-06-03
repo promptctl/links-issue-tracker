@@ -187,83 +187,82 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 	return ahead
 }
 
-// TestOpenReconcilesAheadOfRegistryWhenBaselineIntact pins the recovery path
-// for the May 23 incident shape: a workspace whose goose_db_version is ahead
-// of this binary's registry but whose live application tables are intact
-// MUST auto-reconcile (trim the bookkeeping log down to the registry max)
-// instead of refusing. Application data is never touched; only the goose
-// rows above registryMax are removed.
+// TestOpenToleratesAheadOfRegistryWhenBaselineIntact pins the contract for the
+// May 23 incident shape: a workspace whose goose_db_version is ahead of this
+// binary's registry but whose live application tables are intact MUST open and
+// operate, NOT refuse. goose treats unknown-ahead rows as nothing-to-apply, so
+// no bookkeeping reconciliation is needed — the ahead row is left intact, and
+// re-opening is stable. (In the field an ahead row records migrations a newer
+// binary really applied; the fixture synthesizes that row directly via
+// stampGooseVersionAhead — the contract under test is "tolerate it and leave it
+// alone", not whether the recorded migrations were executed here.)
 //
-// [LAW:types-are-the-program] The refusal type's MissingBaseline field is
-// the discriminator: this path returns no error because the live schema is
-// intact, so MissingBaseline would be empty. A test for the other branch
-// (corrupt baseline) lives below.
-func TestOpenReconcilesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
+// [LAW:behavior-not-structure] The contract is "Open succeeds and the workspace
+// is operable", not "the log was surgically trimmed to registryMax". The old
+// trim was an implementation detail (and an actively harmful one — it destroyed
+// true migration history and left the live schema ahead of a reset log).
+func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
-	registryMax := ahead - 1
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
+		// The ahead row is preserved — not trimmed back to the registry max.
 		recorded, err := st.recordedMigrationVersion(ctx)
 		if err != nil {
 			t.Fatalf("recordedMigrationVersion() error = %v", err)
 		}
-		if recorded != registryMax {
-			t.Errorf("post-reconcile recorded version = %d, want %d (trimmed to registry max)", recorded, registryMax)
+		if recorded != ahead {
+			t.Errorf("recorded version = %d, want %d (ahead log preserved, not trimmed)", recorded, ahead)
 		}
+		// Operable: the live application schema answers queries.
+		assertIssuesQueryable(t, ctx, st)
+	})
 
-		var aheadCount int
-		if err := st.db.QueryRowContext(ctx,
-			`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`, registryMax,
-		).Scan(&aheadCount); err != nil {
-			t.Fatalf("query post-reconcile goose rows error = %v", err)
-		}
-		if aheadCount != 0 {
-			t.Errorf("goose_db_version still has %d rows above registry max %d", aheadCount, registryMax)
-		}
+	// Re-open is stable: tolerating the ahead log is idempotent, no brick.
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		assertIssuesQueryable(t, ctx, st)
 	})
 }
 
-// TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt pins the post-DELETE
-// invariant: even if goose_db_version is corrupted (rows at or below registryMax
-// are missing, leaving only the ahead row), reconciliation must leave
-// recordedMigrationVersion equal to registryMaxVers — not 0 or any other value
-// < registryMaxVers. Without the restamp, the next Open would see applied=0
-// and try to re-baseline against an already-initialized schema.
+// TestOpenToleratesGooseLogWithOnlyAheadRow pins that operability is decided by
+// the live schema, not by the goose log's internal consistency: a log carrying
+// ONLY an ahead row (its baseline row missing) still opens and operates, because
+// the binary reads the schema — which is intact — rather than trusting the log.
+// This is the corruption shape the old code restamped around; the read-only
+// design makes it a non-event.
 //
-// [LAW:types-are-the-program] The post-reconcile workspace state must satisfy
-// the invariant "managed at registryMaxVers." This test asserts that invariant
-// holds even when the only goose row at recovery time is the ahead row.
-func TestOpenReconcilesAheadOfRegistryWhenGooseHistoryCorrupt(t *testing.T) {
+// [LAW:behavior-not-structure] Asserts the workspace opens and is queryable,
+// not any particular post-recovery row count in goose_db_version.
+func TestOpenToleratesGooseLogWithOnlyAheadRow(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	ahead := stampGooseVersionAhead(t, ctx, doltRoot)
 	registryMax := ahead - 1
 
-	// stampGooseVersionAhead inserted the ahead row but did not reconcile (no
-	// subsequent Open ran). The withStore below opens the workspace, which
-	// invokes recovery and trims the ahead row before the body runs. Inside
-	// the body, delete every row <= registryMax and re-insert the ahead row,
-	// so the next Open sees only the ahead row — the corruption shape the
-	// post-DELETE restamp invariant is meant to handle.
+	// Strip every row at or below the registry max, leaving only the ahead row.
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id <= ?`, registryMax)
-		mustExec(t, ctx, st, `INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, ahead)
-		mustCommit(t, ctx, st, "test: corrupt goose history")
+		mustCommit(t, ctx, st, "test: leave only the ahead goose row")
 	})
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		recorded, err := st.recordedMigrationVersion(ctx)
-		if err != nil {
-			t.Fatalf("recordedMigrationVersion() error = %v", err)
-		}
-		if recorded != registryMax {
-			t.Errorf("post-reconcile recorded version = %d, want %d (restamped after empty DELETE)", recorded, registryMax)
-		}
+		assertIssuesQueryable(t, ctx, st)
 	})
+}
+
+// assertIssuesQueryable proves the live application schema is operable by
+// running a read against the canonical issues table. A missing/broken table
+// would error here, distinguishing "opened and usable" from merely "Open
+// returned nil".
+func assertIssuesQueryable(t *testing.T, ctx context.Context, st *Store) {
+	t.Helper()
+	var n int
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues`).Scan(&n); err != nil {
+		t.Fatalf("issues table not queryable after Open: %v", err)
+	}
 }
 
 // TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt pins the refusal branch:
@@ -410,7 +409,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 // TestRefusalSurfacesRecoveryDataFromWorkspace pins the runtime wiring of the
 // remediation hints: when a binary built from a known release version opens a
 // workspace, it stamps meta.producer_binary_version on a successful migrate;
-// when a later refusal fires, recoverAheadOfRegistry reads that row and the
+// when a later refusal fires, refuseIfBaselineMissing reads that row and the
 // most recent migration-recovery snapshot, and surfaces both verbatim in the
 // UnsupportedSchemaVersionError. Without this end-to-end probe the unit test
 // for Error() rendering passes while the lookup layer that populates the
