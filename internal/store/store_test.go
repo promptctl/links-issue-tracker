@@ -631,6 +631,16 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 	if _, err := applyTransition(hydratedLeaf, model.ActionStart, "agent", "claim"); err != nil {
 		t.Fatalf("applyTransition(leaf, start) = %v, want acceptance", err)
 	}
+
+	// The archived/deleted guard refuses a transition regardless of the action's
+	// own legality — an archived issue is frozen.
+	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: leaf.ID, Action: "archive", Reason: "inactive", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	}
+	if _, err := applyTransition(archived, model.ActionClose, "", ""); err == nil {
+		t.Fatal("applyTransition(archived, close) = nil, want refusal (archived issue is frozen)")
+	}
 }
 
 // On a healthy repo every issue — container and leaf — accepts a no-op update,
