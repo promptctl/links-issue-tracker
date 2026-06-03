@@ -16,10 +16,18 @@ func ptr[T any](v T) *T { return &v }
 // update; this count is how the matrix makes "no transition happened" an
 // explicit, machine-checkable assertion instead of an implicit gap.
 func transitionActionCount(events []model.IssueEvent) int {
+	// [LAW:one-source-of-truth] The transition-action vocabulary lives in the
+	// model; sourcing it from the exported constants keeps this counter from
+	// drifting if an action is renamed, rather than re-spelling the strings here.
+	transitions := map[string]bool{
+		string(model.ActionStart):  true,
+		string(model.ActionDone):   true,
+		string(model.ActionClose):  true,
+		string(model.ActionReopen): true,
+	}
 	n := 0
 	for _, e := range events {
-		switch e.Action {
-		case "start", "done", "close", "reopen":
+		if transitions[e.Action] {
 			n++
 		}
 	}
@@ -115,12 +123,22 @@ func TestApplyUpdateIssueTypeFlagMatrix(t *testing.T) {
 					}
 					// The transition is attempted before any field write, so a
 					// rejected container update must leave the issue wholly
-					// untouched — no partial field write, no recorded event.
+					// untouched — no partial field write of ANY field, and no
+					// recorded event of any kind (transition or field-change).
 					if after.Issue.Title != initialTitle {
 						t.Fatalf("ApplyUpdate(%s, %s) wrote title %q on a rejected update; want unchanged %q", issueType, combo.name, after.Issue.Title, initialTitle)
 					}
-					if n := transitionActionCount(added); n != 0 {
-						t.Fatalf("ApplyUpdate(%s, %s) recorded %d transition events on a rejected update, want 0: %#v", issueType, combo.name, n, added)
+					if after.Issue.Description != initialDescription {
+						t.Fatalf("ApplyUpdate(%s, %s) wrote description %q on a rejected update; want unchanged %q", issueType, combo.name, after.Issue.Description, initialDescription)
+					}
+					if after.Issue.Priority != initialPriority {
+						t.Fatalf("ApplyUpdate(%s, %s) wrote priority %d on a rejected update; want unchanged %d", issueType, combo.name, after.Issue.Priority, initialPriority)
+					}
+					if len(after.Issue.Labels) != 0 {
+						t.Fatalf("ApplyUpdate(%s, %s) wrote labels %v on a rejected update; want none", issueType, combo.name, after.Issue.Labels)
+					}
+					if len(added) != 0 {
+						t.Fatalf("ApplyUpdate(%s, %s) recorded %d events on a rejected update, want 0: %#v", issueType, combo.name, len(added), added)
 					}
 					return
 				}
