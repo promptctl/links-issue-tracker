@@ -118,7 +118,14 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	if err != nil {
 		return EpicContext{}, err
 	}
-	epic := epicRels[epicID]
+	// GetRelationsByIDs omits subjects that don't exist; the epic is the subject
+	// and must resolve, so its absence is a NotFound, not a zero-value render.
+	// [LAW:no-defensive-null-guards] This fails loudly at the store boundary
+	// (matching the prior GetIssueDetail path) rather than skipping silently.
+	epic, ok := epicRels[epicID]
+	if !ok {
+		return EpicContext{}, store.NotFoundError{Entity: "issue", ID: epicID}
+	}
 	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
 	childIDs := make([]string, len(epic.Children))
 	for i, child := range epic.Children {
@@ -141,7 +148,13 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	// Children are iterated in epic-rank order; each one's data comes from its
 	// own freshly-resolved bundle, never the epic snapshot.
 	for _, child := range epic.Children {
-		childRel := childRels[child.ID]
+		// A child listed as an epic member but absent from the batch is a data
+		// inconsistency, not a row to fabricate — fail loudly rather than append
+		// a zero-value Issue. [LAW:no-defensive-null-guards]
+		childRel, ok := childRels[child.ID]
+		if !ok {
+			return EpicContext{}, store.NotFoundError{Entity: "issue", ID: child.ID}
+		}
 		children = append(children, epicChild{
 			Issue:  childRel.Issue,
 			Status: classifyChildStatus(childRel.Issue, openBlockers(childRel)),
