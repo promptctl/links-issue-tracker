@@ -97,6 +97,11 @@ The core idea — treat issue tracking as part of the repository workflow so hum
 coordinate through a fast local CLI and syncable state — is his. `links` is an independent
 implementation of that idea with a deliberately minimal, agent-native surface.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup, the build/test/lint
+commands, and the branch & PR conventions.
+
 ## License
 
 `links` is released under the [MIT License](LICENSE).
