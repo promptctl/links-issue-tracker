@@ -569,7 +569,7 @@ type workableFilter struct {
 // [LAW:single-enforcer] `lit ready`, `lit next`, and `lit backlog` all
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]model.IssueDetail, error) {
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
 	cfg, err := config.Load(ap.Workspace.RootDir)
 	if err != nil {
 		return nil, nil, err
@@ -602,7 +602,7 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	if err != nil {
 		return nil, nil, err
 	}
-	details, err := fetchIssueDetails(ctx, ap.Store, issues)
+	details, err := fetchIssueRelations(ctx, ap.Store, issues)
 	if err != nil {
 		return nil, nil, err
 	}

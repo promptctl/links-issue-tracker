@@ -114,36 +114,42 @@ func classifyChildStatus(child model.Issue, openBlockers []string) childStatus {
 // status classification and the cross-epic edge collection, so there is one
 // resolved source per child rather than a separate fetch per concern.
 func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChildID string) (EpicContext, error) {
-	detail, err := st.GetIssueDetail(ctx, epicID)
+	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
 	if err != nil {
 		return EpicContext{}, err
 	}
-	internal := epicMemberIDs(detail.Issue.ID, detail.Children)
-	children := make([]epicChild, 0, len(detail.Children))
+	epic := epicRels[epicID]
+	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
+	childIDs := make([]string, len(epic.Children))
+	for i, child := range epic.Children {
+		childIDs[i] = child.ID
+	}
+	// [LAW:dataflow-not-control-flow] One batch resolves every child's relations
+	// at once; the loop below is pure map lookups, not a fetch per child.
+	childRels, err := st.GetRelationsByIDs(ctx, childIDs)
+	if err != nil {
+		return EpicContext{}, err
+	}
+	children := make([]epicChild, 0, len(epic.Children))
 	var cross crossEpicEdges
 	// [LAW:one-source-of-truth] "Inside the epic" is one boundary used two ways:
 	// epicMemberIDs excludes intra-epic edges, and collect gathers the crossing
 	// ones. The epic node is a member, so its own external edges cross the
-	// boundary exactly as a child's do — collect from the epic detail too, or
-	// the two uses of "inside" would disagree.
-	cross.collect(detail, internal)
-	for _, child := range detail.Children {
-		childDetail, err := st.GetIssueDetail(ctx, child.ID)
-		if err != nil {
-			return EpicContext{}, err
-		}
-		// [LAW:one-source-of-truth] The row's issue, its status, its blockers,
-		// and its cross-epic edges all derive from this one resolved detail —
-		// never the epic-snapshot child, which could disagree if the child's
-		// state changed between the epic fetch and this one.
+	// boundary exactly as a child's do — collect from the epic too, or the two
+	// uses of "inside" would disagree.
+	cross.collect(epic, internal)
+	// Children are iterated in epic-rank order; each one's data comes from its
+	// own freshly-resolved bundle, never the epic snapshot.
+	for _, child := range epic.Children {
+		childRel := childRels[child.ID]
 		children = append(children, epicChild{
-			Issue:  childDetail.Issue,
-			Status: classifyChildStatus(childDetail.Issue, openBlockers(childDetail)),
+			Issue:  childRel.Issue,
+			Status: classifyChildStatus(childRel.Issue, openBlockers(childRel)),
 		})
-		cross.collect(childDetail, internal)
+		cross.collect(childRel, internal)
 	}
 	cross.sortByEndpoints()
-	return EpicContext{Epic: detail.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
+	return EpicContext{Epic: epic.Issue, Children: children, Focused: focusedChildID, CrossEpic: cross}, nil
 }
 
 // epicTarget names the epic whose plan context `lit show` appends for an issue,
@@ -211,9 +217,9 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 // deterministic. Same-epic blockers are kept — an inline blocked-by marker
 // names whichever open blocker comes first, sibling or not — so nothing is
 // excluded.
-func openBlockers(detail model.IssueDetail) []string {
+func openBlockers(rel store.IssueRelations) []string {
 	var ids []string
-	for _, dep := range openExcluding(detail.DependsOn, nil) {
+	for _, dep := range openExcluding(rel.DependsOn, nil) {
 		ids = append(ids, dep.ID)
 	}
 	sort.Strings(ids)
@@ -225,7 +231,7 @@ func openBlockers(detail model.IssueDetail) []string {
 // live plan context, so it contributes nothing; same-epic counterparts are
 // excluded because their ordering is already conveyed by rank in the children
 // list, and closed counterparts are dropped by openExcluding.
-func (x *crossEpicEdges) collect(member model.IssueDetail, internal map[string]struct{}) {
+func (x *crossEpicEdges) collect(member store.IssueRelations, internal map[string]struct{}) {
 	if member.Issue.State() == model.StateClosed {
 		return
 	}

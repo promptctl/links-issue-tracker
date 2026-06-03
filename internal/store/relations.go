@@ -12,6 +12,202 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
+// IssueRelations is one issue together with its structural graph edges —
+// parent, children, dependencies (DependsOn), and dependents (Blocks) — each
+// hydrated, but WITHOUT the comment/event/related payload GetIssueDetail also
+// loads. It is the shared lightweight per-issue shape batch consumers read, so
+// neither the ready pipeline nor the epic view pays GetIssueDetail's per-row
+// comment/event cost.
+// [LAW:one-source-of-truth] One shape for "an issue's open blockers / parent
+// epic" across consumers; a second batch type would let them drift.
+type IssueRelations struct {
+	Issue     model.Issue
+	Parent    *model.Issue
+	Children  []model.Issue
+	DependsOn []model.Issue
+	Blocks    []model.Issue
+}
+
+// bucketRelations sorts the structural edges incident to focalID into the four
+// relation slices, hydrating counterparts from issuesByID. It is the single
+// definition of how a relation row maps to parent / child / depends-on / blocks
+// — shared by single-issue detail loading and batch relation loading so the
+// "blocks convention: src=dependent, dst=dependency" lives in exactly one place.
+// [LAW:single-enforcer] Relation-direction semantics decided once, here.
+func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) IssueRelations {
+	out := IssueRelations{
+		Children:  []model.Issue{},
+		DependsOn: []model.Issue{},
+		Blocks:    []model.Issue{},
+	}
+	for _, rel := range relations {
+		switch rel.Type {
+		case "blocks":
+			// blocks convention: src_id=dependent, dst_id=dependency.
+			if rel.SrcID == focalID {
+				if dep, ok := issuesByID[rel.DstID]; ok {
+					out.DependsOn = append(out.DependsOn, dep)
+				}
+			}
+			if rel.DstID == focalID {
+				if dependent, ok := issuesByID[rel.SrcID]; ok {
+					out.Blocks = append(out.Blocks, dependent)
+				}
+			}
+		case "parent-child":
+			if rel.SrcID == focalID {
+				if parent, ok := issuesByID[rel.DstID]; ok {
+					out.Parent = &parent
+				}
+			}
+			if rel.DstID == focalID {
+				if child, ok := issuesByID[rel.SrcID]; ok {
+					out.Children = append(out.Children, child)
+				}
+			}
+		}
+	}
+	sortIssuesByRank(out.Children)
+	sortIssuesByRank(out.DependsOn)
+	sortIssuesByRank(out.Blocks)
+	return out
+}
+
+// relatedFrom returns the hydrated "related-to" counterparts of focalID. It is
+// GetIssueDetail's concern only — no batch consumer needs related edges, so it
+// stays out of the shared IssueRelations shape.
+func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) []model.Issue {
+	out := []model.Issue{}
+	for _, rel := range relations {
+		if rel.Type != "related-to" {
+			continue
+		}
+		other := rel.SrcID
+		if other == focalID {
+			other = rel.DstID
+		}
+		if related, ok := issuesByID[other]; ok {
+			out = append(out, related)
+		}
+	}
+	sortIssuesByRank(out)
+	return out
+}
+
+// GetRelationsByIDs batch-loads the structural relations for every listed id in
+// a fixed number of queries rather than GetIssueDetail-per-id. Subjects that no
+// longer exist are simply absent from the result, mirroring getIssuesByIDs;
+// callers iterating known-present ids never observe the hole.
+// [LAW:dataflow-not-control-flow] One relations query plus one issue-hydration
+// query feed a pure bucketing pass — the per-subject work is map lookups, not
+// extra round-trips.
+func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]IssueRelations, error) {
+	subjects := dedupeStrings(ids)
+	if len(subjects) == 0 {
+		return map[string]IssueRelations{}, nil
+	}
+	relations, err := s.listRelationsForIDs(ctx, subjects)
+	if err != nil {
+		return nil, err
+	}
+	subjectSet := make(map[string]struct{}, len(subjects))
+	needed := make(map[string]struct{}, len(subjects))
+	for _, id := range subjects {
+		subjectSet[id] = struct{}{}
+		needed[id] = struct{}{}
+	}
+	bySubject := make(map[string][]model.Relation, len(subjects))
+	for _, rel := range relations {
+		needed[rel.SrcID] = struct{}{}
+		needed[rel.DstID] = struct{}{}
+		if _, ok := subjectSet[rel.SrcID]; ok {
+			bySubject[rel.SrcID] = append(bySubject[rel.SrcID], rel)
+		}
+		if _, ok := subjectSet[rel.DstID]; ok && rel.DstID != rel.SrcID {
+			bySubject[rel.DstID] = append(bySubject[rel.DstID], rel)
+		}
+	}
+	issuesByID, err := s.getIssuesByIDs(ctx, mapKeys(needed))
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]IssueRelations, len(subjects))
+	for _, id := range subjects {
+		issue, ok := issuesByID[id]
+		if !ok {
+			continue
+		}
+		rel := bucketRelations(id, bySubject[id], issuesByID)
+		rel.Issue = issue
+		out[id] = rel
+	}
+	return out, nil
+}
+
+// listRelationsForIDs returns every relation row incident to any of the given
+// ids in one query — the batch counterpart of listRelations.
+func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	placeholders := make([]string, len(ids))
+	for i := range ids {
+		placeholders[i] = "?"
+	}
+	clause := strings.Join(placeholders, ",")
+	args := make([]any, 0, len(ids)*2)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE src_id IN (%s) OR dst_id IN (%s) ORDER BY created_at ASC`, clause, clause)
+	rows, err := s.db.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list relations for ids: %w", err)
+	}
+	defer rows.Close()
+	rels := []model.Relation{}
+	for rows.Next() {
+		var rel model.Relation
+		var createdAt string
+		if err := rows.Scan(&rel.SrcID, &rel.DstID, &rel.Type, &createdAt, &rel.CreatedBy); err != nil {
+			return nil, err
+		}
+		t, err := scanTime(createdAt)
+		if err != nil {
+			return nil, err
+		}
+		rel.CreatedAt = t
+		rels = append(rels, rel)
+	}
+	return rels, rows.Err()
+}
+
+// dedupeStrings returns the distinct values of ids preserving first-seen order.
+func dedupeStrings(ids []string) []string {
+	seen := make(map[string]struct{}, len(ids))
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
+}
+
+// mapKeys returns the keys of set in unspecified order.
+func mapKeys(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for k := range set {
+		out = append(out, k)
+	}
+	return out
+}
+
 type AddRelationInput struct {
 	SrcID     string
 	DstID     string
