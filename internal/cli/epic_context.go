@@ -120,6 +120,12 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	internal := epicMemberIDs(detail.Issue.ID, detail.Children)
 	children := make([]epicChild, 0, len(detail.Children))
 	var cross crossEpicEdges
+	// [LAW:one-source-of-truth] "Inside the epic" is one boundary used two ways:
+	// epicMemberIDs excludes intra-epic edges, and collect gathers the crossing
+	// ones. The epic node is a member, so its own external edges cross the
+	// boundary exactly as a child's do — collect from the epic detail too, or
+	// the two uses of "inside" would disagree.
+	cross.collect(detail, internal)
 	for _, child := range detail.Children {
 		childDetail, err := st.GetIssueDetail(ctx, child.ID)
 		if err != nil {
@@ -186,8 +192,8 @@ func (x *crossEpicEdges) collect(child model.IssueDetail, internal map[string]st
 
 // openExcluding keeps the issues that are still open and whose ids are not in
 // excluded. A nil excluded set drops nothing by membership, leaving the plain
-// open filter; passing the epic's child ids drops same-epic counterparts so
-// only boundary-crossing ones remain.
+// open filter; passing the epic member ids (epic plus children) drops
+// same-epic counterparts so only boundary-crossing ones remain.
 func openExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
 	var out []model.Issue
 	for _, other := range others {

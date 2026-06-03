@@ -280,6 +280,26 @@ func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 	}
 }
 
+func TestRenderEpicContextEpicNodeCrossEpicEdges(t *testing.T) {
+	f := newEpicFixture(t, "Epic-level deps", "deps")
+	f.addChild("Some child")
+	upstream := f.outsider("Upstream")     // epic depends on it
+	downstream := f.outsider("Downstream") // it depends on the epic
+	f.block(f.epicID, upstream)
+	f.block(downstream, f.epicID)
+
+	out := f.render("")
+	wantLines := []string{
+		"Blocks externally:\n    " + downstream + " blocked by " + f.epicID,
+		"Blocked externally:\n    " + f.epicID + " blocked by " + upstream,
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(out, want) {
+			t.Errorf("epic node's own external edges should surface, missing %q in:\n%s", want, out)
+		}
+	}
+}
+
 func TestFirstLineStripsHeadingAndBlanks(t *testing.T) {
 	cases := map[string]string{
 		"# Heading\nbody":  "Heading",
