@@ -749,26 +749,31 @@ func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leafA1 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	// Distinct lanes put the same-epic siblings in parallel sub-sequences so
+	// both are ready at once; this test's contract is composite-rank ORDERING,
+	// not the lane gate's membership (covered by the lane-gate tests).
+	leafA1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "A.1",
 		Topic:     "epic-a",
 		IssueType: "task",
 		ParentID:  epicA.ID,
 		Priority:  1,
+		Lane:      "a1",
 	})
-	leafB1 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	leafB1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "B.1",
 		Topic:     "epic-b",
 		IssueType: "task",
 		ParentID:  epicB.ID,
 		Priority:  1,
 	})
-	leafA2 := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	leafA2 := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "A.2",
 		Topic:     "epic-a",
 		IssueType: "task",
 		ParentID:  epicA.ID,
 		Priority:  1,
+		Lane:      "a2",
 	})
 
 	got := h.runReadyJSON()

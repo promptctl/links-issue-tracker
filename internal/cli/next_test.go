@@ -121,8 +121,11 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	// --continue should skip past A.1/A.2 to find a leaf under in_progress epic B.
 	// B.1 is in_progress (skipped); there are no other open leaves under B.
 	// So --continue falls back to top-of-queue: A.1.
-	// Reframe the test: add B.2 so there is a workable leaf under B.
-	b2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	// Reframe the test: add B.2 so there is a workable leaf under B. B.2 sits in
+	// its own lane so the lane gate does not block it behind the in_progress B.1
+	// (an earlier default-lane sibling) — this test's contract is the
+	// continue-bias, not lane-gate membership.
+	b2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID, Lane: "b2"})
 	_ = a2
 
 	continuePick := h.runNextJSON("--continue")

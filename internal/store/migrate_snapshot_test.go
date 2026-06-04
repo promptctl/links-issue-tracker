@@ -558,6 +558,9 @@ func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string)
 	if err != nil {
 		t.Fatalf("withGooseHistoryDropped Open error = %v", err)
 	}
+	// A real pre-goose workspace predates every migration, so revert post-baseline
+	// migrations to the baseline shape before stripping goose history.
+	revertToBaseline(t, st)
 	if err := st.ExecRawForTest(ctx, `DROP TABLE IF EXISTS goose_db_version`); err != nil {
 		_ = st.Close()
 		t.Fatalf("ExecRawForTest drop goose_db_version error = %v", err)
