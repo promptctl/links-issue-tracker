@@ -22,7 +22,7 @@ cd "$ROOT_DIR"
 # (Keep a Changelog) before the tag exists, so an undocumented release can't be cut.
 CHANGELOG_VERSION="${VERSION_TAG#v}"
 if [[ ! -r CHANGELOG.md ]]; then
-  echo "CHANGELOG.md not found at repo root" >&2
+  echo "CHANGELOG.md not found or not readable at repo root" >&2
   exit 6
 fi
 if ! grep -qE "^## \[${CHANGELOG_VERSION//./\\.}\]" CHANGELOG.md; then

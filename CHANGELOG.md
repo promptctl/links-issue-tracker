@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Agent-first core loop: `lit ready`, `lit start`, `lit done`, and `lit followup` return guidance alongside data so a coding agent can drive the workflow unattended.
 - `lit quickstart` prints the live command reference for agents.
 - One write boundary and one identity per clone, keyed off `git rev-parse --git-common-dir`, so all worktrees of a clone share a single issue view.
-- `lit version` command with build-time `ldflag` version stamping.
+- `lit version` command with build-time `-ldflags` version stamping.
 - `lit doctor [--fix]` for diagnosing and repairing workspace issues.
 - `lit lifeboat` recovery path for schema-ahead workspaces.
 - `scripts/install.sh` builds `lit` from source and installs it onto `PATH`, warning about stale shadowing binaries.
