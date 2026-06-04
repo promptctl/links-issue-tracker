@@ -9,6 +9,11 @@ Contributing here means using the same agent-native loop the tool is built for.
 This project is governed by the [Code of Conduct](CODE_OF_CONDUCT.md). By
 participating, you are expected to uphold it.
 
+## Security
+
+Found a vulnerability? Please report it privately — see the
+[Security Policy](SECURITY.md).
+
 ## Development setup
 
 You need:

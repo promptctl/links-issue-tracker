@@ -106,6 +106,10 @@ commands, and the branch & PR conventions.
 
 This project follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 
+## Security
+
+To report a vulnerability, see the [Security Policy](SECURITY.md).
+
 ## License
 
 `links` is released under the [MIT License](LICENSE).
