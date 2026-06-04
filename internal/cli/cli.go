@@ -330,12 +330,13 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
+	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: resolveAssigneeIdentity(*assignee), Labels: splitCSV(*labels),
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: resolveAssigneeIdentity(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Prefix: ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
@@ -606,9 +607,17 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	if err != nil {
 		return nil, nil, err
 	}
+	// The lane gate reads the parent epics' FULL child sets (unfiltered by the
+	// CLI assignee/type/label narrowing) so an earlier sibling hidden by those
+	// filters still gates its later same-lane mates.
+	siblingRelations, err := ap.Store.GetRelationsByIDs(ctx, parentEpicIDs(details))
+	if err != nil {
+		return nil, nil, err
+	}
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
+		newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newNeedsDesignAnnotator(),
 	)
@@ -761,6 +770,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
+	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	status := fs.String("status", "", "Status: open|in_progress|closed")
 	reason := fs.String("reason", "", "Status transition reason")
 	by := fs.String("by", os.Getenv("USER"), "")
@@ -770,10 +780,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
+		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -833,6 +843,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if visited["labels"] {
 		value := splitCSV(*labels)
 		in.Fields.Labels = &value
+	}
+	if visited["lane"] {
+		value := strings.TrimSpace(*lane)
+		in.Fields.Lane = &value
 	}
 	if in.IsEmpty() {
 		return errors.New("lit update requires at least one field flag")
