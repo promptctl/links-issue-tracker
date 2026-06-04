@@ -79,14 +79,9 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		_ = first.Close()
 		t.Fatalf("drop topic column error = %v", err)
 	}
-	if err := first.ExecRawForTest(ctx, `DROP TABLE goose_db_version`); err != nil {
-		_ = first.Close()
-		t.Fatalf("drop goose history error = %v", err)
-	}
-	if err := first.commitWorkingSet(ctx, "simulate pre-converged workspace"); err != nil {
-		_ = first.Close()
-		t.Fatalf("commit error = %v", err)
-	}
+	// Revert post-baseline migrations and strip goose history so the next Open
+	// hits the adoption path on a genuine pre-goose (baseline-shaped) workspace.
+	hijackToPreGoose(t, first)
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
@@ -105,13 +100,13 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 	if len(missing) != 0 {
 		t.Fatalf("after forward migration, baseline shape is still missing: %v", missing)
 	}
-	// goose was stamped at v1 by adoption.
+	// Adoption stamps baseline, then Open forward-migrates to HEAD.
 	v, err := second.recordedMigrationVersion(ctx)
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if v != baselineVersion {
-		t.Fatalf("goose version = %d, want %d", v, baselineVersion)
+	if v != headVersion(t) {
+		t.Fatalf("goose version = %d, want %d", v, headVersion(t))
 	}
 	// The seeded row survived the forward migration with its data intact.
 	issues, err := second.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"Pre-migration issue"}})

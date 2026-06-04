@@ -131,6 +131,40 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	}
 }
 
+// addChildLane adds a child in a specific lane so the epic plan can show which
+// sub-sequence each child belongs to.
+func (f epicFixture) addChildLane(title, lane string) string {
+	f.t.Helper()
+	child, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: lane,
+	})
+	if err != nil {
+		f.t.Fatalf("CreateIssue(child %q) error = %v", title, err)
+	}
+	return child.ID
+}
+
+func TestRenderEpicContextShowsLaneGrouping(t *testing.T) {
+	f := newEpicFixture(t, "Lane epic", "parallel work")
+	laneless := f.addChild("Sequential one")
+	build := f.addChildLane("Build it", "build")
+	docs := f.addChildLane("Document it", "docs")
+
+	out := f.render("")
+
+	// A child with a lane shows its lane tag; the default (empty) lane child
+	// renders exactly as before — no tag, so lane-free epics are unchanged.
+	if !strings.Contains(out, build+"  Build it  [lane: build]") {
+		t.Errorf("missing lane tag for build child in:\n%s", out)
+	}
+	if !strings.Contains(out, docs+"  Document it  [lane: docs]") {
+		t.Errorf("missing lane tag for docs child in:\n%s", out)
+	}
+	if strings.Contains(out, laneless+"  Sequential one  [lane:") {
+		t.Errorf("default-lane child should carry no lane tag, got:\n%s", out)
+	}
+}
+
 func TestRenderEpicContextChildBlockedBySibling(t *testing.T) {
 	f := newEpicFixture(t, "Sibling block", "deps")
 	blocker := f.addChild("Blocker sibling")
