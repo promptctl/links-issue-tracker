@@ -17,6 +17,16 @@ fi
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
 
+# [LAW:single-enforcer] The release boundary is the one place that enforces
+# "a tagged version is a documented version" — promote [Unreleased] -> [X.Y.Z]
+# (Keep a Changelog) before the tag exists, so an undocumented release can't be cut.
+CHANGELOG_VERSION="${VERSION_TAG#v}"
+if ! grep -qE "^## \[${CHANGELOG_VERSION//./\\.}\]" CHANGELOG.md; then
+  echo "CHANGELOG.md has no '## [${CHANGELOG_VERSION}]' section" >&2
+  echo "promote '## [Unreleased]' to '## [${CHANGELOG_VERSION}] - $(date +%Y-%m-%d)' before releasing" >&2
+  exit 6
+fi
+
 go test ./...
 
 if ! git diff --quiet || ! git diff --cached --quiet; then
