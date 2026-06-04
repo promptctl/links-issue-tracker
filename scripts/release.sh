@@ -21,6 +21,10 @@ cd "$ROOT_DIR"
 # "a tagged version is a documented version" — promote [Unreleased] -> [X.Y.Z]
 # (Keep a Changelog) before the tag exists, so an undocumented release can't be cut.
 CHANGELOG_VERSION="${VERSION_TAG#v}"
+if [[ ! -r CHANGELOG.md ]]; then
+  echo "CHANGELOG.md not found at repo root" >&2
+  exit 6
+fi
 if ! grep -qE "^## \[${CHANGELOG_VERSION//./\\.}\]" CHANGELOG.md; then
   echo "CHANGELOG.md has no '## [${CHANGELOG_VERSION}]' section" >&2
   echo "promote '## [Unreleased]' to '## [${CHANGELOG_VERSION}] - $(date +%Y-%m-%d)' before releasing" >&2
