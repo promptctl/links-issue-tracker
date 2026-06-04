@@ -365,7 +365,20 @@ func renderChildLine(child epicChild, focused bool) string {
 	if focused {
 		prefix, suffix = "  ▶ ", "   (you are here)"
 	}
-	return fmt.Sprintf("%s%-*s %s  %s%s\n", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, suffix)
+	return fmt.Sprintf("%s%-*s %s  %s%s%s\n", prefix, statusMarkerWidth, child.Status.marker(), child.Issue.ID, child.Issue.Title, laneTag(child.Issue.Lane), suffix)
+}
+
+// laneTag renders a child's lane as an inline tag so the epic plan shows which
+// sub-sequence each child belongs to (shared lane = serialized; distinct lane =
+// parallel). The empty lane — the fully-sequential default — renders as nothing,
+// so a lane-free epic looks exactly as it did before lanes existed.
+// [LAW:dataflow-not-control-flow] The tag is a pure function of the lane value;
+// the empty case is data rendering to empty, not a branch the caller manages.
+func laneTag(lane string) string {
+	if lane == "" {
+		return ""
+	}
+	return "  [lane: " + lane + "]"
 }
 
 // firstLine returns the first non-blank line of s as prose: surrounding

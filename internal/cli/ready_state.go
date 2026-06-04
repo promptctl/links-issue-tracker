@@ -21,6 +21,7 @@ var readyBlockingKinds = []annotation.Kind{
 	annotation.MissingField,
 	annotation.OpenDependency,
 	annotation.NeedsDesign,
+	annotation.EarlierSiblingPending,
 }
 
 // NeedsDesignLabel is the reserved label that flags an issue as awaiting
@@ -150,6 +151,98 @@ func newBlockerAnnotator(details map[string]store.IssueRelations) annotation.Ann
 		}
 		return annotations, nil
 	}
+}
+
+// newSiblingGateAnnotator emits an EarlierSiblingPending annotation for a leaf
+// whose parent epic contains an unfinished sibling in the same lane ranked
+// before it — lifting the intra-epic "earlier sibling still open" prerequisite
+// into the same blocking-annotation mechanism explicit deps use, so it gates
+// MEMBERSHIP in ready/queue/next through the single isReadyBlocked enforcer.
+//
+// The one rule: leaf L is blocked iff ∃ sibling S under the same epic with
+// S.Lane == L.Lane, S.Rank < L.Rank, and S unfinished. Lane is a plain string;
+// the empty lane is one value among many, so all-keyless children form a single
+// fully-sequential lane and a per-child distinct lane is fully parallel — the
+// old binary "parallel opt-out" is this mechanism's degenerate case.
+// [LAW:dataflow-not-control-flow] Grouping is by lane value, never a branch on
+// "has a lane". The annotator runs for every issue; a leaf with no epic parent
+// or no earlier same-lane sibling yields nil, not a skipped operation.
+// [LAW:one-type-per-behavior] "explicit dep unfinished" and "earlier same-lane
+// sibling unfinished" are the same blocking fact behind the same enforcer.
+//
+// siblingsByEpic holds only unfinished siblings (the index builder applies that
+// predicate once), so the annotator compares lane and rank alone.
+func newSiblingGateAnnotator(details map[string]store.IssueRelations, siblingsByEpic map[string][]model.Issue) annotation.Annotator {
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		parent := details[issue.ID].Parent
+		if parent == nil || !parent.IsContainer() {
+			return nil, nil
+		}
+		var annotations []annotation.Annotation
+		for _, sib := range siblingsByEpic[parent.ID] {
+			if sib.ID == issue.ID {
+				continue
+			}
+			if sib.Lane == issue.Lane && sib.Rank < issue.Rank {
+				annotations = append(annotations, annotation.Annotation{
+					Kind:    annotation.EarlierSiblingPending,
+					Message: sib.ID,
+				})
+			}
+		}
+		return annotations, nil
+	}
+}
+
+// parentEpicIDs returns the distinct ids of the container parents referenced by
+// the workable leaves. These are the epics whose full child set the lane gate
+// must inspect.
+func parentEpicIDs(details map[string]store.IssueRelations) []string {
+	seen := make(map[string]struct{})
+	ids := make([]string, 0)
+	for _, rel := range details {
+		parent := rel.Parent
+		if parent == nil || !parent.IsContainer() {
+			continue
+		}
+		if _, ok := seen[parent.ID]; ok {
+			continue
+		}
+		seen[parent.ID] = struct{}{}
+		ids = append(ids, parent.ID)
+	}
+	return ids
+}
+
+// pendingSiblingsByEpic indexes each epic's UNFINISHED children by epic id. The
+// lane gate must see siblings hidden by the CLI's assignee/type/label filters,
+// so the source is the unfiltered GetRelationsByIDs child set, not the workable
+// list — an unassigned earlier sibling still gates its later lane-mates.
+// [LAW:single-enforcer] "an earlier sibling still needs work" is decided over
+// every sibling, not only the ones this invocation's filters let through.
+func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string][]model.Issue {
+	out := make(map[string][]model.Issue, len(relations))
+	for epicID, rel := range relations {
+		for _, child := range rel.Children {
+			if isUnfinishedSibling(child) {
+				out[epicID] = append(out[epicID], child)
+			}
+		}
+	}
+	return out
+}
+
+// isUnfinishedSibling reports whether a sibling still represents pending work
+// that should gate later same-lane siblings. The unfiltered child fetch is a
+// trust boundary: unlike the store-filtered workable list, it carries archived
+// and deleted rows, which have left the flow and must not block.
+// [LAW:no-defensive-null-guards] The archived/deleted checks translate the raw
+// relation rows into the workable population; they are boundary translation,
+// not a guard against a should-not-happen state.
+func isUnfinishedSibling(issue model.Issue) bool {
+	return issue.ArchivedAt == nil &&
+		issue.DeletedAt == nil &&
+		issue.State() != model.StateClosed
 }
 
 // newOrphanedAnnotator returns an annotator that flags in_progress issues

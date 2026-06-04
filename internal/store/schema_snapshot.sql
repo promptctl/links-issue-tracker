@@ -62,6 +62,7 @@ CREATE TABLE `issues` (
   `archived_at` varchar(64),
   `deleted_at` varchar(64),
   `item_rank` text NOT NULL DEFAULT '',
+  `lane` text NOT NULL DEFAULT '',
   PRIMARY KEY (`id`),
   KEY `idx_issues_rank` (`item_rank`(191)),
   KEY `idx_issues_status_priority` (`status`,`priority`,`updated_at`),

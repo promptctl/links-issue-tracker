@@ -3,11 +3,13 @@ package store
 import (
 	"context"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/pressly/goose/v3"
+	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 )
 
 // TestQuarantineTableCreatedByFreshOpen pins that a fresh-workspace Open
@@ -263,11 +265,15 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	// Force re-migration so applyPendingMigrations runs on next Open.
 	withGooseHistoryDropped(t, ctx, doltRoot)
 
-	// Inject a migration failure via the test hook.
+	// Inject a migration failure via the test hook. The synthetic migration sits
+	// one past HEAD so it cannot collide with (or quarantine) a real registry
+	// migration that the recovery reopen must still be free to apply.
+	failVersion := headVersion(t) + 1
+	failName := fmt.Sprintf("%05d_test.sql", failVersion)
 	sentinel := errors.New("simulated migration body error")
 	migrationUpByOneForTest = func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
 		return &goose.MigrationResult{
-			Source: &goose.Source{Version: 2, Path: "00002_test.sql"},
+			Source: &goose.Source{Version: failVersion, Path: failName},
 		}, sentinel
 	}
 	t.Cleanup(func() { migrationUpByOneForTest = nil })
@@ -289,8 +295,8 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 	if !errors.As(rollback.Cause, &cpErr) {
 		t.Fatalf("rollback.Cause = %v (%T); expected *CheckpointResetError", rollback.Cause, rollback.Cause)
 	}
-	if cpErr.Version != 2 {
-		t.Errorf("CheckpointResetError.Version = %d, want 2", cpErr.Version)
+	if cpErr.Version != failVersion {
+		t.Errorf("CheckpointResetError.Version = %d, want %d", cpErr.Version, failVersion)
 	}
 	if cpErr.Checkpoint.Name == "" {
 		t.Error("CheckpointResetError.Checkpoint.Name is empty")
@@ -308,40 +314,33 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 		t.Errorf("error message missing 'lit snapshots restore': %s", msg)
 	}
 
-	// After reset the workspace is phaseManaged (goose_db_version restored by
-	// the checkpoint) with appliedVersion=1=registryMax, so willMutate=false
-	// and this Open succeeds without re-running migrations.
-	secondForList, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err != nil {
-		t.Fatalf("Open after failed migration error = %v", err)
+	// The quarantine recorded during the failed migration persisted across the
+	// checkpoint reset, so reopening is refused: it guards the workspace against
+	// auto-retrying the known-bad migration until an operator clears the row.
+	_, reopenErr := Open(ctx, doltRoot, "test-workspace-id")
+	if reopenErr == nil {
+		t.Fatal("reopen after quarantined failure returned nil error; expected QuarantineBlockError")
 	}
-	defer secondForList.Close()
+	var qErr *QuarantineBlockError
+	if !errors.As(reopenErr, &qErr) {
+		t.Fatalf("reopen error = %v (%T); expected *QuarantineBlockError", reopenErr, reopenErr)
+	}
+	if qErr.Version != failVersion {
+		t.Errorf("QuarantineBlockError.Version = %d, want %d", qErr.Version, failVersion)
+	}
+	if !strings.Contains(qErr.ErrorText, sentinel.Error()) {
+		t.Errorf("QuarantineBlockError.ErrorText = %q, does not carry the failure cause %q", qErr.ErrorText, sentinel.Error())
+	}
 
 	// The checkpoint branch created during the failed Open must still exist:
-	// PruneCheckpoints only fires on a successful migration pass, which did
-	// not run on this willMutate=false Open.
-	listed, err := secondForList.ListCheckpoints(ctx, migrationCheckpointPrefix)
+	// PruneCheckpoints only fires on a successful migration pass, which the
+	// failure aborted. Verified via raw dolt — a lit Open is (correctly) blocked.
+	branches, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "branch")
 	if err != nil {
-		t.Fatalf("ListCheckpoints error = %v", err)
+		t.Fatalf("dolt branch error = %v", err)
 	}
-	found := false
-	for _, cp := range listed {
-		if cp.Name == cpErr.Checkpoint.Name {
-			found = true
-			break
-		}
-	}
-	if !found {
-		t.Errorf("checkpoint branch %q not found in dolt_branches (listed: %v)", cpErr.Checkpoint.Name, listed)
-	}
-
-	// The top Dolt commit must be the quarantine record written after the reset.
-	var topMessage string
-	if err := secondForList.db.QueryRowContext(ctx, `SELECT message FROM dolt_log() LIMIT 1`).Scan(&topMessage); err != nil {
-		t.Fatalf("query dolt_log error = %v", err)
-	}
-	if !strings.Contains(topMessage, "quarantine") {
-		t.Errorf("top dolt commit message %q does not mention quarantine", topMessage)
+	if !strings.Contains(branches, cpErr.Checkpoint.Name) {
+		t.Errorf("checkpoint branch %q not found in dolt branches:\n%s", cpErr.Checkpoint.Name, branches)
 	}
 }
 

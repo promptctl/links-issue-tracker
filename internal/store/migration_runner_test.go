@@ -12,10 +12,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
-// TestFreshOpenStampsBaselineVersion pins the fresh-workspace acceptance: Open
-// applies 00001_baseline.sql, goose records v1, and the apply lands as one
-// Dolt commit whose message names the migration.
-func TestFreshOpenStampsBaselineVersion(t *testing.T) {
+// headVersion is the registry's max migration version — the version a freshly
+// opened or fully-migrated workspace lands at. Derived from the registry so it
+// tracks new migrations automatically rather than hardcoding a literal.
+// [LAW:one-source-of-truth] One definition of "HEAD" for the test suite.
+func headVersion(t *testing.T) int64 {
+	t.Helper()
+	v, err := migrations.MaxVersion()
+	if err != nil {
+		t.Fatalf("MaxVersion() error = %v", err)
+	}
+	return v
+}
+
+// TestFreshOpenAppliesRegistryToHead pins the fresh-workspace acceptance: Open
+// applies every registry migration in order, goose records HEAD, and each apply
+// lands as its own Dolt commit whose message names the migration.
+func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -29,8 +42,8 @@ func TestFreshOpenStampsBaselineVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if appliedVersion != baselineVersion {
-		t.Fatalf("recorded version = %d, want %d", appliedVersion, baselineVersion)
+	if appliedVersion != headVersion(t) {
+		t.Fatalf("recorded version = %d, want %d", appliedVersion, headVersion(t))
 	}
 
 	log, err := doltcli.Run(ctx, filepath.Join(doltRoot, "links"), "log", "--oneline")
@@ -43,9 +56,9 @@ func TestFreshOpenStampsBaselineVersion(t *testing.T) {
 }
 
 // TestPreGooseAdoptionStampsWithoutRerunningBaseline pins the adoption path: a
-// workspace already at the canonical shape but lacking goose history is
-// re-stamped at the baseline version (not re-created), and the baseline tables
-// survive untouched.
+// workspace already at the canonical shape but lacking goose history is adopted
+// (stamped at baseline, not re-created) and then forward-migrated to HEAD, with
+// the baseline tables and their data surviving untouched.
 func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
@@ -80,8 +93,8 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if appliedVersion != baselineVersion {
-		t.Fatalf("post-adoption version = %d, want %d", appliedVersion, baselineVersion)
+	if appliedVersion != headVersion(t) {
+		t.Fatalf("post-adoption version = %d, want %d", appliedVersion, headVersion(t))
 	}
 	var seeded string
 	if err := second.db.QueryRowContext(ctx, `SELECT title FROM issues WHERE id = 'keep-me'`).Scan(&seeded); err != nil {

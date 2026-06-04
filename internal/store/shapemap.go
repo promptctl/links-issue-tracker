@@ -239,7 +239,7 @@ func buildTargetRegistry() map[TargetKey]targetField {
 		}
 	}
 	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
-	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank")
+	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane")
 	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
 	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
 	add(collIssues, TransformLegacyStatus, required, "status")

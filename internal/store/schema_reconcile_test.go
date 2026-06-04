@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -33,14 +34,21 @@ import (
 // driven; every test exercises the same Open path with different
 // initial workspace shapes.
 
-// hijackToPreGoose simulates a pre-goose workspace by dropping the
-// goose_db_version table after the given Store has bootstrapped. The
-// caller's mutation produces the historical shape they want to test;
-// hijackToPreGoose strips the goose history so the next Open hits the
-// adoption path.
+// hijackToPreGoose simulates a pre-goose workspace by reverting the schema to
+// the baseline shape and then dropping the goose_db_version table. The caller's
+// own mutations produce the historical *baseline-or-earlier* shape they want to
+// test; hijackToPreGoose strips post-baseline migrations and the goose history
+// so the next Open hits the adoption path.
+//
+// A real pre-goose workspace predates every migration, so it cannot carry any
+// post-baseline column (lane, and whatever later migrations add). Reverting via
+// the migrations' own Down sections — the single source of "how to reach
+// baseline" — keeps this helper correct as migrations accrue with no
+// per-migration edits here. [LAW:one-source-of-truth]
 func hijackToPreGoose(t *testing.T, st *Store) {
 	t.Helper()
 	ctx := context.Background()
+	revertToBaseline(t, st)
 	if err := st.ExecRawForTest(ctx, `DROP TABLE goose_db_version`); err != nil {
 		t.Fatalf("drop goose_db_version error = %v", err)
 	}
@@ -49,8 +57,37 @@ func hijackToPreGoose(t *testing.T, st *Store) {
 	}
 }
 
+// revertToBaseline rolls the live schema back to the baseline shape by running
+// the post-baseline migrations' own Down sections — the single source of "how
+// to reach baseline" — so pre-goose simulation stays correct as migrations
+// accrue, with no per-migration edits. [LAW:one-source-of-truth]
+//
+// The Down migrations operate on the issues table. A caller that has already
+// dropped issues is simulating a below-baseline workspace (reconcile recreates
+// every table at baseline), so there is nothing to revert — running the Down
+// would fail on the missing table. Revert only when the schema it targets is
+// present; that is a precondition of the operation, not a swallowed failure.
+func revertToBaseline(t *testing.T, st *Store) {
+	t.Helper()
+	ctx := context.Background()
+	issuesPresent, err := st.tableExists(ctx, "issues")
+	if err != nil {
+		t.Fatalf("tableExists(issues) error = %v", err)
+	}
+	if !issuesPresent {
+		return
+	}
+	provider, err := newGooseProvider(st.db)
+	if err != nil {
+		t.Fatalf("construct goose provider error = %v", err)
+	}
+	if _, err := provider.DownTo(ctx, baselineVersion); err != nil {
+		t.Fatalf("revert to baseline shape error = %v", err)
+	}
+}
+
 // assertReachedBaseline opens st and asserts the post-reconcile invariants:
-// shape converges, goose stamps v1.
+// shape converges to baseline, goose forward-migrates to HEAD.
 func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 	t.Helper()
 	ctx := context.Background()
@@ -70,8 +107,9 @@ func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 	if err != nil {
 		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if v != baselineVersion {
-		t.Fatalf("goose version = %d, want %d", v, baselineVersion)
+	// Open reconciles to baseline, adopts, then forward-migrates to HEAD.
+	if v != headVersion(t) {
+		t.Fatalf("goose version = %d, want %d", v, headVersion(t))
 	}
 	return st
 }
@@ -1043,10 +1081,14 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}
+	// Revert post-baseline migrations to the genuine pre-goose (baseline) shape
+	// while goose history is still intact, so adoption + forward-migration on
+	// reopen do not collide with a post-baseline column the bootstrap left behind.
+	revertToBaseline(t, first)
 	// Reproduce the field shape: legacy issue_history table present
-	// AND a goose_db_version log claiming versions beyond this binary's
-	// registry (the "stamped at v=2 by a buggy older binary" pattern
-	// seen in cc-nerf-buster).
+	// AND a goose_db_version log claiming a version beyond this binary's
+	// registry (the "stamped ahead by a buggy older binary" pattern seen in
+	// cc-nerf-buster).
 	if err := first.ExecRawForTest(ctx, `CREATE TABLE issue_history (id VARCHAR(191) PRIMARY KEY, issue_id VARCHAR(191) NOT NULL)`); err != nil {
 		_ = first.Close()
 		t.Fatalf("create legacy issue_history error = %v", err)
@@ -1055,12 +1097,14 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 		_ = first.Close()
 		t.Fatalf("clear real goose row error = %v", err)
 	}
-	// Three rows at one tstamp = the field-observed fabrication shape
-	// (a single INSERT loop, not real goose apply traces).
+	// Rows at one tstamp = the field-observed fabrication shape (a single INSERT
+	// loop, not real goose apply traces). The last claims a version beyond the
+	// registry max — the ahead-of-registry row recovery must wipe.
+	aheadVersion := headVersion(t) + 1
 	fabricated := []string{
 		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (0, 1, '2026-05-08 23:33:37')`,
 		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (1, 1, '2026-05-08 23:33:37')`,
-		`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (2, 1, '2026-05-08 23:33:37')`,
+		fmt.Sprintf(`INSERT INTO goose_db_version (version_id, is_applied, tstamp) VALUES (%d, 1, '2026-05-08 23:33:37')`, aheadVersion),
 	}
 	for _, stmt := range fabricated {
 		if err := first.ExecRawForTest(ctx, stmt); err != nil {
@@ -1078,7 +1122,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 
 	// Next Open must classify phaseAdopt via disk-truth (issue_history
 	// present), reconcile (drops issue_history + fabricated goose log),
-	// then adopt to a clean v=baseline stamp.
+	// adopt at baseline, then forward-migrate to a clean HEAD stamp.
 	st := assertReachedBaseline(t, doltRoot)
 
 	// issue_history dropped.
@@ -1089,19 +1133,19 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	if histExists {
 		t.Fatal("issue_history not dropped during fabricated-goose recovery")
 	}
-	// goose_db_version has no rows claiming versions beyond the
-	// baseline. The three fabricated rows (including the v=2 row that
-	// previously trapped the workspace in an ahead-of-registry refusal)
-	// must be gone.
+	// goose_db_version has no rows claiming versions beyond HEAD. The fabricated
+	// ahead-of-registry row (the kind that traps a workspace in an
+	// ahead-of-registry refusal) must be gone; recovery re-stamps a clean log
+	// whose max is HEAD.
 	var aheadRows int
 	if err := st.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM goose_db_version WHERE version_id > ?`,
-		baselineVersion,
+		headVersion(t),
 	).Scan(&aheadRows); err != nil {
 		t.Fatalf("count goose rows error = %v", err)
 	}
 	if aheadRows != 0 {
-		t.Fatalf("goose_db_version still has %d rows beyond baseline; fabricated rows survived recovery", aheadRows)
+		t.Fatalf("goose_db_version still has %d rows beyond HEAD; fabricated rows survived recovery", aheadRows)
 	}
 	// Seeded issue survives unchanged.
 	got, err := st.GetIssue(ctx, seeded.ID)

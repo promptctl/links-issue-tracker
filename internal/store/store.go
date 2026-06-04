@@ -59,6 +59,7 @@ type CreateIssueInput struct {
 	ParentID    string
 	Priority    int
 	Assignee    string
+	Lane        string
 	Labels      []string
 	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
 	// Sourced from workspace config at the call site. Not persisted as derived state.
@@ -73,6 +74,7 @@ type UpdateIssueInput struct {
 	Status      *string
 	Priority    *int
 	Assignee    *string
+	Lane        *string
 	Labels      *[]string
 	// By identifies the actor performing the update so the resulting event
 	// log records who changed what. Empty falls back to "unknown".
@@ -83,7 +85,7 @@ type UpdateIssueInput struct {
 
 func (u UpdateIssueInput) IsEmpty() bool {
 	return u.Title == nil && u.Description == nil && u.Prompt == nil && u.IssueType == nil &&
-		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Labels == nil
+		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
 }
 
 // ApplyUpdateInput is the single input for the unified update path.
@@ -471,6 +473,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		Priority:    priority,
 		IssueType:   issueType,
 		Topic:       topic,
+		Lane:        strings.TrimSpace(in.Lane),
 		Labels:      labels,
 		CreatedAt:   now,
 		UpdatedAt:   now,
@@ -502,10 +505,10 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 			return err
 		}
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
-			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
 			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-			issue.AssigneeValue(), issue.Rank, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+			issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
 			return fmt.Errorf("insert issue: %w", err)
 		}
 		if parentID != "" {
@@ -534,7 +537,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 }
 
 func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error) {
-	query := `SELECT i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at FROM issues i`
+	query := `SELECT i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at FROM issues i`
 	var where []string
 	var args []any
 	if !filter.IncludeArchived {
@@ -800,7 +803,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch load issues: %w", err)
@@ -829,7 +832,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id = ?`, id)
 	scanned, err := scanIssue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -858,6 +861,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	priorIssueType := issue.IssueType
 	priorPriority := issue.Priority
 	priorAssignee := issue.AssigneeValue()
+	priorLane := issue.Lane
 	priorLabels := strings.Join(issue.Labels, ",")
 	if in.Title != nil {
 		issue.Title = strings.TrimSpace(*in.Title)
@@ -911,6 +915,9 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		}
 		issue = updated
 	}
+	if in.Lane != nil {
+		issue.Lane = strings.TrimSpace(*in.Lane)
+	}
 	if in.Labels != nil {
 		labels, err := canonicalizeLabels(*in.Labels)
 		if err != nil {
@@ -925,8 +932,8 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	}
 	if err := s.withMutation(ctx, "update issue", func(ctx context.Context, tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, `UPDATE issues SET
-			title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
-			WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+			title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
+			WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
 			return fmt.Errorf("update issue: %w", err)
 		}
 		if in.Labels != nil {
@@ -956,6 +963,9 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		newAssignee := issue.AssigneeValue()
 		if priorAssignee != newAssignee {
 			changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: newAssignee})
+		}
+		if priorLane != issue.Lane {
+			changes = append(changes, model.FieldChange{Field: "lane", From: priorLane, To: issue.Lane})
 		}
 		newLabels := strings.Join(issue.Labels, ",")
 		if priorLabels != newLabels {
@@ -1611,6 +1621,7 @@ type partialIssue struct {
 	IssueType   string
 	Topic       string
 	Rank        string
+	Lane        string
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -1639,7 +1650,7 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	var assignee string
 	var createdAt, updatedAt string
 	var closedAt, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
@@ -1654,7 +1665,7 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 	var assignee string
 	var createdAt, updatedAt string
 	var closedAt, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
+	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
@@ -1775,6 +1786,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 			IssueType:   row.Issue.IssueType,
 			Topic:       row.Issue.Topic,
 			Rank:        row.Issue.Rank,
+			Lane:        row.Issue.Lane,
 			Labels:      labelsByID[row.Issue.ID],
 			CreatedAt:   row.Issue.CreatedAt,
 			UpdatedAt:   row.Issue.UpdatedAt,
@@ -1820,7 +1832,7 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	//   parent dead, child live -> include (snapshot semantics: container's state at archive)
 	//   parent dead, child dead -> include (snapshot semantics)
 	// The WHERE clause encodes "include if parent is dead OR child is live."
-	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
+	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
