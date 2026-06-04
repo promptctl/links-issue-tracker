@@ -175,6 +175,7 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"archived_at":  "issues.archived_at",
 		"deleted_at":   "issues.deleted_at",
 		"item_rank":    "issues.rank", // v1 name
+		"lane":         "issues.lane",
 	},
 	"relations": {
 		"src_id":     "relations.src_id",

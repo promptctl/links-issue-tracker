@@ -90,6 +90,11 @@ type Issue struct {
 	IssueType   string     `json:"issue_type"`
 	Topic       string     `json:"topic"`
 	Rank        string     `json:"rank"`
+	// Lane partitions an epic's children into parallel rank-ordered
+	// sub-sequences: same lane → sequenced by rank, different lanes → parallel.
+	// Empty string is the shared default lane (fully-sequential). Meaningful
+	// only within an epic; the readiness gate is what scopes it.
+	Lane        string     `json:"lane"`
 	Labels      []string   `json:"labels"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -271,6 +276,7 @@ type issueJSON struct {
 	Topic       string     `json:"topic"`
 	Assignee    string     `json:"assignee,omitempty"`
 	Rank        string     `json:"rank"`
+	Lane        string     `json:"lane"`
 	Labels      []string   `json:"labels"`
 	CreatedAt   time.Time  `json:"created_at"`
 	UpdatedAt   time.Time  `json:"updated_at"`
@@ -312,6 +318,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		Topic:       i.Topic,
 		Assignee:    assignee,
 		Rank:        i.Rank,
+		Lane:        i.Lane,
 		Labels:      i.Labels,
 		CreatedAt:   i.CreatedAt,
 		UpdatedAt:   i.UpdatedAt,
@@ -335,6 +342,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		IssueType:   payload.IssueType,
 		Topic:       payload.Topic,
 		Rank:        payload.Rank,
+		Lane:        payload.Lane,
 		Labels:      payload.Labels,
 		CreatedAt:   payload.CreatedAt,
 		UpdatedAt:   payload.UpdatedAt,
