@@ -46,9 +46,15 @@ func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, end
 		return agentsInstallResult{Path: filePath, Created: true, Changed: true}, nil
 	}
 
-	existing := migrateMarkers(string(content), legacyAgentsBeginMarker, legacyAgentsEndMarker, litAgentsBeginMarker, litAgentsEndMarker)
-	updated, changed := upsertManagedSection(existing, section, beginMarker, endMarker)
-	if !changed {
+	// [LAW:one-source-of-truth] The change signal compares the final content
+	// against the original file bytes — not against the post-migration content.
+	// A marker-only migration (legacy markers, body identical to the template)
+	// mutates the file yet leaves upsertManagedSection's own diff empty; comparing
+	// against the original is the only definition of "changed" that persists it.
+	original := string(content)
+	migrated := migrateMarkers(original, legacyAgentsBeginMarker, legacyAgentsEndMarker, litAgentsBeginMarker, litAgentsEndMarker)
+	updated, _ := upsertManagedSection(migrated, section, beginMarker, endMarker)
+	if updated == original {
 		return agentsInstallResult{Path: filePath, Created: false, Changed: false}, nil
 	}
 	if err := os.WriteFile(filePath, []byte(updated), 0o644); err != nil {
