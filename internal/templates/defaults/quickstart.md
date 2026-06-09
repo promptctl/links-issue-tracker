@@ -10,8 +10,9 @@ If the user is re-ranking and wants to read the pull order they are shaping: `li
 Get details for a ticket: `lit show <id>` — for a ticket in an epic it auto-prints the epic plan (siblings in rank order, their status, your "you are here" spot, and any cross-epic dependencies). Start work: `lit start <id>`.
 
 ## Create tickets
-Create tickets: `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic [--parent <parent-id>]`
+Create tickets: `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic [--parent <parent-id>] [--bottom]`
 <agent-instructions>`--topic`: Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')</agent-instructions>
+<agent-instructions>New tickets are ranked to the TOP of the order by default (fresh work surfaces first). Pass `--bottom` to append at the bottom instead — use it when authoring a batch in order so creation order is preserved.</agent-instructions>
 
 ## Modify tickets
 Update tickets: `lit update <issue-id> --title "..." --description "..." --priority 1 [--labels a,b]`

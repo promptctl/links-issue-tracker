@@ -35,6 +35,9 @@ func (h backlogTestHarness) createIssue(input store.CreateIssueInput) (id string
 	if input.Prefix == "" {
 		input.Prefix = h.ap.Workspace.IssuePrefix
 	}
+	// Fixtures author top-to-bottom in listing order, so append at the bottom
+	// to make creation order equal rank order (production default is top).
+	input.Placement = store.RankBottom
 	issue, err := h.ap.Store.CreateIssue(h.ctx, input)
 	if err != nil {
 		h.t.Fatalf("CreateIssue(%q) error = %v", input.Title, err)
