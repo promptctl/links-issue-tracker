@@ -35,6 +35,9 @@ func (f epicFixture) addChild(title string) string {
 	f.t.Helper()
 	child, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID,
+		// Author children top-to-bottom in call order: append at the bottom so
+		// creation order equals rank order (production default is top).
+		Placement: store.RankBottom,
 	})
 	if err != nil {
 		f.t.Fatalf("CreateIssue(child %q) error = %v", title, err)

@@ -230,15 +230,15 @@ func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	dependentA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent A", Topic: "rank", IssueType: "task", Priority: 0})
+	dependentA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependentA) error = %v", err)
 	}
-	dependentB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent B", Topic: "rank", IssueType: "task", Priority: 0})
+	dependentB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent B", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependentB) error = %v", err)
 	}
-	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Shared blocker", Topic: "rank", IssueType: "task", Priority: 0})
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Shared blocker", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
@@ -279,15 +279,15 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0})
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependent) error = %v", err)
 	}
-	upstream, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Upstream blocker", Topic: "rank", IssueType: "task", Priority: 0})
+	upstream, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Upstream blocker", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(upstream) error = %v", err)
 	}
-	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Middle blocker", Topic: "rank", IssueType: "task", Priority: 0})
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Middle blocker", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
@@ -333,15 +333,15 @@ func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Release", Topic: "rank", IssueType: "task", Priority: 0})
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Release", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependent) error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocking epic", Topic: "rank", IssueType: "epic", Priority: 1})
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocking epic", Topic: "rank", IssueType: "epic", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic child", Topic: "rank", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic child", Topic: "rank", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom}); err != nil {
 		t.Fatalf("CreateIssue(epic child) error = %v", err)
 	}
 	if err := st.RankToBottom(ctx, epic.ID); err != nil {
@@ -380,15 +380,15 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0})
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependent) error = %v", err)
 	}
-	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Closed epic", Topic: "rank", IssueType: "epic", Priority: 1})
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Closed epic", Topic: "rank", IssueType: "epic", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Closed child", Topic: "rank", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Closed child", Topic: "rank", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic child) error = %v", err)
 	}
@@ -418,11 +418,11 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0})
+	dependent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(dependent) error = %v", err)
 	}
-	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "rank", IssueType: "task", Priority: 0})
+	blocker, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(blocker) error = %v", err)
 	}
@@ -957,6 +957,36 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	}
 }
 
+func TestCreateIssuePlacement(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	// Default placement (zero value) surfaces fresh work at the top.
+	first, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "First", Topic: "place", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(first) error = %v", err)
+	}
+	second, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Second", Topic: "place", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(second) error = %v", err)
+	}
+	// Explicit bottom placement appends after everything.
+	appended, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Appended", Topic: "place", IssueType: "task", Placement: RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(appended) error = %v", err)
+	}
+
+	issues, err := st.ListIssues(ctx, ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues() error = %v", err)
+	}
+	got := issueIDs(issues)
+	want := []string{second.ID, first.ID, appended.ID}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("rank order = %#v, want %#v (newest-first default, --bottom appended last)", got, want)
+	}
+}
+
 func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -965,11 +995,11 @@ func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "tree", IssueType: "task", Priority: 0})
+	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "tree", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childA) error = %v", err)
 	}
-	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "tree", IssueType: "task", Priority: 0})
+	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "tree", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
@@ -993,39 +1023,39 @@ func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) 
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	main, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Main", Topic: "order", IssueType: "task", Priority: 1})
+	main, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Main", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(main) error = %v", err)
 	}
-	depA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependency A", Topic: "order", IssueType: "task", Priority: 1})
+	depA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependency A", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(depA) error = %v", err)
 	}
-	depB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependency B", Topic: "order", IssueType: "task", Priority: 1})
+	depB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dependency B", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(depB) error = %v", err)
 	}
-	blockedA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocked A", Topic: "order", IssueType: "task", Priority: 1})
+	blockedA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocked A", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedA) error = %v", err)
 	}
-	blockedB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocked B", Topic: "order", IssueType: "task", Priority: 1})
+	blockedB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Blocked B", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedB) error = %v", err)
 	}
-	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "order", IssueType: "task", Priority: 1})
+	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childA) error = %v", err)
 	}
-	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "order", IssueType: "task", Priority: 1})
+	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
-	relatedA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related A", Topic: "order", IssueType: "task", Priority: 1})
+	relatedA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related A", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(relatedA) error = %v", err)
 	}
-	relatedB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related B", Topic: "order", IssueType: "task", Priority: 1})
+	relatedB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related B", Topic: "order", IssueType: "task", Priority: 1, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(relatedB) error = %v", err)
 	}
@@ -2161,15 +2191,15 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0})
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	b, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "B", Topic: "rank", IssueType: "task", Priority: 0})
+	b, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "B", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
-	c, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "C", Topic: "rank", IssueType: "task", Priority: 0})
+	c, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "C", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(C) error = %v", err)
 	}
@@ -2192,7 +2222,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 func TestRankSetRejectsDuplicates(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0})
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
@@ -2204,7 +2234,7 @@ func TestRankSetRejectsDuplicates(t *testing.T) {
 func TestRankSetRejectsTooFewIDs(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0})
+	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
