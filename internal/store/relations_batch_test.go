@@ -18,11 +18,11 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	childA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child A", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childA) error = %v", err)
 	}
-	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	childB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child B", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(childB) error = %v", err)
 	}
