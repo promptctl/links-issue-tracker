@@ -13,10 +13,21 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+# Every job here gates merge and must stay fast (<5 min total). macOS coverage
+# is deliberately NOT here — its cgo build is slow; it runs out-of-band in
+# ci-macos.yml so this gate stays quick.
 jobs:
+  # Primary-platform build+test. One definition, shared with the macOS runner.
   build-and-test:
-    runs-on: ubuntu-latest
+    uses: ./.github/workflows/build-and-test.yml
+    with:
+      os: ubuntu-latest
 
+  # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
+  # check correctness properties of the repo, not the build, so they live apart
+  # from build-and-test ([LAW:decomposition]) and run in parallel with it.
+  verify:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -25,9 +36,9 @@ jobs:
           go-version-file: go.mod
 
       # Enforce module-file tidiness BEFORE a release tag can be cut. The
-      # release pipeline (.goreleaser.yml) no longer runs `go mod tidy` as
-      # a before-hook because that would mutate go.mod/go.sum at release
-      # time, divorcing the published artifacts from the tagged commit.
+      # release pipeline (.goreleaser.yml) no longer runs `go mod tidy` as a
+      # before-hook because that would mutate go.mod/go.sum at release time,
+      # divorcing the published artifacts from the tagged commit.
       # [LAW:single-enforcer] this is the one place tidiness is checked.
       - name: go mod tidy check
         run: |
@@ -38,20 +49,45 @@ jobs:
             exit 1
           fi
 
-      - name: Install Dolt
-        run: |
-          curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
-          sudo bash install-dolt.sh
-          dolt version
-
       - name: Verify install disables VCS stamping
         run: grep -q -- "-buildvcs=false" scripts/install.sh
 
       - name: Install lit via repo script
         run: bash scripts/install.sh
 
-      - name: Build
-        run: go build ./cmd/lit
+  # golangci-lint enforces the depguard lifecycle-boundary rule (.golangci.yml).
+  # The lint version is pinned so the gate is deterministic — a new linter
+  # release can't fail an unrelated PR. Keep it matched to the version
+  # developers run locally.
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Test
-        run: go test ./...
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.8.0
+
+  # Gate docs the same way .8 verified them locally: a missing page or a link
+  # outside docs_dir fails the build under --strict, so nav regressions can't
+  # land silently. Versions pinned for a deterministic gate (mkdocs-material 2.0
+  # is a breaking release).
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install MkDocs
+        run: pip install mkdocs==1.6.1 mkdocs-material==9.7.6
+
+      - name: mkdocs build --strict
+        run: mkdocs build --strict
