@@ -117,5 +117,5 @@ and report status rather than closing it prematurely.
 
 ---
 
-See also: the human-facing [README](../README.md) and `lit quickstart` (the live command
+See also: the human-facing [README](https://github.com/promptctl/links-issue-tracker#readme) and `lit quickstart` (the live command
 reference, which always reflects the installed binary).

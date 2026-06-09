@@ -19,6 +19,7 @@ markdown_extensions:
       permalink: true
 
 nav:
+  - Home: index.md
   - Introduction:
       - What is links?: introduction/what-is-links.md
       - Installation: introduction/installation.md
@@ -31,5 +32,5 @@ nav:
       - Commands: cli-reference.md
   - Guides:
       - Sync and remotes: dolt-remote-sync.md
-      - Agent workflow: guides/agent-workflow.md
-      - Troubleshooting: guides/troubleshooting.md
+      - Agent setup & workflow: agent-setup.md
+      - Troubleshooting: troubleshooting.md
