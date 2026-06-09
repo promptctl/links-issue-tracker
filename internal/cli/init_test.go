@@ -120,6 +120,55 @@ func TestEnsureLinksAgentFilesMigratesLegacyMarkers(t *testing.T) {
 	}
 }
 
+// Regression: when only the markers are legacy and the managed body already
+// matches the current template byte-for-byte, the migration must still persist
+// and be reported as changed. The earlier change signal compared against the
+// post-migration content, so a marker-only diff was silently dropped.
+func TestEnsureLinksAgentFilesMigratesMarkerOnlyDifference(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	section, _, err := renderLinksAgentsSection(repo)
+	if err != nil {
+		t.Fatalf("renderLinksAgentsSection() error = %v", err)
+	}
+	legacyBody := strings.ReplaceAll(section, litAgentsBeginMarker, legacyAgentsBeginMarker)
+	legacyBody = strings.ReplaceAll(legacyBody, litAgentsEndMarker, legacyAgentsEndMarker)
+
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		seeded := "# user-owned heading\n\nUser content above.\n\n" + legacyBody
+		if err := os.WriteFile(filepath.Join(repo, name), []byte(seeded), 0o644); err != nil {
+			t.Fatalf("WriteFile(%s legacy) error = %v", name, err)
+		}
+	}
+
+	agentsResult, claudeResult, err := ensureLinksAgentFiles(repo)
+	if err != nil {
+		t.Fatalf("ensureLinksAgentFiles() error = %v", err)
+	}
+	if !agentsResult.Changed || !claudeResult.Changed {
+		t.Fatalf("marker-only migration not reported as changed: AGENTS.md changed=%v, CLAUDE.md changed=%v",
+			agentsResult.Changed, claudeResult.Changed)
+	}
+
+	for _, name := range []string{"AGENTS.md", "CLAUDE.md"} {
+		got, err := os.ReadFile(filepath.Join(repo, name))
+		if err != nil {
+			t.Fatalf("ReadFile(%s) error = %v", name, err)
+		}
+		text := string(got)
+		if strings.Contains(text, legacyAgentsBeginMarker) || strings.Contains(text, legacyAgentsEndMarker) {
+			t.Fatalf("%s: legacy markers not migrated: %q", name, text)
+		}
+		if strings.Count(text, litAgentsBeginMarker) != 1 || strings.Count(text, litAgentsEndMarker) != 1 {
+			t.Fatalf("%s: expected exactly one managed section, got: %q", name, text)
+		}
+		if !strings.Contains(text, "# user-owned heading") || !strings.Contains(text, "User content above.") {
+			t.Fatalf("%s: user content dropped: %q", name, text)
+		}
+	}
+}
+
 func TestInitHumanOutputShowsAgentsSource(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 	repo := t.TempDir()
