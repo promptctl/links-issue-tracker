@@ -13,15 +13,36 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job here gates merge and must stay fast (<5 min total). macOS coverage
-# is deliberately NOT here — its cgo build is slow; it runs out-of-band in
-# ci-macos.yml so this gate stays quick.
+# Every job here gates merge and must stay fast (<5 min total). CI runs on
+# Linux only by deliberate choice — no macOS runners, no build matrix. The
+# embedded Dolt engine builds with cgo (ICU/zstd); covering a second OS would
+# slow the gate and add platform-provisioning machinery for little signal, so
+# the one supported CI platform is ubuntu.
 jobs:
-  # Primary-platform build+test. One definition, shared with the macOS runner.
   build-and-test:
-    uses: ./.github/workflows/build-and-test.yml
-    with:
-      os: ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      # The test suite shells out to the `dolt` CLI as an oracle, so Dolt must
+      # be installed to run `go test`. (Dolt is a test-only oracle; it is NOT a
+      # runtime dependency of the shipped binary.)
+      - name: Install Dolt
+        run: |
+          set -euo pipefail
+          curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
+          sudo bash install-dolt.sh
+          dolt version
+
+      - name: Build
+        run: go build ./cmd/lit
+
+      - name: Test
+        run: go test ./...
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
