@@ -20,6 +20,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `lit new` and `lit followup` now rank new tickets to the **top** of the order by default (fresh work surfaces first) instead of the bottom. Pass `--bottom` to append at the bottom — use it when authoring a batch in order so creation order is preserved. Importing an existing backlog still preserves its order.
+
 ### Fixed
 
 ### Removed

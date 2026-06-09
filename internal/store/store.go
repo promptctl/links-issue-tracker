@@ -50,6 +50,17 @@ type SyncState struct {
 	ContentHash string
 }
 
+// RankPlacement selects where a newly created issue lands in the rank order.
+// Its zero value is RankTop, so the product default — fresh work surfaces at
+// the top — is also the type default: a CreateIssueInput that says nothing
+// about placement gets top.
+type RankPlacement int
+
+const (
+	RankTop    RankPlacement = iota // sorts before all existing items (default)
+	RankBottom                      // sorts after all existing items
+)
+
 type CreateIssueInput struct {
 	Title       string
 	Description string
@@ -61,6 +72,10 @@ type CreateIssueInput struct {
 	Assignee    string
 	Lane        string
 	Labels      []string
+	// Placement decides where the new issue lands in the rank order. Zero value
+	// (RankTop) surfaces fresh work at the top; callers that author an ordered
+	// batch (e.g. preserving creation order) pass RankBottom.
+	Placement RankPlacement
 	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
 	// Sourced from workspace config at the call site. Not persisted as derived state.
 	Prefix string
@@ -500,7 +515,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		if err != nil {
 			return err
 		}
-		issue.Rank, err = nextRankAtBottom(ctx, tx)
+		issue.Rank, err = nextRankForPlacement(ctx, tx, in.Placement)
 		if err != nil {
 			return err
 		}
@@ -1629,6 +1644,21 @@ type partialIssue struct {
 	DeletedAt   *time.Time
 }
 
+// nextRankForPlacement resolves a new issue's rank from its requested
+// placement. The single dispatch point on RankPlacement: the two edge helpers
+// stay branch-free, and the runtime variability (which edge the caller chose)
+// lives in this one exhaustive match.
+func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p RankPlacement) (string, error) {
+	switch p {
+	case RankTop:
+		return nextRankAtTop(ctx, tx)
+	case RankBottom:
+		return nextRankAtBottom(ctx, tx)
+	default:
+		return "", fmt.Errorf("unknown rank placement: %d", p)
+	}
+}
+
 // nextRankAtBottom returns a rank that sorts after all existing items.
 // Called within a transaction to ensure consistency.
 func nextRankAtBottom(ctx context.Context, tx *sql.Tx) (string, error) {
@@ -1641,6 +1671,20 @@ func nextRankAtBottom(ctx context.Context, tx *sql.Tx) (string, error) {
 		return rank.Initial(), nil
 	}
 	return rank.After(lastRank.String), nil
+}
+
+// nextRankAtTop returns a rank that sorts before all existing items.
+// Called within a transaction to ensure consistency.
+func nextRankAtTop(ctx context.Context, tx *sql.Tx) (string, error) {
+	var firstRank sql.NullString
+	err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank != '' ORDER BY item_rank ASC LIMIT 1").Scan(&firstRank)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("query first rank: %w", err)
+	}
+	if !firstRank.Valid || firstRank.String == "" {
+		return rank.Initial(), nil
+	}
+	return rank.Before(firstRank.String), nil
 }
 
 func scanIssue(row issueScanner) (issueRow, error) {

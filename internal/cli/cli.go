@@ -319,6 +319,16 @@ func unsupportedOutputFlagError() error {
 	return errors.New("--output is no longer supported; use --json for JSON or omit it for text")
 }
 
+// rankPlacement translates the CLI's --bottom boolean into the domain
+// placement value at the boundary, so the default (no flag) surfaces fresh
+// work at the top.
+func rankPlacement(bottom bool) store.RankPlacement {
+	if bottom {
+		return store.RankBottom
+	}
+	return store.RankTop
+}
+
 func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("new")
 	title := fs.String("title", "", "Issue title")
@@ -331,13 +341,15 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
+	bottom := fs.Bool("bottom", false, "Rank the new issue at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: resolveAssigneeIdentity(*assignee), Labels: splitCSV(*labels), Lane: *lane,
-		Prefix: ap.Workspace.IssuePrefix,
+		Placement: rankPlacement(*bottom),
+		Prefix:    ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
 		return err
@@ -363,6 +375,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
+	bottom := fs.Bool("bottom", false, "Rank the follow-up at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
 	jsonOut := fs.Bool("json", false, "Output JSON")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
@@ -370,7 +383,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--json]")
+		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom] [--json]")
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -394,6 +407,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Priority:    *priority,
 		Assignee:    resolveAssigneeIdentity(*assignee),
 		Labels:      splitCSV(*labels),
+		Placement:   rankPlacement(*bottom),
 		Prefix:      ap.Workspace.IssuePrefix,
 	})
 	if err != nil {
