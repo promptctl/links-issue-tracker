@@ -142,3 +142,28 @@ func TestRunFollowupUnknownParentReturnsError(t *testing.T) {
 		t.Fatalf("runFollowup() expected error for unknown parent, got nil")
 	}
 }
+
+func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-closer")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title: "Closed work", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(parent) error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runFollowup(ctx, &stdout, ap, []string{
+		"--on", parent.ID, "--title", "Surfaced follow-up", "--json",
+	}); err != nil {
+		t.Fatalf("runFollowup() error = %v", err)
+	}
+	var created model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal(runFollowup output) error = %v", err)
+	}
+	if got := created.AssigneeValue(); got != "" {
+		t.Fatalf("created.AssigneeValue() = %q, want empty: followup capture is not a claim", got)
+	}
+}
