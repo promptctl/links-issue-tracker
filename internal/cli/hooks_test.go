@@ -22,8 +22,8 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runHooks(&stdout, ws, []string{"install"}); err != nil {
-		t.Fatalf("runHooks(install) error = %v", err)
+	if err := runWsFamily(hooksFamily, context.Background(), &stdout, ws, []string{"install"}); err != nil {
+		t.Fatalf("hooks install error = %v", err)
 	}
 
 	hookPath := filepath.Join(ws.GitCommonDir, "hooks", "pre-push")

@@ -33,7 +33,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 	// Add per-child blocks using named flags (--blocker/--blocked).
 	for _, childID := range []string{child1.ID, child2.ID} {
 		var stdout bytes.Buffer
-		if err := runDep(ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", childID}); err != nil {
+		if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", childID}); err != nil {
 			t.Fatalf("dep add --blocker %s --blocked %s error = %v", epicA.ID, childID, err)
 		}
 		if !strings.Contains(stdout.String(), "--blocks-->") {
@@ -43,7 +43,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 
 	// Add epic-level block.
 	var stdout bytes.Buffer
-	if err := runDep(ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", epicB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", epicB.ID}); err != nil {
 		t.Fatalf("dep add epic-level block error = %v", err)
 	}
 
@@ -55,7 +55,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 	// Remove per-child blocks using positional args.
 	for _, childID := range []string{child1.ID, child2.ID} {
 		var rmStdout bytes.Buffer
-		if err := runDep(ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, childID}); err != nil {
+		if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, childID}); err != nil {
 			t.Fatalf("dep rm %s %s error = %v", epicA.ID, childID, err)
 		}
 		if !strings.Contains(rmStdout.String(), "ok") {
@@ -65,7 +65,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 
 	// Remove epic-level block.
 	var rmEpicStdout bytes.Buffer
-	if err := runDep(ctx, &rmEpicStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, epicB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &rmEpicStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, epicB.ID}); err != nil {
 		t.Fatalf("dep rm epic-level block error = %v", err)
 	}
 }
@@ -85,7 +85,7 @@ func TestDepAddRmWithPositionalArgs(t *testing.T) {
 
 	// Add using positional args (from to).
 	var addStdout bytes.Buffer
-	if err := runDep(ctx, &addStdout, ap, []string{"add", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &addStdout, ap, []string{"add", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
 		t.Fatalf("dep add positional error = %v", err)
 	}
 	if !strings.Contains(addStdout.String(), issueA.ID) || !strings.Contains(addStdout.String(), issueB.ID) {
@@ -94,7 +94,7 @@ func TestDepAddRmWithPositionalArgs(t *testing.T) {
 
 	// Remove using same positional args.
 	var rmStdout bytes.Buffer
-	if err := runDep(ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
 		t.Fatalf("dep rm positional error = %v", err)
 	}
 }
@@ -128,7 +128,7 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			err := runDep(ctx, &stdout, ap, tc.args)
+			err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args)
 			if err == nil {
 				t.Fatalf("dep add should reject same-epic block, got nil; stdout=%q", stdout.String())
 			}
@@ -184,7 +184,7 @@ func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var stdout bytes.Buffer
-			if err := runDep(ctx, &stdout, ap, tc.args); err != nil {
+			if err := runAppFamily(depFamily, ctx, &stdout, ap, tc.args); err != nil {
 				t.Fatalf("dep add cross-epic case %q errored = %v", tc.name, err)
 			}
 		})
@@ -205,7 +205,7 @@ func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	err = runDep(ctx, &stderr, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID})
+	err = runAppFamily(depFamily, ctx, &stderr, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID})
 	if err == nil {
 		t.Fatal("dep rm nonexistent relation should error")
 	}
@@ -242,7 +242,7 @@ func TestDepRejectsUnknownRelationType(t *testing.T) {
 	}
 	for _, args := range cases {
 		var stdout bytes.Buffer
-		err := runDep(ctx, &stdout, ap, args)
+		err := runAppFamily(depFamily, ctx, &stdout, ap, args)
 		if err == nil || err.Error() != wantMsg {
 			t.Errorf("dep %s error = %v, want %q", args[0], err, wantMsg)
 		}

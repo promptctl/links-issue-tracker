@@ -15,27 +15,16 @@ import (
 
 const lifeboatUsage = "usage: lit lifeboat <dump|recover> ..."
 
-func validateLifeboatCommandPath(args []string) error {
-	return validateNestedCommandPath(args, lifeboatUsage, "dump", "recover")
-}
-
-// runLifeboat is the data lifeboat command surface (links-recovery-j0vl): the
-// recovery path that reads a workspace's data below the migration gate, so a
-// workspace store.Open() refuses can still be released and rebuilt. This
-// foundation registers the surface and its first verb, `dump`; later verbs in
-// the epic (map/apply/verify/run) attach here.
-func runLifeboat(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	if len(args) == 0 {
-		return errors.New(lifeboatUsage)
-	}
-	switch args[0] {
-	case "dump":
-		return runLifeboatDump(ctx, stdout, ws, args[1:])
-	case "recover":
-		return runLifeboatRecover(ctx, stdout, ws, args[1:])
-	default:
-		return errors.New(lifeboatUsage)
-	}
+// lifeboatFamily is the data lifeboat command surface (links-recovery-j0vl):
+// the recovery path that reads a workspace's data below the migration gate, so
+// a workspace store.Open() refuses can still be released and rebuilt. Later
+// verbs in the epic (map/apply/verify/run) attach here as rows.
+var lifeboatFamily = commandFamily[wsRunFn]{
+	usage: lifeboatUsage,
+	subcommands: []subcommandRow[wsRunFn]{
+		{name: "dump", payload: runLifeboatDump},
+		{name: "recover", payload: runLifeboatRecover},
+	},
 }
 
 // recoverAttempts is the loop budget for both CLI recovery paths, because both
