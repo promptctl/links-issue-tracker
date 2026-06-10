@@ -36,7 +36,7 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, &stdout, ap, []string{
+	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--on", parent.ID,
 		"--title", "Surface stale cache rows in doctor",
 		"--json",
@@ -77,7 +77,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, &stdout, ap, []string{
+	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--on", parent.ID,
 		"--title", "Add sync metrics surface",
 		"--description", "Custom description for the follow-up.",
@@ -154,7 +154,7 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, &stdout, ap, []string{
+	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--on", parent.ID, "--title", "Surfaced follow-up", "--json",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)

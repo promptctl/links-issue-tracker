@@ -21,7 +21,7 @@ import (
 // [LAW:one-source-of-truth] One source (version.Get); two presentations.
 func TestVersionJSONMatchesGetOutput(t *testing.T) {
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, []string{"--json"}); err != nil {
+	if err := runVersion(newOutputModeWriter(&stdout, outputModeText), []string{"--json"}); err != nil {
 		t.Fatalf("runVersion --json error = %v", err)
 	}
 
@@ -57,7 +57,7 @@ func TestVersionJSONMatchesGetOutput(t *testing.T) {
 // + remainder-of-source via MultiReader is the robust shape.)
 func TestVersionJSONIsStrictMachineContract(t *testing.T) {
 	var stdout bytes.Buffer
-	if err := runVersion(&stdout, []string{"--json"}); err != nil {
+	if err := runVersion(newOutputModeWriter(&stdout, outputModeText), []string{"--json"}); err != nil {
 		t.Fatalf("runVersion --json error = %v", err)
 	}
 

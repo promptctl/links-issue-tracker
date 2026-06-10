@@ -53,7 +53,7 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	label := fs.String("label", "", "Label name")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
 	}
@@ -78,7 +78,7 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 		}
 		results[issueID] = "ok"
 	}
-	return printValue(stdout, results, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, results, func(w io.Writer, v any) error {
 		entries := v.(map[string]string)
 		for issueID, status := range entries {
 			if _, err := fmt.Fprintf(w, "%s %s\n", issueID, status); err != nil {
@@ -99,7 +99,7 @@ func runBulkTransition(action string) appRunFn {
 		reason := fs.String("reason", "", "Lifecycle reason")
 		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
-		jsonOut := fs.Bool("json", false, "Output JSON")
+		fs.JSONFlag()
 		if err := parseFlagSet(fs, args, stdout); err != nil {
 			return err
 		}
@@ -121,7 +121,7 @@ func runBulkTransition(action string) appRunFn {
 			}
 			results[issueID] = "ok"
 		}
-		return printValue(stdout, results, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, results, func(w io.Writer, v any) error {
 			entries := v.(map[string]string)
 			for issueID, status := range entries {
 				if _, err := fmt.Fprintf(w, "%s %s\n", issueID, status); err != nil {
@@ -137,7 +137,7 @@ func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	fs := newCobraFlagSet("bulk import")
 	path := fs.String("path", "", "Path to JSON export")
 	force := fs.Bool("force", false, "Force import over unsynced local state")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -148,7 +148,7 @@ func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	payload := map[string]string{"status": "imported", "path": filepath.Clean(*path)}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]string)
 		_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
 		return err

@@ -30,7 +30,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -54,7 +54,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 			Applied:  false,
 			Note:     "prefix unchanged",
 		}
-		return printValue(stdout, result, *jsonOut, prefixSetTextOutput)
+		return printValue(stdout, result, prefixSetTextOutput)
 	}
 
 	if !*apply {
@@ -64,7 +64,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 			Applied:  false,
 			Note:     "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one.",
 		}
-		return printValue(stdout, result, *jsonOut, prefixSetTextOutput)
+		return printValue(stdout, result, prefixSetTextOutput)
 	}
 
 	if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
@@ -79,7 +79,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 		Current:  normalized,
 		Applied:  true,
 	}
-	return printValue(stdout, result, *jsonOut, prefixSetTextOutput)
+	return printValue(stdout, result, prefixSetTextOutput)
 }
 
 func prefixSetTextOutput(w io.Writer, v any) error {

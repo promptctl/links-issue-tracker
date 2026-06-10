@@ -76,7 +76,7 @@ func runSyncRemote(ctx context.Context, stdout io.Writer, ws workspace.Info, syn
 
 func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync remote ls")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -89,7 +89,7 @@ func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, s
 		"dolt_remotes": syncState.doltRemotes,
 		"changes":      syncState.changes,
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
 		_, err := fmt.Fprintf(
 			w,
@@ -109,7 +109,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	remote := fs.String("remote", "origin", "Remote name")
 	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -125,7 +125,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 		"remote": remoteName,
 		"prune":  *prune,
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
 		if !*verbose {
 			_, err := fmt.Fprintln(w, "fetched")
@@ -140,7 +140,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	fs := newCobraFlagSet("sync pull")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -163,7 +163,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
 		}
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, payload, func(w io.Writer, v any) error {
 			return printSyncPullPayload(w, v, *verbose)
 		})
 	}
@@ -176,7 +176,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"remote": remoteName,
 			"raw":    firstPushSkipMessage,
 		}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, payload, func(w io.Writer, v any) error {
 			return printSyncPullPayload(w, v, *verbose)
 		})
 	}
@@ -189,7 +189,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if handledErr != nil {
 		return handledErr
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		return printSyncPullPayload(w, v, *verbose)
 	})
 }
@@ -200,7 +200,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
 	force := fs.Bool("force", false, "Pass --force to dolt push")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -223,7 +223,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"raw":    "no upstream remote and no single configured remote; skipping sync push",
 		}
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, payload, func(w io.Writer, v any) error {
 			return printSyncPushPayload(w, v, *verbose)
 		})
 	}
@@ -236,7 +236,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"remote": remoteName,
 			"raw":    firstPushSkipMessage,
 		}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, payload, func(w io.Writer, v any) error {
 			return printSyncPushPayload(w, v, *verbose)
 		})
 	}
@@ -292,14 +292,14 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if traceRecordErr != nil {
 		payload["trace_error"] = traceRecordErr.Error()
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		return printSyncPushPayload(w, v, *verbose)
 	})
 }
 
 func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync status")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -326,7 +326,7 @@ func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syn
 		"dolt_remotes": syncState.doltRemotes,
 		"changes":      syncState.changes,
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
 		_, err := fmt.Fprintf(
 			w,

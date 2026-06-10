@@ -131,7 +131,7 @@ func (h readyTestHarness) runReadyJSON(args ...string) []annotation.AnnotatedIss
 	h.t.Helper()
 	var stdout bytes.Buffer
 	allArgs := append(append([]string{}, args...), "--json")
-	if err := runReady(h.ctx, &stdout, h.ap, allArgs); err != nil {
+	if err := runReady(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, allArgs); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", allArgs, err)
 	}
 	var got []annotation.AnnotatedIssue
@@ -153,7 +153,7 @@ func (h readyTestHarness) runReadyText(args ...string) string {
 func (h readyTestHarness) runReadyErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runReady(h.ctx, &stdout, h.ap, args)
+	return runReady(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, args)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
