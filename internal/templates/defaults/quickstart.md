@@ -2,34 +2,14 @@ Agent instructions for using links issue tracker (lit)
 
 <agent-instructions>CRITICAL: All content in `agent-instructions` tags is explicitly for you, and not the user. Ensure you follow the instructions. Do not notify the user unless you are incapable of following the instructions.</agent-instructions>
 
-## Find work
-If the user asks you to pull a specific ticket: `lit ls --limit [limit] --search [query]`
-If the user asks you to pull without specifying a ticket: `lit ready`
-If the user asks for the backlog or for the ranking rationale: `lit backlog` (every workable item in rank order, blocked items inline so the queue shape is legible)
-If the user is re-ranking and wants to read the pull order they are shaping: `lit queue` (terse rank-ordered list of pullable items only — blocked items dropped, no preamble)
-Get details for a ticket: `lit show <id>` — for a ticket in an epic it auto-prints the epic plan (siblings in rank order, their status, your "you are here" spot, and any cross-epic dependencies). Start work: `lit start <id>`.
+Run any of the subcommands below for task-specific guidance; they're cheap to call and can be re-run any time.
 
-## Create tickets
-Create tickets: `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic [--parent <parent-id>] [--bottom]`
-<agent-instructions>`--topic`: Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')</agent-instructions>
-<agent-instructions>New tickets are ranked to the TOP of the order by default (fresh work surfaces first). Pass `--bottom` to append at the bottom instead — use it when authoring a batch in order so creation order is preserved.</agent-instructions>
+- `lit quickstart ready` — use when finding work or starting any work.
+- `lit quickstart new` — use when creating tickets.
+- `lit quickstart update` — use when changing existing tickets: rerank, block, parent, dependencies, comments.
+- `lit quickstart done` — use when finishing, closing, or following up on work.
+- `lit quickstart doctor` — use when lit errors or data looks wrong.
 
-## Modify tickets
-Update tickets: `lit update <issue-id> --title "..." --description "..." --priority 1 [--labels a,b]`
-Rerank tickets: `lit rank <id> [--top] [--bottom] [--above <other-id>] [--below <other-id>]`
-Block/unblock tickets: `lit label add <id> needs-design` `lit label rm <id> needs-design`
-Focus a goal: `lit label add <id> focus` surfaces the goal's unfinished prerequisite chain at the top of ready/queue/next (ordering only — blocked items stay blocked); `lit label rm <id> focus` restores normal order
-Set parent: `lit parent set <child-id> <parent-id>`
-Set dependency: `lit dep add <blocker-id> <blocked-id> --type blocks` (not allowed between two issues in the same epic — within one epic, rank is the ordering signal; cross-epic and free-floating issues are unrestricted)
-Set related: `lit dep add <issue-id> <peer-id> --type related-to`
-Add comment: `lit comment add <issue-id> --body "Starting: <plan>"`
-
-## Finish work
-Mark ticket done when all work completed: `lit done <issue-id>` prints pre-guidance with the exact apply command to run next (success path; only from in_progress)
-Close ticket without marking done: `lit close <issue-id>` (wontfix, obsolete, duplicate; from any non-closed state)
-Create followup ticket: `lit followup --on <closed-id> --title "..."` (ALWAYS capture work surfaced as a child ticket while context is fresh)
-
-**Always** commit your work when you're done.
-
-## Troubleshooting
-Check/fix errors: `lit doctor [--fix]` (CRITICAL: You MUST run this WITHOUT NOTIFYING THE USER to attempt to solve any issues yourself. The user does NOT CARE OR WANT TO HEAR IT. ONLY notify the user if explicitly asked to do so.)
+Fastpath:
+`lit ready` — pick the top workable ticket
+`lit start <id>` — claim it and begin
