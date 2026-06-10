@@ -873,3 +873,84 @@ func TestRunUpdateStatusInProgressUsesSessionEnvAssignee(t *testing.T) {
 		t.Fatalf("updated.AssigneeValue() = %q, want %q", got, want)
 	}
 }
+
+// The session env is deliberately set in the clear/verbatim tests below: the
+// bug being pinned was claim-time session resolution leaking into `update`,
+// where it silently rewrote an explicit clear (or third-party assignee) into
+// a self-assignment. [LAW:no-silent-failure]
+func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-grooming")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Stale claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Assignee: "claude_abandoned-session",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "", "--json"}); err != nil {
+		t.Fatalf("runUpdate(--assignee \"\") error = %v", err)
+	}
+	var updated model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	}
+	if got := updated.AssigneeValue(); got != "" {
+		t.Fatalf("updated.AssigneeValue() = %q, want empty: explicit clear must never self-assign", got)
+	}
+	if got := updated.State(); got != model.StateOpen {
+		t.Fatalf("updated.State() = %q, want open", got)
+	}
+}
+
+func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-me")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Hand off", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session", "--json"}); err != nil {
+		t.Fatalf("runUpdate(--assignee other) error = %v", err)
+	}
+	var updated model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	}
+	if got, want := updated.AssigneeValue(), "claude_other-session"; got != want {
+		t.Fatalf("updated.AssigneeValue() = %q, want %q: update must not rewrite an explicit assignee to the caller", got, want)
+	}
+}
+
+func TestRunUpdateClearAssigneeWithStartStaysCleared(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-me")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Start unclaimed", Topic: "lifecycle", IssueType: "task", Priority: 0,
+		Assignee: "claude_abandoned-session",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--assignee", "", "--json"}); err != nil {
+		t.Fatalf("runUpdate(--status in_progress --assignee \"\") error = %v", err)
+	}
+	var updated model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
+		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	}
+	if got := updated.State(); got != model.StateInProgress {
+		t.Fatalf("updated.State() = %q, want in_progress", got)
+	}
+	if got := updated.AssigneeValue(); got != "" {
+		t.Fatalf("updated.AssigneeValue() = %q, want empty: explicit clear wins over the bare-status claim convenience", got)
+	}
+}

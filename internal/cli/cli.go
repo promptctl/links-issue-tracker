@@ -347,7 +347,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		return err
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: resolveAssigneeIdentity(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Placement: rankPlacement(*bottom),
 		Prefix:    ap.Workspace.IssuePrefix,
 	})
@@ -405,7 +405,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Topic:       resolvedTopic,
 		ParentID:    parent.ID,
 		Priority:    *priority,
-		Assignee:    resolveAssigneeIdentity(*assignee),
+		Assignee:    strings.TrimSpace(*assignee),
 		Labels:      splitCSV(*labels),
 		Placement:   rankPlacement(*bottom),
 		Prefix:      ap.Workspace.IssuePrefix,
@@ -841,17 +841,25 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		in.Fields.Priority = &value
 	}
 	if visited["assignee"] {
-		value := resolveAssigneeIdentity(*assignee)
+		// Update is a field write, not a claim: the explicit value is honored
+		// verbatim and empty means clear. Session-identity resolution
+		// (resolveAssigneeIdentity) is a claim-time convenience that belongs to
+		// `start` only — applying it here would silently turn an explicit
+		// clear (or an explicit third-party assignee) into "assign to me".
+		// [LAW:no-silent-failure]
+		value := strings.TrimSpace(*assignee)
 		in.Fields.Assignee = &value
-		// `start` (in_progress) stamps the assignee column. Thread the resolved
-		// value through so ApplyUpdate can pass it to TransitionIssue.
+		// `start` (in_progress) stamps the assignee column. Thread the value
+		// through so ApplyUpdate can pass it to TransitionIssue.
 		// [LAW:dataflow-not-control-flow]
 		in.TransitionAssignee = value
 	}
 	// Mirror `lit start`: when the status transition implies a `start` action
-	// and no resolved value is in hand yet, ask the resolver again so a bare
-	// `--status in_progress` still picks up CLAUDE_CODE_SESSION_ID.
-	if in.TransitionAssignee == "" && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
+	// and the user expressed no assignee intent at all, ask the resolver so a
+	// bare `--status in_progress` still picks up CLAUDE_CODE_SESSION_ID. The
+	// discriminator is flag presence, not value emptiness — an explicit empty
+	// is a clear, never an invitation to self-assign. [LAW:no-silent-failure]
+	if !visited["assignee"] && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
 		in.TransitionAssignee = resolveAssigneeIdentity("")
 	}
 	if visited["labels"] {
