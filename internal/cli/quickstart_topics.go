@@ -1,13 +1,16 @@
 package cli
 
 import (
+	"fmt"
+	"strings"
+
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
-const quickstartUsage = "usage: lit quickstart [ready|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]"
-
 // quickstartTopics maps `lit quickstart <topic>` tokens to their guidance
 // templates, in router display order.
+// [LAW:one-source-of-truth] This table is the sole declaration of topic membership and order;
+// the usage string and the refresh template set derive from it.
 // [LAW:one-type-per-behavior] Every topic is the same operation — load a guidance template, print it — varying only by value.
 var quickstartTopics = []struct {
 	Token    string
@@ -36,3 +39,16 @@ func quickstartTopicTokens() []string {
 	}
 	return tokens
 }
+
+// quickstartGuidanceTemplateNames returns the router template followed by the
+// topic guidance templates, in router display order.
+func quickstartGuidanceTemplateNames() []string {
+	names := make([]string, 0, len(quickstartTopics)+1)
+	names = append(names, templates.QuickstartTemplateName)
+	for _, topic := range quickstartTopics {
+		names = append(names, topic.Template)
+	}
+	return names
+}
+
+var quickstartUsage = fmt.Sprintf("usage: lit quickstart [%s] [--refresh] [--eject[=LIST]] [--force]", strings.Join(quickstartTopicTokens(), "|"))

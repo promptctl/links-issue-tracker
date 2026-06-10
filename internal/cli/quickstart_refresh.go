@@ -66,8 +66,8 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 // user can decide whether it is genuinely customized or a stale verbatim copy
 // worth deleting / re-ejecting.
 func refreshQuickstartTemplates(workspaceRoot string) ([]quickstartRefreshItem, error) {
-	// [LAW:one-type-per-behavior] Every guidance template gets the identical inspection; the set is data from the templates package.
-	names := templates.QuickstartGuidanceNames()
+	// [LAW:one-type-per-behavior] Every guidance template gets the identical inspection; the set derives from the topic table.
+	names := quickstartGuidanceTemplateNames()
 	items := make([]quickstartRefreshItem, 0, len(names))
 	for _, name := range names {
 		item, err := refreshQuickstartTemplate(workspaceRoot, name)

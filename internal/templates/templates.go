@@ -82,19 +82,6 @@ func sortedAliasNames() []string {
 	return names
 }
 
-// QuickstartGuidanceNames returns the quickstart router template followed by
-// the topic guidance templates, in router display order.
-func QuickstartGuidanceNames() []string {
-	return []string{
-		QuickstartTemplateName,
-		QuickstartReadyTemplateName,
-		QuickstartNewTemplateName,
-		QuickstartUpdateTemplateName,
-		QuickstartDoneTemplateName,
-		QuickstartDoctorTemplateName,
-	}
-}
-
 // Source describes which layer a resolved template came from.
 type Source string
 
