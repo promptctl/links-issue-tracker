@@ -18,99 +18,95 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 )
 
-var backupFamily = commandFamily{
+var backupFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit backup <create|list|restore> ...",
-	subcommands: []subcommandAccess{
+	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
-		{name: "create", access: appAccessRead},
-		{name: "list", access: appAccessRead},
-		{name: "restore", access: appAccessWrite},
+		{name: "create", payload: appSubcommand{access: appAccessRead, run: runBackupCreate}},
+		{name: "list", payload: appSubcommand{access: appAccessRead, run: runBackupList}},
+		{name: "restore", payload: appSubcommand{access: appAccessWrite, run: runBackupRestore}},
 	},
 }
 
-func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit backup <create|list|restore> ...")
+func runBackupCreate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("backup create")
+	keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
 	}
-	switch args[0] {
-	case "create":
-		fs := newCobraFlagSet("backup create")
-		keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		export, err := ap.Store.Export(ctx)
-		if err != nil {
-			return err
-		}
-		snapshot, err := backup.Create(ap.Workspace.StorageDir, export)
-		if err != nil {
-			return err
-		}
-		if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
-			return err
-		}
-		return printValue(stdout, snapshot, *jsonOut, func(w io.Writer, v any) error {
-			s := v.(backup.Snapshot)
-			_, err := fmt.Fprintf(w, "%s %s\n", s.Name, s.Path)
-			return err
-		})
-	case "list":
-		fs := newCobraFlagSet("backup list")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		snapshots, err := backup.List(ap.Workspace.StorageDir)
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, snapshots, *jsonOut, func(w io.Writer, v any) error {
-			list := v.([]backup.Snapshot)
-			for _, snapshot := range list {
-				if _, err := fmt.Fprintf(w, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	case "restore":
-		fs := newCobraFlagSet("backup restore")
-		path := fs.String("path", "", "Backup snapshot path")
-		latest := fs.Bool("latest", false, "Restore latest backup snapshot")
-		force := fs.Bool("force", false, "Force restore over unsynced state")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		restorePath := strings.TrimSpace(*path)
-		if *latest {
-			latestSnapshot, err := backup.Latest(ap.Workspace.StorageDir)
-			if err != nil {
+	export, err := ap.Store.Export(ctx)
+	if err != nil {
+		return err
+	}
+	snapshot, err := backup.Create(ap.Workspace.StorageDir, export)
+	if err != nil {
+		return err
+	}
+	if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
+		return err
+	}
+	return printValue(stdout, snapshot, *jsonOut, func(w io.Writer, v any) error {
+		s := v.(backup.Snapshot)
+		_, err := fmt.Fprintf(w, "%s %s\n", s.Name, s.Path)
+		return err
+	})
+}
+
+func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("backup list")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	snapshots, err := backup.List(ap.Workspace.StorageDir)
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, snapshots, *jsonOut, func(w io.Writer, v any) error {
+		list := v.([]backup.Snapshot)
+		for _, snapshot := range list {
+			if _, err := fmt.Fprintf(w, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
 				return err
 			}
-			if latestSnapshot == nil {
-				return errors.New("no backups available")
-			}
-			restorePath = latestSnapshot.Path
 		}
-		if restorePath == "" {
-			return errors.New("usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest")
-		}
-		if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
-			return err
-		}
-		payload := map[string]string{"status": "restored", "path": restorePath}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-			p := v.(map[string]string)
-			_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
-			return err
-		})
-	default:
-		return errors.New("usage: lit backup <create|list|restore> ...")
+		return nil
+	})
+}
+
+func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("backup restore")
+	path := fs.String("path", "", "Backup snapshot path")
+	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
+	force := fs.Bool("force", false, "Force restore over unsynced state")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
 	}
+	restorePath := strings.TrimSpace(*path)
+	if *latest {
+		latestSnapshot, err := backup.Latest(ap.Workspace.StorageDir)
+		if err != nil {
+			return err
+		}
+		if latestSnapshot == nil {
+			return errors.New("no backups available")
+		}
+		restorePath = latestSnapshot.Path
+	}
+	if restorePath == "" {
+		return errors.New("usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest")
+	}
+	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
+		return err
+	}
+	payload := map[string]string{"status": "restored", "path": restorePath}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		p := v.(map[string]string)
+		_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
+		return err
+	})
 }
 
 func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

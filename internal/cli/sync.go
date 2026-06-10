@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -31,292 +30,318 @@ const firstPushSkipMessage = "Skipping lit sync: remote has no refs yet. " +
 	"If you have pushed to this remote before, do NOT ignore this message — " +
 	"something is wrong (check the remote URL, credentials, or run `git ls-remote <remote>`)."
 
-func validateSyncCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit sync <status|remote|fetch|pull|push> ...", "status", "remote", "fetch", "pull", "push")
+// syncRunFn is the handler shape for sync subcommands: every one operates on
+// the workspace's open sync store.
+type syncRunFn func(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error
+
+// withSyncStore adapts a sync handler to the workspace family shape, owning
+// the sync store's open/close lifecycle so no handler manages it.
+// [LAW:no-ambient-temporal-coupling]
+func withSyncStore(run syncRunFn) wsRunFn {
+	return func(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+		syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		defer syncStore.Close()
+		return run(ctx, stdout, ws, syncStore, args)
+	}
 }
 
-func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
-	}
-	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
+var syncFamily = commandFamily[wsRunFn]{
+	usage: "usage: lit sync <status|remote|fetch|pull|push> ...",
+	subcommands: []subcommandRow[wsRunFn]{
+		{name: "status", payload: withSyncStore(runSyncStatus)},
+		{name: "remote", payload: withSyncStore(runSyncRemote)},
+		{name: "fetch", payload: withSyncStore(runSyncFetch)},
+		{name: "pull", payload: withSyncStore(runSyncPull)},
+		{name: "push", payload: withSyncStore(runSyncPush)},
+	},
+}
+
+var syncRemoteFamily = commandFamily[syncRunFn]{
+	usage: "usage: lit sync remote ls [--json]",
+	subcommands: []subcommandRow[syncRunFn]{
+		{name: "ls", payload: runSyncRemoteLs},
+	},
+}
+
+func runSyncRemote(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	run, err := syncRemoteFamily.resolve(args)
 	if err != nil {
 		return err
 	}
-	defer syncStore.Close()
+	return run(ctx, stdout, ws, syncStore, args[1:])
+}
 
-	switch args[0] {
-	case "remote":
-		if len(args) < 2 {
-			return errors.New("usage: lit sync remote ls [--json]")
-		}
-		switch args[1] {
-		case "ls":
-			fs := newCobraFlagSet("sync remote ls")
-			jsonOut := fs.Bool("json", false, "Output JSON")
-			if err := parseFlagSet(fs, args[2:], stdout); err != nil {
-				return err
-			}
-			syncState, err := readSyncRemoteState(ctx, syncStore, ws)
-			if err != nil {
-				return err
-			}
-			payload := map[string]any{
-				"git_remotes":  syncState.gitRemotes,
-				"dolt_remotes": syncState.doltRemotes,
-				"changes":      syncState.changes,
-			}
-			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-				p := v.(map[string]any)
-				_, err := fmt.Fprintf(
-					w,
-					"git=%d dolt=%d added=%d updated=%d removed=%d\n",
-					len(p["git_remotes"].([]workspace.GitRemote)),
-					len(p["dolt_remotes"].([]store.SyncRemote)),
-					len(syncState.changes.Added),
-					len(syncState.changes.Updated),
-					len(syncState.changes.Removed),
-				)
-				return err
-			})
-		default:
-			return errors.New("usage: lit sync remote ls [--json]")
-		}
-	case "fetch":
-		fs := newCobraFlagSet("sync fetch")
-		remote := fs.String("remote", "origin", "Remote name")
-		prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
-		verbose := fs.Bool("verbose", false, "Include detailed remote output")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		if _, err := syncDoltRemotesFromGit(ctx, syncStore, ws); err != nil {
-			return err
-		}
-		remoteName := strings.TrimSpace(*remote)
-		if err := syncStore.SyncFetch(ctx, remoteName, *prune); err != nil {
-			return err
-		}
-		payload := map[string]any{
-			"status": "ok",
-			"remote": remoteName,
-			"prune":  *prune,
-		}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-			p := v.(map[string]any)
-			if !*verbose {
-				_, err := fmt.Fprintln(w, "fetched")
-				return err
-			}
-			_, err := fmt.Fprintf(w, "fetched %s\n", p["remote"])
-			return err
-		})
-	case "pull":
-		fs := newCobraFlagSet("sync pull")
-		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
-		verbose := fs.Bool("verbose", false, "Include detailed remote output")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
-		if err != nil {
-			return err
-		}
-		remoteName, remoteErr := resolveSyncRemote(
-			strings.TrimSpace(*remote),
-			workspace.UpstreamRemote(ws.RootDir),
-			syncState.gitRemotes,
+func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync remote ls")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	syncState, err := readSyncRemoteState(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"git_remotes":  syncState.gitRemotes,
+		"dolt_remotes": syncState.doltRemotes,
+		"changes":      syncState.changes,
+	}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		p := v.(map[string]any)
+		_, err := fmt.Fprintf(
+			w,
+			"git=%d dolt=%d added=%d updated=%d removed=%d\n",
+			len(p["git_remotes"].([]workspace.GitRemote)),
+			len(p["dolt_remotes"].([]store.SyncRemote)),
+			len(syncState.changes.Added),
+			len(syncState.changes.Updated),
+			len(syncState.changes.Removed),
 		)
-		if remoteErr != nil {
-			return remoteErr
-		}
-		if remoteName == "" {
-			payload := map[string]any{
-				"status": "skipped",
-				"reason": "no_sync_remote",
-				"raw":    "no upstream remote and no single configured remote; skipping sync pull",
-			}
-			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-				return printSyncPullPayload(w, v, *verbose)
-			})
-		}
-		// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-		hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
-		if refsErr == nil && !hasRefs {
-			payload := map[string]any{
-				"status": "skipped",
-				"reason": "remote_empty",
-				"remote": remoteName,
-				"raw":    firstPushSkipMessage,
-			}
-			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-				return printSyncPullPayload(w, v, *verbose)
-			})
-		}
-		resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
-		if err != nil {
+		return err
+	})
+}
+
+func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync fetch")
+	remote := fs.String("remote", "origin", "Remote name")
+	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
+	verbose := fs.Bool("verbose", false, "Include detailed remote output")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if _, err := syncDoltRemotesFromGit(ctx, syncStore, ws); err != nil {
+		return err
+	}
+	remoteName := strings.TrimSpace(*remote)
+	if err := syncStore.SyncFetch(ctx, remoteName, *prune); err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"status": "ok",
+		"remote": remoteName,
+		"prune":  *prune,
+	}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		p := v.(map[string]any)
+		if !*verbose {
+			_, err := fmt.Fprintln(w, "fetched")
 			return err
 		}
-		result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
-		payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, result.Message, err)
-		if handledErr != nil {
-			return handledErr
+		_, err := fmt.Fprintf(w, "fetched %s\n", p["remote"])
+		return err
+	})
+}
+
+func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync pull")
+	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
+	verbose := fs.Bool("verbose", false, "Include detailed remote output")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	remoteName, remoteErr := resolveSyncRemote(
+		strings.TrimSpace(*remote),
+		workspace.UpstreamRemote(ws.RootDir),
+		syncState.gitRemotes,
+	)
+	if remoteErr != nil {
+		return remoteErr
+	}
+	if remoteName == "" {
+		payload := map[string]any{
+			"status": "skipped",
+			"reason": "no_sync_remote",
+			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
+		}
+		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+			return printSyncPullPayload(w, v, *verbose)
+		})
+	}
+	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
+	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	if refsErr == nil && !hasRefs {
+		payload := map[string]any{
+			"status": "skipped",
+			"reason": "remote_empty",
+			"remote": remoteName,
+			"raw":    firstPushSkipMessage,
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			return printSyncPullPayload(w, v, *verbose)
 		})
-	case "push":
-		fs := newCobraFlagSet("sync push")
-		remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
-		setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
-		force := fs.Bool("force", false, "Pass --force to dolt push")
-		verbose := fs.Bool("verbose", false, "Include detailed remote output")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
-		if err != nil {
-			return err
-		}
-		remoteName, remoteErr := resolveSyncRemote(
-			strings.TrimSpace(*remote),
-			workspace.UpstreamRemote(ws.RootDir),
-			syncState.gitRemotes,
-		)
-		if remoteErr != nil {
-			return remoteErr
-		}
-		if remoteName == "" {
-			payload := map[string]any{
-				"status": "skipped",
-				"reason": "no_sync_remote",
-				"raw":    "no upstream remote and no single configured remote; skipping sync push",
-			}
-			// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-				return printSyncPushPayload(w, v, *verbose)
-			})
-		}
-		// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-		hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
-		if refsErr == nil && !hasRefs {
-			payload := map[string]any{
-				"status": "skipped",
-				"reason": "remote_empty",
-				"remote": remoteName,
-				"raw":    firstPushSkipMessage,
-			}
-			return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-				return printSyncPushPayload(w, v, *verbose)
-			})
-		}
-		syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
-		if err != nil {
-			return err
-		}
-		// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-		result, err := syncStore.SyncPush(ctx, remoteName, syncBranch, *setUpstream, *force)
-		traceMetadata := map[string]string{
-			"remote":      remoteName,
-			"sync_branch": syncBranch,
-		}
-		if strings.TrimSpace(result.Message) != "" {
-			traceMetadata["message"] = strings.TrimSpace(result.Message)
-		}
-		traceStatus := "ok"
-		traceReason := "managed automation requested sync push"
-		if err != nil {
-			traceStatus = "error"
-			traceReason = err.Error()
-			traceMetadata["error"] = err.Error()
-		}
-		syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
-		if *setUpstream {
-			syncCommandArgs = append(syncCommandArgs, "--set-upstream")
-		}
-		if *force {
-			syncCommandArgs = append(syncCommandArgs, "--force")
-		}
-		// [LAW:one-source-of-truth] Hook-triggered sync traces reuse the shared automation trace writer instead of shell-local trace formats.
-		traceRef, traceRecordErr := maybeRecordAutomatedCommandTrace(
-			ws,
-			formatCommand(syncCommandArgs),
-			"mirror Dolt data to the configured git remote",
-			traceStatus,
-			traceReason,
-			traceMetadata,
-		)
-		if err != nil {
-			return err
-		}
+	}
+	resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	if err != nil {
+		return err
+	}
+	result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
+	payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, result.Message, err)
+	if handledErr != nil {
+		return handledErr
+	}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printSyncPullPayload(w, v, *verbose)
+	})
+}
+
+func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync push")
+	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
+	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
+	force := fs.Bool("force", false, "Pass --force to dolt push")
+	verbose := fs.Bool("verbose", false, "Include detailed remote output")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	remoteName, remoteErr := resolveSyncRemote(
+		strings.TrimSpace(*remote),
+		workspace.UpstreamRemote(ws.RootDir),
+		syncState.gitRemotes,
+	)
+	if remoteErr != nil {
+		return remoteErr
+	}
+	if remoteName == "" {
 		payload := map[string]any{
-			"status":      "ok",
-			"remote":      remoteName,
-			"branch":      syncBranch,
-			"raw":         result.Message,
-			"push_status": result.Status,
+			"status": "skipped",
+			"reason": "no_sync_remote",
+			"raw":    "no upstream remote and no single configured remote; skipping sync push",
 		}
-		if traceRef != nil {
-			payload["trace_ref"] = traceRef.Path
-		}
-		if traceRecordErr != nil {
-			payload["trace_error"] = traceRecordErr.Error()
+		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+			return printSyncPushPayload(w, v, *verbose)
+		})
+	}
+	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
+	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	if refsErr == nil && !hasRefs {
+		payload := map[string]any{
+			"status": "skipped",
+			"reason": "remote_empty",
+			"remote": remoteName,
+			"raw":    firstPushSkipMessage,
 		}
 		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
 			return printSyncPushPayload(w, v, *verbose)
 		})
-	case "status":
-		fs := newCobraFlagSet("sync status")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, args[1:], stdout); err != nil {
-			return err
-		}
-		syncState, err := readSyncRemoteState(ctx, syncStore, ws)
-		if err != nil {
-			return err
-		}
-		report, err := syncStore.SyncStatus(ctx)
-		if err != nil {
-			return err
-		}
-		head := strings.TrimSpace(report.HeadCommit)
-		if strings.TrimSpace(report.HeadMessage) != "" {
-			head = strings.TrimSpace(report.HeadCommit + " " + report.HeadMessage)
-		}
-		payload := map[string]any{
-			"dolt_version": report.DoltVersion,
-			"branch":       report.Branch,
-			"head":         head,
-			"head_commit":  report.HeadCommit,
-			"head_message": report.HeadMessage,
-			"status":       report.Status,
-			"git_remotes":  syncState.gitRemotes,
-			"dolt_remotes": syncState.doltRemotes,
-			"changes":      syncState.changes,
-		}
-		return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
-			p := v.(map[string]any)
-			_, err := fmt.Fprintf(
-				w,
-				"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
-				p["dolt_version"],
-				p["branch"],
-				p["head"],
-				len(p["git_remotes"].([]workspace.GitRemote)),
-				len(p["dolt_remotes"].([]store.SyncRemote)),
-				len(syncState.changes.Added),
-				len(syncState.changes.Updated),
-				len(syncState.changes.Removed),
-			)
-			return err
-		})
-	default:
-		return errors.New("usage: lit sync <status|remote|fetch|pull|push> ...")
 	}
+	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	if err != nil {
+		return err
+	}
+	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
+	result, err := syncStore.SyncPush(ctx, remoteName, syncBranch, *setUpstream, *force)
+	traceMetadata := map[string]string{
+		"remote":      remoteName,
+		"sync_branch": syncBranch,
+	}
+	if strings.TrimSpace(result.Message) != "" {
+		traceMetadata["message"] = strings.TrimSpace(result.Message)
+	}
+	traceStatus := "ok"
+	traceReason := "managed automation requested sync push"
+	if err != nil {
+		traceStatus = "error"
+		traceReason = err.Error()
+		traceMetadata["error"] = err.Error()
+	}
+	syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
+	if *setUpstream {
+		syncCommandArgs = append(syncCommandArgs, "--set-upstream")
+	}
+	if *force {
+		syncCommandArgs = append(syncCommandArgs, "--force")
+	}
+	// [LAW:one-source-of-truth] Hook-triggered sync traces reuse the shared automation trace writer instead of shell-local trace formats.
+	traceRef, traceRecordErr := maybeRecordAutomatedCommandTrace(
+		ws,
+		formatCommand(syncCommandArgs),
+		"mirror Dolt data to the configured git remote",
+		traceStatus,
+		traceReason,
+		traceMetadata,
+	)
+	if err != nil {
+		return err
+	}
+	payload := map[string]any{
+		"status":      "ok",
+		"remote":      remoteName,
+		"branch":      syncBranch,
+		"raw":         result.Message,
+		"push_status": result.Status,
+	}
+	if traceRef != nil {
+		payload["trace_ref"] = traceRef.Path
+	}
+	if traceRecordErr != nil {
+		payload["trace_error"] = traceRecordErr.Error()
+	}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		return printSyncPushPayload(w, v, *verbose)
+	})
+}
+
+func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync status")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	syncState, err := readSyncRemoteState(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	report, err := syncStore.SyncStatus(ctx)
+	if err != nil {
+		return err
+	}
+	head := strings.TrimSpace(report.HeadCommit)
+	if strings.TrimSpace(report.HeadMessage) != "" {
+		head = strings.TrimSpace(report.HeadCommit + " " + report.HeadMessage)
+	}
+	payload := map[string]any{
+		"dolt_version": report.DoltVersion,
+		"branch":       report.Branch,
+		"head":         head,
+		"head_commit":  report.HeadCommit,
+		"head_message": report.HeadMessage,
+		"status":       report.Status,
+		"git_remotes":  syncState.gitRemotes,
+		"dolt_remotes": syncState.doltRemotes,
+		"changes":      syncState.changes,
+	}
+	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+		p := v.(map[string]any)
+		_, err := fmt.Fprintf(
+			w,
+			"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
+			p["dolt_version"],
+			p["branch"],
+			p["head"],
+			len(p["git_remotes"].([]workspace.GitRemote)),
+			len(p["dolt_remotes"].([]store.SyncRemote)),
+			len(syncState.changes.Added),
+			len(syncState.changes.Updated),
+			len(syncState.changes.Removed),
+		)
+		return err
+	})
 }
 
 func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {

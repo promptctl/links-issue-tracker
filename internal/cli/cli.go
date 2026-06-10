@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -118,29 +117,6 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 	root.SetErr(stderr)
 	applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))
 	return root
-}
-
-func validateNestedCommandPath(args []string, usage string, commands ...string) error {
-	// [LAW:single-enforcer] Nested command path validation is centralized here so invalid/help paths fail before startup side effects.
-	if len(args) == 0 {
-		return errors.New(usage)
-	}
-	subcommand := strings.TrimSpace(args[0])
-	if subcommand == "" || subcommand == "--help" || subcommand == "-h" || strings.HasPrefix(subcommand, "-") {
-		return errors.New(usage)
-	}
-	if !slices.Contains(commands, subcommand) {
-		return errors.New(usage)
-	}
-	return nil
-}
-
-func validateHooksCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit hooks install [--json]", "install")
-}
-
-func validateCommentCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit comment <add|rm> ...", "add", "rm")
 }
 
 func runWithWorkspace(run func(workspace.Info) error) error {
@@ -1228,53 +1204,55 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	return printValue(stdout, issue, *jsonOut, printIssueSummary)
 }
 
-func runComment(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit comment <add|rm> ...")
+var commentFamily = commandFamily[appSubcommand]{
+	usage: "usage: lit comment <add|rm> ...",
+	subcommands: []subcommandRow[appSubcommand]{
+		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runCommentAdd}},
+		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runCommentRm}},
+	},
+}
+
+func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("comment add")
+	body := fs.String("body", "", "Comment body")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
 	}
-	switch args[0] {
-	case "add":
-		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := newCobraFlagSet("comment add")
-		body := fs.String("body", "", "Comment body")
-		by := fs.String("by", os.Getenv("USER"), "")
-		fs.Hide("by")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 1 {
-			return errors.New("usage: lit comment add <id> --body <text>")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit comment add <id> --body <text>")
-		}
-		comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, comment, *jsonOut, printComment)
-	case "rm":
-		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := newCobraFlagSet("comment rm")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 1 {
-			return errors.New("usage: lit comment rm <comment-id> [--json]")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit comment rm <comment-id> [--json]")
-		}
-		comment, err := ap.Store.DeleteComment(ctx, positional[0])
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, comment, *jsonOut, printComment)
-	default:
-		return errors.New("usage: lit comment <add|rm> ...")
+	if len(positional) != 1 {
+		return errors.New("usage: lit comment add <id> --body <text>")
 	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit comment add <id> --body <text>")
+	}
+	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, comment, *jsonOut, printComment)
+}
+
+func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("comment rm")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit comment rm <comment-id> [--json]")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit comment rm <comment-id> [--json]")
+	}
+	comment, err := ap.Store.DeleteComment(ctx, positional[0])
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, comment, *jsonOut, printComment)
 }
 
 func printComment(w io.Writer, v any) error {
@@ -1375,23 +1353,28 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	})
 }
 
+// completionFamily routes a shell name straight to its script: the payload is
+// the data the command emits, so dispatch needs no handler at all.
+// [LAW:dataflow-not-control-flow]
+var completionFamily = commandFamily[string]{
+	usage: "usage: lit completion <bash|zsh|fish>",
+	subcommands: []subcommandRow[string]{
+		{name: "bash", payload: bashCompletionScript},
+		{name: "zsh", payload: zshCompletionScript},
+		{name: "fish", payload: fishCompletionScript},
+	},
+}
+
 func runCompletion(stdout io.Writer, args []string) error {
 	if len(args) != 1 {
-		return errors.New("usage: lit completion <bash|zsh|fish>")
+		return errors.New(completionFamily.usage)
 	}
-	switch args[0] {
-	case "bash":
-		_, err := io.WriteString(stdout, bashCompletionScript)
+	script, err := completionFamily.resolve(args)
+	if err != nil {
 		return err
-	case "zsh":
-		_, err := io.WriteString(stdout, zshCompletionScript)
-		return err
-	case "fish":
-		_, err := io.WriteString(stdout, fishCompletionScript)
-		return err
-	default:
-		return errors.New("usage: lit completion <bash|zsh|fish>")
 	}
+	_, err = io.WriteString(stdout, script)
+	return err
 }
 
 func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
