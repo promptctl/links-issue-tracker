@@ -33,18 +33,18 @@ func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
 	return err
 }
 
-func resolveDoctorAccessMode(args []string) appAccessMode {
+func resolveDoctorAccessMode(args []string) app.AccessMode {
 	cmd := &cobra.Command{Use: "doctor"}
 	fix := cmd.Flags().String("fix", "", "")
 	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
 	cmd.Flags().Bool("json", false, "")
 	if err := cmd.ParseFlags(args); err != nil {
-		return appAccessWrite
+		return app.AccessWrite
 	}
 	if *fix != "" {
-		return appAccessWrite
+		return app.AccessWrite
 	}
-	return appAccessRead
+	return app.AccessRead
 }
 
 func allDoctorFixNames() []string {

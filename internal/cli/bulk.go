@@ -16,10 +16,10 @@ import (
 var bulkFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit bulk <label|close|archive|import> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "label", payload: appSubcommand{access: appAccessWrite, run: runBulkLabel}},
-		{name: "close", payload: appSubcommand{access: appAccessWrite, run: runBulkTransition("close")}},
-		{name: "archive", payload: appSubcommand{access: appAccessWrite, run: runBulkTransition("archive")}},
-		{name: "import", payload: appSubcommand{access: appAccessWrite, run: runBulkImport}},
+		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
+		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition("close")}},
+		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition("archive")}},
+		{name: "import", payload: appSubcommand{access: app.AccessWrite, run: runBulkImport}},
 	},
 }
 

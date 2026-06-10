@@ -16,9 +16,9 @@ import (
 var depFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit dep <add|rm|ls> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runDepAdd}},
-		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runDepRm}},
-		{name: "ls", payload: appSubcommand{access: appAccessRead, run: runDepLs}},
+		{name: "add", payload: appSubcommand{access: app.AccessWrite, run: runDepAdd}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWrite, run: runDepRm}},
+		{name: "ls", payload: appSubcommand{access: app.AccessRead, run: runDepLs}},
 	},
 }
 
