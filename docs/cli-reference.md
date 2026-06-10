@@ -209,8 +209,13 @@ lit label add <issue-id> <label> [--json]
 lit label rm <issue-id> <label> [--json]
 ```
 
-Incremental label edits. Labels also gate readiness: conventionally, labels like
-`needs-design` mark an issue blocked.
+Incremental label edits. Two labels are reserved and carry derived behavior:
+`needs-design` marks an issue blocked (membership), and `focus` marks an issue
+as a goal whose unfinished prerequisite chain — explicit dependencies, epic
+children, and earlier same-lane siblings, transitively — sorts to the top of
+`ready`/`queue`/`next` (ordering only; blocked path items stay blocked, and
+the path re-derives as items close). Focus outranks urgent priority; urgent
+alone never propagates to prerequisites.
 
 ### `lit followup`
 

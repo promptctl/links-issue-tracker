@@ -180,10 +180,7 @@ func newSiblingGateAnnotator(details map[string]store.IssueRelations, siblingsBy
 		}
 		var annotations []annotation.Annotation
 		for _, sib := range siblingsByEpic[parent.ID] {
-			if sib.ID == issue.ID {
-				continue
-			}
-			if sib.Lane == issue.Lane && sib.Rank < issue.Rank {
+			if isEarlierSameLaneSibling(sib, issue) {
 				annotations = append(annotations, annotation.Annotation{
 					Kind:    annotation.EarlierSiblingPending,
 					Message: sib.ID,
@@ -192,6 +189,16 @@ func newSiblingGateAnnotator(details map[string]store.IssueRelations, siblingsBy
 		}
 		return annotations, nil
 	}
+}
+
+// isEarlierSameLaneSibling reports whether sib precedes leaf within the same
+// lane — the ONE intra-epic implicit-prerequisite rule. Both the membership
+// gate (newSiblingGateAnnotator) and the focus-path derivation
+// (fetchFocusPathGoals) read it, so "earlier sibling" cannot drift between
+// the membership and ordering consumers.
+// [LAW:single-enforcer] Single definition of the intra-epic prerequisite edge.
+func isEarlierSameLaneSibling(sib, leaf model.Issue) bool {
+	return sib.ID != leaf.ID && sib.Lane == leaf.Lane && sib.Rank < leaf.Rank
 }
 
 // parentEpicIDs returns the distinct ids of the container parents referenced by
@@ -224,7 +231,7 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 	out := make(map[string][]model.Issue, len(relations))
 	for epicID, rel := range relations {
 		for _, child := range rel.Children {
-			if isUnfinishedSibling(child) {
+			if isUnfinished(child) {
 				out[epicID] = append(out[epicID], child)
 			}
 		}
@@ -232,17 +239,126 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 	return out
 }
 
-// isUnfinishedSibling reports whether a sibling still represents pending work
-// that should gate later same-lane siblings. The unfiltered child fetch is a
-// trust boundary: unlike the store-filtered workable list, it carries archived
-// and deleted rows, which have left the flow and must not block.
+// isUnfinished reports whether an issue still represents pending work — the
+// predicate that decides whether a sibling gates its later lane-mates and
+// whether an edge belongs on a focused goal's prerequisite path. Unfiltered
+// relation fetches are a trust boundary: unlike the store-filtered workable
+// list, they carry archived and deleted rows, which have left the flow and
+// must neither block nor be traversed.
 // [LAW:no-defensive-null-guards] The archived/deleted checks translate the raw
 // relation rows into the workable population; they are boundary translation,
 // not a guard against a should-not-happen state.
-func isUnfinishedSibling(issue model.Issue) bool {
+func isUnfinished(issue model.Issue) bool {
 	return issue.ArchivedAt == nil &&
 		issue.DeletedAt == nil &&
 		issue.State() != model.StateClosed
+}
+
+// FocusLabel is the reserved label that marks an issue as a focused goal.
+// The focus fact is stored on the ONE goal ticket only; "what is on the path
+// to it" is derived from the dependency DAG on every gather
+// (fetchFocusPathGoals), never written onto chain members — derived state
+// auto-advances as items close, with nothing to synchronize.
+// [LAW:one-source-of-truth] Single definition of the focus label.
+const FocusLabel = "focus"
+
+// fetchFocusPathGoals returns issueID -> focused-goal ID for every unfinished
+// issue on the prerequisite closure of a focus-labeled goal, the goal itself
+// included. An issue's prerequisites are its unfinished explicit dependencies,
+// the unfinished children of a container, and its earlier same-lane unfinished
+// siblings — the same implicit edge the lane gate blocks membership on, read
+// through the shared isEarlierSameLaneSibling/isUnfinished predicates.
+// [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
+// same prerequisite fact here, exactly as they are for the membership gate.
+// [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
+// values; no caller mode decides whether it runs — an empty focus set yields
+// an empty map through the same code path.
+func fetchFocusPathGoals(ctx context.Context, st *store.Store) (map[string]string, error) {
+	goals, err := st.ListIssues(ctx, store.ListIssuesFilter{
+		Statuses:  []model.State{model.StateOpen, model.StateInProgress},
+		LabelsAll: []string{FocusLabel},
+	})
+	if err != nil {
+		return nil, err
+	}
+	path := make(map[string]string, len(goals))
+	frontier := make([]string, 0, len(goals))
+	for _, goal := range goals {
+		path[goal.ID] = goal.ID
+		frontier = append(frontier, goal.ID)
+	}
+	// Breadth-first over the prerequisite DAG, one batched fetch per level.
+	// The path map doubles as the visited set, so shared prerequisites are
+	// attributed to the first goal that reaches them and cycles terminate.
+	for len(frontier) > 0 {
+		rels, err := st.GetRelationsByIDs(ctx, frontier)
+		if err != nil {
+			return nil, err
+		}
+		parentRels, err := st.GetRelationsByIDs(ctx, parentEpicIDs(rels))
+		if err != nil {
+			return nil, err
+		}
+		pending := pendingSiblingsByEpic(parentRels)
+		var next []string
+		for _, id := range frontier {
+			rel, ok := rels[id]
+			if !ok {
+				// Frontier ids are hydrated issues from this same connection;
+				// a hole means the store lied. [LAW:no-silent-failure]
+				return nil, store.NotFoundError{Entity: "issue", ID: id}
+			}
+			var prereqs []model.Issue
+			for _, dep := range rel.DependsOn {
+				if isUnfinished(dep) {
+					prereqs = append(prereqs, dep)
+				}
+			}
+			if rel.Issue.IsContainer() {
+				for _, child := range rel.Children {
+					if isUnfinished(child) {
+						prereqs = append(prereqs, child)
+					}
+				}
+			}
+			if rel.Parent != nil && rel.Parent.IsContainer() {
+				for _, sib := range pending[rel.Parent.ID] {
+					if isEarlierSameLaneSibling(sib, rel.Issue) {
+						prereqs = append(prereqs, sib)
+					}
+				}
+			}
+			for _, prereq := range prereqs {
+				if _, seen := path[prereq.ID]; seen {
+					continue
+				}
+				path[prereq.ID] = path[id]
+				next = append(next, prereq.ID)
+			}
+		}
+		frontier = next
+	}
+	return path, nil
+}
+
+// newFocusPathAnnotator returns an annotator that emits a FocusPath annotation
+// for any issue on a focused goal's derived prerequisite path; the message is
+// the goal's ID. FocusPath is an ORDERING fact and is deliberately absent from
+// readyBlockingKinds — it can never change membership, so a blocked path item
+// stays blocked and only the already-ready path items surface.
+// [LAW:dataflow-not-control-flow] Pure map lookup for every issue; absence
+// yields nil, not a skipped operation.
+func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
+	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
+		goalID, ok := pathGoals[issue.ID]
+		if !ok {
+			return nil, nil
+		}
+		return []annotation.Annotation{{
+			Kind:    annotation.FocusPath,
+			Message: goalID,
+		}}, nil
+	}
 }
 
 // newOrphanedAnnotator returns an annotator that flags in_progress issues
@@ -379,6 +495,23 @@ func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]st
 func sortByPriority(issues []annotation.AnnotatedIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
 		return issues[i].Priority > issues[j].Priority
+	})
+}
+
+// sortByFocusPath places issues carrying a FocusPath annotation before all
+// others, preserving the prior (priority, composite-rank) order within each
+// group. Layered LAST in the shared gather so the focus path outranks standing
+// urgent priority: focus is the deliberate "get me here now" directive, urgent
+// is a standing attribute. Flipping that precedence is a one-line reorder
+// against sortByPriority.
+// [LAW:dataflow-not-control-flow] Same comparator runs over every pair; the
+// derived annotation decides ordering, not whether the comparator runs.
+func sortByFocusPath(issues []annotation.AnnotatedIssue) {
+	onPath := func(row annotation.AnnotatedIssue) bool {
+		return annotation.HasAny(row.Annotations, annotation.FocusPath)
+	}
+	sort.SliceStable(issues, func(i, j int) bool {
+		return onPath(issues[i]) && !onPath(issues[j])
 	})
 }
 
