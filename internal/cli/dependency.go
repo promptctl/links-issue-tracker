@@ -34,7 +34,13 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 			return err
 		}
-		fromID, toID, err := resolveDepAddEndpoints(positional, *relType, *blocker, *blocked, fs.NArg())
+		// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
+		// downstream receives the sealed RelationType.
+		rt, err := model.ParseRelationType(*relType)
+		if err != nil {
+			return err
+		}
+		fromID, toID, err := resolveDepAddEndpoints(positional, rt, *blocker, *blocked, fs.NArg())
 		if err != nil {
 			return err
 		}
@@ -47,13 +53,13 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
 		// boundary so the store stays a thin substrate. Within one epic, rank is
 		// the canonical ordering; a 'blocks' edge would duplicate that signal.
-		if strings.TrimSpace(*relType) == "blocks" {
+		if rt == model.RelBlocks {
 			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
 				return err
 			}
 		}
-		srcID, dstID := depStoreEndpoints(*relType, fromID, toID)
-		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: *relType, CreatedBy: *by})
+		srcID, dstID := rt.StoreEndpoints(fromID, toID)
+		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: *by})
 		if err != nil {
 			return err
 		}
@@ -77,8 +83,12 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
 		}
-		srcID, dstID := depStoreEndpoints(*relType, positional[0], positional[1])
-		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, *relType); err != nil {
+		rt, err := model.ParseRelationType(*relType)
+		if err != nil {
+			return err
+		}
+		srcID, dstID := rt.StoreEndpoints(positional[0], positional[1])
+		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
 			return err
 		}
 		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
@@ -99,7 +109,18 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if fs.NArg() != 0 {
 			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
 		}
-		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], *relType)
+		// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
+		// set; a present one is parsed at this trust boundary, so a bad value
+		// errors loudly instead of silently matching nothing.
+		var typeFilter []model.RelationType
+		if strings.TrimSpace(*relType) != "" {
+			rt, err := model.ParseRelationType(*relType)
+			if err != nil {
+				return err
+			}
+			typeFilter = append(typeFilter, rt)
+		}
+		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
 		if err != nil {
 			return err
 		}
@@ -126,11 +147,11 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 // Mixing positional and named flags is an error: the user would have to know
 // the orientation rule to mix them safely, which defeats the purpose.
 // [LAW:single-enforcer] One place decides which input form was used.
-func resolveDepAddEndpoints(positional []string, relType, blocker, blocked string, extraArgs int) (string, string, error) {
+func resolveDepAddEndpoints(positional []string, relType model.RelationType, blocker, blocked string, extraArgs int) (string, string, error) {
 	usage := "usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]\n  or:  lit dep add --blocker <id> --blocked <id> (only with --type blocks)"
 	hasNamed := blocker != "" || blocked != ""
 	if hasNamed {
-		if relType != "blocks" {
+		if relType != model.RelBlocks {
 			return "", "", fmt.Errorf("--blocker/--blocked only apply with --type blocks; got --type %s", relType)
 		}
 		if blocker == "" || blocked == "" {
@@ -148,20 +169,12 @@ func resolveDepAddEndpoints(positional []string, relType, blocker, blocked strin
 	return positional[0], positional[1], nil
 }
 
-func depStoreEndpoints(relType, fromID, toID string) (string, string) {
-	// [LAW:single-enforcer] CLI-to-store orientation normalization for dep commands is centralized in one function.
-	// [LAW:one-source-of-truth] Store keeps one canonical blocks encoding (dependent -> dependency); CLI maps from human order.
-	if strings.TrimSpace(relType) == "blocks" {
-		return toID, fromID
-	}
-	return fromID, toID
-}
-
+// depRelationForCLI flips a store-oriented relation back into the CLI's human
+// order. StoreEndpoints is an involution, so the same mapping serves both
+// directions. [LAW:dataflow-not-control-flow] Applied unconditionally;
+// the per-type variability lives in the RelationType value.
 func depRelationForCLI(rel model.Relation) model.Relation {
-	if strings.TrimSpace(rel.Type) != "blocks" {
-		return rel
-	}
-	rel.SrcID, rel.DstID = rel.DstID, rel.SrcID
+	rel.SrcID, rel.DstID = rel.Type.StoreEndpoints(rel.SrcID, rel.DstID)
 	return rel
 }
 
@@ -205,12 +218,12 @@ func issueEpicID(ctx context.Context, ap *app.App, issueID string) (string, erro
 }
 
 func depRelationLine(rel model.Relation) string {
-	switch strings.TrimSpace(rel.Type) {
-	case "blocks":
+	switch rel.Type {
+	case model.RelBlocks:
 		return fmt.Sprintf("%s --blocks--> %s", rel.SrcID, rel.DstID)
-	case "parent-child":
+	case model.RelParentChild:
 		return fmt.Sprintf("%s --child-of--> %s", rel.SrcID, rel.DstID)
-	case "related-to":
+	case model.RelRelatedTo:
 		return fmt.Sprintf("%s --related-to--> %s", rel.SrcID, rel.DstID)
 	default:
 		return fmt.Sprintf("%s --depends-on--> %s", rel.SrcID, rel.DstID)

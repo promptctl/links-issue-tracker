@@ -409,11 +409,11 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 }
 
 type Relation struct {
-	SrcID     string    `json:"src_id"`
-	DstID     string    `json:"dst_id"`
-	Type      string    `json:"type"`
-	CreatedAt time.Time `json:"created_at"`
-	CreatedBy string    `json:"created_by"`
+	SrcID     string       `json:"src_id"`
+	DstID     string       `json:"dst_id"`
+	Type      RelationType `json:"type"`
+	CreatedAt time.Time    `json:"created_at"`
+	CreatedBy string       `json:"created_by"`
 }
 
 type Comment struct {

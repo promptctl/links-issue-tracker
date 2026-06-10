@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -325,16 +324,13 @@ func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
 	if _, err := s.GetIssue(ctx, in.DstID); err != nil {
 		return err
 	}
-	relType := strings.TrimSpace(in.Type)
-	if relType != "blocks" && relType != "parent-child" && relType != "related-to" {
-		return errors.New("relation type must be blocks, parent-child, or related-to")
+	// [LAW:single-enforcer] Import payloads are a trust boundary; the shared
+	// parser seals the type instead of a local equality chain.
+	relType, err := model.ParseRelationType(in.Type)
+	if err != nil {
+		return err
 	}
-	srcID, dstID := in.SrcID, in.DstID
-	if relType == "related-to" {
-		ordered := []string{srcID, dstID}
-		sort.Strings(ordered)
-		srcID, dstID = ordered[0], ordered[1]
-	}
+	srcID, dstID := relType.CanonicalEndpoints(in.SrcID, in.DstID)
 	createdBy := strings.TrimSpace(in.CreatedBy)
 	if createdBy == "" {
 		createdBy = "unknown"
@@ -345,7 +341,7 @@ func (s *Store) ImportRelation(ctx context.Context, in ImportRelation) error {
 			ON DUPLICATE KEY UPDATE
 				created_at = VALUES(created_at),
 				created_by = VALUES(created_by)`,
-			srcID, dstID, relType, in.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
+			srcID, dstID, string(relType), in.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
 			return fmt.Errorf("import relation: %w", err)
 		}
 		return nil

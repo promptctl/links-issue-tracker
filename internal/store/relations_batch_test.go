@@ -88,7 +88,7 @@ func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
 	}
 }
 
-func mustRelate(t *testing.T, ctx context.Context, st *Store, src, dst, relType string) {
+func mustRelate(t *testing.T, ctx context.Context, st *Store, src, dst string, relType model.RelationType) {
 	t.Helper()
 	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: src, DstID: dst, Type: relType, CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(%s %s->%s) error = %v", relType, src, dst, err)
