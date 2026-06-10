@@ -140,21 +140,122 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) error {
 	})
 }
 
-// RankAbove moves an issue to rank immediately above the target issue.
-func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) error {
-	if issueID == targetID {
-		return errors.New("cannot rank an issue relative to itself")
+// RankMove reports the pair a relative rank operation actually applied to
+// after frame resolution: MovedID was re-ranked relative to AnchorID. When
+// the named issue and target are frame-mates these are the inputs unchanged;
+// cross-frame, one or both are the containing ancestors that were comparable.
+// Callers surface the substitution to the user — moving an issue other than
+// the one named must never be silent. [LAW:no-silent-failure]
+type RankMove struct {
+	MovedID  string
+	AnchorID string
+}
+
+// ancestorChain returns the parent-child ancestry of an issue, self first,
+// root last, following only non-deleted parents. The on-disk relation rows
+// are a trust boundary: a parent cycle is corrupt data and fails loudly
+// rather than looping. [LAW:no-silent-failure]
+func (s *Store) ancestorChain(ctx context.Context, id string) ([]string, error) {
+	chain := []string{id}
+	seen := map[string]struct{}{id: {}}
+	for cur := id; ; {
+		var parent string
+		err := s.db.QueryRowContext(ctx,
+			`SELECT r.dst_id FROM relations r JOIN issues p ON p.id = r.dst_id
+			 WHERE r.src_id = ? AND r.type = 'parent-child' AND p.deleted_at IS NULL`, cur).Scan(&parent)
+		if errors.Is(err, sql.ErrNoRows) {
+			return chain, nil
+		}
+		if err != nil {
+			return nil, fmt.Errorf("ancestor chain of %s: %w", id, err)
+		}
+		if _, ok := seen[parent]; ok {
+			return nil, fmt.Errorf("ancestor chain of %s: parent cycle at %s", id, parent)
+		}
+		seen[parent] = struct{}{}
+		chain = append(chain, parent)
+		cur = parent
 	}
-	target, err := s.GetIssue(ctx, targetID)
-	if err != nil {
-		return err
+}
+
+// resolveComparableFrame maps a relative rank request onto the pair it is
+// actually about. Rank meaning is frame-local: an issue's rank is only ever
+// compared against its frame-mates (siblings under the same container, or
+// fellow top-level items), so a request naming two issues from different
+// frames is resolved to their representatives directly under the lowest
+// common ancestor — ranking a standalone ticket against an epic's child
+// behaves as ranking against the epic itself, and ranking the child against
+// the standalone moves the epic. Nothing inside any epic is reordered.
+// [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
+// the rank keyspace; this resolution makes every write frame-coherent.
+// Ranking an issue relative to its own container (or descendant) has no
+// frame-coherent meaning and is rejected. [LAW:no-silent-failure]
+func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, err error) {
+	pos := make(map[string]int, len(targetChain))
+	for i, id := range targetChain {
+		pos[id] = i
+	}
+	for i, id := range issueChain {
+		j, ok := pos[id]
+		if !ok {
+			continue
+		}
+		if i == 0 {
+			return "", "", fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])
+		}
+		if j == 0 {
+			return "", "", fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
+		}
+		return issueChain[i-1], targetChain[j-1], nil
+	}
+	// Disjoint ancestries: the comparable frame is the top level.
+	return issueChain[len(issueChain)-1], targetChain[len(targetChain)-1], nil
+}
+
+// resolveRankPair validates a relative rank request and resolves it to the
+// frame-comparable pair, returning the hydrated anchor (its rank seeds the
+// midpoint math) and the move record.
+// [LAW:single-enforcer] Both relative rank ops route through this one
+// resolution so cross-frame semantics cannot drift between above and below.
+func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, RankMove, error) {
+	if issueID == targetID {
+		return model.Issue{}, RankMove{}, errors.New("cannot rank an issue relative to itself")
+	}
+	if _, err := s.GetIssue(ctx, targetID); err != nil {
+		return model.Issue{}, RankMove{}, err
 	}
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return err
+		return model.Issue{}, RankMove{}, err
 	}
-	return s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
+	issueChain, err := s.ancestorChain(ctx, issueID)
+	if err != nil {
+		return model.Issue{}, RankMove{}, err
+	}
+	targetChain, err := s.ancestorChain(ctx, targetID)
+	if err != nil {
+		return model.Issue{}, RankMove{}, err
+	}
+	movedID, anchorID, err := resolveComparableFrame(issueChain, targetChain)
+	if err != nil {
+		return model.Issue{}, RankMove{}, err
+	}
+	anchor, err := s.GetIssue(ctx, anchorID)
+	if err != nil {
+		return model.Issue{}, RankMove{}, err
+	}
+	return anchor, RankMove{MovedID: movedID, AnchorID: anchorID}, nil
+}
+
+// RankAbove moves an issue to rank immediately above the target issue,
+// after resolving both to their comparable frame (see resolveComparableFrame).
+func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (RankMove, error) {
+	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
+	if err != nil {
+		return RankMove{}, err
+	}
+	return move, s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
 		var aboveRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", target.Rank, issueID).Scan(&aboveRank)
+		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", target.Rank, move.MovedID).Scan(&aboveRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-above: query neighbor: %w", err)
 		}
@@ -168,28 +269,23 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) error {
 			}
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
 			return fmt.Errorf("rank-above: update: %w", err)
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
 	})
 }
 
-// RankBelow moves an issue to rank immediately below the target issue.
-func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) error {
-	if issueID == targetID {
-		return errors.New("cannot rank an issue relative to itself")
-	}
-	target, err := s.GetIssue(ctx, targetID)
+// RankBelow moves an issue to rank immediately below the target issue,
+// after resolving both to their comparable frame (see resolveComparableFrame).
+func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (RankMove, error) {
+	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
 	if err != nil {
-		return err
+		return RankMove{}, err
 	}
-	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return err
-	}
-	return s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
+	return move, s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
 		var belowRank sql.NullString
-		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank > ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank ASC LIMIT 1", target.Rank, issueID).Scan(&belowRank)
+		err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank > ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank ASC LIMIT 1", target.Rank, move.MovedID).Scan(&belowRank)
 		if err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("rank-below: query neighbor: %w", err)
 		}
@@ -203,7 +299,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) error {
 			}
 		}
 		now := time.Now().UTC().Format(time.RFC3339Nano)
-		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
+		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
 			return fmt.Errorf("rank-below: update: %w", err)
 		}
 		return smoothRanksIfNeededTx(ctx, tx, newRank)
