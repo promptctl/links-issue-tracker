@@ -5,15 +5,17 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
 func TestLoadDefaults(t *testing.T) {
 	// Point XDG_CONFIG_HOME to a directory with no config file.
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
 
-	cfg, err := Load()
+	cfg, err := Load(pathspec.PathSpec{})
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
 
 	if cfg.Logging.Verbose {
@@ -57,8 +59,8 @@ func TestLoadRejectsNonPositiveRetentionBudget(t *testing.T) {
 			t.Fatal(err)
 		}
 		t.Setenv("XDG_CONFIG_HOME", dir)
-		if _, err := Load(); err == nil {
-			t.Fatalf("Load() with body %q expected error, got nil", body)
+		if _, err := Load(pathspec.PathSpec{}); err == nil {
+			t.Fatalf("Load(pathspec.PathSpec{}) with body %q expected error, got nil", body)
 		}
 	}
 }
@@ -92,9 +94,9 @@ soil_mode = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load()
+	cfg, err := Load(pathspec.PathSpec{})
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
 
 	if !cfg.Logging.Verbose {
@@ -136,9 +138,9 @@ verbose = true
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	cfg, err := Load()
+	cfg, err := Load(pathspec.PathSpec{})
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
 
 	if !cfg.Logging.Verbose {
@@ -161,9 +163,9 @@ verbose = true
 func TestLoadMissingDir(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", "/nonexistent/path/that/does/not/exist")
 
-	cfg, err := Load()
+	cfg, err := Load(pathspec.PathSpec{})
 	if err != nil {
-		t.Fatalf("Load() error = %v", err)
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
 	}
 
 	// Should return defaults without error.
@@ -200,9 +202,9 @@ required_fields = ["title", "description"]
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(workspaceRoot)
+	cfg, err := Load(pathspec.New(workspaceRoot))
 	if err != nil {
-		t.Fatalf("Load(workspaceRoot) error = %v", err)
+		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
 	}
 	want := []string{"description", "assignee", "title", "description"}
 	if !reflect.DeepEqual(cfg.Ready.RequiredFields, want) {
@@ -239,15 +241,36 @@ verbose = true
 		t.Fatal(err)
 	}
 
-	cfg, err := Load(workspaceRoot)
+	cfg, err := Load(pathspec.New(workspaceRoot))
 	if err != nil {
-		t.Fatalf("Load(workspaceRoot) error = %v", err)
+		t.Fatalf("Load(pathspec.New(workspaceRoot)) error = %v", err)
 	}
 	if !cfg.Logging.Verbose {
 		t.Fatal("expected project logging.verbose=true to override global")
 	}
 	if cfg.Logging.File != "/tmp/global.log" {
 		t.Fatalf("expected global log file to remain set, got %q", cfg.Logging.File)
+	}
+}
+
+func TestLoadHonorsProjectEnvOverrideWithoutWorkspaceRoot(t *testing.T) {
+	// The project layer is part of the precedence chain whether or not a
+	// workspace root is present; an explicit env override is never silently
+	// dropped. Pins the layer chain as data, not a conditional merge.
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+
+	projectFile := filepath.Join(t.TempDir(), "config.toml")
+	if err := os.WriteFile(projectFile, []byte("[logging]\nverbose = true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LIT_CONFIG_PROJECT_PATH", projectFile)
+
+	cfg, err := Load(pathspec.PathSpec{})
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if !cfg.Logging.Verbose {
+		t.Fatal("expected verbose=true from env-overridden project layer")
 	}
 }
 
@@ -262,7 +285,7 @@ func TestLoadInvalidTOMLReturnsError(t *testing.T) {
 	}
 	t.Setenv("XDG_CONFIG_HOME", dir)
 
-	if _, err := Load(); err == nil {
-		t.Fatal("Load() expected error for invalid TOML")
+	if _, err := Load(pathspec.PathSpec{}); err == nil {
+		t.Fatal("Load(pathspec.PathSpec{}) expected error for invalid TOML")
 	}
 }

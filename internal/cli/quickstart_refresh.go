@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -167,7 +168,7 @@ func renderQuickstartGuidance(workspaceRoot string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("load quickstart guidance: %w", err)
 	}
-	cfg, err := config.Load(workspaceRoot)
+	cfg, err := config.Load(pathspec.New(workspaceRoot))
 	if err != nil {
 		return "", fmt.Errorf("load config for quickstart guidance: %w", err)
 	}
