@@ -109,6 +109,50 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 	}
 }
 
+func TestCommandFamilyResolve(t *testing.T) {
+	// [LAW:behavior-not-structure] Pins the contract: which subcommands open
+	// the app read-only vs writable, and that illegal paths fail with usage
+	// before any app opens.
+	cases := []struct {
+		name    string
+		family  commandFamily
+		args    []string
+		want    appAccessMode
+		wantErr bool
+	}{
+		{name: "dep ls is read", family: depFamily, args: []string{"ls"}, want: appAccessRead},
+		{name: "dep add is write", family: depFamily, args: []string{"add", "a", "b"}, want: appAccessWrite},
+		{name: "dep rm is write", family: depFamily, args: []string{"rm", "a", "b"}, want: appAccessWrite},
+		{name: "dep unknown rejected", family: depFamily, args: []string{"bogus"}, wantErr: true},
+		{name: "dep empty rejected", family: depFamily, args: nil, wantErr: true},
+		{name: "dep help flag rejected", family: depFamily, args: []string{"--help"}, wantErr: true},
+		{name: "backup create is read", family: backupFamily, args: []string{"create"}, want: appAccessRead},
+		{name: "backup list is read", family: backupFamily, args: []string{"list"}, want: appAccessRead},
+		{name: "backup restore is write", family: backupFamily, args: []string{"restore", "--latest"}, want: appAccessWrite},
+		{name: "backup unknown rejected", family: backupFamily, args: []string{"prune"}, wantErr: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := tc.family.resolve(tc.args)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("resolve(%v) error = nil, want usage error", tc.args)
+				}
+				if err.Error() != tc.family.usage {
+					t.Fatalf("resolve(%v) error = %q, want family usage %q", tc.args, err, tc.family.usage)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("resolve(%v) error = %v", tc.args, err)
+			}
+			if got != tc.want {
+				t.Fatalf("resolve(%v) = %v, want %v", tc.args, got, tc.want)
+			}
+		})
+	}
+}
+
 func countNonEmptyLines(input string) int {
 	count := 0
 	for _, line := range strings.Split(strings.TrimSpace(input), "\n") {
