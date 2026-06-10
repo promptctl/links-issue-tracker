@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
@@ -13,9 +14,14 @@ import (
 )
 
 const (
-	AgentsSectionTemplateName = "agents-section.md"
-	PrePushHookTemplateName   = "pre-push-hook.sh"
-	QuickstartTemplateName    = "quickstart.md"
+	AgentsSectionTemplateName    = "agents-section.md"
+	PrePushHookTemplateName      = "pre-push-hook.sh"
+	QuickstartTemplateName       = "quickstart.md"
+	QuickstartReadyTemplateName  = "quickstart-ready.md"
+	QuickstartNewTemplateName    = "quickstart-new.md"
+	QuickstartUpdateTemplateName = "quickstart-update.md"
+	QuickstartDoneTemplateName   = "quickstart-done.md"
+	QuickstartDoctorTemplateName = "quickstart-doctor.md"
 
 	guidanceNamePrefix = "guidance-"
 )
@@ -28,14 +34,24 @@ var (
 		AgentsSectionTemplateName,
 		PrePushHookTemplateName,
 		QuickstartTemplateName,
+		QuickstartReadyTemplateName,
+		QuickstartNewTemplateName,
+		QuickstartUpdateTemplateName,
+		QuickstartDoneTemplateName,
+		QuickstartDoctorTemplateName,
 	}
 
 	// shortAliases maps user-facing short names (CLI tokens) to canonical filenames.
 	// [LAW:one-source-of-truth] CLI/UX mapping for template identity lives here, not spread across commands.
 	shortAliases = map[string]string{
-		"quickstart": QuickstartTemplateName,
-		"agents":     AgentsSectionTemplateName,
-		"hook":       PrePushHookTemplateName,
+		"quickstart":        QuickstartTemplateName,
+		"quickstart-ready":  QuickstartReadyTemplateName,
+		"quickstart-new":    QuickstartNewTemplateName,
+		"quickstart-update": QuickstartUpdateTemplateName,
+		"quickstart-done":   QuickstartDoneTemplateName,
+		"quickstart-doctor": QuickstartDoctorTemplateName,
+		"agents":            AgentsSectionTemplateName,
+		"hook":              PrePushHookTemplateName,
 	}
 )
 
@@ -47,13 +63,36 @@ func Names() []string {
 }
 
 // ResolveShortName returns the canonical filename for a short alias
-// ("quickstart", "agents", "hook"). Returns an error for unknown aliases.
+// (e.g. "quickstart", "agents", "hook"). Returns an error for unknown aliases.
 func ResolveShortName(alias string) (string, error) {
 	name, ok := shortAliases[strings.TrimSpace(alias)]
 	if !ok {
-		return "", fmt.Errorf("usage: unknown template %q (must be one of: quickstart, agents, hook)", alias)
+		// [LAW:one-source-of-truth] The valid-alias list in the error is derived from the map, never hand-maintained.
+		return "", fmt.Errorf("usage: unknown template %q (must be one of: %s)", alias, strings.Join(sortedAliasNames(), ", "))
 	}
 	return name, nil
+}
+
+func sortedAliasNames() []string {
+	names := make([]string, 0, len(shortAliases))
+	for alias := range shortAliases {
+		names = append(names, alias)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// QuickstartGuidanceNames returns the quickstart router template followed by
+// the topic guidance templates, in router display order.
+func QuickstartGuidanceNames() []string {
+	return []string{
+		QuickstartTemplateName,
+		QuickstartReadyTemplateName,
+		QuickstartNewTemplateName,
+		QuickstartUpdateTemplateName,
+		QuickstartDoneTemplateName,
+		QuickstartDoctorTemplateName,
+	}
 }
 
 // Source describes which layer a resolved template came from.

@@ -492,14 +492,19 @@ schema range is what determines whether this binary can open a given workspace.
 ### `lit quickstart`
 
 ```text
-lit quickstart [--refresh] [--eject[=quickstart,agents,hook]] [--force]
+lit quickstart [ready|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]
 ```
 
-Prints the live agent workflow instructions — the authoritative, always-current version
-of the loop documented in [Agent setup](agent-setup.md). `--eject` copies the embedded
-default templates to the global override path so you can customize them (`--force`
-overwrites existing overrides); `--refresh` re-syncs managed repo assets without
-touching overrides.
+Bare `lit quickstart` prints the router: the authoritative, always-current entry point
+for the loop documented in [Agent setup](agent-setup.md), listing the topic subcommands
+and the `lit ready` → `lit start <id>` fastpath. Each topic prints task-specific
+guidance at the moment of need: `ready` (finding and starting work), `new` (creating
+tickets), `update` (managing existing tickets), `done` (finishing work), `doctor`
+(troubleshooting). `--eject` copies the embedded default templates to the global
+override path so you can customize them (`LIST` is comma-separated short names, e.g.
+`quickstart,quickstart-ready,agents,hook`; `--force` overwrites existing overrides);
+`--refresh` re-syncs managed repo assets and reports override drift without touching
+overrides. Topics take no flags.
 
 ### `lit completion`
 

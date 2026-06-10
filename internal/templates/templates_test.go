@@ -195,9 +195,14 @@ func TestLoadWithSourceReportsLayer(t *testing.T) {
 func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 	names := Names()
 	want := map[string]bool{
-		AgentsSectionTemplateName: false,
-		PrePushHookTemplateName:   false,
-		QuickstartTemplateName:    false,
+		AgentsSectionTemplateName:    false,
+		PrePushHookTemplateName:      false,
+		QuickstartTemplateName:       false,
+		QuickstartReadyTemplateName:  false,
+		QuickstartNewTemplateName:    false,
+		QuickstartUpdateTemplateName: false,
+		QuickstartDoneTemplateName:   false,
+		QuickstartDoctorTemplateName: false,
 	}
 	for _, name := range names {
 		if _, ok := want[name]; !ok {
@@ -211,5 +216,3 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 		}
 	}
 }
-
-
