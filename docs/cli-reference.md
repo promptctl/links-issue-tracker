@@ -234,6 +234,25 @@ epic, never reordering anything inside an epic. The output states the
 resolution whenever it substitutes an epic for a named issue. Ranking an issue
 relative to its own epic (either direction) is an error.
 
+### `lit rank set`
+
+```text
+lit rank set <id1> <id2> [<id3> ...] [--json]
+```
+
+Establishes absolute order across N issues atomically by stacking them at the
+top of the rank order: `id1` becomes topmost, `id2` ranks just below, and so
+on. Either every assignment applies or none does.
+
+The same peer rule as relative placement applies: each named ID is resolved to
+its representative in the comparable frame, so naming an epic's child alongside
+outside issues ranks the epic, never reordering anything inside it. Every
+substitution is reported in the output. Two requests are rejected as
+incoherent: naming an issue together with its own epic (either direction), and
+naming two issues that resolve to the same epic — their relative order is
+internal to that epic and cannot be set against outside issues (run `rank set`
+among the siblings instead).
+
 ### `lit assign`
 
 ```text
