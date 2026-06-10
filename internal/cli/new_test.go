@@ -113,3 +113,43 @@ func TestRunQuickstartLoadsTemplateGuidance(t *testing.T) {
 		t.Fatalf("quickstart output missing template body: %q", output)
 	}
 }
+
+func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-creator")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	var stdout bytes.Buffer
+	if err := runNew(ctx, &stdout, ap, []string{
+		"--title", "Born unclaimed", "--topic", "lifecycle", "--json",
+	}); err != nil {
+		t.Fatalf("runNew() error = %v", err)
+	}
+	var created model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal(runNew output) error = %v", err)
+	}
+	// open means unclaimed: creation is not a claim, so the session identity
+	// must not be stamped onto a ticket nobody started. [LAW:one-source-of-truth]
+	if got := created.AssigneeValue(); got != "" {
+		t.Fatalf("created.AssigneeValue() = %q, want empty: lit new must not self-assign from session env", got)
+	}
+}
+
+func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-creator")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	var stdout bytes.Buffer
+	if err := runNew(ctx, &stdout, ap, []string{
+		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--json",
+	}); err != nil {
+		t.Fatalf("runNew() error = %v", err)
+	}
+	var created model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
+		t.Fatalf("json.Unmarshal(runNew output) error = %v", err)
+	}
+	if got, want := created.AssigneeValue(), "alice"; got != want {
+		t.Fatalf("created.AssigneeValue() = %q, want %q: explicit assignee must not be rewritten to the caller", got, want)
+	}
+}

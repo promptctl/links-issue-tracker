@@ -40,6 +40,12 @@ variable (producing an identity like `claude_<session-id>`). The `--assignee` fl
 lifecycle commands is a *fallback* for when that variable is unset — when both are
 present, the environment wins.
 
+This session resolution is claim-time only: it applies to `lit start` (and a bare
+`lit update --status in_progress` that says nothing about assignee). Field-writing
+commands — `new`, `followup`, `update`, `assign` — honor an explicit `--assignee`
+verbatim and never substitute the caller's identity; on `lit update`, an empty
+`--assignee ""` clears the assignee, returning the issue to unassigned.
+
 ### Two-phase transitions
 
 `lit done` is two-phase by default. The bare command performs no transition: it prints a
@@ -183,7 +189,8 @@ lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
 Field-level edit of an existing issue. `--status` performs a lifecycle transition inline
 (with `--reason` recorded); prefer the dedicated transition commands, which carry
 guidance. `--labels` replaces the full label set — use `lit label add`/`rm` for
-incremental changes.
+incremental changes. `--assignee` is taken verbatim (no session-identity substitution);
+`--assignee ""` clears the field, returning the issue to unassigned.
 
 ### `lit comment add` / `lit comment rm`
 
