@@ -148,12 +148,12 @@ func TestAllOfProgressAndActions(t *testing.T) {
 	}
 }
 
-func TestAllOfApplyRejectsEveryAction(t *testing.T) {
-	container := AllOf{Members: []Lifecycle{OwnedStatus{Value: Open}}}
-	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen} {
-		if _, err := container.Apply(action, "tester", ""); err == nil {
-			t.Fatalf("Apply(%s) on container error = nil, want rejection", action)
-		}
+// Containers are structurally non-actionable: the model dispatch boundary
+// relies on this to route them to the epic-aware rejection instead.
+func TestAllOfIsNotActionable(t *testing.T) {
+	var container Lifecycle = AllOf{Members: []Lifecycle{OwnedStatus{Value: Open}}}
+	if _, ok := container.(Actionable); ok {
+		t.Fatal("AllOf satisfies Actionable; containers must not be actionable — their state derives from children")
 	}
 }
 

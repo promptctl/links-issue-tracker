@@ -149,6 +149,57 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 	}
 }
 
+// The one real-invariant rejection in the target-state model: transitioning a
+// container whose children are not all done. The assertion is on the typed
+// category (ContainerActionError + live unfinished count), not the prose.
+// [LAW:behavior-not-structure]
+func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Container", Topic: "reject", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	children := make([]model.Issue, 2)
+	for i := range children {
+		child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "reject", IssueType: "task", Priority: 0, ParentID: epic.ID})
+		if err != nil {
+			t.Fatalf("CreateIssue(child %d) error = %v", i, err)
+		}
+		children[i] = child
+	}
+
+	for _, action := range []string{"close", "done", "start", "reopen"} {
+		_, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: action, CreatedBy: "tester"})
+		var containerErr model.ContainerActionError
+		if !errors.As(err, &containerErr) {
+			t.Fatalf("TransitionIssue(epic, %s) error = %v, want model.ContainerActionError", action, err)
+		}
+		if containerErr.Unfinished() != len(children) {
+			t.Fatalf("TransitionIssue(epic, %s) unfinished = %d, want %d", action, containerErr.Unfinished(), len(children))
+		}
+		if containerErr.ID != epic.ID {
+			t.Fatalf("TransitionIssue(epic, %s) rejection names %q, want %q", action, containerErr.ID, epic.ID)
+		}
+	}
+
+	for _, child := range children {
+		if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+			t.Fatalf("TransitionIssue(child done) error = %v", err)
+		}
+	}
+
+	// All children done: the unfinished-children rejection must stop firing.
+	_, err = st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "close", CreatedBy: "tester"})
+	var containerErr model.ContainerActionError
+	if !errors.As(err, &containerErr) {
+		t.Fatalf("TransitionIssue(epic, close) after children done error = %v, want model.ContainerActionError", err)
+	}
+	if containerErr.Unfinished() != 0 {
+		t.Fatalf("TransitionIssue(epic, close) after children done unfinished = %d, want 0 (rejection must reflect live child state)", containerErr.Unfinished())
+	}
+}
+
 // Epic state is derived from children; ListIssues filters by that derived state
 // rather than the dead i.status DB column. This regression test pins the three
 // epic shapes against the canonical default and explicit status filters.

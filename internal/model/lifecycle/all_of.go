@@ -1,7 +1,11 @@
 package lifecycle
 
-import "fmt"
-
+// AllOf is deliberately not Actionable: a container's state derives from its
+// children, so there is no action to apply. The model dispatch boundary owns
+// the rejection (and its wording), since it holds the issue identity and
+// child-progress facts a useful message needs.
+// [LAW:types-are-the-program] "Containers cannot be acted on" is structural —
+// the type does not satisfy Actionable — not a runtime error string here.
 type AllOf struct {
 	Members []Lifecycle
 }
@@ -32,8 +36,4 @@ func (a AllOf) Progress() Progress {
 		out.Total += progress.Total
 	}
 	return out
-}
-
-func (a AllOf) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
-	return nil, fmt.Errorf("no %s action available on this issue", name)
 }

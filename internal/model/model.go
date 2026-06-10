@@ -129,19 +129,57 @@ func (i Issue) Capabilities() Capabilities {
 	return capabilitiesFrom(lifecycle)
 }
 
+// ContainerActionError rejects a lifecycle action on a container, whose state
+// derives from its children and cannot be set directly. It carries the issue
+// ID and the live child-state breakdown so the message can tell the agent what
+// to do next — facts the lifecycle leaf has no access to, which is why this
+// rejection is owned here at the dispatch boundary.
+// [LAW:single-enforcer] Error() is the only source of the container-rejection
+// wording; tests and callers discriminate on the type, not the prose.
+type ContainerActionError struct {
+	ID       string
+	Action   ActionName
+	Progress Progress
+}
+
+// Unfinished reports how many children are not yet done — the live count the
+// rejection message carries.
+func (e ContainerActionError) Unfinished() int {
+	return e.Progress.Total - e.Progress.Closed
+}
+
+// [LAW:dataflow-not-control-flow] The wording varies with the progress values
+// the error carries, not with which callsite produced it.
+func (e ContainerActionError) Error() string {
+	switch {
+	case e.Progress.Total == 0:
+		return fmt.Sprintf("epic %s has no children; an epic's state derives from its children and cannot be set directly", e.ID)
+	case e.Unfinished() == 0:
+		return fmt.Sprintf("epic %s is already closed: all %d children are done, and an epic's state derives from its children", e.ID, e.Progress.Total)
+	default:
+		return fmt.Sprintf("epic %s has %d children that are not done. Complete the children to close the epic", e.ID, e.Unfinished())
+	}
+}
+
 // Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
 // Multi-OwnedStatus composition (AllOf containing multiple actionable members)
 // is intentionally unsupported here; that requires a dedicated disambiguation
-// design before AllOf.Apply ever returns non-nil. Containers (AllOf) reject
-// every action because their state is derived from children.
+// design before containers ever become actionable. Containers reject every
+// action because their state is derived from children — structurally: AllOf
+// does not implement Actionable, and the Container branch here composes the
+// epic-aware rejection from the issue ID and child progress that only this
+// boundary holds.
 // [LAW:types-are-the-program] No idempotent / from-state branching here: the
 // leaf's Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
-// invariants enforced by the leaf itself (parse-bypass, container).
+// invariants (parse-bypass at the leaf, container here).
 func (i Issue) Apply(action ActionName, actor string, reason string) (Issue, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
 		return Issue{}, err
+	}
+	if _, ok := root.(lifecycle.Container); ok {
+		return Issue{}, ContainerActionError{ID: i.ID, Action: action, Progress: root.Progress()}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
