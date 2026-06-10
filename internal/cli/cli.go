@@ -997,6 +997,15 @@ func resolveTransitionAssignee(action, explicit string) string {
 	return resolveAssigneeIdentity(explicit)
 }
 
+// displayAssignee renders an assignee value for human output; the empty value
+// means "nobody owns this" and must read that way rather than vanish.
+func displayAssignee(assignee string) string {
+	if assignee == "" {
+		return "(unassigned)"
+	}
+	return assignee
+}
+
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
 	fs := newCobraFlagSet(action)
 	reason := fs.String("reason", "", "Transition reason")
@@ -1042,6 +1051,13 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	guided := hasPreGuidance && !isJSON
 
+	// One pre-transition read serves both consumers of the prior row: the
+	// guided-mode token fingerprint and the claim-transfer notice below.
+	prior, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return err
+	}
+
 	if guided {
 		// [LAW:types-are-the-program] In guided mode the pre-guidance template
 		// is the only surface that communicates the apply token to the agent.
@@ -1056,11 +1072,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		// (action + id + the issue's UpdatedAt fingerprint). Reading the issue
 		// before transitioning lets the apply phase recompute the same hash and
 		// reject any drift — including stale tokens from previous sessions.
-		issue, err := ap.Store.GetIssue(ctx, issueID)
-		if err != nil {
-			return err
-		}
-		expected := applyToken("transition", action, issueID, issue.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		expected := applyToken("transition", action, issueID, prior.UpdatedAt.UTC().Format(time.RFC3339Nano))
 
 		if !applyRequested {
 			rendered := renderGuidance(preGuidance, issueID, expected)
@@ -1075,18 +1087,28 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
+	resolvedAssignee := resolveTransitionAssignee(action, *assignee)
 	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 		IssueID:   issueID,
 		Action:    action,
 		Reason:    *reason,
 		CreatedBy: *by,
-		Assignee:  resolveTransitionAssignee(action, *assignee),
+		Assignee:  resolvedAssignee,
 	})
 	if err != nil {
 		return err
 	}
 
 	if !isJSON {
+		// [LAW:no-silent-failure] start rewrites the assignee column; taking an
+		// issue over from an existing owner succeeds (intended target-state
+		// semantics) but must not do so silently. JSON mode carries the new
+		// assignee in the document itself, so the notice is human-output only.
+		if priorOwner := prior.AssigneeValue(); action == "start" && priorOwner != "" && priorOwner != resolvedAssignee {
+			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(resolvedAssignee)); err != nil {
+				return err
+			}
+		}
 		postGuidance, hasPostGuidance, err := loadTransitionGuidance(action, "post", ap.Workspace.RootDir)
 		if err != nil {
 			return fmt.Errorf("load post-guidance: %w", err)

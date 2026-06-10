@@ -1003,10 +1003,11 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 // empty Fields = no field write.
 // [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
-// Same-state transitions are NOT skipped: every TransitionIssue call records an issue_events row with
-// the calling Actor, which is the audit substrate for "who interacted with this ticket" history queries.
-// A start on an already-in-progress issue is the canonical agent-claim path; suppressing it would erase
-// that claim from history.
+// Same-state transitions flow through to TransitionIssue unconditionally; the leaf decides what they
+// mean. A pure no-op (same state, same resulting assignee) records nothing — history reflects actual
+// mutations. A same-state start with a new assignee is the canonical agent-reclaim path and records
+// the assignee change with the calling Actor, which is the audit substrate for "who interacted with
+// this ticket" history queries.
 func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
@@ -1191,6 +1192,14 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	}
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
+	// [LAW:one-source-of-truth] History records actual mutations only. A call
+	// whose target state and resulting assignee both match the current row is
+	// the documented OwnedStatus.Apply no-op: no write, no event. The claim
+	// audit substrate survives because a reclaim (same state, new assignee)
+	// falls through and records the assignee change with the calling actor.
+	if toStatus == fromStatus && postAssignee == priorAssignee {
+		return issue, nil
+	}
 	now := time.Now().UTC()
 	var closedAt any
 	if value := updated.ClosedAtValue(); value != nil {
@@ -1214,8 +1223,12 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 			}
 			return fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
 		}
-		changes := []model.FieldChange{
-			{Field: "status", From: fromStatus, To: toStatus},
+		// [LAW:one-source-of-truth] Change rows mirror the columns that actually
+		// moved. A same-state reclaim records only the assignee row — the legacy
+		// from==to status row was a schema lie.
+		var changes []model.FieldChange
+		if fromStatus != toStatus {
+			changes = append(changes, model.FieldChange{Field: "status", From: fromStatus, To: toStatus})
 		}
 		priorClosedAt := issue.ClosedAtValue()
 		newClosedAt := updated.ClosedAtValue()
