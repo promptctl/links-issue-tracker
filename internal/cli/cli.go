@@ -17,6 +17,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
@@ -585,7 +586,7 @@ type workableFilter struct {
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
 func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
-	cfg, err := config.Load(ap.Workspace.RootDir)
+	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return nil, nil, err
 	}

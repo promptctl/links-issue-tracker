@@ -64,10 +64,35 @@ func ConfigDir() string {
 	return filepath.Join(home, ".config", "links-issue-tracker")
 }
 
-// Load reads config from ~/.config/links-issue-tracker/config.toml and
-// optionally from <workspace>/.lit/config.toml when a workspace root is given.
+// layers is the config precedence chain: merged in slice order, so later
+// layers override earlier ones. [LAW:one-source-of-truth] This ordering is
+// the only encoding of global-vs-project precedence.
+type layers []pathspec.PathSpec
+
+func configLayers(workspaceRoot pathspec.PathSpec) layers {
+	return layers{globalConfigPath(), projectConfigPath(workspaceRoot)}
+}
+
+// merge folds every layer into v in precedence order and returns the
+// concatenated required-field contributions in that same order.
+// [LAW:dataflow-not-control-flow] Absent layers contribute nothing as data;
+// no layer is conditionally skipped.
+func (l layers) merge(v *viper.Viper) ([]string, error) {
+	var required []string
+	for _, layer := range l {
+		fields, err := mergeConfigFile(v, layer)
+		if err != nil {
+			return nil, err
+		}
+		required = append(required, fields...)
+	}
+	return required, nil
+}
+
+// Load reads config from ~/.config/links-issue-tracker/config.toml and from
+// <workspace>/.lit/config.toml when a workspace root is present.
 // A missing file is not an error; defaults are returned.
-func Load(workspaceRoot ...string) (Config, error) {
+func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v := viper.New()
 
 	v.SetDefault("logging.verbose", false)
@@ -79,28 +104,18 @@ func Load(workspaceRoot ...string) (Config, error) {
 	v.SetDefault("quickstart.soil_mode", false)
 	v.SetDefault("snapshot.retention_budget", 5)
 
-	// [LAW:single-enforcer] Global/project config precedence is resolved once at load time.
-	globalRequired, err := mergeConfigFile(v, globalConfigPath())
+	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
 		return Config{}, err
-	}
-	projectRequired := []string{}
-	if root := pathspec.New(first(workspaceRoot)); !root.IsEmpty() {
-		projectRequired, err = mergeConfigFile(v, projectConfigPath(root))
-		if err != nil {
-			return Config{}, err
-		}
 	}
 
 	var cfg Config
 	if err := v.Unmarshal(&cfg); err != nil {
 		return Config{}, fmt.Errorf("decode config: %w", err)
 	}
-	mergedRequired := append(globalRequired, projectRequired...)
-	if len(mergedRequired) == 0 {
-		mergedRequired = cfg.Ready.RequiredFields
+	if len(required) > 0 {
+		cfg.Ready.RequiredFields = required
 	}
-	cfg.Ready.RequiredFields = mergedRequired
 	// [LAW:single-enforcer] snapshot.retention_budget is validated once at the
 	// trust boundary; downstream callers (lit snapshots new, future migration
 	// callers of dbsnapshot.Prune) trust the value is > 0.
@@ -140,11 +155,4 @@ func mergeConfigFile(v *viper.Viper, path pathspec.PathSpec) ([]string, error) {
 	required := fileConfig.GetStringSlice("ready.required_fields")
 	required = append(required, fileConfig.GetStringSlice("required_fields")...)
 	return required, nil
-}
-
-func first(values []string) string {
-	if len(values) == 0 {
-		return ""
-	}
-	return values[0]
 }
