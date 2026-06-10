@@ -576,10 +576,10 @@ type workableFilter struct {
 // map so callers that need extra row context (e.g. `lit next --continue`)
 // avoid a second fetch round-trip.
 //
-// The returned order is the canonical backlog order: priority desc, then
-// composite rank asc. Ready-specific presentation (e.g. pushing blocked
-// items to the bottom) is applied by the caller, not here, so consumers
-// that want the unmodified ranking (`lit backlog`) see it as ordered.
+// The returned order is the canonical backlog order: focus path first, then
+// priority desc, then composite rank asc. Ready-specific presentation (e.g.
+// pushing blocked items to the bottom) is applied by the caller, not here, so
+// consumers that want the unmodified ranking (`lit backlog`) see it as ordered.
 //
 // [LAW:single-enforcer] `lit ready`, `lit next`, and `lit backlog` all
 // read from this single pipeline so their "what is workable, in what
@@ -628,18 +628,28 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	if err != nil {
 		return nil, nil, err
 	}
+	// The focus path is derived from the full dependency DAG (unfiltered by the
+	// CLI narrowing) on every gather — the focus fact lives on the one goal
+	// ticket; chain membership is never stored, so it cannot drift.
+	// [LAW:one-source-of-truth]
+	focusPaths, err := fetchFocusPathGoals(ctx, ap.Store)
+	if err != nil {
+		return nil, nil, err
+	}
 	annotated, err := annotation.Annotate(ctx, issues,
 		fieldAnnotator,
 		newBlockerAnnotator(details),
 		newSiblingGateAnnotator(details, pendingSiblingsByEpic(siblingRelations)),
 		newOrphanedAnnotator(orphanedThreshold),
 		newNeedsDesignAnnotator(),
+		newFocusPathAnnotator(focusPaths),
 	)
 	if err != nil {
 		return nil, nil, err
 	}
 	sortByCompositeRank(annotated, details)
 	sortByPriority(annotated)
+	sortByFocusPath(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
 }
