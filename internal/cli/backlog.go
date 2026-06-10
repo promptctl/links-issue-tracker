@@ -111,17 +111,18 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // "unblocks: ..." shows leverage.
 func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
 	const indent = "    "
+	readiness := ClassifyReadiness(entry.Annotations)
 	if entry.ParentEpic != nil {
 		if _, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, entry.ParentEpic.ID, entry.ParentEpic.Title); err != nil {
 			return err
 		}
 	}
-	if reasons := nonDependencyBlockingReasons(entry.Annotations); len(reasons) > 0 {
+	if reasons := nonDependencyBlockingReasons(readiness); len(reasons) > 0 {
 		if _, err := fmt.Fprintf(w, "%sblocked: %s\n", indent, strings.Join(reasons, "; ")); err != nil {
 			return err
 		}
 	}
-	if deps := dependencyIDs(entry.Annotations); len(deps) > 0 {
+	if deps := readiness.DependencyIDs(); len(deps) > 0 {
 		if _, err := fmt.Fprintf(w, "%sdepends on: %s\n", indent, strings.Join(deps, ", ")); err != nil {
 			return err
 		}
@@ -139,16 +140,16 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 	return nil
 }
 
-// nonDependencyBlockingReasons extracts blocking reasons that aren't already
-// represented by the "depends on:" line — missing-field and needs-design.
-// Open dependencies are surfaced separately so a reader sees them as the
-// concrete blocker IDs rather than a category label.
-func nonDependencyBlockingReasons(annotations []annotation.Annotation) []string {
+// nonDependencyBlockingReasons formats the classified blocking reasons that
+// aren't already represented by the "depends on:" line — missing-field and
+// needs-design. Open dependencies are surfaced separately so a reader sees
+// them as the concrete blocker IDs rather than a category label.
+func nonDependencyBlockingReasons(readiness IssueReadiness) []string {
 	var reasons []string
-	for _, a := range annotations {
-		switch a.Kind {
+	for _, reason := range readiness.BlockingReasons() {
+		switch reason.Kind {
 		case annotation.MissingField:
-			reasons = append(reasons, "missing "+a.Message)
+			reasons = append(reasons, "missing "+reason.Detail)
 		case annotation.NeedsDesign:
 			reasons = append(reasons, "needs-design")
 		}

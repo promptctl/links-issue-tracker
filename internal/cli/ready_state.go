@@ -15,18 +15,9 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// readyBlockingKinds defines which annotation kinds block readiness.
-// [LAW:one-source-of-truth] Single definition of what "blocks readiness" for the ready command.
-var readyBlockingKinds = []annotation.Kind{
-	annotation.MissingField,
-	annotation.OpenDependency,
-	annotation.NeedsDesign,
-	annotation.EarlierSiblingPending,
-}
-
 // NeedsDesignLabel is the reserved label that flags an issue as awaiting
 // design work. The annotator below converts the label (a neutral fact on the
-// issue) into a NeedsDesign annotation; readyBlockingKinds is where the
+// issue) into a NeedsDesign annotation; ClassifyReadiness is where the
 // consumer decides that this annotation blocks readiness.
 // [LAW:one-source-of-truth] Single definition of the needs-design label.
 const NeedsDesignLabel = "needs-design"
@@ -56,10 +47,6 @@ func newNeedsDesignAnnotator() annotation.Annotator {
 // cannot drift.
 // [LAW:one-source-of-truth] Single threshold for orphan detection.
 const orphanedThreshold = 6 * time.Hour
-
-func isReadyBlocked(annotations []annotation.Annotation) bool {
-	return annotation.HasAny(annotations, readyBlockingKinds...)
-}
 
 // newFieldAnnotator validates requiredFields against model.Issue JSON fields,
 // then returns an annotator that checks those fields on each issue.
@@ -157,7 +144,7 @@ func newBlockerAnnotator(details map[string]store.IssueRelations) annotation.Ann
 // whose parent epic contains an unfinished sibling in the same lane ranked
 // before it — lifting the intra-epic "earlier sibling still open" prerequisite
 // into the same blocking-annotation mechanism explicit deps use, so it gates
-// MEMBERSHIP in ready/queue/next through the single isReadyBlocked enforcer.
+// MEMBERSHIP in ready/queue/next through the single ClassifyReadiness enforcer.
 //
 // The one rule: leaf L is blocked iff ∃ sibling S under the same epic with
 // S.Lane == L.Lane, S.Rank < L.Rank, and S unfinished. Lane is a plain string;
@@ -343,9 +330,9 @@ func fetchFocusPathGoals(ctx context.Context, st *store.Store) (map[string]strin
 
 // newFocusPathAnnotator returns an annotator that emits a FocusPath annotation
 // for any issue on a focused goal's derived prerequisite path; the message is
-// the goal's ID. FocusPath is an ORDERING fact and is deliberately absent from
-// readyBlockingKinds — it can never change membership, so a blocked path item
-// stays blocked and only the already-ready path items surface.
+// the goal's ID. FocusPath is an ORDERING fact and is deliberately invisible
+// to ClassifyReadiness — it can never change membership, so a blocked path
+// item stays blocked and only the already-ready path items surface.
 // [LAW:dataflow-not-control-flow] Pure map lookup for every issue; absence
 // yields nil, not a skipped operation.
 func newFocusPathAnnotator(pathGoals map[string]string) annotation.Annotator {
@@ -504,6 +491,11 @@ func sortByPriority(issues []annotation.AnnotatedIssue) {
 // urgent priority: focus is the deliberate "get me here now" directive, urgent
 // is a standing attribute. Flipping that precedence is a one-line reorder
 // against sortByPriority.
+//
+// This reads the FocusPath fact directly rather than through ClassifyReadiness:
+// focus is an ORDERING interpretation, readiness a MEMBERSHIP one, and routing
+// the ordering fact through the readiness classifier would re-tangle the two
+// concerns the focus design keeps apart. [LAW:decomposition]
 // [LAW:dataflow-not-control-flow] Same comparator runs over every pair; the
 // derived annotation decides ordering, not whether the comparator runs.
 func sortByFocusPath(issues []annotation.AnnotatedIssue) {
@@ -524,9 +516,9 @@ func sortByFocusPath(issues []annotation.AnnotatedIssue) {
 // are neutral facts" law.
 func sortByBlockingAnnotations(issues []annotation.AnnotatedIssue) {
 	sort.SliceStable(issues, func(i, j int) bool {
-		iBlocked := isReadyBlocked(issues[i].Annotations)
-		jBlocked := isReadyBlocked(issues[j].Annotations)
-		return !iBlocked && jBlocked
+		iReady := ClassifyReadiness(issues[i].Annotations).IsReady()
+		jReady := ClassifyReadiness(issues[j].Annotations).IsReady()
+		return iReady && !jReady
 	})
 }
 
@@ -565,7 +557,7 @@ func pickFirstReady(rows []annotation.AnnotatedIssue) (annotation.AnnotatedIssue
 		if row.State() != model.StateOpen {
 			continue
 		}
-		if isReadyBlocked(row.Annotations) {
+		if !ClassifyReadiness(row.Annotations).IsReady() {
 			continue
 		}
 		return row, true
@@ -603,31 +595,19 @@ IMPORTANT: If you haven't run 'lit quickstart' yet, do so NOW to ensure you unde
 
 const readyMaxItems = 10
 
-// buildUnblocksMap derives a reverse dependency index from OpenDependency annotations.
-// For each dependency ID, it returns the IDs of open issues that depend on it.
+// buildUnblocksMap derives a reverse dependency index from the classified
+// open-dependency facts. For each dependency ID, it returns the IDs of open
+// issues that depend on it.
 // [LAW:dataflow-not-control-flow] The map is derived from existing annotation data;
 // no extra store queries needed.
 func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	m := make(map[string][]string)
 	for _, issue := range issues {
-		for _, a := range issue.Annotations {
-			if a.Kind == annotation.OpenDependency {
-				m[a.Message] = append(m[a.Message], issue.ID)
-			}
+		for _, dep := range ClassifyReadiness(issue.Annotations).DependencyIDs() {
+			m[dep] = append(m[dep], issue.ID)
 		}
 	}
 	return m
-}
-
-// dependencyIDs extracts the IDs of open dependencies from an issue's annotations.
-func dependencyIDs(annotations []annotation.Annotation) []string {
-	var ids []string
-	for _, a := range annotations {
-		if a.Kind == annotation.OpenDependency {
-			ids = append(ids, a.Message)
-		}
-	}
-	return ids
 }
 
 // printReadyOutput partitions annotated issues into in-progress, ready, and blocked
@@ -635,13 +615,15 @@ func dependencyIDs(annotations []annotation.Annotation) []string {
 // followed by in-progress work, then a count-by-reason summary for blocked issues.
 func printReadyOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
 	resolved := resolveColumns(columns)
-	var inProgress, ready, blocked []annotation.AnnotatedIssue
+	var inProgress, ready []annotation.AnnotatedIssue
+	var blocked []IssueReadiness
 	for i := range issues {
+		readiness := ClassifyReadiness(issues[i].Annotations)
 		switch {
 		case issues[i].State() == model.StateInProgress:
 			inProgress = append(inProgress, issues[i])
-		case isReadyBlocked(issues[i].Annotations):
-			blocked = append(blocked, issues[i])
+		case !readiness.IsReady():
+			blocked = append(blocked, readiness)
 		default:
 			ready = append(ready, issues[i])
 		}
@@ -710,7 +692,7 @@ func printReadySection(w io.Writer, columns []string, ready []annotation.Annotat
 // printInlineDeps prints "depends on:" and "unblocks:" lines indented under a ready item.
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
 	const indent = "    "
-	deps := dependencyIDs(entry.Annotations)
+	deps := ClassifyReadiness(entry.Annotations).DependencyIDs()
 	unblocks := unblocksMap[entry.ID]
 
 	if entry.ParentEpic != nil {
@@ -751,43 +733,22 @@ func printInProgressSection(w io.Writer, columns []string, issues []annotation.A
 func inProgressSuffix(entry annotation.AnnotatedIssue) string {
 	age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
 	suffix := fmt.Sprintf("%s", age)
-	if annotation.HasAny(entry.Annotations, annotation.Orphaned) {
+	if ClassifyReadiness(entry.Annotations).IsOrphaned() {
 		suffix += " (ORPHANED)"
 	}
 	return suffix
 }
 
 // printBlockedSummary prints a compact count-by-reason summary of blocked issues.
-func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error {
+func printBlockedSummary(w io.Writer, blocked []IssueReadiness) error {
 	if len(blocked) == 0 {
 		return nil
-	}
-	// Count issues per blocking reason kind. An issue with multiple blocking
-	// kinds counts once per kind.
-	counts := map[annotation.Kind]int{}
-	for _, issue := range blocked {
-		seen := map[annotation.Kind]bool{}
-		for _, a := range issue.Annotations {
-			if !annotation.HasAny([]annotation.Annotation{a}, readyBlockingKinds...) {
-				continue
-			}
-			if seen[a.Kind] {
-				continue
-			}
-			seen[a.Kind] = true
-			counts[a.Kind]++
-		}
 	}
 	if _, err := fmt.Fprintf(w, "\nBlocked tickets: %d (blocked tickets are not displayed above)\n", len(blocked)); err != nil {
 		return err
 	}
-	// Print in a stable order based on readyBlockingKinds.
-	for _, kind := range readyBlockingKinds {
-		n, ok := counts[kind]
-		if !ok {
-			continue
-		}
-		if _, err := fmt.Fprintf(w, "  %d: %s\n", n, kind.String()); err != nil {
+	for _, kc := range blockingKindCounts(blocked) {
+		if _, err := fmt.Fprintf(w, "  %d: %s\n", kc.Count, kc.Kind.String()); err != nil {
 			return err
 		}
 	}
@@ -799,11 +760,7 @@ func printBlockedSummary(w io.Writer, blocked []annotation.AnnotatedIssue) error
 func printRankInversions(w io.Writer, issues []annotation.AnnotatedIssue) error {
 	count := 0
 	for _, issue := range issues {
-		for _, a := range issue.Annotations {
-			if a.Kind == annotation.RankInversion {
-				count++
-			}
-		}
+		count += len(ClassifyReadiness(issue.Annotations).RankInversions())
 	}
 	if count == 0 {
 		return nil

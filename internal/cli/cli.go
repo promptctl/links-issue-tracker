@@ -727,7 +727,7 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	}
 	orphaned := make([]annotation.AnnotatedIssue, 0, len(annotated))
 	for _, entry := range annotated {
-		if annotation.HasAny(entry.Annotations, annotation.Orphaned) {
+		if ClassifyReadiness(entry.Annotations).IsOrphaned() {
 			orphaned = append(orphaned, entry)
 		}
 	}

@@ -61,14 +61,14 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 }
 
 // filterPullable keeps the rows an agent can pull now: workable and gated by no
-// readiness blocker. "Blocked" is defined once in readyBlockingKinds and read
-// here through isReadyBlocked, so the pull-order set cannot drift from what
+// readiness blocker. "Blocked" is decided once in ClassifyReadiness and read
+// here through the typed result, so the pull-order set cannot drift from what
 // `lit ready` treats as blocked. in_progress items that are not blocked are
 // kept — they hold rank positions and are part of the shape being verified.
 func filterPullable(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue {
 	out := make([]annotation.AnnotatedIssue, 0, len(rows))
 	for _, row := range rows {
-		if isReadyBlocked(row.Annotations) {
+		if !ClassifyReadiness(row.Annotations).IsReady() {
 			continue
 		}
 		out = append(out, row)
