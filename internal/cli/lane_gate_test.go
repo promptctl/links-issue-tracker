@@ -73,7 +73,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	if ann.Message != first.ID {
 		t.Fatalf("EarlierSiblingPending message = %q, want earlier sibling id %q", ann.Message, first.ID)
 	}
-	if !isReadyBlocked(row.Annotations) {
+	if ClassifyReadiness(row.Annotations).IsReady() {
 		t.Fatal("urgent later sibling should be ready-blocked while earlier sibling is open")
 	}
 
