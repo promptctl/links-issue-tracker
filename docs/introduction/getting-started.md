@@ -1,1 +1,0 @@
-# TODO: write actual getting started.  do NOT just copy existing text into here
