@@ -271,6 +271,10 @@ func (fs *cobraFlagSet) NArg() int {
 	return fs.cmd.Flags().NArg()
 }
 
+func (fs *cobraFlagSet) Arg(i int) string {
+	return fs.cmd.Flags().Arg(i)
+}
+
 func (fs *cobraFlagSet) Visit(fn func(*pflag.Flag)) {
 	fs.cmd.Flags().Visit(fn)
 }
@@ -1378,16 +1382,16 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 	_ = ctx
 	fs := newCobraFlagSet("quickstart")
 	refresh := fs.Bool("refresh", false, "Refresh managed repo assets and report quickstart override status (never overwrites overrides)")
-	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated: quickstart,agents,hook; empty = all)")
+	eject := fs.StringOptional("eject", "all", "", "Eject embedded default(s) to the global override path (comma-separated short names; empty = all)")
 	force := fs.Bool("force", false, "With --eject, overwrite existing override files")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if fs.NArg() != 0 {
-		return errors.New("usage: lit quickstart [--refresh] [--eject[=LIST]] [--force]")
+	if fs.NArg() > 1 {
+		return errors.New(quickstartUsage)
 	}
 	if outputModeFromWriter(stdout) == outputModeJSON {
-		return errors.New("usage: lit quickstart [--refresh] [--eject[=LIST]] [--force]")
+		return errors.New(quickstartUsage)
 	}
 	ejectChanged := fs.Changed("eject")
 	ejectValue := *eject
@@ -1399,6 +1403,23 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 	}
 	if *force && !ejectChanged {
 		return errors.New("usage: --force is only valid with --eject")
+	}
+
+	if fs.NArg() == 1 {
+		// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
+		if *refresh || ejectChanged || *force {
+			return errors.New("usage: lit quickstart <topic> takes no flags")
+		}
+		templateName, ok := quickstartTopicTemplate(fs.Arg(0))
+		if !ok {
+			return fmt.Errorf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))
+		}
+		guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintln(stdout, guidance)
+		return err
 	}
 
 	if ejectChanged {
