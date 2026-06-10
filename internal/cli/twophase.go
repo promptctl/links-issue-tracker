@@ -48,7 +48,7 @@ func requireTokenPlaceholder(preGuidance, action, workspaceRoot string) error {
 	}
 	name := templates.GuidanceTemplateName(action, "pre")
 	path, _, _ := templates.ActiveOverride(workspaceRoot, name)
-	if path == "" {
+	if path.IsEmpty() {
 		// Defensive: the embedded default ships with `<token>`, so this branch
 		// should be unreachable. Surface a precise diagnostic instead of a
 		// silent fall-through if the embedded default is ever changed.

@@ -72,7 +72,7 @@ func refreshQuickstartTemplate(workspaceRoot string) (quickstartRefreshItem, err
 	if err != nil {
 		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read override: %w", err)
 	}
-	if path == "" {
+	if path.IsEmpty() {
 		return quickstartRefreshItem{
 			Status:  "absent",
 			Managed: false,
@@ -80,13 +80,13 @@ func refreshQuickstartTemplate(workspaceRoot string) (quickstartRefreshItem, err
 	}
 	if string(content) == string(embedded) {
 		return quickstartRefreshItem{
-			Path:    path,
+			Path:    path.String(),
 			Status:  "unchanged",
 			Managed: true,
 		}, nil
 	}
 	return quickstartRefreshItem{
-		Path:    path,
+		Path:    path.String(),
 		Status:  "skipped",
 		Managed: true,
 		Reason:  "customized",

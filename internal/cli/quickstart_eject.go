@@ -54,18 +54,18 @@ func ejectTemplates(selection string, force bool) ([]ejectResult, error) {
 
 func planEject(name string, force bool) (ejectResult, error) {
 	path := templates.GlobalPath(name)
-	if strings.TrimSpace(path) == "" {
+	if path.IsEmpty() {
 		return ejectResult{}, fmt.Errorf("eject %s: no global config directory configured", name)
 	}
-	if _, statErr := os.Stat(path); statErr == nil {
+	if _, statErr := os.Stat(path.String()); statErr == nil {
 		if !force {
-			return ejectResult{Name: name, Path: path, Skipped: "exists"}, nil
+			return ejectResult{Name: name, Path: path.String(), Skipped: "exists"}, nil
 		}
-		return ejectResult{Name: name, Path: path}, nil
+		return ejectResult{Name: name, Path: path.String()}, nil
 	} else if !os.IsNotExist(statErr) {
 		return ejectResult{}, fmt.Errorf("eject %s: stat %s: %w", name, path, statErr)
 	}
-	return ejectResult{Name: name, Path: path}, nil
+	return ejectResult{Name: name, Path: path.String()}, nil
 }
 
 func writeEject(plan *ejectResult) error {

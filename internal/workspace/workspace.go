@@ -175,16 +175,6 @@ func upstreamRemoteFromRef(ref string) string {
 	return strings.TrimSpace(parts[0])
 }
 
-func firstNonEmptyTrimmed(values ...string) string {
-	for _, value := range values {
-		trimmed := strings.TrimSpace(value)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func GitRemotes(cwd string) ([]GitRemote, error) {
 	output, err := gitOutput(cwd, "remote", "-v")
 	if err != nil {
