@@ -167,9 +167,12 @@ func TestApplyUpdateIssueTypeFlagMatrix(t *testing.T) {
 
 				// The ov6 guard, made explicit: a field-only cell records zero
 				// transition events on every type — most importantly on a
-				// container, where the phantom transition once fired.
+				// container, where the phantom transition once fired. A
+				// same-state target with an unchanged assignee is the leaf's
+				// documented no-op and likewise records nothing; only a
+				// transition that mutates the row earns an event.
 				wantTransitions := 0
-				if carriesTransition {
+				if carriesTransition && model.DefaultOpen(in.TargetStatus) != created.State() {
 					wantTransitions = 1
 				}
 				if n := transitionActionCount(added); n != wantTransitions {
