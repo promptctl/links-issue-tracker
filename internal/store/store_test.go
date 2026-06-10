@@ -2289,7 +2289,7 @@ func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
 	}
 
 	// Rank A above B.
-	if err := st.RankAbove(ctx, epicA.ID, epicB.ID); err != nil {
+	if _, err := st.RankAbove(ctx, epicA.ID, epicB.ID); err != nil {
 		t.Fatalf("RankAbove(A, B) error = %v", err)
 	}
 
