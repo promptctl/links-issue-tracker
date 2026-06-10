@@ -15,8 +15,15 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-func validateSnapshotsCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit snapshots <new|list|restore> ...", "new", "list", "restore")
+var snapshotsFamily = commandFamily[wsRunFn]{
+	usage: "usage: lit snapshots <new|list|restore> ...",
+	subcommands: []subcommandRow[wsRunFn]{
+		{name: "new", payload: runSnapshotsNew},
+		{name: "list", payload: func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+			return runSnapshotsList(stdout, ws, args)
+		}},
+		{name: "restore", payload: runSnapshotsRestore},
+	},
 }
 
 // snapshotsDirFor returns the workspace's filesystem-snapshot directory.
@@ -38,22 +45,6 @@ func snapshotsDirFor(ws workspace.Info) string {
 // disjunction, in exactly one place.
 func isUserSnapshotName(name string) bool {
 	return !store.IsMigrationSnapshotName(name) && !store.IsDowngradeSnapshotName(name)
-}
-
-func runSnapshots(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit snapshots <new|list|restore> ...")
-	}
-	switch args[0] {
-	case "new":
-		return runSnapshotsNew(ctx, stdout, ws, args[1:])
-	case "list":
-		return runSnapshotsList(stdout, ws, args[1:])
-	case "restore":
-		return runSnapshotsRestore(ctx, stdout, ws, args[1:])
-	default:
-		return errors.New("usage: lit snapshots <new|list|restore> ...")
-	}
 }
 
 // withCommitLock acquires the path-based commit lock used by Store mutations

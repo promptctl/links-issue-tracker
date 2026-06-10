@@ -115,7 +115,7 @@ func TestCommandFamilyResolve(t *testing.T) {
 	// before any app opens.
 	cases := []struct {
 		name    string
-		family  commandFamily
+		family  commandFamily[appSubcommand]
 		args    []string
 		want    appAccessMode
 		wantErr bool
@@ -146,8 +146,11 @@ func TestCommandFamilyResolve(t *testing.T) {
 			if err != nil {
 				t.Fatalf("resolve(%v) error = %v", tc.args, err)
 			}
-			if got != tc.want {
-				t.Fatalf("resolve(%v) = %v, want %v", tc.args, got, tc.want)
+			if got.access != tc.want {
+				t.Fatalf("resolve(%v) access = %v, want %v", tc.args, got.access, tc.want)
+			}
+			if got.run == nil {
+				t.Fatalf("resolve(%v) returned a row with no handler", tc.args)
 			}
 		})
 	}

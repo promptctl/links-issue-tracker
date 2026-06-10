@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -27,16 +28,13 @@ type hookInstallResult struct {
 	Reason   string
 }
 
-func runHooks(stdout io.Writer, ws workspace.Info, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit hooks install [--json]")
-	}
-	switch args[0] {
-	case "install":
-		return runHooksInstall(stdout, ws, args[1:])
-	default:
-		return errors.New("usage: lit hooks install [--json]")
-	}
+var hooksFamily = commandFamily[wsRunFn]{
+	usage: "usage: lit hooks install [--json]",
+	subcommands: []subcommandRow[wsRunFn]{
+		{name: "install", payload: func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+			return runHooksInstall(stdout, ws, args)
+		}},
+	},
 }
 
 func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {

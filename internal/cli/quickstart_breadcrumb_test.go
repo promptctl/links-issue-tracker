@@ -67,7 +67,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var labelOut bytes.Buffer
-	if err := runLabel(ctx, &labelOut, ap, []string{"add", issueID, "probe"}); err != nil {
+	if err := runAppFamily(labelFamily, ctx, &labelOut, ap, []string{"add", issueID, "probe"}); err != nil {
 		t.Fatalf("runLabel(add) error = %v", err)
 	}
 	if got, want := lastLine(labelOut.String()), quickstartBreadcrumb("update"); got != want {
@@ -104,7 +104,7 @@ func TestBreadcrumbAbsentFromJSONOutput(t *testing.T) {
 	globalOut := outputModeWriter{Writer: &bytes.Buffer{}, mode: outputModeJSON}
 	var labelBuf bytes.Buffer
 	globalOut.Writer = &labelBuf
-	if err := runLabel(ctx, globalOut, ap, []string{"add", created.ID, "probe"}); err != nil {
+	if err := runAppFamily(labelFamily, ctx, globalOut, ap, []string{"add", created.ID, "probe"}); err != nil {
 		t.Fatalf("runLabel(add) under global JSON mode error = %v", err)
 	}
 	var labels []string

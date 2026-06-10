@@ -12,112 +12,108 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-func validateLabelCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit label <add|rm> ...", "add", "rm")
+var labelFamily = commandFamily[appSubcommand]{
+	usage: "usage: lit label <add|rm> ...",
+	subcommands: []subcommandRow[appSubcommand]{
+		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runLabelAdd}},
+		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runLabelRm}},
+	},
 }
 
-func validateParentCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit parent <set|clear> ...", "set", "clear")
+var parentFamily = commandFamily[appSubcommand]{
+	usage: "usage: lit parent <set|clear> ...",
+	subcommands: []subcommandRow[appSubcommand]{
+		{name: "set", payload: appSubcommand{access: appAccessWrite, run: runParentSet}},
+		{name: "clear", payload: appSubcommand{access: appAccessWrite, run: runParentClear}},
+	},
 }
 
-func runLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit label <add|rm> ...")
+func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("label add")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
 	}
-	switch args[0] {
-	case "add":
-		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := newCobraFlagSet("label add")
-		by := fs.String("by", os.Getenv("USER"), "")
-		fs.Hide("by")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 2 {
-			return errors.New("usage: lit label add <issue-id> <label> [--json]")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit label add <issue-id> <label> [--json]")
-		}
-		labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
-	case "rm":
-		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := newCobraFlagSet("label rm")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 2 {
-			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit label rm <issue-id> <label> [--json]")
-		}
-		labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
-	default:
-		return errors.New("usage: lit label <add|rm> ...")
+	if len(positional) != 2 {
+		return errors.New("usage: lit label add <issue-id> <label> [--json]")
 	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit label add <issue-id> <label> [--json]")
+	}
+	labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
 }
 
-func runParent(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit parent <set|clear> ...")
+func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("label rm")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
 	}
-	switch args[0] {
-	case "set":
-		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := newCobraFlagSet("parent set")
-		by := fs.String("by", os.Getenv("USER"), "")
-		fs.Hide("by")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 2 {
-			return errors.New("usage: lit parent set <child-id> <parent-id> [--json]")
-		}
-		rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
-			ChildID:   positional[0],
-			ParentID:  positional[1],
-			CreatedBy: *by,
-		})
-		if err != nil {
-			return err
-		}
-		return printValue(stdout, rel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
-			relation := v.(model.Relation)
-			_, err := fmt.Fprintf(w, "%s --parent-child--> %s\n", relation.SrcID, relation.DstID)
-			return err
-		}))
-	case "clear":
-		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := newCobraFlagSet("parent clear")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 1 {
-			return errors.New("usage: lit parent clear <child-id> [--json]")
-		}
-		if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
-			return err
-		}
-		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
-			_, err := fmt.Fprintln(w, "ok")
-			return err
-		}))
-	default:
-		return errors.New("usage: lit parent <set|clear> ...")
+	if len(positional) != 2 {
+		return errors.New("usage: lit label rm <issue-id> <label> [--json]")
 	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit label rm <issue-id> <label> [--json]")
+	}
+	labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
+}
+
+func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("parent set")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 2 {
+		return errors.New("usage: lit parent set <child-id> <parent-id> [--json]")
+	}
+	rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
+		ChildID:   positional[0],
+		ParentID:  positional[1],
+		CreatedBy: *by,
+	})
+	if err != nil {
+		return err
+	}
+	return printValue(stdout, rel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
+		relation := v.(model.Relation)
+		_, err := fmt.Fprintf(w, "%s --parent-child--> %s\n", relation.SrcID, relation.DstID)
+		return err
+	}))
+}
+
+func runParentClear(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("parent clear")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit parent clear <child-id> [--json]")
+	}
+	if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
+		return err
+	}
+	return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
+		_, err := fmt.Fprintln(w, "ok")
+		return err
+	}))
 }
 
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

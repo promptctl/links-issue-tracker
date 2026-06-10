@@ -13,138 +13,134 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-var depFamily = commandFamily{
+var depFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit dep <add|rm|ls> ...",
-	subcommands: []subcommandAccess{
-		{name: "add", access: appAccessWrite},
-		{name: "rm", access: appAccessWrite},
-		{name: "ls", access: appAccessRead},
+	subcommands: []subcommandRow[appSubcommand]{
+		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runDepAdd}},
+		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runDepRm}},
+		{name: "ls", payload: appSubcommand{access: appAccessRead, run: runDepLs}},
 	},
 }
 
-func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("usage: lit dep <add|rm> ...")
+func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("dep add")
+	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+	blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
+	blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
 	}
-	switch args[0] {
-	case "add":
-		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := newCobraFlagSet("dep add")
-		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-		blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
-		blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
-		by := fs.String("by", os.Getenv("USER"), "")
-		fs.Hide("by")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
+	// downstream receives the sealed RelationType.
+	rt, err := model.ParseRelationType(*relType)
+	if err != nil {
+		return err
+	}
+	fromID, toID, err := resolveDepAddEndpoints(positional, rt, *blocker, *blocked, fs.NArg())
+	if err != nil {
+		return err
+	}
+	// Self-loop check: a relation from an issue to itself is meaningless and
+	// would otherwise corrupt downstream blocker traversals. Cheap to catch
+	// here; transitive cycle detection is a follow-up.
+	if fromID == toID {
+		return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
+	}
+	// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
+	// boundary so the store stays a thin substrate. Within one epic, rank is
+	// the canonical ordering; a 'blocks' edge would duplicate that signal.
+	if rt == model.RelBlocks {
+		if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
 			return err
 		}
-		// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
-		// downstream receives the sealed RelationType.
+	}
+	srcID, dstID := rt.StoreEndpoints(fromID, toID)
+	rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: *by})
+	if err != nil {
+		return err
+	}
+	cliRel := depRelationForCLI(rel)
+	return printValue(stdout, cliRel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
+		r := v.(model.Relation)
+		_, err := fmt.Fprintln(w, depRelationLine(r))
+		return err
+	}))
+}
+
+func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 2)
+	fs := newCobraFlagSet("dep rm")
+	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 2 {
+		return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
+	}
+	rt, err := model.ParseRelationType(*relType)
+	if err != nil {
+		return err
+	}
+	srcID, dstID := rt.StoreEndpoints(positional[0], positional[1])
+	if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
+		return err
+	}
+	return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
+		_, err := fmt.Fprintln(w, "ok")
+		return err
+	}))
+}
+
+func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("dep ls")
+	relType := fs.String("type", "", "Filter relation type")
+	jsonOut := fs.Bool("json", false, "Output JSON")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 {
+		return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+	}
+	if fs.NArg() != 0 {
+		return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+	}
+	// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
+	// set; a present one is parsed at this trust boundary, so a bad value
+	// errors loudly instead of silently matching nothing.
+	var typeFilter []model.RelationType
+	if strings.TrimSpace(*relType) != "" {
 		rt, err := model.ParseRelationType(*relType)
 		if err != nil {
 			return err
 		}
-		fromID, toID, err := resolveDepAddEndpoints(positional, rt, *blocker, *blocked, fs.NArg())
-		if err != nil {
-			return err
-		}
-		// Self-loop check: a relation from an issue to itself is meaningless and
-		// would otherwise corrupt downstream blocker traversals. Cheap to catch
-		// here; transitive cycle detection is a follow-up.
-		if fromID == toID {
-			return fmt.Errorf("dep add: self-loop rejected (%s -> %s)", fromID, toID)
-		}
-		// [LAW:single-enforcer] Same-epic blocks are rejected at the CLI policy
-		// boundary so the store stays a thin substrate. Within one epic, rank is
-		// the canonical ordering; a 'blocks' edge would duplicate that signal.
-		if rt == model.RelBlocks {
-			if err := rejectSameEpicBlocks(ctx, ap, fromID, toID); err != nil {
-				return err
-			}
-		}
-		srcID, dstID := rt.StoreEndpoints(fromID, toID)
-		rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: *by})
-		if err != nil {
-			return err
-		}
-		cliRel := depRelationForCLI(rel)
-		return printValue(stdout, cliRel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
-			r := v.(model.Relation)
-			_, err := fmt.Fprintln(w, depRelationLine(r))
-			return err
-		}))
-	case "rm":
-		positional, flagArgs := splitArgs(args[1:], 2)
-		fs := newCobraFlagSet("dep rm")
-		relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 2 {
-			return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
-		}
-		rt, err := model.ParseRelationType(*relType)
-		if err != nil {
-			return err
-		}
-		srcID, dstID := rt.StoreEndpoints(positional[0], positional[1])
-		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
-			return err
-		}
-		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
-			_, err := fmt.Fprintln(w, "ok")
-			return err
-		}))
-	case "ls":
-		positional, flagArgs := splitArgs(args[1:], 1)
-		fs := newCobraFlagSet("dep ls")
-		relType := fs.String("type", "", "Filter relation type")
-		jsonOut := fs.Bool("json", false, "Output JSON")
-		if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-			return err
-		}
-		if len(positional) != 1 {
-			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
-		}
-		if fs.NArg() != 0 {
-			return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
-		}
-		// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
-		// set; a present one is parsed at this trust boundary, so a bad value
-		// errors loudly instead of silently matching nothing.
-		var typeFilter []model.RelationType
-		if strings.TrimSpace(*relType) != "" {
-			rt, err := model.ParseRelationType(*relType)
-			if err != nil {
-				return err
-			}
-			typeFilter = append(typeFilter, rt)
-		}
-		relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
-		if err != nil {
-			return err
-		}
-		cliRelations := make([]model.Relation, 0, len(relations))
-		for _, rel := range relations {
-			cliRelations = append(cliRelations, depRelationForCLI(rel))
-		}
-		return printValue(stdout, cliRelations, *jsonOut, func(w io.Writer, v any) error {
-			list := v.([]model.Relation)
-			for _, rel := range list {
-				if _, err := fmt.Fprintln(w, depRelationLine(rel)); err != nil {
-					return err
-				}
-			}
-			return nil
-		})
-	default:
-		return errors.New("usage: lit dep <add|rm|ls> ...")
+		typeFilter = append(typeFilter, rt)
 	}
+	relations, err := ap.Store.ListRelationsForIssue(ctx, positional[0], typeFilter...)
+	if err != nil {
+		return err
+	}
+	cliRelations := make([]model.Relation, 0, len(relations))
+	for _, rel := range relations {
+		cliRelations = append(cliRelations, depRelationForCLI(rel))
+	}
+	return printValue(stdout, cliRelations, *jsonOut, func(w io.Writer, v any) error {
+		list := v.([]model.Relation)
+		for _, rel := range list {
+			if _, err := fmt.Fprintln(w, depRelationLine(rel)); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 // resolveDepAddEndpoints chooses between positional and named-flag input for

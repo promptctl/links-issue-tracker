@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -45,39 +44,54 @@ var commandGroups = []GroupSpec{
 	{ID: "guidance", Title: "Guidance & Tooling"},
 }
 
-// subcommandAccess pairs one legal subcommand name with the app access it
-// requires.
-type subcommandAccess struct {
-	name   string
-	access appAccessMode
+// subcommandRow pairs one legal subcommand name with whatever that family's
+// rows carry: access+handler for app families, a handler for workspace
+// families, a completion script for the completion family. The routing
+// behavior is identical across families, so it is written once and the
+// variability lives in the payload value. [LAW:one-type-per-behavior]
+type subcommandRow[P any] struct {
+	name    string
+	payload P
 }
 
 // commandFamily is the single source of truth for a subcommand family: which
-// first arguments are legal and what app access each one requires.
-// [LAW:one-source-of-truth] The former per-family path validators and the
-// args[0] string tests selecting read vs write were two drifting copies of
-// this table; the string tests silently defaulted unknown subcommands to
-// write and stayed correct only because the validator happened to run first.
-type commandFamily struct {
+// first arguments are legal and what each one means.
+// [LAW:one-source-of-truth] The former per-family path validators, the
+// args[0] string tests selecting read vs write, and the per-family dispatch
+// switches were three drifting copies of this table; each repeated the usage
+// string and the legal-name set independently.
+type commandFamily[P any] struct {
 	usage       string
-	subcommands []subcommandAccess
+	subcommands []subcommandRow[P]
 }
 
-// resolve returns the access mode of the subcommand named by args[0].
+// resolve returns the payload of the subcommand named by args[0].
 // Lookup is validation: a missing, unknown, or flag-shaped first argument
 // fails with the family usage before any app opens, so resolution cannot
 // depend on a validator having run earlier. [LAW:no-ambient-temporal-coupling]
-func (f commandFamily) resolve(args []string) (appAccessMode, error) {
+// The match is exact — argv tokens arrive verbatim from the shell, and a
+// table that trimmed names would claim inputs as legal that no dispatch
+// ever honored. [FRAMING:representation]
+func (f commandFamily[P]) resolve(args []string) (P, error) {
+	var zero P
 	if len(args) == 0 {
-		return "", errors.New(f.usage)
+		return zero, errors.New(f.usage)
 	}
-	subcommand := strings.TrimSpace(args[0])
 	for _, s := range f.subcommands {
-		if s.name == subcommand {
-			return s.access, nil
+		if s.name == args[0] {
+			return s.payload, nil
 		}
 	}
-	return "", errors.New(f.usage)
+	return zero, errors.New(f.usage)
+}
+
+// appSubcommand is the row payload for app-mode families: the access the
+// subcommand needs and the handler that runs once the app is open in that
+// mode. One row answers legality, access, and dispatch together, so the
+// three can never disagree. [LAW:one-source-of-truth]
+type appSubcommand struct {
+	access appAccessMode
+	run    appRunFn
 }
 
 // appRunFn is the canonical signature for app-mode handlers.
@@ -107,17 +121,35 @@ func (r *commandRegistrar) appCmdDynamic(resolve func([]string) appAccessMode, f
 	}
 }
 
-// familyCmd seals the resolve→open pipeline for a subcommand family: the
-// table yields the access mode (or rejects the path), then the app opens in
-// that mode. Callers compose nothing; the ordering lives here.
-func (r *commandRegistrar) familyCmd(f commandFamily, fn appRunFn) CommandRunner {
+// familyCmd seals the resolve→open→dispatch pipeline for an app-mode
+// subcommand family: the table yields the row (or rejects the path), the app
+// opens in the row's access mode, and the row's handler runs on the remaining
+// arguments. Callers compose nothing; the ordering lives here.
+func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunner {
 	return func(args []string) error {
-		access, err := f.resolve(args)
+		sub, err := f.resolve(args)
 		if err != nil {
 			return err
 		}
-		return runWithApp(r.ctx, access, func(commandCtx context.Context, ap *app.App) error {
-			return fn(commandCtx, r.stdout, ap, args)
+		return runWithApp(r.ctx, sub.access, func(commandCtx context.Context, ap *app.App) error {
+			return sub.run(commandCtx, r.stdout, ap, args[1:])
+		})
+	}
+}
+
+// wsFamilyCmd is familyCmd for workspace-mode families: resolve rejects bad
+// paths before the workspace resolves, then the row's handler runs on the
+// remaining arguments. [LAW:no-ambient-temporal-coupling] Usage failures must
+// surface even outside a git repository, so resolution precedes workspace
+// lookup here rather than relying on caller ordering.
+func (r *commandRegistrar) wsFamilyCmd(f commandFamily[wsRunFn]) CommandRunner {
+	return func(args []string) error {
+		run, err := f.resolve(args)
+		if err != nil {
+			return err
+		}
+		return runWithWorkspace(func(ws workspace.Info) error {
+			return run(r.ctx, r.stdout, ws, args[1:])
 		})
 	}
 }
@@ -134,17 +166,6 @@ func (r *commandRegistrar) transitionCmd(action string) CommandRunner {
 	return r.appCmd(appAccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runTransition(ctx, stdout, ap, args, action)
 	})
-}
-
-// withValidation prefixes a runner with a path validator. Validation is data:
-// the spec carries the validator function, the runtime path is unchanged.
-func withValidation(validate func([]string) error, run CommandRunner) CommandRunner {
-	return func(args []string) error {
-		if err := validate(args); err != nil {
-			return err
-		}
-		return run(args)
-	}
 }
 
 // commandSpecs returns the full registry. New commands are added here as a
@@ -172,11 +193,9 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
 			Run: versionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
-			Run: withValidation(validateHooksCommandPath, r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-				return runHooks(stdout, ws, args)
-			}))},
+			Run: r.wsFamilyCmd(hooksFamily)},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
-			Run: withValidation(validateSyncCommandPath, r.wsCmd(runSync))},
+			Run: r.wsFamilyCmd(syncFamily)},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
 			Run: r.appCmd(appAccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
@@ -218,15 +237,15 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "operations",
 			Run: r.transitionCmd("restore")},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
-			Run: withValidation(validateCommentCommandPath, r.appCmd(appAccessWrite, runComment))},
+			Run: r.familyCmd(commentFamily)},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",
-			Run: withValidation(validateLabelCommandPath, r.appCmd(appAccessWrite, runLabel))},
+			Run: r.familyCmd(labelFamily)},
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
-			Run: withValidation(validateParentCommandPath, r.appCmd(appAccessWrite, runParent))},
+			Run: r.familyCmd(parentFamily)},
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
 			Run: r.appCmd(appAccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
-			Run: r.familyCmd(depFamily, runDep)},
+			Run: r.familyCmd(depFamily)},
 		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
 			Run: r.appCmd(appAccessRead, runExport)},
 		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
@@ -242,17 +261,17 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
 		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
-			Run: r.familyCmd(backupFamily, runBackup)},
+			Run: r.familyCmd(backupFamily)},
 		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
-			Run: withValidation(validateSnapshotsCommandPath, r.wsCmd(runSnapshots))},
+			Run: r.wsFamilyCmd(snapshotsFamily)},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
 			Run: r.appCmd(appAccessWrite, runRecover)},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
-			Run: withValidation(validateLifeboatCommandPath, r.wsCmd(runLifeboat))},
+			Run: r.wsFamilyCmd(lifeboatFamily)},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(appAccessWrite, runDowngrade)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
-			Run: withValidation(validateBulkCommandPath, r.appCmd(appAccessWrite, runBulk))},
+			Run: r.familyCmd(bulkFamily)},
 	}
 }
 
