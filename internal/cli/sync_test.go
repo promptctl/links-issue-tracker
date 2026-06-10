@@ -296,21 +296,6 @@ func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 	}
 }
 
-func TestFirstNonEmptySyncBranchFollowsDeterministicPriority(t *testing.T) {
-	got := firstNonEmptySyncBranch("debug", "default")
-	if got != "debug" {
-		t.Fatalf("firstNonEmptySyncBranch() = %q, want debug", got)
-	}
-	got = firstNonEmptySyncBranch("", "default")
-	if got != "default" {
-		t.Fatalf("firstNonEmptySyncBranch() = %q, want default", got)
-	}
-	got = firstNonEmptySyncBranch("", "")
-	if got != "" {
-		t.Fatalf("firstNonEmptySyncBranch() = %q, want empty", got)
-	}
-}
-
 func TestBuildRemoteSyncChanges(t *testing.T) {
 	gitRemotes := []workspace.GitRemote{
 		{Name: "origin", URL: "https://example.com/new-origin.git"},

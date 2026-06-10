@@ -12,6 +12,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -318,16 +319,6 @@ func runSync(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	}
 }
 
-func firstNonEmptySyncBranch(candidates ...string) string {
-	for _, candidate := range candidates {
-		trimmed := strings.TrimSpace(candidate)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
-}
-
 func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {
 	validatedRequestedRemote := strings.TrimSpace(requestedRemote)
 	if validatedRequestedRemote != "" {
@@ -346,17 +337,8 @@ func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes
 		validatedUpstreamRemote = ""
 	}
 	// [LAW:one-source-of-truth] Sync remote selection is derived once from ordered candidates and shared by pull/push.
-	return firstNonEmptySyncRemote(validatedUpstreamRemote, singleRemote), nil
-}
-
-func firstNonEmptySyncRemote(candidates ...string) string {
-	for _, candidate := range candidates {
-		trimmed := strings.TrimSpace(candidate)
-		if trimmed != "" {
-			return trimmed
-		}
-	}
-	return ""
+	// Candidates are trimmed where they are produced, so plain precedence suffices.
+	return precedence.First(validatedUpstreamRemote, singleRemote), nil
 }
 
 func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
@@ -376,7 +358,7 @@ func resolveSyncBranch(rootDir string, remote string) (string, error) {
 	debugOverride := strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar))
 	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(rootDir, remote))
 	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
-	resolvedBranch := firstNonEmptySyncBranch(debugOverride, defaultBranch)
+	resolvedBranch := precedence.First(debugOverride, defaultBranch)
 	if resolvedBranch == "" {
 		return "", fmt.Errorf(
 			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
