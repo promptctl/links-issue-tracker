@@ -37,12 +37,6 @@ func (s *Store) RankToTop(ctx context.Context, issueID string) error {
 	})
 }
 
-// RankSet establishes absolute order across the given IDs by stacking them at
-// the top of the rank space in the order supplied: ids[0] becomes topmost,
-// ids[1] ranks just below, etc. Atomic — every assignment commits together
-// or none does. Validates IDs exist and rejects duplicates before any write.
-// [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
-// transaction so partial-application states cannot occur.
 func rankSetValidateIDs(ids []string) error {
 	if len(ids) < 2 {
 		return errors.New("rank set: need at least 2 IDs to establish order")
@@ -60,21 +54,78 @@ func rankSetValidateIDs(ids []string) error {
 	return nil
 }
 
-func (s *Store) RankSet(ctx context.Context, ids []string) error {
-	if err := rankSetValidateIDs(ids); err != nil {
-		return err
-	}
-	for _, id := range ids {
+// RankSetResolution pairs each ID named in a rank-set request with the
+// representative that was actually ranked after frame resolution. NamedID and
+// RankedID are equal for frame-mates; when they differ the caller must surface
+// the substitution — ranking a different issue than named is never silent.
+// [LAW:no-silent-failure]
+type RankSetResolution struct {
+	NamedID  string `json:"named_id"`
+	RankedID string `json:"ranked_id"`
+}
+
+// resolveRankSet maps the named IDs onto the frame-comparable representatives
+// a rank-set order is actually about (see resolveFrameRepresentatives). Two
+// named IDs collapsing onto one representative is rejected: the requested
+// total order places issues from inside one epic relative to outsiders, which
+// no frame-coherent write can express — honoring part of the order while
+// silently discarding the rest would misrepresent the request.
+// [LAW:no-silent-failure]
+func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]RankSetResolution, error) {
+	chains := make([][]string, len(ids))
+	for i, id := range ids {
 		if _, err := s.GetIssue(ctx, id); err != nil {
-			return err
+			return nil, err
 		}
+		chain, err := s.ancestorChain(ctx, id)
+		if err != nil {
+			return nil, err
+		}
+		chains[i] = chain
 	}
-	return s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
+	reps, err := resolveFrameRepresentatives(chains)
+	if err != nil {
+		return nil, fmt.Errorf("rank set: %w", err)
+	}
+	resolutions := make([]RankSetResolution, len(ids))
+	repToNamed := make(map[string]string, len(ids))
+	for i, id := range ids {
+		if prior, dup := repToNamed[reps[i]]; dup {
+			return nil, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
+		}
+		repToNamed[reps[i]] = id
+		resolutions[i] = RankSetResolution{NamedID: id, RankedID: reps[i]}
+	}
+	return resolutions, nil
+}
+
+// RankSet establishes absolute order across the given IDs by stacking them at
+// the top of the rank space in the order supplied: ids[0] becomes topmost,
+// ids[1] ranks just below, etc. IDs are first resolved to their
+// frame-comparable representatives (a child's stand-in is its epic), so the
+// order written is always frame-coherent and nothing inside any epic is
+// reordered. Atomic — every assignment commits together or none does.
+// Validates IDs exist and rejects duplicates before any write.
+// [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
+// transaction so partial-application states cannot occur.
+func (s *Store) RankSet(ctx context.Context, ids []string) ([]RankSetResolution, error) {
+	if err := rankSetValidateIDs(ids); err != nil {
+		return nil, err
+	}
+	resolutions, err := s.resolveRankSet(ctx, ids)
+	if err != nil {
+		return nil, err
+	}
+	ranked := make([]string, len(resolutions))
+	for i, r := range resolutions {
+		ranked[i] = r.RankedID
+	}
+	return resolutions, s.withMutation(ctx, "rank set", func(ctx context.Context, tx *sql.Tx) error {
 		// Find the current topmost rank, excluding any of the IDs being reassigned
 		// (so we anchor against rows that aren't moving).
-		excludeIDs := make([]any, 0, len(ids))
-		placeholders := make([]string, 0, len(ids))
-		for _, id := range ids {
+		excludeIDs := make([]any, 0, len(ranked))
+		placeholders := make([]string, 0, len(ranked))
+		for _, id := range ranked {
 			excludeIDs = append(excludeIDs, id)
 			placeholders = append(placeholders, "?")
 		}
@@ -91,8 +142,8 @@ func (s *Store) RankSet(ctx context.Context, ids []string) error {
 		now := time.Now().UTC().Format(time.RFC3339Nano)
 		cursor := topRank.String
 		hasCursor := topRank.Valid && topRank.String != ""
-		newRanks := make([]string, len(ids))
-		for i := len(ids) - 1; i >= 0; i-- {
+		newRanks := make([]string, len(ranked))
+		for i := len(ranked) - 1; i >= 0; i-- {
 			var newRank string
 			if !hasCursor {
 				newRank = rank.Initial()
@@ -103,7 +154,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) error {
 			newRanks[i] = newRank
 			cursor = newRank
 		}
-		for i, id := range ids {
+		for i, id := range ranked {
 			if _, err := tx.ExecContext(ctx, `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?`, newRanks[i], now, id); err != nil {
 				return fmt.Errorf("rank-set: update %s: %w", id, err)
 			}
@@ -178,38 +229,95 @@ func (s *Store) ancestorChain(ctx context.Context, id string) ([]string, error) 
 	}
 }
 
-// resolveComparableFrame maps a relative rank request onto the pair it is
-// actually about. Rank meaning is frame-local: an issue's rank is only ever
-// compared against its frame-mates (siblings under the same container, or
-// fellow top-level items), so a request naming two issues from different
-// frames is resolved to their representatives directly under the lowest
-// common ancestor — ranking a standalone ticket against an epic's child
-// behaves as ranking against the epic itself, and ranking the child against
-// the standalone moves the epic. Nothing inside any epic is reordered.
+// frameContainmentError reports a rank request that names an issue together
+// with one of its own ancestors. No comparable frame holds both — the
+// contained issue's representative would be (or sit under) the container
+// itself — so no frame-coherent rank order between them exists.
+type frameContainmentError struct {
+	containerID string
+	containedID string
+}
+
+func (e *frameContainmentError) Error() string {
+	return fmt.Sprintf("%s is inside %s; no comparable frame contains both — rank it against a sibling instead", e.containedID, e.containerID)
+}
+
+// resolveFrameRepresentatives maps each ancestor chain (self first, root
+// last) onto its representative in the chains' comparable frame. Rank meaning
+// is frame-local: an issue's rank is only ever compared against its
+// frame-mates (siblings under the same container, or fellow top-level items),
+// so issues from different frames resolve to their representatives directly
+// under the lowest common ancestor of all chains — and to their roots when
+// the ancestries share none, the top level being the comparable frame.
+// Nothing inside any epic is ever reordered by a cross-frame request.
 // [LAW:types-are-the-program] Cross-frame midpoints are an illegal state of
 // the rank keyspace; this resolution makes every write frame-coherent.
-// Ranking an issue relative to its own container (or descendant) has no
-// frame-coherent meaning and is rejected. [LAW:no-silent-failure]
-func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, err error) {
-	pos := make(map[string]int, len(targetChain))
-	for i, id := range targetChain {
-		pos[id] = i
+// [LAW:single-enforcer] The one resolution core behind every rank verb.
+func resolveFrameRepresentatives(chains [][]string) ([]string, error) {
+	memberships := make([]map[string]int, len(chains))
+	for i, chain := range chains {
+		m := make(map[string]int, len(chain))
+		for idx, id := range chain {
+			m[id] = idx
+		}
+		memberships[i] = m
 	}
-	for i, id := range issueChain {
-		j, ok := pos[id]
-		if !ok {
+	for i, chain := range chains {
+		for j, m := range memberships {
+			if i == j {
+				continue
+			}
+			if idx, ok := m[chain[0]]; ok && idx > 0 {
+				return nil, &frameContainmentError{containerID: chain[0], containedID: chains[j][0]}
+			}
+		}
+	}
+	// Common ancestors form a shared suffix of every chain, so the first
+	// element of chains[0] present in all others is the lowest common ancestor.
+	lcaID := ""
+	for _, id := range chains[0] {
+		inAll := true
+		for _, m := range memberships[1:] {
+			if _, ok := m[id]; !ok {
+				inAll = false
+				break
+			}
+		}
+		if inAll {
+			lcaID = id
+			break
+		}
+	}
+	reps := make([]string, len(chains))
+	for i, chain := range chains {
+		if lcaID == "" {
+			reps[i] = chain[len(chain)-1]
 			continue
 		}
-		if i == 0 {
+		reps[i] = chain[memberships[i][lcaID]-1]
+	}
+	return reps, nil
+}
+
+// resolveComparableFrame maps a relative rank request onto the pair it is
+// actually about: ranking a standalone ticket against an epic's child behaves
+// as ranking against the epic itself, and ranking the child against the
+// standalone moves the epic (see resolveFrameRepresentatives). Ranking an
+// issue relative to its own container (or descendant) has no frame-coherent
+// meaning and is rejected. [LAW:no-silent-failure]
+func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID string, err error) {
+	reps, err := resolveFrameRepresentatives([][]string{issueChain, targetChain})
+	var containment *frameContainmentError
+	if errors.As(err, &containment) {
+		if containment.containerID == issueChain[0] {
 			return "", "", fmt.Errorf("cannot rank %s relative to %s: %s contains it; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0])
 		}
-		if j == 0 {
-			return "", "", fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
-		}
-		return issueChain[i-1], targetChain[j-1], nil
+		return "", "", fmt.Errorf("cannot rank %s relative to %s: %s is inside %s; rank it against a sibling instead", issueChain[0], targetChain[0], issueChain[0], targetChain[0])
 	}
-	// Disjoint ancestries: the comparable frame is the top level.
-	return issueChain[len(issueChain)-1], targetChain[len(targetChain)-1], nil
+	if err != nil {
+		return "", "", err
+	}
+	return reps[0], reps[1], nil
 }
 
 // resolveRankPair validates a relative rank request and resolves it to the
