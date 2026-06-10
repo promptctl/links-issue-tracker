@@ -6,7 +6,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -39,12 +38,15 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 		return errors.New("usage: lit prefix set <new-prefix> [--apply] [--json]")
 	}
 	requested := strings.TrimSpace(positional[0])
-	normalized, err := issueid.NormalizeConfiguredPrefix(requested)
+	// [LAW:single-enforcer] workspace.ConfiguredPrefix is the one boundary that
+	// mints a valid prefix; the CLI never normalizes on its own.
+	spec, err := workspace.ConfiguredPrefix(requested)
 	if err != nil {
 		return fmt.Errorf("invalid prefix %q: %w", requested, err)
 	}
+	normalized := spec.Value()
 
-	previous := ws.IssuePrefix
+	previous := ws.IssuePrefix.Value()
 	if normalized == previous {
 		result := prefixSetResult{
 			Previous: previous,

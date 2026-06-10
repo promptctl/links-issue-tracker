@@ -37,7 +37,7 @@ func newTestCLIApp(t *testing.T) *app.App {
 			RootDir:      workspaceRoot,
 			DatabasePath: filepath.Join(workspaceRoot, "dolt"),
 			WorkspaceID:  "test-workspace-id",
-			IssuePrefix:  "test",
+			IssuePrefix:  testIssuePrefix(t, "test"),
 		},
 		Store: st,
 	}
@@ -81,7 +81,7 @@ func (h readyTestHarness) writeReadyConfig(requiredFields ...string) {
 func (h readyTestHarness) createIssue(input store.CreateIssueInput) model.Issue {
 	h.t.Helper()
 	if input.Prefix == "" {
-		input.Prefix = h.ap.Workspace.IssuePrefix
+		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
 	}
 	// Fixtures author top-to-bottom in listing order, so append at the bottom
 	// to make creation order equal rank order (production default is top).

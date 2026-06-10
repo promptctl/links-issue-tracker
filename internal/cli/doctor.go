@@ -24,8 +24,12 @@ import (
 func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
 	// Path fields use %q so values containing spaces (e.g. a checkout under
 	// "My Projects") stay unambiguous and copy-pasteable in the key=value line.
-	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%s git_common_dir=%q\n",
-		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix, ws.GitCommonDir)
+	prefixSource := "configured"
+	if ws.IssuePrefix.Derived() {
+		prefixSource = "derived"
+	}
+	_, err := fmt.Fprintf(w, "workspace: storage_dir=%q workspace_id=%s issue_prefix=%s issue_prefix_source=%s git_common_dir=%q\n",
+		ws.StorageDir, ws.WorkspaceID, ws.IssuePrefix.Value(), prefixSource, ws.GitCommonDir)
 	return err
 }
 

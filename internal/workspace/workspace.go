@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/google/uuid"
+	"github.com/promptctl/links-issue-tracker/internal/issueid"
 )
 
 var ErrNotGitRepo = errors.New("links requires a git repository/worktree")
@@ -32,8 +32,37 @@ type Info struct {
 	DatabasePath string
 	DoltRepoPath string
 	WorkspaceID  string
-	IssuePrefix  string
+	IssuePrefix  PrefixSpec
 }
+
+// PrefixSpec is a resolved issue prefix together with its provenance. The
+// value is normalized and non-empty by construction; the only ways to obtain
+// one are ConfiguredPrefix and resolveIssuePrefix, so no consumer ever needs
+// to re-trim or re-validate. [LAW:types-are-the-program]
+type PrefixSpec struct {
+	value   string
+	derived bool
+}
+
+// ConfiguredPrefix validates and normalizes a prefix that a caller holds as a
+// configured value (config file, user input, test fixture). It is the only
+// exported way to mint a PrefixSpec. [LAW:single-enforcer]
+func ConfiguredPrefix(raw string) (PrefixSpec, error) {
+	normalized, err := issueid.NormalizeConfiguredPrefix(raw)
+	if err != nil {
+		return PrefixSpec{}, err
+	}
+	return PrefixSpec{value: normalized}, nil
+}
+
+func (p PrefixSpec) Value() string { return p.value }
+
+// Derived reports whether this load minted the prefix from the repository
+// name rather than reading it from config. The derived value is persisted
+// immediately, so provenance is per-load: the next load reads it back as
+// configured. Carried so the one run that invents a prefix the user never
+// chose is observable, not silent. [LAW:no-silent-failure]
+func (p PrefixSpec) Derived() bool { return p.derived }
 
 type GitRemote struct {
 	Name string `json:"name"`
@@ -110,7 +139,7 @@ func Resolve(cwd string) (Info, error) {
 	if err := os.MkdirAll(storageDir, 0o755); err != nil {
 		return Info{}, fmt.Errorf("create storage dir: %w", err)
 	}
-	cfg, err := loadOrCreateConfig(rootDir, configPath)
+	cfg, prefix, err := loadOrCreateConfig(rootDir, configPath)
 	if err != nil {
 		return Info{}, err
 	}
@@ -122,7 +151,7 @@ func Resolve(cwd string) (Info, error) {
 		DatabasePath: databasePath,
 		DoltRepoPath: doltRepoPath,
 		WorkspaceID:  cfg.WorkspaceID,
-		IssuePrefix:  cfg.IssuePrefix,
+		IssuePrefix:  prefix,
 	}, nil
 }
 
@@ -207,47 +236,69 @@ func GitRemotes(cwd string) ([]GitRemote, error) {
 	return remotes, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string) (Config, error) {
+// resolveIssuePrefix is the single enforcer of the prefix rule: an absent
+// (empty after trimming) configured value is derived from the repository
+// name; a present value is normalized; an invalid present value is a loud
+// error, never a silent fallback to derivation. [LAW:single-enforcer]
+// [LAW:no-silent-failure]
+func resolveIssuePrefix(rootDir string, configured string) (PrefixSpec, error) {
+	if strings.TrimSpace(configured) == "" {
+		derived, err := deriveIssuePrefix(rootDir)
+		if err != nil {
+			return PrefixSpec{}, err
+		}
+		return PrefixSpec{value: derived, derived: true}, nil
+	}
+	spec, err := ConfiguredPrefix(configured)
+	if err != nil {
+		return PrefixSpec{}, fmt.Errorf("invalid issue_prefix: %w", err)
+	}
+	return spec, nil
+}
+
+func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error) {
 	payload, err := os.ReadFile(path)
 	if err == nil {
 		var cfg Config
 		if err := json.Unmarshal(payload, &cfg); err != nil {
-			return Config{}, fmt.Errorf("parse workspace config: %w", err)
+			return Config{}, PrefixSpec{}, fmt.Errorf("parse workspace config: %w", err)
 		}
 		if cfg.WorkspaceID == "" {
-			return Config{}, errors.New("workspace config missing workspace_id")
+			return Config{}, PrefixSpec{}, errors.New("workspace config missing workspace_id")
 		}
-		if strings.TrimSpace(cfg.IssuePrefix) == "" {
-			derivedPrefix, err := deriveIssuePrefix(rootDir)
-			if err != nil {
-				return Config{}, err
-			}
-			cfg.IssuePrefix = derivedPrefix
-			return writeConfig(path, cfg)
-		}
-		normalizedPrefix, err := issueid.NormalizeConfiguredPrefix(cfg.IssuePrefix)
+		prefix, err := resolveIssuePrefix(rootDir, cfg.IssuePrefix)
 		if err != nil {
-			return Config{}, fmt.Errorf("invalid issue_prefix: %w", err)
+			return Config{}, PrefixSpec{}, err
 		}
-		if normalizedPrefix != cfg.IssuePrefix {
-			cfg.IssuePrefix = normalizedPrefix
-			return writeConfig(path, cfg)
+		// [LAW:one-source-of-truth] config.json holds the resolved value, so a
+		// derivation or a normalization change is persisted the moment it happens.
+		if prefix.Value() != cfg.IssuePrefix {
+			cfg.IssuePrefix = prefix.Value()
+			cfg, err = writeConfig(path, cfg)
+			if err != nil {
+				return Config{}, PrefixSpec{}, err
+			}
 		}
-		return cfg, nil
+		return cfg, prefix, nil
 	}
 	if !errors.Is(err, os.ErrNotExist) {
-		return Config{}, fmt.Errorf("read workspace config: %w", err)
+		return Config{}, PrefixSpec{}, fmt.Errorf("read workspace config: %w", err)
+	}
+	prefix, err := resolveIssuePrefix(rootDir, "")
+	if err != nil {
+		return Config{}, PrefixSpec{}, err
 	}
 	cfg := Config{
 		WorkspaceID: uuid.NewString(),
+		IssuePrefix: prefix.Value(),
 		CreatedAt:   time.Now().UTC(),
 		Version:     1,
 	}
-	cfg.IssuePrefix, err = deriveIssuePrefix(rootDir)
+	cfg, err = writeConfig(path, cfg)
 	if err != nil {
-		return Config{}, err
+		return Config{}, PrefixSpec{}, err
 	}
-	return writeConfig(path, cfg)
+	return cfg, prefix, nil
 }
 
 func writeConfig(path string, cfg Config) (Config, error) {
