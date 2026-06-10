@@ -13,8 +13,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-func validateDepCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit dep <add|rm|ls> ...", "add", "rm", "ls")
+var depFamily = commandFamily{
+	usage: "usage: lit dep <add|rm|ls> ...",
+	subcommands: []subcommandAccess{
+		{name: "add", access: appAccessWrite},
+		{name: "rm", access: appAccessWrite},
+		{name: "ls", access: appAccessRead},
+	},
 }
 
 func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {

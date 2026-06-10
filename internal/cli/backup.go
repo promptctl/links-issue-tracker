@@ -18,8 +18,15 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 )
 
-func validateBackupCommandPath(args []string) error {
-	return validateNestedCommandPath(args, "usage: lit backup <create|list|restore> ...", "create", "list", "restore")
+var backupFamily = commandFamily{
+	usage: "usage: lit backup <create|list|restore> ...",
+	subcommands: []subcommandAccess{
+		// create only reads the store: it exports issue data and writes the
+		// snapshot file outside the database, so a write lock is unnecessary.
+		{name: "create", access: appAccessRead},
+		{name: "list", access: appAccessRead},
+		{name: "restore", access: appAccessWrite},
+	},
 }
 
 func runBackup(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
