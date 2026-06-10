@@ -912,6 +912,11 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return errors.New("exactly one of --top, --bottom, --above, --below is required")
 	}
 	issueID := positional[0]
+	// Relative ops resolve cross-frame requests to the comparable pair (a
+	// child's stand-in is its epic); the move record carries what actually
+	// happened so the substitution is reported, never silent.
+	// [LAW:no-silent-failure]
+	move := store.RankMove{MovedID: issueID, AnchorID: issueID}
 	var err error
 	switch {
 	case visited["top"]:
@@ -919,14 +924,25 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	case visited["bottom"]:
 		err = ap.Store.RankToBottom(ctx, issueID)
 	case visited["above"]:
-		err = ap.Store.RankAbove(ctx, issueID, *above)
+		move, err = ap.Store.RankAbove(ctx, issueID, *above)
 	case visited["below"]:
-		err = ap.Store.RankBelow(ctx, issueID, *below)
+		move, err = ap.Store.RankBelow(ctx, issueID, *below)
 	}
 	if err != nil {
 		return err
 	}
-	issue, err := ap.Store.GetIssue(ctx, issueID)
+	namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
+	if !*jsonOut && move.MovedID != issueID {
+		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
+			return err
+		}
+	}
+	if !*jsonOut && namedAnchor != "" && move.AnchorID != namedAnchor {
+		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
+			return err
+		}
+	}
+	issue, err := ap.Store.GetIssue(ctx, move.MovedID)
 	if err != nil {
 		return err
 	}
