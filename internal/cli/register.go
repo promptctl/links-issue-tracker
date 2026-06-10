@@ -90,7 +90,7 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 // mode. One row answers legality, access, and dispatch together, so the
 // three can never disagree. [LAW:one-source-of-truth]
 type appSubcommand struct {
-	access appAccessMode
+	access app.AccessMode
 	run    appRunFn
 }
 
@@ -109,11 +109,11 @@ type commandRegistrar struct {
 	stderr io.Writer
 }
 
-func (r *commandRegistrar) appCmd(access appAccessMode, fn appRunFn) CommandRunner {
-	return r.appCmdDynamic(func([]string) appAccessMode { return access }, fn)
+func (r *commandRegistrar) appCmd(access app.AccessMode, fn appRunFn) CommandRunner {
+	return r.appCmdDynamic(func([]string) app.AccessMode { return access }, fn)
 }
 
-func (r *commandRegistrar) appCmdDynamic(resolve func([]string) appAccessMode, fn appRunFn) CommandRunner {
+func (r *commandRegistrar) appCmdDynamic(resolve func([]string) app.AccessMode, fn appRunFn) CommandRunner {
 	return func(args []string) error {
 		return runWithApp(r.ctx, resolve(args), func(commandCtx context.Context, ap *app.App) error {
 			return fn(commandCtx, r.stdout, ap, args)
@@ -163,7 +163,7 @@ func (r *commandRegistrar) wsCmd(fn wsRunFn) CommandRunner {
 }
 
 func (r *commandRegistrar) transitionCmd(action string) CommandRunner {
-	return r.appCmd(appAccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	return r.appCmd(app.AccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		return runTransition(ctx, stdout, ap, args, action)
 	})
 }
@@ -173,7 +173,7 @@ func (r *commandRegistrar) transitionCmd(action string) CommandRunner {
 func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []CommandSpec {
 	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
 
-	readyRun := r.appCmd(appAccessRead, runReady)
+	readyRun := r.appCmd(app.AccessRead, runReady)
 
 	completionRun := func(args []string) error {
 		return runCompletion(stdout, args)
@@ -197,31 +197,31 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
 			Run: r.wsFamilyCmd(syncFamily)},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, runNew)},
+			Run: r.appCmd(app.AccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, runFollowup)},
+			Run: r.appCmd(app.AccessWrite, runFollowup)},
 		{Name: "ready", Summary: "List open work by readiness and rank", GroupID: "operations",
 			Run: readyRun},
 		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runBacklog)},
+			Run: r.appCmd(app.AccessRead, runBacklog)},
 		{Name: "queue", Summary: "List the rank-ordered pull sequence (pullable items only, terse)", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runQueue)},
+			Run: r.appCmd(app.AccessRead, runQueue)},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runNext)},
+			Run: r.appCmd(app.AccessRead, runNext)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runOrphaned)},
+			Run: r.appCmd(app.AccessRead, runOrphaned)},
 		{Name: "ls", Summary: "List issues (rank by default)", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runList)},
+			Run: r.appCmd(app.AccessRead, runList)},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
-			Run: r.appCmd(appAccessRead, runShow)},
+			Run: r.appCmd(app.AccessRead, runShow)},
 		{Name: "update", Summary: "Update issue fields", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, runUpdate)},
+			Run: r.appCmd(app.AccessWrite, runUpdate)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, runRank)},
+			Run: r.appCmd(app.AccessWrite, runRank)},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
 			Run: r.transitionCmd("start")},
 		{Name: "assign", Summary: "Reassign an issue to a different agent (without changing status)", GroupID: "operations",
-			Run: r.appCmd(appAccessWrite, runAssign)},
+			Run: r.appCmd(app.AccessWrite, runAssign)},
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
 			Run: r.transitionCmd("done")},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
@@ -243,13 +243,13 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
 			Run: r.familyCmd(parentFamily)},
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
-			Run: r.appCmd(appAccessRead, runChildren)},
+			Run: r.appCmd(app.AccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
 			Run: r.familyCmd(depFamily)},
 		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
-			Run: r.appCmd(appAccessRead, runExport)},
+			Run: r.appCmd(app.AccessRead, runExport)},
 		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
-			Run: r.appCmd(appAccessWrite, runImportTree)},
+			Run: r.appCmd(app.AccessWrite, runImportTree)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runWorkspace(stdout, ws, args)
@@ -265,11 +265,11 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
 			Run: r.wsFamilyCmd(snapshotsFamily)},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
-			Run: r.appCmd(appAccessWrite, runRecover)},
+			Run: r.appCmd(app.AccessWrite, runRecover)},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
 			Run: r.wsFamilyCmd(lifeboatFamily)},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
-			Run: r.appCmd(appAccessWrite, runDowngrade)},
+			Run: r.appCmd(app.AccessWrite, runDowngrade)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
 			Run: r.familyCmd(bulkFamily)},
 	}

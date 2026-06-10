@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -91,13 +92,13 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 	cases := []struct {
 		name string
 		args []string
-		want appAccessMode
+		want app.AccessMode
 	}{
-		{name: "no flags defaults to read", args: nil, want: appAccessRead},
-		{name: "json only is read", args: []string{"--json"}, want: appAccessRead},
-		{name: "fix all implies write", args: []string{"--fix"}, want: appAccessWrite},
-		{name: "fix named implies write", args: []string{"--fix", "rank"}, want: appAccessWrite},
-		{name: "fix with json implies write", args: []string{"--fix", "--json"}, want: appAccessWrite},
+		{name: "no flags defaults to read", args: nil, want: app.AccessRead},
+		{name: "json only is read", args: []string{"--json"}, want: app.AccessRead},
+		{name: "fix all implies write", args: []string{"--fix"}, want: app.AccessWrite},
+		{name: "fix named implies write", args: []string{"--fix", "rank"}, want: app.AccessWrite},
+		{name: "fix with json implies write", args: []string{"--fix", "--json"}, want: app.AccessWrite},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -117,18 +118,18 @@ func TestCommandFamilyResolve(t *testing.T) {
 		name    string
 		family  commandFamily[appSubcommand]
 		args    []string
-		want    appAccessMode
+		want    app.AccessMode
 		wantErr bool
 	}{
-		{name: "dep ls is read", family: depFamily, args: []string{"ls"}, want: appAccessRead},
-		{name: "dep add is write", family: depFamily, args: []string{"add", "a", "b"}, want: appAccessWrite},
-		{name: "dep rm is write", family: depFamily, args: []string{"rm", "a", "b"}, want: appAccessWrite},
+		{name: "dep ls is read", family: depFamily, args: []string{"ls"}, want: app.AccessRead},
+		{name: "dep add is write", family: depFamily, args: []string{"add", "a", "b"}, want: app.AccessWrite},
+		{name: "dep rm is write", family: depFamily, args: []string{"rm", "a", "b"}, want: app.AccessWrite},
 		{name: "dep unknown rejected", family: depFamily, args: []string{"bogus"}, wantErr: true},
 		{name: "dep empty rejected", family: depFamily, args: nil, wantErr: true},
 		{name: "dep help flag rejected", family: depFamily, args: []string{"--help"}, wantErr: true},
-		{name: "backup create is read", family: backupFamily, args: []string{"create"}, want: appAccessRead},
-		{name: "backup list is read", family: backupFamily, args: []string{"list"}, want: appAccessRead},
-		{name: "backup restore is write", family: backupFamily, args: []string{"restore", "--latest"}, want: appAccessWrite},
+		{name: "backup create is read", family: backupFamily, args: []string{"create"}, want: app.AccessRead},
+		{name: "backup list is read", family: backupFamily, args: []string{"list"}, want: app.AccessRead},
+		{name: "backup restore is write", family: backupFamily, args: []string{"restore", "--latest"}, want: app.AccessWrite},
 		{name: "backup unknown rejected", family: backupFamily, args: []string{"prune"}, wantErr: true},
 	}
 	for _, tc := range cases {

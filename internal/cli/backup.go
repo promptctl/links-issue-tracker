@@ -23,9 +23,9 @@ var backupFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		// create only reads the store: it exports issue data and writes the
 		// snapshot file outside the database, so a write lock is unnecessary.
-		{name: "create", payload: appSubcommand{access: appAccessRead, run: runBackupCreate}},
-		{name: "list", payload: appSubcommand{access: appAccessRead, run: runBackupList}},
-		{name: "restore", payload: appSubcommand{access: appAccessWrite, run: runBackupRestore}},
+		{name: "create", payload: appSubcommand{access: app.AccessRead, run: runBackupCreate}},
+		{name: "list", payload: appSubcommand{access: app.AccessRead, run: runBackupList}},
+		{name: "restore", payload: appSubcommand{access: app.AccessWrite, run: runBackupRestore}},
 	},
 }
 

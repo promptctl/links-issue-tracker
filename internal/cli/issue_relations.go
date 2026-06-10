@@ -15,16 +15,16 @@ import (
 var labelFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit label <add|rm> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runLabelAdd}},
-		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runLabelRm}},
+		{name: "add", payload: appSubcommand{access: app.AccessWrite, run: runLabelAdd}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWrite, run: runLabelRm}},
 	},
 }
 
 var parentFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit parent <set|clear> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "set", payload: appSubcommand{access: appAccessWrite, run: runParentSet}},
-		{name: "clear", payload: appSubcommand{access: appAccessWrite, run: runParentClear}},
+		{name: "set", payload: appSubcommand{access: app.AccessWrite, run: runParentSet}},
+		{name: "clear", payload: appSubcommand{access: app.AccessWrite, run: runParentClear}},
 	},
 }
 
