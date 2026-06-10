@@ -223,7 +223,16 @@ the description defaults to a reference back to the source ticket.
 lit rank <id> --top | --bottom | --above <other-id> | --below <other-id> [--json]
 ```
 
-Moves one issue in the global rank order. Exactly one placement flag is required.
+Moves one issue in the rank order. Exactly one placement flag is required.
+
+Relative placement (`--above`/`--below`) operates between *peers*: two siblings
+inside the same epic, or two top-level items. When the named issue and the
+anchor live in different epics (or one is standalone), the request is resolved
+to the comparable pair — ranking against an epic's child behaves as ranking
+against the epic itself, and ranking a child against an outside issue moves its
+epic, never reordering anything inside an epic. The output states the
+resolution whenever it substitutes an epic for a named issue. Ranking an issue
+relative to its own epic (either direction) is an error.
 
 ### `lit assign`
 

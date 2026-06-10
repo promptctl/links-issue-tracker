@@ -48,7 +48,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 	}
 
 	// Rank A above B.
-	if err := ap.Store.RankAbove(ctx, epicA.ID, epicB.ID); err != nil {
+	if _, err := ap.Store.RankAbove(ctx, epicA.ID, epicB.ID); err != nil {
 		t.Fatalf("RankAbove error = %v", err)
 	}
 
