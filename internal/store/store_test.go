@@ -2307,7 +2307,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 	}
 
 	// Apply absolute order [C, A, B] at the top, regardless of creation order.
-	if err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID}); err != nil {
+	if _, err := st.RankSet(ctx, []string{c.ID, a.ID, b.ID}); err != nil {
 		t.Fatalf("RankSet() error = %v", err)
 	}
 	all, err := st.ListIssues(ctx, ListIssuesFilter{Limit: 0})
@@ -2328,7 +2328,7 @@ func TestRankSetRejectsDuplicates(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if err := st.RankSet(ctx, []string{a.ID, a.ID}); err == nil || !strings.Contains(err.Error(), "duplicate") {
+	if _, err := st.RankSet(ctx, []string{a.ID, a.ID}); err == nil || !strings.Contains(err.Error(), "duplicate") {
 		t.Fatalf("RankSet(duplicates) error = %v, want duplicate-id error", err)
 	}
 }
@@ -2340,7 +2340,7 @@ func TestRankSetRejectsTooFewIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if err := st.RankSet(ctx, []string{a.ID}); err == nil || !strings.Contains(err.Error(), "at least 2") {
+	if _, err := st.RankSet(ctx, []string{a.ID}); err == nil || !strings.Contains(err.Error(), "at least 2") {
 		t.Fatalf("RankSet(single id) error = %v, want too-few error", err)
 	}
 }

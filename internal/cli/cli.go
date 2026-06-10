@@ -951,7 +951,9 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 
 // runRankSet establishes absolute order across N issues by stacking them at
 // the top in the given sequence: id1 becomes the topmost, id2 ranks just
-// below, etc. Atomic: the store either applies all or none.
+// below, etc. Atomic: the store either applies all or none. IDs inside an
+// epic resolve to the epic itself; the substitution is reported, never
+// silent. [LAW:no-silent-failure]
 func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, len(args))
 	fs := newCobraFlagSet("rank set")
@@ -962,11 +964,25 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	if len(positional) < 2 {
 		return errors.New("usage: lit rank set <id1> <id2> [<id3> ...]")
 	}
-	if err := ap.Store.RankSet(ctx, positional); err != nil {
+	resolutions, err := ap.Store.RankSet(ctx, positional)
+	if err != nil {
 		return err
 	}
-	return printValue(stdout, map[string]any{"status": "ok", "ranked": positional}, *jsonOut, func(w io.Writer, _ any) error {
-		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(positional), strings.Join(positional, ", "))
+	ranked := make([]string, len(resolutions))
+	for i, r := range resolutions {
+		ranked[i] = r.RankedID
+	}
+	if !*jsonOut {
+		for _, r := range resolutions {
+			if r.RankedID != r.NamedID {
+				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, *jsonOut, func(w io.Writer, _ any) error {
+		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", "))
 		return err
 	})
 }
