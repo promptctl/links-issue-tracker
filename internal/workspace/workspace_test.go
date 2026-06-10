@@ -19,8 +19,11 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if info.WorkspaceID == "" {
 		t.Fatal("expected workspace ID")
 	}
-	if info.IssuePrefix == "" {
+	if info.IssuePrefix.Value() == "" {
 		t.Fatal("expected issue prefix")
+	}
+	if !info.IssuePrefix.Derived() {
+		t.Fatal("first resolve mints the prefix from the repo name; provenance must say derived")
 	}
 	if _, err := os.Stat(info.ConfigPath); err != nil {
 		t.Fatalf("config file missing: %v", err)
@@ -47,8 +50,13 @@ func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
 	if info2.WorkspaceID != info.WorkspaceID {
 		t.Fatalf("workspace ID changed: %q != %q", info2.WorkspaceID, info.WorkspaceID)
 	}
-	if info2.IssuePrefix != info.IssuePrefix {
-		t.Fatalf("issue prefix changed: %q != %q", info2.IssuePrefix, info.IssuePrefix)
+	if info2.IssuePrefix.Value() != info.IssuePrefix.Value() {
+		t.Fatalf("issue prefix changed: %q != %q", info2.IssuePrefix.Value(), info.IssuePrefix.Value())
+	}
+	// Provenance is per-load: the derived value was persisted, so the second
+	// resolve reads it back as configured.
+	if info2.IssuePrefix.Derived() {
+		t.Fatal("second resolve reads the persisted prefix; provenance must say configured")
 	}
 }
 
@@ -144,6 +152,42 @@ func TestResolveNormalizesConfiguredIssuePrefix(t *testing.T) {
 		t.Fatalf("Resolve() initial error = %v", err)
 	}
 
+	rewriteConfigPrefix(t, info.ConfigPath, "Renderer Platform Team")
+
+	info, err = Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() normalized error = %v", err)
+	}
+	if info.IssuePrefix.Value() != "renderer-pla" {
+		t.Fatalf("IssuePrefix = %q, want renderer-pla", info.IssuePrefix.Value())
+	}
+	if info.IssuePrefix.Derived() {
+		t.Fatal("a configured prefix that only needed normalization is not derived")
+	}
+}
+
+func TestResolveDerivesPrefixWhenConfigValueAbsent(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+
+	info, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() initial error = %v", err)
+	}
+	rewriteConfigPrefix(t, info.ConfigPath, "   ")
+
+	derivedInfo, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() after blanking prefix error = %v", err)
+	}
+	if derivedInfo.IssuePrefix.Value() == "" {
+		t.Fatal("expected a derived issue prefix")
+	}
+	if !derivedInfo.IssuePrefix.Derived() {
+		t.Fatal("an absent configured prefix must resolve with derived provenance")
+	}
+
+	// The derivation is persisted, not repeated silently on every load.
 	payload, err := os.ReadFile(info.ConfigPath)
 	if err != nil {
 		t.Fatalf("ReadFile(config) error = %v", err)
@@ -152,21 +196,45 @@ func TestResolveNormalizesConfiguredIssuePrefix(t *testing.T) {
 	if err := json.Unmarshal(payload, &cfg); err != nil {
 		t.Fatalf("json.Unmarshal(config) error = %v", err)
 	}
-	cfg.IssuePrefix = "Renderer Platform Team"
+	if cfg.IssuePrefix != derivedInfo.IssuePrefix.Value() {
+		t.Fatalf("persisted prefix = %q, want %q", cfg.IssuePrefix, derivedInfo.IssuePrefix.Value())
+	}
+}
+
+func TestResolveRejectsInvalidConfiguredPrefix(t *testing.T) {
+	repo := t.TempDir()
+	run(t, repo, "git", "init")
+
+	info, err := Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() initial error = %v", err)
+	}
+	rewriteConfigPrefix(t, info.ConfigPath, "ab")
+
+	// Only an absent prefix falls back to derivation; an invalid configured
+	// value is a loud error, never silently replaced.
+	if _, err := Resolve(repo); err == nil || !strings.Contains(err.Error(), "invalid issue_prefix") {
+		t.Fatalf("Resolve() error = %v, want invalid issue_prefix", err)
+	}
+}
+
+func rewriteConfigPrefix(t *testing.T, configPath string, prefix string) {
+	t.Helper()
+	payload, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("ReadFile(config) error = %v", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		t.Fatalf("json.Unmarshal(config) error = %v", err)
+	}
+	cfg.IssuePrefix = prefix
 	updated, err := json.Marshal(cfg)
 	if err != nil {
 		t.Fatalf("json.Marshal(config) error = %v", err)
 	}
-	if err := os.WriteFile(info.ConfigPath, updated, 0o644); err != nil {
+	if err := os.WriteFile(configPath, updated, 0o644); err != nil {
 		t.Fatalf("WriteFile(config) error = %v", err)
-	}
-
-	info, err = Resolve(repo)
-	if err != nil {
-		t.Fatalf("Resolve() normalized error = %v", err)
-	}
-	if info.IssuePrefix != "renderer-pla" {
-		t.Fatalf("IssuePrefix = %q, want renderer-pla", info.IssuePrefix)
 	}
 }
 
