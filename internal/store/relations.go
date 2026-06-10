@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -42,7 +41,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 	}
 	for _, rel := range relations {
 		switch rel.Type {
-		case "blocks":
+		case model.RelBlocks:
 			// blocks convention: src_id=dependent, dst_id=dependency.
 			if rel.SrcID == focalID {
 				if dep, ok := issuesByID[rel.DstID]; ok {
@@ -54,7 +53,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 					out.Blocks = append(out.Blocks, dependent)
 				}
 			}
-		case "parent-child":
+		case model.RelParentChild:
 			if rel.SrcID == focalID {
 				if parent, ok := issuesByID[rel.DstID]; ok {
 					out.Parent = &parent
@@ -79,7 +78,7 @@ func bucketRelations(focalID string, relations []model.Relation, issuesByID map[
 func relatedFrom(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) []model.Issue {
 	out := []model.Issue{}
 	for _, rel := range relations {
-		if rel.Type != "related-to" {
+		if rel.Type != model.RelRelatedTo {
 			continue
 		}
 		other := rel.SrcID
@@ -148,7 +147,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 // GetRelationsByIDs returns. related-to is excluded so its endpoints are never
 // pulled into the batch's hydration set — that is the whole point of the
 // lightweight accessor vs GetIssueDetail.
-var structuralRelationTypes = []string{"blocks", "parent-child"}
+var structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelParentChild}
 
 // listRelationsForIDs returns every structural relation row incident to any of
 // the given ids in one query — the batch counterpart of listRelations, scoped to
@@ -167,7 +166,7 @@ func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.
 		args = append(args, id)
 	}
 	for _, relType := range structuralRelationTypes {
-		args = append(args, relType)
+		args = append(args, string(relType))
 	}
 	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE (src_id IN (%s) OR dst_id IN (%s)) AND type IN (%s) ORDER BY created_at ASC`, idClause, idClause, typeClause)
 	rows, err := s.db.QueryContext(ctx, query, args...)
@@ -227,7 +226,7 @@ func mapKeys(set map[string]struct{}) []string {
 type AddRelationInput struct {
 	SrcID     string
 	DstID     string
-	Type      string
+	Type      model.RelationType
 	CreatedBy string
 }
 
@@ -244,21 +243,14 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 	if _, err := s.GetIssue(ctx, in.DstID); err != nil {
 		return model.Relation{}, err
 	}
-	relType := strings.TrimSpace(in.Type)
-	if relType != "blocks" && relType != "parent-child" && relType != "related-to" {
-		return model.Relation{}, errors.New("relation type must be blocks, parent-child, or related-to")
+	// [LAW:types-are-the-program] in.Type is sealed at the trust boundary by
+	// ParseRelationType; no string re-validation here.
+	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
+		return model.Relation{}, errors.New("related-to cannot target itself")
 	}
-	srcID, dstID := in.SrcID, in.DstID
-	if relType == "related-to" {
-		if srcID == dstID {
-			return model.Relation{}, errors.New("related-to cannot target itself")
-		}
-		ordered := []string{srcID, dstID}
-		sort.Strings(ordered)
-		srcID, dstID = ordered[0], ordered[1]
-	}
+	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
 	now := time.Now().UTC()
-	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: relType, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
+	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
 	if rel.CreatedBy == "" {
 		rel.CreatedBy = "unknown"
 	}
@@ -270,7 +262,7 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 		// so neither Doctor nor FixRankInversions has to compensate for it.
 		// [LAW:single-enforcer] AddRelation is the only interactive creator of
 		// blocks edges; bulk import is a trust boundary that Doctor re-checks.
-		if rel.Type == "blocks" {
+		if rel.Type == model.RelBlocks {
 			if err := rejectBlocksCycle(ctx, tx, rel.SrcID, rel.DstID); err != nil {
 				return err
 			}
@@ -305,15 +297,10 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 	return nil
 }
 
-func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string) error {
-	relType = strings.TrimSpace(relType)
-	if relType == "related-to" {
-		ordered := []string{srcID, dstID}
-		sort.Strings(ordered)
-		srcID, dstID = ordered[0], ordered[1]
-	}
+func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {
+	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
 	return s.withMutation(ctx, "remove relation", func(ctx context.Context, tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, relType)
+		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, string(relType))
 		if err != nil {
 			return fmt.Errorf("delete relation: %w", err)
 		}
@@ -328,7 +315,11 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID, relType string
 	})
 }
 
-func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, relType string) ([]model.Relation, error) {
+// ListRelationsForIssue returns the relations incident to issueID, optionally
+// restricted to the given types; no types means no restriction.
+// [LAW:dataflow-not-control-flow] The absent-filter case is the empty filter
+// set, not a sentinel string.
+func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, types ...model.RelationType) ([]model.Relation, error) {
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
 		return nil, err
 	}
@@ -336,13 +327,16 @@ func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, relTy
 	if err != nil {
 		return nil, err
 	}
-	normalizedType := strings.TrimSpace(relType)
-	if normalizedType == "" {
+	if len(types) == 0 {
 		return rels, nil
+	}
+	wanted := make(map[model.RelationType]struct{}, len(types))
+	for _, t := range types {
+		wanted[t] = struct{}{}
 	}
 	out := make([]model.Relation, 0, len(rels))
 	for _, rel := range rels {
-		if rel.Type == normalizedType {
+		if _, ok := wanted[rel.Type]; ok {
 			out = append(out, rel)
 		}
 	}
@@ -365,7 +359,7 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	rel := model.Relation{
 		SrcID:     in.ChildID,
 		DstID:     in.ParentID,
-		Type:      "parent-child",
+		Type:      model.RelParentChild,
 		CreatedAt: time.Now().UTC(),
 		CreatedBy: strings.TrimSpace(in.CreatedBy),
 	}

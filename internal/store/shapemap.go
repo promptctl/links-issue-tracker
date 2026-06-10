@@ -600,7 +600,7 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 		export.Relations = append(export.Relations, model.Relation{
 			SrcID:     cellString(rec["src_id"]),
 			DstID:     cellString(rec["dst_id"]),
-			Type:      cellString(rec["type"]),
+			Type:      model.RelationType(cellString(rec["type"])), // [LAW:single-enforcer] exception: lifeboat salvage conserves bytes; Doctor re-checks
 			CreatedAt: cellTime(rec["created_at"]),
 			CreatedBy: cellString(rec["created_by"]),
 		})

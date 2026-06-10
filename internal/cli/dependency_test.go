@@ -215,3 +215,36 @@ func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 		t.Fatalf("error message should include diagnostic keys, got: %q", errMsg)
 	}
 }
+
+// TestDepRejectsUnknownRelationType pins the trust-boundary contract: every
+// dep subcommand rejects a relation type outside the sealed set at the CLI
+// boundary with the documented message. For 'ls' this is load-bearing — an
+// unknown --type filter must error loudly, not silently match nothing.
+// [LAW:no-silent-failure]
+func TestDepRejectsUnknownRelationType(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issueA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "A", Topic: "dep", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "dep", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+
+	wantMsg := "relation type must be blocks, parent-child, or related-to"
+	cases := [][]string{
+		{"add", "--type", "depends-on", issueA.ID, issueB.ID},
+		{"rm", "--type", "depends-on", issueA.ID, issueB.ID},
+		{"ls", "--type", "depends-on", issueA.ID},
+	}
+	for _, args := range cases {
+		var stdout bytes.Buffer
+		err := runDep(ctx, &stdout, ap, args)
+		if err == nil || err.Error() != wantMsg {
+			t.Errorf("dep %s error = %v, want %q", args[0], err, wantMsg)
+		}
+	}
+}

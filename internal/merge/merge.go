@@ -176,7 +176,10 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 }
 
 func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relation) []model.Relation {
-	type key struct{ Src, Dst, Type string }
+	type key struct {
+		Src, Dst string
+		Type     model.RelationType
+	}
 	merged := map[key]model.Relation{}
 	for _, relation := range append(locals, remotes...) {
 		if _, ok := issueSet[relation.SrcID]; !ok {
