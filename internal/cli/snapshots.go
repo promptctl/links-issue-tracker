@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -79,7 +80,7 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	cfg, err := config.Load(ws.RootDir)
+	cfg, err := config.Load(pathspec.New(ws.RootDir))
 	if err != nil {
 		return err
 	}
