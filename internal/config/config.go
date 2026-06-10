@@ -5,9 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/viper"
+
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
 // Config holds user-level settings loaded from ~/.config/links-issue-tracker/config.toml.
@@ -84,7 +85,7 @@ func Load(workspaceRoot ...string) (Config, error) {
 		return Config{}, err
 	}
 	projectRequired := []string{}
-	if root := strings.TrimSpace(first(workspaceRoot)); root != "" {
+	if root := pathspec.New(first(workspaceRoot)); !root.IsEmpty() {
 		projectRequired, err = mergeConfigFile(v, projectConfigPath(root))
 		if err != nil {
 			return Config{}, err
@@ -109,40 +110,32 @@ func Load(workspaceRoot ...string) (Config, error) {
 	return cfg, nil
 }
 
-func globalConfigPath() string {
-	if override := strings.TrimSpace(os.Getenv(globalConfigPathEnv)); override != "" {
-		return override
-	}
-	dir := ConfigDir()
-	if dir == "" {
-		return ""
-	}
-	return filepath.Join(dir, "config.toml")
+func globalConfigPath() pathspec.PathSpec {
+	return pathspec.New(os.Getenv(globalConfigPathEnv)).
+		Or(pathspec.New(ConfigDir()).Join("config.toml"))
 }
 
-func projectConfigPath(workspaceRoot string) string {
-	if override := strings.TrimSpace(os.Getenv(projectConfigPathEnv)); override != "" {
-		return override
-	}
-	return filepath.Join(workspaceRoot, ".lit", "config.toml")
+func projectConfigPath(workspaceRoot pathspec.PathSpec) pathspec.PathSpec {
+	return pathspec.New(os.Getenv(projectConfigPathEnv)).
+		Or(workspaceRoot.Join(".lit", "config.toml"))
 }
 
-func mergeConfigFile(v *viper.Viper, path string) ([]string, error) {
-	trimmedPath := strings.TrimSpace(path)
-	if trimmedPath == "" {
+func mergeConfigFile(v *viper.Viper, path pathspec.PathSpec) ([]string, error) {
+	// An absent layer contributes nothing — genuine optionality the type declares.
+	if path.IsEmpty() {
 		return nil, nil
 	}
 	fileConfig := viper.New()
-	fileConfig.SetConfigFile(trimmedPath)
+	fileConfig.SetConfigFile(path.String())
 	if err := fileConfig.ReadInConfig(); err != nil {
 		var notFound viper.ConfigFileNotFoundError
 		if errors.As(err, &notFound) || os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, fmt.Errorf("parse config %s: %w", trimmedPath, err)
+		return nil, fmt.Errorf("parse config %s: %w", path, err)
 	}
 	if err := v.MergeConfigMap(fileConfig.AllSettings()); err != nil {
-		return nil, fmt.Errorf("merge config %s: %w", trimmedPath, err)
+		return nil, fmt.Errorf("merge config %s: %w", path, err)
 	}
 	required := fileConfig.GetStringSlice("ready.required_fields")
 	required = append(required, fileConfig.GetStringSlice("required_fields")...)

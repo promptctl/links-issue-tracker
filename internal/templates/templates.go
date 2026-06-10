@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
 
 const (
@@ -109,54 +110,50 @@ func EmbeddedDefault(name string) ([]byte, error) {
 }
 
 // GlobalPath returns the override path in the user's global config directory for name.
-// Returns empty string when no global config directory is configured.
-func GlobalPath(name string) string {
-	dir := globalTemplatesDir()
-	if strings.TrimSpace(dir) == "" {
-		return ""
-	}
-	return filepath.Join(dir, name)
+// Absent when no global config directory is configured.
+func GlobalPath(name string) pathspec.PathSpec {
+	return globalTemplatesDir().Join(name)
 }
 
 // ProjectPath returns the override path under the workspace's .lit/templates directory.
-// Returns empty string when workspaceRoot is empty.
-func ProjectPath(workspaceRoot string, name string) string {
+// Absent when workspaceRoot is empty.
+func ProjectPath(workspaceRoot string, name string) pathspec.PathSpec {
 	return projectTemplatePath(workspaceRoot, name)
 }
 
 // ActiveOverride returns the highest-priority existing override (project > global)
-// for name. When neither layer has a file, the returned path is empty and content
+// for name. When neither layer has a file, the returned path is absent and content
 // is nil. Filesystem errors other than "not exist" are propagated.
 // [LAW:one-source-of-truth] This helper resolves only the project/global override
 // layers; callers that need to know which override layer was selected can infer it
 // from the returned path.
-func ActiveOverride(workspaceRoot string, name string) (path string, content []byte, err error) {
+func ActiveOverride(workspaceRoot string, name string) (path pathspec.PathSpec, content []byte, err error) {
 	// [LAW:dataflow-not-control-flow] Inspect both layers in fixed order; presence/absence is data, not branching.
-	candidatePaths := []string{
+	candidatePaths := []pathspec.PathSpec{
 		projectTemplatePath(workspaceRoot, name),
 		GlobalPath(name),
 	}
 	for _, p := range candidatePaths {
-		if strings.TrimSpace(p) == "" {
+		if p.IsEmpty() {
 			continue
 		}
-		raw, readErr := os.ReadFile(p)
+		raw, readErr := os.ReadFile(p.String())
 		if readErr != nil {
 			if errors.Is(readErr, os.ErrNotExist) {
 				continue
 			}
-			return "", nil, readErr
+			return pathspec.PathSpec{}, nil, readErr
 		}
 		return p, raw, nil
 	}
-	return "", nil, nil
+	return pathspec.PathSpec{}, nil, nil
 }
 
-func readOptionalFile(path string) (string, error) {
-	if strings.TrimSpace(path) == "" {
+func readOptionalFile(path pathspec.PathSpec) (string, error) {
+	if path.IsEmpty() {
 		return "", nil
 	}
-	content, err := os.ReadFile(path)
+	content, err := os.ReadFile(path.String())
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return "", nil
@@ -166,21 +163,13 @@ func readOptionalFile(path string) (string, error) {
 	return string(content), nil
 }
 
-func projectTemplatePath(workspaceRoot string, name string) string {
-	trimmedRoot := strings.TrimSpace(workspaceRoot)
-	if trimmedRoot == "" {
-		return ""
-	}
-	return filepath.Join(trimmedRoot, ".lit", "templates", name)
+func projectTemplatePath(workspaceRoot string, name string) pathspec.PathSpec {
+	return pathspec.New(workspaceRoot).Join(".lit", "templates", name)
 }
 
-func globalTemplatesDir() string {
+func globalTemplatesDir() pathspec.PathSpec {
 	// [LAW:one-source-of-truth] Global template storage reuses config.ConfigDir as the canonical root.
-	root := strings.TrimSpace(config.ConfigDir())
-	if root == "" {
-		return ""
-	}
-	return filepath.Join(root, "templates")
+	return pathspec.New(config.ConfigDir()).Join("templates")
 }
 
 func firstNonEmpty(values ...string) string {
