@@ -197,13 +197,13 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 	}
-	if isReadyBlocked(got[0].Annotations) {
+	if !ClassifyReadiness(got[0].Annotations).IsReady() {
 		t.Fatalf("got[0] should not be blocked, annotations=%#v", got[0].Annotations)
 	}
 	if got[0].ID != openA.ID {
 		t.Fatalf("got[0].ID = %q, want %q", got[0].ID, openA.ID)
 	}
-	if !isReadyBlocked(got[1].Annotations) {
+	if ClassifyReadiness(got[1].Annotations).IsReady() {
 		t.Fatalf("got[1] should be blocked, annotations=%#v", got[1].Annotations)
 	}
 	if got[1].ID != openB.ID {
@@ -241,10 +241,10 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 	}
 
 	byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
-	if isReadyBlocked(byID[plain.ID].Annotations) {
+	if !ClassifyReadiness(byID[plain.ID].Annotations).IsReady() {
 		t.Fatalf("plain issue should not be blocked, annotations=%#v", byID[plain.ID].Annotations)
 	}
-	if !isReadyBlocked(byID[flagged.ID].Annotations) {
+	if ClassifyReadiness(byID[flagged.ID].Annotations).IsReady() {
 		t.Fatalf("needs-design issue should be blocked, annotations=%#v", byID[flagged.ID].Annotations)
 	}
 	if _, ok := findAnnotation(byID[flagged.ID].Annotations, annotation.NeedsDesign); !ok {
@@ -300,7 +300,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 	if got[0].ID != issue.ID {
 		t.Fatalf("got[0].ID = %q, want %q", got[0].ID, issue.ID)
 	}
-	if !isReadyBlocked(got[0].Annotations) {
+	if ClassifyReadiness(got[0].Annotations).IsReady() {
 		t.Fatal("issue with missing required field should be blocked")
 	}
 	missingField, ok := findAnnotation(got[0].Annotations, annotation.MissingField)
@@ -878,7 +878,7 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	if _, ok := findAnnotation(byID[urgent.ID].Annotations, annotation.FocusPath); ok {
 		t.Fatalf("unrelated issue must not carry focus_path: %#v", byID[urgent.ID].Annotations)
 	}
-	if !isReadyBlocked(byID[c2.ID].Annotations) {
+	if ClassifyReadiness(byID[c2.ID].Annotations).IsReady() {
 		t.Fatalf("focus must not unblock gated path member %s", c2.ID)
 	}
 
