@@ -8,7 +8,20 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
+
+// testIssuePrefix mints a PrefixSpec for fixtures through the same validating
+// boundary production uses; fixtures cannot hold an un-normalized prefix.
+func testIssuePrefix(t *testing.T, raw string) workspace.PrefixSpec {
+	t.Helper()
+	spec, err := workspace.ConfiguredPrefix(raw)
+	if err != nil {
+		t.Fatalf("ConfiguredPrefix(%q) error = %v", raw, err)
+	}
+	return spec
+}
 
 // initRepoForPrefixTest stamps a fresh git repo + lit init in a temp dir and
 // returns the repo path. The returned cleanup restores cwd; tests run inside

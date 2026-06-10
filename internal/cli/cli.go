@@ -354,7 +354,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Placement: rankPlacement(*bottom),
-		Prefix:    ap.Workspace.IssuePrefix,
+		Prefix:    ap.Workspace.IssuePrefix.Value(),
 	})
 	if err != nil {
 		return err
@@ -413,7 +413,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Assignee:    strings.TrimSpace(*assignee),
 		Labels:      splitCSV(*labels),
 		Placement:   rankPlacement(*bottom),
-		Prefix:      ap.Workspace.IssuePrefix,
+		Prefix:      ap.Workspace.IssuePrefix.Value(),
 	})
 	if err != nil {
 		return err
@@ -1331,7 +1331,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	result, err := ap.Store.ImportTree(ctx, ap.Workspace.IssuePrefix, specs)
+	result, err := ap.Store.ImportTree(ctx, ap.Workspace.IssuePrefix.Value(), specs)
 	if err != nil {
 		return err
 	}
@@ -1357,7 +1357,7 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	}
 	payload := map[string]string{
 		"workspace_id":   ws.WorkspaceID,
-		"issue_prefix":   ws.IssuePrefix,
+		"issue_prefix":   ws.IssuePrefix.Value(),
 		"git_common_dir": ws.GitCommonDir,
 		"storage_dir":    ws.StorageDir,
 		"database_path":  ws.DatabasePath,
