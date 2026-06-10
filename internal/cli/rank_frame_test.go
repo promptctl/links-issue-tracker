@@ -39,9 +39,17 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	if !strings.Contains(out, child.ID+" is inside "+epic.ID) {
 		t.Errorf("rank output = %q, want moved-side resolution note naming %s and %s", out, child.ID, epic.ID)
 	}
-	lines := strings.Split(strings.TrimSpace(out), "\n")
-	if summary := lines[len(lines)-1]; !strings.Contains(summary, epic.ID) {
-		t.Errorf("rank summary line = %q, want it to describe the epic that moved (%s)", summary, epic.ID)
+	// [LAW:behavior-not-structure] The contract is that the issue-summary line
+	// describes the epic that moved, not that it sits at any fixed position
+	// (the success output now ends with a quickstart breadcrumb).
+	summaryFound := false
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if strings.HasPrefix(line, epic.ID+" [") {
+			summaryFound = true
+		}
+	}
+	if !summaryFound {
+		t.Errorf("rank output = %q, want a summary line describing the epic that moved (%s)", out, epic.ID)
 	}
 
 	// Anchor-side resolution: ranking the standalone against the child anchors to the epic.

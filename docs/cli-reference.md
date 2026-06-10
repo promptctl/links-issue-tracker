@@ -506,6 +506,12 @@ override path so you can customize them (`LIST` is comma-separated short names, 
 `--refresh` re-syncs managed repo assets and reports override drift without touching
 overrides. Topics take no flags.
 
+Mutation commands point back here at the moment of need: the text success output of
+`new`/`followup` ends with a one-line breadcrumb at `lit quickstart new`, `start` at
+`lit quickstart ready`, `done`/`close` at `lit quickstart done`, and
+`update`/`rank`/`label`/`parent`/`dep` at `lit quickstart update`. Breadcrumbs are
+text-mode only; `--json` output is untouched.
+
 ### `lit completion`
 
 ```text
