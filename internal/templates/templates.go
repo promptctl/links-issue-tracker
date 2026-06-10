@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
+	"github.com/promptctl/links-issue-tracker/internal/precedence"
 )
 
 const (
@@ -198,15 +199,6 @@ func globalTemplatesDir() pathspec.PathSpec {
 	return pathspec.New(config.ConfigDir()).Join("templates")
 }
 
-func firstNonEmpty(values ...string) string {
-	for _, value := range values {
-		if value != "" {
-			return value
-		}
-	}
-	return ""
-}
-
 // GuidanceTemplateName returns the canonical template filename for a
 // transition action's guidance phase (e.g. "guidance-done-pre.md").
 func GuidanceTemplateName(action, phase string) string {
@@ -238,7 +230,7 @@ func LoadGuidance(action, phase, workspaceRoot string) (string, error) {
 		embedded = string(raw)
 	}
 
-	resolved := firstNonEmpty(projectContent, globalContent, embedded)
+	resolved := precedence.First(projectContent, globalContent, embedded)
 	if resolved == "" {
 		return "", nil
 	}
