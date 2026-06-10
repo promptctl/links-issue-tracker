@@ -2,7 +2,9 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"io"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -43,6 +45,41 @@ var commandGroups = []GroupSpec{
 	{ID: "guidance", Title: "Guidance & Tooling"},
 }
 
+// subcommandAccess pairs one legal subcommand name with the app access it
+// requires.
+type subcommandAccess struct {
+	name   string
+	access appAccessMode
+}
+
+// commandFamily is the single source of truth for a subcommand family: which
+// first arguments are legal and what app access each one requires.
+// [LAW:one-source-of-truth] The former per-family path validators and the
+// args[0] string tests selecting read vs write were two drifting copies of
+// this table; the string tests silently defaulted unknown subcommands to
+// write and stayed correct only because the validator happened to run first.
+type commandFamily struct {
+	usage       string
+	subcommands []subcommandAccess
+}
+
+// resolve returns the access mode of the subcommand named by args[0].
+// Lookup is validation: a missing, unknown, or flag-shaped first argument
+// fails with the family usage before any app opens, so resolution cannot
+// depend on a validator having run earlier. [LAW:no-ambient-temporal-coupling]
+func (f commandFamily) resolve(args []string) (appAccessMode, error) {
+	if len(args) == 0 {
+		return "", errors.New(f.usage)
+	}
+	subcommand := strings.TrimSpace(args[0])
+	for _, s := range f.subcommands {
+		if s.name == subcommand {
+			return s.access, nil
+		}
+	}
+	return "", errors.New(f.usage)
+}
+
 // appRunFn is the canonical signature for app-mode handlers.
 type appRunFn func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error
 
@@ -65,6 +102,21 @@ func (r *commandRegistrar) appCmd(access appAccessMode, fn appRunFn) CommandRunn
 func (r *commandRegistrar) appCmdDynamic(resolve func([]string) appAccessMode, fn appRunFn) CommandRunner {
 	return func(args []string) error {
 		return runWithApp(r.ctx, resolve(args), func(commandCtx context.Context, ap *app.App) error {
+			return fn(commandCtx, r.stdout, ap, args)
+		})
+	}
+}
+
+// familyCmd seals the resolve→open pipeline for a subcommand family: the
+// table yields the access mode (or rejects the path), then the app opens in
+// that mode. Callers compose nothing; the ordering lives here.
+func (r *commandRegistrar) familyCmd(f commandFamily, fn appRunFn) CommandRunner {
+	return func(args []string) error {
+		access, err := f.resolve(args)
+		if err != nil {
+			return err
+		}
+		return runWithApp(r.ctx, access, func(commandCtx context.Context, ap *app.App) error {
 			return fn(commandCtx, r.stdout, ap, args)
 		})
 	}
@@ -108,19 +160,6 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 
 	versionRun := func(args []string) error {
 		return runVersion(stdout, args)
-	}
-
-	depAccess := func(args []string) appAccessMode {
-		if len(args) > 0 && args[0] == "ls" {
-			return appAccessRead
-		}
-		return appAccessWrite
-	}
-	backupAccess := func(args []string) appAccessMode {
-		if len(args) > 0 && (args[0] == "create" || args[0] == "list") {
-			return appAccessRead
-		}
-		return appAccessWrite
 	}
 
 	return []CommandSpec{
@@ -187,7 +226,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
 			Run: r.appCmd(appAccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
-			Run: withValidation(validateDepCommandPath, r.appCmdDynamic(depAccess, runDep))},
+			Run: r.familyCmd(depFamily, runDep)},
 		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
 			Run: r.appCmd(appAccessRead, runExport)},
 		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
@@ -203,7 +242,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
 		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
-			Run: withValidation(validateBackupCommandPath, r.appCmdDynamic(backupAccess, runBackup))},
+			Run: r.familyCmd(backupFamily, runBackup)},
 		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
 			Run: withValidation(validateSnapshotsCommandPath, r.wsCmd(runSnapshots))},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
