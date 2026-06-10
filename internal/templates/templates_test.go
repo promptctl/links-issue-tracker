@@ -26,6 +26,28 @@ func TestLoadReturnsEmbeddedDefaultWhenNoOverride(t *testing.T) {
 	}
 }
 
+// An absent workspace root means the project layer contributes nothing —
+// resolution falls through to global/embedded instead of erroring or
+// inventing a relative ".lit" path. Whitespace-only input is absence too.
+// [LAW:behavior-not-structure] Pins the behavior absorbed into PathSpec.
+func TestLoadAbsentWorkspaceRootFallsThrough(t *testing.T) {
+	xdgRoot := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
+
+	for _, root := range []string{"", "   ", "\t\n"} {
+		content, source, err := LoadWithSource(AgentsSectionTemplateName, root)
+		if err != nil {
+			t.Fatalf("LoadWithSource(root=%q) error = %v", root, err)
+		}
+		if source != SourceEmbedded {
+			t.Fatalf("LoadWithSource(root=%q) source = %q, want %q", root, source, SourceEmbedded)
+		}
+		if !strings.Contains(content, "BEGIN LIT INTEGRATION") {
+			t.Fatalf("LoadWithSource(root=%q) missing embedded marker", root)
+		}
+	}
+}
+
 func TestLoadGlobalOverrideWins(t *testing.T) {
 	xdgRoot := t.TempDir()
 	t.Setenv("XDG_CONFIG_HOME", xdgRoot)
