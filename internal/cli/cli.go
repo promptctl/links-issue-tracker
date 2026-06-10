@@ -359,7 +359,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("new", printIssueSummary))
 }
 
 // runFollowup creates a child issue parented to --on, intended for the
@@ -418,7 +418,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("new", printIssueSummary))
 }
 
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -892,7 +892,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("update", printIssueSummary))
 }
 
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -969,7 +969,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("update", printIssueSummary))
 }
 
 // runRankSet establishes absolute order across N issues by stacking them at
@@ -1004,10 +1004,10 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 			}
 		}
 	}
-	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, *jsonOut, func(w io.Writer, _ any) error {
+	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
 		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", "))
 		return err
-	})
+	}))
 }
 
 func filterWorkableIssues(issues []model.Issue) []model.Issue {
@@ -1059,6 +1059,18 @@ func displayAssignee(assignee string) string {
 		return "(unassigned)"
 	}
 	return assignee
+}
+
+// transitionBreadcrumbTopics maps transition actions to the quickstart topic
+// whose guidance follows naturally from that success: claiming work points at
+// the finding-work guidance, finishing (done or close) at the wrap-up
+// guidance. Absence from the table is the encoding of "no natural follow-on
+// topic" (archive, delete, reopen, ...), not a skipped branch.
+// [LAW:dataflow-not-control-flow]
+var transitionBreadcrumbTopics = map[string]string{
+	"start": "ready",
+	"done":  "done",
+	"close": "done",
 }
 
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
@@ -1176,7 +1188,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	textFn := printIssueSummary
+	if topic, ok := transitionBreadcrumbTopics[action]; ok {
+		textFn = withQuickstartBreadcrumb(topic, printIssueSummary)
+	}
+	return printValue(stdout, issue, *jsonOut, textFn)
 }
 
 // runAssign rewrites the assignee column on an issue without changing status.

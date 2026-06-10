@@ -58,11 +58,11 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 			return err
 		}
 		cliRel := depRelationForCLI(rel)
-		return printValue(stdout, cliRel, *jsonOut, func(w io.Writer, v any) error {
+		return printValue(stdout, cliRel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
 			r := v.(model.Relation)
 			_, err := fmt.Fprintln(w, depRelationLine(r))
 			return err
-		})
+		}))
 	case "rm":
 		positional, flagArgs := splitArgs(args[1:], 2)
 		fs := newCobraFlagSet("dep rm")
@@ -81,10 +81,10 @@ func runDep(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 		if err := ap.Store.RemoveRelation(ctx, srcID, dstID, *relType); err != nil {
 			return err
 		}
-		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, func(w io.Writer, _ any) error {
+		return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
 			_, err := fmt.Fprintln(w, "ok")
 			return err
-		})
+		}))
 	case "ls":
 		positional, flagArgs := splitArgs(args[1:], 1)
 		fs := newCobraFlagSet("dep ls")
