@@ -56,6 +56,7 @@ var (
 	orphanedDef              = &kindDef{key: "orphaned"}
 	needsDesignDef           = &kindDef{key: "needs_design"}
 	earlierSiblingPendingDef = &kindDef{key: "earlier_sibling_pending"}
+	focusPathDef             = &kindDef{key: "focus_path"}
 
 	MissingField          = Kind{def: missingFieldDef}          // a required field is empty or unset
 	OpenDependency        = Kind{def: openDependencyDef}        // issue depends on an open ticket
@@ -63,6 +64,7 @@ var (
 	Orphaned              = Kind{def: orphanedDef}              // in_progress with no update past the orphaned threshold
 	NeedsDesign           = Kind{def: needsDesignDef}           // carries the needs-design label; consumer may treat as not-yet-ready
 	EarlierSiblingPending = Kind{def: earlierSiblingPendingDef} // an earlier same-lane sibling under the parent epic is still open
+	FocusPath             = Kind{def: focusPathDef}             // issue is a focused goal or a derived prerequisite of one; ordering signal, never blocks
 
 	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
 	// "blocked_by" is a deserialization alias for backwards compatibility after
@@ -75,6 +77,7 @@ var (
 		orphanedDef.key:              Orphaned,
 		needsDesignDef.key:           NeedsDesign,
 		earlierSiblingPendingDef.key: EarlierSiblingPending,
+		focusPathDef.key:             FocusPath,
 	}
 )
 

@@ -808,3 +808,155 @@ func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 		t.Fatalf("runReady error = %q, want parse config context", err.Error())
 	}
 }
+
+// setLabels replaces an issue's full label set — the store-level equivalent of
+// `lit label add/rm` for fixture setup.
+func (h readyTestHarness) setLabels(issueID string, labels ...string) {
+	h.t.Helper()
+	if _, err := h.ap.Store.UpdateIssue(h.ctx, issueID, store.UpdateIssueInput{Labels: &labels}); err != nil {
+		h.t.Fatalf("UpdateIssue(labels) error = %v", err)
+	}
+}
+
+func assertReadyOrder(t *testing.T, got []annotation.AnnotatedIssue, want []string) {
+	t.Helper()
+	gotIDs := make([]string, len(got))
+	for i, entry := range got {
+		gotIDs[i] = entry.ID
+	}
+	if len(gotIDs) != len(want) {
+		t.Fatalf("ready returned %d rows, want %d; ids=%v", len(gotIDs), len(want), gotIDs)
+	}
+	for i := range want {
+		if gotIDs[i] != want[i] {
+			t.Fatalf("ready row %d = %q, want %q; full order=%v", i, gotIDs[i], want[i], gotIDs)
+		}
+	}
+}
+
+// Focusing a blocked goal surfaces its earliest unfinished same-lane
+// prerequisite at the top of ready — above unrelated standing-urgent work —
+// and the path auto-advances as each prerequisite closes. The blocked path
+// members stay blocked: FocusPath affects ordering, never membership.
+func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+	})
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Goal epic", Topic: "goal", IssueType: "epic",
+	})
+	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Step 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+	})
+	c2 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Step 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+	})
+	c3 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Goal", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+	})
+	h.setLabels(c3.ID, FocusLabel)
+
+	got := h.runReadyJSON()
+	// c1 is the only ready path member and outranks the unrelated urgent item;
+	// c2/c3 are sibling-gated and pushed below by the blocked-presentation sort.
+	assertReadyOrder(t, got, []string{c1.ID, urgent.ID, c2.ID, c3.ID})
+	byID := map[string]annotation.AnnotatedIssue{}
+	for _, row := range got {
+		byID[row.ID] = row
+	}
+	for _, id := range []string{c1.ID, c2.ID, c3.ID} {
+		a, ok := findAnnotation(byID[id].Annotations, annotation.FocusPath)
+		if !ok {
+			t.Fatalf("%s missing focus_path annotation: %#v", id, byID[id].Annotations)
+		}
+		if a.Message != c3.ID {
+			t.Fatalf("focus_path message = %q, want goal %q", a.Message, c3.ID)
+		}
+	}
+	if _, ok := findAnnotation(byID[urgent.ID].Annotations, annotation.FocusPath); ok {
+		t.Fatalf("unrelated issue must not carry focus_path: %#v", byID[urgent.ID].Annotations)
+	}
+	if !isReadyBlocked(byID[c2.ID].Annotations) {
+		t.Fatalf("focus must not unblock gated path member %s", c2.ID)
+	}
+
+	h.closeIssue(c1.ID, "done")
+	assertReadyOrder(t, h.runReadyJSON(), []string{c2.ID, urgent.ID, c3.ID})
+
+	h.closeIssue(c2.ID, "done")
+	assertReadyOrder(t, h.runReadyJSON(), []string{c3.ID, urgent.ID})
+}
+
+// The path follows explicit dependency edges transitively: focusing a goal
+// that depends on A, which depends on B, surfaces B (the only ready member).
+func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+	})
+	b := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "B", Topic: "chain", IssueType: "task",
+	})
+	a := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "A", Topic: "chain", IssueType: "task",
+	})
+	goal := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Goal", Topic: "chain", IssueType: "task",
+	})
+	h.addDependency(goal.ID, a.ID)
+	h.addDependency(a.ID, b.ID)
+	h.setLabels(goal.ID, FocusLabel)
+
+	assertReadyOrder(t, h.runReadyJSON(), []string{b.ID, urgent.ID, a.ID, goal.ID})
+}
+
+// Removing the focus label restores normal priority ordering, and urgent
+// priority alone never propagates to prerequisites.
+func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+	})
+	prereq := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Prereq", Topic: "chain", IssueType: "task",
+	})
+	goal := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Urgent goal", Topic: "chain", IssueType: "task", Priority: 1,
+	})
+	h.addDependency(goal.ID, prereq.ID)
+
+	// Urgent goal, no focus: its prerequisite does NOT inherit urgency.
+	assertReadyOrder(t, h.runReadyJSON(), []string{urgent.ID, prereq.ID, goal.ID})
+
+	h.setLabels(goal.ID, FocusLabel)
+	assertReadyOrder(t, h.runReadyJSON(), []string{prereq.ID, urgent.ID, goal.ID})
+
+	h.setLabels(goal.ID)
+	assertReadyOrder(t, h.runReadyJSON(), []string{urgent.ID, prereq.ID, goal.ID})
+}
+
+// Focusing an epic surfaces its unfinished children: container expansion is a
+// prerequisite edge like any other.
+func TestFocusPathExpandsContainerChildren(t *testing.T) {
+	h := newReadyTestHarness(t)
+
+	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
+	})
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Focused epic", Topic: "goal", IssueType: "epic",
+	})
+	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Child 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+	})
+	c2 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+		Title: "Child 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
+	})
+	h.setLabels(epic.ID, FocusLabel)
+
+	assertReadyOrder(t, h.runReadyJSON(), []string{c1.ID, urgent.ID, c2.ID})
+}
