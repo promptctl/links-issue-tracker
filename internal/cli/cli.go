@@ -37,13 +37,6 @@ type outputModeWriter struct {
 	mode outputMode
 }
 
-type appAccessMode string
-
-const (
-	appAccessRead  appAccessMode = "read"
-	appAccessWrite appAccessMode = "write"
-)
-
 var errHelpHandled = errors.New("help handled")
 
 func (w outputModeWriter) linksOutputMode() outputMode {
@@ -127,19 +120,13 @@ func runWithWorkspace(run func(workspace.Info) error) error {
 	return run(ws)
 }
 
-func runWithApp(ctx context.Context, accessMode appAccessMode, run func(context.Context, *app.App) error) error {
+func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
 	}
 	// [LAW:single-enforcer] Cobra command registration owns app access selection so startup mode is declared once per entrypoint.
-	var ap *app.App
-	switch accessMode {
-	case appAccessRead:
-		ap, err = app.OpenForRead(ctx, cwd)
-	default:
-		ap, err = app.Open(ctx, cwd)
-	}
+	ap, err := app.Open(ctx, cwd, accessMode)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return fmt.Errorf("links requires running inside a git repository/worktree")
@@ -1207,8 +1194,8 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 var commentFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit comment <add|rm> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "add", payload: appSubcommand{access: appAccessWrite, run: runCommentAdd}},
-		{name: "rm", payload: appSubcommand{access: appAccessWrite, run: runCommentRm}},
+		{name: "add", payload: appSubcommand{access: app.AccessWrite, run: runCommentAdd}},
+		{name: "rm", payload: appSubcommand{access: app.AccessWrite, run: runCommentRm}},
 	},
 }
 
