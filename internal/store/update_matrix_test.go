@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -118,8 +119,9 @@ func TestApplyUpdateIssueTypeFlagMatrix(t *testing.T) {
 					if err == nil {
 						t.Fatalf("ApplyUpdate(%s, %s) error = nil, want container transition refusal", issueType, combo.name)
 					}
-					if !strings.Contains(err.Error(), "action available") {
-						t.Fatalf("ApplyUpdate(%s, %s) error = %q, want container 'no <action> action available' refusal", issueType, combo.name, err)
+					var containerErr model.ContainerActionError
+					if !errors.As(err, &containerErr) {
+						t.Fatalf("ApplyUpdate(%s, %s) error = %q, want model.ContainerActionError container refusal", issueType, combo.name, err)
 					}
 					// The transition is attempted before any field write, so a
 					// rejected container update must leave the issue wholly
