@@ -30,7 +30,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 		RootDir:      root,
 		DatabasePath: canonical,
 		WorkspaceID:  "test-workspace-id",
-		IssuePrefix:  "test",
+		IssuePrefix:  testIssuePrefix(t, "test"),
 	}
 }
 

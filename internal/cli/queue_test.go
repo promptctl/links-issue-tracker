@@ -30,7 +30,7 @@ func newQueueTestHarness(t *testing.T) queueTestHarness {
 func (h queueTestHarness) createIssue(input store.CreateIssueInput) (id string) {
 	h.t.Helper()
 	if input.Prefix == "" {
-		input.Prefix = h.ap.Workspace.IssuePrefix
+		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
 	}
 	// Fixtures author top-to-bottom in listing order, so append at the bottom
 	// to make creation order equal rank order (production default is top).
