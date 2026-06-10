@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -256,6 +257,194 @@ func TestRunTransitionDoneTokenInvalidatedByDriftBetweenPreviewAndApply(t *testi
 	want := "run `lit done " + issue.ID + "` first"
 	if err.Error() != want {
 		t.Fatalf("error = %q, want %q", err.Error(), want)
+	}
+}
+
+// TestRunTransitionTargetStateMatrix drives every (verb, from-state) cell of
+// the target-state model through the CLI verb path. Each verb is sugar for
+// "set target state to X": every cell succeeds and lands on the verb's target
+// state; diagonal cells (target == current state) are no-ops that record
+// nothing; off-diagonal cells record exactly one event named after the verb's
+// action. Assertions are behavioral — resulting state and event-log content —
+// never output wording.
+func TestRunTransitionTargetStateMatrix(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+
+	const owner = "matrix-owner"
+	fromStates := []model.State{model.StateOpen, model.StateInProgress, model.StateClosed}
+	verbs := []struct {
+		action string
+		target model.State
+	}{
+		{action: "start", target: model.StateInProgress},
+		{action: "done", target: model.StateClosed},
+		{action: "close", target: model.StateClosed},
+		{action: "reopen", target: model.StateOpen},
+	}
+
+	for _, verb := range verbs {
+		for _, from := range fromStates {
+			t.Run(verb.action+"_from_"+string(from), func(t *testing.T) {
+				ap := newTestCLIApp(t)
+				issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+					Prefix: "test", Title: "matrix " + verb.action, Topic: "lifecycle", IssueType: "task", Priority: 0,
+				})
+				if err != nil {
+					t.Fatalf("CreateIssue() error = %v", err)
+				}
+				// Drive the issue to the from-state. The claim is always held by
+				// `owner` so the start diagonal (start on an in_progress issue by
+				// the same owner) is a pure no-op rather than a claim transfer.
+				switch from {
+				case model.StateInProgress:
+					if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+						IssueID: issue.ID, Action: "start", CreatedBy: owner, Assignee: owner,
+					}); err != nil {
+						t.Fatalf("setup start error = %v", err)
+					}
+				case model.StateClosed:
+					if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+						IssueID: issue.ID, Action: "close", CreatedBy: owner,
+					}); err != nil {
+						t.Fatalf("setup close error = %v", err)
+					}
+				}
+				before, err := ap.Store.GetIssueDetail(ctx, issue.ID)
+				if err != nil {
+					t.Fatalf("GetIssueDetail(before) error = %v", err)
+				}
+
+				args := []string{issue.ID, "--json"}
+				if verb.action == "start" {
+					args = append(args, "--assignee", owner)
+				}
+				if err := runTransition(ctx, &bytes.Buffer{}, ap, args, verb.action); err != nil {
+					t.Fatalf("runTransition(%s from %s) error = %v, want success on every leaf cell", verb.action, from, err)
+				}
+
+				after, err := ap.Store.GetIssueDetail(ctx, issue.ID)
+				if err != nil {
+					t.Fatalf("GetIssueDetail(after) error = %v", err)
+				}
+				if got := after.Issue.State(); got != verb.target {
+					t.Fatalf("state after %s from %s = %q, want %q", verb.action, from, got, verb.target)
+				}
+				added := after.Events[len(before.Events):]
+				if from == verb.target {
+					if len(added) != 0 {
+						t.Fatalf("diagonal cell %s from %s recorded %d events, want 0 (no-ops record nothing): %#v", verb.action, from, len(added), added)
+					}
+					return
+				}
+				if len(added) != 1 {
+					t.Fatalf("cell %s from %s recorded %d events, want exactly 1: %#v", verb.action, from, len(added), added)
+				}
+				if added[0].Action != verb.action {
+					t.Fatalf("cell %s from %s recorded action %q, want %q (done-vs-close distinction lives in event history)", verb.action, from, added[0].Action, verb.action)
+				}
+			})
+		}
+	}
+}
+
+// TestRunTransitionMatrixContainerCell pins the one rejection that survives
+// the target-state model: acting on a container, whose state derives from its
+// children. The assertion is the typed shape from links-lifecycle-2wz.3 —
+// errors.As + the live unfinished count — never the message prose.
+func TestRunTransitionMatrixContainerCell(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Matrix epic", Topic: "lifecycle", IssueType: "epic", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Open child", Topic: "lifecycle", IssueType: "task", Priority: 0, ParentID: epic.ID,
+	}); err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+
+	for _, action := range []string{"start", "done", "close", "reopen"} {
+		t.Run(action, func(t *testing.T) {
+			err := runTransition(ctx, &bytes.Buffer{}, ap, []string{epic.ID, "--json"}, action)
+			if err == nil {
+				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
+			}
+			var containerErr model.ContainerActionError
+			if !errors.As(err, &containerErr) {
+				t.Fatalf("runTransition(%s epic) error = %q, want model.ContainerActionError", action, err)
+			}
+			if got := containerErr.Unfinished(); got != 1 {
+				t.Fatalf("ContainerActionError.Unfinished() = %d, want 1 (one open child)", got)
+			}
+		})
+	}
+}
+
+// TestRunTransitionStartClaimTransferEmitsNotice pins the no-silent-failure
+// half of the reclaim path: taking an in_progress issue over from another
+// owner succeeds, but announces the old and new owner on human output. The
+// assertion names both identities rather than pinning wording.
+func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Contested claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, "start"); err != nil {
+		t.Fatalf("runTransition(first start) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob"}, "start"); err != nil {
+		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "agent-alice") || !strings.Contains(out, "agent-bob") {
+		t.Fatalf("reclaim output %q does not name both the old and new owner", out)
+	}
+	reclaimed, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got := reclaimed.AssigneeValue(); got != "agent-bob" {
+		t.Fatalf("AssigneeValue() = %q, want agent-bob (transfer must still succeed)", got)
+	}
+}
+
+// TestRunTransitionStartClaimTransferJSONStaysMachineClean asserts the notice
+// never leaks into JSON mode: --json output must be exactly one JSON document
+// (the new assignee is carried in the document itself).
+func TestRunTransitionStartClaimTransferJSONStaysMachineClean(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "JSON reclaim", Topic: "lifecycle", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, "start"); err != nil {
+		t.Fatalf("runTransition(first start) error = %v", err)
+	}
+	var stdout bytes.Buffer
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob", "--json"}, "start"); err != nil {
+		t.Fatalf("runTransition(reclaim --json) error = %v", err)
+	}
+	var reclaimed model.Issue
+	if err := json.Unmarshal(stdout.Bytes(), &reclaimed); err != nil {
+		t.Fatalf("json.Unmarshal(reclaim output) error = %v; output %q must be a single JSON document", err, stdout.String())
+	}
+	if got := reclaimed.AssigneeValue(); got != "agent-bob" {
+		t.Fatalf("JSON document AssigneeValue() = %q, want agent-bob", got)
 	}
 }
 
