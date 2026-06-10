@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
 func TestEjectTemplatesWritesAllByDefault(t *testing.T) {
@@ -14,8 +16,8 @@ func TestEjectTemplatesWritesAllByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ejectTemplates() error = %v", err)
 	}
-	if len(results) != 3 {
-		t.Fatalf("got %d results, want 3", len(results))
+	if len(results) != len(templates.Names()) {
+		t.Fatalf("got %d results, want %d", len(results), len(templates.Names()))
 	}
 	for _, r := range results {
 		if !r.Changed {

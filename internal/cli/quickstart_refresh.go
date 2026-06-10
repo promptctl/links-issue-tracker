@@ -11,6 +11,7 @@ import (
 )
 
 type quickstartRefreshItem struct {
+	Name    string `json:"name,omitempty"`
 	Path    string `json:"path"`
 	Status  string `json:"status"`
 	Managed bool   `json:"managed"`
@@ -19,10 +20,10 @@ type quickstartRefreshItem struct {
 }
 
 type quickstartRefreshReport struct {
-	Agents     quickstartRefreshItem `json:"agents"`
-	Claude     quickstartRefreshItem `json:"claude"`
-	Hooks      quickstartRefreshItem `json:"hooks"`
-	Quickstart quickstartRefreshItem `json:"quickstart"`
+	Agents     quickstartRefreshItem   `json:"agents"`
+	Claude     quickstartRefreshItem   `json:"claude"`
+	Hooks      quickstartRefreshItem   `json:"hooks"`
+	Quickstart []quickstartRefreshItem `json:"quickstart"`
 }
 
 func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport, error) {
@@ -35,7 +36,7 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
 	}
-	quickstartItem, qsErr := refreshQuickstartTemplate(ws.RootDir)
+	quickstartItems, qsErr := refreshQuickstartTemplates(ws.RootDir)
 	if qsErr != nil {
 		return quickstartRefreshReport{}, qsErr
 	}
@@ -53,40 +54,58 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 			Managed: true,
 			Source:  string(claudeResult.Source),
 		},
-		Quickstart: quickstartItem,
+		Quickstart: quickstartItems,
 	}, nil
 }
 
-// refreshQuickstartTemplate inspects the active quickstart.md override (project > global)
-// and reports its status without overwriting it. This is intentionally conservative:
-// the override file exists because the user explicitly ejected, so refresh never
-// mutates it. When content matches the embedded default, status is "unchanged".
-// When content has drifted, status is "skipped" with reason "customized" and the
-// override path is surfaced so the user can decide whether it is genuinely customized
-// or a stale verbatim copy worth deleting / re-ejecting.
-func refreshQuickstartTemplate(workspaceRoot string) (quickstartRefreshItem, error) {
-	embedded, err := templates.EmbeddedDefault(templates.QuickstartTemplateName)
-	if err != nil {
-		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read embedded default: %w", err)
+// refreshQuickstartTemplates inspects the active override (project > global) for
+// every quickstart guidance template and reports each status without overwriting.
+// This is intentionally conservative: an override file exists because the user
+// explicitly ejected, so refresh never mutates it. When content matches the
+// embedded default, status is "unchanged". When content has drifted, status is
+// "skipped" with reason "customized" and the override path is surfaced so the
+// user can decide whether it is genuinely customized or a stale verbatim copy
+// worth deleting / re-ejecting.
+func refreshQuickstartTemplates(workspaceRoot string) ([]quickstartRefreshItem, error) {
+	// [LAW:one-type-per-behavior] Every guidance template gets the identical inspection; the set derives from the topic table.
+	names := quickstartGuidanceTemplateNames()
+	items := make([]quickstartRefreshItem, 0, len(names))
+	for _, name := range names {
+		item, err := refreshQuickstartTemplate(workspaceRoot, name)
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, item)
 	}
-	path, content, err := templates.ActiveOverride(workspaceRoot, templates.QuickstartTemplateName)
+	return items, nil
+}
+
+func refreshQuickstartTemplate(workspaceRoot string, name string) (quickstartRefreshItem, error) {
+	embedded, err := templates.EmbeddedDefault(name)
 	if err != nil {
-		return quickstartRefreshItem{}, fmt.Errorf("refresh quickstart: read override: %w", err)
+		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read embedded default: %w", name, err)
+	}
+	path, content, err := templates.ActiveOverride(workspaceRoot, name)
+	if err != nil {
+		return quickstartRefreshItem{}, fmt.Errorf("refresh %s: read override: %w", name, err)
 	}
 	if path.IsEmpty() {
 		return quickstartRefreshItem{
+			Name:    name,
 			Status:  "absent",
 			Managed: false,
 		}, nil
 	}
 	if string(content) == string(embedded) {
 		return quickstartRefreshItem{
+			Name:    name,
 			Path:    path.String(),
 			Status:  "unchanged",
 			Managed: true,
 		}, nil
 	}
 	return quickstartRefreshItem{
+		Name:    name,
 		Path:    path.String(),
 		Status:  "skipped",
 		Managed: true,
@@ -111,7 +130,9 @@ func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
 		{"AGENTS.md", refresh.Agents.Status, composeSourceReason(refresh.Agents.Reason, refresh.Agents.Source, refresh.Agents.Status)},
 		{"CLAUDE.md", refresh.Claude.Status, composeSourceReason(refresh.Claude.Reason, refresh.Claude.Source, refresh.Claude.Status)},
-		{"quickstart template", refresh.Quickstart.Status, refresh.Quickstart.Reason},
+	}
+	for _, q := range refresh.Quickstart {
+		items = append(items, labeledStatus{fmt.Sprintf("%s template", strings.TrimSuffix(q.Name, ".md")), q.Status, q.Reason})
 	}
 
 	var updated, skipped, unchanged []string
@@ -177,4 +198,15 @@ func renderQuickstartGuidance(workspaceRoot string) (string, error) {
 		out += soilSection
 	}
 	return out, nil
+}
+
+// renderQuickstartTopic loads one topic guidance template (project > global > embedded).
+// Topic output never carries the soil section: SOIL is a session-wide convention
+// surfaced once at the session-start router read, not per-task guidance.
+func renderQuickstartTopic(workspaceRoot string, name string) (string, error) {
+	tmpl, err := templates.Load(name, workspaceRoot)
+	if err != nil {
+		return "", fmt.Errorf("load quickstart topic guidance: %w", err)
+	}
+	return strings.TrimSpace(tmpl), nil
 }
