@@ -23,6 +23,7 @@ nav:
   - Introduction:
       - What is links?: introduction/what-is-links.md
       - Installation: introduction/installation.md
+      - Getting started: introduction/getting-started.md
   - Concepts:
       - Core concepts: concepts.md
   - Architecture:
@@ -31,3 +32,5 @@ nav:
       - Sync and remotes: dolt-remote-sync.md
       - Agent setup & workflow: agent-setup.md
       - Troubleshooting: troubleshooting.md
+  - CLI reference:
+      - Commands: cli-reference.md
