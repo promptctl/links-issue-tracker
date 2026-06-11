@@ -44,7 +44,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit hooks install [--json]")
+		return UsageError{Message: "usage: lit hooks install [--json]"}
 	}
 
 	result, err := installHooks(ws)

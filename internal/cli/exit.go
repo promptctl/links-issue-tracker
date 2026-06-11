@@ -2,7 +2,6 @@ package cli
 
 import (
 	"errors"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -17,6 +16,9 @@ const (
 	ExitCorruption = 7
 )
 
+// ExitCode maps a typed error to its exit code.
+// [LAW:single-enforcer] This is the one place that decides exit code from error type.
+// [LAW:types-are-the-program] Dispatch is by type (errors.As), never by message text.
 func ExitCode(err error) int {
 	if err == nil {
 		return ExitOK
@@ -33,20 +35,32 @@ func ExitCode(err error) int {
 	if errors.As(err, &corruption) {
 		return ExitCorruption
 	}
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	switch {
-	case strings.HasPrefix(message, "usage:"),
-		strings.HasPrefix(message, "unknown flag"):
+	var usage UsageError
+	if errors.As(err, &usage) {
 		return ExitUsage
-	case strings.Contains(message, "required"),
-		strings.Contains(message, "must be"),
-		strings.Contains(message, "unsupported"),
-		strings.Contains(message, "--output is no longer supported"),
-		strings.Contains(message, "unknown command"):
+	}
+	var unknownCmd UnknownCommandError
+	if errors.As(err, &unknownCmd) {
 		return ExitValidation
-	case strings.Contains(message, "conflict"):
-		return ExitConflict
-	default:
+	}
+	var validation ValidationError
+	if errors.As(err, &validation) {
+		return ExitValidation
+	}
+	var storeValidation store.ValidationError
+	if errors.As(err, &storeValidation) {
+		return ExitValidation
+	}
+	var unsupported UnsupportedError
+	if errors.As(err, &unsupported) {
+		return ExitValidation
+	}
+	var outsideWorkspace OutsideWorkspaceError
+	if errors.As(err, &outsideWorkspace) {
 		return ExitGeneric
 	}
+	if errors.Is(err, store.ErrTransientManifestReadOnly) {
+		return ExitGeneric
+	}
+	return ExitGeneric
 }

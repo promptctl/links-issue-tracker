@@ -11,7 +11,7 @@ import (
 )
 
 func TestBuildCommandErrorPayloadUnknownCommand(t *testing.T) {
-	err := errors.New(`unknown command "wat"`)
+	err := UnknownCommandError{Command: "wat"}
 	payload := buildCommandErrorPayload(err)
 
 	if payload.Code != "validation" {
@@ -78,7 +78,7 @@ func TestShouldEmitJSONError(t *testing.T) {
 func TestWriteCommandErrorJSON(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer
-	exitCode := WriteCommandError(&stderr, &stdout, []string{"--json", "unknown"}, errors.New(`unknown command "unknown"`))
+	exitCode := WriteCommandError(&stderr, &stdout, []string{"--json", "unknown"}, UnknownCommandError{Command: "unknown"})
 	if exitCode != ExitValidation {
 		t.Fatalf("exitCode = %d, want %d", exitCode, ExitValidation)
 	}
@@ -102,10 +102,9 @@ func TestWriteCommandErrorJSON(t *testing.T) {
 func TestWriteCommandErrorText(t *testing.T) {
 	var stderr bytes.Buffer
 	var stdout bytes.Buffer
-	WriteCommandError(&stderr, &stdout, []string{"unknown"}, errors.New(`unknown command "unknown"`))
+	WriteCommandError(&stderr, &stdout, []string{"unknown"}, UnknownCommandError{Command: "unknown"})
 
 	if !strings.Contains(stderr.String(), "error (code=3): unknown command \"unknown\"") {
 		t.Fatalf("unexpected text stderr: %q", stderr.String())
 	}
 }
-
