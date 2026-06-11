@@ -96,7 +96,7 @@ func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args [
 		restorePath = latestSnapshot.Path
 	}
 	if restorePath == "" {
-		return errors.New("usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest")
+		return UsageError{Message: "usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest"}
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
@@ -135,7 +135,7 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		}
 		restorePath = latest.Path
 	default:
-		return errors.New("usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]")
+		return UsageError{Message: "usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]"}
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err

@@ -60,10 +60,10 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	}
 	issueIDs := splitCSV(*ids)
 	if len(issueIDs) == 0 {
-		return errors.New("--ids is required")
+		return ValidationError{Message: "--ids is required"}
 	}
 	if strings.TrimSpace(*label) == "" {
-		return errors.New("--label is required")
+		return ValidationError{Message: "--label is required"}
 	}
 	// Resolved after the flag checks to preserve the established error
 	// precedence: missing --ids/--label surface before an unknown action does.
@@ -106,7 +106,7 @@ func runBulkTransition(action model.ActionName) appRunFn {
 		}
 		issueIDs := splitCSV(*ids)
 		if len(issueIDs) == 0 {
-			return errors.New("--ids is required")
+			return ValidationError{Message: "--ids is required"}
 		}
 		results := map[string]string{}
 		for _, issueID := range issueIDs {
@@ -143,7 +143,7 @@ func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if strings.TrimSpace(*path) == "" {
-		return errors.New("--path is required")
+		return ValidationError{Message: "--path is required"}
 	}
 	if err := restoreFromExportPath(ctx, ap, *path, *force); err != nil {
 		return err

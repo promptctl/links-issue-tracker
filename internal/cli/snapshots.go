@@ -127,11 +127,11 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 		return err
 	}
 	if len(positional) != 1 || fs.NArg() != 0 {
-		return errors.New("usage: lit snapshots restore <name> [--json]")
+		return UsageError{Message: "usage: lit snapshots restore <name> [--json]"}
 	}
 	name := strings.TrimSpace(positional[0])
 	if name == "" {
-		return errors.New("usage: lit snapshots restore <name> [--json]")
+		return UsageError{Message: "usage: lit snapshots restore <name> [--json]"}
 	}
 	// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
 	// exclusion; commit lock (held inside withCommitLock below) owns

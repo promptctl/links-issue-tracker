@@ -105,7 +105,7 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
-				return fmt.Errorf("unknown command %q", args[0])
+				return UnknownCommandError{Command: args[0]}
 			}
 			// [LAW:one-source-of-truth] Default command reuses renderQuickstartGuidance
 			// so the output is always identical to `lit quickstart`.
@@ -150,7 +150,7 @@ func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context
 	ap, err := app.Open(ctx, cwd, accessMode)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
-			return fmt.Errorf("links requires running inside a git repository/worktree")
+			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
 		return err
 	}
@@ -166,9 +166,8 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 	ws, err := workspace.Resolve(cwd)
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
-			// [LAW:one-source-of-truth] Wrap with %w so callers can dispatch on the
-			// sentinel; the surface text remains the canonical CLI message.
-			return workspace.Info{}, fmt.Errorf("links requires running inside a git repository/worktree: %w", err)
+			// [LAW:types-are-the-program] Typed error carries classification; message preserved for surface display.
+			return workspace.Info{}, OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
 		return workspace.Info{}, err
 	}
@@ -299,6 +298,15 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			}
 			return errHelpHandled
 		}
+		// [LAW:types-are-the-program] Wrap pflag errors at the parse boundary so sinks dispatch on type, not message text.
+		msg := err.Error()
+		if strings.Contains(msg, "flag provided but not defined: -output") ||
+			strings.Contains(msg, "flag provided but not defined: --output") {
+			return UnsupportedError{Message: "--output is no longer supported; use --json for JSON or omit it for text", Feature: "--output"}
+		}
+		if strings.HasPrefix(msg, "unknown flag:") || strings.HasPrefix(msg, "flag provided but not defined:") {
+			return UsageError{Message: msg}
+		}
 		return err
 	}
 	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
@@ -324,7 +332,7 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 }
 
 func unsupportedOutputFlagError() error {
-	return errors.New("--output is no longer supported; use --json for JSON or omit it for text")
+	return UnsupportedError{Message: "--output is no longer supported; use --json for JSON or omit it for text", Feature: "--output"}
 }
 
 // rankPlacement translates the CLI's --bottom boolean into the domain
@@ -391,7 +399,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return errors.New("usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom] [--json]")
+		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom] [--json]"}
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -524,7 +532,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		case "table":
 			return printIssueTable(w, list, columns)
 		default:
-			return fmt.Errorf("unsupported --format %q", formatMode)
+			return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
 		}
 	})
 }
@@ -542,7 +550,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]")
+		return UsageError{Message: "usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
@@ -676,7 +684,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit next [--continue] [--assignee <user>] [--json]")
+		return UsageError{Message: "usage: lit next [--continue] [--assignee <user>] [--json]"}
 	}
 	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{Assignee: strings.TrimSpace(*assignee)})
 	if err != nil {
@@ -712,7 +720,7 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit orphaned [--assignee <user>] [--json]")
+		return UsageError{Message: "usage: lit orphaned [--assignee <user>] [--json]"}
 	}
 	listFilter := store.ListIssuesFilter{
 		Statuses:        []model.State{model.StateInProgress},
@@ -774,10 +782,10 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit show <id>")
+		return UsageError{Message: "usage: lit show <id>"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit show <id>")
+		return UsageError{Message: "usage: lit show <id>"}
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 	if err != nil {
@@ -812,10 +820,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]")
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]"}
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -917,7 +925,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit rank <id> --top|--bottom|--above <id>|--below <id>")
+		return UsageError{Message: "usage: lit rank <id> --top|--bottom|--above <id>|--below <id>"}
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -935,7 +943,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		modeCount++
 	}
 	if modeCount != 1 {
-		return errors.New("exactly one of --top, --bottom, --above, --below is required")
+		return ValidationError{Message: "exactly one of --top, --bottom, --above, --below is required"}
 	}
 	issueID := positional[0]
 	// Relative ops resolve cross-frame requests to the comparable pair (a
@@ -991,7 +999,7 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return err
 	}
 	if len(positional) < 2 {
-		return errors.New("usage: lit rank set <id1> <id2> [<id3> ...]")
+		return UsageError{Message: "usage: lit rank set <id1> <id2> [<id3> ...]"}
 	}
 	resolutions, err := ap.Store.RankSet(ctx, positional)
 	if err != nil {
@@ -1216,7 +1224,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if len(positional) != 2 || fs.NArg() != 0 {
-		return errors.New("usage: lit assign <id> <new-assignee> [--reason <text>]")
+		return UsageError{Message: "usage: lit assign <id> <new-assignee> [--reason <text>]"}
 	}
 	id := positional[0]
 	newAssignee := strings.TrimSpace(positional[1])
@@ -1253,10 +1261,10 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit comment add <id> --body <text>")
+		return UsageError{Message: "usage: lit comment add <id> --body <text>"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit comment add <id> --body <text>")
+		return UsageError{Message: "usage: lit comment add <id> --body <text>"}
 	}
 	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
 	if err != nil {
@@ -1273,10 +1281,10 @@ func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit comment rm <comment-id> [--json]")
+		return UsageError{Message: "usage: lit comment rm <comment-id> [--json]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit comment rm <comment-id> [--json]")
+		return UsageError{Message: "usage: lit comment rm <comment-id> [--json]"}
 	}
 	comment, err := ap.Store.DeleteComment(ctx, positional[0])
 	if err != nil {
@@ -1326,10 +1334,10 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 	if strings.TrimSpace(*path) == "" {
-		return errors.New("usage: lit import --path <file.json>")
+		return UsageError{Message: "usage: lit import --path <file.json>"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit import --path <file.json>")
+		return UsageError{Message: "usage: lit import --path <file.json>"}
 	}
 	data, err := os.ReadFile(*path)
 	if err != nil {
@@ -1417,10 +1425,10 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		return err
 	}
 	if fs.NArg() > 1 {
-		return errors.New(quickstartUsage)
+		return UsageError{Message: quickstartUsage}
 	}
 	if outputModeFromWriter(stdout) == outputModeJSON {
-		return errors.New(quickstartUsage)
+		return UsageError{Message: quickstartUsage}
 	}
 	ejectChanged := fs.Changed("eject")
 	ejectValue := *eject
@@ -1428,20 +1436,20 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		ejectValue = "all"
 	}
 	if ejectChanged && *refresh {
-		return errors.New("usage: --refresh and --eject are mutually exclusive")
+		return UsageError{Message: "usage: --refresh and --eject are mutually exclusive"}
 	}
 	if *force && !ejectChanged {
-		return errors.New("usage: --force is only valid with --eject")
+		return UsageError{Message: "usage: --force is only valid with --eject"}
 	}
 
 	if fs.NArg() == 1 {
 		// [LAW:dataflow-not-control-flow] Topic dispatch is a value lookup; every topic shares one render path.
 		if *refresh || ejectChanged || *force {
-			return errors.New("usage: lit quickstart <topic> takes no flags")
+			return UsageError{Message: "usage: lit quickstart <topic> takes no flags"}
 		}
 		templateName, ok := quickstartTopicTemplate(fs.Arg(0))
 		if !ok {
-			return fmt.Errorf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))
+			return UsageError{Message: fmt.Sprintf("usage: unknown quickstart topic %q (must be one of: %s)", fs.Arg(0), strings.Join(quickstartTopicTokens(), ", "))}
 		}
 		guidance, err := renderQuickstartTopic(ws.RootDir, templateName)
 		if err != nil {
@@ -1593,7 +1601,7 @@ func parseSortSpecs(input string) ([]store.SortSpec, error) {
 			case "desc":
 				desc = true
 			default:
-				return nil, fmt.Errorf("unsupported sort direction %q", direction)
+				return nil, UnsupportedError{Message: fmt.Sprintf("unsupported sort direction %q", direction), Feature: "sort-direction"}
 			}
 		}
 		out = append(out, store.SortSpec{Field: field, Desc: desc})
@@ -1615,6 +1623,44 @@ type CorruptionError struct {
 }
 
 func (e CorruptionError) Error() string { return e.Message }
+
+// UsageError signals wrong CLI usage (bad argument count, unrecognised flag).
+// [LAW:types-are-the-program] The type carries the ExitUsage classification so sinks dispatch on type.
+type UsageError struct {
+	Message string
+}
+
+func (e UsageError) Error() string { return e.Message }
+
+// UnknownCommandError signals that the router received a command name it does not recognise.
+type UnknownCommandError struct {
+	Command string
+}
+
+func (e UnknownCommandError) Error() string { return fmt.Sprintf("unknown command %q", e.Command) }
+
+// ValidationError signals that a user-supplied value failed a domain constraint check.
+type ValidationError struct {
+	Message string
+}
+
+func (e ValidationError) Error() string { return e.Message }
+
+// UnsupportedError signals use of a removed or unsupported feature.
+// Feature names the unsupported capability (e.g. "--output") for targeted remediation.
+type UnsupportedError struct {
+	Message string
+	Feature string
+}
+
+func (e UnsupportedError) Error() string { return e.Message }
+
+// OutsideWorkspaceError signals that the command requires a git repository context.
+type OutsideWorkspaceError struct {
+	Message string
+}
+
+func (e OutsideWorkspaceError) Error() string { return e.Message }
 
 func splitArgs(args []string, positionalCount int) ([]string, []string) {
 	positionals := make([]string, 0, positionalCount)

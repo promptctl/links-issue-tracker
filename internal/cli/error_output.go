@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -86,6 +85,9 @@ func commandErrorCode(exitCode int) string {
 	}
 }
 
+// commandErrorReason maps a typed error to its machine-readable reason string.
+// [LAW:single-enforcer] All error→reason mappings live here; dispatch is by type via errors.As.
+// [LAW:types-are-the-program] No message text is inspected; classification is carried by the type.
 func commandErrorReason(err error) string {
 	var notFound store.NotFoundError
 	if errors.As(err, &notFound) {
@@ -99,22 +101,29 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &corruption) {
 		return "corruption_detected"
 	}
-	message := strings.ToLower(strings.TrimSpace(err.Error()))
-	switch {
-	case strings.Contains(message, "unknown command"):
+	var unknownCmd UnknownCommandError
+	if errors.As(err, &unknownCmd) {
 		return "unknown_command"
-	case strings.HasPrefix(message, "usage:"):
+	}
+	var usage UsageError
+	if errors.As(err, &usage) {
 		return "usage_error"
-	case strings.Contains(message, "--output is no longer supported"),
-		strings.Contains(message, "flag provided but not defined: -output"):
-		return "unsupported_output_flag"
-	case strings.Contains(message, "cannot update manifest") && strings.Contains(message, "read only"):
-		return "manifest_read_only"
-	case strings.Contains(message, "requires running inside a git repository"):
-		return "outside_git_workspace"
-	default:
+	}
+	var unsupported UnsupportedError
+	if errors.As(err, &unsupported) {
+		if unsupported.Feature == "--output" {
+			return "unsupported_output_flag"
+		}
 		return "command_failed"
 	}
+	var outsideWorkspace OutsideWorkspaceError
+	if errors.As(err, &outsideWorkspace) {
+		return "outside_git_workspace"
+	}
+	if errors.Is(err, store.ErrTransientManifestReadOnly) {
+		return "manifest_read_only"
+	}
+	return "command_failed"
 }
 
 func commandErrorRemediation(reason string) string {

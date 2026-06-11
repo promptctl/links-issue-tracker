@@ -45,6 +45,14 @@ func (e NotFoundError) Error() string {
 	return fmt.Sprintf("%s %q not found", e.Entity, e.ID)
 }
 
+// ValidationError is returned when a domain constraint (field value, type, range) is violated.
+// [LAW:types-are-the-program] The type carries the classification so callers dispatch on type, not message text.
+type ValidationError struct {
+	Message string
+}
+
+func (e ValidationError) Error() string { return e.Message }
+
 type SyncState struct {
 	Path        string
 	ContentHash string
@@ -1952,14 +1960,14 @@ func validateIssueType(issueType string) (string, error) {
 		return "task", nil
 	}
 	if !model.IsValidIssueType(trimmed) {
-		return "", errors.New("issue type must be task, feature, bug, chore, or epic")
+		return "", ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}
 	}
 	return trimmed, nil
 }
 
 func validatePriority(priority int) error {
 	if priority != model.PriorityNormal && priority != model.PriorityUrgent {
-		return fmt.Errorf("priority must be %d (normal) or %d (urgent)", model.PriorityNormal, model.PriorityUrgent)
+		return ValidationError{Message: fmt.Sprintf("priority must be %d (normal) or %d (urgent)", model.PriorityNormal, model.PriorityUrgent)}
 	}
 	return nil
 }
