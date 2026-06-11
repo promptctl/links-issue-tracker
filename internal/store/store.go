@@ -222,15 +222,26 @@ type AddCommentInput struct {
 	CreatedBy string
 }
 
+// TransitionIssueInput covers all lifecycle transitions except start.
+// For start (which stamps the assignee column), use StartIssueInput and StartIssue.
+// [LAW:types-are-the-program] Assignee is absent from this type by design — the
+// constraint "assignee only travels with start" is structural, not a runtime check.
 type TransitionIssueInput struct {
 	IssueID   string
 	Action    model.ActionName
 	Reason    string
 	CreatedBy string
-	// Assignee is consumed only by the start action: claiming an issue
-	// stamps the assignee column with the agent identity. Other actions
-	// must not pass a value here — TransitionIssue rejects it.
-	Assignee string
+}
+
+// StartIssueInput is the input for the start (claim) transition. It is the only
+// transition that stamps the assignee column, and is separated from the generic
+// TransitionIssueInput to make that constraint unrepresentable to violate.
+// [LAW:types-are-the-program]
+type StartIssueInput struct {
+	IssueID   string
+	Assignee  string
+	Reason    string
+	CreatedBy string
 }
 
 func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
@@ -1026,22 +1037,28 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 		if reason == "" {
 			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), model.DefaultOpen(in.TargetStatus))
 		}
-		// [LAW:single-enforcer] TransitionIssue rejects assignee for non-start actions;
-		// the gate here mirrors that contract so cli.go can plumb TransitionAssignee
-		// unconditionally without surprising users who run e.g. `--status closed --assignee X`
-		// (the field-level assignee goes through Fields.Assignee below).
-		assignee := ""
+		// [LAW:types-are-the-program] StartIssue vs TransitionIssue is the single
+		// structural encoding of "assignee only travels with start" — routing
+		// to the typed method replaces the former runtime guard and ApplyUpdate's
+		// pre-strip. The field-level assignee goes through Fields.Assignee below.
+		var transErr error
 		if action == model.ActionStart {
-			assignee = in.TransitionAssignee
+			_, transErr = s.StartIssue(ctx, StartIssueInput{
+				IssueID:   id,
+				Assignee:  in.TransitionAssignee,
+				Reason:    reason,
+				CreatedBy: in.TransitionBy,
+			})
+		} else {
+			_, transErr = s.TransitionIssue(ctx, TransitionIssueInput{
+				IssueID:   id,
+				Action:    action,
+				Reason:    reason,
+				CreatedBy: in.TransitionBy,
+			})
 		}
-		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
-			IssueID:   id,
-			Action:    action,
-			Reason:    reason,
-			CreatedBy: in.TransitionBy,
-			Assignee:  assignee,
-		}); err != nil {
-			return model.Issue{}, err
+		if transErr != nil {
+			return model.Issue{}, transErr
 		}
 	}
 	return s.UpdateIssue(ctx, id, in.Fields)
@@ -1115,15 +1132,12 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	if actor == "" {
 		actor = "unknown"
 	}
-	newAssignee := strings.TrimSpace(in.Assignee)
-	if newAssignee != "" && in.Action != model.ActionStart {
-		return model.Issue{}, fmt.Errorf("assignee is only accepted on the start action, not %q", in.Action)
-	}
 	// [LAW:types-are-the-program] Action is already the sealed ActionName type;
 	// dispatch is a direct switch on typed constants — no string re-parsing needed.
+	// ActionStart is absent: start carries an assignee and routes through StartIssue.
 	switch in.Action {
-	case model.ActionStart, model.ActionDone, model.ActionClose, model.ActionReopen:
-		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, newAssignee)
+	case model.ActionDone, model.ActionClose, model.ActionReopen:
+		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "")
 	}
 	now := time.Now().UTC()
 	priorArchivedAt := issue.ArchivedAt
@@ -1186,6 +1200,21 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		return issue, nil
 	}
 	return reloaded, nil
+}
+
+// StartIssue transitions an issue to in_progress and stamps the assignee column.
+// It is the only lifecycle path that carries an assignee; all other transitions
+// route through TransitionIssue, which has no assignee field. [LAW:types-are-the-program]
+func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue, error) {
+	issue, err := s.GetIssue(ctx, in.IssueID)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	actor := strings.TrimSpace(in.CreatedBy)
+	if actor == "" {
+		actor = "unknown"
+	}
+	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee))
 }
 
 func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string) (model.Issue, error) {

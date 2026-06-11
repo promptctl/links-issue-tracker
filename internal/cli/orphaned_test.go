@@ -27,14 +27,13 @@ func runOrphanedJSON(t *testing.T, h readyTestHarness, args ...string) []annotat
 
 func startIssueForTest(t *testing.T, h readyTestHarness, id string) {
 	t.Helper()
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
 		IssueID:   id,
-		Action:    "start",
+		Assignee:  "agent",
 		Reason:    "claim",
 		CreatedBy: "agent",
-		Assignee:  "agent",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start, %s): %v", id, err)
+		t.Fatalf("StartIssue(%s): %v", id, err)
 	}
 }
 
@@ -117,15 +116,15 @@ func TestRunOrphanedAssigneeFilter(t *testing.T) {
 
 	mine := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Mine", Topic: "topic", IssueType: "task"})
 	theirs := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Theirs", Topic: "topic", IssueType: "task"})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
-		IssueID: mine.ID, Action: "start", CreatedBy: "alice", Assignee: "alice",
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
+		IssueID: mine.ID, Assignee: "alice", CreatedBy: "alice",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start mine) error = %v", err)
+		t.Fatalf("StartIssue(mine) error = %v", err)
 	}
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
-		IssueID: theirs.ID, Action: "start", CreatedBy: "bob", Assignee: "bob",
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
+		IssueID: theirs.ID, Assignee: "bob", CreatedBy: "bob",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start theirs) error = %v", err)
+		t.Fatalf("StartIssue(theirs) error = %v", err)
 	}
 	h.backdateUpdatedAt(mine.ID, 7*time.Hour)
 	h.backdateUpdatedAt(theirs.ID, 7*time.Hour)
