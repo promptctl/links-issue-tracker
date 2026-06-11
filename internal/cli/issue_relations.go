@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -38,10 +37,10 @@ func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	if len(positional) != 2 {
-		return errors.New("usage: lit label add <issue-id> <label> [--json]")
+		return UsageError{Message: "usage: lit label add <issue-id> <label> [--json]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit label add <issue-id> <label> [--json]")
+		return UsageError{Message: "usage: lit label add <issue-id> <label> [--json]"}
 	}
 	labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
 	if err != nil {
@@ -58,10 +57,10 @@ func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return err
 	}
 	if len(positional) != 2 {
-		return errors.New("usage: lit label rm <issue-id> <label> [--json]")
+		return UsageError{Message: "usage: lit label rm <issue-id> <label> [--json]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit label rm <issue-id> <label> [--json]")
+		return UsageError{Message: "usage: lit label rm <issue-id> <label> [--json]"}
 	}
 	labels, err := ap.Store.RemoveLabel(ctx, positional[0], positional[1])
 	if err != nil {
@@ -80,7 +79,7 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 		return err
 	}
 	if len(positional) != 2 {
-		return errors.New("usage: lit parent set <child-id> <parent-id> [--json]")
+		return UsageError{Message: "usage: lit parent set <child-id> <parent-id> [--json]"}
 	}
 	rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
 		ChildID:   positional[0],
@@ -105,7 +104,7 @@ func runParentClear(ctx context.Context, stdout io.Writer, ap *app.App, args []s
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit parent clear <child-id> [--json]")
+		return UsageError{Message: "usage: lit parent clear <child-id> [--json]"}
 	}
 	if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
 		return err
@@ -124,7 +123,7 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit children <parent-id> [--json]")
+		return UsageError{Message: "usage: lit children <parent-id> [--json]"}
 	}
 	children, err := ap.Store.ListChildren(ctx, positional[0])
 	if err != nil {

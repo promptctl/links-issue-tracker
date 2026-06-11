@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -32,7 +31,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit init [--json] [--skip-hooks] [--skip-agents]")
+		return UsageError{Message: "usage: lit init [--json] [--skip-hooks] [--skip-agents]"}
 	}
 
 	dbCreated, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)

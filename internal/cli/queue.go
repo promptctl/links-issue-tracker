@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -40,7 +39,7 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit queue [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]")
+		return UsageError{Message: "usage: lit queue [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),

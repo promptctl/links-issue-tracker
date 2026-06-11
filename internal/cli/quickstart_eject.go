@@ -138,9 +138,9 @@ func writeEjectReport(stdout io.Writer, results []ejectResult, force bool) error
 	}
 	if aborted {
 		if force {
-			return fmt.Errorf("eject aborted: unexpected conflicts reported with --force")
+			return MergeConflictError{Message: "eject aborted: unexpected conflicts reported with --force"}
 		}
-		return fmt.Errorf("conflict: %d template(s) already exist; re-run with --force to overwrite", conflicts)
+		return MergeConflictError{Message: fmt.Sprintf("conflict: %d template(s) already exist; re-run with --force to overwrite", conflicts)}
 	}
 	return nil
 }

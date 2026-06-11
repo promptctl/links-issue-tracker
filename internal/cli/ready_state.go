@@ -54,7 +54,7 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 	validFields := issueJSONFieldNames()
 	for _, field := range requiredFields {
 		if _, ok := validFields[field]; !ok {
-			return nil, fmt.Errorf("required field %q does not exist on issue", field)
+			return nil, ValidationError{Message: fmt.Sprintf("required field %q does not exist on issue", field)}
 		}
 	}
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {

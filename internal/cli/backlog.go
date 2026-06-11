@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -48,7 +47,7 @@ func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]")
+		return UsageError{Message: "usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),

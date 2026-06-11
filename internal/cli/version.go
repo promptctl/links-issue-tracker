@@ -24,7 +24,7 @@ func runVersion(stdout io.Writer, args []string) error {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return fmt.Errorf("usage: lit version [--json]")
+		return UsageError{Message: "usage: lit version [--json]"}
 	}
 
 	info, err := version.Get()

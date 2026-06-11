@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -21,7 +20,7 @@ type prefixSetResult struct {
 
 func runPrefix(stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 || args[0] != "set" {
-		return errors.New("usage: lit prefix set <new-prefix> [--apply] [--json]")
+		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply] [--json]"}
 	}
 	return runPrefixSet(stdout, ws, args[1:])
 }
@@ -35,7 +34,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 		return err
 	}
 	if len(positional) != 1 || fs.NArg() != 0 {
-		return errors.New("usage: lit prefix set <new-prefix> [--apply] [--json]")
+		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply] [--json]"}
 	}
 	requested := strings.TrimSpace(positional[0])
 	// [LAW:single-enforcer] workspace.ConfiguredPrefix is the one boundary that
