@@ -38,7 +38,7 @@ func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -69,7 +69,7 @@ func TestRunTransitionDoneApplyTransitionsAndPrintsPostGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -108,7 +108,7 @@ func TestRunTransitionDoneApplyWithoutTokenRefusesWithShortMessage(t *testing.T)
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -141,7 +141,7 @@ func TestRunTransitionDoneApplyEmptyValueIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -180,7 +180,7 @@ func TestRunTransitionDonePreGuidanceMissingTokenPlaceholderRefusesAtLoad(t *tes
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -207,7 +207,7 @@ func TestRunTransitionDoneApplyWithWrongTokenRefusesWithShortMessage(t *testing.
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -232,7 +232,7 @@ func TestRunTransitionDoneTokenInvalidatedByDriftBetweenPreviewAndApply(t *testi
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: issue.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 
@@ -298,8 +298,8 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				// the same owner) is a pure no-op rather than a claim transfer.
 				switch from {
 				case model.StateInProgress:
-					if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-						IssueID: issue.ID, Action: "start", CreatedBy: owner, Assignee: owner,
+					if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{
+						IssueID: issue.ID, Assignee: owner, CreatedBy: owner,
 					}); err != nil {
 						t.Fatalf("setup start error = %v", err)
 					}
@@ -519,7 +519,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closed child) error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: closedChild.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
 	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
@@ -747,33 +747,6 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 	if err.Error() != "--status requires a non-empty value" {
 		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--status requires a non-empty value")
-	}
-}
-
-func TestResolveTransitionAssignee(t *testing.T) {
-	tests := []struct {
-		name     string
-		action   model.ActionName
-		explicit string
-		env      string
-		want     string
-	}{
-		{name: "env overrides explicit on start", action: "start", explicit: "alice", env: "abc-123", want: "claude_abc-123"},
-		{name: "explicit passes through on non-start (gate)", action: "done", explicit: "alice", env: "abc-123", want: "alice"},
-		{name: "start fills from env when explicit empty", action: "start", explicit: "", env: "abc-123", want: "claude_abc-123"},
-		{name: "start empty when env unset and no explicit", action: "start", explicit: "", env: "", want: ""},
-		{name: "non-start never reads env even when explicit empty", action: "done", explicit: "", env: "abc-123", want: ""},
-		{name: "start trims whitespace from env", action: "start", explicit: "", env: "   ", want: ""},
-		{name: "start uses explicit when env unset", action: "start", explicit: "alice", env: "", want: "alice"},
-	}
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
-			got := resolveTransitionAssignee(tc.action, tc.explicit)
-			if got != tc.want {
-				t.Fatalf("resolveTransitionAssignee(%q, %q) = %q, want %q", tc.action, tc.explicit, got, tc.want)
-			}
-		})
 	}
 }
 

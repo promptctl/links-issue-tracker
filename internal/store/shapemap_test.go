@@ -309,7 +309,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add label: %v", err)
 		}
-		if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: solo.ID, Action: "start", Reason: "begin", CreatedBy: "claude", Assignee: "claude"}); err != nil {
+		if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: solo.ID, Assignee: "claude", Reason: "begin", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("start solo: %v", err)
 		}
 		for _, id := range []string{epic.ID, child.ID, solo.ID} {
