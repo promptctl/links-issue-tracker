@@ -112,4 +112,16 @@ func TestSubcommandJSONFlagPromotesWriterMode(t *testing.T) {
 	if json.Valid(textBuf.Bytes()) && strings.TrimSpace(textBuf.String()) != "" {
 		t.Fatalf("text output decoded as JSON; mode leaked: %s", textBuf.String())
 	}
+
+	// [LAW:no-silent-failure] The guard in parseFlagSet must surface a hard
+	// error when --json is parsed but the writer cannot carry JSON mode.
+	// A plain io.Writer with no outputModeWriter wrapper is the failing case.
+	var plain bytes.Buffer
+	err = runShow(ctx, &plain, ap, []string{created.ID, "--json"})
+	if err == nil {
+		t.Fatal("runShow(--json, plain writer) error = nil; want internal promotion error")
+	}
+	if !strings.Contains(err.Error(), "internal") {
+		t.Fatalf("runShow(--json, plain writer) error = %v; want message containing \"internal\"", err)
+	}
 }
