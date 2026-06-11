@@ -43,7 +43,7 @@ func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -62,7 +62,7 @@ func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	}
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, annotated, func(w io.Writer, v any) error {
 		return printBacklogOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})
 }

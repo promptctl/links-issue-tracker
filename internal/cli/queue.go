@@ -35,7 +35,7 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	pullable := filterPullable(annotated)
 	pullable = applyLimit(pullable, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, pullable, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, pullable, func(w io.Writer, v any) error {
 		return printQueueOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})
 }

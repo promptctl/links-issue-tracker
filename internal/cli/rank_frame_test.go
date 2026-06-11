@@ -63,7 +63,7 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 
 	// JSON mode stays a single JSON document describing what moved.
 	stdout.Reset()
-	if err := runRank(ctx, &stdout, ap, []string{child.ID, "--above", standalone.ID, "--json"}); err != nil {
+	if err := runRank(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{child.ID, "--above", standalone.ID, "--json"}); err != nil {
 		t.Fatalf("rank --json error = %v", err)
 	}
 	var doc map[string]any

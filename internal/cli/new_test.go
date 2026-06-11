@@ -28,7 +28,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--title", "Tighten repro",
 		"--topic", "renderer",
 		"--parent", parent.ID,
@@ -59,7 +59,7 @@ func TestRunNewRanksToTopByDefaultAndBottomOnFlag(t *testing.T) {
 		t.Helper()
 		var stdout bytes.Buffer
 		base := []string{"--title", title, "--topic", "place", "--type", "task", "--json"}
-		if err := runNew(ctx, &stdout, ap, append(base, args...)); err != nil {
+		if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, append(base, args...)); err != nil {
 			t.Fatalf("runNew(%q) error = %v", title, err)
 		}
 		var created model.Issue
@@ -119,7 +119,7 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--title", "Born unclaimed", "--topic", "lifecycle", "--json",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
@@ -140,7 +140,7 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, &stdout, ap, []string{
+	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
 		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--json",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)

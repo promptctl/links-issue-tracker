@@ -88,7 +88,7 @@ func TestBreadcrumbAbsentFromJSONOutput(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, &newOut, ap, []string{"--title", "JSON probe", "--topic", "crumbs", "--type", "task", "--json"}); err != nil {
+	if err := runNew(ctx, newOutputModeWriter(&newOut, outputModeText), ap, []string{"--title", "JSON probe", "--topic", "crumbs", "--type", "task", "--json"}); err != nil {
 		t.Fatalf("runNew(--json) error = %v", err)
 	}
 	var created model.Issue
@@ -101,9 +101,8 @@ func TestBreadcrumbAbsentFromJSONOutput(t *testing.T) {
 
 	// Global --json (outputModeWriter) must be just as breadcrumb-free as the
 	// command-local flag: both routes resolve inside printValue.
-	globalOut := outputModeWriter{Writer: &bytes.Buffer{}, mode: outputModeJSON}
 	var labelBuf bytes.Buffer
-	globalOut.Writer = &labelBuf
+	globalOut := newOutputModeWriter(&labelBuf, outputModeJSON)
 	if err := runAppFamily(labelFamily, ctx, globalOut, ap, []string{"add", created.ID, "probe"}); err != nil {
 		t.Fatalf("runLabel(add) under global JSON mode error = %v", err)
 	}
