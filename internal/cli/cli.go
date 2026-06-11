@@ -1051,8 +1051,8 @@ func resolveAssigneeIdentity(explicit string) string {
 // actions the explicit value passes through unchanged so callers can keep
 // using a single helper without leaking env-derived values into actions the
 // store will reject.
-func resolveTransitionAssignee(action, explicit string) string {
-	if action != "start" {
+func resolveTransitionAssignee(action model.ActionName, explicit string) string {
+	if action != model.ActionStart {
 		return strings.TrimSpace(explicit)
 	}
 	return resolveAssigneeIdentity(explicit)
@@ -1073,14 +1073,14 @@ func displayAssignee(assignee string) string {
 // guidance. Absence from the table is the encoding of "no natural follow-on
 // topic" (archive, delete, reopen, ...), not a skipped branch.
 // [LAW:dataflow-not-control-flow]
-var transitionBreadcrumbTopics = map[string]string{
-	"start": "ready",
-	"done":  "done",
-	"close": "done",
+var transitionBreadcrumbTopics = map[model.ActionName]string{
+	model.ActionStart: "ready",
+	model.ActionDone:  "done",
+	model.ActionClose: "done",
 }
 
-func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action string) error {
-	fs := newCobraFlagSet(action)
+func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action model.ActionName) error {
+	fs := newCobraFlagSet(string(action))
 	reason := fs.String("reason", "", "Transition reason")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
@@ -1137,7 +1137,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		// A template that omits `<token>` cannot satisfy that contract — apply
 		// would refuse with no way to discover the token. Refuse at load time
 		// and name the offending override so the user can fix it.
-		if err := requireTokenPlaceholder(preGuidance, action, ap.Workspace.RootDir); err != nil {
+		if err := requireTokenPlaceholder(preGuidance, string(action), ap.Workspace.RootDir); err != nil {
 			return err
 		}
 
@@ -1145,7 +1145,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		// (action + id + the issue's UpdatedAt fingerprint). Reading the issue
 		// before transitioning lets the apply phase recompute the same hash and
 		// reject any drift — including stale tokens from previous sessions.
-		expected := applyToken("transition", action, issueID, prior.UpdatedAt.UTC().Format(time.RFC3339Nano))
+		expected := applyToken("transition", string(action), issueID, prior.UpdatedAt.UTC().Format(time.RFC3339Nano))
 
 		if !applyRequested {
 			rendered := renderGuidance(preGuidance, issueID, expected)
@@ -1177,7 +1177,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		// issue over from an existing owner succeeds (intended target-state
 		// semantics) but must not do so silently. JSON mode carries the new
 		// assignee in the document itself, so the notice is human-output only.
-		if priorOwner := prior.AssigneeValue(); action == "start" && priorOwner != "" && priorOwner != resolvedAssignee {
+		if priorOwner := prior.AssigneeValue(); action == model.ActionStart && priorOwner != "" && priorOwner != resolvedAssignee {
 			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(resolvedAssignee)); err != nil {
 				return err
 			}
@@ -1528,20 +1528,18 @@ func toSlice(s string) []string {
 	return []string{s}
 }
 
-func transitionCommandName(action string) string {
-	switch action {
-	case "reopen":
+func transitionCommandName(action model.ActionName) string {
+	if action == model.ActionReopen {
 		return "open"
-	default:
-		return action
 	}
+	return string(action)
 }
 
 // loadTransitionGuidance loads a guidance template for the given action/phase.
 // Returns the template content, whether it exists, and any I/O error.
 // Absent templates are not an error — they simply deactivate the guidance flow.
-func loadTransitionGuidance(action, phase, workspaceRoot string) (string, bool, error) {
-	content, err := templates.LoadGuidance(action, phase, workspaceRoot)
+func loadTransitionGuidance(action model.ActionName, phase, workspaceRoot string) (string, bool, error) {
+	content, err := templates.LoadGuidance(string(action), phase, workspaceRoot)
 	if err != nil {
 		return "", false, err
 	}

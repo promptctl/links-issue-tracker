@@ -169,7 +169,7 @@ func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
 		children[i] = child
 	}
 
-	for _, action := range []string{"close", "done", "start", "reopen"} {
+	for _, action := range []model.ActionName{"close", "done", "start", "reopen"} {
 		_, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: action, CreatedBy: "tester"})
 		var containerErr model.ContainerActionError
 		if !errors.As(err, &containerErr) {

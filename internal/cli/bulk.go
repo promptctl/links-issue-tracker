@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -17,8 +18,8 @@ var bulkFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit bulk <label|close|archive|import> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
-		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition("close")}},
-		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition("archive")}},
+		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.ActionClose)}},
+		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.ActionArchive)}},
 		{name: "import", payload: appSubcommand{access: app.AccessWrite, run: runBulkImport}},
 	},
 }
@@ -92,7 +93,7 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 // runBulkTransition builds the handler for a bulk lifecycle action. The
 // action is fixed by the family row, so the body never re-reads argv to
 // learn which subcommand it is serving. [LAW:dataflow-not-control-flow]
-func runBulkTransition(action string) appRunFn {
+func runBulkTransition(action model.ActionName) appRunFn {
 	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		fs := newCobraFlagSet("bulk transition")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
