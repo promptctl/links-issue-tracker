@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -80,10 +79,10 @@ func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if len(positional) != 2 {
-		return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
+		return UsageError{Message: "usage: lit dep rm <from-id> <to-id> [--type ...]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit dep rm <from-id> <to-id> [--type ...]")
+		return UsageError{Message: "usage: lit dep rm <from-id> <to-id> [--type ...]"}
 	}
 	rt, err := model.ParseRelationType(*relType)
 	if err != nil {
@@ -108,10 +107,10 @@ func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		return err
 	}
 	if len(positional) != 1 {
-		return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]"}
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]")
+		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]"}
 	}
 	// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
 	// set; a present one is parsed at this trust boundary, so a bad value
@@ -156,16 +155,16 @@ func resolveDepAddEndpoints(positional []string, relType model.RelationType, blo
 			return "", "", fmt.Errorf("--blocker/--blocked only apply with --type blocks; got --type %s", relType)
 		}
 		if blocker == "" || blocked == "" {
-			return "", "", errors.New("--blocker and --blocked must both be provided")
+			return "", "", ValidationError{Message: "--blocker and --blocked must both be provided"}
 		}
 		if len(positional) > 0 || extraArgs > 0 {
-			return "", "", errors.New("provide either positional <from> <to> or --blocker/--blocked, not both")
+			return "", "", ValidationError{Message: "provide either positional <from> <to> or --blocker/--blocked, not both"}
 		}
 		// "from" in CLI convention = blocker; "to" = blocked.
 		return blocker, blocked, nil
 	}
 	if len(positional) != 2 || extraArgs != 0 {
-		return "", "", errors.New(usage)
+		return "", "", UsageError{Message: usage}
 	}
 	return positional[0], positional[1], nil
 }
@@ -196,7 +195,7 @@ func rejectSameEpicBlocks(ctx context.Context, ap *app.App, fromID, toID string)
 		return err
 	}
 	if fromEpic != "" && fromEpic == toEpic {
-		return errors.New(sameEpicBlocksRejectionMessage)
+		return ValidationError{Message: sameEpicBlocksRejectionMessage}
 	}
 	return nil
 }

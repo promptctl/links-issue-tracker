@@ -80,7 +80,7 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit lifeboat recover [--mapping <file>] [--json]")
+		return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>] [--json]"}
 	}
 	mapper, err := recoverMapper(*mappingPath)
 	if err != nil {
@@ -178,7 +178,7 @@ func runLifeboatDump(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit lifeboat dump")
+		return UsageError{Message: "usage: lit lifeboat dump"}
 	}
 	dump, err := store.DumpRaw(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {

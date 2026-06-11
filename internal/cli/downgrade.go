@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -69,7 +68,7 @@ func runDowngradeWith(
 		return err
 	}
 	if fs.NArg() != 0 {
-		return errors.New("usage: lit downgrade --to <version> [--json]")
+		return UsageError{Message: "usage: lit downgrade --to <version> [--json]"}
 	}
 	tag, err := normalizeDowngradeTag(*to)
 	if err != nil {
@@ -142,7 +141,7 @@ type downgradeResult struct {
 func normalizeDowngradeTag(in string) (string, error) {
 	t := strings.TrimSpace(in)
 	if t == "" {
-		return "", errors.New("downgrade: --to <version> is required")
+		return "", ValidationError{Message: "downgrade: --to <version> is required"}
 	}
 	if !strings.HasPrefix(t, "v") {
 		t = "v" + t
