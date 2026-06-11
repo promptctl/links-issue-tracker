@@ -1054,17 +1054,6 @@ func resolveAssigneeIdentity(explicit string) string {
 	return strings.TrimSpace(explicit)
 }
 
-// resolveTransitionAssignee wraps resolveAssigneeIdentity with the store's
-// "assignee only on start" invariant (store.go enforces it). For non-start
-// actions the explicit value passes through unchanged so callers can keep
-// using a single helper without leaking env-derived values into actions the
-// store will reject.
-func resolveTransitionAssignee(action model.ActionName, explicit string) string {
-	if action != model.ActionStart {
-		return strings.TrimSpace(explicit)
-	}
-	return resolveAssigneeIdentity(explicit)
-}
 
 // displayAssignee renders an assignee value for human output; the empty value
 // means "nobody owns this" and must read that way rather than vanish.
@@ -1093,7 +1082,8 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
 	// Only `start` consumes --assignee. Defining the flag for every action
-	// keeps the parser uniform; the store rejects use on non-start actions.
+	// keeps the parser uniform; non-start paths route to TransitionIssue, which
+	// has no Assignee field — the constraint is structural, not a runtime guard.
 	// The resolver overrides this with CLAUDE_CODE_SESSION_ID whenever set;
 	// the flag survives only as a fallback for environments without the env var.
 	assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
@@ -1168,14 +1158,28 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	resolvedAssignee := resolveTransitionAssignee(action, *assignee)
-	issue, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-		IssueID:   issueID,
-		Action:    action,
-		Reason:    *reason,
-		CreatedBy: *by,
-		Assignee:  resolvedAssignee,
-	})
+	// [LAW:types-are-the-program] Start is the only action that carries an assignee;
+	// routing to the typed StartIssue method encodes the constraint structurally.
+	var (
+		issue           model.Issue
+		resolvedAssignee string
+	)
+	if action == model.ActionStart {
+		resolvedAssignee = resolveAssigneeIdentity(*assignee)
+		issue, err = ap.Store.StartIssue(ctx, store.StartIssueInput{
+			IssueID:   issueID,
+			Assignee:  resolvedAssignee,
+			Reason:    *reason,
+			CreatedBy: *by,
+		})
+	} else {
+		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
+			IssueID:   issueID,
+			Action:    action,
+			Reason:    *reason,
+			CreatedBy: *by,
+		})
+	}
 	if err != nil {
 		return err
 	}
