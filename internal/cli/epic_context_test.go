@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -45,7 +46,7 @@ func (f epicFixture) addChild(title string) string {
 	return child.ID
 }
 
-func (f epicFixture) transition(id, action string) {
+func (f epicFixture) transition(id string, action model.ActionName) {
 	f.t.Helper()
 	if _, err := f.ap.Store.TransitionIssue(f.ctx, store.TransitionIssueInput{IssueID: id, Action: action, CreatedBy: "test"}); err != nil {
 		f.t.Fatalf("TransitionIssue(%s, %s) error = %v", id, action, err)
