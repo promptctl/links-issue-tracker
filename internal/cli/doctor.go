@@ -84,7 +84,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	fs := newCobraFlagSet("doctor")
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -109,7 +109,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	if err := printValue(stdout, report, *jsonOut, func(w io.Writer, v any) error {
+	if err := printValue(stdout, report, func(w io.Writer, v any) error {
 		// The identity header is part of the text rendering only; routing it
 		// through the text closure makes JSON mode structurally unable to emit it.
 		if err := printWorkspaceIdentity(w, ap.Workspace); err != nil {

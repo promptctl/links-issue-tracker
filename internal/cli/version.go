@@ -19,7 +19,7 @@ import (
 // no field is derived in this function that isn't already on the struct.
 func runVersion(stdout io.Writer, args []string) error {
 	fs := newCobraFlagSet("version")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -32,7 +32,7 @@ func runVersion(stdout io.Writer, args []string) error {
 		return err
 	}
 
-	return printValue(stdout, info, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, info, func(w io.Writer, v any) error {
 		i := v.(version.Info)
 		ver := i.Version
 		if i.IsDev {

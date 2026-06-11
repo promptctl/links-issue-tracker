@@ -30,7 +30,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -64,7 +64,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	cliRel := depRelationForCLI(rel)
-	return printValue(stdout, cliRel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
+	return printValue(stdout, cliRel, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
 		r := v.(model.Relation)
 		_, err := fmt.Fprintln(w, depRelationLine(r))
 		return err
@@ -75,7 +75,7 @@ func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("dep rm")
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -93,7 +93,7 @@ func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
 		return err
 	}
-	return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
+	return printValue(stdout, map[string]string{"status": "ok"}, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
 		_, err := fmt.Fprintln(w, "ok")
 		return err
 	}))
@@ -103,7 +103,7 @@ func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("dep ls")
 	relType := fs.String("type", "", "Filter relation type")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -132,7 +132,7 @@ func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	for _, rel := range relations {
 		cliRelations = append(cliRelations, depRelationForCLI(rel))
 	}
-	return printValue(stdout, cliRelations, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, cliRelations, func(w io.Writer, v any) error {
 		list := v.([]model.Relation)
 		for _, rel := range list {
 			if _, err := fmt.Fprintln(w, depRelationLine(rel)); err != nil {

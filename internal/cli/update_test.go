@@ -319,7 +319,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				if verb.action == "start" {
 					args = append(args, "--assignee", owner)
 				}
-				if err := runTransition(ctx, &bytes.Buffer{}, ap, args, verb.action); err != nil {
+				if err := runTransition(ctx, newOutputModeWriter(&bytes.Buffer{}, outputModeText), ap, args, verb.action); err != nil {
 					t.Fatalf("runTransition(%s from %s) error = %v, want success on every leaf cell", verb.action, from, err)
 				}
 
@@ -369,7 +369,7 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 
 	for _, action := range []string{"start", "done", "close", "reopen"} {
 		t.Run(action, func(t *testing.T) {
-			err := runTransition(ctx, &bytes.Buffer{}, ap, []string{epic.ID, "--json"}, action)
+			err := runTransition(ctx, newOutputModeWriter(&bytes.Buffer{}, outputModeText), ap, []string{epic.ID, "--json"}, action)
 			if err == nil {
 				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
 			}
@@ -436,7 +436,7 @@ func TestRunTransitionStartClaimTransferJSONStaysMachineClean(t *testing.T) {
 		t.Fatalf("runTransition(first start) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob", "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "agent-bob", "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(reclaim --json) error = %v", err)
 	}
 	var reclaimed model.Issue
@@ -476,7 +476,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	var started model.Issue
@@ -526,7 +526,7 @@ func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
 		t.Fatalf("TransitionIssue(done) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runShow(ctx, &stdout, ap, []string{epic.ID, "--json"}); err != nil {
+	if err := runShow(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{epic.ID, "--json"}); err != nil {
 		t.Fatalf("runShow(epic --json) error = %v", err)
 	}
 	var payload struct {
@@ -558,7 +558,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress --json) error = %v", err)
 	}
 
@@ -602,7 +602,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent", "--json"}); err != nil {
 		t.Fatalf("runUpdate(field flags --json) error = %v", err)
 	}
 
@@ -626,7 +626,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, &newOut, ap, []string{
+	if err := runNew(ctx, newOutputModeWriter(&newOut, outputModeText), ap, []string{
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
@@ -645,7 +645,7 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	}
 
 	var upOut bytes.Buffer
-	if err := runUpdate(ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead.", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&upOut, outputModeText), ap, []string{created.ID, "--prompt", "Run --headless instead.", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--prompt) error = %v", err)
 	}
 	var updated model.Issue
@@ -674,7 +674,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	// --reason alone (no field flags and no --status) must still be rejected
 	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here", "--json"})
+	err = runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--reason", "no fields here", "--json"})
 	if err == nil {
 		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
 	}
@@ -696,7 +696,7 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body", "--json"}); err != nil {
 		t.Fatalf("runUpdate(epic --title --description) error = %v", err)
 	}
 
@@ -741,7 +741,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--status=", "--json"})
+	err = runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--status=", "--json"})
 	if err == nil {
 		t.Fatal("runUpdate(--status= --json) error = nil, want validation error")
 	}
@@ -813,7 +813,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start without --assignee) error = %v", err)
 	}
 	var started model.Issue
@@ -839,7 +839,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--json"}, "start"); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	var started model.Issue
@@ -862,7 +862,7 @@ func TestRunUpdateStatusInProgressUsesSessionEnvAssignee(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--status", "in_progress", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
 	}
 	var updated model.Issue
@@ -890,7 +890,7 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--assignee \"\") error = %v", err)
 	}
 	var updated model.Issue
@@ -916,7 +916,7 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "claude_other-session", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--assignee other) error = %v", err)
 	}
 	var updated model.Issue
@@ -940,7 +940,7 @@ func TestRunUpdateClearAssigneeWithStartStaysCleared(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--assignee", "", "--json"}); err != nil {
+	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--status", "in_progress", "--assignee", "", "--json"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress --assignee \"\") error = %v", err)
 	}
 	var updated model.Issue

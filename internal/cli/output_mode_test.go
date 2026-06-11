@@ -3,9 +3,12 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 func TestParseGlobalOutputMode(t *testing.T) {
@@ -78,5 +81,47 @@ func TestRunQuickstartRejectsCommandLocalJSONFlag(t *testing.T) {
 	}
 	if got := ExitCode(err); got != ExitUsage {
 		t.Fatalf("ExitCode(quickstart --json) = %d, want %d", got, ExitUsage)
+	}
+}
+
+// TestSubcommandJSONFlagPromotesWriterMode pins the absorbed variance:
+// the subcommand --json flag promotes output mode through the writer, not a
+// parallel bool. [LAW:one-source-of-truth] [LAW:single-enforcer]
+func TestSubcommandJSONFlagPromotesWriterMode(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "probe", Topic: "mode", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	var jsonBuf bytes.Buffer
+	if err := runShow(ctx, newOutputModeWriter(&jsonBuf, outputModeText), ap, []string{created.ID, "--json"}); err != nil {
+		t.Fatalf("runShow --json error = %v", err)
+	}
+	if !json.Valid(jsonBuf.Bytes()) {
+		t.Fatalf("--json output is not valid JSON: %s", jsonBuf.String())
+	}
+
+	var textBuf bytes.Buffer
+	if err := runShow(ctx, &textBuf, ap, []string{created.ID}); err != nil {
+		t.Fatalf("runShow (text) error = %v", err)
+	}
+	if json.Valid(textBuf.Bytes()) && strings.TrimSpace(textBuf.String()) != "" {
+		t.Fatalf("text output decoded as JSON; mode leaked: %s", textBuf.String())
+	}
+
+	// [LAW:no-silent-failure] The guard in parseFlagSet must surface a hard
+	// error when --json is parsed but the writer cannot carry JSON mode.
+	// A plain io.Writer with no outputModeWriter wrapper is the failing case.
+	var plain bytes.Buffer
+	err = runShow(ctx, &plain, ap, []string{created.ID, "--json"})
+	if err == nil {
+		t.Fatal("runShow(--json, plain writer) error = nil; want internal promotion error")
+	}
+	if !strings.Contains(err.Error(), "internal") {
+		t.Fatalf("runShow(--json, plain writer) error = %v; want message containing \"internal\"", err)
 	}
 }

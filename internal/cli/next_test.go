@@ -14,7 +14,7 @@ func (h readyTestHarness) runNextJSON(args ...string) annotation.AnnotatedIssue 
 	h.t.Helper()
 	var stdout bytes.Buffer
 	allArgs := append(append([]string{}, args...), "--json")
-	if err := runNext(h.ctx, &stdout, h.ap, allArgs); err != nil {
+	if err := runNext(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, allArgs); err != nil {
 		h.t.Fatalf("runNext(%v) error = %v", allArgs, err)
 	}
 	var got annotation.AnnotatedIssue

@@ -58,7 +58,7 @@ func (h backlogTestHarness) runBacklogJSON(args ...string) []annotation.Annotate
 	h.t.Helper()
 	var stdout bytes.Buffer
 	all := append(append([]string{}, args...), "--json")
-	if err := runBacklog(h.ctx, &stdout, h.ap, all); err != nil {
+	if err := runBacklog(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, all); err != nil {
 		h.t.Fatalf("runBacklog(%v) error = %v", all, err)
 	}
 	var got []annotation.AnnotatedIssue

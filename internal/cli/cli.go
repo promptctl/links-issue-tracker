@@ -32,19 +32,40 @@ const (
 	outputModeJSON outputMode = "json"
 )
 
+// outputModeWriter is the single carrier of the CLI's output mode.
+// [LAW:one-source-of-truth] The mode is a shared cell rather than a value so
+// the per-subcommand --json flag can be absorbed into the writer at the parse
+// boundary; every consumer downstream reads the writer, never a parallel bool.
+// Owner: Run creates the cell; parseFlagSet is the only writer of its state.
 type outputModeWriter struct {
 	io.Writer
-	mode outputMode
+	mode *outputMode
+}
+
+func newOutputModeWriter(w io.Writer, mode outputMode) outputModeWriter {
+	return outputModeWriter{Writer: w, mode: &mode}
 }
 
 var errHelpHandled = errors.New("help handled")
 
 func (w outputModeWriter) linksOutputMode() outputMode {
-	return w.mode
+	return *w.mode
+}
+
+func (w outputModeWriter) promoteToJSON() {
+	*w.mode = outputModeJSON
 }
 
 type outputModeProvider interface {
 	linksOutputMode() outputMode
+}
+
+// jsonPromoter is implemented by writers whose output mode can be promoted to
+// JSON when a subcommand-position --json flag parses true. Promotion only —
+// never demotion — so an explicit global --json always wins, matching the
+// historical `flag || writerMode` semantics.
+type jsonPromoter interface {
+	promoteToJSON()
 }
 
 const (
@@ -57,7 +78,7 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	if err != nil {
 		return err
 	}
-	stdout = outputModeWriter{Writer: stdout, mode: resolvedOutputMode}
+	stdout = newOutputModeWriter(stdout, resolvedOutputMode)
 	root := newRootCommand(ctx, stdout, stderr)
 	root.SetArgs(normalizedArgs)
 	root.SetOut(stdout)
@@ -217,6 +238,13 @@ func (fs *cobraFlagSet) Bool(name string, value bool, usage string) *bool {
 	return fs.cmd.Flags().Bool(name, value, usage)
 }
 
+// JSONFlag declares the per-subcommand --json flag. Its parsed value is not
+// returned: parseFlagSet absorbs it into the output writer's mode, and
+// consumers read the mode from the writer. [LAW:one-source-of-truth]
+func (fs *cobraFlagSet) JSONFlag() {
+	fs.cmd.Flags().Bool("json", false, "Output JSON")
+}
+
 func (fs *cobraFlagSet) Int(name string, value int, usage string) *int {
 	return fs.cmd.Flags().Int(name, value, usage)
 }
@@ -261,12 +289,12 @@ func (fs *cobraFlagSet) printHelp(helpOutput io.Writer) error {
 	return nil
 }
 
-func parseFlagSet(fs *cobraFlagSet, args []string, helpOutput io.Writer) error {
+func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 	fs.SetOutput(io.Discard)
 	if err := fs.Parse(args); err != nil {
 		if errors.Is(err, pflag.ErrHelp) {
 			// [LAW:single-enforcer] Flag help rendering is normalized in one Cobra parser path.
-			if helpErr := fs.printHelp(helpOutput); helpErr != nil {
+			if helpErr := fs.printHelp(stdout); helpErr != nil {
 				return helpErr
 			}
 			return errHelpHandled
@@ -275,10 +303,22 @@ func parseFlagSet(fs *cobraFlagSet, args []string, helpOutput io.Writer) error {
 	}
 	if helpFlag := fs.cmd.Flags().Lookup("help"); helpFlag != nil && helpFlag.Changed {
 		// [LAW:single-enforcer] Parsed help flags follow the same Cobra help rendering path as explicit help errors.
-		if helpErr := fs.printHelp(helpOutput); helpErr != nil {
+		if helpErr := fs.printHelp(stdout); helpErr != nil {
 			return helpErr
 		}
 		return errHelpHandled
+	}
+	// [LAW:single-enforcer] The parse boundary is the one place the
+	// subcommand-position --json flag becomes writer state; no handler may
+	// thread the flag value past this point.
+	if jsonFlag, err := fs.cmd.Flags().GetBool("json"); err == nil && jsonFlag {
+		promoter, ok := stdout.(jsonPromoter)
+		if !ok {
+			// [LAW:no-silent-failure] Dropping an explicit --json and printing
+			// text would misrepresent the output contract; refuse instead.
+			return errors.New("internal: --json parsed but output writer cannot carry JSON mode")
+		}
+		promoter.promoteToJSON()
 	}
 	return nil
 }
@@ -310,7 +350,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	bottom := fs.Bool("bottom", false, "Rank the new issue at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -322,7 +362,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("new", printIssueSummary))
+	return printValue(stdout, issue, withQuickstartBreadcrumb("new", printIssueSummary))
 }
 
 // runFollowup creates a child issue parented to --on, intended for the
@@ -344,7 +384,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	bottom := fs.Bool("bottom", false, "Rank the follow-up at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -381,7 +421,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("new", printIssueSummary))
+	return printValue(stdout, issue, withQuickstartBreadcrumb("new", printIssueSummary))
 }
 
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -402,7 +442,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -476,7 +516,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	}
 	columns := parseColumns(*columnsExpr)
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
-	return printValue(stdout, issues, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, issues, func(w io.Writer, v any) error {
 		list := v.([]model.Issue)
 		switch formatMode {
 		case "", "lines":
@@ -497,7 +537,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -521,7 +561,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	sortByBlockingAnnotations(annotated)
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, annotated, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, annotated, func(w io.Writer, v any) error {
 		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
 	})
 }
@@ -631,7 +671,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	fs := newCobraFlagSet("next")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	continueFlag := fs.Bool("continue", false, "Bias toward leaves under in-progress epics")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -652,7 +692,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if !ok {
 		return errors.New("no ready work")
 	}
-	return printValue(stdout, next, *jsonOut, printNextSummary)
+	return printValue(stdout, next, printNextSummary)
 }
 
 // runOrphaned lists in_progress issues whose last update is older than
@@ -667,7 +707,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -705,7 +745,7 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	sort.SliceStable(orphaned, func(i, j int) bool {
 		return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
 	})
-	return printValue(stdout, orphaned, *jsonOut, printOrphanedText)
+	return printValue(stdout, orphaned, printOrphanedText)
 }
 
 func printOrphanedText(w io.Writer, v any) error {
@@ -729,7 +769,7 @@ func printOrphanedText(w io.Writer, v any) error {
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("show")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -743,7 +783,7 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, detail, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, detail, func(w io.Writer, v any) error {
 		d := v.(model.IssueDetail)
 		if err := printIssueDetail(w, d); err != nil {
 			return err
@@ -767,7 +807,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	reason := fs.String("reason", "", "Status transition reason")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -855,7 +895,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("update", printIssueSummary))
+	return printValue(stdout, issue, withQuickstartBreadcrumb("update", printIssueSummary))
 }
 
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -872,7 +912,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -918,12 +958,15 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
-	if !*jsonOut && move.MovedID != issueID {
+	// Substitution notices are text-mode only; in JSON mode the move record in
+	// the payload carries the same fact, and a leading text line would break
+	// the single-document --json contract.
+	if outputModeFromWriter(stdout) != outputModeJSON && move.MovedID != issueID {
 		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
 			return err
 		}
 	}
-	if !*jsonOut && namedAnchor != "" && move.AnchorID != namedAnchor {
+	if outputModeFromWriter(stdout) != outputModeJSON && namedAnchor != "" && move.AnchorID != namedAnchor {
 		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
 			return err
 		}
@@ -932,7 +975,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, withQuickstartBreadcrumb("update", printIssueSummary))
+	return printValue(stdout, issue, withQuickstartBreadcrumb("update", printIssueSummary))
 }
 
 // runRankSet establishes absolute order across N issues by stacking them at
@@ -943,7 +986,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, len(args))
 	fs := newCobraFlagSet("rank set")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -958,7 +1001,7 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	for i, r := range resolutions {
 		ranked[i] = r.RankedID
 	}
-	if !*jsonOut {
+	if outputModeFromWriter(stdout) != outputModeJSON {
 		for _, r := range resolutions {
 			if r.RankedID != r.NamedID {
 				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
@@ -967,7 +1010,7 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 			}
 		}
 	}
-	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
+	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
 		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", "))
 		return err
 	}))
@@ -1051,7 +1094,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
 	// apply requires a value matching the plan's hash, no other state needed.
 	applyVal := fs.StringOptional("apply", applyNoTokenSentinel, "", "Apply the transition with the token printed by the preview phase (use `--apply=<token>`)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1062,7 +1105,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 
 	issueID := remaining[0]
-	isJSON := *jsonOut || outputModeFromWriter(stdout) == outputModeJSON
+	isJSON := outputModeFromWriter(stdout) == outputModeJSON
 	// [LAW:types-are-the-program] Apply intent is "did the caller pass --apply
 	// in any form" — both `--apply` (no value) and `--apply=` (explicit empty)
 	// are apply attempts whose tokens cannot match the expected hash.
@@ -1155,7 +1198,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if topic, ok := transitionBreadcrumbTopics[action]; ok {
 		textFn = withQuickstartBreadcrumb(topic, printIssueSummary)
 	}
-	return printValue(stdout, issue, *jsonOut, textFn)
+	return printValue(stdout, issue, textFn)
 }
 
 // runAssign rewrites the assignee column on an issue without changing status.
@@ -1168,7 +1211,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	reason := fs.String("reason", "", "Reassignment reason (optional)")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1188,7 +1231,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, *jsonOut, printIssueSummary)
+	return printValue(stdout, issue, printIssueSummary)
 }
 
 var commentFamily = commandFamily[appSubcommand]{
@@ -1205,7 +1248,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	body := fs.String("body", "", "Comment body")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1219,13 +1262,13 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, comment, *jsonOut, printComment)
+	return printValue(stdout, comment, printComment)
 }
 
 func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("comment rm")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1239,7 +1282,7 @@ func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, comment, *jsonOut, printComment)
+	return printValue(stdout, comment, printComment)
 }
 
 func printComment(w io.Writer, v any) error {
@@ -1278,7 +1321,7 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("import")
 	path := fs.String("path", "", "Path to JSON tree spec file")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1300,7 +1343,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, result, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, result, func(w io.Writer, v any) error {
 		r := v.(store.ImportTreeResult)
 		if _, err := fmt.Fprintf(w, "imported %d issues\n", len(r.IDMap)); err != nil {
 			return err
@@ -1316,7 +1359,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("workspace")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1329,7 +1372,7 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 		"dolt_repo_path": ws.DoltRepoPath,
 		"traces_dir":     automationTraceDir(ws),
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]string)
 		for _, key := range []string{"workspace_id", "issue_prefix", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
 			if _, err := fmt.Fprintf(w, "%s: %s\n", key, p[key]); err != nil {
@@ -1458,8 +1501,10 @@ func outputModeFromWriter(w io.Writer) outputMode {
 // [LAW:single-enforcer] Commands with both JSON and text modes go through this function
 // to guarantee that both paths receive the same data. JSON-only commands (e.g., export)
 // may call writeJSON directly since there is no text path to diverge from.
-func printValue(w io.Writer, v any, jsonOut bool, textFn func(io.Writer, any) error) error {
-	if jsonOut || outputModeFromWriter(w) == outputModeJSON {
+// [LAW:one-source-of-truth] The writer carries the output mode; there is no
+// parallel flag value to consult.
+func printValue(w io.Writer, v any, textFn func(io.Writer, any) error) error {
+	if outputModeFromWriter(w) == outputModeJSON {
 		return writeJSON(w, v)
 	}
 	return textFn(w, v)
