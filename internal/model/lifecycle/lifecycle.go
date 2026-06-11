@@ -66,6 +66,13 @@ const (
 	ActionDone   ActionName = "done"
 	ActionClose  ActionName = "close"
 	ActionReopen ActionName = "reopen"
+
+	// [LAW:types-are-the-program] Lifecycle actions complete the sealed set so
+	// every legal TransitionIssue action is a named constant, not a raw string.
+	ActionArchive   ActionName = "archive"
+	ActionUnarchive ActionName = "unarchive"
+	ActionDelete    ActionName = "delete"
+	ActionRestore   ActionName = "restore"
 )
 
 type Lifecycle interface {
@@ -126,10 +133,15 @@ func DefaultOpen(value string) State {
 	return state
 }
 
+// ParseAction maps an untrusted action string into the sealed set of all
+// eight transition actions.
+// [LAW:single-enforcer] The only string-to-ActionName gate; all trust
+// boundaries call this instead of carrying their own string comparisons.
 func ParseAction(value string) (ActionName, error) {
 	normalized := strings.TrimSpace(strings.ToLower(value))
 	switch ActionName(normalized) {
-	case ActionStart, ActionDone, ActionClose, ActionReopen:
+	case ActionStart, ActionDone, ActionClose, ActionReopen,
+		ActionArchive, ActionUnarchive, ActionDelete, ActionRestore:
 		return ActionName(normalized), nil
 	default:
 		return "", fmt.Errorf("unsupported lifecycle action %q", value)

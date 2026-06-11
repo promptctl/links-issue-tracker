@@ -274,7 +274,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 	const owner = "matrix-owner"
 	fromStates := []model.State{model.StateOpen, model.StateInProgress, model.StateClosed}
 	verbs := []struct {
-		action string
+		action model.ActionName
 		target model.State
 	}{
 		{action: "start", target: model.StateInProgress},
@@ -285,10 +285,10 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 
 	for _, verb := range verbs {
 		for _, from := range fromStates {
-			t.Run(verb.action+"_from_"+string(from), func(t *testing.T) {
+			t.Run(string(verb.action)+"_from_"+string(from), func(t *testing.T) {
 				ap := newTestCLIApp(t)
 				issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-					Prefix: "test", Title: "matrix " + verb.action, Topic: "lifecycle", IssueType: "task", Priority: 0,
+					Prefix: "test", Title: "matrix " + string(verb.action), Topic: "lifecycle", IssueType: "task", Priority: 0,
 				})
 				if err != nil {
 					t.Fatalf("CreateIssue() error = %v", err)
@@ -340,7 +340,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				if len(added) != 1 {
 					t.Fatalf("cell %s from %s recorded %d events, want exactly 1: %#v", verb.action, from, len(added), added)
 				}
-				if added[0].Action != verb.action {
+				if added[0].Action != string(verb.action) {
 					t.Fatalf("cell %s from %s recorded action %q, want %q (done-vs-close distinction lives in event history)", verb.action, from, added[0].Action, verb.action)
 				}
 			})
@@ -367,8 +367,8 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
 
-	for _, action := range []string{"start", "done", "close", "reopen"} {
-		t.Run(action, func(t *testing.T) {
+	for _, action := range []model.ActionName{"start", "done", "close", "reopen"} {
+		t.Run(string(action), func(t *testing.T) {
 			err := runTransition(ctx, newOutputModeWriter(&bytes.Buffer{}, outputModeText), ap, []string{epic.ID, "--json"}, action)
 			if err == nil {
 				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
@@ -753,7 +753,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 func TestResolveTransitionAssignee(t *testing.T) {
 	tests := []struct {
 		name     string
-		action   string
+		action   model.ActionName
 		explicit string
 		env      string
 		want     string
