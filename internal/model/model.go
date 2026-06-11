@@ -24,6 +24,11 @@ const (
 	ActionDone   = lifecycle.ActionDone
 	ActionClose  = lifecycle.ActionClose
 	ActionReopen = lifecycle.ActionReopen
+
+	ActionArchive   = lifecycle.ActionArchive
+	ActionUnarchive = lifecycle.ActionUnarchive
+	ActionDelete    = lifecycle.ActionDelete
+	ActionRestore   = lifecycle.ActionRestore
 )
 
 var (

@@ -127,7 +127,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 func (s *Store) rollbackImportTreePartial(ctx context.Context, idMap map[string]string) []string {
 	leaked := []string{}
 	for _, realID := range idMap {
-		if _, err := s.TransitionIssue(ctx, TransitionIssueInput{IssueID: realID, Action: "delete", CreatedBy: "links", Reason: "import rollback"}); err != nil {
+		if _, err := s.TransitionIssue(ctx, TransitionIssueInput{IssueID: realID, Action: model.ActionDelete, CreatedBy: "links", Reason: "import rollback"}); err != nil {
 			leaked = append(leaked, realID)
 		}
 	}

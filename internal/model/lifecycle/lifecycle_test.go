@@ -279,11 +279,27 @@ func TestParseActionValid(t *testing.T) {
 	}
 }
 
-func TestParseActionRejectsNonLifecycle(t *testing.T) {
-	for _, input := range []string{"archive", "delete", "restore", "bogus"} {
+func TestParseActionRoundTrips(t *testing.T) {
+	all := []ActionName{
+		ActionStart, ActionDone, ActionClose, ActionReopen,
+		ActionArchive, ActionUnarchive, ActionDelete, ActionRestore,
+	}
+	for _, a := range all {
+		got, err := ParseAction(string(a))
+		if err != nil {
+			t.Fatalf("ParseAction(%q) unexpected error = %v", a, err)
+		}
+		if got != a {
+			t.Fatalf("ParseAction(%q) = %q, want %q", a, got, a)
+		}
+	}
+}
+
+func TestParseActionRejectsUnknown(t *testing.T) {
+	for _, input := range []string{"bogus", "", "transition", "lifecycle"} {
 		_, err := ParseAction(input)
 		if err == nil {
-			t.Fatalf("expected error for non-lifecycle action %q", input)
+			t.Fatalf("ParseAction(%q) = nil error, want rejection", input)
 		}
 	}
 }

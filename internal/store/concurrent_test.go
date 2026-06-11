@@ -8,6 +8,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -171,18 +172,18 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	}
 
 	// Plan: transition pre-created issues. start -> in_progress, close -> closed.
-	transitionStatus := map[string]string{
-		"start": "in_progress",
-		"close": "closed",
+	transitionStatus := map[model.ActionName]string{
+		model.ActionStart: "in_progress",
+		model.ActionClose: "closed",
 	}
 	for i, id := range issues[:3] {
-		action := "start"
+		action := model.ActionStart
 		if i%2 == 0 {
-			action = "close"
+			action = model.ActionClose
 		}
 		transitionPlan[id] = transitionStatus[action]
 		assignee := ""
-		if action == "start" {
+		if action == model.ActionStart {
 			assignee = "concurrent-tester"
 		}
 		eg.Go(func() error {

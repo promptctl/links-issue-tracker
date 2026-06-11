@@ -216,10 +216,10 @@ type AddCommentInput struct {
 
 type TransitionIssueInput struct {
 	IssueID   string
-	Action    string
+	Action    model.ActionName
 	Reason    string
 	CreatedBy string
-	// Assignee is consumed only by the "start" action: claiming an issue
+	// Assignee is consumed only by the start action: claiming an issue
 	// stamps the assignee column with the agent identity. Other actions
 	// must not pass a value here — TransitionIssue rejects it.
 	Assignee string
@@ -1028,7 +1028,7 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 		}
 		if _, err = s.TransitionIssue(ctx, TransitionIssueInput{
 			IssueID:   id,
-			Action:    string(action),
+			Action:    action,
 			Reason:    reason,
 			CreatedBy: in.TransitionBy,
 			Assignee:  assignee,
@@ -1102,24 +1102,26 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	if err != nil {
 		return model.Issue{}, err
 	}
-	action := strings.TrimSpace(in.Action)
 	reason := strings.TrimSpace(in.Reason)
 	actor := strings.TrimSpace(in.CreatedBy)
 	if actor == "" {
 		actor = "unknown"
 	}
 	newAssignee := strings.TrimSpace(in.Assignee)
-	if newAssignee != "" && action != "start" {
-		return model.Issue{}, fmt.Errorf("assignee is only accepted on the start action, not %q", action)
+	if newAssignee != "" && in.Action != model.ActionStart {
+		return model.Issue{}, fmt.Errorf("assignee is only accepted on the start action, not %q", in.Action)
 	}
-	if parsed, err := model.ParseAction(action); err == nil {
-		return s.writeStatusTransition(ctx, issue, actor, reason, parsed, newAssignee)
+	// [LAW:types-are-the-program] Action is already the sealed ActionName type;
+	// dispatch is a direct switch on typed constants — no string re-parsing needed.
+	switch in.Action {
+	case model.ActionStart, model.ActionDone, model.ActionClose, model.ActionReopen:
+		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, newAssignee)
 	}
 	now := time.Now().UTC()
 	priorArchivedAt := issue.ArchivedAt
 	priorDeletedAt := issue.DeletedAt
-	switch action {
-	case "archive":
+	switch in.Action {
+	case model.ActionArchive:
 		if issue.DeletedAt != nil {
 			return model.Issue{}, errors.New("cannot archive deleted issue")
 		}
@@ -1127,7 +1129,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 			return model.Issue{}, errors.New("issue is already archived")
 		}
 		issue.ArchivedAt = &now
-	case "unarchive":
+	case model.ActionUnarchive:
 		if issue.DeletedAt != nil {
 			return model.Issue{}, errors.New("cannot unarchive deleted issue")
 		}
@@ -1135,18 +1137,18 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 			return model.Issue{}, errors.New("issue is not archived")
 		}
 		issue.ArchivedAt = nil
-	case "delete":
+	case model.ActionDelete:
 		if issue.DeletedAt != nil {
 			return model.Issue{}, errors.New("issue is already deleted")
 		}
 		issue.DeletedAt = &now
-	case "restore":
+	case model.ActionRestore:
 		if issue.DeletedAt == nil {
 			return model.Issue{}, errors.New("issue is not deleted")
 		}
 		issue.DeletedAt = nil
 	default:
-		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", action)
+		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", in.Action)
 	}
 	issue.UpdatedAt = now
 	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
@@ -1164,7 +1166,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		if !timesEqual(priorDeletedAt, issue.DeletedAt) {
 			changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(issue.DeletedAt)})
 		}
-		return s.recordEvent(ctx, tx, issue.ID, action, reason, actor, changes)
+		return s.recordEvent(ctx, tx, issue.ID, string(in.Action), reason, actor, changes)
 	}); err != nil {
 		return model.Issue{}, err
 	}
