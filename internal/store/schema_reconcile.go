@@ -1011,6 +1011,7 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	if err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: begin tx: %w", err)
 	}
+	defer func() { _ = tx.Rollback() }()
 	// [LAW:no-silent-fallbacks] Seed `current` from the max existing
 	// non-empty rank (or rank.Initial() if there are no ranked rows
 	// yet), so the assigned sequence cannot collide with any rank
@@ -1021,7 +1022,6 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	if err := tx.QueryRowContext(ctx,
 		`SELECT MAX(item_rank) FROM issues WHERE item_rank != ''`,
 	).Scan(&maxExistingRank); err != nil {
-		_ = tx.Rollback()
 		return false, fmt.Errorf("ensureIssueRanks: read max existing rank: %w", err)
 	}
 	current := rank.Initial()
@@ -1037,13 +1037,11 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	// rollback path reverts every prepared exec.
 	stmt, err := tx.PrepareContext(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?")
 	if err != nil {
-		_ = tx.Rollback()
 		return false, fmt.Errorf("ensureIssueRanks: prepare: %w", err)
 	}
 	defer stmt.Close()
 	for _, id := range ids {
 		if _, err := stmt.ExecContext(ctx, current, id); err != nil {
-			_ = tx.Rollback()
 			return false, fmt.Errorf("ensureIssueRanks: update %s: %w", id, err)
 		}
 		current = rank.After(current)
