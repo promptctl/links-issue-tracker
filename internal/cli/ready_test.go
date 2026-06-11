@@ -337,14 +337,13 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
 		IssueID:   issue.ID,
-		Action:    "start",
+		Assignee:  "agent",
 		Reason:    "claim",
 		CreatedBy: "agent",
-		Assignee:  "agent",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start) error = %v", err)
+		t.Fatalf("StartIssue error = %v", err)
 	}
 
 	got := h.runReadyJSON()
@@ -368,14 +367,13 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
 		IssueID:   issue.ID,
-		Action:    "start",
+		Assignee:  "agent",
 		Reason:    "claim",
 		CreatedBy: "agent",
-		Assignee:  "agent",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start) error = %v", err)
+		t.Fatalf("StartIssue error = %v", err)
 	}
 	h.backdateUpdatedAt(issue.ID, 25*time.Hour)
 
@@ -398,14 +396,13 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
 		IssueID:   issue.ID,
-		Action:    "start",
+		Assignee:  "agent",
 		Reason:    "claim",
 		CreatedBy: "agent",
-		Assignee:  "agent",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(start) error = %v", err)
+		t.Fatalf("StartIssue error = %v", err)
 	}
 
 	got := h.runReadyJSON()

@@ -48,8 +48,14 @@ func (f epicFixture) addChild(title string) string {
 
 func (f epicFixture) transition(id string, action model.ActionName) {
 	f.t.Helper()
-	if _, err := f.ap.Store.TransitionIssue(f.ctx, store.TransitionIssueInput{IssueID: id, Action: action, CreatedBy: "test"}); err != nil {
-		f.t.Fatalf("TransitionIssue(%s, %s) error = %v", id, action, err)
+	var err error
+	if action == model.ActionStart {
+		_, err = f.ap.Store.StartIssue(f.ctx, store.StartIssueInput{IssueID: id, Assignee: "test", CreatedBy: "test"})
+	} else {
+		_, err = f.ap.Store.TransitionIssue(f.ctx, store.TransitionIssueInput{IssueID: id, Action: action, CreatedBy: "test"})
+	}
+	if err != nil {
+		f.t.Fatalf("transition(%s, %s) error = %v", id, action, err)
 	}
 }
 

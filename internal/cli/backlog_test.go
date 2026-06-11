@@ -155,7 +155,7 @@ func TestBacklogIncludesInProgressInline(t *testing.T) {
 	a := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1})
 	b := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "inp", IssueType: "task", Priority: 1})
 	c := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C", Topic: "inp", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{IssueID: b, Action: "start", CreatedBy: "tester", Assignee: "tester"}); err != nil {
+	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{IssueID: b, Assignee: "tester", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("start(%s) error = %v", b, err)
 	}
 

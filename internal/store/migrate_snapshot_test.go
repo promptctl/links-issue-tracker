@@ -389,13 +389,12 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
+	if _, err := st.StartIssue(ctx, StartIssueInput{
 		IssueID:   issueA.ID,
-		Action:    "start",
-		CreatedBy: "alice",
 		Assignee:  "alice",
+		CreatedBy: "alice",
 	}); err != nil {
-		t.Fatalf("TransitionIssue(A start) error = %v", err)
+		t.Fatalf("StartIssue(A) error = %v", err)
 	}
 
 	// Issue B: task, receives a comment.
