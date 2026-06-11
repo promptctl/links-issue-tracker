@@ -151,7 +151,7 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 func TestRunLifeboatRecoverJSONModeEmitsMachinePayload(t *testing.T) {
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
-	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"--json"}); err != nil {
+	if err := runLifeboatRecover(context.Background(), newOutputModeWriter(&out, outputModeText), ws, []string{"--json"}); err != nil {
 		t.Fatalf("runLifeboatRecover --json: %v", err)
 	}
 	dec := json.NewDecoder(&out)

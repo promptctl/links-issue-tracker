@@ -39,7 +39,7 @@ var hooksFamily = commandFamily[wsRunFn]{
 
 func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("hooks install")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -60,7 +60,7 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		"reason":     result.Reason,
 		"traces_dir": automationTraceDir(ws),
 	}
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(map[string]any)
 		_, printErr := fmt.Fprintf(w, "installed %s\n", p["hook"])
 		return printErr

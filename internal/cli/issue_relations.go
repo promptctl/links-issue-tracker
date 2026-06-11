@@ -33,7 +33,7 @@ func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	fs := newCobraFlagSet("label add")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -47,13 +47,13 @@ func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
+	return printValue(stdout, labels, withQuickstartBreadcrumb("update", printLabels))
 }
 
 func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("label rm")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -67,7 +67,7 @@ func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, labels, *jsonOut, withQuickstartBreadcrumb("update", printLabels))
+	return printValue(stdout, labels, withQuickstartBreadcrumb("update", printLabels))
 }
 
 func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -75,7 +75,7 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	fs := newCobraFlagSet("parent set")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -90,7 +90,7 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, rel, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
+	return printValue(stdout, rel, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
 		relation := v.(model.Relation)
 		_, err := fmt.Fprintf(w, "%s --parent-child--> %s\n", relation.SrcID, relation.DstID)
 		return err
@@ -100,7 +100,7 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 func runParentClear(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("parent clear")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -110,7 +110,7 @@ func runParentClear(ctx context.Context, stdout io.Writer, ap *app.App, args []s
 	if err := ap.Store.ClearParent(ctx, positional[0]); err != nil {
 		return err
 	}
-	return printValue(stdout, map[string]string{"status": "ok"}, *jsonOut, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
+	return printValue(stdout, map[string]string{"status": "ok"}, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
 		_, err := fmt.Fprintln(w, "ok")
 		return err
 	}))
@@ -119,7 +119,7 @@ func runParentClear(ctx context.Context, stdout io.Writer, ap *app.App, args []s
 func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("children")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -130,7 +130,7 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, children, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, children, func(w io.Writer, v any) error {
 		return printIssueLines(w, v.([]model.Issue), []string{"id", "state", "title"})
 	})
 }

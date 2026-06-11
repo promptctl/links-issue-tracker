@@ -15,7 +15,7 @@ func runOrphanedJSON(t *testing.T, h readyTestHarness, args ...string) []annotat
 	t.Helper()
 	var stdout bytes.Buffer
 	allArgs := append(append([]string{}, args...), "--json")
-	if err := runOrphaned(h.ctx, &stdout, h.ap, allArgs); err != nil {
+	if err := runOrphaned(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, allArgs); err != nil {
 		t.Fatalf("runOrphaned(%v) error = %v", allArgs, err)
 	}
 	var got []annotation.AnnotatedIssue

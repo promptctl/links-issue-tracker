@@ -64,7 +64,7 @@ func runDowngradeWith(
 ) error {
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
-	jsonOut := fs.Bool("json", false, "Output JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -113,7 +113,7 @@ func runDowngradeWith(
 	// contract (extra stdout after the JSON document) and added a platform
 	// mode for no measurable benefit — the rename has already happened, the
 	// user's next shell prompt runs the prior binary.
-	return printValue(stdout, payload, *jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(downgradeResult)
 		_, err := fmt.Fprintf(w,
 			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",

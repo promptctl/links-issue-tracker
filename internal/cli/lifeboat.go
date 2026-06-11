@@ -75,7 +75,7 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("lifeboat recover")
 	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
-	jsonOut := fs.Bool("json", false, "Emit the recovery result as JSON")
+	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -104,7 +104,7 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	}
 	switch o := outcome.(type) {
 	case store.Reconciled:
-		return promoteReconciled(ctx, stdout, ws, o, *jsonOut)
+		return promoteReconciled(ctx, stdout, ws, o)
 	case store.RequiresDrop:
 		// [LAW:no-silent-fallbacks] Discard the rebuild and refuse to commit: an
 		// unexplained drop silently loses data, so the human is notified and
@@ -128,7 +128,7 @@ type recoverResult struct {
 	Backup    string `json:"backup,omitempty"`
 }
 
-func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled, jsonOut bool) (err error) {
+func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
 	// [LAW:no-silent-fallbacks] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
 	// in the storage dir the operator must see; join it to the return rather than
@@ -146,7 +146,7 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 	// emits the machine payload and never the human text — the same format gate
 	// every dual-mode command passes, honoring the global --json contract.
 	payload := recoverResult{Status: "recovered", Canonical: result.Canonical, Backup: result.Backup}
-	return printValue(stdout, payload, jsonOut, func(w io.Writer, v any) error {
+	return printValue(stdout, payload, func(w io.Writer, v any) error {
 		p := v.(recoverResult)
 		// The preservation clause is a function of whether a backup was actually
 		// made: an empty Backup means the canonical directory did not exist at

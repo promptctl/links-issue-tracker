@@ -104,7 +104,7 @@ func TestRunDowngradeWithJSONEmitsSingleDocument(t *testing.T) {
 	dg := &stubDowngrader{}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	if err := runDowngradeWith(context.Background(), &out, dg, []string{"--to", "v0.4.1", "--json"}, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+	if err := runDowngradeWith(context.Background(), newOutputModeWriter(&out, outputModeText), dg, []string{"--to", "v0.4.1", "--json"}, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
 		t.Fatalf("runDowngradeWith: %v", err)
 	}
 	// Body must decode as exactly one JSON document with no trailing content,
