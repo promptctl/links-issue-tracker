@@ -33,7 +33,7 @@ The system's success is measured by whether agents working within it produce goo
 
 These are what must be in place at the moment an agent starts work, for that work to go well:
 
-1. **Context for the work** — the agent has the information needed to work the ticket without extensive re-derivation. Description, related decisions, codebase entry points, prior context are loadable.
+1. **Context for the work** — the agent knows what to build and why, with complete freedom in how to build it. The description carries the intent and the constraints that bound the work — enough to act without guessing — but not a snapshot of the codebase that goes stale the moment the code moves. Related decisions and reference docs are reachable; the ticket points to them rather than copying them.
 2. **Focus** — the agent is working on one well-defined thing, not surveying or deciding. The act of starting was unambiguous; the work in front of the agent is clear.
 3. **Alignment with the codebase** — the ticket reflects the codebase as it currently exists. A ticket written six months ago against a now-different schema is not aligned. The work, as described, is implementable in the code as it stands.
 4. **Alignment with the backlog and epic** — the ticket fits coherently with adjacent tickets in its epic and with the rest of the backlog. There are no contradictions, no duplicates, no stale work blocking it. The relationship to siblings is clear.
@@ -71,10 +71,15 @@ Concretely, the discipline at each touchpoint:
 
 ### When a ticket is created
 
-- The description is enough that an agent in a future session can work it without re-deriving the context that motivated the ticket.
+The governing test for a description: **it survives a refactor of the code it concerns.** State *what* to build and *why* it matters; leave *how* to the agent holding the code. This is not taste — it is a fact about how the next agent reads. An LLM does not draw one fact from a ticket and let the rest lie quiet in a drawer; every token is in the room at once, each pulling at a finite budget of attention, each weighted by how present and how certain it sounds. Context is not storage — it is a beam of fixed brightness. Pour a snapshot of the codebase into the description and the beam scatters across detail the agent could read more truly from the code itself.
+
+The snapshot does worse than dilute. Code moves; the prose does not. Yesterday's accurate line is today's confident falsehood — and the agent cannot tell, because in context, certainty reads as truth. It steers by the stale signpost *because* it is near and sure, straight into a wall a refactor demolished. An absent detail costs a tool call; a wrong one costs the work.
+
+So the discipline is not silence — repetition is an instrument, not a redundancy. Say the intent, the constraint, the why, and say it again where it bears: each restatement concentrates the beam and holds the agent's bearing on what matters. But repeat only what cannot go stale. Reinforce the destination; never re-photograph the terrain. Intent has one home and this is it — restating it deepens a single truth. The code's home is the code — copying it here only ages a second, lesser print. The refactor test sorts the two cleanly: if it can falsify a sentence, that was a photograph; if it leaves the sentence standing, that was a heading. Write headings. Repeat the headings. Let the terrain be read from the terrain.
+
 - It states what "done" means concretely enough to be machine-verifiable.
 - It is parented to its epic; dependencies are declared; rank is reasonable.
-- It names *concepts* (e.g., "rank smoothing in the store layer") rather than relying on `file:line` references that may move.
+- It names *concepts* (e.g., "rank smoothing in the store layer") rather than relying on `file:line` references that may move — one concrete way descriptions survive a refactor.
 - The acceptance criterion does not require the future agent to ask the user a clarifying question to know whether the work is done.
 
 ### When a ticket is updated
@@ -218,7 +223,7 @@ This is hard to accept because the consequences of any single loop are vivid (th
 A well-tended system has these properties:
 
 - An agent starting a session walks into a backlog where the top of `lit ready` is workable without triage. Triage was done by a previous session.
-- Ticket descriptions are sufficient that re-deriving context from scratch is rare.
+- Ticket descriptions say what to build and why — enough for a fresh agent to act without guessing — and stay accurate across refactors because they never encoded the implementation in the first place.
 - Adjacent tickets reflect the current state of the codebase and each other.
 - When a recurring procedure happens, the corresponding skill exists.
 - When a recurring correction happens, the corresponding convention is documented.
