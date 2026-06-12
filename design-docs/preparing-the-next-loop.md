@@ -79,7 +79,7 @@ So the discipline is not silence — repetition is an instrument, not a redundan
 
 - It states what "done" means concretely enough to be machine-verifiable.
 - It is parented to its epic; dependencies are declared; rank is reasonable.
-- It names *concepts* (e.g., "rank smoothing in the store layer") rather than relying on `file:line` references that may move — the concrete mechanism behind surviving a refactor.
+- It names *concepts* (e.g., "rank smoothing in the store layer") rather than relying on `file:line` references that may move — one concrete way descriptions survive a refactor.
 - The acceptance criterion does not require the future agent to ask the user a clarifying question to know whether the work is done.
 
 ### When a ticket is updated
