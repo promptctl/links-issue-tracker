@@ -2,6 +2,7 @@ Creating tickets (lit)
 
 Create tickets: `lit new --title "..." --topic <topic> --type task|bug|feature|chore|epic [--parent <parent-id>] [--bottom]`
 
+<agent-instructions>`--description`: describe what to build and why; leave how to the implementer — write what survives a refactor of the code it concerns.</agent-instructions>
 <agent-instructions>`--topic`: Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')</agent-instructions>
 <agent-instructions>New tickets are ranked to the TOP of the order by default (fresh work surfaces first). Pass `--bottom` to append at the bottom instead — use it when authoring a batch in order so creation order is preserved.</agent-instructions>
 
