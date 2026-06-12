@@ -224,7 +224,7 @@ This is hard to accept because the consequences of any single loop are vivid (th
 A well-tended system has these properties:
 
 - An agent starting a session walks into a backlog where the top of `lit ready` is workable without triage. Triage was done by a previous session.
-- Ticket descriptions say what to build without dictating how, and stay accurate across refactors because they never encoded the implementation in the first place.
+- Ticket descriptions say what to build and why — enough for a fresh agent to act without guessing — and stay accurate across refactors because they never encoded the implementation in the first place.
 - Adjacent tickets reflect the current state of the codebase and each other.
 - When a recurring procedure happens, the corresponding skill exists.
 - When a recurring correction happens, the corresponding convention is documented.
