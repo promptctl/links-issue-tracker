@@ -77,7 +77,6 @@ The snapshot does worse than dilute. Code moves; the prose does not. Yesterday's
 
 So the discipline is not silence — repetition is an instrument, not a redundancy. Say the intent, the constraint, the why, and say it again where it bears: each restatement concentrates the beam and holds the agent's bearing on what matters. But repeat only what cannot go stale. Reinforce the destination; never re-photograph the terrain. Intent has one home and this is it — restating it deepens a single truth. The code's home is the code — copying it here only ages a second, lesser print. The refactor test sorts the two cleanly: if it can falsify a sentence, that was a photograph; if it leaves the sentence standing, that was a heading. Write headings. Repeat the headings. Let the terrain be read from the terrain.
 
-- The description says what to build and why, with complete freedom on how. It carries the intent and the constraints that bound the work, not a snapshot of the codebase.
 - It states what "done" means concretely enough to be machine-verifiable.
 - It is parented to its epic; dependencies are declared; rank is reasonable.
 - It names *concepts* (e.g., "rank smoothing in the store layer") rather than relying on `file:line` references that may move — the concrete mechanism behind surviving a refactor.
