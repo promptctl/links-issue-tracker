@@ -204,48 +204,104 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
 	if err != nil {
 		return err
 	}
+	// [LAW:no-silent-failure] The push error surfaces as the command's exit
+	// status only after its trace has been recorded inside performSyncPush —
+	// the skipped/ok payload is never printed over a failed push.
+	if outcome.pushErr != nil {
+		return outcome.pushErr
+	}
+	return printValue(stdout, outcome.payload(), func(w io.Writer, v any) error {
+		return printSyncPushPayload(w, v, *verbose)
+	})
+}
+
+// syncPushOutcome is the result of one push attempt, independent of CLI
+// presentation. [LAW:decomposition] Reconciling remotes, resolving
+// remote+branch, pushing, and recording the trace are one part; flag parsing
+// and payload rendering are another. The `lit sync push` command and the
+// on-change cadence owner both consume this one orchestration so their push
+// behavior cannot drift. [LAW:single-enforcer]
+type syncPushOutcome struct {
+	status     string // "ok" | "skipped"
+	reason     string // set when status == "skipped"
+	remote     string
+	branch     string
+	message    string
+	pushStatus int64
+	traceRef   *automationTraceRef
+	traceErr   error
+	pushErr    error // the push failure; the trace is already recorded when set
+}
+
+// payload renders the outcome into the map shape printSyncPushPayload consumes.
+func (o syncPushOutcome) payload() map[string]any {
+	payload := map[string]any{
+		"status": o.status,
+		"remote": o.remote,
+		"branch": o.branch,
+		"raw":    o.message,
+	}
+	if o.status == "skipped" {
+		payload["reason"] = o.reason
+		return payload
+	}
+	payload["push_status"] = o.pushStatus
+	if o.traceRef != nil {
+		payload["trace_ref"] = o.traceRef.Path
+	}
+	if o.traceErr != nil {
+		payload["trace_error"] = o.traceErr.Error()
+	}
+	return payload
+}
+
+// performSyncPush reconciles Dolt remotes from git, resolves the remote and
+// branch, mirrors the store, and records an automation trace for the attempt.
+// The returned error is a "could not attempt" failure (reconcile or remote
+// resolution); a push that ran and failed is carried in outcome.pushErr with
+// its trace already recorded, leaving the caller to decide whether that fails
+// it (the command) or is best-effort (the cadence owner).
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool) (syncPushOutcome, error) {
+	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	if err != nil {
+		return syncPushOutcome{}, err
+	}
 	remoteName, remoteErr := resolveSyncRemote(
-		strings.TrimSpace(*remote),
+		strings.TrimSpace(remote),
 		workspace.UpstreamRemote(ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
-		return remoteErr
+		return syncPushOutcome{}, remoteErr
 	}
 	if remoteName == "" {
-		payload := map[string]any{
-			"status": "skipped",
-			"reason": "no_sync_remote",
-			"raw":    "no upstream remote and no single configured remote; skipping sync push",
-		}
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printValue(stdout, payload, func(w io.Writer, v any) error {
-			return printSyncPushPayload(w, v, *verbose)
-		})
+		return syncPushOutcome{
+			status:  "skipped",
+			reason:  "no_sync_remote",
+			message: "no upstream remote and no single configured remote; skipping sync push",
+		}, nil
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
 	if refsErr == nil && !hasRefs {
-		payload := map[string]any{
-			"status": "skipped",
-			"reason": "remote_empty",
-			"remote": remoteName,
-			"raw":    firstPushSkipMessage,
-		}
-		return printValue(stdout, payload, func(w io.Writer, v any) error {
-			return printSyncPushPayload(w, v, *verbose)
-		})
+		return syncPushOutcome{
+			status:  "skipped",
+			reason:  "remote_empty",
+			remote:  remoteName,
+			message: firstPushSkipMessage,
+		}, nil
 	}
 	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
 	if err != nil {
-		return err
+		return syncPushOutcome{}, err
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, err := syncStore.SyncPush(ctx, remoteName, syncBranch, *setUpstream, *force)
+	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,
@@ -255,16 +311,16 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	}
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
-	if err != nil {
+	if pushErr != nil {
 		traceStatus = "error"
-		traceReason = err.Error()
-		traceMetadata["error"] = err.Error()
+		traceReason = pushErr.Error()
+		traceMetadata["error"] = pushErr.Error()
 	}
 	syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
-	if *setUpstream {
+	if setUpstream {
 		syncCommandArgs = append(syncCommandArgs, "--set-upstream")
 	}
-	if *force {
+	if force {
 		syncCommandArgs = append(syncCommandArgs, "--force")
 	}
 	// [LAW:one-source-of-truth] Hook-triggered sync traces reuse the shared automation trace writer instead of shell-local trace formats.
@@ -276,25 +332,16 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		traceReason,
 		traceMetadata,
 	)
-	if err != nil {
-		return err
-	}
-	payload := map[string]any{
-		"status":      "ok",
-		"remote":      remoteName,
-		"branch":      syncBranch,
-		"raw":         result.Message,
-		"push_status": result.Status,
-	}
-	if traceRef != nil {
-		payload["trace_ref"] = traceRef.Path
-	}
-	if traceRecordErr != nil {
-		payload["trace_error"] = traceRecordErr.Error()
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		return printSyncPushPayload(w, v, *verbose)
-	})
+	return syncPushOutcome{
+		status:     "ok",
+		remote:     remoteName,
+		branch:     syncBranch,
+		message:    result.Message,
+		pushStatus: result.Status,
+		traceRef:   traceRef,
+		traceErr:   traceRecordErr,
+		pushErr:    pushErr,
+	}, nil
 }
 
 func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {

@@ -72,3 +72,26 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 `lit hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
 The hook auto-runs one canonical `lit sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
 Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace --json`.
+
+## Push cadence
+
+The cadence — how often lit mirrors the store to the remote — is a single
+config policy you own, not a per-command behavior. Set it under `[sync]` in
+`config.toml` (global at `~/.config/links-issue-tracker/config.toml`, or
+per-project at `.lit/config.toml`):
+
+```toml
+[sync]
+cadence = "on-push"   # default
+```
+
+| value       | meaning                                                                 |
+| ----------- | ----------------------------------------------------------------------- |
+| `on-push`   | mirror only when the managed pre-push hook runs (one push per `git push`). The default and historical behavior. |
+| `on-change` | additionally mirror after every mutating lit command (`new`, `start`, `update`, `close`, `comment`, `rank`, …), shrinking the window where local ticket state is invisible to other clones. |
+
+`on-change` runs the same `lit sync push` the pre-push hook runs, after the
+command completes. It is best-effort: a push failure is surfaced on stderr and
+recorded as an automation trace, but never fails the command — the ticket
+change is already durable in the local Dolt store. An unknown cadence value is
+rejected at config load.

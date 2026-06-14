@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/viper"
 
@@ -19,6 +20,7 @@ type Config struct {
 	Ready      ReadyConfig      `mapstructure:"ready"`
 	Quickstart QuickstartConfig `mapstructure:"quickstart"`
 	Snapshot   SnapshotConfig   `mapstructure:"snapshot"`
+	Sync       SyncConfig       `mapstructure:"sync"`
 }
 
 type LoggingConfig struct {
@@ -45,6 +47,47 @@ type QuickstartConfig struct {
 
 type SnapshotConfig struct {
 	RetentionBudget int `mapstructure:"retention_budget"`
+}
+
+type SyncConfig struct {
+	Cadence SyncCadence `mapstructure:"cadence"`
+}
+
+// SyncCadence selects when lit mirrors its Dolt store to the configured git
+// remote. [LAW:no-mode-explosion] The set is deliberately closed to two values
+// with one default; a new cadence is a new const in syncCadences with a doc
+// line, never a per-command toggle or an independent boolean.
+type SyncCadence string
+
+const (
+	// SyncCadenceOnPush mirrors only when the managed pre-push git hook runs
+	// (one push per `git push`). This is the default and today's behavior.
+	SyncCadenceOnPush SyncCadence = "on-push"
+	// SyncCadenceOnChange mirrors after every mutating lit command, shrinking
+	// the window where local ticket state is invisible to other clones.
+	SyncCadenceOnChange SyncCadence = "on-change"
+)
+
+// syncCadences is the closed set of legal cadence values in documentation
+// order. [LAW:one-source-of-truth] The default, validation, and the error
+// message all derive from this one list, so they cannot drift.
+var syncCadences = []SyncCadence{SyncCadenceOnPush, SyncCadenceOnChange}
+
+func (c SyncCadence) valid() bool {
+	for _, candidate := range syncCadences {
+		if c == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func syncCadenceValues() string {
+	parts := make([]string, len(syncCadences))
+	for i, candidate := range syncCadences {
+		parts[i] = string(candidate)
+	}
+	return strings.Join(parts, ", ")
 }
 
 const (
@@ -103,6 +146,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("ready.required_fields", []string{})
 	v.SetDefault("quickstart.soil_mode", false)
 	v.SetDefault("snapshot.retention_budget", 5)
+	v.SetDefault("sync.cadence", string(SyncCadenceOnPush))
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
@@ -121,6 +165,13 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	// callers of dbsnapshot.Prune) trust the value is > 0.
 	if cfg.Snapshot.RetentionBudget <= 0 {
 		return Config{}, fmt.Errorf("config: snapshot.retention_budget must be > 0, got %d", cfg.Snapshot.RetentionBudget)
+	}
+	// [LAW:single-enforcer] sync.cadence is validated once at the trust
+	// boundary; the one owner of sync scheduling trusts the value is a legal
+	// cadence and switches on it without re-checking. [LAW:no-silent-failure]
+	// An unknown value fails loudly here rather than silently falling back.
+	if !cfg.Sync.Cadence.valid() {
+		return Config{}, fmt.Errorf("config: sync.cadence must be one of %s, got %q", syncCadenceValues(), cfg.Sync.Cadence)
 	}
 	return cfg, nil
 }
