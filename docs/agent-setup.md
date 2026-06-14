@@ -19,29 +19,35 @@ lit version
 
 ## 2. Install lit
 
-`lit` builds from source. It needs the **Go toolchain** and a **git** checkout. It does
-**not** need the `dolt` CLI at runtime — the storage engine is compiled into the binary.
+`lit` ships **prebuilt, self-contained binaries** — no Go toolchain, no system ICU/zstd, and
+no `dolt` CLI needed at runtime (the storage engine is compiled into the binary). Install the
+latest release onto your `PATH`:
 
 ```sh
-git clone https://github.com/promptctl/links-issue-tracker
-cd links-issue-tracker
-./scripts/install.sh
+curl -fsSL https://raw.githubusercontent.com/promptctl/links-issue-tracker/master/scripts/install.sh | bash -s -- --latest-release
 ```
 
-`install.sh` builds `lit`, installs it to a directory already on your `PATH` (or
-`~/.local/bin`), and prints a warning if any *other* `lit` binary on `PATH` would shadow the
-one it just installed. If it warns, remove the stale binaries — otherwise the `lit` you run
-will not be the one you installed.
-
-On macOS, if `go build` fails with ICU header or zstd linker errors, install the native deps
-and persist the cgo paths as described in
-[introduction/installation.md](introduction/installation.md), then re-run `install.sh`.
-
-Verify:
+This downloads the binary for your OS/architecture, checksum-verifies it, installs it to a
+directory already on your `PATH` (or `~/.local/bin`), and warns if any *other* `lit` on
+`PATH` would shadow it. If it warns, remove the stale binaries — otherwise the `lit` you run
+will not be the one you installed. Needs `curl`, `tar`, `jq`; on Windows run it from Git
+Bash. Verify:
 
 ```sh
 lit version
 ```
+
+If there's no prebuilt archive for your platform, or you're developing `lit` itself, build
+from source instead (needs the **Go toolchain** and a git checkout):
+
+```sh
+git clone https://github.com/promptctl/links-issue-tracker
+cd links-issue-tracker
+./scripts/install.sh        # no flags = build from source
+```
+
+Full matrix, manual download, version pinning, and the macOS ICU/zstd build notes are in
+[introduction/installation.md](introduction/installation.md).
 
 ## 3. Initialize the workspace (once per clone)
 
