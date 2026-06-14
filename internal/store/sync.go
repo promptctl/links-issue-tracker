@@ -313,6 +313,120 @@ func (s *Store) SyncStatus(ctx context.Context) (SyncStatusReport, error) {
 	return report, nil
 }
 
+// SyncFreshnessState classifies the local data branch's position relative to
+// the remote-tracking ref. It is derived solely from whether that ref exists
+// and the ahead/behind commit counts (see SyncFreshness.State), so there is one
+// mapping from observation to label and no caller re-derives it.
+// [LAW:one-source-of-truth]
+type SyncFreshnessState string
+
+const (
+	SyncNeverSynced SyncFreshnessState = "never_synced"
+	SyncUpToDate    SyncFreshnessState = "up_to_date"
+	SyncAhead       SyncFreshnessState = "ahead"
+	SyncBehind      SyncFreshnessState = "behind"
+	SyncDiverged    SyncFreshnessState = "diverged"
+)
+
+// SyncFreshness reports the local data branch's position relative to the
+// remote-tracking ref `remotes/<Remote>/<Branch>`. That ref reflects the remote
+// as of the last fetch or push, so Behind is "as of last fetch" — computing it
+// never contacts the network. Synced is false when the ref does not exist yet
+// (the remote has never been pushed to or fetched from); Ahead and Behind are
+// zero in that state, which is why State, not the raw counts, is the discriminant
+// a renderer switches on.
+type SyncFreshness struct {
+	Remote string `json:"remote"`
+	Branch string `json:"branch"`
+	Synced bool   `json:"synced"`
+	Ahead  int64  `json:"ahead"`
+	Behind int64  `json:"behind"`
+}
+
+// State derives the classification from the raw observations. Keeping it a
+// computed method (rather than a stored field) makes a label that contradicts
+// the counts unrepresentable. [LAW:types-are-the-program]
+func (f SyncFreshness) State() SyncFreshnessState {
+	if !f.Synced {
+		return SyncNeverSynced
+	}
+	switch {
+	case f.Ahead == 0 && f.Behind == 0:
+		return SyncUpToDate
+	case f.Behind == 0:
+		return SyncAhead
+	case f.Ahead == 0:
+		return SyncBehind
+	default:
+		return SyncDiverged
+	}
+}
+
+// SyncFreshness computes the local data branch's position relative to the
+// remote-tracking ref for the given remote+branch, as of the last fetch/push.
+// It is a pure read against local refs — it never touches the network — so it
+// runs on any open store, including doctor's read-only one. The caller resolves
+// remote and branch (the same selection `lit sync` uses) and owns the
+// no-remote-configured case; this method owns the never-synced case, guarding
+// the range queries so they never run against a missing ref.
+func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string) (SyncFreshness, error) {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return SyncFreshness{}, err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return SyncFreshness{}, err
+	}
+	freshness := SyncFreshness{Remote: trimmedRemote, Branch: trimmedBranch}
+	trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
+
+	var trackingRefCount int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?`, trackingRef,
+	).Scan(&trackingRefCount); err != nil {
+		return SyncFreshness{}, fmt.Errorf("check remote-tracking ref %q: %w", trackingRef, err)
+	}
+	if trackingRefCount == 0 {
+		// [LAW:no-defensive-null-guards] Absent tracking ref is a real domain
+		// state (never synced), so it is returned as a value the caller matches
+		// on — not papered over. The range queries below would error against a
+		// missing ref, so they must not run here.
+		return freshness, nil
+	}
+	freshness.Synced = true
+
+	var localBranch string
+	if err := s.db.QueryRowContext(ctx, `SELECT ACTIVE_BRANCH()`).Scan(&localBranch); err != nil {
+		return SyncFreshness{}, fmt.Errorf("read active branch: %w", err)
+	}
+
+	ahead, err := s.countCommitRange(ctx, trackingRef, localBranch)
+	if err != nil {
+		return SyncFreshness{}, fmt.Errorf("count commits ahead of %q: %w", trackingRef, err)
+	}
+	behind, err := s.countCommitRange(ctx, localBranch, trackingRef)
+	if err != nil {
+		return SyncFreshness{}, fmt.Errorf("count commits behind %q: %w", trackingRef, err)
+	}
+	freshness.Ahead = ahead
+	freshness.Behind = behind
+	return freshness, nil
+}
+
+// countCommitRange counts commits reachable from `to` but not from `from` — the
+// dolt_log two-dot range `from..to`. [LAW:single-enforcer] Ahead and behind are
+// the same query in opposite directions, so they share one path. The range is a
+// bound parameter, not interpolated, so ref names cannot inject SQL.
+func (s *Store) countCommitRange(ctx context.Context, from string, to string) (int64, error) {
+	var count int64
+	rangeExpr := fmt.Sprintf("%s..%s", from, to)
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, rangeExpr).Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientManifestReadOnly(ctx, operation, transientManifestRetryDelay, waitWithContext)

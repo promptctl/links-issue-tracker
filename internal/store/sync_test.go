@@ -279,6 +279,135 @@ func TestValidateEmbeddedSyncSupportRejectsOlderVersions(t *testing.T) {
 	}
 }
 
+func TestSyncFreshnessStateClassification(t *testing.T) {
+	cases := []struct {
+		name string
+		in   SyncFreshness
+		want SyncFreshnessState
+	}{
+		{"never synced ignores counts", SyncFreshness{Synced: false, Ahead: 0, Behind: 0}, SyncNeverSynced},
+		{"up to date", SyncFreshness{Synced: true, Ahead: 0, Behind: 0}, SyncUpToDate},
+		{"ahead only", SyncFreshness{Synced: true, Ahead: 2, Behind: 0}, SyncAhead},
+		{"behind only", SyncFreshness{Synced: true, Ahead: 0, Behind: 3}, SyncBehind},
+		{"diverged", SyncFreshness{Synced: true, Ahead: 2, Behind: 3}, SyncDiverged},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.in.State(); got != tc.want {
+				t.Fatalf("State() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+	if _, err := st.SyncFreshness(ctx, "  ", "master"); err == nil || !strings.Contains(err.Error(), "remote is required") {
+		t.Fatalf("SyncFreshness with blank remote error = %v, want remote required", err)
+	}
+	if _, err := st.SyncFreshness(ctx, "origin", "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
+		t.Fatalf("SyncFreshness with blank branch error = %v, want branch required", err)
+	}
+}
+
+// TestSyncFreshnessTracksAheadBehindAgainstRemote drives a real file-backed
+// remote through every freshness state so the dolt_log range counting and the
+// tracking-ref guard are proven against the embedded engine, not asserted in a
+// vacuum.
+func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	doltRoot := filepath.Join(base, "dolt")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	commit := func(title string) {
+		st, err := Open(ctx, doltRoot, "ws")
+		if err != nil {
+			t.Fatalf("Open(%q) error = %v", title, err)
+		}
+		if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+			t.Fatalf("CreateIssue(%q) error = %v", title, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close(%q) error = %v", title, err)
+		}
+	}
+
+	assertFreshness := func(label string, sync *Store, wantState SyncFreshnessState, wantAhead, wantBehind int64) {
+		t.Helper()
+		got, err := sync.SyncFreshness(ctx, "origin", "master")
+		if err != nil {
+			t.Fatalf("%s: SyncFreshness() error = %v", label, err)
+		}
+		if got.State() != wantState || got.Ahead != wantAhead || got.Behind != wantBehind {
+			t.Fatalf("%s: freshness = %+v state=%q, want state=%q ahead=%d behind=%d", label, got, got.State(), wantState, wantAhead, wantBehind)
+		}
+	}
+
+	commit("c1")
+
+	sync, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+
+	// Remote configured but never pushed/fetched: tracking ref absent.
+	assertFreshness("never synced", sync, SyncNeverSynced, 0, 0)
+
+	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncPush(c1) error = %v", err)
+	}
+	var c1Hash string
+	if err := sync.db.QueryRowContext(ctx, `SELECT hash FROM dolt_branches WHERE name = 'master'`).Scan(&c1Hash); err != nil {
+		t.Fatalf("read c1 hash error = %v", err)
+	}
+	assertFreshness("after first push", sync, SyncUpToDate, 0, 0)
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() after push error = %v", err)
+	}
+
+	// Local commit not pushed: ahead by 1.
+	commit("c2")
+	sync, err = OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() after c2 error = %v", err)
+	}
+	assertFreshness("after local commit", sync, SyncAhead, 1, 0)
+
+	// Publish c2 so the remote-tracking ref advances to c2, then rewind the
+	// local branch to c1: the tracking ref is now ahead of local → behind by 1.
+	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("SyncPush(c2) error = %v", err)
+	}
+	assertFreshness("after publishing c2", sync, SyncUpToDate, 0, 0)
+	if _, err := sync.db.ExecContext(ctx, `CALL DOLT_RESET('--hard', ?)`, c1Hash); err != nil {
+		t.Fatalf("DOLT_RESET to c1 error = %v", err)
+	}
+	assertFreshness("after rewind to c1", sync, SyncBehind, 0, 1)
+
+	// New local commit on top of the rewound branch: c3 is not on the remote and
+	// c2 is not local → diverged.
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() before c3 error = %v", err)
+	}
+	commit("c3")
+	sync, err = OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() after c3 error = %v", err)
+	}
+	defer sync.Close()
+	assertFreshness("after divergent commit", sync, SyncDiverged, 1, 1)
+}
+
 func TestGitBackedRemoteURL(t *testing.T) {
 	cases := []struct {
 		name string
