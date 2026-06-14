@@ -573,7 +573,7 @@ func syncDoltRemotesFromGit(ctx context.Context, syncStore *store.Store, ws work
 	changes := buildRemoteSyncChanges(gitRemotes, doltRemotes)
 
 	for _, remote := range gitRemotes {
-		desiredURL := syncRemoteURL(remote.URL)
+		desiredURL := store.GitBackedRemoteURL(remote.URL)
 		currentURL, exists := doltByName[remote.Name]
 		if !exists {
 			if err := syncStore.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
@@ -618,7 +618,7 @@ func buildRemoteSyncChanges(gitRemotes []workspace.GitRemote, doltRemotes []stor
 		Removed: []string{},
 	}
 	for _, remote := range gitRemotes {
-		desiredURL := syncRemoteURL(remote.URL)
+		desiredURL := store.GitBackedRemoteURL(remote.URL)
 		currentURL, exists := doltByName[remote.Name]
 		if !exists {
 			changes.Added = append(changes.Added, remote.Name)
@@ -662,28 +662,6 @@ func mapRemotesByName(remotes []store.SyncRemote) map[string]string {
 
 func sameRemoteURL(left, right string) bool {
 	return normalizeRemoteURL(left) == normalizeRemoteURL(right)
-}
-
-func syncRemoteURL(input string) string {
-	trimmed := strings.TrimSpace(input)
-	if trimmed == "" {
-		return ""
-	}
-	if strings.HasPrefix(trimmed, "git+") {
-		return trimmed
-	}
-	if !strings.HasSuffix(strings.ToLower(trimmed), ".git") {
-		return trimmed
-	}
-	if strings.Contains(trimmed, "://") {
-		// [LAW:one-source-of-truth] Git-backed Dolt remotes use one explicit `git+...` transport form instead of relying on procedure-side URL inference.
-		return "git+" + trimmed
-	}
-	normalized := normalizeSCPLikeRemoteURL(trimmed)
-	if normalized != trimmed {
-		return "git+" + normalized
-	}
-	return trimmed
 }
 
 func normalizeRemoteURL(input string) string {

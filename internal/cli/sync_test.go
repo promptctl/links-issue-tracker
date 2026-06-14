@@ -72,22 +72,6 @@ func TestSameRemoteURLSupportsBracketedIPv6SCPLikeHosts(t *testing.T) {
 	}
 }
 
-func TestSyncRemoteURLPrefixesGitHTTPSRemotes(t *testing.T) {
-	got := syncRemoteURL("https://github.com/org/repo.git")
-	want := "git+https://github.com/org/repo.git"
-	if got != want {
-		t.Fatalf("syncRemoteURL() = %q, want %q", got, want)
-	}
-}
-
-func TestSyncRemoteURLPrefixesSCPLikeGitRemotes(t *testing.T) {
-	got := syncRemoteURL("git@github.com:org/repo.git")
-	want := "git+ssh://git@github.com/org/repo.git"
-	if got != want {
-		t.Fatalf("syncRemoteURL() = %q, want %q", got, want)
-	}
-}
-
 func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
 	runErr := errors.New(`branch "feature/local-only" not found on remote`)
 	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)
