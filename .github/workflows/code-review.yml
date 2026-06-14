@@ -1,4 +1,4 @@
-name: AI Code Review with Z.ai
+name: AI Code Review
 
 on:
   pull_request:
@@ -22,4 +22,10 @@ jobs:
       - name: Code Review
         uses: brandon-fryslie/zai-coding-agent-review@v1
         with:
-          ZAI_API_KEY: ${{ secrets.ZAI_API_KEY }}
+          # codex is the engine: the z.ai provider is throttled by a 429 Fair Usage
+          # account limit, so we run OpenAI instead. The action picks its engine from
+          # PROVIDER alone (a credential does not switch it); declare it explicitly so
+          # the choice does not ride on the floating @v1 tag's default.
+          # Requires the OPENAI_API_KEY repo secret.
+          PROVIDER: codex
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
