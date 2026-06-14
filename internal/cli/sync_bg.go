@@ -66,8 +66,14 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 
 	// 1. Wait for the spawning command's embedded engine to be released. Opening
 	// a second engine on the same path while the first is live collides on
-	// Dolt's online garbage collection.
-	waitForProcessExit(*parentPID, mirrorParentWaitTimeout, mirrorParentPollDelay)
+	// Dolt's online garbage collection. If the parent outlives the timeout, the
+	// precondition is unmet — abort rather than race a live engine.
+	// [LAW:no-ambient-temporal-coupling]
+	if !waitForProcessExit(*parentPID, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+		return recordMirrorError(ws, fmt.Errorf(
+			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
+			*parentPID, mirrorParentWaitTimeout))
+	}
 
 	// 2. Single-flight. A lost race is the coalescing path, not an error: the
 	// holding mirror pushes the current HEAD (which already includes this
@@ -107,11 +113,14 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 	if err != nil {
 		return recordMirrorError(ws, err)
 	}
-	// Never-synced means there is no remote-tracking ref yet: seeding an empty
-	// remote is the explicit first `lit sync push --set-upstream`, not an
-	// on-change side effect — the same skip `lit sync push` already makes. A zero
-	// lead (as of last fetch) means there is nothing new to mirror.
-	if !synced || ahead == 0 {
+	// Skip only the case we know needs no push: synced and not ahead (as of last
+	// fetch). When no tracking ref exists yet (never synced), fall through to
+	// performSyncPush — a remote that already has refs must still receive this
+	// branch on-change, and performSyncPush's own RemoteHasRefs gate skips a
+	// genuinely-empty remote (whose first-push seeding stays an explicit
+	// `lit sync push --set-upstream`). [LAW:dataflow-not-control-flow] The skip is
+	// driven by the precise up-to-date value, not a coarse tracking-ref proxy.
+	if synced && ahead == 0 {
 		return nil
 	}
 	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false, false)
@@ -156,35 +165,46 @@ func mirrorAhead(ctx context.Context, syncStore *store.Store, ws workspace.Info)
 	return freshness.Ahead, freshness.Synced, nil
 }
 
-// waitForProcessExit blocks until pid is gone or the timeout elapses. The
-// ordering owner is the liveness check, not the sleep: each iteration tests the
-// real signal (process gone) and the poll delay is only the interval between
-// checks. [LAW:no-ambient-temporal-coupling]
-func waitForProcessExit(pid int, timeout, poll time.Duration) {
+// waitForProcessExit blocks until pid is gone, returning true, or the timeout
+// elapses with the process still alive, returning false. The ordering owner is
+// the liveness check, not the sleep: each iteration tests the real signal
+// (process gone) and the poll delay is only the interval between checks. The
+// boolean lets the caller distinguish "parent released the engine" from "parent
+// outlived the wait" rather than proceeding blindly on a timeout.
+// [LAW:no-ambient-temporal-coupling]
+func waitForProcessExit(pid int, timeout, poll time.Duration) bool {
 	if pid <= 0 {
-		return
+		return true
 	}
 	deadline := time.Now().Add(timeout)
 	for processAlive(pid) {
 		if time.Now().After(deadline) {
-			return
+			return false
 		}
 		time.Sleep(poll)
 	}
+	return true
 }
 
 // recordMirrorError writes the failure to the shared automation trace so a
 // detached mirror that fails is loud out-of-band rather than silent. It always
 // returns nil: the mutation is already durable, so the mirror is best-effort
-// and never reports a non-zero exit. [LAW:no-silent-failure]
+// and never reports a non-zero exit. [LAW:no-silent-failure] If the trace write
+// itself fails, the error is not swallowed — it goes to stderr, the worker's
+// only remaining channel (discarded when detached, visible when the hidden
+// subcommand is run in the foreground for debugging).
 func recordMirrorError(ws workspace.Info, cause error) error {
-	_, _ = maybeRecordAutomatedCommandTrace(
+	if _, traceErr := maybeRecordAutomatedCommandTrace(
 		ws,
 		"lit sync push",
 		"mirror Dolt data to the configured git remote",
 		"error",
 		cause.Error(),
 		map[string]string{"error": cause.Error()},
-	)
+	); traceErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"lit: on-change mirror could not record failure trace (%v); original error: %v\n",
+			traceErr, cause)
+	}
 	return nil
 }
