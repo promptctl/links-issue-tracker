@@ -198,13 +198,12 @@ snapshot:
 release:
   disable: true
 
+# Release notes have a single owner: `gh release create --generate-notes` in
+# release.yml builds them from the PRs/commits in the tag range. goreleaser's
+# own changelog is redundant with that, and `use: github` would have it call
+# the GitHub API from the build container (which is given no token). Disable it
+# so note generation has one owner and the build container has no API
+# dependency in the real `release` path snapshot validation never exercises.
+# [LAW:single-enforcer] one generator of release notes, not two.
 changelog:
-  use: github
-  sort: asc
-  filters:
-    exclude:
-      - '^docs:'
-      - '^test:'
-      - '^chore:'
-      - Merge pull request
-      - Merge branch
+  disable: true
