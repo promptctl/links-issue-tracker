@@ -42,6 +42,45 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Snapshot.RetentionBudget != 5 {
 		t.Fatalf("expected snapshot.retention_budget=5 by default, got %d", cfg.Snapshot.RetentionBudget)
 	}
+	if cfg.Sync.Cadence != SyncCadenceOnPush {
+		t.Fatalf("expected sync.cadence=on-push by default, got %q", cfg.Sync.Cadence)
+	}
+}
+
+func TestLoadSyncCadenceFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[sync]\ncadence = \"on-change\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := Load(pathspec.PathSpec{})
+	if err != nil {
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
+	}
+	if cfg.Sync.Cadence != SyncCadenceOnChange {
+		t.Fatalf("expected sync.cadence=on-change from file, got %q", cfg.Sync.Cadence)
+	}
+}
+
+func TestLoadRejectsUnknownSyncCadence(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[sync]\ncadence = \"hourly\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	if _, err := Load(pathspec.PathSpec{}); err == nil {
+		t.Fatal("Load(pathspec.PathSpec{}) with unknown sync.cadence expected error, got nil")
+	}
 }
 
 func TestLoadRejectsNonPositiveRetentionBudget(t *testing.T) {
