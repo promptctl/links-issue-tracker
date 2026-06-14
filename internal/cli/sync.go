@@ -208,7 +208,11 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
+	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
+	// backs) compacts atomically with the push; the on-change mirror pushes
+	// without compaction. The choice is the push step passed as a value, so
+	// performSyncPush has no compaction branch and a skipped push never compacts.
+	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, syncStore.SyncCompactAndPush)
 	if err != nil {
 		return err
 	}
@@ -217,18 +221,6 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// the skipped/ok payload is never printed over a failed push.
 	if outcome.pushErr != nil {
 		return outcome.pushErr
-	}
-	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
-	// backs) composes maintenance compaction with the push as two separate store
-	// operations; the on-change mirror omits it by not composing it. Compaction
-	// runs only behind a push that actually happened — a skipped push (no remote /
-	// empty remote) must stay a no-op and never run DOLT_GC. It reclaims local
-	// chunks only and does not change what was pushed, so running it after
-	// delivery is equivalent.
-	if outcome.status == "ok" {
-		if compactErr := syncStore.SyncCompact(ctx); compactErr != nil {
-			return fmt.Errorf("push succeeded but post-push compaction failed: %w", compactErr)
-		}
 	}
 	return printValue(stdout, outcome.payload(), func(w io.Writer, v any) error {
 		return printSyncPushPayload(w, v, *verbose)
@@ -275,13 +267,20 @@ func (o syncPushOutcome) payload() map[string]any {
 	return payload
 }
 
+// syncPushStep is the push the orchestrator runs once it has resolved the
+// remote and branch — store.Store.SyncPush (push only) or
+// store.Store.SyncCompactAndPush (compact + push, atomic). [LAW:dataflow-not-control-flow]
+// The variant is a value the caller supplies, so performSyncPush carries no
+// compaction branch and never compacts a push it skips.
+type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (store.SyncPushResult, error)
+
 // performSyncPush reconciles Dolt remotes from git, resolves the remote and
-// branch, mirrors the store, and records an automation trace for the attempt.
-// The returned error is a "could not attempt" failure (reconcile or remote
-// resolution); a push that ran and failed is carried in outcome.pushErr with
-// its trace already recorded, leaving the caller to decide whether that fails
-// it (the command) or is best-effort (the cadence owner).
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool) (syncPushOutcome, error) {
+// branch, runs the supplied push step, and records an automation trace for the
+// attempt. The returned error is a "could not attempt" failure (reconcile or
+// remote resolution); a push that ran and failed is carried in outcome.pushErr
+// with its trace already recorded, leaving the caller to decide whether that
+// fails it (the command) or is best-effort (the cadence owner).
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (syncPushOutcome, error) {
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
@@ -317,7 +316,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		return syncPushOutcome{}, err
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)
+	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,

@@ -489,6 +489,47 @@ func TestSyncPushDelivers(t *testing.T) {
 	}
 }
 
+// TestSyncCompactAndPushDelivers proves the explicit command's push variant
+// compacts and delivers in one call. The atomicity (compact + push under one
+// commit lock) is structural in SyncCompactAndPush; this pins that the composed
+// operation still reaches the remote, against a real file-backed Dolt remote.
+func TestSyncCompactAndPushDelivers(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	doltRoot := filepath.Join(base, "dolt")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	sync, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer sync.Close()
+	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+	got, err := sync.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness() error = %v", err)
+	}
+	if got.State() != SyncUpToDate {
+		t.Fatalf("after compact+push: state = %q (%+v), want up-to-date", got.State(), got)
+	}
+}
+
 func TestGitBackedRemoteURL(t *testing.T) {
 	cases := []struct {
 		name string

@@ -234,14 +234,51 @@ func (s *Store) SyncCompact(ctx context.Context) error {
 }
 
 // SyncPush mirrors the local branch to the remote. It only pushes — one path,
-// every call. [LAW:dataflow-not-control-flow] Maintenance compaction is a
-// separate operation (SyncCompact) the caller composes when it wants it, so this
-// method has no mode bit selecting whether garbage collection runs. The manual
-// `lit sync push` and the pre-push hook compose compaction ahead of the push;
-// the interactive on-change mirror does not — DOLT_GC transitions the embedded
-// store read-only mid-run and collides with the engine state just after a
-// mutation, and reclaiming local disk is not worth that on every change.
+// every call, no mode bit. [LAW:dataflow-not-control-flow] Maintenance
+// compaction is the separate SyncCompactAndPush entrypoint; the interactive
+// on-change mirror calls this plain push because DOLT_GC transitions the
+// embedded store read-only mid-run and collides with the engine state just
+// after a mutation, and reclaiming local disk is not worth that on every change.
 func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
+	var result SyncPushResult
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
+		result = pushed
+		return pushErr
+	})
+	if err != nil {
+		return SyncPushResult{}, err
+	}
+	return result, nil
+}
+
+// SyncCompactAndPush compacts then pushes under one commit-lock acquisition, so
+// no other mutation interleaves between the garbage collection and the push and
+// the push reflects exactly the compacted state. [LAW:no-ambient-temporal-coupling]
+// The explicit `lit sync push` and the pre-push hook use this; the on-change
+// mirror uses the plain SyncPush. The two are distinct single-purpose
+// entrypoints, not one method with a compaction flag. [LAW:decomposition]
+func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
+	var result SyncPushResult
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if err := s.compactWithinLock(ctx); err != nil {
+			return err
+		}
+		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
+		result = pushed
+		return pushErr
+	})
+	if err != nil {
+		return SyncPushResult{}, err
+	}
+	return result, nil
+}
+
+// pushWithinLock runs DOLT_PUSH for the resolved remote and branch. The caller
+// holds the commit lock (via runSyncMutation); SyncPush and SyncCompactAndPush
+// both compose over this one push implementation so the push step cannot drift
+// between them. [LAW:single-enforcer]
+func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
 		return SyncPushResult{}, err
@@ -258,21 +295,13 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 	if trimmedBranch != "" {
 		args = append(args, fmt.Sprintf("HEAD:%s", trimmedBranch))
 	}
-
+	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result SyncPushResult
-	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
-		query := buildProcedureCall("DOLT_PUSH", len(args))
-		var message sql.NullString
-		err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
-		if err != nil {
-			return fmt.Errorf("push remote %q: %w", trimmedRemote, err)
-		}
-		result.Message = nullStringValue(message)
-		return nil
-	})
-	if err != nil {
-		return SyncPushResult{}, err
+	var message sql.NullString
+	if err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message); err != nil {
+		return SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, err)
 	}
+	result.Message = nullStringValue(message)
 	return result, nil
 }
 
