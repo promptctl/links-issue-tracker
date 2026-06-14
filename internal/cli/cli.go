@@ -155,7 +155,15 @@ func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context
 		return err
 	}
 	defer ap.Close()
-	return run(ctx, ap)
+	if runErr := run(ctx, ap); runErr != nil {
+		return runErr
+	}
+	// [LAW:single-enforcer] One owner consults the sync-cadence policy after a
+	// successful command; command handlers stay unaware of cadence. The mirror
+	// reuses this command's own open store, so the embedded Dolt engine is
+	// never opened a second time for the same path while the first is live.
+	// [LAW:no-ambient-temporal-coupling] It runs before the deferred Close.
+	return maybeSyncAfterMutation(ctx, accessMode, ap)
 }
 
 func resolveWorkspaceFromWD() (workspace.Info, error) {
