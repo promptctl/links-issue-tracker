@@ -31,28 +31,26 @@ small, predictable CLI.
 ### Requirements
 
 - A git repository (or worktree)
-- The Go toolchain — `lit` builds from source
 
-> The `dolt` CLI is **not** required to run `lit`; the Dolt storage engine is compiled in.
-> (It's only used as a test oracle when developing `lit` itself.)
-> On macOS, building the embedded engine needs ICU and zstd headers — see
-> [docs/introduction/installation.md](docs/introduction/installation.md) if `go build`
-> hits ICU/zstd errors.
+> `lit` ships **prebuilt, self-contained binaries** — no Go toolchain and no
+> system ICU/zstd needed to run them. The `dolt` CLI isn't required either; the
+> Dolt storage engine is compiled in. (It's only a test oracle when developing
+> `lit` itself.)
 
 ### Install
 
-```sh
-git clone https://github.com/promptctl/links-issue-tracker
-cd links-issue-tracker
-./scripts/install.sh
-```
-
-`install.sh` builds `lit` from this checkout and installs it onto your `PATH` (it also warns
-you about any stale `lit` binaries shadowing the new one). Confirm it landed:
+Install the latest release onto your `PATH` (downloads the right binary for your
+OS/arch, checksum-verified):
 
 ```sh
+curl -fsSL https://raw.githubusercontent.com/promptctl/links-issue-tracker/master/scripts/install.sh | bash -s -- --latest-release
 lit version
 ```
+
+Prefer to grab the archive yourself, pin a version, or build from source? See
+**[docs/introduction/installation.md](docs/introduction/installation.md)** — it
+covers manual download, `--from-release <tag>`, and the Go build (the fallback
+for unsupported platforms or hacking on `lit`).
 
 ### A 60-second tour
 
