@@ -278,3 +278,88 @@ func TestValidateEmbeddedSyncSupportRejectsOlderVersions(t *testing.T) {
 		t.Fatalf("validateEmbeddedSyncSupport() error = %v, want embedded sync guidance", err)
 	}
 }
+
+func TestGitBackedRemoteURL(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"https with .git", "https://github.com/org/repo.git", "git+https://github.com/org/repo.git"},
+		{"https without .git", "https://github.com/org/repo", "git+https://github.com/org/repo"},
+		{"http without .git", "http://example.com/org/repo", "git+http://example.com/org/repo"},
+		{"scp-like with .git", "git@github.com:org/repo.git", "git+ssh://git@github.com/./org/repo.git"},
+		{"ssh url with .git", "ssh://git@github.com/org/repo.git", "git+ssh://git@github.com/org/repo.git"},
+		{"file url", "file:///srv/git/repo.git", "git+file:///srv/git/repo.git"},
+		{"local absolute path with .git", "/srv/git/repo.git", "git+file:///srv/git/repo.git"},
+		{"already git+ prefixed", "git+https://github.com/org/repo", "git+https://github.com/org/repo"},
+		{"empty", "   ", ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := GitBackedRemoteURL(tc.in); got != tc.want {
+				t.Fatalf("GitBackedRemoteURL(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestGitBackedRemoteURLIsIdempotent(t *testing.T) {
+	for _, in := range []string{
+		"https://github.com/org/repo",
+		"git@github.com:org/repo.git",
+		"/srv/git/repo.git",
+	} {
+		once := GitBackedRemoteURL(in)
+		twice := GitBackedRemoteURL(once)
+		if once != twice {
+			t.Fatalf("GitBackedRemoteURL not idempotent for %q: once=%q twice=%q", in, once, twice)
+		}
+	}
+}
+
+// TestGitBackedRemoteURLRoundTripsThroughDolt guards the no-churn invariant in the
+// sync reconciliation loop: the URL lit computes for a git remote must equal the URL
+// Dolt stores when that same value is added, or every reconcile would remove+re-add
+// the remote forever. Covers the suffix-less and local-path forms that a pure unit
+// test of the string output cannot prove against the real store.
+func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
+	ctx := context.Background()
+	for _, raw := range []string{
+		"https://github.com/org/repo.git",
+		"https://github.com/org/repo",
+		"git@github.com:org/repo.git",
+		"/srv/git/repo.git",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			doltRoot := filepath.Join(t.TempDir(), "dolt")
+			st, err := Open(ctx, doltRoot, "test-workspace-id")
+			if err != nil {
+				t.Fatalf("Open() error = %v", err)
+			}
+			if err := st.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+			syncStore, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+			if err != nil {
+				t.Fatalf("OpenSync() error = %v", err)
+			}
+			defer syncStore.Close()
+
+			desired := GitBackedRemoteURL(raw)
+			if err := syncStore.SyncAddRemote(ctx, "origin", desired); err != nil {
+				t.Fatalf("SyncAddRemote(%q) error = %v", desired, err)
+			}
+			remotes, err := syncStore.SyncListRemotes(ctx)
+			if err != nil {
+				t.Fatalf("SyncListRemotes() error = %v", err)
+			}
+			if len(remotes) != 1 {
+				t.Fatalf("remotes = %#v, want 1", remotes)
+			}
+			if remotes[0].URL != desired {
+				t.Fatalf("stored URL = %q, want %q (would cause reconcile churn)", remotes[0].URL, desired)
+			}
+		})
+	}
+}
