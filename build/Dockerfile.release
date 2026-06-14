@@ -238,6 +238,23 @@ COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
 COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
 COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
 
+# linux/amd64 is the native target: it compiles against the system libicu-dev
+# (installed in `base`) rather than a cross-built prefix. But go-icu-regex emits
+# a bare `-licui18n`, which the linker resolves to the SHARED .so whenever a dir
+# holds both .so and .a — leaving the binary with a NEEDED libicui18n.so the
+# target host must supply. The four cross-targets avoid this only because their
+# -L points at a dir holding ONLY static archives. Give linux/amd64 the same
+# shape: a static-only lib dir of symlinks to the system *.a, which .goreleaser's
+# `CGO_LDFLAGS=-L/opt/icu/linux_amd64/lib` points the link at so the .a wins.
+# Headers stay on the system include path (no include/ dir here). The same dir
+# is reproduced on the bare release-smoke runner so the PR gate builds the
+# identical static recipe. [LAW:one-type-per-behavior]
+RUN set -euo pipefail; \
+    mkdir -p /opt/icu/linux_amd64/lib; \
+    for lib in libicui18n libicuuc libicudata; do \
+        ln -sf "/usr/lib/x86_64-linux-gnu/${lib}.a" "/opt/icu/linux_amd64/lib/${lib}.a"; \
+    done
+
 # Sanity check at image-build time — fail loudly if any prefix is missing
 # headers/libs the consumer expects. [LAW:verifiable-goals]
 RUN set -euo pipefail; \
@@ -246,6 +263,10 @@ RUN set -euo pipefail; \
             || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
         ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \
             || { echo "MISSING: ICU libraries in /opt/icu/${target}/lib/" >&2; exit 1; }; \
+    done; \
+    for lib in libicui18n libicuuc libicudata; do \
+        test -f "/opt/icu/linux_amd64/lib/${lib}.a" \
+            || { echo "MISSING: static archive /opt/icu/linux_amd64/lib/${lib}.a (system libicu-dev *.a)" >&2; exit 1; }; \
     done; \
     echo "ICU prefixes verified for all targets."
 
