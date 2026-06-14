@@ -55,8 +55,15 @@ func maybeSyncAfterMutation(ctx context.Context, accessMode app.AccessMode, ap *
 		fmt.Fprintf(os.Stderr, "lit: on-change sync failed: %v\n", err)
 		return nil
 	}
+	// Both the push and the trace-write can fail independently; neither fails
+	// the durable mutation, but both stay loud. [LAW:no-silent-failure] The
+	// command path surfaces traceErr via its payload; this path has no payload,
+	// so it goes to stderr alongside the push error.
 	if outcome.pushErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change sync failed: %v\n", outcome.pushErr)
+	}
+	if outcome.traceErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: on-change sync trace not recorded: %v\n", outcome.traceErr)
 	}
 	return nil
 }
