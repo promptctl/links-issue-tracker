@@ -8,6 +8,7 @@ import (
 	"runtime/debug"
 	"strings"
 
+	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"golang.org/x/mod/semver"
 )
 
@@ -105,6 +106,35 @@ func (s *Store) SyncListRemotes(ctx context.Context) ([]SyncRemote, error) {
 		return nil, fmt.Errorf("iterate dolt remotes: %w", err)
 	}
 	return remotes, nil
+}
+
+// GitBackedRemoteURL translates a git remote URL (as reported by `git remote -v`)
+// into the canonical Dolt git-backed transport URL (the `git+...` form). Every such
+// URL is a git remote by construction, so the git-backed transport applies to all of
+// them — https, ssh/scp, and local-path spellings alike — even when the URL omits the
+// `.git` suffix that providers like GitHub legitimately allow.
+//
+// [LAW:one-source-of-truth] Dolt's NormalizeGitRemoteUrl is the single source of truth
+// for the translation — it canonically handles scp, ssh, file, and local-path spellings
+// (including the home-relative `/./` that a naive scp→ssh rewrite gets wrong). lit only
+// supplies the one thing Dolt declines to recognize: a git remote whose `.git` suffix is
+// absent. Dolt gates recognition on that suffix, so we append a synthetic one to run the
+// canonical translator, then drop exactly what we added — leaving the transport URL
+// pointed at the real, suffix-less remote path. The suffix is never the discriminator.
+// [LAW:single-enforcer] Lives at the Store boundary, the one layer that owns the Dolt
+// dependency, so every caller shares one transport contract instead of re-deriving it.
+func GitBackedRemoteURL(raw string) string {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" {
+		return ""
+	}
+	if normalized, ok, err := doltenv.NormalizeGitRemoteUrl(trimmed); ok && err == nil {
+		return normalized
+	}
+	if normalized, ok, err := doltenv.NormalizeGitRemoteUrl(trimmed + ".git"); ok && err == nil {
+		return strings.TrimSuffix(normalized, ".git")
+	}
+	return trimmed
 }
 
 func (s *Store) SyncAddRemote(ctx context.Context, name string, url string) error {
