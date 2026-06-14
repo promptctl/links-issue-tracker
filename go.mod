@@ -3,6 +3,7 @@ module github.com/promptctl/links-issue-tracker
 go 1.25.7
 
 require (
+	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
@@ -66,7 +67,6 @@ require (
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
-	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/fslock v0.0.3 // indirect
