@@ -233,7 +233,17 @@ func (s *Store) SyncCompact(ctx context.Context) error {
 	return s.runSyncMutation(ctx, s.compactWithinLock)
 }
 
-func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
+// SyncPush mirrors the local branch to the remote. compact selects whether the
+// maintenance garbage collection runs first: it reclaims local unreferenced
+// chunks but does not change which chunks the push sends (the remote receives
+// the same data either way). The interactive on-change mirror passes compact
+// false — DOLT_GC transitions the embedded store read-only mid-run and collides
+// with the engine state just after a mutation, and reclaiming local disk is not
+// worth blocking every change on. The manual `lit sync push` and the pre-push
+// hook pass compact true, folding maintenance into an explicit, less frequent
+// push. [LAW:decomposition] Pushing and compacting are two concerns joined here
+// by one declared value, not fused unconditionally.
+func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool, compact bool) (SyncPushResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
 		return SyncPushResult{}, err
@@ -253,10 +263,14 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 
 	var result SyncPushResult
 	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
-		// [LAW:dataflow-not-control-flow] Every push unconditionally compacts first; gc decides what to reclaim from store state, not a caller-supplied gate.
-		// [LAW:single-enforcer] Compact + push run under one commit-lock acquisition so no other mutation can interleave between GC and push.
-		if err := s.compactWithinLock(ctx); err != nil {
-			return err
+		// [LAW:dataflow-not-control-flow] Whether to compact is a value the caller
+		// passes, not hidden state; the push that follows is identical either way.
+		// [LAW:single-enforcer] When it runs, compact + push share one commit-lock
+		// acquisition so no other mutation interleaves between GC and push.
+		if compact {
+			if err := s.compactWithinLock(ctx); err != nil {
+				return err
+			}
 		}
 		query := buildProcedureCall("DOLT_PUSH", len(args))
 		var message sql.NullString

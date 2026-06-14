@@ -281,6 +281,62 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 // acquisitions cannot both succeed — one wins, the other refuses immediately.
 // Without this invariant, two concurrent lit snapshots restore commands could
 // both rotate the database directory and lose data.
+// TestTryAcquireSyncPushLockIsSingleFlight pins the coalescing contract the
+// background mirror relies on: while one mirror holds the sync-push lock, a
+// second attempt does not take it and does not error — it reports acquired=false
+// so the caller coalesces, knowing the holder will push the current HEAD. After
+// release the hold is available again. Two separate OpenFile descriptors on one
+// path contend under flock even in a single process, so this proves the
+// primitive without spawning.
+func TestTryAcquireSyncPushLockIsSingleFlight(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "dolt")
+
+	release, acquired, err := TryAcquireSyncPushLock(dbPath)
+	if err != nil {
+		t.Fatalf("first acquire error = %v", err)
+	}
+	if !acquired {
+		t.Fatal("first acquire must take the hold")
+	}
+
+	release2, acquired2, err := TryAcquireSyncPushLock(dbPath)
+	if err != nil {
+		t.Fatalf("second acquire error = %v, want nil (contention is not an error)", err)
+	}
+	if acquired2 {
+		t.Fatal("second acquire must not take the hold while the first is held")
+	}
+	if release2 != nil {
+		t.Fatal("a declined acquire must not return a release func")
+	}
+
+	if err := release(); err != nil {
+		t.Fatalf("release error = %v", err)
+	}
+
+	release3, acquired3, err := TryAcquireSyncPushLock(dbPath)
+	if err != nil {
+		t.Fatalf("third acquire error = %v", err)
+	}
+	if !acquired3 {
+		t.Fatal("acquire after release must take the hold")
+	}
+	if err := release3(); err != nil {
+		t.Fatalf("third release error = %v", err)
+	}
+}
+
+// TestSyncPushLockPathIsSiblingOfDolt fixes the lock at the same sibling-of-dolt
+// position as the commit and workspace locks, so a snapshots restore that
+// rotates the Dolt directory does not move it out from under a running mirror.
+func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
+	got := SyncPushLockPath(filepath.Join("repo", ".git", "links", "dolt"))
+	want := filepath.Join("repo", ".git", "links", ".links-sync-push.lock")
+	if got != want {
+		t.Fatalf("SyncPushLockPath() = %q, want %q", got, want)
+	}
+}
+
 func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

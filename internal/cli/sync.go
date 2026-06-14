@@ -56,6 +56,10 @@ var syncFamily = commandFamily[wsRunFn]{
 		{name: "fetch", payload: withSyncStore(runSyncFetch)},
 		{name: "pull", payload: withSyncStore(runSyncPull)},
 		{name: "push", payload: withSyncStore(runSyncPush)},
+		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
+		// above, so it never shows in help; it manages its own store lifecycle
+		// (wait-for-parent, then open) and so is registered without withSyncStore.
+		{name: backgroundMirrorSubcommand, payload: runBackgroundMirror},
 	},
 }
 
@@ -204,7 +208,9 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
+	// The explicit `lit sync push` folds in maintenance compaction; the
+	// background on-change mirror is the one caller that pushes without it.
+	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, true)
 	if err != nil {
 		return err
 	}
@@ -265,7 +271,7 @@ func (o syncPushOutcome) payload() map[string]any {
 // resolution); a push that ran and failed is carried in outcome.pushErr with
 // its trace already recorded, leaving the caller to decide whether that fails
 // it (the command) or is best-effort (the cadence owner).
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool) (syncPushOutcome, error) {
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force, compact bool) (syncPushOutcome, error) {
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
@@ -301,7 +307,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		return syncPushOutcome{}, err
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)
+	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force, compact)
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,

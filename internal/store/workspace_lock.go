@@ -99,8 +99,47 @@ func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() err
 	return release, err
 }
 
+// SyncPushLockPath returns the single-flight lock path for the background
+// mirror, a sibling of the Dolt directory at
+// <dirname(databasePath)>/.links-sync-push.lock — the same position as the
+// commit and workspace locks, so it survives a lit snapshots restore that
+// rotates the Dolt directory. [LAW:one-source-of-truth] One naming convention;
+// every mirror reads the path from here.
+func SyncPushLockPath(databasePath string) string {
+	cleaned := filepath.Clean(databasePath)
+	return filepath.Join(filepath.Dir(cleaned), ".links-sync-push.lock")
+}
+
+// TryAcquireSyncPushLock takes a non-blocking exclusive hold guaranteeing only
+// one background mirror runs at a time. The second return value reports whether
+// the hold was taken: false means another mirror already holds it, and the
+// caller coalesces by doing nothing — that mirror pushes the current HEAD
+// (which already includes this caller's commit) and re-checks freshness before
+// it releases. [LAW:no-ambient-temporal-coupling] Single-flight is owned here,
+// not by sleeps or in-flight flags scattered across the spawn path; it is also
+// what keeps two sibling mirrors from opening a second embedded Dolt engine on
+// the one path and colliding on online GC.
+func TryAcquireSyncPushLock(databasePath string) (func() error, bool, error) {
+	release, err := acquireFileLock(context.Background(), SyncPushLockPath(databasePath), true, 1, 0)
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return nil, false, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return release, true, nil
+}
+
 func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	lockPath := WorkspaceLockPath(doltRootDir)
+	return acquireFileLock(ctx, WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
+}
+
+// acquireFileLock is the path-parametrized acquisition loop shared by every
+// flock-backed coordination point (the workspace-exclusivity lock and the
+// background-mirror single-flight lock). [LAW:one-source-of-truth] One
+// OpenFile → tryLockFile → retry-or-error sequence; the lock's meaning lives
+// entirely in which path and (exclusive, maxAttempts, delay) the caller passes.
+func acquireFileLock(ctx context.Context, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, fmt.Errorf("ensure workspace lock dir: %w", err)
 	}
