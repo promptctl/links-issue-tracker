@@ -289,9 +289,12 @@ func TestGitBackedRemoteURL(t *testing.T) {
 		{"https without .git", "https://github.com/org/repo", "git+https://github.com/org/repo"},
 		{"http without .git", "http://example.com/org/repo", "git+http://example.com/org/repo"},
 		{"scp-like with .git", "git@github.com:org/repo.git", "git+ssh://git@github.com/./org/repo.git"},
+		{"scp-like without .git", "git@github.com:org/repo", "git+ssh://git@github.com/./org/repo"},
 		{"ssh url with .git", "ssh://git@github.com/org/repo.git", "git+ssh://git@github.com/org/repo.git"},
 		{"file url", "file:///srv/git/repo.git", "git+file:///srv/git/repo.git"},
 		{"local absolute path with .git", "/srv/git/repo.git", "git+file:///srv/git/repo.git"},
+		{"local absolute path without .git", "/srv/git/repo", "git+file:///srv/git/repo"},
+		{"schemeless host without .git", "github.com/org/repo", "git+https://github.com/org/repo"},
 		{"already git+ prefixed", "git+https://github.com/org/repo", "git+https://github.com/org/repo"},
 		{"empty", "   ", ""},
 	}
@@ -329,7 +332,9 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 		"https://github.com/org/repo.git",
 		"https://github.com/org/repo",
 		"git@github.com:org/repo.git",
+		"git@github.com:org/repo",
 		"/srv/git/repo.git",
+		"/srv/git/repo",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			doltRoot := filepath.Join(t.TempDir(), "dolt")
