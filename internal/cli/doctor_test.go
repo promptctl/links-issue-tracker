@@ -85,7 +85,7 @@ func TestPrintSyncFreshness(t *testing.T) {
 		{
 			name:        "ahead names push fix",
 			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Ahead: 2}},
-			wantSubstrs: []string{"sync:", "ahead of origin/master by 2", "not pushed", "lit sync push", "ahead=2 behind=0"},
+			wantSubstrs: []string{"sync:", "ahead of origin/master by 2", "not pushed", "as of last fetch", "lit sync push", "ahead=2 behind=0"},
 		},
 		{
 			name:        "behind names pull fix and stays honest",
@@ -136,5 +136,24 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	}
 	if !strings.Contains(got, "sync: no git remote configured") {
 		t.Fatalf("runDoctor() output missing no-remote freshness line: %q", got)
+	}
+}
+
+// TestRunDoctorSurfacesUnresolvedFreshness drives the resolution-failure path
+// end to end: the test workspace is not a git repo, so reading git remotes
+// fails and doctor must surface a loud "freshness unavailable" line carrying the
+// reason — without aborting the integrity health check beside it.
+func TestRunDoctorSurfacesUnresolvedFreshness(t *testing.T) {
+	ap := newTestCLIApp(t)
+	var buf bytes.Buffer
+	if err := runDoctor(context.Background(), &buf, ap, nil); err != nil {
+		t.Fatalf("runDoctor() error = %v", err)
+	}
+	got := buf.String()
+	if !strings.Contains(got, "integrity_check=ok") {
+		t.Fatalf("runDoctor() output missing health line: %q", got)
+	}
+	if !strings.Contains(got, "sync: freshness unavailable") {
+		t.Fatalf("runDoctor() output missing unresolved freshness line: %q", got)
 	}
 }

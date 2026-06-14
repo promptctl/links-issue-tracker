@@ -404,8 +404,20 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() after c3 error = %v", err)
 	}
-	defer sync.Close()
 	assertFreshness("after divergent commit", sync, SyncDiverged, 1, 1)
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() after divergence error = %v", err)
+	}
+
+	// `lit doctor` opens the store read-only, so prove SyncFreshness's queries
+	// (dolt_remote_branches, ACTIVE_BRANCH, dolt_log) run on an OpenForRead store
+	// and not just the sync store the rest of this test drives.
+	readStore, err := OpenForRead(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenForRead() error = %v", err)
+	}
+	defer readStore.Close()
+	assertFreshness("read-only store", readStore, SyncDiverged, 1, 1)
 }
 
 func TestGitBackedRemoteURL(t *testing.T) {

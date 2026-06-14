@@ -88,9 +88,9 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *stor
 }
 
 // printSyncFreshness renders the freshness line. Every resolved state names the
-// stale direction and the exact command to fix it; the behind direction is
-// always qualified "as of last fetch" because it is read from the local
-// remote-tracking ref, which doctor does not refresh over the network.
+// stale direction and the exact command to fix it, qualified "as of last fetch"
+// because both ahead and behind are read from the local remote-tracking ref,
+// which doctor does not refresh over the network.
 func printSyncFreshness(w io.Writer, report doctorSyncReport) error {
 	switch report.Kind {
 	case doctorSyncNoRemote:
@@ -110,13 +110,13 @@ func printSyncFreshness(w io.Writer, report doctorSyncReport) error {
 		_, err := fmt.Fprintf(w, "sync: up to date with %s (as of last fetch)\n", ref)
 		return err
 	case store.SyncAhead:
-		_, err := fmt.Fprintf(w, "sync: ahead of %s by %d local change(s) not pushed — run 'lit sync push' [ahead=%d behind=0]\n", ref, f.Ahead, f.Ahead)
+		_, err := fmt.Fprintf(w, "sync: ahead of %s by %d local change(s) not pushed, as of last fetch — run 'lit sync push' [ahead=%d behind=0]\n", ref, f.Ahead, f.Ahead)
 		return err
 	case store.SyncBehind:
 		_, err := fmt.Fprintf(w, "sync: behind %s by %d change(s) not pulled, as of last fetch — run 'lit sync pull' [ahead=0 behind=%d]\n", ref, f.Behind, f.Behind)
 		return err
 	case store.SyncDiverged:
-		_, err := fmt.Fprintf(w, "sync: diverged from %s — %d local change(s) not pushed, %d remote change(s) not pulled as of last fetch; run 'lit sync pull' to reconcile [ahead=%d behind=%d]\n", ref, f.Ahead, f.Behind, f.Ahead, f.Behind)
+		_, err := fmt.Fprintf(w, "sync: diverged from %s as of last fetch — %d local change(s) not pushed, %d remote change(s) not pulled; run 'lit sync pull' to reconcile [ahead=%d behind=%d]\n", ref, f.Ahead, f.Behind, f.Ahead, f.Behind)
 		return err
 	}
 	// [LAW:no-silent-failure] State() is exhaustive over the store's freshness
@@ -201,10 +201,15 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	// Resolve freshness here, outside the print closure, so the closure stays a
-	// pure renderer. [LAW:effects-at-boundaries] Like the identity header, the
-	// freshness line is part of the text rendering only, so --json still emits a
-	// single HealthReport document and nothing else.
-	syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+	// pure renderer. [LAW:effects-at-boundaries] The freshness line is part of
+	// the text rendering only; resolution shells out to git (including a possible
+	// `ls-remote` against the remote), so it is gated to text mode rather than
+	// run-and-discarded under --json, where it would do network work for output
+	// that is never emitted.
+	syncReport := doctorSyncReport{}
+	if outputModeFromWriter(stdout) != outputModeJSON {
+		syncReport = resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+	}
 	if err := printValue(stdout, report, func(w io.Writer, v any) error {
 		// The identity header is part of the text rendering only; routing it
 		// through the text closure makes JSON mode structurally unable to emit it.
