@@ -271,4 +271,19 @@ RUN set -euo pipefail; \
     echo "ICU prefixes verified for all targets."
 
 WORKDIR /go/src/app
+
+# goreleaser runs git inside this container as root, but the bind-mounted
+# /go/src/app/.git is owned by the host CI user (the runner's uid, not root).
+# Modern git refuses a repo owned by another user ("detected dubious
+# ownership"), which goreleaser surfaces as "current folder is not a git
+# repository" — fatal in the real `release` path. Snapshot mode silently
+# degrades to version "+none" instead of failing, which is why release-validate
+# (snapshot only) stayed green while the first real tag push failed at "getting
+# and validating git state". Trust exactly the mount target (== WORKDIR) so the
+# real `goreleaser release` can read the tag.
+# [LAW:single-enforcer] one image owns the build environment's git trust; both
+# release.yml and release-validate.yml inherit it from here rather than each
+# carrying its own per-`docker run` safe.directory env.
+RUN git config --global --add safe.directory /go/src/app
+
 ENTRYPOINT ["/usr/local/bin/goreleaser"]
