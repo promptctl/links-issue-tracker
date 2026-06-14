@@ -439,6 +439,13 @@ lit doctor [--fix[=<area,...>]] [--json]
 Health check. Bare `--fix` applies all available fixes; `--fix rank` (comma-separated)
 scopes them. Run `lit doctor --fix` before escalating any persistent error.
 
+The report also includes a `sync:` line reporting freshness against the configured
+remote — ahead (local ticket changes not pushed), behind (remote changes not pulled,
+as of the last fetch), diverged, up to date, or never synced — and names the
+`lit sync push`/`lit sync pull` command to fix it. The behind direction is read from
+the local remote-tracking ref, so it reflects the last fetch; doctor does not reach
+the network. The line appears in the text report only, not under `--json`.
+
 ### `lit hooks install`
 
 ```text
