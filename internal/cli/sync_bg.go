@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"time"
 
@@ -17,6 +18,11 @@ import (
 // cadence owner spawns. It is absent from the family usage string, so it never
 // appears in help; it exists only as the detached worker's entrypoint.
 const backgroundMirrorSubcommand = "__mirror-bg"
+
+// mirrorLogName is the detached worker's durable output sink. A detached
+// process owns no terminal, so its stdout/stderr must land somewhere inspectable
+// rather than /dev/null — otherwise a trace-write failure or a panic vanishes.
+const mirrorLogName = "mirror.log"
 
 const (
 	// mirrorParentWaitTimeout bounds the wait for the spawning command to
@@ -41,15 +47,29 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 	}
 	cmd := exec.Command(self, "sync", backgroundMirrorSubcommand, "--parent-pid", strconv.Itoa(parentPID))
 	cmd.Dir = ws.RootDir
-	// A detached worker owns no terminal; discarding its streams keeps it from
-	// writing over the command's output. Failures surface via the trace files.
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = nil, nil, nil
+	cmd.Stdin = nil
+	// Route the detached worker's output to a durable log. [LAW:no-silent-failure]
+	// If the log cannot be opened, surface that on the command's terminal-attached
+	// stderr and still spawn with discarded streams — the mirror matters more than
+	// its log, and the inability to log is itself loud here rather than swallowed.
+	logFile, logErr := os.OpenFile(filepath.Join(ws.StorageDir, mirrorLogName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if logErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: on-change mirror log unavailable (%v); worker output will be discarded\n", logErr)
+	} else {
+		cmd.Stdout, cmd.Stderr = logFile, logFile
+	}
 	cmd.SysProcAttr = detachSysProcAttr()
 	cmd.Env = append(os.Environ(),
 		automationTriggerEnvVar+"=on-change",
 		automationReasonEnvVar+"=on-change cadence mirrored after a mutating command",
 	)
-	return cmd.Start()
+	startErr := cmd.Start()
+	if logFile != nil {
+		// The child inherited its own dup of the fd at exec; the parent's copy is
+		// no longer needed. Closing it cannot affect the child's logging.
+		_ = logFile.Close()
+	}
+	return startErr
 }
 
 // runBackgroundMirror is the detached worker. It runs as its own process after
@@ -128,12 +148,14 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 		// Could-not-attempt (reconcile/remote resolution): record and stop.
 		return recordMirrorError(ws, err)
 	}
-	if outcome.pushErr != nil {
-		// The push ran and failed (e.g. offline). performSyncPush already recorded
-		// the error trace; the mutation is durable locally and the next push
-		// retries, so the mirror stops cleanly. [LAW:no-silent-failure]
-		return nil
+	// performSyncPush records its own trace (push-ok or push-failure). If that
+	// trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
+	if outcome.traceErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
 	}
+	// outcome.pushErr (e.g. offline) is already captured in that trace; the
+	// mutation is durable locally and the next push retries, so the mirror stops
+	// cleanly either way.
 	return nil
 }
 
