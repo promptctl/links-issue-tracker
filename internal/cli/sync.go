@@ -208,14 +208,6 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
-	// backs) composes maintenance compaction with the push as two separate store
-	// operations at this call site; the on-change mirror omits compaction by not
-	// composing it. Compaction reclaims local chunks only and never changes what
-	// the push sends, so this ordering does not affect delivery.
-	if err := syncStore.SyncCompact(ctx); err != nil {
-		return err
-	}
 	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
 	if err != nil {
 		return err
@@ -225,6 +217,18 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// the skipped/ok payload is never printed over a failed push.
 	if outcome.pushErr != nil {
 		return outcome.pushErr
+	}
+	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
+	// backs) composes maintenance compaction with the push as two separate store
+	// operations; the on-change mirror omits it by not composing it. Compaction
+	// runs only behind a push that actually happened — a skipped push (no remote /
+	// empty remote) must stay a no-op and never run DOLT_GC. It reclaims local
+	// chunks only and does not change what was pushed, so running it after
+	// delivery is equivalent.
+	if outcome.status == "ok" {
+		if compactErr := syncStore.SyncCompact(ctx); compactErr != nil {
+			return fmt.Errorf("push succeeded but post-push compaction failed: %w", compactErr)
+		}
 	}
 	return printValue(stdout, outcome.payload(), func(w io.Writer, v any) error {
 		return printSyncPushPayload(w, v, *verbose)

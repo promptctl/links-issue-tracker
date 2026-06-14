@@ -3,8 +3,9 @@
 package cli
 
 import (
-	"os"
 	"syscall"
+
+	"golang.org/x/sys/windows"
 )
 
 // detachSysProcAttr is the Windows peer of the POSIX detach seam. Windows has
@@ -15,22 +16,27 @@ func detachSysProcAttr() *syscall.SysProcAttr {
 	return &syscall.SysProcAttr{}
 }
 
-// processAlive is a best-effort liveness probe for the wait-for-parent. lit has
-// no Windows build — the embedded Dolt engine (gozstd / go-mysql-server cgo) does
-// not compile for Windows, so this file never executes; it exists only so the
-// platform seam type-checks, mirroring workspace_lock_windows.go. os.FindProcess
-// on Windows opens a handle that lingers briefly after exit, so this errs toward
-// "alive" — the same limitation the store's isCommitLockPIDRunning carries. That
-// bias is deliberately the safe one: waitForProcessExit treats a never-exiting
-// probe as a timeout, and the mirror aborts on timeout (records a trace) rather
-// than racing a live engine. A precise OpenProcess/GetExitCodeProcess probe is
-// withheld on purpose: it would be code CI can neither compile nor run.
-// [LAW:verifiable-goals]
+// stillActiveExitCode is the value GetExitCodeProcess reports while a process is
+// still running (Win32 STILL_ACTIVE); any other value means it has exited.
+const stillActiveExitCode = 259
+
+// processAlive reports whether pid names a live process by querying its exit
+// state. lit has no Windows build today — the embedded Dolt engine does not
+// compile for Windows — but the probe is genuinely correct, not an always-alive
+// placeholder, so wait-for-parent behaves if that ever changes. It uses the same
+// golang.org/x/sys/windows surface workspace_lock_windows.go already relies on.
 func processAlive(pid int) bool {
-	proc, err := os.FindProcess(pid)
+	handle, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
 	if err != nil {
+		// The process cannot be opened: it has exited or never existed.
 		return false
 	}
-	_ = proc.Release()
-	return true
+	defer windows.CloseHandle(handle)
+	var code uint32
+	if err := windows.GetExitCodeProcess(handle, &code); err != nil {
+		// State indeterminate — report alive so the mirror waits rather than
+		// racing a possibly-live engine. [LAW:no-ambient-temporal-coupling]
+		return true
+	}
+	return code == stillActiveExitCode
 }
