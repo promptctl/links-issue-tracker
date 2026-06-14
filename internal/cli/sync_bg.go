@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -59,10 +60,7 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 		cmd.Stdout, cmd.Stderr = logFile, logFile
 	}
 	cmd.SysProcAttr = detachSysProcAttr()
-	cmd.Env = append(os.Environ(),
-		automationTriggerEnvVar+"=on-change",
-		automationReasonEnvVar+"=on-change cadence mirrored after a mutating command",
-	)
+	cmd.Env = mirrorEnv()
 	startErr := cmd.Start()
 	if logFile != nil {
 		// The child inherited its own dup of the fd at exec; the parent's copy is
@@ -70,6 +68,40 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 		_ = logFile.Close()
 	}
 	return startErr
+}
+
+// mirrorEnv builds the detached mirror's environment: the parent's environment
+// with every automation-trace variable stripped, then the mirror's own trigger
+// and reason set. [LAW:one-source-of-truth] The parent's
+// LNKS_AUTOMATION_TRACE_REF_FILE points at a file the parent's caller reads to
+// learn which trace the command recorded; the detached mirror must not inherit
+// it and overwrite that file with its own trace path after the command has
+// returned. The mirror has no reader for a trace-ref file, so it carries none —
+// it records traces by trigger alone.
+func mirrorEnv() []string {
+	stripped := []string{
+		automationTriggerEnvVar + "=",
+		automationReasonEnvVar + "=",
+		automationTraceRefFileEnvVar + "=",
+	}
+	parent := os.Environ()
+	env := make([]string, 0, len(parent)+2)
+	for _, kv := range parent {
+		keep := true
+		for _, prefix := range stripped {
+			if strings.HasPrefix(kv, prefix) {
+				keep = false
+				break
+			}
+		}
+		if keep {
+			env = append(env, kv)
+		}
+	}
+	return append(env,
+		automationTriggerEnvVar+"=on-change",
+		automationReasonEnvVar+"=on-change cadence mirrored after a mutating command",
+	)
 }
 
 // runBackgroundMirror is the detached worker. It runs as its own process after
