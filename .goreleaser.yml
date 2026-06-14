@@ -82,9 +82,15 @@ builds:
           {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-linux-gnu{{- end }}
         {{- end -}}
       # CGO include + link paths per target — points cgo at the ICU prefix
-      # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Empty
-      # for linux/amd64 because that target uses the system libicu-dev which
-      # is already on the default include/lib search path.
+      # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. For
+      # linux/amd64 the include path is empty (it compiles against the system
+      # libicu-dev headers already on the default search path), but the link
+      # path is NOT empty: it points at the static-only /opt/icu/linux_amd64/lib
+      # the Dockerfile populates with symlinks to the system libicu *.a, so the
+      # bare `-licui18n` go-icu-regex emits resolves to the static archive
+      # instead of the .so. [LAW:one-type-per-behavior] every target now links
+      # ICU statically and ships a self-contained binary; linux/amd64 is no
+      # longer the dynamically-linked exception.
       #
       # We set CGO_CPPFLAGS (preprocessor: -I) so the include path applies to
       # BOTH C and C++ source. go-icu-regex has file.cpp; CGO_CFLAGS alone
@@ -98,20 +104,21 @@ builds:
         {{- end -}}
       - >-
         {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
-          CGO_LDFLAGS=
+          CGO_LDFLAGS=-L/opt/icu/linux_amd64/lib -static-libstdc++ -static-libgcc
         {{- else -}}
           CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib
         {{- end -}}
-      # icu_static build tag: the cross-builds produce ONLY static libs
-      # (--enable-static --disable-shared), so go-icu-regex's static-link
-      # cgo recipe is the one we want. The linux/amd64 native build uses
-      # the system dynamic libs, which is its non-static recipe — handled
-      # by leaving the tag unset for that target only.
-      - >-
-        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
-        {{- else -}}
-          GOFLAGS=-tags=icu_static
-        {{- end -}}
+      # icu_static build tag: every target links ICU's STATIC archives, so
+      # go-icu-regex's static-link cgo recipe (-DU_STATIC_IMPLEMENTATION) is the
+      # one we want everywhere. The cross-targets build ICU from source
+      # (--enable-static --disable-shared) at /opt/icu/<target>; linux/amd64
+      # links the system libicu *.a via the static-only -L above. The extra
+      # -static-libstdc++ -static-libgcc on linux/amd64 bundles the C++ runtime
+      # (ICU is C++): without them the native gcc link leaves NEEDED libstdc++.so
+      # / libgcc_s.so, which a clean target host need not have. The zig
+      # cross-targets bundle their libc++ statically by default, so they don't
+      # need (and zig cc would reject) these gcc driver flags.
+      - GOFLAGS=-tags=icu_static
     # goos/goarch enumerate every target we know how to build; the active
     # set ships only those NOT in the ignore: block below.
     goos:
