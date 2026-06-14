@@ -208,9 +208,15 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	// The explicit `lit sync push` folds in maintenance compaction; the
-	// background on-change mirror is the one caller that pushes without it.
-	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, true)
+	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
+	// backs) composes maintenance compaction with the push as two separate store
+	// operations at this call site; the on-change mirror omits compaction by not
+	// composing it. Compaction reclaims local chunks only and never changes what
+	// the push sends, so this ordering does not affect delivery.
+	if err := syncStore.SyncCompact(ctx); err != nil {
+		return err
+	}
+	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
 	if err != nil {
 		return err
 	}
@@ -271,7 +277,7 @@ func (o syncPushOutcome) payload() map[string]any {
 // resolution); a push that ran and failed is carried in outcome.pushErr with
 // its trace already recorded, leaving the caller to decide whether that fails
 // it (the command) or is best-effort (the cadence owner).
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force, compact bool) (syncPushOutcome, error) {
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool) (syncPushOutcome, error) {
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
@@ -305,16 +311,6 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
 	if err != nil {
 		return syncPushOutcome{}, err
-	}
-	// [LAW:decomposition] Compaction and push are separate store operations this
-	// orchestrator composes. Compaction runs here — past the skip checks above, so
-	// it never garbage-collects for a push that won't happen — and only for the
-	// callers that want it (manual push, pre-push hook); the on-change mirror
-	// passes compact false to keep DOLT_GC off every interactive change.
-	if compact {
-		if compactErr := syncStore.SyncCompact(ctx); compactErr != nil {
-			return syncPushOutcome{}, compactErr
-		}
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)

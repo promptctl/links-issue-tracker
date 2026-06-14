@@ -129,7 +129,7 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 // after this push is mirrored by the next mutation's mirror or the pre-push
 // hook. The unsynced window shrinks toward zero without ever blocking a mutation.
 func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) error {
-	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false, false)
+	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): record and stop.
 		return recordMirrorError(ws, err)
