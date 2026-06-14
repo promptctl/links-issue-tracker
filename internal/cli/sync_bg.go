@@ -118,38 +118,24 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	return mirrorOnce(ctx, syncStore, ws)
 }
 
-// mirrorOnce pushes the local branch to the remote once, without compaction.
-// [LAW:dataflow-not-control-flow] It does not loop re-checking freshness: the
-// embedded engine reports the remote-tracking ref "as of last fetch", so an
-// in-session re-read after a push is stale and cannot tell the loop when to
-// stop. Coalescing of a burst instead comes from two facts that need no loop —
-// dolt push sends the current HEAD (so commits that landed before this push go
-// out with it), and the single-flight lock funnels concurrent mutations through
-// one mirror. A commit that lands after this push, while the lock is still held,
-// is mirrored by the next mutation's mirror or the pre-push hook; the unsynced
-// window shrinks toward zero without ever blocking a mutation.
+// mirrorOnce runs the one shared push path, without compaction. It is a single
+// path with no freshness branch: [LAW:dataflow-not-control-flow] the skip
+// decisions (no remote, empty remote) already live in performSyncPush, and an
+// up-to-date push is a cheap no-op, so the mirror does not pre-decide whether to
+// push. It does not loop, either — the engine reports the tracking ref "as of
+// last fetch", so an in-session re-read is stale. Coalescing of a burst comes
+// from dolt push sending the current HEAD (commits that landed before this push
+// go out with it) funnelled through the single-flight lock; a commit that lands
+// after this push is mirrored by the next mutation's mirror or the pre-push
+// hook. The unsynced window shrinks toward zero without ever blocking a mutation.
 func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) error {
-	ahead, synced, err := mirrorAhead(ctx, syncStore, ws)
-	if err != nil {
-		return recordMirrorError(ws, err)
-	}
-	// Skip only the case we know needs no push: synced and not ahead (as of last
-	// fetch). When no tracking ref exists yet (never synced), fall through to
-	// performSyncPush — a remote that already has refs must still receive this
-	// branch on-change, and performSyncPush's own RemoteHasRefs gate skips a
-	// genuinely-empty remote (whose first-push seeding stays an explicit
-	// `lit sync push --set-upstream`). [LAW:dataflow-not-control-flow] The skip is
-	// driven by the precise up-to-date value, not a coarse tracking-ref proxy.
-	if synced && ahead == 0 {
-		return nil
-	}
 	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false, false)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): record and stop.
 		return recordMirrorError(ws, err)
 	}
-	// performSyncPush records its own trace (push-ok or push-failure). If that
-	// trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
+	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
+	// that trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
 	}
@@ -157,34 +143,6 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 	// mutation is durable locally and the next push retries, so the mirror stops
 	// cleanly either way.
 	return nil
-}
-
-// mirrorAhead resolves the same remote and branch `lit sync` uses and returns
-// how far the local branch leads the remote-tracking ref (as of the last
-// fetch), plus whether a tracking ref exists at all. It reuses the shared
-// resolution helpers so the mirror's target can never drift from the manual
-// push's. [LAW:one-source-of-truth]
-func mirrorAhead(ctx context.Context, syncStore *store.Store, ws workspace.Info) (int64, bool, error) {
-	state, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
-	if err != nil {
-		return 0, false, err
-	}
-	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), state.gitRemotes)
-	if err != nil {
-		return 0, false, err
-	}
-	if remote == "" {
-		return 0, false, nil
-	}
-	branch, err := resolveSyncBranch(ws.RootDir, remote)
-	if err != nil {
-		return 0, false, err
-	}
-	freshness, err := syncStore.SyncFreshness(ctx, remote, branch)
-	if err != nil {
-		return 0, false, err
-	}
-	return freshness.Ahead, freshness.Synced, nil
 }
 
 // waitForProcessExit blocks until pid is gone, returning true, or the timeout

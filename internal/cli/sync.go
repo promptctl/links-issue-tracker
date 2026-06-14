@@ -306,8 +306,18 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
+	// [LAW:decomposition] Compaction and push are separate store operations this
+	// orchestrator composes. Compaction runs here — past the skip checks above, so
+	// it never garbage-collects for a push that won't happen — and only for the
+	// callers that want it (manual push, pre-push hook); the on-change mirror
+	// passes compact false to keep DOLT_GC off every interactive change.
+	if compact {
+		if compactErr := syncStore.SyncCompact(ctx); compactErr != nil {
+			return syncPushOutcome{}, compactErr
+		}
+	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force, compact)
+	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,
