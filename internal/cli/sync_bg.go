@@ -121,7 +121,7 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	// Dolt's online garbage collection. If the parent outlives the timeout, the
 	// precondition is unmet — abort rather than race a live engine.
 	// [LAW:no-ambient-temporal-coupling]
-	if !waitForProcessExit(*parentPID, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+	if !waitForParentExit(*parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
 		return recordMirrorError(ws, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 			*parentPID, mirrorParentWaitTimeout))
@@ -179,19 +179,25 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 	return nil
 }
 
-// waitForProcessExit blocks until pid is gone, returning true, or the timeout
-// elapses with the process still alive, returning false. The ordering owner is
-// the liveness check, not the sleep: each iteration tests the real signal
-// (process gone) and the poll delay is only the interval between checks. The
-// boolean lets the caller distinguish "parent released the engine" from "parent
-// outlived the wait" rather than proceeding blindly on a timeout.
-// [LAW:no-ambient-temporal-coupling]
-func waitForProcessExit(pid int, timeout, poll time.Duration) bool {
-	if pid <= 0 {
+// waitForParentExit blocks until the spawning command has exited, returning
+// true, or the timeout elapses with it still alive, returning false. It watches
+// the worker's own parent pid (getppid): the detached worker is a direct child
+// of the spawning command, so when that command exits the worker is reparented
+// (to init or a subreaper) and getppid stops equalling parentPID. This is robust
+// where a kill(pid,0) probe is not — a zombie parent still answers kill(pid,0)
+// until it is reaped (delaying the mirror past the actual exit), and a reused
+// pid could be mistaken for the original; reparenting happens at exit, before
+// reaping, and getppid reports the real current parent. [LAW:no-ambient-temporal-coupling]
+// The ordering owner is the getppid check, not the sleep, which is only the poll
+// interval; the boolean distinguishes "parent exited" from "parent outlived the
+// wait" so the caller aborts rather than proceeding blindly on a timeout.
+// getppid is a parameter so the wait is testable without a real process tree.
+func waitForParentExit(parentPID int, getppid func() int, timeout, poll time.Duration) bool {
+	if parentPID <= 0 {
 		return true
 	}
 	deadline := time.Now().Add(timeout)
-	for processAlive(pid) {
+	for getppid() == parentPID {
 		if time.Now().After(deadline) {
 			return false
 		}
