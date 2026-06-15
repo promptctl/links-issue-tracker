@@ -25,20 +25,31 @@ import (
 // is never released, which defer prevents for panics and PID-liveness
 // reclaims for killed processes.
 
-var ErrTransientManifestReadOnly = errors.New("transient manifest read-only")
+// ErrTransientGCContention marks a failure caused by concurrent Dolt online
+// garbage collection — either the manifest going read-only mid-run or the
+// active connection being invalidated ("please reconnect"). Both are
+// recoverable by backing off, rotating the poisoned connection, and retrying.
+var ErrTransientGCContention = errors.New("transient online-gc contention")
 var processCommitMutex sync.Mutex
 var commitLockPIDRunning = isCommitLockPIDRunning
 
 const (
-	transientManifestRetryMaxAttempts = 12
-	transientManifestRetryBaseDelay   = 50 * time.Millisecond
-	transientManifestRetryMaxDelay    = 1 * time.Second
-	commitLockStaleAfter              = 10 * time.Minute
+	transientRetryMaxAttempts = 12
+	transientRetryBaseDelay   = 50 * time.Millisecond
+	transientRetryMaxDelay    = 1 * time.Second
+	commitLockStaleAfter      = 10 * time.Minute
 )
 
 type retryOperation func(context.Context) error
 type retryDelayFunc func(attempt int) time.Duration
 type retrySleepFunc func(context.Context, time.Duration) error
+
+// connectionRotator rotates a poisoned SQL connection between retry attempts.
+// Online GC invalidates the connection that observed it, so the next attempt
+// must run on a fresh handle. [LAW:effects-at-boundaries] The retry loop stays
+// pure; the reconnect effect is injected here.
+type connectionRotator func() error
+
 type commitLockContextKey struct{}
 
 // withMutation runs a mutation under a held commit lock. It begins a tx,
@@ -68,31 +79,40 @@ func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx co
 	})
 }
 
-func retryTransientManifestReadOnly(ctx context.Context, operation retryOperation, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
+// retryTransientGCContention runs operation, and on a transient online-GC
+// contention failure backs off, rotates the (poisoned) connection, and retries.
+// The rotate-between-attempts step is load-bearing: the GC reset invalidates the
+// connection that observed it, so re-running on the same handle would fail
+// identically — only a fresh connection can make progress. [LAW:single-enforcer]
+// All GC-contention recovery lives here; callers supply the rotate effect.
+func retryTransientGCContention(ctx context.Context, operation retryOperation, rotate connectionRotator, delayForAttempt retryDelayFunc, sleep retrySleepFunc) error {
 	var lastErr error
-	for attempt := 1; attempt <= transientManifestRetryMaxAttempts; attempt++ {
-		err := classifyTransientManifestError(operation(ctx))
+	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
+		err := classifyTransientGCError(operation(ctx))
 		if err == nil {
 			return nil
 		}
 		lastErr = err
-		if !errors.Is(err, ErrTransientManifestReadOnly) || attempt == transientManifestRetryMaxAttempts {
+		if !errors.Is(err, ErrTransientGCContention) || attempt == transientRetryMaxAttempts {
 			break
 		}
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
 			return waitErr
 		}
+		if rotateErr := rotate(); rotateErr != nil {
+			return rotateErr
+		}
 	}
 	return lastErr
 }
 
-func transientManifestRetryDelay(attempt int) time.Duration {
+func transientRetryDelay(attempt int) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	delay := transientManifestRetryBaseDelay << (attempt - 1)
-	if delay > transientManifestRetryMaxDelay {
-		delay = transientManifestRetryMaxDelay
+	delay := transientRetryBaseDelay << (attempt - 1)
+	if delay > transientRetryMaxDelay {
+		delay = transientRetryMaxDelay
 	}
 	return delay
 }
@@ -119,9 +139,9 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	// [LAW:single-enforcer] commitWorkingSet is the single mutation boundary that owns transient commit retry behavior.
 	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientManifestReadOnly(ctx, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.commitWorkingSetOnce(ctx, message)
-		}, transientManifestRetryDelay, waitWithContext)
+		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
 
@@ -205,7 +225,7 @@ func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), erro
 			processCommitMutex.Unlock()
 			return nil, fmt.Errorf("acquire commit lock: %w", staleErr)
 		}
-		if waitErr := waitWithContext(ctx, transientManifestRetryBaseDelay); waitErr != nil {
+		if waitErr := waitWithContext(ctx, transientRetryBaseDelay); waitErr != nil {
 			processCommitMutex.Unlock()
 			return nil, waitErr
 		}
@@ -324,48 +344,68 @@ func isCommitLockPIDRunning(pid int) (bool, error) {
 	return true, nil
 }
 
-type transientManifestReadOnlyError struct {
+type transientGCContentionError struct {
 	err error
 }
 
-func (e transientManifestReadOnlyError) Error() string {
+func (e transientGCContentionError) Error() string {
 	return e.err.Error()
 }
 
-func (e transientManifestReadOnlyError) Unwrap() error {
+func (e transientGCContentionError) Unwrap() error {
 	return e.err
 }
 
-func (e transientManifestReadOnlyError) Is(target error) bool {
-	return target == ErrTransientManifestReadOnly
+func (e transientGCContentionError) Is(target error) bool {
+	return target == ErrTransientGCContention
 }
 
 func wrapCommitWorkingSetError(err error) error {
 	wrapped := fmt.Errorf("dolt commit working set: %w", err)
-	if !isManifestReadOnlyCommitError(err) {
+	if !isTransientGCContentionError(err) {
 		return wrapped
 	}
-	// [LAW:one-source-of-truth] Store commit wrapping is the canonical transient classifier for manifest read-only failures.
-	return transientManifestReadOnlyError{err: wrapped}
+	// [LAW:one-source-of-truth] Store commit wrapping is the canonical transient classifier for online-GC contention failures.
+	return transientGCContentionError{err: wrapped}
 }
 
-func classifyTransientManifestError(err error) error {
+func classifyTransientGCError(err error) error {
 	if err == nil {
 		return nil
 	}
-	if errors.Is(err, ErrTransientManifestReadOnly) {
+	if errors.Is(err, ErrTransientGCContention) {
 		return err
 	}
-	if !isManifestReadOnlyCommitError(err) {
+	if !isTransientGCContentionError(err) {
 		return err
 	}
-	return transientManifestReadOnlyError{err: err}
+	return transientGCContentionError{err: err}
 }
 
-func isManifestReadOnlyCommitError(err error) bool {
+// isTransientGCContentionError is the single predicate deciding whether a raw
+// Dolt error is recoverable online-GC contention. The two shapes are distinct
+// symptoms of the same cause, kept as single-purpose predicates and composed
+// here. [LAW:decomposition] [LAW:single-enforcer]
+func isTransientGCContentionError(err error) bool {
+	return isManifestReadOnlyError(err) || isOnlineGCResetError(err)
+}
+
+func isManifestReadOnlyError(err error) bool {
 	if err == nil {
 		return false
 	}
 	normalized := strings.ToLower(err.Error())
 	return strings.Contains(normalized, "cannot update manifest") && strings.Contains(normalized, "read only")
+}
+
+// isOnlineGCResetError matches Dolt's online-GC connection invalidation
+// (ErrServerPerformedGC). It requires the GC-specific phrase so the unrelated
+// cluster-role transition error — which also says "please reconnect" — is not
+// misclassified as transient. [FRAMING:representation]
+func isOnlineGCResetError(err error) bool {
+	if err == nil {
+		return false
+	}
+	normalized := strings.ToLower(err.Error())
+	return strings.Contains(normalized, "online garbage collection") && strings.Contains(normalized, "reconnect")
 }

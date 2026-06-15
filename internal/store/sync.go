@@ -514,7 +514,7 @@ func (s *Store) countCommitRange(ctx context.Context, from string, to string) (i
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		return retryTransientManifestReadOnly(ctx, operation, transientManifestRetryDelay, waitWithContext)
+		return retryTransientGCContention(ctx, operation, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
 
