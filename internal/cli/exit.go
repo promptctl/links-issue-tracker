@@ -59,7 +59,7 @@ func ExitCode(err error) int {
 	if errors.As(err, &outsideWorkspace) {
 		return ExitGeneric
 	}
-	if errors.Is(err, store.ErrTransientManifestReadOnly) {
+	if errors.Is(err, store.ErrTransientGCContention) {
 		return ExitGeneric
 	}
 	return ExitGeneric
