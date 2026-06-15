@@ -25,58 +25,63 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 	return current
 }
 
-func TestRetryTransientManifestReadOnlyRetriesTransientError(t *testing.T) {
+// noRotate is the rotate hook for retry tests that don't exercise reconnection.
+func noRotate() error { return nil }
+
+func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	op := &fakeRetryOperation{
 		results: []error{
-			transientManifestReadOnlyError{err: errors.New("transient manifest read only")},
+			transientGCContentionError{err: errors.New("transient manifest read only")},
 			nil,
 		},
 	}
 
-	err := retryTransientManifestReadOnly(
+	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
+		noRotate,
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
 	if err != nil {
-		t.Fatalf("retryTransientManifestReadOnly() error = %v", err)
+		t.Fatalf("retryTransientGCContention() error = %v", err)
 	}
 	if op.calls != 2 {
 		t.Fatalf("op.calls = %d, want 2", op.calls)
 	}
 }
 
-func TestRetryTransientManifestReadOnlyReturnsLastErrorAfterExhaustion(t *testing.T) {
-	results := make([]error, 0, transientManifestRetryMaxAttempts)
-	for attempt := 1; attempt < transientManifestRetryMaxAttempts; attempt++ {
-		results = append(results, transientManifestReadOnlyError{err: errors.New("transient")})
+func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T) {
+	results := make([]error, 0, transientRetryMaxAttempts)
+	for attempt := 1; attempt < transientRetryMaxAttempts; attempt++ {
+		results = append(results, transientGCContentionError{err: errors.New("transient")})
 	}
-	lastErr := transientManifestReadOnlyError{err: errors.New("transient final")}
+	lastErr := transientGCContentionError{err: errors.New("transient final")}
 	results = append(results, lastErr)
 	op := &fakeRetryOperation{results: results}
 
-	err := retryTransientManifestReadOnly(
+	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
+		noRotate,
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
 	if err == nil {
-		t.Fatal("retryTransientManifestReadOnly() error = nil, want non-nil")
+		t.Fatal("retryTransientGCContention() error = nil, want non-nil")
 	}
-	if !errors.Is(err, ErrTransientManifestReadOnly) {
-		t.Fatalf("error = %v, want ErrTransientManifestReadOnly", err)
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("error = %v, want ErrTransientGCContention", err)
 	}
 	if err.Error() != lastErr.Error() {
 		t.Fatalf("error = %q, want %q", err.Error(), lastErr.Error())
 	}
-	if op.calls != transientManifestRetryMaxAttempts {
-		t.Fatalf("op.calls = %d, want %d", op.calls, transientManifestRetryMaxAttempts)
+	if op.calls != transientRetryMaxAttempts {
+		t.Fatalf("op.calls = %d, want %d", op.calls, transientRetryMaxAttempts)
 	}
 }
 
-func TestRetryTransientManifestReadOnlyDoesNotRetryNonTransientError(t *testing.T) {
+func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 	op := &fakeRetryOperation{
 		results: []error{
 			errors.New("some other storage failure"),
@@ -84,87 +89,175 @@ func TestRetryTransientManifestReadOnlyDoesNotRetryNonTransientError(t *testing.
 		},
 	}
 
-	err := retryTransientManifestReadOnly(
+	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
+		noRotate,
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
 	if err == nil {
-		t.Fatal("retryTransientManifestReadOnly() error = nil, want non-nil")
+		t.Fatal("retryTransientGCContention() error = nil, want non-nil")
 	}
 	if op.calls != 1 {
 		t.Fatalf("op.calls = %d, want 1", op.calls)
 	}
 }
 
-func TestRetryTransientManifestReadOnlyHonorsContextTimeoutDuringBackoff(t *testing.T) {
+func TestRetryTransientGCContentionHonorsContextTimeoutDuringBackoff(t *testing.T) {
 	op := &fakeRetryOperation{
 		results: []error{
-			transientManifestReadOnlyError{err: errors.New("transient timeout")},
+			transientGCContentionError{err: errors.New("transient timeout")},
 		},
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
 	defer cancel()
 
-	err := retryTransientManifestReadOnly(
+	err := retryTransientGCContention(
 		ctx,
 		op.run,
+		noRotate,
 		func(int) time.Duration { return 50 * time.Millisecond },
 		waitWithContext,
 	)
 	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Fatalf("retryTransientManifestReadOnly() error = %v, want context.DeadlineExceeded", err)
+		t.Fatalf("retryTransientGCContention() error = %v, want context.DeadlineExceeded", err)
 	}
 	if op.calls != 1 {
 		t.Fatalf("op.calls = %d, want 1", op.calls)
 	}
 }
 
-func TestTransientManifestRetryDelayIsBounded(t *testing.T) {
+// TestRetryTransientGCContentionRotatesConnectionBetweenAttempts pins the fix:
+// the GC reset poisons the connection, so the retry must rotate it before each
+// re-attempt. One rotation per backoff, never after the final (succeeding) call.
+func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T) {
+	op := &fakeRetryOperation{
+		results: []error{
+			transientGCContentionError{err: errors.New("gc reset 1")},
+			transientGCContentionError{err: errors.New("gc reset 2")},
+			nil,
+		},
+	}
+	rotations := 0
+
+	err := retryTransientGCContention(
+		context.Background(),
+		op.run,
+		func() error { rotations++; return nil },
+		func(int) time.Duration { return 0 },
+		func(context.Context, time.Duration) error { return nil },
+	)
+	if err != nil {
+		t.Fatalf("retryTransientGCContention() error = %v", err)
+	}
+	if op.calls != 3 {
+		t.Fatalf("op.calls = %d, want 3", op.calls)
+	}
+	if rotations != 2 {
+		t.Fatalf("rotations = %d, want 2 (one per backoff, none after success)", rotations)
+	}
+}
+
+// TestRetryTransientGCContentionSurfacesRotateFailure proves a failed reconnect
+// aborts the retry loudly instead of silently looping on a dead connection.
+// [LAW:no-silent-failure]
+func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
+	op := &fakeRetryOperation{
+		results: []error{
+			transientGCContentionError{err: errors.New("gc reset")},
+			nil,
+		},
+	}
+	rotateErr := errors.New("reopen dolt failed")
+
+	err := retryTransientGCContention(
+		context.Background(),
+		op.run,
+		func() error { return rotateErr },
+		func(int) time.Duration { return 0 },
+		func(context.Context, time.Duration) error { return nil },
+	)
+	if !errors.Is(err, rotateErr) {
+		t.Fatalf("retryTransientGCContention() error = %v, want rotate failure", err)
+	}
+	if op.calls != 1 {
+		t.Fatalf("op.calls = %d, want 1 (no re-attempt after rotate failure)", op.calls)
+	}
+}
+
+func TestTransientRetryDelayIsBounded(t *testing.T) {
 	for attempt := 1; attempt <= 10; attempt++ {
-		delay := transientManifestRetryDelay(attempt)
-		if delay < transientManifestRetryBaseDelay {
-			t.Fatalf("delay(%d) = %v, want >= %v", attempt, delay, transientManifestRetryBaseDelay)
+		delay := transientRetryDelay(attempt)
+		if delay < transientRetryBaseDelay {
+			t.Fatalf("delay(%d) = %v, want >= %v", attempt, delay, transientRetryBaseDelay)
 		}
-		if delay > transientManifestRetryMaxDelay {
-			t.Fatalf("delay(%d) = %v, want <= %v", attempt, delay, transientManifestRetryMaxDelay)
+		if delay > transientRetryMaxDelay {
+			t.Fatalf("delay(%d) = %v, want <= %v", attempt, delay, transientRetryMaxDelay)
 		}
 	}
 }
 
-func TestWrapCommitWorkingSetErrorMarksTransientManifestReadOnly(t *testing.T) {
+func TestWrapCommitWorkingSetErrorMarksManifestReadOnly(t *testing.T) {
 	err := wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
-	if !errors.Is(err, ErrTransientManifestReadOnly) {
-		t.Fatalf("errors.Is(err, ErrTransientManifestReadOnly) = false, err=%v", err)
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
 	}
 	if !strings.Contains(err.Error(), "dolt commit working set") || !strings.Contains(err.Error(), "cannot update manifest") {
 		t.Fatalf("unexpected wrapped error text: %q", err.Error())
 	}
 }
 
+// TestWrapCommitWorkingSetErrorMarksGCReset covers the previously-unhandled
+// variant: a commit that hits Dolt's online-GC connection invalidation must be
+// classified transient so it is retried (with a reconnect), not surfaced raw.
+func TestWrapCommitWorkingSetErrorMarksGCReset(t *testing.T) {
+	err := wrapCommitWorkingSetError(errors.New("this connection was established when this server performed an online garbage collection. this connection can no longer be used. please reconnect."))
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
+	}
+}
+
 func TestWrapCommitWorkingSetErrorLeavesNonTransientUnmarked(t *testing.T) {
 	err := wrapCommitWorkingSetError(errors.New("permission denied"))
-	if errors.Is(err, ErrTransientManifestReadOnly) {
-		t.Fatalf("errors.Is(err, ErrTransientManifestReadOnly) = true, err=%v", err)
+	if errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("errors.Is(err, ErrTransientGCContention) = true, err=%v", err)
 	}
 	if got, want := err.Error(), "dolt commit working set: permission denied"; got != want {
 		t.Fatalf("error = %q, want %q", got, want)
 	}
 }
 
-func TestClassifyTransientManifestErrorWrapsGenericManifestFailures(t *testing.T) {
-	err := classifyTransientManifestError(errors.New("commit add comment: Error 1105: cannot update manifest: database is read only"))
-	if !errors.Is(err, ErrTransientManifestReadOnly) {
-		t.Fatalf("errors.Is(err, ErrTransientManifestReadOnly) = false, err=%v", err)
+func TestClassifyTransientGCErrorWrapsManifestReadOnly(t *testing.T) {
+	err := classifyTransientGCError(errors.New("commit add comment: Error 1105: cannot update manifest: database is read only"))
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
 	}
 }
 
-func TestClassifyTransientManifestErrorLeavesGenericFailures(t *testing.T) {
+func TestClassifyTransientGCErrorWrapsGCReset(t *testing.T) {
+	err := classifyTransientGCError(errors.New("gc_copier: this connection was established when this server performed an online garbage collection. please reconnect."))
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
+	}
+}
+
+// TestClassifyTransientGCErrorLeavesClusterRoleReconnect guards the precision of
+// the GC-reset predicate: the cluster role-transition error also says "please
+// reconnect" but is not GC contention, so it must NOT be retried as transient.
+func TestClassifyTransientGCErrorLeavesClusterRoleReconnect(t *testing.T) {
+	source := errors.New("this server transitioned cluster roles. this connection can no longer be used. please reconnect.")
+	err := classifyTransientGCError(source)
+	if errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("cluster-role reconnect misclassified as GC contention: %v", err)
+	}
+}
+
+func TestClassifyTransientGCErrorLeavesGenericFailures(t *testing.T) {
 	source := errors.New("permission denied")
-	err := classifyTransientManifestError(source)
+	err := classifyTransientGCError(source)
 	if err != source {
-		t.Fatalf("classifyTransientManifestError() = %v, want original %v", err, source)
+		t.Fatalf("classifyTransientGCError() = %v, want original %v", err, source)
 	}
 }
 
