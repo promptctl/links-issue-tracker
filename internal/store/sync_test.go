@@ -581,6 +581,65 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	}
 }
 
+// TestStagedWorkingSetSurvivesReconnect proves the load-bearing safety property
+// of routing commitWorkingSet's retry through a reconnect: the staged working set
+// must survive the connection rotation. If Dolt's working set were connection-
+// local, rotating the handle between staging a mutation and DOLT_COMMIT would
+// silently drop the change — the commit would find "nothing to commit" and the
+// mutation would vanish with no error. [LAW:no-silent-failure] This stages a
+// write, reconnects, commits on the fresh handle, then reads it back through a
+// brand-new Open (its own engine) to confirm the change is durably committed.
+func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+
+	// Staged, but deliberately not DOLT_COMMIT'd — so the reconnect below lands
+	// between the staged write and its Dolt commit.
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		t.Fatalf("BeginTx() error = %v", err)
+	}
+	if err := st.setMeta(ctx, tx, "reconnect_probe", "survived"); err != nil {
+		t.Fatalf("setMeta() error = %v", err)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatalf("tx.Commit() error = %v", err)
+	}
+
+	// Rotate the connection between the staged write and the Dolt commit — the
+	// exact sequence the GC-contention retry now performs.
+	if err := st.reconnect(); err != nil {
+		t.Fatalf("reconnect() error = %v", err)
+	}
+	if err := st.commitWorkingSetOnce(ctx, "commit staged probe after reconnect"); err != nil {
+		t.Fatalf("commitWorkingSetOnce() after reconnect error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	// A brand-new Open (fresh engine) must see the committed value. If the staged
+	// write had been lost on reconnect, the commit above would have been a no-op
+	// and this read returns empty.
+	reopened, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("reopen Open() error = %v", err)
+	}
+	defer reopened.Close()
+	got, err := reopened.getMeta(ctx, nil, "reconnect_probe")
+	if err != nil {
+		t.Fatalf("getMeta() error = %v", err)
+	}
+	if got != "survived" {
+		t.Fatalf("reconnect_probe = %q, want \"survived\" (staged working set lost across reconnect)", got)
+	}
+}
+
 // TestSyncResetToRemoteHeadAdoptsUnrelatedHistory drives the bootstrap adopt
 // path against a real file-backed remote: a producer pushes a ticket, then a
 // brand-new store (its own unrelated bootstrap root) fetches and adopts the
