@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 )
@@ -527,6 +528,56 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	}
 	if got.State() != SyncUpToDate {
 		t.Fatalf("after compact+push: state = %q (%+v), want up-to-date", got.State(), got)
+	}
+}
+
+// TestReconnectRotatorRecoversPoisonedOperation proves the links-sync-w3i3 fix
+// end to end against a REAL store: when an operation fails with Dolt's online-GC
+// connection-reset error, the retry boundary rotates the live connection via the
+// real s.reconnect and the subsequent attempt succeeds on the fresh handle. The
+// CLI race that produces this error is timing-dependent and cannot be summoned
+// on demand, so this injects the exact Dolt error string at the seam and asserts
+// the recovery machinery — reconnect + retry — actually makes a real store usable
+// again. A post-recovery write confirms the rotated handle is fully functional.
+func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	// The exact Dolt ErrServerPerformedGC text (verified against the pinned
+	// module), wrapped the way callIntProcedure would surface it.
+	gcReset := errors.New("compact dolt store: Error 1105: this connection was established when this server performed an online garbage collection. this connection can no longer be used. please reconnect.")
+
+	dbBefore := st.db
+	attempts := 0
+	err = st.withCommitLock(ctx, func(ctx context.Context) error {
+		return retryTransientGCContention(ctx, func(context.Context) error {
+			attempts++
+			if attempts == 1 {
+				return gcReset
+			}
+			return nil
+		}, st.reconnect, func(int) time.Duration { return 0 }, func(context.Context, time.Duration) error { return nil })
+	})
+	if err != nil {
+		t.Fatalf("retry with real reconnect rotator error = %v", err)
+	}
+	if attempts != 2 {
+		t.Fatalf("attempts = %d, want 2 (one poisoned, one post-reconnect success)", attempts)
+	}
+	if st.db == dbBefore {
+		t.Fatal("s.db was not rotated; reconnect rotator did not run")
+	}
+
+	// The rotated connection must be a fully working handle, not just non-nil:
+	// a real mutation through it has to commit.
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		t.Fatalf("CreateIssue() after reconnect error = %v", err)
 	}
 }
 
