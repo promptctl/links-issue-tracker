@@ -11,15 +11,16 @@ import (
 )
 
 type initReport struct {
-	Status       string `json:"status"`
-	WorkspaceID  string `json:"workspace_id"`
-	DatabasePath string `json:"database_path"`
-	DBCreated    bool   `json:"db_created"`
-	Hooks        string `json:"hooks"`
-	Agents       string `json:"agents"`
-	Claude       string `json:"claude"`
-	AgentsSource string `json:"agents_source,omitempty"`
-	ClaudeSource string `json:"claude_source,omitempty"`
+	Status       string          `json:"status"`
+	WorkspaceID  string          `json:"workspace_id"`
+	DatabasePath string          `json:"database_path"`
+	DBCreated    bool            `json:"db_created"`
+	Hooks        string          `json:"hooks"`
+	Agents       string          `json:"agents"`
+	Claude       string          `json:"claude"`
+	AgentsSource string          `json:"agents_source,omitempty"`
+	ClaudeSource string          `json:"claude_source,omitempty"`
+	Sync         initSyncOutcome `json:"sync"`
 }
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -47,6 +48,11 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		Hooks:        "skipped",
 		Agents:       "skipped",
 		Claude:       "skipped",
+		// Detect-and-adopt gates on local emptiness, not on dbCreated, so a
+		// re-init after a transient adopt failure can still pick up the remote
+		// backlog. [LAW:types-are-the-program] adoptRemoteTicketsOnInit owns the
+		// whole decision and returns the discriminated outcome.
+		Sync: adoptRemoteTicketsOnInit(ctx, ws),
 	}
 
 	if !*skipHooks {
@@ -146,6 +152,9 @@ func writeInitHumanOutput(w io.Writer, report initReport) error {
 		if _, err := fmt.Fprintf(w, "lit workspace already initialized\n"); err != nil {
 			return err
 		}
+	}
+	if err := writeInitSyncLine(w, report.Sync); err != nil {
+		return err
 	}
 	if len(updated) > 0 {
 		if _, err := fmt.Fprintf(w, "  Updated: %s\n", strings.Join(updated, ", ")); err != nil {

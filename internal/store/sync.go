@@ -216,6 +216,59 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 	return result, nil
 }
 
+// LocalIssueCount reports how many issues the local data branch holds. It is the
+// adopt-safety signal for `lit init`: a store with zero local issues has no work
+// to lose, so adopting the remote history wholesale is safe; a store with issues
+// must be preserved. A store that has never been opened for normal use has not
+// run the baseline migration, so the issues table is simply absent — a true "no
+// issues yet" state in the schema lifecycle, reported as 0 rather than surfaced
+// as a missing-table error. [LAW:no-defensive-null-guards] The absence is a real
+// domain value (pristine store), matched here, not papered over.
+func (s *Store) LocalIssueCount(ctx context.Context) (int64, error) {
+	var tableExists int64
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'issues'`,
+	).Scan(&tableExists); err != nil {
+		return 0, fmt.Errorf("check issues table presence: %w", err)
+	}
+	if tableExists == 0 {
+		return 0, nil
+	}
+	var count int64
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issues`).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count local issues: %w", err)
+	}
+	return count, nil
+}
+
+// SyncResetToRemoteHead replaces the local data branch with the remote-tracking
+// ref's history, wholesale — the embedded equivalent of `git reset --hard
+// remotes/<remote>/<branch>`. It is the bootstrap counterpart to SyncPull, not a
+// variant of it: a freshly-initialized store's only commit is an unrelated
+// bootstrap root, so a merge against the remote fails with "no common ancestor".
+// Adopting the remote head discards that throwaway root and points the local
+// branch at the remote history. It is therefore destructive of local commits by
+// design — the one safe caller is `lit init` on a store it just created, where
+// there is no local history to lose. The caller has already fetched, so the
+// tracking ref exists; this method owns only the reset. [LAW:decomposition]
+func (s *Store) SyncResetToRemoteHead(ctx context.Context, remote string, branch string) error {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return err
+	}
+	trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
+	return s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", trackingRef); err != nil {
+			return fmt.Errorf("reset to remote head %q: %w", trackingRef, err)
+		}
+		return nil
+	})
+}
+
 // compactWithinLock runs DOLT_GC and rotates the connection. The caller must
 // already hold the commit lock; SyncCompact and SyncPush both compose over
 // this helper so the compact step has one implementation regardless of whether
