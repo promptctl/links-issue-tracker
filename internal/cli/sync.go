@@ -56,6 +56,10 @@ var syncFamily = commandFamily[wsRunFn]{
 		{name: "fetch", payload: withSyncStore(runSyncFetch)},
 		{name: "pull", payload: withSyncStore(runSyncPull)},
 		{name: "push", payload: withSyncStore(runSyncPush)},
+		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
+		// above, so it never shows in help; it manages its own store lifecycle
+		// (wait-for-parent, then open) and so is registered without withSyncStore.
+		{name: backgroundMirrorSubcommand, payload: runBackgroundMirror},
 	},
 }
 
@@ -204,7 +208,11 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force)
+	// [LAW:decomposition] The explicit `lit sync push` (and the pre-push hook it
+	// backs) compacts atomically with the push; the on-change mirror pushes
+	// without compaction. The choice is the push step passed as a value, so
+	// performSyncPush has no compaction branch and a skipped push never compacts.
+	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, syncStore.SyncCompactAndPush)
 	if err != nil {
 		return err
 	}
@@ -259,13 +267,20 @@ func (o syncPushOutcome) payload() map[string]any {
 	return payload
 }
 
+// syncPushStep is the push the orchestrator runs once it has resolved the
+// remote and branch — store.Store.SyncPush (push only) or
+// store.Store.SyncCompactAndPush (compact + push, atomic). [LAW:dataflow-not-control-flow]
+// The variant is a value the caller supplies, so performSyncPush carries no
+// compaction branch and never compacts a push it skips.
+type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (store.SyncPushResult, error)
+
 // performSyncPush reconciles Dolt remotes from git, resolves the remote and
-// branch, mirrors the store, and records an automation trace for the attempt.
-// The returned error is a "could not attempt" failure (reconcile or remote
-// resolution); a push that ran and failed is carried in outcome.pushErr with
-// its trace already recorded, leaving the caller to decide whether that fails
-// it (the command) or is best-effort (the cadence owner).
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool) (syncPushOutcome, error) {
+// branch, runs the supplied push step, and records an automation trace for the
+// attempt. The returned error is a "could not attempt" failure (reconcile or
+// remote resolution); a push that ran and failed is carried in outcome.pushErr
+// with its trace already recorded, leaving the caller to decide whether that
+// fails it (the command) or is best-effort (the cadence owner).
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (syncPushOutcome, error) {
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
@@ -301,7 +316,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		return syncPushOutcome{}, err
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
-	result, pushErr := syncStore.SyncPush(ctx, remoteName, syncBranch, setUpstream, force)
+	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,

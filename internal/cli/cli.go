@@ -160,9 +160,10 @@ func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context
 	}
 	// [LAW:single-enforcer] One owner consults the sync-cadence policy after a
 	// successful command; command handlers stay unaware of cadence. The mirror
-	// reuses this command's own open store, so the embedded Dolt engine is
-	// never opened a second time for the same path while the first is live.
-	// [LAW:no-ambient-temporal-coupling] It runs before the deferred Close.
+	// it schedules is non-blocking — a detached worker that pushes only after
+	// this command's engine is released — so it adds no latency here and never
+	// opens a second engine on the path while the first is live.
+	// [LAW:no-ambient-temporal-coupling]
 	return maybeSyncAfterMutation(ctx, accessMode, ap)
 }
 
