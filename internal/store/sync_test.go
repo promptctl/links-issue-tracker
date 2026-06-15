@@ -598,8 +598,8 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 
-	// Stage a write into the working set: begin a tx, write, commit the tx (which
-	// flushes to the branch working set) — but do NOT DOLT_COMMIT yet.
+	// Staged, but deliberately not DOLT_COMMIT'd — so the reconnect below lands
+	// between the staged write and its Dolt commit.
 	tx, err := st.db.BeginTx(ctx, nil)
 	if err != nil {
 		t.Fatalf("BeginTx() error = %v", err)
