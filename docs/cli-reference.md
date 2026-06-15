@@ -82,6 +82,14 @@ managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git h
 Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
 suppress the respective side effects.
 
+On a fresh clone, `lit init` detects whether the configured git remote already
+carries `lit` ticket data and adopts it automatically, so the clone transparently
+picks up the existing backlog (it prints `Pulled existing backlog from <remote>/<branch>`).
+The store lives in `.git/links/dolt`, which `git clone` does not transfer, so init is
+the place that makes "clone + init = my tickets are here" true. Adoption runs only when
+the local store has no tickets of its own — a workspace with local work is never
+overwritten — so it is also safe to re-run after a transient network failure.
+
 ---
 
 ## Working the queue

@@ -18,6 +18,16 @@ $(git rev-parse --git-common-dir)/links/dolt
 
 `lit sync` commands run in the current repo/worktree root and operate on that database.
 
+## First clone (bootstrap)
+
+On a fresh clone of a repo that already uses `lit`, run `lit init`: it detects that
+the remote carries existing ticket data and adopts that history wholesale, so the
+clone starts with the real backlog. This is the first-receive path — not `lit sync
+pull`. A fresh store has its own unrelated root commit, so a pull against the remote
+fails with `no common ancestor`; adoption resets the local branch to the remote head
+instead. Once the clone has adopted, its history is shared with the remote and the
+ordinary `lit sync pull` / `lit sync push` flow applies.
+
 ## Typical setup
 
 ```sh

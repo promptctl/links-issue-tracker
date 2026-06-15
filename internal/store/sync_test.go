@@ -530,6 +530,140 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	}
 }
 
+// TestSyncResetToRemoteHeadAdoptsUnrelatedHistory drives the bootstrap adopt
+// path against a real file-backed remote: a producer pushes a ticket, then a
+// brand-new store (its own unrelated bootstrap root) fetches and adopts the
+// remote head. It proves the producer's ticket lands locally and that a
+// subsequent regular Open — which runs migrations — reads it, the real
+// post-`lit init` usage path. A plain SyncPull cannot do this; it fails with
+// "no common ancestor" across the unrelated roots, which is why adopt resets.
+func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	// Producer: a real workspace with a ticket, pushed to the remote.
+	producerRoot := filepath.Join(base, "producer")
+	producer, err := Open(ctx, producerRoot, "ws-producer")
+	if err != nil {
+		t.Fatalf("Open(producer) error = %v", err)
+	}
+	if _, err := producer.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		t.Fatalf("CreateIssue(producer) error = %v", err)
+	}
+	if err := producer.Close(); err != nil {
+		t.Fatalf("Close(producer) error = %v", err)
+	}
+	producerSync, err := OpenSync(ctx, producerRoot, "ws-producer")
+	if err != nil {
+		t.Fatalf("OpenSync(producer) error = %v", err)
+	}
+	if err := producerSync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(producer) error = %v", err)
+	}
+	if _, err := producerSync.SyncPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncPush(producer) error = %v", err)
+	}
+	if err := producerSync.Close(); err != nil {
+		t.Fatalf("Close(producerSync) error = %v", err)
+	}
+
+	// Consumer: a brand-new store with an unrelated bootstrap root.
+	consumerRoot := filepath.Join(base, "consumer")
+	consumer, err := OpenSync(ctx, consumerRoot, "ws-consumer")
+	if err != nil {
+		t.Fatalf("OpenSync(consumer) error = %v", err)
+	}
+	if err := consumer.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(consumer) error = %v", err)
+	}
+	if err := consumer.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(consumer) error = %v", err)
+	}
+	// The tracking ref exists post-fetch, so the consumer reports Synced — the
+	// signal init uses to decide there is remote data to adopt.
+	freshness, err := consumer.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(consumer) error = %v", err)
+	}
+	if !freshness.Synced {
+		t.Fatalf("consumer freshness Synced = false, want true (remote carries data): %+v", freshness)
+	}
+	if err := consumer.SyncResetToRemoteHead(ctx, "origin", "master"); err != nil {
+		t.Fatalf("SyncResetToRemoteHead() error = %v", err)
+	}
+	if err := consumer.Close(); err != nil {
+		t.Fatalf("Close(consumer) error = %v", err)
+	}
+
+	// A regular Open runs migrations on the adopted store and reads the ticket.
+	adopted, err := Open(ctx, consumerRoot, "ws-consumer")
+	if err != nil {
+		t.Fatalf("Open(consumer after adopt) error = %v", err)
+	}
+	defer adopted.Close()
+	issues, err := adopted.ListIssues(ctx, ListIssuesFilter{})
+	if err != nil {
+		t.Fatalf("ListIssues(consumer) error = %v", err)
+	}
+	if len(issues) != 1 || issues[0].Title != "remote-ticket" {
+		t.Fatalf("adopted issues = %+v, want exactly [remote-ticket]", issues)
+	}
+}
+
+// TestLocalIssueCountAcrossLifecycle pins the adopt-safety signal at each store
+// lifecycle stage: a pristine sync store (no baseline migration, issues table
+// absent) reports 0, a migrated store with no tickets still reports 0, and a
+// store with a ticket reports its count.
+func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+
+	pristine, err := OpenSync(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	if got, err := pristine.LocalIssueCount(ctx); err != nil || got != 0 {
+		t.Fatalf("pristine LocalIssueCount() = %d, %v; want 0, nil", got, err)
+	}
+	if err := pristine.Close(); err != nil {
+		t.Fatalf("Close(pristine) error = %v", err)
+	}
+
+	st, err := Open(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if got, err := st.LocalIssueCount(ctx); err != nil || got != 0 {
+		t.Fatalf("migrated-empty LocalIssueCount() = %d, %v; want 0, nil", got, err)
+	}
+	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if got, err := st.LocalIssueCount(ctx); err != nil || got != 1 {
+		t.Fatalf("after-ticket LocalIssueCount() = %d, %v; want 1, nil", got, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+}
+
+func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	st, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer st.Close()
+	if err := st.SyncResetToRemoteHead(ctx, "  ", "master"); err == nil || !strings.Contains(err.Error(), "remote is required") {
+		t.Fatalf("blank remote error = %v, want remote required", err)
+	}
+	if err := st.SyncResetToRemoteHead(ctx, "origin", "  "); err == nil || !strings.Contains(err.Error(), "branch is required") {
+		t.Fatalf("blank branch error = %v, want branch required", err)
+	}
+}
+
 func TestGitBackedRemoteURL(t *testing.T) {
 	cases := []struct {
 		name string
