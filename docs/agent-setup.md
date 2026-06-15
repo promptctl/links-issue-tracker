@@ -59,7 +59,9 @@ lit init
 
 This creates the issue store under `$(git rev-parse --git-common-dir)/links/` and adds a
 short `lit` section to `AGENTS.md` and `CLAUDE.md` so future agents know to run
-`lit quickstart`. Useful flags:
+`lit quickstart`. If the repo's remote already carries `lit` ticket data, `init` adopts
+that backlog automatically, so a fresh clone starts with the project's real tickets
+rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
 - `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
