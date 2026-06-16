@@ -101,16 +101,18 @@ func markReceiveAttempt(ws workspace.Info) error {
 
 // workspaceHasGitRemote reports whether the workspace has at least one git remote
 // configured — the cheap precondition for any receive, so a single-machine repo
-// never opens a sync store only to resolve "no remote". An error reading remotes
-// is treated as "cannot tell, skip": receive is best-effort and the next interval
-// retries. [LAW:no-silent-failure] The skip is a real domain choice (no confirmed
-// remote), not a swallowed failure.
-func workspaceHasGitRemote(ws workspace.Info) bool {
+// never opens a sync store only to resolve "no remote". It returns the read error
+// rather than collapsing it into false: "no remote configured" (false, nil) is a
+// legitimate silent skip, but "could not read remotes" is an unexpected failure
+// the caller must surface, not silently treat as absence. [LAW:no-silent-failure]
+// [LAW:no-defensive-null-guards] The two conditions are distinct values, not one
+// folded bool.
+func workspaceHasGitRemote(ws workspace.Info) (bool, error) {
 	remotes, err := workspace.GitRemotes(ws.RootDir)
 	if err != nil {
-		return false
+		return false, err
 	}
-	return len(remotes) > 0
+	return len(remotes) > 0, nil
 }
 
 // isTruthyEnv reports whether an environment value enables a flag. It accepts the

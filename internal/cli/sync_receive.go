@@ -37,7 +37,14 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	if !workspaceHasGitRemote(ws) {
+	hasRemote, err := workspaceHasGitRemote(ws)
+	if err != nil {
+		// Couldn't read remotes — unexpected; surface it loudly rather than treat
+		// it as "no remote". [LAW:no-silent-failure]
+		recordReceiveError(ws, fmt.Errorf("check git remotes: %w", err))
+		return
+	}
+	if !hasRemote {
 		return
 	}
 
