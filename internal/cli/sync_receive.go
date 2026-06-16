@@ -109,10 +109,14 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 	if remoteName == "" {
 		return syncReceiveOutcome{status: "skipped", reason: "no_sync_remote"}, nil
 	}
-	// [LAW:single-enforcer] First-push detection is the shared "remote is empty"
-	// definition: an empty remote has nothing to receive.
+	// First-push detection: an empty remote has nothing to receive. A read error
+	// here is unexpected and must not be misread as "empty" — surface it as a
+	// could-not-attempt failure so the caller records a trace. [LAW:no-silent-failure]
 	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
-	if refsErr == nil && !hasRefs {
+	if refsErr != nil {
+		return syncReceiveOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
 		return syncReceiveOutcome{status: "skipped", reason: "remote_empty", remote: remoteName}, nil
 	}
 	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
@@ -129,7 +133,7 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		"behind":      strconv.FormatInt(result.Behind, 10),
 	}
 	traceStatus := "ok"
-	traceReason := "automatic receive fast-forwarded from the configured git remote"
+	traceReason := receiveReasonForState(result.State)
 	if receiveErr != nil {
 		traceStatus = "error"
 		traceReason = receiveErr.Error()
@@ -155,6 +159,27 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		traceErr:   traceRecordErr,
 		receiveErr: receiveErr,
 	}, nil
+}
+
+// receiveReasonForState maps a receive outcome to the human reason recorded on
+// its automation trace, so the trace describes what actually happened rather than
+// assuming a fast-forward. [LAW:one-source-of-truth] One mapping from state to
+// reason; an exhaustive switch over the closed SyncReceiveState set.
+func receiveReasonForState(state store.SyncReceiveState) string {
+	switch state {
+	case store.SyncReceiveFastForwarded:
+		return "automatic receive fast-forwarded the local store to the remote head"
+	case store.SyncReceiveUpToDate:
+		return "automatic receive found the local store already up to date with the remote"
+	case store.SyncReceiveAhead:
+		return "automatic receive found local ahead of the remote; nothing to receive"
+	case store.SyncReceiveDiverged:
+		return "automatic receive found local diverged from the remote; left for foreground reconcile"
+	case store.SyncReceiveNeverSynced:
+		return "automatic receive found no remote-tracking data on this branch yet"
+	default:
+		return "automatic receive completed with state " + string(state)
+	}
 }
 
 // recordReceiveError writes a could-not-attempt failure to the shared automation
