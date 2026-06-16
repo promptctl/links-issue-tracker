@@ -105,3 +105,38 @@ command completes. It is best-effort: a push failure is surfaced on stderr and
 recorded as an automation trace, but never fails the command — the ticket
 change is already durable in the local Dolt store. An unknown cadence value is
 rejected at config load.
+
+## Receive automation
+
+Push cadence governs getting *local* work onto the remote; receive governs
+seeing *other machines'* work arrive. An established clone (one that already
+adopted the remote on init) no longer needs a manual `lit sync pull` to observe
+another machine's pushes — after a command runs, lit fetches the remote and
+**fast-forwards** the local store when it is strictly behind. It is enabled by
+default and toggled independently of push cadence:
+
+```toml
+[sync]
+receive = true   # default
+```
+
+The receive runs **inline** — in the command's own process, after the command's
+work is done and its engine is closed — not in a background worker. Embedded Dolt
+permits only one read-write engine on a path at a time, so a worker fetching
+concurrently with the next foreground command would make that command fail
+"database is read only"; running the receive sequentially after close keeps a
+single engine open at any moment. It is the lossless half of arrival: it only
+fast-forwards a branch with no local commits to lose, so it never creates a merge
+commit and never touches divergent local work. It is best-effort and bounded —
+debounced so a command burst triggers at most one fetch per interval, gated on a
+configured remote, and time-boxed so an offline or slow remote cannot hang the
+command; failures are recorded as automation traces, never failing the command.
+Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
+for a process — useful for CI and sandboxes.
+
+A clone that has made its *own* unpushed commits while the remote also moved is
+*diverged*, not merely behind. The receive deliberately does not merge that case
+— a real three-way merge can conflict, and resolving a conflict needs judgment —
+so divergence is reported and left for the foreground reconcile rather than
+silently dropped. Until that lands, reconcile a diverged clone with an explicit
+`lit sync pull`.
