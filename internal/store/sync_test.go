@@ -863,3 +863,149 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 		})
 	}
 }
+
+// TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence drives a real
+// file-remote two-clone scenario through every freshness state and pins
+// SyncReceive's contract: it fast-forwards a strictly-behind clone (the only
+// data-mutating state), is a no-op when up-to-date or ahead, and — critically —
+// reports a divergence WITHOUT merging it (that is the foreground reconcile's
+// job), so no divergent local work is ever touched by the background receive.
+func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	createIssue := func(root, title string) {
+		t.Helper()
+		st, err := Open(ctx, root, "ws")
+		if err != nil {
+			t.Fatalf("Open(%s,%q) error = %v", root, title, err)
+		}
+		if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task"}); err != nil {
+			t.Fatalf("CreateIssue(%q) error = %v", title, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close after CreateIssue(%q) error = %v", title, err)
+		}
+	}
+	issueCount := func(root string) int {
+		t.Helper()
+		st, err := OpenForRead(ctx, root, "ws")
+		if err != nil {
+			t.Fatalf("OpenForRead(%s) error = %v", root, err)
+		}
+		defer st.Close()
+		list, err := st.ListIssues(ctx, ListIssuesFilter{})
+		if err != nil {
+			t.Fatalf("ListIssues(%s) error = %v", root, err)
+		}
+		return len(list)
+	}
+	pushFrom := func(root string, setUpstream bool) {
+		t.Helper()
+		st, err := OpenSync(ctx, root, "ws")
+		if err != nil {
+			t.Fatalf("OpenSync(%s) for push error = %v", root, err)
+		}
+		if _, err := st.SyncPush(ctx, "origin", "master", setUpstream, false); err != nil {
+			t.Fatalf("SyncPush(%s) error = %v", root, err)
+		}
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close(%s) after push error = %v", root, err)
+		}
+	}
+	receive := func(label string, wantState SyncReceiveState) SyncReceiveResult {
+		t.Helper()
+		st, err := OpenSync(ctx, rootB, "ws")
+		if err != nil {
+			t.Fatalf("%s: OpenSync(B) error = %v", label, err)
+		}
+		defer st.Close()
+		res, err := st.SyncReceive(ctx, "origin", "master")
+		if err != nil {
+			t.Fatalf("%s: SyncReceive() error = %v", label, err)
+		}
+		if res.State != wantState {
+			t.Fatalf("%s: receive state = %q (ahead=%d behind=%d), want %q", label, res.State, res.Ahead, res.Behind, wantState)
+		}
+		return res
+	}
+
+	// A seeds the remote with one issue.
+	createIssue(rootA, "c1")
+	syncA, err := OpenSync(ctx, rootA, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(A) error = %v", err)
+	}
+	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(A) error = %v", err)
+	}
+	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncPush(A c1) error = %v", err)
+	}
+	if err := syncA.Close(); err != nil {
+		t.Fatalf("Close(A) error = %v", err)
+	}
+
+	// B adopts the remote: it now has c1 and is up to date.
+	syncB, err := OpenSync(ctx, rootB, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync(B) error = %v", err)
+	}
+	if err := syncB.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(B) error = %v", err)
+	}
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B) error = %v", err)
+	}
+	if err := syncB.SyncResetToRemoteHead(ctx, "origin", "master"); err != nil {
+		t.Fatalf("SyncResetToRemoteHead(B) error = %v", err)
+	}
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B) after adopt error = %v", err)
+	}
+	if got := issueCount(rootB); got != 1 {
+		t.Fatalf("B issue count after adopt = %d, want 1", got)
+	}
+
+	// Up to date: receive is a no-op.
+	receive("up to date", SyncReceiveUpToDate)
+	if got := issueCount(rootB); got != 1 {
+		t.Fatalf("B issue count after up-to-date receive = %d, want 1", got)
+	}
+
+	// A pushes c2: B is now behind by one. Receive fast-forwards it.
+	createIssue(rootA, "c2")
+	pushFrom(rootA, false)
+	res := receive("behind", SyncReceiveFastForwarded)
+	if res.Behind != 1 {
+		t.Fatalf("behind receive: Behind = %d, want 1", res.Behind)
+	}
+	if got := issueCount(rootB); got != 2 {
+		t.Fatalf("B issue count after fast-forward = %d, want 2", got)
+	}
+
+	// B makes a local, unpushed commit: it is ahead, remote unchanged. No-op.
+	createIssue(rootB, "b-local")
+	res = receive("ahead", SyncReceiveAhead)
+	if res.Ahead != 1 {
+		t.Fatalf("ahead receive: Ahead = %d, want 1", res.Ahead)
+	}
+	if got := issueCount(rootB); got != 3 {
+		t.Fatalf("B issue count after ahead receive = %d, want 3", got)
+	}
+
+	// A pushes c3 while B holds its unpushed commit: B is diverged. Receive must
+	// report it and NOT merge — B's three issues are untouched.
+	createIssue(rootA, "c3")
+	pushFrom(rootA, false)
+	res = receive("diverged", SyncReceiveDiverged)
+	if res.Ahead != 1 || res.Behind != 1 {
+		t.Fatalf("diverged receive: ahead=%d behind=%d, want 1/1", res.Ahead, res.Behind)
+	}
+	if got := issueCount(rootB); got != 3 {
+		t.Fatalf("B issue count after diverged receive = %d, want 3 (no merge)", got)
+	}
+}
