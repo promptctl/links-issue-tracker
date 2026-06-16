@@ -269,6 +269,93 @@ func (s *Store) SyncResetToRemoteHead(ctx context.Context, remote string, branch
 	})
 }
 
+// SyncReceiveState classifies what a single background receive did, derived
+// from the post-fetch freshness. [LAW:one-source-of-truth] One mapping from
+// freshness to outcome; the CLI renders this, it never re-derives it.
+type SyncReceiveState string
+
+const (
+	// SyncReceiveUpToDate: local already at the remote head; fetch found nothing.
+	SyncReceiveUpToDate SyncReceiveState = "up_to_date"
+	// SyncReceiveFastForwarded: local was strictly behind and advanced to the
+	// remote head with no merge commit — the only state that mutates local data.
+	SyncReceiveFastForwarded SyncReceiveState = "fast_forwarded"
+	// SyncReceiveAhead: local has unpushed commits and the remote has nothing
+	// new; there is nothing to receive (the push side delivers local commits).
+	SyncReceiveAhead SyncReceiveState = "ahead"
+	// SyncReceiveDiverged: both sides moved; a fast-forward is impossible and a
+	// real merge is required. The background receive deliberately does NOT merge
+	// here — that is the foreground, agent-present reconcile (links-multi-machine-ttde.2).
+	// Reported, never silently skipped. [LAW:no-silent-failure]
+	SyncReceiveDiverged SyncReceiveState = "diverged"
+	// SyncReceiveNeverSynced: no remote-tracking ref even after a fetch (the
+	// remote has no data on this branch yet); nothing to receive.
+	SyncReceiveNeverSynced SyncReceiveState = "never_synced"
+)
+
+// SyncReceiveResult reports the receive outcome and the ahead/behind counts it
+// was decided from.
+type SyncReceiveResult struct {
+	State  SyncReceiveState
+	Ahead  int64
+	Behind int64
+}
+
+// SyncReceive fetches the remote and, only when the local branch is strictly
+// behind, fast-forwards it to the remote head. It is purely lossless: it never
+// creates a merge commit, never merges a divergence, and never leaves a dirty
+// or conflicted working set — a fast-forward only moves a branch pointer that
+// has no local commits to lose. [LAW:effects-at-boundaries] The one state that
+// touches local data (behind → fast-forward) is the only safe automatic one;
+// every other state is observed and reported for the caller, with the diverged
+// case explicitly deferred to the foreground agent-present reconcile rather than
+// silently dropped. [LAW:dataflow-not-control-flow] The post-fetch freshness is
+// the value that selects the outcome; there is one fetch and one freshness read
+// every call.
+func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (SyncReceiveResult, error) {
+	trimmedRemote, err := requireSyncArg("remote", remote)
+	if err != nil {
+		return SyncReceiveResult{}, err
+	}
+	trimmedBranch, err := requireSyncArg("branch", branch)
+	if err != nil {
+		return SyncReceiveResult{}, err
+	}
+
+	var result SyncReceiveResult
+	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
+		if _, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", trimmedRemote); err != nil {
+			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
+		}
+		fresh, err := s.SyncFreshness(ctx, trimmedRemote, trimmedBranch)
+		if err != nil {
+			return err
+		}
+		result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
+		switch fresh.State() {
+		case SyncBehind:
+			trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
+			if err := execProcedureDiscard(ctx, s.db, "DOLT_MERGE", "--ff-only", trackingRef); err != nil {
+				return fmt.Errorf("fast-forward to %q: %w", trackingRef, err)
+			}
+			result.State = SyncReceiveFastForwarded
+		case SyncDiverged:
+			result.State = SyncReceiveDiverged
+		case SyncAhead:
+			result.State = SyncReceiveAhead
+		case SyncNeverSynced:
+			result.State = SyncReceiveNeverSynced
+		default:
+			result.State = SyncReceiveUpToDate
+		}
+		return nil
+	})
+	if err != nil {
+		return SyncReceiveResult{}, err
+	}
+	return result, nil
+}
+
 // compactWithinLock runs DOLT_GC and rotates the connection. The caller must
 // already hold the commit lock; SyncCompact and SyncPush both compose over
 // this helper so the compact step has one implementation regardless of whether
@@ -525,6 +612,24 @@ func callIntProcedure(ctx context.Context, db *sql.DB, procedure string, args ..
 		return 0, err
 	}
 	return status, nil
+}
+
+// execProcedureDiscard runs a CALL whose result row carries no value this caller
+// needs (e.g. DOLT_MERGE's hash/fast_forward/conflicts/message tuple) and
+// surfaces only the procedure's error. [LAW:no-silent-failure] The row is
+// drained and rows.Err is checked so a procedure failure reported mid-stream is
+// not swallowed. It is column-count agnostic, so it does not break when Dolt's
+// procedure result shape changes across versions.
+func execProcedureDiscard(ctx context.Context, db *sql.DB, procedure string, args ...string) error {
+	query := buildProcedureCall(procedure, len(args))
+	rows, err := db.QueryContext(ctx, query, stringArgsToAny(args)...)
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	for rows.Next() {
+	}
+	return rows.Err()
 }
 
 func buildProcedureCall(procedure string, argCount int) string {
