@@ -154,17 +154,26 @@ func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context
 		}
 		return err
 	}
-	defer ap.Close()
-	if runErr := run(ctx, ap); runErr != nil {
+	// Capture the workspace before running: auto-sync needs it after the engine
+	// is closed, and the close happens in the inner function below (including on
+	// panic, as a deferred close) so it always precedes the inline receive.
+	ws := ap.Workspace
+	runErr := func() error {
+		defer ap.Close()
+		return run(ctx, ap)
+	}()
+	if runErr != nil {
 		return runErr
 	}
-	// [LAW:single-enforcer] One owner consults the sync-cadence policy after a
-	// successful command; command handlers stay unaware of cadence. The mirror
-	// it schedules is non-blocking — a detached worker that pushes only after
-	// this command's engine is released — so it adds no latency here and never
-	// opens a second engine on the path while the first is live.
+	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
+	// successful command, AND after that command's engine is closed: the on-change
+	// push mirror is a detached worker that opens its own engine only once this
+	// process exits, and the receive runs inline now on its own engine — so at no
+	// point are two read-write engines open on the path, which embedded Dolt
+	// forbids. Command handlers stay unaware of any of this.
 	// [LAW:no-ambient-temporal-coupling]
-	return maybeSyncAfterMutation(ctx, accessMode, ap)
+	maybeAutoSyncAfterCommand(ctx, accessMode, ws)
+	return nil
 }
 
 func resolveWorkspaceFromWD() (workspace.Info, error) {

@@ -51,6 +51,14 @@ type SnapshotConfig struct {
 
 type SyncConfig struct {
 	Cadence SyncCadence `mapstructure:"cadence"`
+	// Receive enables the background receive worker that fast-forwards the local
+	// store to the remote head after a command, so an established clone sees
+	// other machines' pushed tickets without a manual `lit sync pull`. It is
+	// orthogonal to Cadence (which governs sending): a clone can receive
+	// regardless of how it pushes. Default true — seamless multi-machine is the
+	// goal; the off switch is the documented exception. [LAW:no-mode-explosion]
+	// One boolean, one default, not a second cadence enum.
+	Receive bool `mapstructure:"receive"`
 }
 
 // SyncCadence selects when lit mirrors its Dolt store to the configured git
@@ -147,6 +155,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("quickstart.soil_mode", false)
 	v.SetDefault("snapshot.retention_budget", 5)
 	v.SetDefault("sync.cadence", string(SyncCadenceOnPush))
+	v.SetDefault("sync.receive", true)
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
