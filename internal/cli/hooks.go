@@ -15,10 +15,10 @@ import (
 
 const (
 	// [LAW:one-source-of-truth] Only the section between these markers is owned by lit.
-	litHookBeginMarker     = "# --- BEGIN LIT INTEGRATION ---"
-	litHookEndMarker       = "# --- END LIT INTEGRATION ---"
-	legacyHookBeginMarker  = "# --- BEGIN LINKS INTEGRATION ---"
-	legacyHookEndMarker    = "# --- END LINKS INTEGRATION ---"
+	litHookBeginMarker    = "# --- BEGIN LIT INTEGRATION ---"
+	litHookEndMarker      = "# --- END LIT INTEGRATION ---"
+	legacyHookBeginMarker = "# --- BEGIN LINKS INTEGRATION ---"
+	legacyHookEndMarker   = "# --- END LINKS INTEGRATION ---"
 )
 
 type hookInstallResult struct {
@@ -29,7 +29,7 @@ type hookInstallResult struct {
 }
 
 var hooksFamily = commandFamily[wsRunFn]{
-	usage: "usage: lit hooks install [--json]",
+	usage: "usage: lit hooks install",
 	subcommands: []subcommandRow[wsRunFn]{
 		{name: "install", payload: func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 			return runHooksInstall(stdout, ws, args)
@@ -39,12 +39,11 @@ var hooksFamily = commandFamily[wsRunFn]{
 
 func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("hooks install")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit hooks install [--json]"}
+		return UsageError{Message: "usage: lit hooks install"}
 	}
 
 	result, err := installHooks(ws)
@@ -52,19 +51,8 @@ func runHooksInstall(stdout io.Writer, ws workspace.Info, args []string) error {
 		return err
 	}
 
-	payload := map[string]any{
-		"status":     "installed",
-		"hook":       result.HookPath,
-		"changed":    result.Changed,
-		"managed":    result.Managed,
-		"reason":     result.Reason,
-		"traces_dir": automationTraceDir(ws),
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]any)
-		_, printErr := fmt.Fprintf(w, "installed %s\n", p["hook"])
-		return printErr
-	})
+	_, err = fmt.Fprintf(stdout, "installed %s\n", result.HookPath)
+	return err
 }
 
 func installHooks(ws workspace.Info) (hookInstallResult, error) {

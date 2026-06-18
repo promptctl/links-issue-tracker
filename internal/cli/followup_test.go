@@ -3,11 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -15,11 +13,11 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cache invalidation",
 		Topic:     "renderer",
 		IssueType: "task",
-		Priority: 0,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
@@ -36,20 +34,20 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
+	if err := runFollowup(ctx, &stdout, ap, []string{
 		"--on", parent.ID,
 		"--title", "Surface stale cache rows in doctor",
-		"--json",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runFollowup output) error = %v", err)
+	createdID := firstIssueID(t, stdout.String())
+	if createdID != parent.ID+".1" {
+		t.Fatalf("created.ID = %q, want %q", createdID, parent.ID+".1")
 	}
-	if created.ID != parent.ID+".1" {
-		t.Fatalf("created.ID = %q, want %q", created.ID, parent.ID+".1")
+	created, err := ap.Store.GetIssue(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 	}
 	if created.Topic != parent.Topic {
 		t.Fatalf("created.Topic = %q, want inherited %q", created.Topic, parent.Topic)
@@ -66,18 +64,18 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Sync flow tightening",
 		Topic:     "sync",
 		IssueType: "task",
-		Priority: 0,
+		Priority:  0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
+	if err := runFollowup(ctx, &stdout, ap, []string{
 		"--on", parent.ID,
 		"--title", "Add sync metrics surface",
 		"--description", "Custom description for the follow-up.",
@@ -85,14 +83,13 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 		"--type", "feature",
 		"--priority", "1",
 		"--labels", "metrics,observability",
-		"--json",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
 
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runFollowup output) error = %v", err)
+	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if created.Topic != "observability" {
 		t.Fatalf("created.Topic = %q, want observability", created.Topic)
@@ -154,14 +151,14 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runFollowup(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
-		"--on", parent.ID, "--title", "Surfaced follow-up", "--json",
+	if err := runFollowup(ctx, &stdout, ap, []string{
+		"--on", parent.ID, "--title", "Surfaced follow-up",
 	}); err != nil {
 		t.Fatalf("runFollowup() error = %v", err)
 	}
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runFollowup output) error = %v", err)
+	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got := created.AssigneeValue(); got != "" {
 		t.Fatalf("created.AssigneeValue() = %q, want empty: followup capture is not a claim", got)

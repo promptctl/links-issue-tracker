@@ -24,48 +24,7 @@ import (
 	"github.com/spf13/pflag"
 )
 
-type outputMode string
-
-const (
-	outputModeText outputMode = "text"
-	outputModeJSON outputMode = "json"
-)
-
-// outputModeWriter is the single carrier of the CLI's output mode.
-// [LAW:one-source-of-truth] The mode is a shared cell rather than a value so
-// the per-subcommand --json flag can be absorbed into the writer at the parse
-// boundary; every consumer downstream reads the writer, never a parallel bool.
-// Owner: Run creates the cell; parseFlagSet is the only writer of its state.
-type outputModeWriter struct {
-	io.Writer
-	mode *outputMode
-}
-
-func newOutputModeWriter(w io.Writer, mode outputMode) outputModeWriter {
-	return outputModeWriter{Writer: w, mode: &mode}
-}
-
 var errHelpHandled = errors.New("help handled")
-
-func (w outputModeWriter) linksOutputMode() outputMode {
-	return *w.mode
-}
-
-func (w outputModeWriter) promoteToJSON() {
-	*w.mode = outputModeJSON
-}
-
-type outputModeProvider interface {
-	linksOutputMode() outputMode
-}
-
-// jsonPromoter is implemented by writers whose output mode can be promoted to
-// JSON when a subcommand-position --json flag parses true. Promotion only —
-// never demotion — so an explicit global --json always wins, matching the
-// historical `flag || writerMode` semantics.
-type jsonPromoter interface {
-	promoteToJSON()
-}
 
 const (
 	humanBootstrapHelp = "Human bootstrap command. Run once per repository/worktree setup before autonomous agent operations."
@@ -73,11 +32,10 @@ const (
 )
 
 func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string) error {
-	normalizedArgs, resolvedOutputMode, err := parseGlobalOutputMode(args, stdout)
+	normalizedArgs, err := parseGlobalArgs(args)
 	if err != nil {
 		return err
 	}
-	stdout = newOutputModeWriter(stdout, resolvedOutputMode)
 	root := newRootCommand(ctx, stdout, stderr)
 	root.SetArgs(normalizedArgs)
 	root.SetOut(stdout)
@@ -93,14 +51,8 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 
 func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *cobra.Command {
 	root := &cobra.Command{
-		Use: "lit",
-		Long: strings.Join([]string{
-			"Agent-native issue tracker",
-			"",
-			"Output mode:",
-			"  default text",
-			"  --json for machine-readable JSON output",
-		}, "\n"),
+		Use:  "lit",
+		Long: "Agent-native issue tracker",
 		Args: cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			if len(args) > 0 {
@@ -126,6 +78,12 @@ func newRootCommand(ctx context.Context, stdout io.Writer, stderr io.Writer) *co
 		},
 	}
 	root.CompletionOptions.DisableDefaultCmd = true
+	// [CLI] Exit codes are a contract: a global-position unknown flag (e.g. the
+	// removed `--json`) is a usage error, the same ExitUsage the per-command
+	// parser returns, not a generic failure. [LAW:single-enforcer]
+	root.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return UsageError{Message: err.Error()}
+	})
 	root.SetOut(stdout)
 	root.SetErr(stderr)
 	applyRegistry(root, commandGroups, commandSpecs(ctx, stdout, stderr))
@@ -191,10 +149,8 @@ func resolveWorkspaceFromWD() (workspace.Info, error) {
 	return ws, nil
 }
 
-func parseGlobalOutputMode(args []string, _ io.Writer) ([]string, outputMode, error) {
-	// [LAW:single-enforcer] Exact global --json handling and legacy output flag rejection live in one parser path.
-	// [LAW:one-source-of-truth] Text is the canonical default; only an explicit global --json flips the shared writer mode.
-	mode := outputModeText
+func parseGlobalArgs(args []string) ([]string, error) {
+	// [LAW:single-enforcer] Legacy --output rejection lives in one global parser path.
 	index := 0
 	for index < len(args) {
 		arg := args[index]
@@ -202,21 +158,18 @@ func parseGlobalOutputMode(args []string, _ io.Writer) ([]string, outputMode, er
 		case "--":
 			index++
 			goto done
-		case "--json":
-			mode = outputModeJSON
-			index++
 		case "--output":
-			return nil, "", unsupportedOutputFlagError()
+			return nil, unsupportedOutputFlagError()
 		default:
 			if strings.HasPrefix(arg, "--output=") {
-				return nil, "", unsupportedOutputFlagError()
+				return nil, unsupportedOutputFlagError()
 			}
 			goto done
 		}
 	}
 
 done:
-	return args[index:], mode, nil
+	return args[index:], nil
 }
 
 type cobraFlagSet struct {
@@ -252,13 +205,6 @@ func (fs *cobraFlagSet) String(name string, value string, usage string) *string 
 
 func (fs *cobraFlagSet) Bool(name string, value bool, usage string) *bool {
 	return fs.cmd.Flags().Bool(name, value, usage)
-}
-
-// JSONFlag declares the per-subcommand --json flag. Its parsed value is not
-// returned: parseFlagSet absorbs it into the output writer's mode, and
-// consumers read the mode from the writer. [LAW:one-source-of-truth]
-func (fs *cobraFlagSet) JSONFlag() {
-	fs.cmd.Flags().Bool("json", false, "Output JSON")
 }
 
 func (fs *cobraFlagSet) Int(name string, value int, usage string) *int {
@@ -326,7 +272,7 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		msg := err.Error()
 		if strings.Contains(msg, "flag provided but not defined: -output") ||
 			strings.Contains(msg, "flag provided but not defined: --output") {
-			return UnsupportedError{Message: "--output is no longer supported; use --json for JSON or omit it for text", Feature: "--output"}
+			return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
 		}
 		if strings.HasPrefix(msg, "unknown flag:") || strings.HasPrefix(msg, "flag provided but not defined:") {
 			return UsageError{Message: msg}
@@ -340,23 +286,11 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 		}
 		return errHelpHandled
 	}
-	// [LAW:single-enforcer] The parse boundary is the one place the
-	// subcommand-position --json flag becomes writer state; no handler may
-	// thread the flag value past this point.
-	if jsonFlag, err := fs.cmd.Flags().GetBool("json"); err == nil && jsonFlag {
-		promoter, ok := stdout.(jsonPromoter)
-		if !ok {
-			// [LAW:no-silent-failure] Dropping an explicit --json and printing
-			// text would misrepresent the output contract; refuse instead.
-			return errors.New("internal: --json parsed but output writer cannot carry JSON mode")
-		}
-		promoter.promoteToJSON()
-	}
 	return nil
 }
 
 func unsupportedOutputFlagError() error {
-	return UnsupportedError{Message: "--output is no longer supported; use --json for JSON or omit it for text", Feature: "--output"}
+	return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
 }
 
 // rankPlacement translates the CLI's --bottom boolean into the domain
@@ -382,7 +316,6 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	bottom := fs.Bool("bottom", false, "Rank the new issue at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -394,7 +327,10 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, withQuickstartBreadcrumb("new", printIssueSummary))
+	if err := printIssueSummary(stdout, issue); err != nil {
+		return err
+	}
+	return emitBreadcrumb(stdout, "new")
 }
 
 // runFollowup creates a child issue parented to --on, intended for the
@@ -416,14 +352,13 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	bottom := fs.Bool("bottom", false, "Rank the follow-up at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom] [--json]"}
+		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom]"}
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -453,7 +388,10 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, withQuickstartBreadcrumb("new", printIssueSummary))
+	if err := printIssueSummary(stdout, issue); err != nil {
+		return err
+	}
+	return emitBreadcrumb(stdout, "new")
 }
 
 func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -474,7 +412,6 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -548,17 +485,14 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	}
 	columns := parseColumns(*columnsExpr)
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
-	return printValue(stdout, issues, func(w io.Writer, v any) error {
-		list := v.([]model.Issue)
-		switch formatMode {
-		case "", "lines":
-			return printIssueLines(w, list, columns)
-		case "table":
-			return printIssueTable(w, list, columns)
-		default:
-			return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
-		}
-	})
+	switch formatMode {
+	case "", "lines":
+		return printIssueLines(stdout, issues, columns)
+	case "table":
+		return printIssueTable(stdout, issues, columns)
+	default:
+		return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
+	}
 }
 
 func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -569,12 +503,11 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
+		return UsageError{Message: "usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
@@ -593,9 +526,7 @@ func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	sortByBlockingAnnotations(annotated)
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, annotated, func(w io.Writer, v any) error {
-		return printReadyOutput(w, columns, v.([]annotation.AnnotatedIssue))
-	})
+	return printReadyOutput(stdout, columns, annotated)
 }
 
 // workableFilter carries the user-supplied narrowing options for any
@@ -703,12 +634,11 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	fs := newCobraFlagSet("next")
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	continueFlag := fs.Bool("continue", false, "Bias toward leaves under in-progress epics")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit next [--continue] [--assignee <user>] [--json]"}
+		return UsageError{Message: "usage: lit next [--continue] [--assignee <user>]"}
 	}
 	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{Assignee: strings.TrimSpace(*assignee)})
 	if err != nil {
@@ -724,7 +654,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if !ok {
 		return errors.New("no ready work")
 	}
-	return printValue(stdout, next, printNextSummary)
+	return printNextSummary(stdout, next)
 }
 
 // runOrphaned lists in_progress issues whose last update is older than
@@ -739,12 +669,11 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("orphaned")
 	assignee := fs.String("assignee", "", "Filter by assignee")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit orphaned [--assignee <user>] [--json]"}
+		return UsageError{Message: "usage: lit orphaned [--assignee <user>]"}
 	}
 	listFilter := store.ListIssuesFilter{
 		Statuses:        []model.State{model.StateInProgress},
@@ -777,11 +706,10 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	sort.SliceStable(orphaned, func(i, j int) bool {
 		return orphaned[i].UpdatedAt.Before(orphaned[j].UpdatedAt)
 	})
-	return printValue(stdout, orphaned, printOrphanedText)
+	return printOrphanedText(stdout, orphaned)
 }
 
-func printOrphanedText(w io.Writer, v any) error {
-	rows := v.([]annotation.AnnotatedIssue)
+func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 	if len(rows) == 0 {
 		_, err := fmt.Fprintln(w, "No orphaned issues.")
 		return err
@@ -801,7 +729,6 @@ func printOrphanedText(w io.Writer, v any) error {
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("show")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -815,13 +742,10 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, detail, func(w io.Writer, v any) error {
-		d := v.(model.IssueDetail)
-		if err := printIssueDetail(w, d); err != nil {
-			return err
-		}
-		return writeEpicContext(ctx, ap.Store, w, d)
-	})
+	if err := printIssueDetail(stdout, detail); err != nil {
+		return err
+	}
+	return writeEpicContext(ctx, ap.Store, stdout, detail)
 }
 
 func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -839,15 +763,14 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	reason := fs.String("reason", "", "Status transition reason")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>]"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>] [--json]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>]"}
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
@@ -927,7 +850,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, withQuickstartBreadcrumb("update", printIssueSummary))
+	if err := printIssueSummary(stdout, issue); err != nil {
+		return err
+	}
+	return emitBreadcrumb(stdout, "update")
 }
 
 func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -944,7 +870,6 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	_ = fs.Bool("bottom", false, "Move to lowest rank")
 	above := fs.String("above", "", "Rank above this issue ID")
 	below := fs.String("below", "", "Rank below this issue ID")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -990,15 +915,14 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	namedAnchor := *above + *below // exactly one mode is set; empty for --top/--bottom
-	// Substitution notices are text-mode only; in JSON mode the move record in
-	// the payload carries the same fact, and a leading text line would break
-	// the single-document --json contract.
-	if outputModeFromWriter(stdout) != outputModeJSON && move.MovedID != issueID {
+	// A relative op against an issue inside an epic ranks the epic as its
+	// stand-in; report the substitution so it is never silent. [LAW:no-silent-failure]
+	if move.MovedID != issueID {
 		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", issueID, move.MovedID, move.MovedID); err != nil {
 			return err
 		}
 	}
-	if outputModeFromWriter(stdout) != outputModeJSON && namedAnchor != "" && move.AnchorID != namedAnchor {
+	if namedAnchor != "" && move.AnchorID != namedAnchor {
 		if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked relative to the epic %s instead\n", namedAnchor, move.AnchorID, move.AnchorID); err != nil {
 			return err
 		}
@@ -1007,7 +931,10 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, withQuickstartBreadcrumb("update", printIssueSummary))
+	if err := printIssueSummary(stdout, issue); err != nil {
+		return err
+	}
+	return emitBreadcrumb(stdout, "update")
 }
 
 // runRankSet establishes absolute order across N issues by stacking them at
@@ -1018,7 +945,6 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, len(args))
 	fs := newCobraFlagSet("rank set")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1033,19 +959,17 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	for i, r := range resolutions {
 		ranked[i] = r.RankedID
 	}
-	if outputModeFromWriter(stdout) != outputModeJSON {
-		for _, r := range resolutions {
-			if r.RankedID != r.NamedID {
-				if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
-					return err
-				}
+	for _, r := range resolutions {
+		if r.RankedID != r.NamedID {
+			if _, err := fmt.Fprintf(stdout, "%s is inside %s; ranked the epic %s instead, leaving its internal order unchanged\n", r.NamedID, r.RankedID, r.RankedID); err != nil {
+				return err
 			}
 		}
 	}
-	return printValue(stdout, map[string]any{"status": "ok", "ranked": ranked, "resolutions": resolutions}, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
-		_, err := fmt.Fprintf(w, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", "))
+	if _, err := fmt.Fprintf(stdout, "ranked %d issues at top in order: %s\n", len(ranked), strings.Join(ranked, ", ")); err != nil {
 		return err
-	}))
+	}
+	return emitBreadcrumb(stdout, "update")
 }
 
 func filterWorkableIssues(issues []model.Issue) []model.Issue {
@@ -1077,7 +1001,6 @@ func resolveAssigneeIdentity(explicit string) string {
 	}
 	return strings.TrimSpace(explicit)
 }
-
 
 // displayAssignee renders an assignee value for human output; the empty value
 // means "nobody owns this" and must read that way rather than vanish.
@@ -1116,7 +1039,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
 	// apply requires a value matching the plan's hash, no other state needed.
 	applyVal := fs.StringOptional("apply", applyNoTokenSentinel, "", "Apply the transition with the token printed by the preview phase (use `--apply=<token>`)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1127,7 +1049,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 
 	issueID := remaining[0]
-	isJSON := outputModeFromWriter(stdout) == outputModeJSON
 	// [LAW:types-are-the-program] Apply intent is "did the caller pass --apply
 	// in any form" — both `--apply` (no value) and `--apply=` (explicit empty)
 	// are apply attempts whose tokens cannot match the expected hash.
@@ -1136,15 +1057,14 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	// [LAW:dataflow-not-control-flow] Pre-guidance template existence is the data
 	// that activates the two-phase (preview/apply) flow. When the template exists
-	// and we are not in JSON mode, the bare command prints guidance with a
-	// state-derived token, and only `--apply=<token>` with a matching token may
-	// execute the transition. When no template exists or we are in JSON mode,
-	// the command keeps the legacy single-phase contract.
+	// the bare command prints guidance with a state-derived token, and only
+	// `--apply=<token>` with a matching token may execute the transition. When no
+	// template exists, the command keeps the single-phase contract.
 	preGuidance, hasPreGuidance, err := loadTransitionGuidance(action, "pre", ap.Workspace.RootDir)
 	if err != nil {
 		return fmt.Errorf("load pre-guidance: %w", err)
 	}
-	guided := hasPreGuidance && !isJSON
+	guided := hasPreGuidance
 
 	// One pre-transition read serves both consumers of the prior row: the
 	// guided-mode token fingerprint and the claim-transfer notice below.
@@ -1185,7 +1105,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// [LAW:types-are-the-program] Start is the only action that carries an assignee;
 	// routing to the typed StartIssue method encodes the constraint structurally.
 	var (
-		issue           model.Issue
+		issue            model.Issue
 		resolvedAssignee string
 	)
 	if action == model.ActionStart {
@@ -1208,33 +1128,32 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 
-	if !isJSON {
-		// [LAW:no-silent-failure] start rewrites the assignee column; taking an
-		// issue over from an existing owner succeeds (intended target-state
-		// semantics) but must not do so silently. JSON mode carries the new
-		// assignee in the document itself, so the notice is human-output only.
-		if priorOwner := prior.AssigneeValue(); action == model.ActionStart && priorOwner != "" && priorOwner != resolvedAssignee {
-			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(resolvedAssignee)); err != nil {
-				return err
-			}
+	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
+	// issue over from an existing owner succeeds (intended target-state
+	// semantics) but must not do so silently.
+	if priorOwner := prior.AssigneeValue(); action == model.ActionStart && priorOwner != "" && priorOwner != resolvedAssignee {
+		if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(resolvedAssignee)); err != nil {
+			return err
 		}
-		postGuidance, hasPostGuidance, err := loadTransitionGuidance(action, "post", ap.Workspace.RootDir)
-		if err != nil {
-			return fmt.Errorf("load post-guidance: %w", err)
-		}
-		if hasPostGuidance {
-			rendered := renderGuidance(postGuidance, issueID, "")
-			if _, err := fmt.Fprintln(stdout, rendered); err != nil {
-				return err
-			}
+	}
+	postGuidance, hasPostGuidance, err := loadTransitionGuidance(action, "post", ap.Workspace.RootDir)
+	if err != nil {
+		return fmt.Errorf("load post-guidance: %w", err)
+	}
+	if hasPostGuidance {
+		rendered := renderGuidance(postGuidance, issueID, "")
+		if _, err := fmt.Fprintln(stdout, rendered); err != nil {
+			return err
 		}
 	}
 
-	textFn := printIssueSummary
-	if topic, ok := transitionBreadcrumbTopics[action]; ok {
-		textFn = withQuickstartBreadcrumb(topic, printIssueSummary)
+	if err := printIssueSummary(stdout, issue); err != nil {
+		return err
 	}
-	return printValue(stdout, issue, textFn)
+	if topic, ok := transitionBreadcrumbTopics[action]; ok {
+		return emitBreadcrumb(stdout, topic)
+	}
+	return nil
 }
 
 // runAssign rewrites the assignee column on an issue without changing status.
@@ -1247,7 +1166,6 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	reason := fs.String("reason", "", "Reassignment reason (optional)")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1267,7 +1185,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, issue, printIssueSummary)
+	return printIssueSummary(stdout, issue)
 }
 
 var commentFamily = commandFamily[appSubcommand]{
@@ -1284,7 +1202,6 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	body := fs.String("body", "", "Comment body")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1298,31 +1215,29 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, comment, printComment)
+	return printComment(stdout, comment)
 }
 
 func runCommentRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("comment rm")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit comment rm <comment-id> [--json]"}
+		return UsageError{Message: "usage: lit comment rm <comment-id>"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit comment rm <comment-id> [--json]"}
+		return UsageError{Message: "usage: lit comment rm <comment-id>"}
 	}
 	comment, err := ap.Store.DeleteComment(ctx, positional[0])
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, comment, printComment)
+	return printComment(stdout, comment)
 }
 
-func printComment(w io.Writer, v any) error {
-	c := v.(model.Comment)
+func printComment(w io.Writer, c model.Comment) error {
 	_, err := fmt.Fprintf(w, "%s %s\n", c.IssueID, c.ID)
 	return err
 }
@@ -1357,7 +1272,6 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("import")
 	path := fs.String("path", "", "Path to JSON tree spec file")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1379,44 +1293,40 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, result, func(w io.Writer, v any) error {
-		r := v.(store.ImportTreeResult)
-		if _, err := fmt.Fprintf(w, "imported %d issues\n", len(r.IDMap)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.IDMap)); err != nil {
+		return err
+	}
+	for local, real := range result.IDMap {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", local, real); err != nil {
 			return err
 		}
-		for local, real := range r.IDMap {
-			if _, err := fmt.Fprintf(w, "  %s -> %s\n", local, real); err != nil {
-				return err
-			}
-		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("workspace")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	payload := map[string]string{
-		"workspace_id":   ws.WorkspaceID,
-		"issue_prefix":   ws.IssuePrefix.Value(),
-		"git_common_dir": ws.GitCommonDir,
-		"storage_dir":    ws.StorageDir,
-		"database_path":  ws.DatabasePath,
-		"dolt_repo_path": ws.DoltRepoPath,
-		"traces_dir":     automationTraceDir(ws),
+	// [LAW:one-source-of-truth] The ordered slice is the single source of the
+	// output's field order; each line is `key: value`, parseable by an agent
+	// that needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
+	fields := []struct{ key, value string }{
+		{"workspace_id", ws.WorkspaceID},
+		{"issue_prefix", ws.IssuePrefix.Value()},
+		{"git_common_dir", ws.GitCommonDir},
+		{"storage_dir", ws.StorageDir},
+		{"database_path", ws.DatabasePath},
+		{"dolt_repo_path", ws.DoltRepoPath},
+		{"traces_dir", automationTraceDir(ws)},
 	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]string)
-		for _, key := range []string{"workspace_id", "issue_prefix", "git_common_dir", "storage_dir", "database_path", "dolt_repo_path", "traces_dir"} {
-			if _, err := fmt.Fprintf(w, "%s: %s\n", key, p[key]); err != nil {
-				return err
-			}
+	for _, f := range fields {
+		if _, err := fmt.Fprintf(stdout, "%s: %s\n", f.key, f.value); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // completionFamily routes a shell name straight to its script: the payload is
@@ -1453,9 +1363,6 @@ func runQuickstart(ctx context.Context, stdout io.Writer, ws workspace.Info, arg
 		return err
 	}
 	if fs.NArg() > 1 {
-		return UsageError{Message: quickstartUsage}
-	}
-	if outputModeFromWriter(stdout) == outputModeJSON {
 		return UsageError{Message: quickstartUsage}
 	}
 	ejectChanged := fs.Changed("eject")
@@ -1523,27 +1430,6 @@ func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
-}
-
-func outputModeFromWriter(w io.Writer) outputMode {
-	provider, ok := w.(outputModeProvider)
-	if !ok {
-		return outputModeText
-	}
-	return provider.linksOutputMode()
-}
-
-// printValue is the single enforcer for output format selection.
-// [LAW:single-enforcer] Commands with both JSON and text modes go through this function
-// to guarantee that both paths receive the same data. JSON-only commands (e.g., export)
-// may call writeJSON directly since there is no text path to diverge from.
-// [LAW:one-source-of-truth] The writer carries the output mode; there is no
-// parallel flag value to consult.
-func printValue(w io.Writer, v any, textFn func(io.Writer, any) error) error {
-	if outputModeFromWriter(w) == outputModeJSON {
-		return writeJSON(w, v)
-	}
-	return textFn(w, v)
 }
 
 func parseStateSlice(s string) ([]model.State, error) {

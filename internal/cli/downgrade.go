@@ -63,12 +63,11 @@ func runDowngradeWith(
 ) error {
 	fs := newCobraFlagSet("downgrade")
 	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.4.1)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit downgrade --to <version> [--json]"}
+		return UsageError{Message: "usage: lit downgrade --to <version>"}
 	}
 	tag, err := normalizeDowngradeTag(*to)
 	if err != nil {
@@ -100,39 +99,16 @@ func runDowngradeWith(
 		)
 	}
 
-	payload := downgradeResult{
-		Status:     "downgraded",
-		Target:     tag,
-		Schema:     target.Manifest.Schema.Max,
-		BinaryPath: binPath,
-	}
 	// [LAW:dataflow-not-control-flow] The post-install step is a single print.
 	// An earlier draft re-exec'd into the prior binary on Unix and printed a
-	// human re-run line on Windows, but both branches violated the --json
-	// contract (extra stdout after the JSON document) and added a platform
-	// mode for no measurable benefit — the rename has already happened, the
-	// user's next shell prompt runs the prior binary.
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(downgradeResult)
-		_, err := fmt.Fprintf(w,
-			"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
-			p.Target, p.Schema, p.BinaryPath,
-		)
-		return err
-	})
-}
-
-// downgradeResult is the typed JSON payload `lit downgrade` emits with --json.
-// Schema is an int64 to match version.Info.SchemaSupport's numeric encoding;
-// machine consumers don't have to parse a string to recover the number.
-//
-// [LAW:types-are-the-program] One struct projects to both text and JSON;
-// the text renderer reads typed fields, never re-deriving them from strings.
-type downgradeResult struct {
-	Status     string `json:"status"`
-	Target     string `json:"target"`
-	Schema     int64  `json:"schema"`
-	BinaryPath string `json:"binary_path"`
+	// human re-run line on Windows, but both branches added a platform mode for
+	// no measurable benefit — the rename has already happened, the user's next
+	// shell prompt runs the prior binary.
+	_, err = fmt.Fprintf(stdout,
+		"downgraded to %s (schema v%d) installed at %s\nre-run `lit version` to confirm.\n",
+		tag, target.Manifest.Schema.Max, binPath,
+	)
+	return err
 }
 
 // normalizeDowngradeTag accepts either "v0.4.1" or "0.4.1" and returns the

@@ -1,9 +1,6 @@
 package cli
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -11,78 +8,18 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-type commandErrorPayload struct {
-	Code        string `json:"code"`
-	Reason      string `json:"reason"`
-	Message     string `json:"message"`
-	Remediation string `json:"remediation,omitempty"`
-	TraceRef    string `json:"trace_ref,omitempty"`
-	ExitCode    int    `json:"exit_code"`
-}
-
-func WriteCommandError(stderr io.Writer, stdout io.Writer, args []string, err error) int {
-	payload := buildCommandErrorPayload(err)
-	if shouldEmitJSONError(args, stdout) {
-		_ = json.NewEncoder(stderr).Encode(map[string]any{
-			"error": payload,
-		})
-		return payload.ExitCode
-	}
-	_, _ = fmt.Fprintf(stderr, "error (code=%d): %v\n", payload.ExitCode, err)
-	return payload.ExitCode
-}
-
-func buildCommandErrorPayload(err error) commandErrorPayload {
+// WriteCommandError renders a failed command to stderr: the exit code and
+// message, plus the actionable remediation for the error's typed reason. Text
+// is the one canonical surface, so the remediation guidance — once reachable
+// only under --json — now reaches every caller. [LAW:single-enforcer] The
+// error→reason→remediation mapping is derived in one boundary.
+func WriteCommandError(stderr io.Writer, err error) int {
 	exitCode := ExitCode(err)
-	code := commandErrorCode(exitCode)
-	reason := commandErrorReason(err)
-	// [LAW:single-enforcer] Machine-readable failure schema (code/reason/remediation/trace) is derived in one boundary.
-	return commandErrorPayload{
-		Code:        code,
-		Reason:      reason,
-		Message:     err.Error(),
-		Remediation: commandErrorRemediation(reason),
-		TraceRef:    commandErrorTraceRef(code, reason, err.Error()),
-		ExitCode:    exitCode,
+	_, _ = fmt.Fprintf(stderr, "error (code=%d): %v\n", exitCode, err)
+	if remediation := commandErrorRemediation(commandErrorReason(err)); remediation != "" {
+		_, _ = fmt.Fprintf(stderr, "remediation: %s\n", remediation)
 	}
-}
-
-func shouldEmitJSONError(args []string, stdout io.Writer) bool {
-	// [LAW:one-source-of-truth] Error-output format follows the same global output precedence resolver as normal command output.
-	_, mode, err := parseGlobalOutputMode(args, stdout)
-	if err == nil {
-		return mode == outputModeJSON || explicitJSONErrorRequest(args)
-	}
-	return explicitJSONErrorRequest(args)
-}
-
-func explicitJSONErrorRequest(args []string) bool {
-	for index := 0; index < len(args); index++ {
-		switch {
-		case args[index] == "--":
-			return false
-		case args[index] == "--json":
-			return true
-		}
-	}
-	return false
-}
-
-func commandErrorCode(exitCode int) string {
-	switch exitCode {
-	case ExitUsage:
-		return "usage"
-	case ExitValidation:
-		return "validation"
-	case ExitNotFound:
-		return "not_found"
-	case ExitConflict:
-		return "conflict"
-	case ExitCorruption:
-		return "corruption"
-	default:
-		return "generic"
-	}
+	return exitCode
 }
 
 // commandErrorReason maps a typed error to its machine-readable reason string.
@@ -133,9 +70,9 @@ func commandErrorRemediation(reason string) string {
 	case "usage_error":
 		return "Run the command with `--help` and retry with valid arguments."
 	case "unsupported_output_flag":
-		return "Remove `--output`. Use `--json` for JSON output or omit it for text output."
+		return "Remove `--output`. lit emits text output; there is no output-format flag."
 	case "entity_not_found":
-		return "Verify the target ID exists with `lit ls --json` or `lit show <id> --json`."
+		return "Verify the target ID exists with `lit ls` or `lit show <id>`."
 	case "merge_conflict":
 		return "Sync and retry after resolving conflicts."
 	case "corruption_detected":
@@ -145,11 +82,6 @@ func commandErrorRemediation(reason string) string {
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	default:
-		return "Retry the command. If it still fails, run `lit doctor --json` for diagnostics."
+		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}
-}
-
-func commandErrorTraceRef(code string, reason string, message string) string {
-	sum := sha256.Sum256([]byte(code + "|" + reason + "|" + message))
-	return "err-" + hex.EncodeToString(sum[:8])
 }

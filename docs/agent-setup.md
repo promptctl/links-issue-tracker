@@ -65,7 +65,6 @@ rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
 - `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
-- `--json` — machine-readable output
 
 Already initialized? `lit init` is safe to run again; it reconciles the integration blocks.
 
@@ -112,7 +111,7 @@ lit doctor [--fix]        # health check; run --fix yourself before escalating a
 - **The store you see depends on your current directory.** `lit` selects the database from
   `git rev-parse --git-common-dir` of your cwd. If you `cd` into a different repo (or a
   nested checkout), you are silently looking at a *different* backlog. If `lit ls` shows
-  tickets you don't recognize, check where you are: `lit workspace --json`.
+  tickets you don't recognize, check where you are: `lit workspace`.
 - **A stale binary lies.** If a documented `lit` subcommand prints an unrelated usage error,
   the installed binary is older than the source. Rebuild it onto your `PATH`:
   `go build -o "$(which lit)" ./cmd/lit` from the checkout.

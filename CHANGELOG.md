@@ -26,4 +26,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Removed
 
+- The `--json` flag is removed from every command. The default human-readable text is the one canonical surface — it is already the agent interface, and per-line output is parseable when a script needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`). `lit export` and `lit lifeboat dump` are unchanged: they emit a JSON data structure as their sole output (no flag), because a full export / raw dump has no text form. Passing `--json` now fails with a usage error.
+
 ### Security

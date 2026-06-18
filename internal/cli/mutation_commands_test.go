@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -45,30 +44,23 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 		}
 	}
 
-	if _, err := runWithTimeout([]string{"init", "--skip-hooks", "--skip-agents", "--json"}, 10*time.Second); err != nil {
-		t.Fatalf("Run(init --skip-hooks --skip-agents --json) error = %v", err)
+	if _, err := runWithTimeout([]string{"init", "--skip-hooks", "--skip-agents"}, 10*time.Second); err != nil {
+		t.Fatalf("Run(init --skip-hooks --skip-agents) error = %v", err)
 	}
 
-	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1", "--json"}, 10*time.Second)
+	newOut, err := runWithTimeout([]string{"new", "--title", "deadlock regression probe", "--topic", "deadlock", "--type", "task", "--priority", "1"}, 10*time.Second)
 	if err != nil {
-		t.Fatalf("Run(new --json) error = %v", err)
+		t.Fatalf("Run(new) error = %v", err)
 	}
-	var issue map[string]any
-	if err := json.Unmarshal(newOut.Bytes(), &issue); err != nil {
-		t.Fatalf("new output should be json: %v", err)
-	}
-	issueID, ok := issue["id"].(string)
-	if !ok || issueID == "" {
-		t.Fatalf("new output missing id: %v", issue)
-	}
+	issueID := extractTicketID(t, newOut.String())
 
-	if _, err := runWithTimeout([]string{"comment", "add", issueID, "--body", "deadlock regression probe", "--json"}, 10*time.Second); err != nil {
-		t.Fatalf("Run(comment add --json) error = %v", err)
+	if _, err := runWithTimeout([]string{"comment", "add", issueID, "--body", "deadlock regression probe"}, 10*time.Second); err != nil {
+		t.Fatalf("Run(comment add) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"update", issueID, "--status", "in_progress", "--assignee", "tester", "--json"}, 10*time.Second); err != nil {
-		t.Fatalf("Run(update --status in_progress --assignee tester --json) error = %v", err)
+	if _, err := runWithTimeout([]string{"update", issueID, "--status", "in_progress", "--assignee", "tester"}, 10*time.Second); err != nil {
+		t.Fatalf("Run(update --status in_progress --assignee tester) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"close", issueID, "--reason", "deadlock regression probe cleanup", "--json"}, 10*time.Second); err != nil {
-		t.Fatalf("Run(close --json) error = %v", err)
+	if _, err := runWithTimeout([]string{"close", issueID, "--reason", "deadlock regression probe cleanup"}, 10*time.Second); err != nil {
+		t.Fatalf("Run(close) error = %v", err)
 	}
 }

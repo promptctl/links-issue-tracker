@@ -82,26 +82,13 @@ func parsedReconcileFlags(t *testing.T, args ...string) *cobraFlagSet {
 func TestGuardReconcileInputRejectsStrayPositional(t *testing.T) {
 	// A stray positional must fail loudly rather than be silently ignored, or a
 	// malformed finalize could appear to succeed.
-	var text bytes.Buffer
-	err := guardReconcileInput(parsedReconcileFlags(t, "junk", "--resolve", "links-x.1:title=merged"), &text, "sync reconcile resolve")
+	err := guardReconcileInput(parsedReconcileFlags(t, "junk", "--resolve", "links-x.1:title=merged"), "sync reconcile resolve")
 	if code := ExitCode(err); code != ExitUsage {
 		t.Fatalf("stray positional exit code = %d, want %d (ExitUsage)", code, ExitUsage)
 	}
 
-	if err := guardReconcileInput(parsedReconcileFlags(t, "--resolve", "links-x.1:title=merged"), &text, "sync reconcile resolve"); err != nil {
+	if err := guardReconcileInput(parsedReconcileFlags(t, "--resolve", "links-x.1:title=merged"), "sync reconcile resolve"); err != nil {
 		t.Fatalf("guardReconcileInput() on a clean text command = %v, want nil", err)
-	}
-}
-
-func TestGuardReconcileInputRejectsJSONMode(t *testing.T) {
-	// The reconcile surface is agent-facing text guidance with no JSON form, so a
-	// JSON output mode must be rejected rather than silently emit plain text under
-	// the strict one-document JSON contract.
-	var buf bytes.Buffer
-	jsonStdout := newOutputModeWriter(&buf, outputModeJSON)
-	err := guardReconcileInput(parsedReconcileFlags(t, "--resolve", "links-x.1:title=merged"), jsonStdout, "sync reconcile resolve")
-	if code := ExitCode(err); code != ExitValidation {
-		t.Fatalf("JSON-mode exit code = %d, want %d (ExitValidation for an unsupported flag)", code, ExitValidation)
 	}
 }
 

@@ -3,9 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
-	"io"
 	"strings"
 	"testing"
 
@@ -96,37 +94,6 @@ func TestRunDowngradeWithHappyPath(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "downgraded to v0.4.1") {
 		t.Errorf("stdout missing success line: %q", out.String())
-	}
-}
-
-func TestRunDowngradeWithJSONEmitsSingleDocument(t *testing.T) {
-	res := &stubResolver{target: newFakeTarget()}
-	dg := &stubDowngrader{}
-	inst := &stubInstaller{}
-	var out bytes.Buffer
-	if err := runDowngradeWith(context.Background(), newOutputModeWriter(&out, outputModeText), dg, []string{"--to", "v0.4.1", "--json"}, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
-		t.Fatalf("runDowngradeWith: %v", err)
-	}
-	// Body must decode as exactly one JSON document with no trailing content,
-	// and the schema field must be a number (not a string-encoded number) so
-	// machine consumers don't have to re-parse.
-	dec := json.NewDecoder(&out)
-	var payload struct {
-		Status     string `json:"status"`
-		Target     string `json:"target"`
-		Schema     int64  `json:"schema"`
-		BinaryPath string `json:"binary_path"`
-	}
-	if err := dec.Decode(&payload); err != nil {
-		t.Fatalf("decode JSON: %v", err)
-	}
-	if payload.Status != "downgraded" || payload.Target != "v0.4.1" || payload.Schema != 3 || payload.BinaryPath != "/p/lit" {
-		t.Errorf("payload mismatch: %+v", payload)
-	}
-	// No trailing JSON or junk after the document — exactly one JSON doc.
-	var trailing json.RawMessage
-	if err := dec.Decode(&trailing); !errors.Is(err, io.EOF) {
-		t.Errorf("expected io.EOF after JSON document, got %v", err)
 	}
 }
 

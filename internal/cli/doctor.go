@@ -17,9 +17,7 @@ import (
 
 // printWorkspaceIdentity writes the resolved store identity so a human can
 // confirm at a glance which store lit opened — the direct answer to "why am I
-// not seeing my issues". It is part of the text report only: --json emits a
-// single JSON document and nothing else, so machine consumers are never handed
-// a non-JSON line. [LAW:one-source-of-truth] Renders the already-resolved
+// not seeing my issues". [LAW:one-source-of-truth] Renders the already-resolved
 // workspace.Info; it never re-resolves storage location.
 func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
 	// Path fields use %q so values containing spaces (e.g. a checkout under
@@ -128,7 +126,6 @@ func resolveDoctorAccessMode(args []string) app.AccessMode {
 	cmd := &cobra.Command{Use: "doctor"}
 	fix := cmd.Flags().String("fix", "", "")
 	cmd.Flags().Lookup("fix").NoOptDefVal = "all"
-	cmd.Flags().Bool("json", false, "")
 	if err := cmd.ParseFlags(args); err != nil {
 		return app.AccessWrite
 	}
@@ -175,7 +172,6 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	fs := newCobraFlagSet("doctor")
 	fix := fs.String("fix", "", "Apply fixes: --fix (all) or --fix rank,thingA")
 	fs.cmd.Flags().Lookup("fix").NoOptDefVal = "all"
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -184,8 +180,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		if *fix != "all" {
 			fixNames = splitCSV(*fix)
 		}
-		// [LAW:dataflow-not-control-flow] Fix progress always writes to stderr
-		// so stdout remains clean for the JSON report when --json is set.
+		// Fix progress writes to stderr so stdout carries only the health report.
 		for _, name := range fixNames {
 			fn, ok := doctorFixes[name]
 			if !ok {
@@ -200,32 +195,21 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	// Resolve freshness here, outside the print closure, so the closure stays a
-	// pure renderer. [LAW:effects-at-boundaries] The freshness line is part of
-	// the text rendering only; resolution shells out to git (including a possible
-	// `ls-remote` against the remote), so it is gated to text mode rather than
-	// run-and-discarded under --json, where it would do network work for output
-	// that is never emitted.
-	syncReport := doctorSyncReport{}
-	if outputModeFromWriter(stdout) != outputModeJSON {
-		syncReport = resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+	// [LAW:effects-at-boundaries] Freshness resolution shells out to git
+	// (including a possible `ls-remote` against the remote), so it runs here, at
+	// the boundary, before the pure text rendering below.
+	syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
+	if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
+		return err
 	}
-	if err := printValue(stdout, report, func(w io.Writer, v any) error {
-		// The identity header is part of the text rendering only; routing it
-		// through the text closure makes JSON mode structurally unable to emit it.
-		if err := printWorkspaceIdentity(w, ap.Workspace); err != nil {
-			return err
-		}
-		r := v.(store.HealthReport)
-		dependencyCycle := "none"
-		if len(r.DependencyCycle) > 0 {
-			dependencyCycle = strings.Join(r.DependencyCycle, "->")
-		}
-		if _, err := fmt.Fprintf(w, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d update_dryrun_failures=%d dependency_cycle=%s\n", r.IntegrityCheck, r.ForeignKeyIssues, r.InvalidRelatedRows, r.OrphanHistoryRows, r.RankInversions, r.UpdateDryRunFailures, dependencyCycle); err != nil {
-			return err
-		}
-		return printSyncFreshness(w, syncReport)
-	}); err != nil {
+	dependencyCycle := "none"
+	if len(report.DependencyCycle) > 0 {
+		dependencyCycle = strings.Join(report.DependencyCycle, "->")
+	}
+	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d update_dryrun_failures=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, report.UpdateDryRunFailures, dependencyCycle); err != nil {
+		return err
+	}
+	if err := printSyncFreshness(stdout, syncReport); err != nil {
 		return err
 	}
 	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.
