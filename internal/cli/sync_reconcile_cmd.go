@@ -39,11 +39,18 @@ func runSyncReconcile(ctx context.Context, stdout io.Writer, ws workspace.Info, 
 	return runSyncReconcileShow(ctx, stdout, ws, syncStore, args)
 }
 
-// rejectStrayReconcileArgs fails when a reconcile handler received positional
-// arguments it does not consume — every reconcile input is a flag, so a stray
-// positional is a malformed command, never silently ignored. [LAW:no-silent-failure]
-// [LAW:single-enforcer] the three handlers reject extra args through this one check.
-func rejectStrayReconcileArgs(fs *cobraFlagSet, cmd string) error {
+// guardReconcileInput rejects the two malformed inputs every reconcile handler
+// must refuse before doing work: a JSON output mode (the surface is agent-facing
+// text guidance by design and has no JSON form, so emitting plain text under
+// `--json` would silently break the strict one-document contract — reject it
+// rather than misrepresent the output) and a stray positional argument (every
+// reconcile input is a flag, so a positional is a malformed command, never
+// silently ignored). [LAW:no-silent-failure] [LAW:single-enforcer] the three
+// handlers enforce both through this one guard.
+func guardReconcileInput(fs *cobraFlagSet, stdout io.Writer, cmd string) error {
+	if outputModeFromWriter(stdout) == outputModeJSON {
+		return UnsupportedError{Message: fmt.Sprintf("%s has no JSON form: it prints agent-facing merge guidance; omit --json", cmd), Feature: "--json"}
+	}
 	if fs.NArg() != 0 {
 		return UsageError{Message: fmt.Sprintf("%s takes no positional arguments; got %q", cmd, fs.Arg(0))}
 	}
@@ -65,7 +72,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if err := rejectStrayReconcileArgs(fs, "sync reconcile"); err != nil {
+	if err := guardReconcileInput(fs, stdout, "sync reconcile"); err != nil {
 		return err
 	}
 	remote, branch, ok, err := freshReconcileTarget(ctx, syncStore, ws)
@@ -93,7 +100,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if err := rejectStrayReconcileArgs(fs, "sync reconcile resolve"); err != nil {
+	if err := guardReconcileInput(fs, stdout, "sync reconcile resolve"); err != nil {
 		return err
 	}
 	if len(*resolveValues) == 0 {
@@ -129,7 +136,7 @@ func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.I
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if err := rejectStrayReconcileArgs(fs, "sync reconcile abort"); err != nil {
+	if err := guardReconcileInput(fs, stdout, "sync reconcile abort"); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
