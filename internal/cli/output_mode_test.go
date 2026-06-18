@@ -66,12 +66,18 @@ func TestRunQuickstartDefaultsToText(t *testing.T) {
 // TestRejectsJSONFlag pins the removal: --json is no longer a flag, so it is an
 // unknown flag at any position and the command fails with ExitUsage rather than
 // emitting JSON. [LAW:no-silent-failure]
+//
+// The cases use workspace-free commands on purpose. The two rejection paths are
+// the single enforcers every command shares — the root FlagErrorFunc (global
+// position) and parseFlagSet (command-local) — so quickstart/version exercise
+// the same mechanism a store-backed command would, without coupling the test to
+// ambient workspace state: a command that opens the app first can fail at
+// app.Open (exit 1) before its flags are ever parsed. [LAW:no-ambient-temporal-coupling]
 func TestRejectsJSONFlag(t *testing.T) {
 	cases := [][]string{
-		{"--json", "quickstart"}, // global position
-		{"quickstart", "--json"}, // command-local position
-		{"ready", "--json"},
-		{"show", "--json"},
+		{"--json", "quickstart"}, // global position → root FlagErrorFunc
+		{"quickstart", "--json"}, // command-local → parseFlagSet
+		{"version", "--json"},    // command-local → parseFlagSet
 	}
 	for _, args := range cases {
 		args := args
