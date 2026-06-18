@@ -135,8 +135,22 @@ Set `LIT_DISABLE_AUTO_SYNC=1` to disable all automatic sync (mirror and receive)
 for a process — useful for CI and sandboxes.
 
 A clone that has made its *own* unpushed commits while the remote also moved is
-*diverged*, not merely behind. The receive deliberately does not merge that case
-— a real three-way merge can conflict, and resolving a conflict needs judgment —
-so divergence is reported and left for the foreground reconcile rather than
-silently dropped. Until that lands, reconcile a diverged clone with an explicit
-`lit sync pull`.
+*diverged*, not merely behind — a fast-forward cannot absorb it. The receive does
+not fast-forward that case; instead it runs a **field-aware reconcile** inline, on
+the same engine, right after the fast-forward check. The reconcile reads the
+three-way state (base = merge-base, ours = local head, theirs = remote head) and
+resolves it field by field with deterministic, no-clock rules: a field only one
+side moved is taken from that side; a field both sides moved to different values
+is settled by its policy (e.g. priority and status take the dominant value). The
+merged result is replayed as **one forward commit on top of the remote head**, so
+the history stays linear — no merge commit, no per-machine DAG — and the next push
+fast-forwards. The reconcile is transparent for everything the rules can settle.
+
+The one class the rules cannot settle is a concurrent **free-text rewrite** —
+title, description, or agent prompt changed to different text on both sides. Those
+are the only fields a reader can genuinely *merge* (preserving both intents)
+rather than pick, so the reconcile commits nothing, leaves the local branch
+untouched (still diverged, still usable on local truth), and holds the conflict as
+a **prose-pending** state recorded on an automation trace for the agent surface to
+merge inline. Reverting a peer's semantic field is incoherent distrust, so every
+other field converges deterministically; prose is the sole agent boundary.
