@@ -65,7 +65,7 @@ var syncFamily = commandFamily[wsRunFn]{
 }
 
 var syncRemoteFamily = commandFamily[syncRunFn]{
-	usage: "usage: lit sync remote ls [--json]",
+	usage: "usage: lit sync remote ls",
 	subcommands: []subcommandRow[syncRunFn]{
 		{name: "ls", payload: runSyncRemoteLs},
 	},
@@ -81,7 +81,6 @@ func runSyncRemote(ctx context.Context, stdout io.Writer, ws workspace.Info, syn
 
 func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync remote ls")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -89,24 +88,16 @@ func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, s
 	if err != nil {
 		return err
 	}
-	payload := map[string]any{
-		"git_remotes":  syncState.gitRemotes,
-		"dolt_remotes": syncState.doltRemotes,
-		"changes":      syncState.changes,
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]any)
-		_, err := fmt.Fprintf(
-			w,
-			"git=%d dolt=%d added=%d updated=%d removed=%d\n",
-			len(p["git_remotes"].([]workspace.GitRemote)),
-			len(p["dolt_remotes"].([]store.SyncRemote)),
-			len(syncState.changes.Added),
-			len(syncState.changes.Updated),
-			len(syncState.changes.Removed),
-		)
-		return err
-	})
+	_, err = fmt.Fprintf(
+		stdout,
+		"git=%d dolt=%d added=%d updated=%d removed=%d\n",
+		len(syncState.gitRemotes),
+		len(syncState.doltRemotes),
+		len(syncState.changes.Added),
+		len(syncState.changes.Updated),
+		len(syncState.changes.Removed),
+	)
+	return err
 }
 
 func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
@@ -114,7 +105,6 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	remote := fs.String("remote", "origin", "Remote name")
 	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -125,27 +115,18 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	if err := syncStore.SyncFetch(ctx, remoteName, *prune); err != nil {
 		return err
 	}
-	payload := map[string]any{
-		"status": "ok",
-		"remote": remoteName,
-		"prune":  *prune,
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]any)
-		if !*verbose {
-			_, err := fmt.Fprintln(w, "fetched")
-			return err
-		}
-		_, err := fmt.Fprintf(w, "fetched %s\n", p["remote"])
+	if !*verbose {
+		_, err := fmt.Fprintln(stdout, "fetched")
 		return err
-	})
+	}
+	_, err := fmt.Fprintf(stdout, "fetched %s\n", remoteName)
+	return err
 }
 
 func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync pull")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -168,9 +149,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
 		}
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printValue(stdout, payload, func(w io.Writer, v any) error {
-			return printSyncPullPayload(w, v, *verbose)
-		})
+		return printSyncPullPayload(stdout, payload, *verbose)
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
@@ -181,9 +160,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"remote": remoteName,
 			"raw":    firstPushSkipMessage,
 		}
-		return printValue(stdout, payload, func(w io.Writer, v any) error {
-			return printSyncPullPayload(w, v, *verbose)
-		})
+		return printSyncPullPayload(stdout, payload, *verbose)
 	}
 	resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
 	if err != nil {
@@ -194,9 +171,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if handledErr != nil {
 		return handledErr
 	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		return printSyncPullPayload(w, v, *verbose)
-	})
+	return printSyncPullPayload(stdout, payload, *verbose)
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
@@ -205,7 +180,6 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
 	force := fs.Bool("force", false, "Pass --force to dolt push")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -223,9 +197,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if outcome.pushErr != nil {
 		return outcome.pushErr
 	}
-	return printValue(stdout, outcome.payload(), func(w io.Writer, v any) error {
-		return printSyncPushPayload(w, v, *verbose)
-	})
+	return printSyncPushPayload(stdout, outcome.payload(), *verbose)
 }
 
 // syncPushOutcome is the result of one push attempt, independent of CLI
@@ -362,7 +334,6 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 
 func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync status")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -378,33 +349,19 @@ func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syn
 	if strings.TrimSpace(report.HeadMessage) != "" {
 		head = strings.TrimSpace(report.HeadCommit + " " + report.HeadMessage)
 	}
-	payload := map[string]any{
-		"dolt_version": report.DoltVersion,
-		"branch":       report.Branch,
-		"head":         head,
-		"head_commit":  report.HeadCommit,
-		"head_message": report.HeadMessage,
-		"status":       report.Status,
-		"git_remotes":  syncState.gitRemotes,
-		"dolt_remotes": syncState.doltRemotes,
-		"changes":      syncState.changes,
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]any)
-		_, err := fmt.Fprintf(
-			w,
-			"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
-			p["dolt_version"],
-			p["branch"],
-			p["head"],
-			len(p["git_remotes"].([]workspace.GitRemote)),
-			len(p["dolt_remotes"].([]store.SyncRemote)),
-			len(syncState.changes.Added),
-			len(syncState.changes.Updated),
-			len(syncState.changes.Removed),
-		)
-		return err
-	})
+	_, err = fmt.Fprintf(
+		stdout,
+		"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
+		report.DoltVersion,
+		report.Branch,
+		head,
+		len(syncState.gitRemotes),
+		len(syncState.doltRemotes),
+		len(syncState.changes.Added),
+		len(syncState.changes.Updated),
+		len(syncState.changes.Removed),
+	)
+	return err
 }
 
 func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {
@@ -502,8 +459,7 @@ func detectMissingRemoteBranch(message string, requestedBranch string) (string, 
 	return branch, true
 }
 
-func printSyncPullPayload(w io.Writer, v any, verbose bool) error {
-	payload := v.(map[string]any)
+func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) error {
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
 	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
@@ -561,8 +517,7 @@ func printSyncPullPayload(w io.Writer, v any, verbose bool) error {
 	}
 }
 
-func printSyncPushPayload(w io.Writer, v any, verbose bool) error {
-	payload := v.(map[string]any)
+func printSyncPushPayload(w io.Writer, payload map[string]any, verbose bool) error {
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	raw, hasRaw := payload["raw"].(string)
 	reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))

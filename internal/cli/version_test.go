@@ -2,83 +2,13 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
-	"io"
 	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
 )
-
-// TestVersionJSONMatchesGetOutput pins the JSON surface as the typed contract:
-// the bytes `lit version --json` emits MUST round-trip via json.Unmarshal into
-// a version.Info equal to version.Get(). Downstream tooling (`lit downgrade`,
-// the refusal-message upgrade) reads this output; any drift between the
-// command surface and the package surface breaks them.
-//
-// [LAW:one-source-of-truth] One source (version.Get); two presentations.
-func TestVersionJSONMatchesGetOutput(t *testing.T) {
-	var stdout bytes.Buffer
-	if err := runVersion(newOutputModeWriter(&stdout, outputModeText), []string{"--json"}); err != nil {
-		t.Fatalf("runVersion --json error = %v", err)
-	}
-
-	var got version.Info
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		t.Fatalf("--json output is not valid JSON: %v\nbytes: %s", err, stdout.String())
-	}
-	want, err := version.Get()
-	if err != nil {
-		t.Fatalf("version.Get() error = %v", err)
-	}
-	if got != want {
-		t.Errorf("--json decoded to %+v, want %+v", got, want)
-	}
-}
-
-// TestVersionJSONIsStrictMachineContract pins [memory: json-mode-strict-machine-contract]:
-// `--json` emits exactly one JSON document and nothing else (no banners, no
-// trailing prose, no log lines on the buffer). A hidden header would slip
-// past plain `json.Valid` (which only checks the first document) but break
-// a `jq` pipeline downstream.
-//
-// Implementation: decode from a bytes.NewReader, then read EVERYTHING left
-// — both bytes the decoder buffered ahead but didn't consume AND bytes the
-// underlying reader still hasn't yielded. The combined leftover is the
-// canonical "what came after the first JSON document"; only whitespace is
-// allowed there (json.Encoder appends a trailing newline).
-//
-// (Note: we cannot inspect stdout.String() after Decode — json.Decoder
-// buffers reads ahead, so the source bytes.Buffer still contains every byte
-// written. Reading from dec.Buffered() ALONE is also insufficient when the
-// decoder hasn't read past the first document. The combined dec.Buffered()
-// + remainder-of-source via MultiReader is the robust shape.)
-func TestVersionJSONIsStrictMachineContract(t *testing.T) {
-	var stdout bytes.Buffer
-	if err := runVersion(newOutputModeWriter(&stdout, outputModeText), []string{"--json"}); err != nil {
-		t.Fatalf("runVersion --json error = %v", err)
-	}
-
-	raw := stdout.Bytes()
-	reader := bytes.NewReader(raw)
-	dec := json.NewDecoder(reader)
-	var first version.Info
-	if err := dec.Decode(&first); err != nil {
-		t.Fatalf("first decode error = %v", err)
-	}
-
-	// Drain decoder-buffered bytes + anything still unread on the reader.
-	leftover, err := io.ReadAll(io.MultiReader(dec.Buffered(), reader))
-	if err != nil {
-		t.Fatalf("read leftover: %v", err)
-	}
-	tail := strings.TrimSpace(string(leftover))
-	if tail != "" {
-		t.Errorf("--json emitted trailing non-whitespace after the JSON document: %q", tail)
-	}
-}
 
 // TestVersionHumanSurfacesAllInfoFields pins the currently-rendered Info
 // fields in the human surface: Version, Commit, Date, and Schema.{Min,Max}.
@@ -148,7 +78,7 @@ func TestVersionHumanLabelsDevBuild(t *testing.T) {
 }
 
 // TestVersionRejectsPositionalArgs pins the command shape: `lit version` takes
-// only `--json`; any positional arg is a usage error. Prevents silent misuse
+// no positional args; any positional is a usage error. Prevents silent misuse
 // like `lit version v0.1.0` (which a user might think means "show v0.1.0's
 // release manifest" — that operation belongs to a different command).
 func TestVersionRejectsPositionalArgs(t *testing.T) {

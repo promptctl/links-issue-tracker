@@ -3,11 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -51,18 +49,12 @@ func (h queueTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
-func (h queueTestHarness) runQueueJSON(args ...string) []annotation.AnnotatedIssue {
+// runQueueIDs renders the queue and extracts the issue ID leading each row, in
+// render order — the structured probe over the command's pull-order logic
+// (which items survive the not-blocked filter, in what order) read from text.
+func (h queueTestHarness) runQueueIDs(args ...string) []string {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	all := append(append([]string{}, args...), "--json")
-	if err := runQueue(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, all); err != nil {
-		h.t.Fatalf("runQueue(%v) error = %v", all, err)
-	}
-	var got []annotation.AnnotatedIssue
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		h.t.Fatalf("json.Unmarshal(queue) error = %v", err)
-	}
-	return got
+	return issueIDsFromText(h.runQueueText(args...))
 }
 
 func (h queueTestHarness) runQueueText(args ...string) string {
@@ -85,19 +77,19 @@ func TestQueueDropsBlockedItems(t *testing.T) {
 	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "D needs design", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{NeedsDesignLabel}})
 	h.addDependency(b, a) // b is dependency-gated, must be dropped
 
-	got := h.runQueueJSON()
+	got := h.runQueueIDs()
 	wantOrder := []string{a, c} // b dropped (open dep), flagged dropped (needs-design)
 	if len(got) != len(wantOrder) {
-		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), gotIDs(got))
+		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), got)
 	}
 	for i, want := range wantOrder {
-		if got[i].ID != want {
-			t.Fatalf("queue[%d].ID = %q, want %q; full order=%v", i, got[i].ID, want, gotIDs(got))
+		if got[i] != want {
+			t.Fatalf("queue[%d].ID = %q, want %q; full order=%v", i, got[i], want, got)
 		}
 	}
-	for _, r := range got {
-		if r.ID == b || r.ID == flagged {
-			t.Fatalf("blocked item %q must not appear in queue; got=%v", r.ID, gotIDs(got))
+	for _, id := range got {
+		if id == b || id == flagged {
+			t.Fatalf("blocked item %q must not appear in queue; got=%v", id, got)
 		}
 	}
 }
@@ -113,14 +105,14 @@ func TestQueueKeepsInProgressInRankOrder(t *testing.T) {
 		t.Fatalf("start(%s) error = %v", b, err)
 	}
 
-	got := h.runQueueJSON()
+	got := h.runQueueIDs()
 	wantOrder := []string{a, b, c}
 	if len(got) != len(wantOrder) {
-		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), gotIDs(got))
+		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), got)
 	}
 	for i, want := range wantOrder {
-		if got[i].ID != want {
-			t.Fatalf("queue[%d].ID = %q, want %q; full order=%v", i, got[i].ID, want, gotIDs(got))
+		if got[i] != want {
+			t.Fatalf("queue[%d].ID = %q, want %q; full order=%v", i, got[i], want, got)
 		}
 	}
 }
@@ -162,7 +154,7 @@ func TestQueueRespectsLimit(t *testing.T) {
 		h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1})
 	}
 
-	got := h.runQueueJSON("--limit", "2")
+	got := h.runQueueIDs("--limit", "2")
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2 (limit)", len(got))
 	}

@@ -9,6 +9,6 @@ import (
 
 func main() {
 	if err := cli.Run(context.Background(), os.Stdout, os.Stderr, os.Args[1:]); err != nil {
-		os.Exit(cli.WriteCommandError(os.Stderr, os.Stdout, os.Args[1:], err))
+		os.Exit(cli.WriteCommandError(os.Stderr, err))
 	}
 }

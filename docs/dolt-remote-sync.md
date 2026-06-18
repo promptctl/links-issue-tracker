@@ -33,27 +33,27 @@ ordinary `lit sync pull` / `lit sync push` flow applies.
 ```sh
 lit hooks install
 git remote add origin https://github.com/<org>/<repo>.git
-lit sync remote ls --json
+lit sync remote ls
 lit sync fetch
-lit sync pull --json
+lit sync pull
 ```
 
 ## Daily workflow
 
 ```sh
 lit sync status
-lit sync pull --json
+lit sync pull
 # ...work with lit commands...
-lit sync push --json
+lit sync push
 ```
 
 ## Commands
 
-- `lit sync status [--json]`
-- `lit sync remote ls [--json]`
-- `lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]`
-- `lit sync pull [--remote <name>] [--verbose] [--json]`
-- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose] [--json]`
+- `lit sync status`
+- `lit sync remote ls`
+- `lit sync fetch [--remote <name>] [--prune] [--verbose]`
+- `lit sync pull [--remote <name>] [--verbose]`
+- `lit sync push [--remote <name>] [--set-upstream] [--force] [--verbose]`
 - `lit sync reconcile` — merge a diverged clone into linear history; surfaces a concurrent free-text rewrite for the calling agent to merge
 - `lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT …` — finalize the reconcile with the agent's merged text (one `--resolve` per pending field; the fingerprint, copied from the guidance, pins the merge to the exact conflict)
 - `lit sync reconcile abort` — leave the clone diverged for now
@@ -84,7 +84,7 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 
 `lit hooks install` writes `$(git rev-parse --git-common-dir)/hooks/pre-push` and chains any existing user hook.
 The hook auto-runs one canonical `lit sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
-Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace --json`.
+Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace`.
 
 ## Push cadence
 

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -12,36 +11,8 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
-func TestInitReportsAgentsSourceFromEmbeddedDefault(t *testing.T) {
-	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
-	repo := t.TempDir()
-	runGit(t, repo, "init")
-
-	prevWD, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("Getwd() error = %v", err)
-	}
-	if err := os.Chdir(repo); err != nil {
-		t.Fatalf("Chdir(repo) error = %v", err)
-	}
-	t.Cleanup(func() { _ = os.Chdir(prevWD) })
-
-	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks", "--json"}); err != nil {
-		t.Fatalf("Run(init --skip-hooks --json) error = %v", err)
-	}
-
-	var report initReport
-	if err := json.Unmarshal(stdout.Bytes(), &report); err != nil {
-		t.Fatalf("json.Unmarshal(init output) error = %v\noutput = %q", err, stdout.String())
-	}
-	if report.AgentsSource != string(templates.SourceEmbedded) {
-		t.Fatalf("init agents_source = %q, want %q", report.AgentsSource, templates.SourceEmbedded)
-	}
-	if report.ClaudeSource != string(templates.SourceEmbedded) {
-		t.Fatalf("init claude_source = %q, want %q", report.ClaudeSource, templates.SourceEmbedded)
-	}
-}
+// The embedded-default source path is pinned by TestInitHumanOutputShowsAgentsSource,
+// which asserts the "(via embedded)" text the init surface now emits.
 
 func TestInitReportsAgentsSourceFromGlobalOverride(t *testing.T) {
 	xdg := t.TempDir()
@@ -70,19 +41,16 @@ func TestInitReportsAgentsSourceFromGlobalOverride(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
-	var jsonBuf bytes.Buffer
-	if err := Run(context.Background(), &jsonBuf, &jsonBuf, []string{"init", "--skip-hooks", "--json"}); err != nil {
-		t.Fatalf("Run(init --skip-hooks --json) error = %v", err)
+	var stdout bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks"}); err != nil {
+		t.Fatalf("Run(init --skip-hooks) error = %v", err)
 	}
-	var report initReport
-	if err := json.Unmarshal(jsonBuf.Bytes(), &report); err != nil {
-		t.Fatalf("json.Unmarshal(init output) error = %v\noutput = %q", err, jsonBuf.String())
+	output := stdout.String()
+	if !strings.Contains(output, "AGENTS.md (via global)") {
+		t.Fatalf("init agents source = %q, want AGENTS.md (via global)", output)
 	}
-	if report.AgentsSource != string(templates.SourceGlobal) {
-		t.Fatalf("init agents_source = %q, want %q", report.AgentsSource, templates.SourceGlobal)
-	}
-	if report.ClaudeSource != string(templates.SourceGlobal) {
-		t.Fatalf("init claude_source = %q, want %q", report.ClaudeSource, templates.SourceGlobal)
+	if !strings.Contains(output, "CLAUDE.md (via global)") {
+		t.Fatalf("init claude source = %q, want CLAUDE.md (via global)", output)
 	}
 }
 

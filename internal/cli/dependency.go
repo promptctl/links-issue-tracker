@@ -29,7 +29,6 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -63,18 +62,16 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	cliRel := depRelationForCLI(rel)
-	return printValue(stdout, cliRel, withQuickstartBreadcrumb("update", func(w io.Writer, v any) error {
-		r := v.(model.Relation)
-		_, err := fmt.Fprintln(w, depRelationLine(r))
+	if _, err := fmt.Fprintln(stdout, depRelationLine(cliRel)); err != nil {
 		return err
-	}))
+	}
+	return emitBreadcrumb(stdout, "update")
 }
 
 func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("dep rm")
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -92,25 +89,24 @@ func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
 		return err
 	}
-	return printValue(stdout, map[string]string{"status": "ok"}, withQuickstartBreadcrumb("update", func(w io.Writer, _ any) error {
-		_, err := fmt.Fprintln(w, "ok")
+	if _, err := fmt.Fprintln(stdout, "ok"); err != nil {
 		return err
-	}))
+	}
+	return emitBreadcrumb(stdout, "update")
 }
 
 func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("dep ls")
 	relType := fs.String("type", "", "Filter relation type")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]"}
+		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to] [--json]"}
+		return UsageError{Message: "usage: lit dep ls <issue-id> [--type blocks|parent-child|related-to]"}
 	}
 	// [LAW:dataflow-not-control-flow] An absent --type is the empty filter
 	// set; a present one is parsed at this trust boundary, so a bad value
@@ -131,15 +127,12 @@ func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	for _, rel := range relations {
 		cliRelations = append(cliRelations, depRelationForCLI(rel))
 	}
-	return printValue(stdout, cliRelations, func(w io.Writer, v any) error {
-		list := v.([]model.Relation)
-		for _, rel := range list {
-			if _, err := fmt.Fprintln(w, depRelationLine(rel)); err != nil {
-				return err
-			}
+	for _, rel := range cliRelations {
+		if _, err := fmt.Fprintln(stdout, depRelationLine(rel)); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // resolveDepAddEndpoints chooses between positional and named-flag input for

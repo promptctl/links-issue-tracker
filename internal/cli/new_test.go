@@ -3,15 +3,32 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
+
+// firstIssueID returns the issue ID leading the first row of a mutation
+// command's text summary (printIssueSummary prints "<id> [..] <title>"). With
+// --json removed, text is the sole surface, so a test that needs the
+// created/updated issue extracts its ID here and re-reads the row from the
+// store to assert fields the summary line doesn't carry. Child IDs carry a
+// ".<n>" suffix, so this reads the first field verbatim rather than validating
+// against the flat-ID token shape.
+func firstIssueID(t *testing.T, out string) string {
+	t.Helper()
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	t.Fatalf("output has no issue ID row: %q", out)
+	return ""
+}
 
 func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	ctx := context.Background()
@@ -28,26 +45,26 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
+	if err := runNew(ctx, &stdout, ap, []string{
 		"--title", "Tighten repro",
 		"--topic", "renderer",
 		"--parent", parent.ID,
 		"--type", "task",
 		"--priority", "1",
-		"--json",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
 
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runNew output) error = %v", err)
+	createdID := firstIssueID(t, stdout.String())
+	if createdID != parent.ID+".1" {
+		t.Fatalf("created.ID = %q, want %q", createdID, parent.ID+".1")
+	}
+	created, err := ap.Store.GetIssue(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetIssue(%s) error = %v", createdID, err)
 	}
 	if created.Topic != "renderer" {
 		t.Fatalf("created.Topic = %q, want renderer", created.Topic)
-	}
-	if created.ID != parent.ID+".1" {
-		t.Fatalf("created.ID = %q, want %q", created.ID, parent.ID+".1")
 	}
 }
 
@@ -55,18 +72,14 @@ func TestRunNewRanksToTopByDefaultAndBottomOnFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	runCreate := func(title string, args ...string) model.Issue {
+	runCreate := func(title string, args ...string) string {
 		t.Helper()
 		var stdout bytes.Buffer
-		base := []string{"--title", title, "--topic", "place", "--type", "task", "--json"}
-		if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, append(base, args...)); err != nil {
+		base := []string{"--title", title, "--topic", "place", "--type", "task"}
+		if err := runNew(ctx, &stdout, ap, append(base, args...)); err != nil {
 			t.Fatalf("runNew(%q) error = %v", title, err)
 		}
-		var created model.Issue
-		if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-			t.Fatalf("json.Unmarshal(runNew %q) error = %v", title, err)
-		}
-		return created
+		return firstIssueID(t, stdout.String())
 	}
 
 	first := runCreate("First")
@@ -81,7 +94,7 @@ func TestRunNewRanksToTopByDefaultAndBottomOnFlag(t *testing.T) {
 	for _, is := range issues {
 		got = append(got, is.ID)
 	}
-	want := []string{second.ID, first.ID, appended.ID}
+	want := []string{second, first, appended}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("rank order = %#v, want %#v (newest-first default, --bottom appended last)", got, want)
 	}
@@ -119,14 +132,14 @@ func TestRunNewWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
-		"--title", "Born unclaimed", "--topic", "lifecycle", "--json",
+	if err := runNew(ctx, &stdout, ap, []string{
+		"--title", "Born unclaimed", "--topic", "lifecycle",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runNew output) error = %v", err)
+	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	// open means unclaimed: creation is not a claim, so the session identity
 	// must not be stamped onto a ticket nobody started. [LAW:one-source-of-truth]
@@ -140,14 +153,14 @@ func TestRunNewExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	var stdout bytes.Buffer
-	if err := runNew(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{
-		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice", "--json",
+	if err := runNew(ctx, &stdout, ap, []string{
+		"--title", "Pre-assigned", "--topic", "lifecycle", "--assignee", "alice",
 	}); err != nil {
 		t.Fatalf("runNew() error = %v", err)
 	}
-	var created model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(runNew output) error = %v", err)
+	created, err := ap.Store.GetIssue(ctx, firstIssueID(t, stdout.String()))
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got, want := created.AssigneeValue(), "alice"; got != want {
 		t.Fatalf("created.AssigneeValue() = %q, want %q: explicit assignee must not be rewritten to the caller", got, want)

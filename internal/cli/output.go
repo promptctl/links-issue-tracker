@@ -10,8 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-func printIssueSummary(w io.Writer, v any) error {
-	issue := v.(model.Issue)
+func printIssueSummary(w io.Writer, issue model.Issue) error {
 	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), issue.Title, formatLabels(issue.Labels))
 	return err
 }
@@ -212,8 +211,7 @@ func emptyDash(s string) string {
 	return s
 }
 
-func printLabels(w io.Writer, v any) error {
-	labels := v.([]string)
+func printLabels(w io.Writer, labels []string) error {
 	_, err := fmt.Fprintln(w, strings.Join(labels, ","))
 	return err
 }

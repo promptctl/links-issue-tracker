@@ -3,11 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -54,18 +52,12 @@ func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
-func (h backlogTestHarness) runBacklogJSON(args ...string) []annotation.AnnotatedIssue {
+// runBacklogIDs renders the backlog and extracts the issue ID leading each row,
+// in render order — the structured probe over the command's logic (which items,
+// in what order) now read from the one canonical text surface.
+func (h backlogTestHarness) runBacklogIDs(args ...string) []string {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	all := append(append([]string{}, args...), "--json")
-	if err := runBacklog(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, all); err != nil {
-		h.t.Fatalf("runBacklog(%v) error = %v", all, err)
-	}
-	var got []annotation.AnnotatedIssue
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		h.t.Fatalf("json.Unmarshal(backlog) error = %v", err)
-	}
-	return got
+	return issueIDsFromText(h.runBacklogText(args...))
 }
 
 func (h backlogTestHarness) runBacklogText(args ...string) string {
@@ -86,14 +78,14 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 	c := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0})
 	h.addDependency(b, a) // b is blocked
 
-	got := h.runBacklogJSON()
+	got := h.runBacklogIDs()
 	wantOrder := []string{a, b, c}
 	if len(got) != len(wantOrder) {
-		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), gotIDs(got))
+		t.Fatalf("len(got) = %d, want %d; got=%v", len(got), len(wantOrder), got)
 	}
 	for i, want := range wantOrder {
-		if got[i].ID != want {
-			t.Fatalf("backlog[%d].ID = %q, want %q; full order=%v", i, got[i].ID, want, gotIDs(got))
+		if got[i] != want {
+			t.Fatalf("backlog[%d].ID = %q, want %q; full order=%v", i, got[i], want, got)
 		}
 	}
 }
@@ -144,7 +136,7 @@ func TestBacklogRespectsLimit(t *testing.T) {
 		h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1})
 	}
 
-	got := h.runBacklogJSON("--limit", "2")
+	got := h.runBacklogIDs("--limit", "2")
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2 (limit)", len(got))
 	}
@@ -159,14 +151,14 @@ func TestBacklogIncludesInProgressInline(t *testing.T) {
 		t.Fatalf("start(%s) error = %v", b, err)
 	}
 
-	got := h.runBacklogJSON()
+	got := h.runBacklogIDs()
 	wantOrder := []string{a, b, c}
 	if len(got) != 3 {
-		t.Fatalf("len(got) = %d, want 3; got=%v", len(got), gotIDs(got))
+		t.Fatalf("len(got) = %d, want 3; got=%v", len(got), got)
 	}
 	for i, want := range wantOrder {
-		if got[i].ID != want {
-			t.Fatalf("backlog[%d].ID = %q, want %q; full order=%v", i, got[i].ID, want, gotIDs(got))
+		if got[i] != want {
+			t.Fatalf("backlog[%d].ID = %q, want %q; full order=%v", i, got[i], want, got)
 		}
 	}
 
@@ -176,10 +168,64 @@ func TestBacklogIncludesInProgressInline(t *testing.T) {
 	}
 }
 
-func gotIDs(rows []annotation.AnnotatedIssue) []string {
-	ids := make([]string, len(rows))
-	for i, r := range rows {
-		ids[i] = r.ID
+// issueIDsFromText extracts the issue ID leading each row of a list command's
+// text output, in render order. Issue IDs are the first <prefix>-<token>
+// identifier on a row; rows without one (preamble, separators, context lines)
+// contribute nothing. This is the text-surface equivalent of reading the
+// ordered ID list the old --json probe produced.
+func issueIDsFromText(text string) []string {
+	var ids []string
+	for _, line := range strings.Split(text, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		// A primary list row leads with the issue ID, or with an "N." position
+		// number followed by it. Indented context lines (epic:/depends on:/...)
+		// lead with a label token and are intentionally skipped.
+		if isIssueIDToken(fields[0]) {
+			ids = append(ids, fields[0])
+			continue
+		}
+		if isPositionToken(fields[0]) && len(fields) > 1 && isIssueIDToken(fields[1]) {
+			ids = append(ids, fields[1])
+		}
 	}
 	return ids
+}
+
+func isPositionToken(s string) bool {
+	if len(s) < 2 || s[len(s)-1] != '.' {
+		return false
+	}
+	for i := 0; i < len(s)-1; i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func isIssueIDToken(s string) bool {
+	// An issue ID is <prefix>-<token>, with child IDs appending ".N" segments
+	// (e.g. test-ab12, test-ab12.1.3). The leading dash is what separates a real
+	// ID from a position number ("1.") or a label ("epic:"); a dot only appears
+	// inside child IDs, always after that dash.
+	dash := strings.IndexByte(s, '-')
+	if dash <= 0 || dash == len(s)-1 {
+		return false
+	}
+	dot := strings.IndexByte(s, '.')
+	if dot >= 0 && dot < dash {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		isLower := c >= 'a' && c <= 'z'
+		isDigit := c >= '0' && c <= '9'
+		if !isLower && !isDigit && c != '-' && c != '.' {
+			return false
+		}
+	}
+	return true
 }

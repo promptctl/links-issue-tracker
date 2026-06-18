@@ -54,7 +54,6 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	label := fs.String("label", "", "Label name")
 	by := fs.String("by", os.Getenv("USER"), "")
 	fs.Hide("by")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
 	}
@@ -79,15 +78,12 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 		}
 		results[issueID] = "ok"
 	}
-	return printValue(stdout, results, func(w io.Writer, v any) error {
-		entries := v.(map[string]string)
-		for issueID, status := range entries {
-			if _, err := fmt.Fprintf(w, "%s %s\n", issueID, status); err != nil {
-				return err
-			}
+	for issueID, status := range results {
+		if _, err := fmt.Fprintf(stdout, "%s %s\n", issueID, status); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 // runBulkTransition builds the handler for a bulk lifecycle action. The
@@ -100,7 +96,6 @@ func runBulkTransition(action model.ActionName) appRunFn {
 		reason := fs.String("reason", "", "Lifecycle reason")
 		by := fs.String("by", os.Getenv("USER"), "")
 		fs.Hide("by")
-		fs.JSONFlag()
 		if err := parseFlagSet(fs, args, stdout); err != nil {
 			return err
 		}
@@ -122,15 +117,12 @@ func runBulkTransition(action model.ActionName) appRunFn {
 			}
 			results[issueID] = "ok"
 		}
-		return printValue(stdout, results, func(w io.Writer, v any) error {
-			entries := v.(map[string]string)
-			for issueID, status := range entries {
-				if _, err := fmt.Fprintf(w, "%s %s\n", issueID, status); err != nil {
-					return err
-				}
+		for issueID, status := range results {
+			if _, err := fmt.Fprintf(stdout, "%s %s\n", issueID, status); err != nil {
+				return err
 			}
-			return nil
-		})
+		}
+		return nil
 	}
 }
 
@@ -138,7 +130,6 @@ func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	fs := newCobraFlagSet("bulk import")
 	path := fs.String("path", "", "Path to JSON export")
 	force := fs.Bool("force", false, "Force import over unsynced local state")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -148,10 +139,6 @@ func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err := restoreFromExportPath(ctx, ap, *path, *force); err != nil {
 		return err
 	}
-	payload := map[string]string{"status": "imported", "path": filepath.Clean(*path)}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]string)
-		_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
-		return err
-	})
+	_, err := fmt.Fprintf(stdout, "imported %s\n", filepath.Clean(*path))
+	return err
 }

@@ -11,10 +11,9 @@
 //     consults a manifest to name a concrete prior version.
 //
 // NOTE: an earlier draft of this comment claimed the manifest is "embedded in
-// each binary" so `lit version --json` could expose Artifact lists locally.
-// That embedding is not implemented in this PR; `lit version` only reports
-// version.Info. Embedding can be added later via go:embed if downstream
-// tickets need it.
+// each binary" so a local binary could expose Artifact lists. That embedding is
+// not implemented in this PR; `lit version` only reports version.Info.
+// Embedding can be added later via go:embed if downstream tickets need it.
 //
 // [LAW:one-source-of-truth] One schema definition. The bytes mkmanifest writes
 // and the bytes a downgrade client reads share this Go type — there is no

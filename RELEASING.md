@@ -127,15 +127,6 @@ short SHA, and the build timestamp — injected by goreleaser via
 $ lit version
 lit 0.1.0 (commit abcdef0, built 2026-05-24T15:21:00Z)
 schema versions supported: 1–1
-
-$ lit version --json
-{
-  "version": "0.1.0",
-  "commit": "abcdef0",
-  "date": "2026-05-24T15:21:00Z",
-  "is_dev": false,
-  "schema_support": { "min": 1, "max": 1 }
-}
 ```
 
 The reported `version` is goreleaser's `.Version` template — the tag with the

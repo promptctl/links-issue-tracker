@@ -25,14 +25,13 @@ type initReport struct {
 
 func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("init")
-	fs.JSONFlag()
 	skipHooks := fs.Bool("skip-hooks", false, "Skip git hook installation")
 	skipAgents := fs.Bool("skip-agents", false, "Skip AGENTS.md integration update")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit init [--json] [--skip-hooks] [--skip-agents]"}
+		return UsageError{Message: "usage: lit init [--skip-hooks] [--skip-agents]"}
 	}
 
 	dbCreated, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
@@ -90,10 +89,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 	}
 
-	return printValue(stdout, report, func(w io.Writer, v any) error {
-		payload := v.(initReport)
-		return writeInitHumanOutput(w, payload)
-	})
+	return writeInitHumanOutput(stdout, report)
 }
 
 type labeledStatus struct {

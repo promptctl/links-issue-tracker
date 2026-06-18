@@ -32,7 +32,7 @@ go env -w CGO_LDFLAGS="-L${ICU_PREFIX}/lib -L${ZSTD_PREFIX}/lib"
 Then retry:
 
 ```sh
-go test ./internal/cli -run TestQuickstartOutputsStructuredJSON -count=1
+go test ./internal/cli -run TestRunQuickstartDefaultsToText -count=1
 go build -buildvcs=false ./cmd/lit
 ```
 
@@ -47,7 +47,7 @@ lit sync push
 Then check status:
 
 ```sh
-lit sync status --json
+lit sync status
 ```
 
 ## Integrity errors
@@ -55,8 +55,8 @@ lit sync status --json
 Run:
 
 ```sh
-lit doctor --json
-lit fsck --repair --json
+lit doctor
+lit fsck --repair
 ```
 
 ## Startup preflight blocked by Beads residue
@@ -68,6 +68,6 @@ When a non-`init` command is blocked by startup preflight, the error includes th
 Use backups:
 
 ```sh
-lit backup list --json
-lit backup restore --latest --json
+lit backup list
+lit backup restore --latest
 ```

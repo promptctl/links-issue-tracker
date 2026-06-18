@@ -29,7 +29,7 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 		{args: []string{"parent", "bogus"}, wantErr: "usage: lit parent <set|clear> ..."},
 		{args: []string{"dep", "unknown"}, wantErr: "usage: lit dep <add|rm|ls> ..."},
 		{args: []string{"sync", "unknown"}, wantErr: "usage: lit sync <status|remote|fetch|pull|push|reconcile> ..."},
-		{args: []string{"hooks"}, wantErr: "usage: lit hooks install [--json]"},
+		{args: []string{"hooks"}, wantErr: "usage: lit hooks install"},
 		{args: []string{"bulk"}, wantErr: "usage: lit bulk <label|close|archive|import> ..."},
 		{args: []string{"backup", "prune"}, wantErr: "usage: lit backup <create|list|restore> ..."},
 		{args: []string{"snapshots", "-h"}, wantErr: "usage: lit snapshots <new|list|restore> ..."},
@@ -66,23 +66,23 @@ func TestRunNewCompletesWithoutDeadlock(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init", "--json"}); err != nil {
-		t.Fatalf("Run(init --json) error = %v", err)
+	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	done := make(chan error, 1)
 	go func() {
 		var stdout bytes.Buffer
-		done <- Run(context.Background(), &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock", "--json"})
+		done <- Run(context.Background(), &stdout, &stdout, []string{"new", "--title", "deadlock guard", "--topic", "deadlock"})
 	}()
 
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("Run(new --json) error = %v", err)
+			t.Fatalf("Run(new) error = %v", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("Run(new --json) timed out; likely mutation lock context regression")
+		t.Fatal("Run(new) timed out; likely mutation lock context regression")
 	}
 }
 
@@ -100,8 +100,8 @@ func TestRunNestedHelpAfterValidSubcommandPassesThrough(t *testing.T) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initOut bytes.Buffer
-	if err := Run(context.Background(), &initOut, &initOut, []string{"init", "--json"}); err != nil {
-		t.Fatalf("Run(init --json) error = %v", err)
+	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+		t.Fatalf("Run(init) error = %v", err)
 	}
 
 	var stdout bytes.Buffer

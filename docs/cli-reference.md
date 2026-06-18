@@ -8,16 +8,16 @@ tell you. For a guided tour instead of a reference, start with
 
 These hold across the whole CLI; per-command sections below only note deviations.
 
-### Output modes
+### Output
 
-Every command prints human-readable text by default. Almost every command accepts
-`--json`, which switches to a strict machine contract: **exactly one JSON document on
-stdout and nothing else** — no headers, no progress, no prose on any stream. Errors in
-JSON mode are themselves a single JSON document carrying `code`, `message`,
-`remediation`, a `trace_ref`, and the `exit_code`.
+Every command prints human-readable text — the one canonical surface, designed to be
+read directly by both humans and agents. There is no `--json` flag; the terse default
+text *is* the agent interface. Each output line is simple enough to parse when a script
+needs one field (e.g. `lit workspace | sed -n 's/^traces_dir: //p'`).
 
-`lit export` and `lit lifeboat dump` always emit JSON — they have no text mode and no
-`--json` flag.
+`lit export` and `lit lifeboat dump` are the exceptions: they emit a JSON data structure
+as their sole output, because a full database export / raw dump has no text form. They
+take no flag — the structured output *is* the command.
 
 ### Exit codes
 
@@ -57,8 +57,7 @@ a fresh one.
 The mechanism is template-driven: any lifecycle transition becomes two-phase when a
 pre-guidance template exists for it in the workspace, and `done` is the only one with a
 built-in template. All other transitions (`start`, `close`, `open`, `archive`,
-`unarchive`, `delete`, `restore`) apply immediately out of the box. JSON mode always
-bypasses guidance and applies in one phase.
+`unarchive`, `delete`, `restore`) apply immediately out of the box.
 
 ### Lifecycle
 
@@ -74,7 +73,7 @@ any non-closed state). The distinction is recorded in history.
 ### `lit init`
 
 ```text
-lit init [--skip-hooks] [--skip-agents] [--json]
+lit init [--skip-hooks] [--skip-agents]
 ```
 
 Initializes the issue store under `$(git rev-parse --git-common-dir)/links/`, adds
@@ -97,7 +96,7 @@ overwritten — so it is also safe to re-run after a transient network failure.
 ### `lit ready`
 
 ```text
-lit ready [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>] [--json]
+lit ready [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>]
 ```
 
 The pull view: epics with their top workable ticket, plus in-progress and orphaned
@@ -107,7 +106,7 @@ counted in a footer.
 ### `lit backlog`
 
 ```text
-lit backlog [filters as for ready] [--json]
+lit backlog [filters as for ready]
 ```
 
 Every workable item in rank order with blocked items shown **inline**, so the shape of
@@ -116,7 +115,7 @@ the queue is legible. Use when grooming or re-ranking.
 ### `lit queue`
 
 ```text
-lit queue [filters as for ready] [--json]
+lit queue [filters as for ready]
 ```
 
 Terse rank-ordered list of pullable items only — blocked items dropped, no preamble. The
@@ -125,7 +124,7 @@ minimal machine-friendly pull order.
 ### `lit next`
 
 ```text
-lit next [--assignee <a>] [--continue] [--json]
+lit next [--assignee <a>] [--continue]
 ```
 
 Prints the single next workable leaf to `lit start`. `--continue` biases toward leaves
@@ -134,7 +133,7 @@ under epics that are already in progress.
 ### `lit orphaned`
 
 ```text
-lit orphaned [--assignee <a>] [--json]
+lit orphaned [--assignee <a>]
 ```
 
 Lists `in_progress` issues with no recent updates — claimed work that went quiet and
@@ -148,7 +147,7 @@ lit ls [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
        [--sort rank:asc,updated_at:desc] [--limit <n>] [--columns <csv>]
-       [--format lines|table] [--json]
+       [--format lines|table]
 ```
 
 General-purpose listing, ranked by default. `--search` matches title and description
@@ -159,7 +158,7 @@ hidden unless explicitly included.
 ### `lit show`
 
 ```text
-lit show <id> [--json]
+lit show <id>
 ```
 
 Full detail for one issue: description, status, labels, comments, history. For an issue
@@ -175,7 +174,7 @@ cross-epic dependencies. Exits 4 if the ID doesn't exist.
 ```text
 lit new --title <text> --topic <slug> [--type task|feature|bug|chore|epic]
         [--description <text>] [--parent <id>] [--lane <key>] [--priority 0|1]
-        [--labels <csv>] [--assignee <a>] [--prompt <text>] [--bottom] [--json]
+        [--labels <csv>] [--assignee <a>] [--prompt <text>] [--bottom]
 ```
 
 Creates an issue and **prints its generated ID** — capture it; IDs are not guessable.
@@ -191,7 +190,7 @@ the work the issue captures.
 ```text
 lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
            [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
-           [--lane <key>] [--status open|in_progress|closed] [--reason <text>] [--json]
+           [--lane <key>] [--status open|in_progress|closed] [--reason <text>]
 ```
 
 Field-level edit of an existing issue. `--status` performs a lifecycle transition inline
@@ -203,8 +202,8 @@ incremental changes. `--assignee` is taken verbatim (no session-identity substit
 ### `lit comment add` / `lit comment rm`
 
 ```text
-lit comment add <id> --body <text> [--json]
-lit comment rm <comment-id> [--json]
+lit comment add <id> --body <text>
+lit comment rm <comment-id>
 ```
 
 Comments are the work trail: plans, findings, hand-off notes. Removal takes the
@@ -213,8 +212,8 @@ comment's own ID (shown in `lit show`), not the issue ID.
 ### `lit label add` / `lit label rm`
 
 ```text
-lit label add <issue-id> <label> [--json]
-lit label rm <issue-id> <label> [--json]
+lit label add <issue-id> <label>
+lit label rm <issue-id> <label>
 ```
 
 Incremental label edits. Two labels are reserved and carry derived behavior:
@@ -230,7 +229,7 @@ alone never propagates to prerequisites.
 ```text
 lit followup --on <closed-id> --title <text> [--description <text>] [--topic <slug>]
              [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
-             [--bottom] [--json]
+             [--bottom]
 ```
 
 Files a follow-up parented to a just-closed ticket — the way to capture work surfaced
@@ -240,7 +239,7 @@ the description defaults to a reference back to the source ticket.
 ### `lit rank`
 
 ```text
-lit rank <id> --top | --bottom | --above <other-id> | --below <other-id> [--json]
+lit rank <id> --top | --bottom | --above <other-id> | --below <other-id>
 ```
 
 Moves one issue in the rank order. Exactly one placement flag is required.
@@ -257,7 +256,7 @@ relative to its own epic (either direction) is an error.
 ### `lit rank set`
 
 ```text
-lit rank set <id1> <id2> [<id3> ...] [--json]
+lit rank set <id1> <id2> [<id3> ...]
 ```
 
 Establishes absolute order across N issues atomically by stacking them at the
@@ -276,7 +275,7 @@ among the siblings instead).
 ### `lit assign`
 
 ```text
-lit assign <id> <new-assignee> [--reason <text>] [--json]
+lit assign <id> <new-assignee> [--reason <text>]
 ```
 
 Reassigns without changing status — hand-off of claimed work.
@@ -289,7 +288,7 @@ All seven share one shape (see [Two-phase transitions](#two-phase-transitions) a
 [Identity](#identity) for `--apply` and `--assignee` semantics):
 
 ```text
-lit <verb> <id> [--reason <text>] [--apply=<token>] [--assignee <fallback>] [--json]
+lit <verb> <id> [--reason <text>] [--apply=<token>] [--assignee <fallback>]
 ```
 
 | Command | Transition | Notes |
@@ -311,7 +310,7 @@ lit <verb> <id> [--reason <text>] [--apply=<token>] [--assignee <fallback>] [--j
 lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]
 lit dep add --blocker <id> --blocked <id>          # blocks-only alternative spelling
 lit dep rm <from-id> <to-id> [--type <t>]
-lit dep ls <issue-id> [--type <t>] [--json]
+lit dep ls <issue-id> [--type <t>]
 ```
 
 Manages relationship edges. The default type is `blocks` (first ID blocks the second);
@@ -322,8 +321,8 @@ signal. `related-to` is symmetric annotation with no scheduling effect.
 ### `lit parent set` / `lit parent clear`
 
 ```text
-lit parent set <child-id> <parent-id> [--json]
-lit parent clear <child-id> [--json]
+lit parent set <child-id> <parent-id>
+lit parent clear <child-id>
 ```
 
 Manages epic membership. Epics contain children; an epic's completion is derived from
@@ -332,7 +331,7 @@ its children rather than tracked as its own status.
 ### `lit children`
 
 ```text
-lit children <parent-id> [--json]
+lit children <parent-id>
 ```
 
 Lists an issue's children in rank order.
@@ -344,9 +343,9 @@ Lists an issue's children in rank order.
 ### `lit bulk label` / `lit bulk close` / `lit bulk archive`
 
 ```text
-lit bulk label <add|rm> --ids <csv> --label <label> [--json]
-lit bulk close --ids <csv> [--reason <text>] [--json]
-lit bulk archive --ids <csv> [--reason <text>] [--json]
+lit bulk label <add|rm> --ids <csv> --label <label>
+lit bulk close --ids <csv> [--reason <text>]
+lit bulk archive --ids <csv> [--reason <text>]
 ```
 
 Apply one label edit or lifecycle transition across many issues in one call.
@@ -354,8 +353,8 @@ Apply one label edit or lifecycle transition across many issues in one call.
 ### `lit import` / `lit bulk import`
 
 ```text
-lit import --path <tree-spec.json> [--json]
-lit bulk import --path <export.json> [--force] [--json]
+lit import --path <tree-spec.json>
+lit bulk import --path <export.json> [--force]
 ```
 
 Two different inputs: `lit import` bulk-creates issues from a JSON **tree spec**
@@ -370,11 +369,11 @@ produced by `lit export`, and refuses to overwrite unsynced local state without
 ### `lit sync`
 
 ```text
-lit sync status [--json]
-lit sync remote ls [--json]
-lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]
-lit sync pull  [--remote <name>] [--verbose] [--json]
-lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose] [--json]
+lit sync status
+lit sync remote ls
+lit sync fetch [--remote <name>] [--prune] [--verbose]
+lit sync pull  [--remote <name>] [--verbose]
+lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose]
 lit sync reconcile                                              # run the field-aware reconcile; surface any prose divergence
 lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT … # finalize with the agent's merged text
 lit sync reconcile abort                                        # leave the clone diverged for now
@@ -409,9 +408,9 @@ flags). The input format for `lit bulk import`.
 ### `lit backup`
 
 ```text
-lit backup create [--keep <n>] [--json]
-lit backup list [--json]
-lit backup restore (--latest | --path <p>) [--force] [--json]
+lit backup create [--keep <n>]
+lit backup list
+lit backup restore (--latest | --path <p>) [--force]
 ```
 
 Logical backup snapshots with rotation (`--keep`, default 20). `restore` refuses to
@@ -420,9 +419,9 @@ overwrite unsynced state without `--force`.
 ### `lit snapshots`
 
 ```text
-lit snapshots new [--label <text>] [--json]
-lit snapshots list [--json]
-lit snapshots restore <name> [--json]
+lit snapshots new [--label <text>]
+lit snapshots list
+lit snapshots restore <name>
 ```
 
 Filesystem-level workspace snapshots — coarser and lower-level than `lit backup`,
@@ -431,7 +430,7 @@ capturing the store directory wholesale.
 ### `lit recover`
 
 ```text
-lit recover (--from-backup <p> | --latest-backup | --from-sync <p>) [--force] [--json]
+lit recover (--from-backup <p> | --latest-backup | --from-sync <p>) [--force]
 ```
 
 Single entry point for restoring a workspace from a backup snapshot or a sync file.
@@ -440,7 +439,7 @@ Single entry point for restoring a workspace from a backup snapshot or a sync fi
 
 ```text
 lit lifeboat dump
-lit lifeboat recover [--mapping <shape-mapping.json>] [--json]
+lit lifeboat recover [--mapping <shape-mapping.json>]
 ```
 
 Below-the-gate recovery for a workspace whose schema the binary cannot open: `dump`
@@ -457,7 +456,7 @@ attempt leaves the workspace untouched.
 ### `lit doctor`
 
 ```text
-lit doctor [--fix[=<area,...>]] [--json]
+lit doctor [--fix[=<area,...>]]
 ```
 
 Health check. Bare `--fix` applies all available fixes; `--fix rank` (comma-separated)
@@ -468,12 +467,12 @@ remote — ahead (local ticket changes not pushed), behind (remote changes not p
 as of the last fetch), diverged, up to date, or never synced — and names the
 `lit sync push`/`lit sync pull` command to fix it. The behind direction is read from
 the local remote-tracking ref, so it reflects the last fetch; doctor does not reach
-the network. The line appears in the text report only, not under `--json`.
+the network.
 
 ### `lit hooks install`
 
 ```text
-lit hooks install [--json]
+lit hooks install
 ```
 
 Installs the shared `pre-push` sync hook into the clone's common git dir, so every
@@ -482,7 +481,7 @@ worktree of the clone inherits it.
 ### `lit workspace`
 
 ```text
-lit workspace [--json]
+lit workspace
 ```
 
 Prints workspace metadata — which store you are actually talking to. The store is
@@ -492,7 +491,7 @@ listings look unfamiliar, this is the first thing to check.
 ### `lit prefix set`
 
 ```text
-lit prefix set <new-prefix> [--apply] [--json]
+lit prefix set <new-prefix> [--apply]
 ```
 
 Renames the cosmetic issue-ID prefix. Preview-first: without `--apply` it prints what
@@ -501,7 +500,7 @@ would change.
 ### `lit downgrade`
 
 ```text
-lit downgrade --to <vX.Y.Z> [--json]
+lit downgrade --to <vX.Y.Z>
 ```
 
 Reverses schema migrations and atomically installs the prior `lit` binary for the given
@@ -510,7 +509,7 @@ v-prefixed git tag — the rollback path for a bad upgrade.
 ### `lit version`
 
 ```text
-lit version [--json]
+lit version
 ```
 
 Prints binary version, build metadata, and the supported schema version range. The
@@ -540,8 +539,7 @@ overrides. Topics take no flags.
 Mutation commands point back here at the moment of need: the text success output of
 `new`/`followup` ends with a one-line breadcrumb at `lit quickstart new`, `start` at
 `lit quickstart ready`, `done`/`close` at `lit quickstart done`, and
-`update`/`rank`/`label`/`parent`/`dep` at `lit quickstart update`. Breadcrumbs are
-text-mode only; `--json` output is untouched.
+`update`/`rank`/`label`/`parent`/`dep` at `lit quickstart update`.
 
 ### `lit completion`
 
