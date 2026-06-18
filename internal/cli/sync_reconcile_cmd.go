@@ -39,6 +39,17 @@ func runSyncReconcile(ctx context.Context, stdout io.Writer, ws workspace.Info, 
 	return runSyncReconcileShow(ctx, stdout, ws, syncStore, args)
 }
 
+// rejectStrayReconcileArgs fails when a reconcile handler received positional
+// arguments it does not consume — every reconcile input is a flag, so a stray
+// positional is a malformed command, never silently ignored. [LAW:no-silent-failure]
+// [LAW:single-enforcer] the three handlers reject extra args through this one check.
+func rejectStrayReconcileArgs(fs *cobraFlagSet, cmd string) error {
+	if fs.NArg() != 0 {
+		return UsageError{Message: fmt.Sprintf("%s takes no positional arguments; got %q", cmd, fs.Arg(0))}
+	}
+	return nil
+}
+
 // runSyncReconcileShow runs the field-aware reconcile and reports the outcome. A
 // settled divergence linearizes transparently; a prose divergence renders the
 // full guidance to stdout and returns a MergeConflictError so the command exits
@@ -52,6 +63,9 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 	// honor while also printing base/ours/theirs prose.
 	fs := newCobraFlagSet("sync reconcile")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if err := rejectStrayReconcileArgs(fs, "sync reconcile"); err != nil {
 		return err
 	}
 	remote, branch, ok, err := freshReconcileTarget(ctx, syncStore, ws)
@@ -77,6 +91,9 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 	fs := newCobraFlagSet("sync reconcile resolve")
 	resolveValues := fs.StringArray("resolve", "Merged text for one diverged field, as ISSUE_ID:FIELD=TEXT (repeat for every pending field)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if err := rejectStrayReconcileArgs(fs, "sync reconcile resolve"); err != nil {
 		return err
 	}
 	if len(*resolveValues) == 0 {
@@ -110,6 +127,9 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync reconcile abort")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if err := rejectStrayReconcileArgs(fs, "sync reconcile abort"); err != nil {
 		return err
 	}
 	_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")

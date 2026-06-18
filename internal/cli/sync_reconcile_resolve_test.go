@@ -51,6 +51,45 @@ func TestParseProseResolutionsRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestProseGuidanceNamesRealAbortCommand(t *testing.T) {
+	var b bytes.Buffer
+	if err := renderProsePendingGuidance(&b, []merge.ProsePending{{IssueID: "links-x.1", Field: merge.ProseTitle, Base: "b", Ours: "o", Theirs: "t"}}); err != nil {
+		t.Fatalf("renderProsePendingGuidance() error = %v", err)
+	}
+	out := b.String()
+	if !strings.Contains(out, "lit sync reconcile abort") {
+		t.Fatalf("guidance missing abort command:\n%s", out)
+	}
+	// The abort command is a subcommand, not a flag: the guidance must not print the
+	// non-existent `abort --abort` form.
+	if strings.Contains(out, "--abort") {
+		t.Fatalf("guidance prints a non-existent --abort flag:\n%s", out)
+	}
+}
+
+func TestRejectStrayReconcileArgs(t *testing.T) {
+	// A stray positional must fail loudly rather than be silently ignored, or a
+	// malformed finalize could appear to succeed.
+	withArgs := newCobraFlagSet("sync reconcile resolve")
+	withArgs.StringArray("resolve", "")
+	if err := withArgs.Parse([]string{"junk", "--resolve", "links-x.1:title=merged"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	err := rejectStrayReconcileArgs(withArgs, "sync reconcile resolve")
+	if code := ExitCode(err); code != ExitUsage {
+		t.Fatalf("stray positional exit code = %d, want %d (ExitUsage)", code, ExitUsage)
+	}
+
+	clean := newCobraFlagSet("sync reconcile resolve")
+	clean.StringArray("resolve", "")
+	if err := clean.Parse([]string{"--resolve", "links-x.1:title=merged"}); err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if err := rejectStrayReconcileArgs(clean, "sync reconcile resolve"); err != nil {
+		t.Fatalf("rejectStrayReconcileArgs() on a flags-only command = %v, want nil", err)
+	}
+}
+
 // runCLIInDirErr runs the CLI and returns its output and error instead of failing
 // the test, so a command expected to exit non-zero (a prose-pending reconcile) can
 // be asserted on.

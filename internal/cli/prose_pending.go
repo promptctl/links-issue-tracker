@@ -53,7 +53,7 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error
 		fmt.Fprintf(&b, " \\\n    --resolve '%s:%s=<your merged text>'", p.IssueID, p.Field)
 	}
 	b.WriteString("\n\n")
-	fmt.Fprintf(&b, "To leave the clone diverged for now (it stays usable, and a later command re-surfaces this): %s --abort\n\n", proseReconcileAbortHint)
+	fmt.Fprintf(&b, "To leave the clone diverged for now (it stays usable, and a later command re-surfaces this): %s\n\n", proseReconcileAbortHint)
 
 	b.WriteString(guidanceClose)
 	b.WriteString("\n</agent-instructions>\n")
