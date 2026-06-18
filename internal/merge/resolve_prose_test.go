@@ -71,6 +71,20 @@ func TestApplyProseResolutionsRejectsUnknownField(t *testing.T) {
 	}
 }
 
+func TestApplyProseResolutionsRejectsDuplicateField(t *testing.T) {
+	result := prosePendingFixture(t)
+	// Two resolutions for the SAME pending field: keeping the last would silently
+	// finalize one of two conflicting texts. The count gate cannot catch this (the
+	// duplicate keeps the map the same size), so the duplicate itself must reject.
+	if _, ok := ApplyProseResolutions(result, []ProseResolution{
+		{IssueID: "i1", Field: ProseTitle, Text: "first"},
+		{IssueID: "i1", Field: ProseTitle, Text: "second"},
+		{IssueID: "i1", Field: ProseDescription, Text: "merged-desc"},
+	}); ok {
+		t.Fatalf("duplicate resolution for one field accepted; the last would silently win")
+	}
+}
+
 func TestApplyProseResolutionsRejectsWrongIssue(t *testing.T) {
 	result := prosePendingFixture(t)
 	if _, ok := ApplyProseResolutions(result, []ProseResolution{

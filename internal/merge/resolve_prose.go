@@ -54,6 +54,14 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 		if _, ok := pendingByKey[key]; !ok {
 			return model.Export{}, false
 		}
+		// A second resolution for the same field is an ambiguous, malformed set:
+		// silently keeping the last would finalize one of two conflicting texts the
+		// agent supplied. Reject it instead of letting a map overwrite pick. The
+		// bijection count below cannot catch this on its own — a duplicate key keeps
+		// the map the same size — so the duplicate must fail here. [LAW:no-silent-failure]
+		if _, dup := resolvedByKey[key]; dup {
+			return model.Export{}, false
+		}
 		resolvedByKey[key] = resolution.Text
 	}
 	// Every pending field must be resolved, or the export would still carry a
