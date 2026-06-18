@@ -72,6 +72,48 @@ type SyncReconcileResult struct {
 	Pending []merge.ProsePending
 }
 
+// settleFn turns the three-way merge of a divergence into the export to replay as
+// the single forward commit, OR a non-empty pending set that holds the reconcile
+// for the agent surface. It is the ONLY thing that differs between the autonomous
+// reconcile (which can never resolve prose itself) and the agent-resolved finalize
+// (which splices the agent's merged text in): the lock, freshness gate, anchor
+// capture, scratch branch, and atomic reparent are identical for both, so they
+// live in one shared core and the policy crosses the seam as a value.
+// [LAW:dataflow-not-control-flow] the per-path variability is this value, not a
+// branch duplicated through the safety-critical replay. [LAW:single-enforcer] the
+// scratch-branch safe-replay is written once.
+type settleFn func(merge.MergeResult) (model.Export, []merge.ProsePending)
+
+// autonomousSettle is the reconcile's own policy: commit the merge only when every
+// field — prose included — converged without the agent; otherwise hold the live
+// prose conflicts. [LAW:no-silent-failure] prose is never auto-committed by picking
+// a side.
+func autonomousSettle(merged merge.MergeResult) (model.Export, []merge.ProsePending) {
+	if export, ok := merged.Settled(); ok {
+		return export, nil
+	}
+	return model.Export{}, merged.Pending
+}
+
+// resolvedSettle is the finalize policy: splice the agent's merged prose into the
+// provisional export and commit it. It first honors a divergence that converged on
+// its own between the agent reading and finalizing (Settled), then applies the
+// agent's resolutions — but only when they are an exact bijection with the LIVE
+// pending set. A stale or partial set falls back to holding the CURRENT pending so
+// the caller re-surfaces it; the agent never commits against a divergence that
+// changed underneath it. [LAW:no-silent-failure]
+func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
+	return func(merged merge.MergeResult) (model.Export, []merge.ProsePending) {
+		if export, ok := merged.Settled(); ok {
+			return export, nil
+		}
+		if export, ok := merge.ApplyProseResolutions(merged, resolutions); ok {
+			return export, nil
+		}
+		return model.Export{}, merged.Pending
+	}
+}
+
 // SyncReconcile reconciles a DIVERGED local branch into LINEAR history using the
 // pure field-aware merge engine. It reads the three-way state (base = merge-base,
 // ours = local head, theirs = remote head) from Dolt, runs the engine, and — when
@@ -98,6 +140,26 @@ type SyncReconcileResult struct {
 // on the caller's own engine after its command engine closed — never a background
 // worker.
 func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (SyncReconcileResult, error) {
+	return s.reconcile(ctx, remote, branch, autonomousSettle)
+}
+
+// SyncReconcileResolved is the agent-resolved finalize of a prose-pending
+// divergence. It re-derives the SAME three-way state SyncReconcile read — the
+// prose-pending state is never snapshot-persisted, so the live refs are the one
+// source of truth ([LAW:one-source-of-truth]) — and replays the merge with the
+// agent's merged prose spliced in, as the SAME single forward commit on the remote
+// head. Resolutions that no longer match the live divergence do not commit; the
+// result comes back SyncReconcileProsePending with the CURRENT conflicts for the
+// agent to re-merge. [LAW:no-silent-failure]
+//
+// It shares SyncReconcile's safe-replay verbatim: the merged commit is built on a
+// unique scratch branch and the data branch advances with one atomic reset, so an
+// interrupted finalize can never orphan the clone's local work.
+func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (SyncReconcileResult, error) {
+	return s.reconcile(ctx, remote, branch, resolvedSettle(resolutions))
+}
+
+func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn) (SyncReconcileResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
 		return SyncReconcileResult{}, err
@@ -148,7 +210,7 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 		scratchBranch := reconcileScratchName()
 
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			return s.reconcileFromAnchors(ctx, &result, dataBranch, scratchBranch, localHead, remoteHead, baseCommit)
+			return s.reconcileFromAnchors(ctx, &result, settle, dataBranch, scratchBranch, localHead, remoteHead, baseCommit)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 	if err != nil {
@@ -168,7 +230,7 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) (err error) {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) (err error) {
 	// Force-create this run's unique scratch branch at the local head and switch to
 	// it; -B recreates it if a prior retry of this same run left it behind.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", scratchBranch, localHead); err != nil {
@@ -199,16 +261,18 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	}
 
 	merged := merge.ThreeWay(base, ours, theirs)
-	export, ok := merged.Settled()
-	if !ok {
-		// Prose diverged on both sides: commit nothing. The data branch is still at
-		// localHead (only the scratch branch moved), so the clone keeps working on
+	export, pending := settle(merged)
+	if len(pending) > 0 {
+		// Prose still diverges on both sides: commit nothing. The data branch is still
+		// at localHead (only the scratch branch moved), so the clone keeps working on
 		// local truth, still diverged; the unresolved divergence IS the durable
 		// pending state, re-derivable from the refs rather than a snapshot that can
 		// drift. [LAW:one-source-of-truth] Hand the prose conflicts to the agent
-		// surface. [LAW:no-silent-failure] never auto-committed by picking a side.
+		// surface. [LAW:no-silent-failure] never auto-committed by picking a side. The
+		// resolved finalize reaches here only when the agent's resolutions no longer
+		// match the live divergence, so this same path re-surfaces the CURRENT state.
 		result.State = SyncReconcileProsePending
-		result.Pending = merged.Pending
+		result.Pending = pending
 		return nil
 	}
 

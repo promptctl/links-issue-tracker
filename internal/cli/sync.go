@@ -49,13 +49,14 @@ func withSyncStore(run syncRunFn) wsRunFn {
 }
 
 var syncFamily = commandFamily[wsRunFn]{
-	usage: "usage: lit sync <status|remote|fetch|pull|push> ...",
+	usage: "usage: lit sync <status|remote|fetch|pull|push|reconcile> ...",
 	subcommands: []subcommandRow[wsRunFn]{
 		{name: "status", payload: withSyncStore(runSyncStatus)},
 		{name: "remote", payload: withSyncStore(runSyncRemote)},
 		{name: "fetch", payload: withSyncStore(runSyncFetch)},
 		{name: "pull", payload: withSyncStore(runSyncPull)},
 		{name: "push", payload: withSyncStore(runSyncPush)},
+		{name: "reconcile", payload: withSyncStore(runSyncReconcile)},
 		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
 		// above, so it never shows in help; it manages its own store lifecycle
 		// (wait-for-parent, then open) and so is registered without withSyncStore.

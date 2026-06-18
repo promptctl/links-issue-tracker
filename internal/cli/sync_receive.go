@@ -69,6 +69,15 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
+	// A prose-pending reconcile is the one outcome that needs the agent: surface a
+	// compact nudge to stderr (the command's stdout is already produced and clean,
+	// so local reads still serve). It is not a failure — the clone keeps working
+	// diverged — so it never affects the command's exit. [LAW:no-silent-failure]
+	if outcome.reconcile != nil && outcome.reconcile.state == store.SyncReconcileProsePending {
+		if nudgeErr := renderProsePendingNudge(os.Stderr, outcome.reconcile.pending); nudgeErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: automatic reconcile nudge not rendered: %v\n", nudgeErr)
+		}
+	}
 }
 
 // syncReceiveOutcome is the result of one receive attempt, independent of how it
