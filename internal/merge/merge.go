@@ -161,12 +161,14 @@ type issueProjection struct {
 	ID          string
 	Title       string
 	Description string
+	Prompt      string
 	Status      string
 	Priority    int
 	IssueType   string
 	Topic       string
 	Assignee    string
 	Rank        string
+	Lane        string
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -177,16 +179,20 @@ type issueProjection struct {
 
 func issueProjectionFrom(issue model.Issue) issueProjection {
 	// [LAW:one-source-of-truth] Merge equality compares the same lossless issue data that the sync wire owns, without depending on lifecycle-derived JSON fields.
+	// Every field ResolveIssue merges must appear here, or a change to an omitted
+	// field reads as "unchanged" and ThreeWay drops the edit. [LAW:no-silent-failure]
 	return issueProjection{
 		ID:          issue.ID,
 		Title:       issue.Title,
 		Description: issue.Description,
+		Prompt:      issue.Prompt,
 		Status:      issue.StatusValue(),
 		Priority:    issue.Priority,
 		IssueType:   issue.IssueType,
 		Topic:       issue.Topic,
 		Assignee:    issue.AssigneeValue(),
 		Rank:        issue.Rank,
+		Lane:        issue.Lane,
 		Labels:      append([]string{}, issue.Labels...),
 		CreatedAt:   issue.CreatedAt,
 		UpdatedAt:   issue.UpdatedAt,

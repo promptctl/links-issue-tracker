@@ -291,6 +291,31 @@ func TestMergeResultSettledGatesOnPending(t *testing.T) {
 	}
 }
 
+func TestThreeWayDetectsPromptAndLaneOnlyEdits(t *testing.T) {
+	// A change to a field ResolveIssue merges must be seen by ThreeWay's change
+	// detection, or the edit is silently dropped.
+	cases := []struct {
+		name  string
+		mut   func(*model.Issue)
+		check func(model.Issue) bool
+	}{
+		{"prompt-only", func(i *model.Issue) { i.Prompt = "new prompt" }, func(i model.Issue) bool { return i.Prompt == "new prompt" }},
+		{"lane-only", func(i *model.Issue) { i.Lane = "fast" }, func(i model.Issue) bool { return i.Lane == "fast" }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
+			edited := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, tc.mut)
+			local := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{edited}}
+			remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{open(t, "i1")}}
+			got := ThreeWay(base, local, remote)
+			if len(got.Provisional().Issues) != 1 || !tc.check(got.Provisional().Issues[0]) {
+				t.Fatalf("%s edit dropped: merged = %#v", tc.name, got.Provisional().Issues)
+			}
+		})
+	}
+}
+
 func TestThreeWayDeleteVsEditPreservesSurvivingEdit(t *testing.T) {
 	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
 	local := model.Export{WorkspaceID: "wsA"} // local removed the whole row
