@@ -30,7 +30,7 @@ func jsonRoundTripIssue(t *testing.T, issue model.Issue) model.Issue {
 	return decoded
 }
 
-func TestThreeWayDetectsPerIssueConflict(t *testing.T) {
+func TestThreeWayEmitsProsePendingForConcurrentTitleRewrite(t *testing.T) {
 	base := model.Export{Issues: []model.Issue{issueWithStatus(t, model.Issue{ID: "i1", Title: "issue", Priority: 0, IssueType: "task", CreatedAt: time.Now().UTC(), UpdatedAt: time.Now().UTC()}, model.StateOpen)}}
 	local := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
 	remote := model.Export{Issues: append([]model.Issue(nil), base.Issues...)}
@@ -38,11 +38,15 @@ func TestThreeWayDetectsPerIssueConflict(t *testing.T) {
 	remote.Issues[0].Title = "remote-change"
 
 	result := ThreeWay(base, local, remote)
-	if len(result.Conflicts) != 1 {
-		t.Fatalf("conflicts = %#v", result.Conflicts)
+	if len(result.Pending) != 1 {
+		t.Fatalf("pending = %#v", result.Pending)
 	}
-	if result.Conflicts[0].IssueID != "i1" {
-		t.Fatalf("issue id = %q", result.Conflicts[0].IssueID)
+	got := result.Pending[0]
+	if got.IssueID != "i1" || got.Field != ProseTitle {
+		t.Fatalf("pending ref = %#v", got)
+	}
+	if got.Base != "issue" || got.Ours != "local-change" || got.Theirs != "remote-change" {
+		t.Fatalf("pending texts = %#v", got)
 	}
 }
 
@@ -65,8 +69,8 @@ func TestThreeWayComparesJSONUnmarshaledEpicData(t *testing.T) {
 	remote.Issues[0].Title = "remote"
 
 	result := ThreeWay(base, local, remote)
-	if len(result.Conflicts) != 0 {
-		t.Fatalf("unexpected conflicts = %#v", result.Conflicts)
+	if len(result.Pending) != 0 {
+		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
 	if len(result.Export.Issues) != 1 || result.Export.Issues[0].Title != "remote" {
 		t.Fatalf("merged issues = %#v, want remote title", result.Export.Issues)
@@ -100,8 +104,8 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	remote.Issues[1].Title = "remote i2"
 
 	result := ThreeWay(base, local, remote)
-	if len(result.Conflicts) != 0 {
-		t.Fatalf("unexpected conflicts = %#v", result.Conflicts)
+	if len(result.Pending) != 0 {
+		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
 	if len(result.Export.Issues) != 2 {
 		t.Fatalf("issues = %#v", result.Export.Issues)

@@ -8,16 +8,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-type IssueConflict struct {
-	IssueID string       `json:"issue_id"`
-	Base    *model.Issue `json:"base,omitempty"`
-	Local   *model.Issue `json:"local,omitempty"`
-	Remote  *model.Issue `json:"remote,omitempty"`
-}
-
+// MergeResult is the whole-export merge: the converged export plus the prose
+// fields that diverged on both sides and need the calling agent's semantic
+// merge. [LAW:single-enforcer] One merge policy lives in this package — the
+// per-row field-aware decisions are ResolveIssue's; ThreeWay only fans it across
+// the export and unions the append-only tables.
 type MergeResult struct {
-	Export    model.Export    `json:"export"`
-	Conflicts []IssueConflict `json:"conflicts"`
+	Export  model.Export   `json:"export"`
+	Pending []ProsePending `json:"pending"`
 }
 
 func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult {
@@ -27,7 +25,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 
 	allIDs := unionIssueIDs(baseMap, localMap, remoteMap)
 	mergedIssues := make([]model.Issue, 0, len(allIDs))
-	conflicts := make([]IssueConflict, 0)
+	pending := make([]ProsePending, 0)
 
 	for _, id := range allIDs {
 		baseIssue, hasBase := baseMap[id]
@@ -53,22 +51,19 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			if hasRemote {
 				mergedIssues = append(mergedIssues, remoteIssue)
 			}
-		default:
-			if issueEqual(localPtr, remotePtr) {
-				if hasLocal {
-					mergedIssues = append(mergedIssues, localIssue)
-				}
-				continue
-			}
-			conflicts = append(conflicts, IssueConflict{
-				IssueID: id,
-				Base:    basePtr,
-				Local:   localPtr,
-				Remote:  remotePtr,
-			})
+		case !hasLocal || !hasRemote:
+			// One side deleted the whole row while the other edited it; whole-row
+			// presence is a collection concern, not a field merge. Keep the
+			// surviving edited side rather than feeding a nil row to ResolveIssue.
 			if hasLocal {
 				mergedIssues = append(mergedIssues, localIssue)
+			} else {
+				mergedIssues = append(mergedIssues, remoteIssue)
 			}
+		default:
+			resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+			mergedIssues = append(mergedIssues, resolution.Merged)
+			pending = append(pending, resolution.Pending...)
 		}
 	}
 
@@ -88,7 +83,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Labels:      mergeLabels(issueSet, local.Labels, remote.Labels),
 		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
-	return MergeResult{Export: merged, Conflicts: conflicts}
+	return MergeResult{Export: merged, Pending: pending}
 }
 
 func mapIssues(issues []model.Issue) map[string]model.Issue {
@@ -194,6 +189,7 @@ func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relati
 	for _, relation := range merged {
 		out = append(out, relation)
 	}
+	out = enforceSingleParent(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].SrcID != out[j].SrcID {
 			return out[i].SrcID < out[j].SrcID
@@ -203,6 +199,90 @@ func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relati
 		}
 		return out[i].Type < out[j].Type
 	})
+	return out
+}
+
+// enforceSingleParent collapses concurrent parent-child edges so the graph stays
+// a valid forest: each child keeps exactly one parent and no parent chain loops.
+// blocks / related-to are additive and pass through; only parent-child is
+// single-valued (a child's parent relation is stored src=child, dst=parent, one
+// per child). [LAW:decomposition] This is the "choose-only, no semantic winner"
+// branch of the merge cut: two parents cannot be combined, so a deterministic,
+// symmetric tiebreak keeps the DAG invariant without inventing a clock.
+func enforceSingleParent(relations []model.Relation) []model.Relation {
+	parentOf := map[string]model.Relation{}
+	out := make([]model.Relation, 0, len(relations))
+	for _, relation := range relations {
+		if relation.Type != model.RelParentChild {
+			out = append(out, relation)
+			continue
+		}
+		existing, seen := parentOf[relation.SrcID]
+		if !seen || relation.DstID > existing.DstID {
+			parentOf[relation.SrcID] = relation
+		}
+	}
+	breakParentCycles(parentOf)
+	for _, relation := range parentOf {
+		out = append(out, relation)
+	}
+	return out
+}
+
+// breakParentCycles deletes one edge from every parent cycle so the union never
+// commits a cycle (the store has no acyclicity guard, so a cycle here would be
+// silent corruption — [LAW:no-silent-failure]). With single-parent already
+// enforced the parent map is functional, so each cycle is a simple loop; the
+// victim is the lexicographically greatest child id in the loop — a choice both
+// machines compute identically from the same data.
+func breakParentCycles(parentOf map[string]model.Relation) {
+	const (
+		unvisited = 0
+		onPath    = 1
+		settled   = 2
+	)
+	state := map[string]int{}
+	for start := range parentOf {
+		if state[start] != unvisited {
+			continue
+		}
+		var path []string
+		node := start
+		for {
+			if _, ok := parentOf[node]; !ok || state[node] == settled {
+				break
+			}
+			if state[node] == onPath {
+				cycle := path[indexOf(path, node):]
+				delete(parentOf, maxString(cycle))
+				break
+			}
+			state[node] = onPath
+			path = append(path, node)
+			node = parentOf[node].DstID
+		}
+		for _, n := range path {
+			state[n] = settled
+		}
+	}
+}
+
+func indexOf(items []string, target string) int {
+	for idx, item := range items {
+		if item == target {
+			return idx
+		}
+	}
+	return -1
+}
+
+func maxString(items []string) string {
+	out := items[0]
+	for _, item := range items[1:] {
+		if item > out {
+			out = item
+		}
+	}
 	return out
 }
 

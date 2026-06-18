@@ -1,0 +1,288 @@
+package merge
+
+import (
+	"testing"
+	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
+
+var (
+	t0 = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	t1 = time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	t2 = time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+)
+
+// leaf builds a hydrated leaf issue; mut tailors the scalar fields before the
+// lifecycle is attached so status/assignee/closed_at travel through the real
+// model API the resolver depends on.
+func leaf(t *testing.T, id string, view model.StatusView, mut func(*model.Issue)) model.Issue {
+	t.Helper()
+	iss := model.Issue{ID: id, IssueType: "task", CreatedAt: t0, UpdatedAt: t0}
+	if mut != nil {
+		mut(&iss)
+	}
+	hydrated, err := model.HydrateOwnedStatus(iss, view)
+	if err != nil {
+		t.Fatalf("HydrateOwnedStatus(%s): %v", id, err)
+	}
+	return hydrated
+}
+
+func open(t *testing.T, id string) model.Issue {
+	return leaf(t, id, model.StatusView{Value: model.StateOpen}, nil)
+}
+
+func TestResolveIssueStatusTwoTier(t *testing.T) {
+	cases := []struct {
+		name               string
+		base, ours, theirs model.State
+		want               model.State
+	}{
+		{"unchanged keeps base", model.StateInProgress, model.StateInProgress, model.StateInProgress, model.StateInProgress},
+		{"reopen via tier1 (only ours moved off closed)", model.StateClosed, model.StateOpen, model.StateClosed, model.StateOpen},
+		{"only theirs moved -> take theirs", model.StateOpen, model.StateOpen, model.StateInProgress, model.StateInProgress},
+		{"concurrent closed vs in_progress -> closed dominates", model.StateOpen, model.StateInProgress, model.StateClosed, model.StateClosed},
+		{"concurrent open vs in_progress (off closed) -> in_progress dominates", model.StateClosed, model.StateOpen, model.StateInProgress, model.StateInProgress},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			base := leaf(t, "i1", model.StatusView{Value: tc.base}, nil)
+			ours := leaf(t, "i1", model.StatusView{Value: tc.ours}, nil)
+			theirs := leaf(t, "i1", model.StatusView{Value: tc.theirs}, nil)
+			got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+			if got.Merged.StatusValue() != string(tc.want) {
+				t.Fatalf("status = %q, want %q", got.Merged.StatusValue(), tc.want)
+			}
+			if len(got.Pending) != 0 {
+				t.Fatalf("status is code-resolvable; unexpected pending = %#v", got.Pending)
+			}
+		})
+	}
+}
+
+func TestResolveIssuePriorityUrgentWins(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityNormal })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityUrgent })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityNormal })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if got.Merged.Priority != model.PriorityUrgent {
+		t.Fatalf("priority = %d, want urgent", got.Merged.Priority)
+	}
+}
+
+func TestResolveIssueProseTier1TakesMover(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "d" })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "b"; i.Description = "d" })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "d" })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if len(got.Pending) != 0 {
+		t.Fatalf("only one side rewrote title; should not need the agent: %#v", got.Pending)
+	}
+	if got.Merged.Title != "b" {
+		t.Fatalf("title = %q, want b", got.Merged.Title)
+	}
+}
+
+func TestResolveIssueProseTier2EmitsPendingNeverAutoPicks(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "base d"; i.Prompt = "p" })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "ours d"; i.Prompt = "p" })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "theirs d"; i.Prompt = "p" })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if len(got.Pending) != 1 {
+		t.Fatalf("pending = %#v, want exactly the description", got.Pending)
+	}
+	p := got.Pending[0]
+	if p.Field != ProseDescription || p.IssueID != "i1" {
+		t.Fatalf("pending ref = %#v", p)
+	}
+	if p.Base != "base d" || p.Ours != "ours d" || p.Theirs != "theirs d" {
+		t.Fatalf("pending carries all three versions for the agent: %#v", p)
+	}
+}
+
+func TestResolveIssueTiebreakSymmetry(t *testing.T) {
+	// Topic diverged on both sides: a single-valued field with no semantic winner.
+	mk := func(topic string) func(*model.Issue) {
+		return func(i *model.Issue) { i.Topic = topic }
+	}
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("root"))
+	alice := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("alice"))
+	bob := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("bob"))
+
+	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
+	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
+	if forward.Merged.Topic != swapped.Merged.Topic {
+		t.Fatalf("tiebreak not symmetric: forward=%q swapped=%q", forward.Merged.Topic, swapped.Merged.Topic)
+	}
+	if forward.Merged.Topic != "bob" {
+		t.Fatalf("tiebreak winner = %q, want the value from the greater workspace id (wsB->bob)", forward.Merged.Topic)
+	}
+}
+
+func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
+	// Both sides closed concurrently -> closed; closed_at is the earliest close.
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t2}, nil)
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if got.Merged.StatusValue() != string(model.StateClosed) {
+		t.Fatalf("status = %q, want closed", got.Merged.StatusValue())
+	}
+	closedAt := got.Merged.ClosedAtValue()
+	if closedAt == nil || !closedAt.Equal(t1) {
+		t.Fatalf("closed_at = %v, want earliest close %v", closedAt, t1)
+	}
+
+	// Reopen wins -> closed_at must be cleared even though theirs still carries one.
+	reopenBase := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
+	reopenOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	reopenTheirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
+	reopened := ResolveIssue(&reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB")
+	if reopened.Merged.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("reopen status = %q, want open", reopened.Merged.StatusValue())
+	}
+	if reopened.Merged.ClosedAtValue() != nil {
+		t.Fatalf("closed_at = %v, want nil (slaved to non-closed status)", reopened.Merged.ClosedAtValue())
+	}
+}
+
+func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t1 })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if got.Merged.ArchivedAt == nil || !got.Merged.ArchivedAt.Equal(t1) {
+		t.Fatalf("archived_at = %v, want earliest %v", got.Merged.ArchivedAt, t1)
+	}
+
+	// Only ours archived -> tier1 takes the archive; timestamp is ours.
+	soloBase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
+	soloTheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	solo := ResolveIssue(&soloBase, &soloOurs, &soloTheirs, "wsA", "wsB")
+	if solo.Merged.ArchivedAt == nil || !solo.Merged.ArchivedAt.Equal(t2) {
+		t.Fatalf("solo archive = %v, want %v", solo.Merged.ArchivedAt, t2)
+	}
+}
+
+func TestResolveIssueLabelsUnion(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep"} })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "ours"} })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "theirs"} })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	want := []string{"keep", "ours", "theirs"}
+	if len(got.Merged.Labels) != len(want) {
+		t.Fatalf("labels = %#v, want union %#v", got.Merged.Labels, want)
+	}
+	for idx, label := range want {
+		if got.Merged.Labels[idx] != label {
+			t.Fatalf("labels = %#v, want sorted union %#v", got.Merged.Labels, want)
+		}
+	}
+}
+
+func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil) // created_at = t0
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t2 })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if got.Merged.ID != "i1" {
+		t.Fatalf("id = %q, want i1", got.Merged.ID)
+	}
+	if !got.Merged.CreatedAt.Equal(t0) {
+		t.Fatalf("created_at = %v, want immutable base %v", got.Merged.CreatedAt, t0)
+	}
+}
+
+func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
+	// Same id created independently on both sides: no merge-base. The resolver
+	// must not touch the zero-value base's lifecycle accessors, and must converge
+	// every field as "both changed".
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.Title = "ours" })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, func(i *model.Issue) { i.Title = "theirs" })
+	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	if got.Merged.StatusValue() != string(model.StateClosed) {
+		t.Fatalf("status = %q, want closed (dominant join with no base)", got.Merged.StatusValue())
+	}
+	if len(got.Pending) != 1 || got.Pending[0].Field != ProseTitle {
+		t.Fatalf("pending = %#v, want concurrent title", got.Pending)
+	}
+}
+
+func TestThreeWayUnionsConcurrentComments(t *testing.T) {
+	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
+	local := model.Export{
+		WorkspaceID: "wsA",
+		Issues:      []model.Issue{open(t, "i1")},
+		Comments:    []model.Comment{{ID: "c-ours", IssueID: "i1", Body: "ours", CreatedAt: t1}},
+	}
+	remote := model.Export{
+		WorkspaceID: "wsB",
+		Issues:      []model.Issue{open(t, "i1")},
+		Comments:    []model.Comment{{ID: "c-theirs", IssueID: "i1", Body: "theirs", CreatedAt: t2}},
+	}
+	got := ThreeWay(base, local, remote)
+	ids := map[string]bool{}
+	for _, comment := range got.Export.Comments {
+		ids[comment.ID] = true
+	}
+	if !ids["c-ours"] || !ids["c-theirs"] || len(got.Export.Comments) != 2 {
+		t.Fatalf("comments = %#v, want both concurrent comments kept", got.Export.Comments)
+	}
+}
+
+func TestThreeWayBreaksConcurrentParentCycle(t *testing.T) {
+	// ours makes a the child of b; theirs makes b the child of a. Each is a valid
+	// single-parent edge alone, but the union is a cycle the store cannot reject.
+	issues := []model.Issue{open(t, "a"), open(t, "b")}
+	base := model.Export{WorkspaceID: "wsA", Issues: issues}
+	local := model.Export{
+		WorkspaceID: "wsA",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelParentChild, CreatedAt: t1}},
+	}
+	remote := model.Export{
+		WorkspaceID: "wsB",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "b", DstID: "a", Type: model.RelParentChild, CreatedAt: t2}},
+	}
+	got := ThreeWay(base, local, remote)
+	parentOf := map[string]string{}
+	for _, relation := range got.Export.Relations {
+		if relation.Type == model.RelParentChild {
+			parentOf[relation.SrcID] = relation.DstID
+		}
+	}
+	if len(parentOf) != 1 {
+		t.Fatalf("parent edges = %#v, want exactly one (cycle broken)", parentOf)
+	}
+	if parentOf["a"] == "b" && parentOf["b"] == "a" {
+		t.Fatalf("both edges survived; the merged graph is a cycle: %#v", parentOf)
+	}
+}
+
+func TestThreeWayKeepsSingleParentOnConcurrentReparent(t *testing.T) {
+	issues := []model.Issue{open(t, "c1"), open(t, "p1"), open(t, "p2")}
+	base := model.Export{WorkspaceID: "wsA", Issues: issues}
+	local := model.Export{
+		WorkspaceID: "wsA",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "c1", DstID: "p1", Type: model.RelParentChild, CreatedAt: t1}},
+	}
+	remote := model.Export{
+		WorkspaceID: "wsB",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "c1", DstID: "p2", Type: model.RelParentChild, CreatedAt: t2}},
+	}
+	got := ThreeWay(base, local, remote)
+	parents := 0
+	for _, relation := range got.Export.Relations {
+		if relation.SrcID == "c1" && relation.Type == model.RelParentChild {
+			parents++
+		}
+	}
+	if parents != 1 {
+		t.Fatalf("parent-child edges for c1 = %d, want exactly one parent preserved", parents)
+	}
+}
