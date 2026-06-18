@@ -51,19 +51,25 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			if hasRemote {
 				mergedIssues = append(mergedIssues, remoteIssue)
 			}
-		case !hasLocal || !hasRemote:
-			// One side deleted the whole row while the other edited it; whole-row
-			// presence is a collection concern, not a field merge. Keep the
-			// surviving edited side rather than feeding a nil row to ResolveIssue.
-			if hasLocal {
-				mergedIssues = append(mergedIssues, localIssue)
-			} else {
-				mergedIssues = append(mergedIssues, remoteIssue)
-			}
 		default:
-			resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
-			mergedIssues = append(mergedIssues, resolution.Merged)
-			pending = append(pending, resolution.Pending...)
+			// Both sides changed. A field-aware merge needs both rows present; a
+			// missing side here means one machine removed the whole row while the
+			// other edited it. (Routine deletion is soft — a DeletedAt stamp on a
+			// still-present row — so this whole-row-absence path is reached only by
+			// genuine row removal, and presence is a collection fact, not a field.)
+			switch {
+			case hasLocal && hasRemote:
+				resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+				mergedIssues = append(mergedIssues, resolution.Merged)
+				pending = append(pending, resolution.Pending...)
+			case hasLocal:
+				// remote removed it, local edited -> preserve the surviving edit.
+				mergedIssues = append(mergedIssues, localIssue)
+			case hasRemote:
+				// local removed it, remote edited -> preserve the surviving edit.
+				mergedIssues = append(mergedIssues, remoteIssue)
+				// both removed a base-only row -> converged removal, append nothing.
+			}
 		}
 	}
 

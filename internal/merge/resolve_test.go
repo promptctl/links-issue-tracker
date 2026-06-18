@@ -210,6 +210,29 @@ func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
 	}
 }
 
+func TestThreeWayDeleteVsEditPreservesSurvivingEdit(t *testing.T) {
+	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
+	local := model.Export{WorkspaceID: "wsA"} // local removed the whole row
+	edited := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "edited" })
+	remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{edited}}
+	got := ThreeWay(base, local, remote)
+	if len(got.Export.Issues) != 1 || got.Export.Issues[0].Title != "edited" {
+		t.Fatalf("issues = %#v, want the surviving remote edit kept (no silent drop)", got.Export.Issues)
+	}
+}
+
+func TestThreeWayBothRemovedBaseRowAppendsNothing(t *testing.T) {
+	// Regression guard: a base-only id absent on both sides must converge to a
+	// removal, never an appended zero-value issue.
+	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
+	local := model.Export{WorkspaceID: "wsA"}
+	remote := model.Export{WorkspaceID: "wsB"}
+	got := ThreeWay(base, local, remote)
+	if len(got.Export.Issues) != 0 {
+		t.Fatalf("issues = %#v, want none (both removed; no zero-value row)", got.Export.Issues)
+	}
+}
+
 func TestThreeWayUnionsConcurrentComments(t *testing.T) {
 	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
 	local := model.Export{
