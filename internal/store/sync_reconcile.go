@@ -261,9 +261,14 @@ func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch, scratch
 		if reconnectErr := s.reconnect(); reconnectErr != nil {
 			return fmt.Errorf("reconcile left the store on the scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", dataBranch, err, reconnectErr)
 		}
-		// Rotation recovered: the fresh connection is on the data branch. The leftover
-		// scratch branch is harmless — the next reconcile's startup sweep drops it and
-		// it is never pushed (only the data branch is).
+		// A fresh connection opens on the default branch, but do not rely on that —
+		// check out the data branch explicitly on it and treat a failure as the
+		// unrecoverable case, so the store is provably on the data branch (or the
+		// reconcile errors) rather than assumed to be. The leftover scratch branch is
+		// harmless: the next reconcile's startup sweep drops it and it is never pushed.
+		if recoverErr := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); recoverErr != nil {
+			return fmt.Errorf("reconcile could not restore the data branch %q after rotating the connection: %w", dataBranch, recoverErr)
+		}
 		return nil
 	}
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", scratchBranch); err != nil {

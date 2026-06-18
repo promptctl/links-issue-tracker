@@ -173,13 +173,9 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		traceErr:   traceRecordErr,
 		receiveErr: receiveErr,
 	}
-	// A fast-forward absorbed a strictly-behind clone; a divergence cannot
-	// fast-forward and needs the field-aware three-way reconcile, run INLINE on
-	// this same engine right after the receive's engine work — embedded Dolt
-	// permits only one read-write engine per path, so this never spawns a worker.
-	// [LAW:no-ambient-temporal-coupling] Reconcile only when the receive both ran
-	// and classified a divergence. [LAW:no-silent-failure] the divergence is not
-	// left silently deferred — it is reconciled now or surfaced as prose-pending.
+	// The reconcile runs INLINE on this same engine because embedded Dolt permits
+	// only one read-write engine per path — a worker would collide with the next
+	// foreground command. [LAW:no-ambient-temporal-coupling]
 	if receiveErr == nil && result.State == store.SyncReceiveDiverged {
 		outcome.reconcile = performInlineReconcile(ctx, syncStore, ws, remoteName, syncBranch)
 	}
