@@ -10,12 +10,32 @@ import (
 
 // MergeResult is the whole-export merge: the converged export plus the prose
 // fields that diverged on both sides and need the calling agent's semantic
-// merge. [LAW:single-enforcer] One merge policy lives in this package — the
-// per-row field-aware decisions are ResolveIssue's; ThreeWay only fans it across
-// the export and unions the append-only tables.
+// merge. The export is reachable only through Settled (gated) or Provisional
+// (explicitly named) for the same reason IssueResolution gates its row — a
+// caller must not commit a provisional export while prose is unresolved.
+// [LAW:single-enforcer] One merge policy lives in this package — the per-row
+// field-aware decisions are ResolveIssue's; ThreeWay only fans it across the
+// export and unions the append-only tables.
 type MergeResult struct {
-	Export  model.Export   `json:"export"`
-	Pending []ProsePending `json:"pending"`
+	export  model.Export
+	Pending []ProsePending
+}
+
+// Settled returns the merged export to commit autonomously, and ok=true ONLY
+// when no prose field anywhere in the export needs the agent. A non-empty
+// Pending set returns ok=false, so the autonomous-commit path cannot publish an
+// export carrying provisional prose. [LAW:no-silent-failure] the gate is the
+// return value, not a convention.
+func (r MergeResult) Settled() (model.Export, bool) {
+	return r.export, len(r.Pending) == 0
+}
+
+// Provisional returns the merged export carrying provisional prose values, for
+// the reconcile boundary that persists the code-resolved fields while holding
+// the Pending prose for the agent surface. The name marks the callsite that has
+// accepted responsibility for the unresolved prose.
+func (r MergeResult) Provisional() model.Export {
+	return r.export
 }
 
 func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult {
@@ -89,7 +109,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Labels:      mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
-	return MergeResult{Export: merged, Pending: pending}
+	return MergeResult{export: merged, Pending: pending}
 }
 
 func mapIssues(issues []model.Issue) map[string]model.Issue {

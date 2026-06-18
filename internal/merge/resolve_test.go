@@ -232,11 +232,11 @@ func TestThreeWayLabelTableHonorsConcurrentRemoval(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	names := map[string]bool{}
-	for _, label := range got.Export.Labels {
+	for _, label := range got.Provisional().Labels {
 		names[label.Name] = true
 	}
 	if names["b"] || !names["a"] {
-		t.Fatalf("labels = %#v, want only [a] (authoritative table must honor removal)", got.Export.Labels)
+		t.Fatalf("labels = %#v, want only [a] (authoritative table must honor removal)", got.Provisional().Labels)
 	}
 }
 
@@ -268,14 +268,37 @@ func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
 	}
 }
 
+func TestMergeResultSettledGatesOnPending(t *testing.T) {
+	mk := func(title string) model.Export {
+		return model.Export{WorkspaceID: "ws", Issues: []model.Issue{
+			leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = title }),
+		}}
+	}
+	// Concurrent title rewrite -> export carries provisional prose -> Settled refuses.
+	base, local, remote := mk("a"), mk("ours"), mk("theirs")
+	local.WorkspaceID, remote.WorkspaceID = "wsA", "wsB"
+	res := ThreeWay(base, local, remote)
+	if len(res.Pending) == 0 {
+		t.Fatalf("expected pending prose")
+	}
+	if _, ok := res.Settled(); ok {
+		t.Fatalf("Settled() ok=true with prose pending; a provisional export must not reach the autonomous-commit path")
+	}
+	// Clean merge -> Settled hands back the export.
+	clean := ThreeWay(mk("a"), mk("a"), mk("a"))
+	if _, ok := clean.Settled(); !ok {
+		t.Fatalf("Settled() ok=false for a clean merge; want a committable export")
+	}
+}
+
 func TestThreeWayDeleteVsEditPreservesSurvivingEdit(t *testing.T) {
 	base := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{open(t, "i1")}}
 	local := model.Export{WorkspaceID: "wsA"} // local removed the whole row
 	edited := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "edited" })
 	remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{edited}}
 	got := ThreeWay(base, local, remote)
-	if len(got.Export.Issues) != 1 || got.Export.Issues[0].Title != "edited" {
-		t.Fatalf("issues = %#v, want the surviving remote edit kept (no silent drop)", got.Export.Issues)
+	if len(got.Provisional().Issues) != 1 || got.Provisional().Issues[0].Title != "edited" {
+		t.Fatalf("issues = %#v, want the surviving remote edit kept (no silent drop)", got.Provisional().Issues)
 	}
 }
 
@@ -286,8 +309,8 @@ func TestThreeWayBothRemovedBaseRowAppendsNothing(t *testing.T) {
 	local := model.Export{WorkspaceID: "wsA"}
 	remote := model.Export{WorkspaceID: "wsB"}
 	got := ThreeWay(base, local, remote)
-	if len(got.Export.Issues) != 0 {
-		t.Fatalf("issues = %#v, want none (both removed; no zero-value row)", got.Export.Issues)
+	if len(got.Provisional().Issues) != 0 {
+		t.Fatalf("issues = %#v, want none (both removed; no zero-value row)", got.Provisional().Issues)
 	}
 }
 
@@ -305,11 +328,11 @@ func TestThreeWayUnionsConcurrentComments(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	ids := map[string]bool{}
-	for _, comment := range got.Export.Comments {
+	for _, comment := range got.Provisional().Comments {
 		ids[comment.ID] = true
 	}
-	if !ids["c-ours"] || !ids["c-theirs"] || len(got.Export.Comments) != 2 {
-		t.Fatalf("comments = %#v, want both concurrent comments kept", got.Export.Comments)
+	if !ids["c-ours"] || !ids["c-theirs"] || len(got.Provisional().Comments) != 2 {
+		t.Fatalf("comments = %#v, want both concurrent comments kept", got.Provisional().Comments)
 	}
 }
 
@@ -330,7 +353,7 @@ func TestThreeWayBreaksConcurrentParentCycle(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	parentOf := map[string]string{}
-	for _, relation := range got.Export.Relations {
+	for _, relation := range got.Provisional().Relations {
 		if relation.Type == model.RelParentChild {
 			parentOf[relation.SrcID] = relation.DstID
 		}
@@ -358,7 +381,7 @@ func TestThreeWayKeepsSingleParentOnConcurrentReparent(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	parents := 0
-	for _, relation := range got.Export.Relations {
+	for _, relation := range got.Provisional().Relations {
 		if relation.SrcID == "c1" && relation.Type == model.RelParentChild {
 			parents++
 		}

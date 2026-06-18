@@ -72,8 +72,8 @@ func TestThreeWayComparesJSONUnmarshaledEpicData(t *testing.T) {
 	if len(result.Pending) != 0 {
 		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
-	if len(result.Export.Issues) != 1 || result.Export.Issues[0].Title != "remote" {
-		t.Fatalf("merged issues = %#v, want remote title", result.Export.Issues)
+	if len(result.Provisional().Issues) != 1 || result.Provisional().Issues[0].Title != "remote" {
+		t.Fatalf("merged issues = %#v, want remote title", result.Provisional().Issues)
 	}
 }
 
@@ -107,11 +107,11 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	if len(result.Pending) != 0 {
 		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
-	if len(result.Export.Issues) != 2 {
-		t.Fatalf("issues = %#v", result.Export.Issues)
+	if len(result.Provisional().Issues) != 2 {
+		t.Fatalf("issues = %#v", result.Provisional().Issues)
 	}
 	merged := map[string]string{}
-	for _, issue := range result.Export.Issues {
+	for _, issue := range result.Provisional().Issues {
 		merged[issue.ID] = issue.Title
 	}
 	if merged["i1"] != "local i1" || merged["i2"] != "remote i2" {
