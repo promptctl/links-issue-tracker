@@ -150,16 +150,22 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, dataBranch, localHead, remoteHead, baseCommit string) error {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, dataBranch, localHead, remoteHead, baseCommit string) (err error) {
 	// Force-create the scratch branch at the local head and switch to it; -B
 	// recreates it whether or not a prior run left one behind.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", reconcileScratchBranch, localHead); err != nil {
 		return fmt.Errorf("create reconcile scratch branch: %w", err)
 	}
 	// Whatever happens, return the session to the data branch and drop the scratch
-	// branch. The data-branch pointer is the durable result and a fresh connection
-	// always opens on it, so a best-effort cleanup cannot corrupt state.
-	defer s.cleanupReconcileScratch(ctx, dataBranch)
+	// branch. Cleanup recovers a failed switch-back by rotating the connection; only
+	// if THAT also fails is the store left unusable, and then the failure is
+	// promoted to the reconcile's result (when it would not otherwise mask a durable
+	// error) rather than swallowed. [LAW:no-silent-failure]
+	defer func() {
+		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch); cleanupErr != nil && err == nil {
+			err = cleanupErr
+		}
+	}()
 
 	ours, err := s.exportAtCommit(ctx, localHead)
 	if err != nil {
@@ -225,22 +231,27 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 // not left on the scratch branch — otherwise a later use of this store would
 // silently read/write the wrong branch. If the switch back fails, the connection
 // IS stranded on scratch, so it is rotated: a fresh connection always opens on the
-// data branch, which makes "reconcile returned success while stranded on scratch"
-// unrepresentable rather than merely logged. [LAW:no-silent-failure] the failure
-// is surfaced, and the bad state is made unreachable rather than tolerated.
-func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string) {
+// data branch. Only if that rotation ALSO fails is the store genuinely unusable —
+// an unrecoverable state the caller promotes to the reconcile's error rather than
+// tolerating. A failed scratch-branch delete is recoverable (the next reconcile
+// force-recreates the name and it is never pushed), so it is surfaced but not
+// promoted. [LAW:no-silent-failure] recoverable failures recover loudly;
+// unrecoverable ones fail the operation.
+func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string) error {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
 		if reconnectErr := s.reconnect(); reconnectErr != nil {
-			fmt.Fprintf(os.Stderr, "lit: reconcile connection rotation failed: %v\n", reconnectErr)
+			return fmt.Errorf("reconcile left the store on the scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", dataBranch, err, reconnectErr)
 		}
-		// The stale scratch branch is harmless — the next reconcile force-recreates
-		// it under the same name and it is never pushed (only the data branch is).
-		return
+		// Rotation recovered: the fresh connection is on the data branch. The stale
+		// scratch branch is harmless — the next reconcile force-recreates it under
+		// the same name and it is never pushed (only the data branch is).
+		return nil
 	}
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", reconcileScratchBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch: %v\n", err)
 	}
+	return nil
 }
 
 // exportAtCommit hard-resets the (scratch) branch to a commit and exports it.
