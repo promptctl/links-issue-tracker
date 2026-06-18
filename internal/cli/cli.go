@@ -265,6 +265,13 @@ func (fs *cobraFlagSet) Int(name string, value int, usage string) *int {
 	return fs.cmd.Flags().Int(name, value, usage)
 }
 
+// StringArray declares a repeatable string flag: each occurrence appends one
+// value, with no splitting on commas, so a value may itself contain any
+// character (including the multi-line merged prose the reconcile resolve carries).
+func (fs *cobraFlagSet) StringArray(name string, usage string) *[]string {
+	return fs.cmd.Flags().StringArray(name, nil, usage)
+}
+
 // StringOptional declares a string flag whose value is `defaultIfAbsent` when
 // the flag is not passed, `defaultIfPresent` when the flag is passed with no
 // value (e.g. `--eject`), or the caller-supplied value otherwise.
