@@ -30,8 +30,7 @@ assignees: ""
 ## Logs / output
 
 <!--
-Paste the command you ran and its full output. For machine-readable failures,
-include the `--json` output if the command supports it. Redact anything private.
+Paste the command you ran and its full output. Redact anything private.
 -->
 
 ```

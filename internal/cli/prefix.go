@@ -8,19 +8,19 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// prefixSetResult is the JSON-serialisable shape returned by `lit prefix set`.
-// Both the preview path (--apply omitted) and the applied path emit the same
-// struct so consumers can branch on Applied without parsing free text.
+// prefixSetResult is the outcome of `lit prefix set`. Both the preview path
+// (--apply omitted) and the applied path produce the same struct so the text
+// renderer reads typed fields rather than re-deriving them.
 type prefixSetResult struct {
-	Previous string `json:"previous"`
-	Current  string `json:"current"`
-	Applied  bool   `json:"applied"`
-	Note     string `json:"note,omitempty"`
+	Previous string
+	Current  string
+	Applied  bool
+	Note     string
 }
 
 func runPrefix(stdout io.Writer, ws workspace.Info, args []string) error {
 	if len(args) == 0 || args[0] != "set" {
-		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply] [--json]"}
+		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply]"}
 	}
 	return runPrefixSet(stdout, ws, args[1:])
 }
@@ -29,12 +29,11 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("prefix set")
 	apply := fs.Bool("apply", false, "Apply the rename (without this flag, prints a preview)")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply] [--json]"}
+		return UsageError{Message: "usage: lit prefix set <new-prefix> [--apply]"}
 	}
 	requested := strings.TrimSpace(positional[0])
 	// [LAW:single-enforcer] workspace.ConfiguredPrefix is the one boundary that
@@ -53,7 +52,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 			Applied:  false,
 			Note:     "prefix unchanged",
 		}
-		return printValue(stdout, result, prefixSetTextOutput)
+		return prefixSetTextOutput(stdout, result)
 	}
 
 	if !*apply {
@@ -63,7 +62,7 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 			Applied:  false,
 			Note:     "preview only — pass --apply to write config.json. Existing issue IDs keep their old prefix; only new issues use the new one.",
 		}
-		return printValue(stdout, result, prefixSetTextOutput)
+		return prefixSetTextOutput(stdout, result)
 	}
 
 	if _, err := workspace.UpdateConfig(ws.ConfigPath, func(cfg workspace.Config) (workspace.Config, error) {
@@ -78,11 +77,10 @@ func runPrefixSet(stdout io.Writer, ws workspace.Info, args []string) error {
 		Current:  normalized,
 		Applied:  true,
 	}
-	return printValue(stdout, result, prefixSetTextOutput)
+	return prefixSetTextOutput(stdout, result)
 }
 
-func prefixSetTextOutput(w io.Writer, v any) error {
-	r := v.(prefixSetResult)
+func prefixSetTextOutput(w io.Writer, r prefixSetResult) error {
 	if r.Applied {
 		_, err := fmt.Fprintf(w, "issue_prefix: %s -> %s (applied)\n", r.Previous, r.Current)
 		return err

@@ -3,11 +3,8 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
-
-	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 func TestQuickstartBreadcrumbDerivesFromTopicTable(t *testing.T) {
@@ -80,42 +77,5 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 	if got, want := lastLine(closeOut.String()), quickstartBreadcrumb("done"); got != want {
 		t.Fatalf("lit close last line = %q, want breadcrumb %q", got, want)
-	}
-}
-
-func TestBreadcrumbAbsentFromJSONOutput(t *testing.T) {
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-
-	var newOut bytes.Buffer
-	if err := runNew(ctx, newOutputModeWriter(&newOut, outputModeText), ap, []string{"--title", "JSON probe", "--topic", "crumbs", "--type", "task", "--json"}); err != nil {
-		t.Fatalf("runNew(--json) error = %v", err)
-	}
-	var created model.Issue
-	if err := json.Unmarshal(newOut.Bytes(), &created); err != nil {
-		t.Fatalf("lit new --json output must be exactly one JSON document, got %q: %v", newOut.String(), err)
-	}
-	if strings.Contains(newOut.String(), "quickstart") {
-		t.Fatalf("breadcrumb leaked into JSON output: %q", newOut.String())
-	}
-
-	// Global --json (outputModeWriter) must be just as breadcrumb-free as the
-	// command-local flag: both routes resolve inside printValue.
-	var labelBuf bytes.Buffer
-	globalOut := newOutputModeWriter(&labelBuf, outputModeJSON)
-	if err := runAppFamily(labelFamily, ctx, globalOut, ap, []string{"add", created.ID, "probe"}); err != nil {
-		t.Fatalf("runLabel(add) under global JSON mode error = %v", err)
-	}
-	var labels []string
-	if err := json.Unmarshal(labelBuf.Bytes(), &labels); err != nil {
-		t.Fatalf("label add output under global JSON mode must be exactly one JSON document, got %q: %v", labelBuf.String(), err)
-	}
-	if strings.Contains(labelBuf.String(), "quickstart") {
-		t.Fatalf("breadcrumb leaked into global JSON mode output: %q", labelBuf.String())
-	}
-
-	// Sanity: the store really holds what JSON mode reported.
-	if _, err := ap.Store.GetIssue(ctx, created.ID); err != nil {
-		t.Fatalf("GetIssue(%s) error = %v", created.ID, err)
 	}
 }

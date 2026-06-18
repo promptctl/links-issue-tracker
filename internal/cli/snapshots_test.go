@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,13 +13,24 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
+// firstSnapshotName returns the snapshot name leading the first non-empty line
+// of `lit snapshots new`/`list` text output ("<name> <...>" per line).
+func firstSnapshotName(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
 func TestSnapshotsNew_ProducesSnapshot(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
 	before := countUserSnapshots(t, ws)
 
-	stderr := captureRun(t, "snapshots", "new", "--json")
+	stderr := captureRun(t, "snapshots", "new")
 
 	if stderr.Len() != 0 {
 		t.Fatalf("happy path stderr should be empty, got: %q", stderr.String())
@@ -35,26 +45,28 @@ func TestSnapshotsList_NewestFirst(t *testing.T) {
 	chdir(t, repo)
 
 	for i := 0; i < 3; i++ {
-		captureRun(t, "snapshots", "new", "--json")
+		captureRun(t, "snapshots", "new")
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"snapshots", "list", "--json"}); err != nil {
+	if err := Run(context.Background(), &stdout, &stdout, []string{"snapshots", "list"}); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
-	var listed []map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &listed); err != nil {
-		t.Fatalf("decode JSON: %v\nraw=%s", err, stdout.String())
+	// Each row leads with the snapshot name ("<name> <created> <path>"). The
+	// listing includes the migration-recovery snapshot from the bootstrap Open
+	// in addition to the three user snapshots above; the newest-first invariant
+	// must hold across all entries.
+	var names []string
+	for _, line := range strings.Split(strings.TrimRight(stdout.String(), "\n"), "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			names = append(names, fields[0])
+		}
 	}
-	// listed includes the migration-recovery snapshot from the bootstrap
-	// Open in addition to the three user snapshots above. The newest-first
-	// invariant must still hold across all entries.
-	if len(listed) < 3 {
-		t.Fatalf("listed=%d, want at least 3 (raw=%s)", len(listed), stdout.String())
+	if len(names) < 3 {
+		t.Fatalf("listed=%d, want at least 3 (raw=%s)", len(names), stdout.String())
 	}
 	prev := ""
-	for i, s := range listed {
-		name, _ := s["name"].(string)
+	for i, name := range names {
 		if i > 0 && name >= prev {
 			t.Fatalf("not newest-first at index %d: %s >= %s", i, name, prev)
 		}
@@ -67,15 +79,13 @@ func TestSnapshotsRestore_RoundTrip(t *testing.T) {
 	chdir(t, repo)
 
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new", "--json"}); err != nil {
+	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
-	var snap struct {
-		Name string `json:"name"`
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(newOut.Bytes(), &snap); err != nil {
-		t.Fatalf("decode new JSON: %v\nraw=%s", err, newOut.String())
+	// `snapshots new` text prints "<name> <path>".
+	snapName := firstSnapshotName(newOut.String())
+	if snapName == "" {
+		t.Fatalf("snapshots new returned no name: %s", newOut.String())
 	}
 
 	// Mutate the database directory: drop a marker file Dolt would never own.
@@ -84,7 +94,7 @@ func TestSnapshotsRestore_RoundTrip(t *testing.T) {
 		t.Fatalf("write marker: %v", err)
 	}
 
-	stderr := captureRun(t, "snapshots", "restore", snap.Name, "--json")
+	stderr := captureRun(t, "snapshots", "restore", snapName)
 	if stderr.Len() != 0 {
 		t.Fatalf("restore stderr should be empty, got: %q", stderr.String())
 	}
@@ -111,8 +121,6 @@ func TestSnapshotsCommands_SilentOnHappyPath(t *testing.T) {
 	cases := [][]string{
 		{"snapshots", "new"},
 		{"snapshots", "list"},
-		{"snapshots", "new", "--json"},
-		{"snapshots", "list", "--json"},
 	}
 	for _, args := range cases {
 		var stderr bytes.Buffer
@@ -178,22 +186,19 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	// Take a snapshot via the CLI, then restore it. The lock path should be
 	// stable across the rotation (no lock file there afterwards because the
 	// restore released the lock, but the path semantics are unchanged).
-	captureRun(t, "snapshots", "new", "--json")
+	captureRun(t, "snapshots", "new")
 	var listOut bytes.Buffer
-	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list", "--json"}); err != nil {
+	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list"}); err != nil {
 		t.Fatalf("snapshots list: %v", err)
 	}
-	var listed []struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(listOut.Bytes(), &listed); err != nil {
-		t.Fatalf("decode list: %v", err)
-	}
-	if len(listed) == 0 {
+	// `snapshots list` is newest-first; the first row's leading token is the
+	// most recent snapshot name.
+	firstName := firstSnapshotName(listOut.String())
+	if firstName == "" {
 		t.Fatal("expected at least one snapshot")
 	}
 
-	captureRun(t, "snapshots", "restore", listed[0].Name, "--json")
+	captureRun(t, "snapshots", "restore", firstName)
 
 	if pathDir := filepath.Dir(store.CommitLockPath(ws.DatabasePath)); pathDir != filepath.Dir(lockPath) {
 		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
@@ -217,8 +222,8 @@ func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {
 	before := snapshotsOnDisk(t, ws)
 
 	// Drive a series of data mutations and reads that must not produce snapshots.
-	captureRun(t, "new", "--title", "test", "--type", "task", "--topic", "test-topic", "--json")
-	captureRun(t, "ls", "--json")
+	captureRun(t, "new", "--title", "test", "--type", "task", "--topic", "test-topic")
+	captureRun(t, "ls")
 
 	after := snapshotsOnDisk(t, ws)
 	for _, name := range after {
@@ -295,14 +300,12 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Produce a snapshot to restore.
 	var newOut bytes.Buffer
-	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new", "--json"}); err != nil {
+	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
 		t.Fatalf("snapshots new: %v", err)
 	}
-	var snap struct {
-		Name string `json:"name"`
-	}
-	if err := json.Unmarshal(newOut.Bytes(), &snap); err != nil {
-		t.Fatalf("decode new JSON: %v\nraw=%s", err, newOut.String())
+	snapName := firstSnapshotName(newOut.String())
+	if snapName == "" {
+		t.Fatalf("snapshots new returned no name: %s", newOut.String())
 	}
 
 	// Open a long-lived Store that holds the shared workspace lock — the
@@ -314,7 +317,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	defer reader.Close()
 
 	var stdout, stderr bytes.Buffer
-	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "restore", snap.Name, "--json"})
+	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "restore", snapName})
 	if err == nil {
 		t.Fatalf("snapshots restore succeeded while a reader was open; expected workspace-busy refusal\nstdout=%s", stdout.String())
 	}

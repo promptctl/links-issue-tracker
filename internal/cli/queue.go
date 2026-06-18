@@ -34,12 +34,11 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit queue [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
+		return UsageError{Message: "usage: lit queue [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
@@ -54,9 +53,7 @@ func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 	pullable := filterPullable(annotated)
 	pullable = applyLimit(pullable, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, pullable, func(w io.Writer, v any) error {
-		return printQueueOutput(w, columns, v.([]annotation.AnnotatedIssue))
-	})
+	return printQueueOutput(stdout, columns, pullable)
 }
 
 // filterPullable keeps the rows an agent can pull now: workable and gated by no

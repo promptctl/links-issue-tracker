@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -136,18 +135,15 @@ func TestRunHooksViaCLI(t *testing.T) {
 	})
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"hooks", "install", "--json"}); err != nil {
-		t.Fatalf("Run(hooks install --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"hooks", "install"}); err != nil {
+		t.Fatalf("Run(hooks install) error = %v", err)
 	}
-	var payload map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal(hooks install output) error = %v", err)
+	output := stdout.String()
+	if !strings.Contains(output, "installed") {
+		t.Fatalf("hooks install output = %q, want it to report installed", output)
 	}
-	if payload["status"] != "installed" {
-		t.Fatalf("status = %v, want installed", payload["status"])
-	}
-	if strings.TrimSpace(payload["traces_dir"].(string)) == "" {
-		t.Fatalf("traces_dir = %v, want non-empty", payload["traces_dir"])
+	if !strings.Contains(output, filepath.Join("hooks", "pre-push")) {
+		t.Fatalf("hooks install output = %q, want the pre-push hook path", output)
 	}
 }
 

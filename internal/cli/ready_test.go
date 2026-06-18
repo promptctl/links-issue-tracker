@@ -127,18 +127,20 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
-func (h readyTestHarness) runReadyJSON(args ...string) []annotation.AnnotatedIssue {
+// runReadyAnnotated reproduces exactly what `lit ready` computes — the shared
+// workable pipeline plus the ready-specific blocked-to-bottom sort and limit —
+// and returns the annotated rows. With --json removed this is the honest probe
+// of the command's logic: it inspects the same prepared rows the text renderer
+// consumes, so annotation/parent-epic/order assertions read real domain values
+// rather than re-parsing text. [LAW:single-enforcer]
+func (h readyTestHarness) runReadyAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	allArgs := append(append([]string{}, args...), "--json")
-	if err := runReady(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, allArgs); err != nil {
-		h.t.Fatalf("runReady(%v) error = %v", allArgs, err)
+	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	if err != nil {
+		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
-	var got []annotation.AnnotatedIssue
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		h.t.Fatalf("json.Unmarshal(ready output) error = %v", err)
-	}
-	return got
+	sortByBlockingAnnotations(annotated)
+	return applyLimit(annotated, limit)
 }
 
 func (h readyTestHarness) runReadyText(args ...string) string {
@@ -153,7 +155,7 @@ func (h readyTestHarness) runReadyText(args ...string) string {
 func (h readyTestHarness) runReadyErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runReady(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, args)
+	return runReady(h.ctx, &stdout, h.ap, args)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
@@ -168,14 +170,14 @@ func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (
 func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	openA := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	openA := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Open issue A",
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  0,
 		Assignee:  "alice",
 	})
-	openB := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	openB := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Open issue B",
 		Topic:     "bravo",
 		IssueType: "bug",
@@ -184,7 +186,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	})
 	h.addDependency(openB.ID, openA.ID)
 
-	closed := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	closed := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Already done",
 		Topic:     "closed",
 		IssueType: "task",
@@ -192,7 +194,7 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	})
 	h.closeIssue(closed.ID, "not ready work")
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
@@ -221,13 +223,13 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	plain := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	plain := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Ready leaf",
 		Topic:     "alpha",
 		IssueType: "task",
 		Priority:  0,
 	})
-	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Needs design first",
 		Topic:     "alpha",
 		IssueType: "task",
@@ -235,7 +237,7 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 		Labels:    []string{NeedsDesignLabel},
 	})
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 	}
@@ -262,7 +264,7 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 		Priority:  1,
 		Assignee:  "alice",
 	})
-	h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Bob task",
 		Topic:     "bob",
 		IssueType: "task",
@@ -270,7 +272,7 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 		Assignee:  "bob",
 	})
 
-	got := h.runReadyJSON("--assignee", "alice", "--limit", "1")
+	got := h.runReadyAnnotated(workableFilter{Assignee: "alice"}, 1)
 
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1; got=%#v", len(got), got)
@@ -284,7 +286,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("assignee")
 
-	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:       "Needs assignee",
 		Topic:       "assignee",
 		IssueType:   "task",
@@ -292,7 +294,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 		Description: "still missing assignee",
 	})
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
@@ -316,7 +318,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("made_up_field")
 
-	err := h.runReadyErr("--json")
+	err := h.runReadyErr()
 	if err == nil {
 		t.Fatal("runReady expected error for invalid required field")
 	}
@@ -331,7 +333,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 func TestRunReadyShowsInProgressSection(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Claimed work",
 		Topic:     "claimed",
 		IssueType: "task",
@@ -346,7 +348,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -361,7 +363,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Stale work",
 		Topic:     "stale",
 		IssueType: "task",
@@ -377,7 +379,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	}
 	h.backdateUpdatedAt(issue.ID, 25*time.Hour)
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -390,7 +392,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	issue := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Fresh work",
 		Topic:     "fresh",
 		IssueType: "task",
@@ -405,7 +407,7 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -421,13 +423,13 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// second depends on first — first is ranked above second, no inversion.
 	// But if we make first depend on second (second blocks first), second has
 	// worse rank than first — that's a rank inversion.
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
@@ -436,7 +438,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2", len(got))
@@ -465,13 +467,13 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 
 	// first is created first (better rank), second is created second (worse rank).
 	// second depends on first — first (dependency) has better rank → no inversion.
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "First issue (better rank)",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue (worse rank)",
 		Topic:     "second",
 		IssueType: "task",
@@ -480,7 +482,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 	// second depends on first — first (dependency) ranked above second → no inversion.
 	h.addDependency(second.ID, first.ID)
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	for _, entry := range got {
 		if entry.ID == second.ID {
@@ -496,13 +498,13 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	first := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "First issue",
 		Topic:     "first",
 		IssueType: "task",
 		Priority:  1,
 	})
-	second := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	second := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Second issue",
 		Topic:     "second",
 		IssueType: "task",
@@ -542,10 +544,10 @@ func TestRunReadyPreambleGoesToStdout(t *testing.T) {
 func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	a := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	a := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "First", Topic: "aaa", IssueType: "task", Priority: 1,
 	})
-	b := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	b := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0,
 	})
 
@@ -566,10 +568,10 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
 	})
-	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 0,
 	})
 	h.addDependency(dependent.ID, blocker.ID)
@@ -584,7 +586,7 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 	h := newReadyTestHarness(t)
 
 	for i := 0; i < 12; i++ {
-		h.createIssue(store.CreateIssueInput{Prefix: "test", 
+		h.createIssue(store.CreateIssueInput{Prefix: "test",
 			Title:     fmt.Sprintf("Task %d", i),
 			Topic:     fmt.Sprintf("topic-%02d", i),
 			IssueType: "task",
@@ -610,27 +612,27 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 func TestRunReadyExcludesEpics(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Epic container",
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leafTask := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	leafTask := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Leaf task under epic",
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standaloneBug := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	standaloneBug := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Standalone bug",
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
 	})
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	gotIDs := make(map[string]bool, len(got))
 	for _, entry := range got {
@@ -657,32 +659,32 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 func TestRunReadyCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Integrate foo subsystem end-to-end",
 		Topic:     "epic-topic",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Wire up the frobnicator",
 		Topic:     "epic-topic",
 		IssueType: "task",
 		Priority:  1,
 		ParentID:  epic.ID,
 	})
-	standalone := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	standalone := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Standalone bug",
 		Topic:     "bug-topic",
 		IssueType: "bug",
 		Priority:  1,
 	})
-	nonEpicParent := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	nonEpicParent := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Parent feature",
 		Topic:     "feat-topic",
 		IssueType: "feature",
 		Priority:  1,
 	})
-	childOfFeature := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	childOfFeature := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Feature subtask",
 		Topic:     "feat-topic",
 		IssueType: "task",
@@ -690,7 +692,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 		ParentID:  nonEpicParent.ID,
 	})
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	byID := make(map[string]annotation.AnnotatedIssue, len(got))
 	for _, entry := range got {
@@ -737,13 +739,13 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Epic A",
 		Topic:     "epic-a",
 		IssueType: "epic",
 		Priority:  1,
 	})
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", 
+	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title:     "Epic B",
 		Topic:     "epic-b",
 		IssueType: "epic",
@@ -776,7 +778,7 @@ func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 		Lane:      "a2",
 	})
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 
 	gotIDs := make([]string, len(got))
 	for i, entry := range got {
@@ -797,7 +799,7 @@ func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")
 
-	err := h.runReadyErr("--json")
+	err := h.runReadyErr()
 	if err == nil {
 		t.Fatal("runReady expected config parse error")
 	}
@@ -855,7 +857,7 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	})
 	h.setLabels(c3.ID, FocusLabel)
 
-	got := h.runReadyJSON()
+	got := h.runReadyAnnotated(workableFilter{}, 0)
 	// c1 is the only ready path member and outranks the unrelated urgent item;
 	// c2/c3 are sibling-gated and pushed below by the blocked-presentation sort.
 	assertReadyOrder(t, got, []string{c1.ID, urgent.ID, c2.ID, c3.ID})
@@ -880,10 +882,10 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	}
 
 	h.closeIssue(c1.ID, "done")
-	assertReadyOrder(t, h.runReadyJSON(), []string{c2.ID, urgent.ID, c3.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c2.ID, urgent.ID, c3.ID})
 
 	h.closeIssue(c2.ID, "done")
-	assertReadyOrder(t, h.runReadyJSON(), []string{c3.ID, urgent.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c3.ID, urgent.ID})
 }
 
 // The path follows explicit dependency edges transitively: focusing a goal
@@ -907,7 +909,7 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	h.addDependency(a.ID, b.ID)
 	h.setLabels(goal.ID, FocusLabel)
 
-	assertReadyOrder(t, h.runReadyJSON(), []string{b.ID, urgent.ID, a.ID, goal.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{b.ID, urgent.ID, a.ID, goal.ID})
 }
 
 // Removing the focus label restores normal priority ordering, and urgent
@@ -927,13 +929,13 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 	h.addDependency(goal.ID, prereq.ID)
 
 	// Urgent goal, no focus: its prerequisite does NOT inherit urgency.
-	assertReadyOrder(t, h.runReadyJSON(), []string{urgent.ID, prereq.ID, goal.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{urgent.ID, prereq.ID, goal.ID})
 
 	h.setLabels(goal.ID, FocusLabel)
-	assertReadyOrder(t, h.runReadyJSON(), []string{prereq.ID, urgent.ID, goal.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{prereq.ID, urgent.ID, goal.ID})
 
 	h.setLabels(goal.ID)
-	assertReadyOrder(t, h.runReadyJSON(), []string{urgent.ID, prereq.ID, goal.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{urgent.ID, prereq.ID, goal.ID})
 }
 
 // Focusing an epic surfaces its unfinished children: container expansion is a
@@ -955,5 +957,5 @@ func TestFocusPathExpandsContainerChildren(t *testing.T) {
 	})
 	h.setLabels(epic.ID, FocusLabel)
 
-	assertReadyOrder(t, h.runReadyJSON(), []string{c1.ID, urgent.ID, c2.ID})
+	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c1.ID, urgent.ID, c2.ID})
 }

@@ -42,12 +42,11 @@ func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
 	limit := fs.Int("limit", 0, "Limit results")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...] [--json]"}
+		return UsageError{Message: "usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
 	}
 	rf := workableFilter{
 		Assignee:  strings.TrimSpace(*assignee),
@@ -61,9 +60,7 @@ func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	}
 	annotated = applyLimit(annotated, *limit)
 	columns := parseColumns(*columnsExpr)
-	return printValue(stdout, annotated, func(w io.Writer, v any) error {
-		return printBacklogOutput(w, columns, v.([]annotation.AnnotatedIssue))
-	})
+	return printBacklogOutput(stdout, columns, annotated)
 }
 
 // printBacklogOutput renders the backlog as a numbered list with inline

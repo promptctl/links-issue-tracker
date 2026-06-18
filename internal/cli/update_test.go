@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -11,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -28,11 +28,31 @@ func extractApplyToken(t *testing.T, previewOutput string) string {
 	return m[1]
 }
 
+// driveTransition runs a transition to completion through the real CLI,
+// transparently satisfying the two-phase contract for actions whose default
+// pre-guidance template gates them (e.g. `done`): if the first run prints a
+// preview carrying an `--apply=<token>`, it re-runs with that token to apply.
+// Single-phase actions (start/close/reopen) complete on the first run.
+func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id string, action model.ActionName, extra ...string) {
+	t.Helper()
+	var first bytes.Buffer
+	args := append([]string{id}, extra...)
+	if err := runTransition(ctx, &first, ap, args, action); err != nil {
+		t.Fatalf("runTransition(%s %s) error = %v", action, id, err)
+	}
+	if m := applyTokenRE.FindStringSubmatch(first.String()); m != nil {
+		applyArgs := append([]string{id, "--apply=" + m[1]}, extra...)
+		if err := runTransition(ctx, &bytes.Buffer{}, ap, applyArgs, action); err != nil {
+			t.Fatalf("runTransition(%s %s --apply) error = %v", action, id, err)
+		}
+	}
+}
+
 func TestRunTransitionDonePreGuidancePrintsWithoutTransitioning(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title: "Guidance test", Topic: "guidance", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -315,13 +335,11 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 					t.Fatalf("GetIssueDetail(before) error = %v", err)
 				}
 
-				args := []string{issue.ID, "--json"}
+				var extra []string
 				if verb.action == "start" {
-					args = append(args, "--assignee", owner)
+					extra = []string{"--assignee", owner}
 				}
-				if err := runTransition(ctx, newOutputModeWriter(&bytes.Buffer{}, outputModeText), ap, args, verb.action); err != nil {
-					t.Fatalf("runTransition(%s from %s) error = %v, want success on every leaf cell", verb.action, from, err)
-				}
+				driveTransition(t, ctx, ap, issue.ID, verb.action, extra...)
 
 				after, err := ap.Store.GetIssueDetail(ctx, issue.ID)
 				if err != nil {
@@ -369,7 +387,18 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 
 	for _, action := range []model.ActionName{"start", "done", "close", "reopen"} {
 		t.Run(string(action), func(t *testing.T) {
-			err := runTransition(ctx, newOutputModeWriter(&bytes.Buffer{}, outputModeText), ap, []string{epic.ID, "--json"}, action)
+			// Guided actions (e.g. `done`) preview before they act, so the
+			// container rejection only surfaces at the apply phase; drive past
+			// the preview when a token is offered.
+			var preview bytes.Buffer
+			err := runTransition(ctx, &preview, ap, []string{epic.ID}, action)
+			if err == nil {
+				m := applyTokenRE.FindStringSubmatch(preview.String())
+				if m == nil {
+					t.Fatalf("runTransition(%s epic) = nil with no apply token, want container rejection; output %q", action, preview.String())
+				}
+				err = runTransition(ctx, &bytes.Buffer{}, ap, []string{epic.ID, "--apply=" + m[1]}, action)
+			}
 			if err == nil {
 				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
 			}
@@ -419,39 +448,10 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	}
 }
 
-// TestRunTransitionStartClaimTransferJSONStaysMachineClean asserts the notice
-// never leaks into JSON mode: --json output must be exactly one JSON document
-// (the new assignee is carried in the document itself).
-func TestRunTransitionStartClaimTransferJSONStaysMachineClean(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Prefix: "test", Title: "JSON reclaim", Topic: "lifecycle", IssueType: "task", Priority: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, "start"); err != nil {
-		t.Fatalf("runTransition(first start) error = %v", err)
-	}
-	var stdout bytes.Buffer
-	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "agent-bob", "--json"}, "start"); err != nil {
-		t.Fatalf("runTransition(reclaim --json) error = %v", err)
-	}
-	var reclaimed model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &reclaimed); err != nil {
-		t.Fatalf("json.Unmarshal(reclaim output) error = %v; output %q must be a single JSON document", err, stdout.String())
-	}
-	if got := reclaimed.AssigneeValue(); got != "agent-bob" {
-		t.Fatalf("JSON document AssigneeValue() = %q, want agent-bob", got)
-	}
-}
-
 func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Epic container",
 		Topic:     "lifecycle",
 		IssueType: "epic",
@@ -460,7 +460,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Leaf work",
 		Topic:     "lifecycle",
 		IssueType: "task",
@@ -476,70 +476,15 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{leaf.ID, "--assignee", "tester", "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester"}, "start"); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
-	var started model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
-		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	started, err := ap.Store.GetIssue(ctx, leaf.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(leaf) error = %v", err)
 	}
 	if started.State() != model.StateInProgress {
 		t.Fatalf("started.State() = %q, want in_progress", started.State())
-	}
-}
-
-func TestRunShowEpicJSONOmitsProgressAndStatus(t *testing.T) {
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
-		Title:     "Epic container",
-		Topic:     "show",
-		IssueType: "epic",
-		Priority:  1,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
-		Title:     "Open child",
-		Topic:     "show",
-		IssueType: "task",
-		Priority:  0,
-		ParentID:  epic.ID,
-	}); err != nil {
-		t.Fatalf("CreateIssue(open child) error = %v", err)
-	}
-	closedChild, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
-		Title:     "Closed child",
-		Topic:     "show",
-		IssueType: "task",
-		Priority:  0,
-		ParentID:  epic.ID,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue(closed child) error = %v", err)
-	}
-	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: closedChild.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(start) error = %v", err)
-	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(done) error = %v", err)
-	}
-	var stdout bytes.Buffer
-	if err := runShow(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{epic.ID, "--json"}); err != nil {
-		t.Fatalf("runShow(epic --json) error = %v", err)
-	}
-	var payload struct {
-		Issue map[string]json.RawMessage `json:"issue"`
-	}
-	if err := json.Unmarshal(stdout.Bytes(), &payload); err != nil {
-		t.Fatalf("json.Unmarshal(show output) error = %v", err)
-	}
-	if _, ok := payload.Issue["status"]; ok {
-		t.Fatalf("epic JSON issue has status field: %s", stdout.String())
-	}
-	if _, ok := payload.Issue["progress"]; ok {
-		t.Fatalf("epic JSON issue has progress field: %s", stdout.String())
 	}
 }
 
@@ -547,7 +492,7 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Update status",
 		Topic:     "status",
 		IssueType: "task",
@@ -558,13 +503,13 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester", "--json"}); err != nil {
-		t.Fatalf("runUpdate(--status in_progress --json) error = %v", err)
+	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester"}); err != nil {
+		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
 	}
 
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if updated.State() != model.StateInProgress {
 		t.Fatalf("updated.State() = %q, want in_progress", updated.State())
@@ -591,7 +536,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", 
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
 		Title:     "Update fields",
 		Topic:     "fields",
 		IssueType: "task",
@@ -602,13 +547,13 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent", "--json"}); err != nil {
-		t.Fatalf("runUpdate(field flags --json) error = %v", err)
+	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--priority", "1", "--assignee", "alice", "--labels", "api,urgent"}); err != nil {
+		t.Fatalf("runUpdate(field flags) error = %v", err)
 	}
 
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if updated.Priority != 1 {
 		t.Fatalf("updated.Priority = %d, want 1", updated.Priority)
@@ -626,31 +571,31 @@ func TestRunNewAndUpdateCarryPromptField(t *testing.T) {
 	ap := newTestCLIApp(t)
 
 	var newOut bytes.Buffer
-	if err := runNew(ctx, newOutputModeWriter(&newOut, outputModeText), ap, []string{
+	if err := runNew(ctx, &newOut, ap, []string{
 		"--title", "Wire prompt field",
 		"--topic", "prompts",
 		"--type", "task",
 		"--priority", "1",
 		"--prompt", "Render at 1024x768 and verify no NaNs.",
-		"--json",
 	}); err != nil {
 		t.Fatalf("runNew(--prompt) error = %v", err)
 	}
-	var created model.Issue
-	if err := json.Unmarshal(newOut.Bytes(), &created); err != nil {
-		t.Fatalf("json.Unmarshal(new) error = %v", err)
+	createdID := firstIssueID(t, newOut.String())
+	created, err := ap.Store.GetIssue(ctx, createdID)
+	if err != nil {
+		t.Fatalf("GetIssue(new) error = %v", err)
 	}
 	if created.Prompt != "Render at 1024x768 and verify no NaNs." {
 		t.Fatalf("created.Prompt = %q, want trimmed prompt body", created.Prompt)
 	}
 
 	var upOut bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&upOut, outputModeText), ap, []string{created.ID, "--prompt", "Run --headless instead.", "--json"}); err != nil {
+	if err := runUpdate(ctx, &upOut, ap, []string{created.ID, "--prompt", "Run --headless instead."}); err != nil {
 		t.Fatalf("runUpdate(--prompt) error = %v", err)
 	}
-	var updated model.Issue
-	if err := json.Unmarshal(upOut.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(update) error = %v", err)
 	}
 	if updated.Prompt != "Run --headless instead." {
 		t.Fatalf("updated.Prompt = %q, want updated value", updated.Prompt)
@@ -674,7 +619,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	// --reason alone (no field flags and no --status) must still be rejected
 	// because there is nothing to record the reason on.
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--reason", "no fields here", "--json"})
+	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--reason", "no fields here"})
 	if err == nil {
 		t.Fatal("runUpdate(--reason with no fields) error = nil, want validation error")
 	}
@@ -696,13 +641,13 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{epic.ID, "--title", "Renamed epic", "--description", "New body"}); err != nil {
 		t.Fatalf("runUpdate(epic --title --description) error = %v", err)
 	}
 
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if updated.Title != "Renamed epic" {
 		t.Fatalf("updated.Title = %q, want %q", updated.Title, "Renamed epic")
@@ -741,9 +686,9 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	err = runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{created.ID, "--status=", "--json"})
+	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--status="})
 	if err == nil {
-		t.Fatal("runUpdate(--status= --json) error = nil, want validation error")
+		t.Fatal("runUpdate(--status=) error = nil, want validation error")
 	}
 	if err.Error() != "--status requires a non-empty value" {
 		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--status requires a non-empty value")
@@ -786,12 +731,12 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "start"); err != nil {
 		t.Fatalf("runTransition(start without --assignee) error = %v", err)
 	}
-	var started model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
-		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	started, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if started.State() != model.StateInProgress {
 		t.Fatalf("started.State() = %q, want in_progress", started.State())
@@ -812,12 +757,12 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--json"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "start"); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
-	var started model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &started); err != nil {
-		t.Fatalf("json.Unmarshal(start output) error = %v", err)
+	started, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got, want := started.AssigneeValue(), "claude_sess-abc"; got != want {
 		t.Fatalf("started.AssigneeValue() = %q, want %q", got, want)
@@ -835,12 +780,12 @@ func TestRunUpdateStatusInProgressUsesSessionEnvAssignee(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--status", "in_progress", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress"}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
 	}
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got, want := updated.AssigneeValue(), "claude_sess-xyz"; got != want {
 		t.Fatalf("updated.AssigneeValue() = %q, want %q", got, want)
@@ -863,12 +808,12 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", ""}); err != nil {
 		t.Fatalf("runUpdate(--assignee \"\") error = %v", err)
 	}
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got := updated.AssigneeValue(); got != "" {
 		t.Fatalf("updated.AssigneeValue() = %q, want empty: explicit clear must never self-assign", got)
@@ -889,12 +834,12 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--assignee", "claude_other-session", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--assignee", "claude_other-session"}); err != nil {
 		t.Fatalf("runUpdate(--assignee other) error = %v", err)
 	}
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got, want := updated.AssigneeValue(), "claude_other-session"; got != want {
 		t.Fatalf("updated.AssigneeValue() = %q, want %q: update must not rewrite an explicit assignee to the caller", got, want)
@@ -913,12 +858,12 @@ func TestRunUpdateClearAssigneeWithStartStaysCleared(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runUpdate(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{issue.ID, "--status", "in_progress", "--assignee", "", "--json"}); err != nil {
+	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--assignee", ""}); err != nil {
 		t.Fatalf("runUpdate(--status in_progress --assignee \"\") error = %v", err)
 	}
-	var updated model.Issue
-	if err := json.Unmarshal(stdout.Bytes(), &updated); err != nil {
-		t.Fatalf("json.Unmarshal(update output) error = %v", err)
+	updated, err := ap.Store.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
 	}
 	if got := updated.State(); got != model.StateInProgress {
 		t.Fatalf("updated.State() = %q, want in_progress", got)

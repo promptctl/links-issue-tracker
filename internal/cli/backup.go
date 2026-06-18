@@ -32,7 +32,6 @@ var backupFamily = commandFamily[appSubcommand]{
 func runBackupCreate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("backup create")
 	keep := fs.Int("keep", 20, "Snapshots to keep after rotation")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -47,16 +46,12 @@ func runBackupCreate(ctx context.Context, stdout io.Writer, ap *app.App, args []
 	if err := backup.Prune(ap.Workspace.StorageDir, *keep); err != nil {
 		return err
 	}
-	return printValue(stdout, snapshot, func(w io.Writer, v any) error {
-		s := v.(backup.Snapshot)
-		_, err := fmt.Fprintf(w, "%s %s\n", s.Name, s.Path)
-		return err
-	})
+	_, err = fmt.Fprintf(stdout, "%s %s\n", snapshot.Name, snapshot.Path)
+	return err
 }
 
 func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("backup list")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -64,15 +59,12 @@ func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, snapshots, func(w io.Writer, v any) error {
-		list := v.([]backup.Snapshot)
-		for _, snapshot := range list {
-			if _, err := fmt.Fprintf(w, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
-				return err
-			}
+	for _, snapshot := range snapshots {
+		if _, err := fmt.Fprintf(stdout, "%s %d %s\n", snapshot.Name, snapshot.Size, snapshot.Path); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -80,7 +72,6 @@ func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args [
 	path := fs.String("path", "", "Backup snapshot path")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -96,17 +87,13 @@ func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args [
 		restorePath = latestSnapshot.Path
 	}
 	if restorePath == "" {
-		return UsageError{Message: "usage: lit backup restore --path <snapshot.json> [--force] [--json] or --latest"}
+		return UsageError{Message: "usage: lit backup restore --path <snapshot.json> [--force] or --latest"}
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
 	}
-	payload := map[string]string{"status": "restored", "path": restorePath}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]string)
-		_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
-		return err
-	})
+	_, err := fmt.Fprintf(stdout, "restored %s\n", restorePath)
+	return err
 }
 
 func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -115,7 +102,6 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	fromBackup := fs.String("from-backup", "", "Restore from backup snapshot")
 	latestBackup := fs.Bool("latest-backup", false, "Restore from latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -135,17 +121,13 @@ func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 		}
 		restorePath = latest.Path
 	default:
-		return UsageError{Message: "usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force] [--json]"}
+		return UsageError{Message: "usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force]"}
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
 	}
-	payload := map[string]string{"status": "recovered", "path": restorePath}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]string)
-		_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["path"])
-		return err
-	})
+	_, err := fmt.Fprintf(stdout, "recovered %s\n", restorePath)
+	return err
 }
 
 func syncBasePath(ap *app.App) string {
