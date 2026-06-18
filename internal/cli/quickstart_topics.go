@@ -66,18 +66,10 @@ func quickstartBreadcrumb(token string) string {
 	return "deeper guidance: lit quickstart " + token
 }
 
-// withQuickstartBreadcrumb wraps a text printer so the command's success
-// output ends with the topic's breadcrumb line.
-// [LAW:single-enforcer] JSON safety is structural, not guarded: printValue
-// routes JSON mode to writeJSON before any text printer runs, so the
-// breadcrumb cannot reach the machine contract on any stream.
-func withQuickstartBreadcrumb(token string, textFn func(io.Writer, any) error) func(io.Writer, any) error {
-	crumb := quickstartBreadcrumb(token)
-	return func(w io.Writer, v any) error {
-		if err := textFn(w, v); err != nil {
-			return err
-		}
-		_, err := fmt.Fprintln(w, crumb)
-		return err
-	}
+// emitBreadcrumb writes a command's topic breadcrumb line, called after the
+// command has written its own success output. Discovery of topic guidance then
+// happens at the moment of need rather than only at session start.
+func emitBreadcrumb(w io.Writer, token string) error {
+	_, err := fmt.Fprintln(w, quickstartBreadcrumb(token))
+	return err
 }

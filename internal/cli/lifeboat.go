@@ -75,12 +75,11 @@ func recoverMapper(mappingPath string) (store.Mapper, error) {
 func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("lifeboat recover")
 	mappingPath := fs.String("mapping", "", "Path to an operator-authored ShapeMapping JSON; default uses the built-in deterministic mapper")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>] [--json]"}
+		return UsageError{Message: "usage: lit lifeboat recover [--mapping <file>]"}
 	}
 	mapper, err := recoverMapper(*mappingPath)
 	if err != nil {
@@ -119,15 +118,6 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	}
 }
 
-// recoverResult is the recovery success payload. Backup is omitted when the
-// canonical directory did not exist at swap time, so JSON consumers see its
-// absence rather than an empty string, and the text path can say so explicitly.
-type recoverResult struct {
-	Status    string `json:"status"`
-	Canonical string `json:"canonical"`
-	Backup    string `json:"backup,omitempty"`
-}
-
 func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
 	// [LAW:no-silent-fallbacks] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
@@ -142,22 +132,15 @@ func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info,
 	if err != nil {
 		return err
 	}
-	// [LAW:single-enforcer] Route the success line through printValue so JSON mode
-	// emits the machine payload and never the human text — the same format gate
-	// every dual-mode command passes, honoring the global --json contract.
-	payload := recoverResult{Status: "recovered", Canonical: result.Canonical, Backup: result.Backup}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(recoverResult)
-		// The preservation clause is a function of whether a backup was actually
-		// made: an empty Backup means the canonical directory did not exist at
-		// swap time, and printing "preserved at " with a blank path would lie.
-		preserved := "no previous contents to preserve"
-		if p.Backup != "" {
-			preserved = fmt.Sprintf("previous contents preserved at %s", p.Backup)
-		}
-		_, err := fmt.Fprintf(w, "recovered: rebuilt workspace promoted to %s (%s)\n", p.Canonical, preserved)
-		return err
-	})
+	// The preservation clause is a function of whether a backup was actually
+	// made: an empty Backup means the canonical directory did not exist at
+	// swap time, and printing "preserved at " with a blank path would lie.
+	preserved := "no previous contents to preserve"
+	if result.Backup != "" {
+		preserved = fmt.Sprintf("previous contents preserved at %s", result.Backup)
+	}
+	_, err = fmt.Fprintf(stdout, "recovered: rebuilt workspace promoted to %s (%s)\n", result.Canonical, preserved)
+	return err
 }
 
 func formatDrops(drops []store.UnexplainedDrop) string {

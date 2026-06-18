@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -59,18 +58,5 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), child.ID+" is inside "+epic.ID) {
 		t.Errorf("rank output = %q, want anchor-side resolution note", stdout.String())
-	}
-
-	// JSON mode stays a single JSON document describing what moved.
-	stdout.Reset()
-	if err := runRank(ctx, newOutputModeWriter(&stdout, outputModeText), ap, []string{child.ID, "--above", standalone.ID, "--json"}); err != nil {
-		t.Fatalf("rank --json error = %v", err)
-	}
-	var doc map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
-		t.Fatalf("rank --json output is not one JSON doc: %v\n%s", err, stdout.String())
-	}
-	if doc["id"] != epic.ID {
-		t.Errorf("rank --json doc id = %v, want the moved epic %s", doc["id"], epic.ID)
 	}
 }

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,7 +43,7 @@ func initRepoForPrefixTest(t *testing.T) (repo string, runLit func(args ...strin
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var initBuf bytes.Buffer
-	if err := Run(context.Background(), &initBuf, &initBuf, []string{"init", "--skip-hooks", "--skip-agents", "--json"}); err != nil {
+	if err := Run(context.Background(), &initBuf, &initBuf, []string{"init", "--skip-hooks", "--skip-agents"}); err != nil {
 		t.Fatalf("Run(init) error = %v\n%s", err, initBuf.String())
 	}
 
@@ -56,6 +55,28 @@ func initRepoForPrefixTest(t *testing.T) (repo string, runLit func(args ...strin
 	return repo, runLit
 }
 
+// prefixFromWorkspace extracts the issue_prefix value from `lit workspace` text
+// output (one "key: value" line per field).
+func prefixFromWorkspace(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if rest, ok := strings.CutPrefix(line, "issue_prefix: "); ok {
+			return strings.TrimSpace(rest)
+		}
+	}
+	return ""
+}
+
+// issueIDFromNew returns the issue id leading `lit new`'s issue-summary text
+// row (the first whitespace-delimited token of the first non-empty line).
+func issueIDFromNew(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
 func TestPrefixSetPreviewDoesNotWriteConfig(t *testing.T) {
 	repo, runLit := initRepoForPrefixTest(t)
 	configPath := filepath.Join(repo, ".git", "links", "config.json")
@@ -64,19 +85,16 @@ func TestPrefixSetPreviewDoesNotWriteConfig(t *testing.T) {
 		t.Fatalf("ReadFile(config) error = %v", err)
 	}
 
-	out, err := runLit("prefix", "set", "newproj", "--json")
+	out, err := runLit("prefix", "set", "newproj")
 	if err != nil {
 		t.Fatalf("Run(prefix set preview) error = %v\n%s", err, out)
 	}
-	var result prefixSetResult
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("json.Unmarshal(preview) error = %v\noutput = %q", err, out)
+	// Preview text: "issue_prefix: <prev> -> newproj (preview)"; never "(applied)".
+	if !strings.Contains(out, "-> newproj (preview)") {
+		t.Fatalf("preview output = %q, want a '-> newproj (preview)' line", out)
 	}
-	if result.Applied {
-		t.Fatalf("preview reported Applied=true; want false")
-	}
-	if result.Current != "newproj" {
-		t.Fatalf("preview Current = %q, want %q", result.Current, "newproj")
+	if strings.Contains(out, "(applied)") {
+		t.Fatalf("preview reported applied; want preview only: %q", out)
 	}
 	after, err := os.ReadFile(configPath)
 	if err != nil {
@@ -91,32 +109,22 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 	repo, runLit := initRepoForPrefixTest(t)
 	configPath := filepath.Join(repo, ".git", "links", "config.json")
 
-	newOut, err := runLit("new", "--title", "first", "--topic", "onboarding", "--type", "task", "--json")
+	newOut, err := runLit("new", "--title", "first", "--topic", "onboarding", "--type", "task")
 	if err != nil {
 		t.Fatalf("Run(new) error = %v\n%s", err, newOut)
 	}
-	var firstIssue map[string]any
-	if err := json.Unmarshal([]byte(newOut), &firstIssue); err != nil {
-		t.Fatalf("json.Unmarshal(new) error = %v\n%s", err, newOut)
-	}
-	firstID, _ := firstIssue["id"].(string)
+	firstID := issueIDFromNew(newOut)
 	if firstID == "" {
 		t.Fatalf("first issue missing id: %s", newOut)
 	}
 
-	out, err := runLit("prefix", "set", "newproj", "--apply", "--json")
+	out, err := runLit("prefix", "set", "newproj", "--apply")
 	if err != nil {
 		t.Fatalf("Run(prefix set --apply) error = %v\n%s", err, out)
 	}
-	var result prefixSetResult
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("json.Unmarshal(apply) error = %v\noutput = %q", err, out)
-	}
-	if !result.Applied {
-		t.Fatalf("apply reported Applied=false; want true")
-	}
-	if result.Current != "newproj" {
-		t.Fatalf("apply Current = %q, want %q", result.Current, "newproj")
+	// Applied text: "issue_prefix: <prev> -> newproj (applied)".
+	if !strings.Contains(out, "-> newproj (applied)") {
+		t.Fatalf("apply output = %q, want a '-> newproj (applied)' line", out)
 	}
 
 	configBytes, err := os.ReadFile(configPath)
@@ -127,20 +135,16 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 		t.Fatalf("config.json missing new prefix; got: %s", string(configBytes))
 	}
 
-	secondOut, err := runLit("new", "--title", "second", "--topic", "onboarding", "--type", "task", "--json")
+	secondOut, err := runLit("new", "--title", "second", "--topic", "onboarding", "--type", "task")
 	if err != nil {
 		t.Fatalf("Run(new after rename) error = %v\n%s", err, secondOut)
 	}
-	var secondIssue map[string]any
-	if err := json.Unmarshal([]byte(secondOut), &secondIssue); err != nil {
-		t.Fatalf("json.Unmarshal(new after rename) error = %v\n%s", err, secondOut)
-	}
-	secondID, _ := secondIssue["id"].(string)
+	secondID := issueIDFromNew(secondOut)
 	if !strings.HasPrefix(secondID, "newproj-") {
 		t.Fatalf("second issue ID = %q, want prefix newproj-", secondID)
 	}
 
-	showOut, err := runLit("show", firstID, "--json")
+	showOut, err := runLit("show", firstID)
 	if err != nil {
 		t.Fatalf("Run(show old id after rename) error = %v\n%s", err, showOut)
 	}
@@ -152,32 +156,26 @@ func TestPrefixSetApplyWritesConfigAndOldIDsSurvive(t *testing.T) {
 func TestPrefixSetIdempotentWhenAlreadyCurrent(t *testing.T) {
 	_, runLit := initRepoForPrefixTest(t)
 
-	wsOut, err := runLit("workspace", "--json")
+	wsOut, err := runLit("workspace")
 	if err != nil {
 		t.Fatalf("Run(workspace) error = %v\n%s", err, wsOut)
 	}
-	var ws map[string]string
-	if err := json.Unmarshal([]byte(wsOut), &ws); err != nil {
-		t.Fatalf("json.Unmarshal(workspace) error = %v\n%s", err, wsOut)
-	}
-	current := ws["issue_prefix"]
+	current := prefixFromWorkspace(wsOut)
 	if current == "" {
 		t.Fatalf("workspace missing issue_prefix: %s", wsOut)
 	}
 
-	out, err := runLit("prefix", "set", current, "--apply", "--json")
+	out, err := runLit("prefix", "set", current, "--apply")
 	if err != nil {
 		t.Fatalf("Run(prefix set same value) error = %v\n%s", err, out)
 	}
-	var result prefixSetResult
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		t.Fatalf("json.Unmarshal(idempotent) error = %v\n%s", err, out)
+	// Setting the current prefix is a no-op: "issue_prefix: <current> (prefix
+	// unchanged)" — never an applied/preview transition.
+	if !strings.Contains(out, "issue_prefix: "+current+" (prefix unchanged)") {
+		t.Fatalf("idempotent output = %q, want '(prefix unchanged)' for %q", out, current)
 	}
-	if result.Applied {
-		t.Fatalf("idempotent set should report Applied=false; got true")
-	}
-	if result.Current != current {
-		t.Fatalf("idempotent Current = %q, want %q", result.Current, current)
+	if strings.Contains(out, "(applied)") {
+		t.Fatalf("idempotent set reported applied; want unchanged: %q", out)
 	}
 }
 

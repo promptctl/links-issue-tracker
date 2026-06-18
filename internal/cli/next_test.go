@@ -2,7 +2,6 @@ package cli
 
 import (
 	"bytes"
-	"encoding/json"
 	"strings"
 	"testing"
 
@@ -10,18 +9,25 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-func (h readyTestHarness) runNextJSON(args ...string) annotation.AnnotatedIssue {
+// runNextRow reproduces exactly what `lit next` picks — the shared workable
+// pipeline, the optional --continue bias, and the first-ready pick — and returns
+// the chosen annotated row. With --json removed this probes the command's
+// selection logic against real domain values rather than a parsed line.
+// [LAW:single-enforcer]
+func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssue {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	allArgs := append(append([]string{}, args...), "--json")
-	if err := runNext(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, allArgs); err != nil {
-		h.t.Fatalf("runNext(%v) error = %v", allArgs, err)
+	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	if err != nil {
+		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
 	}
-	var got annotation.AnnotatedIssue
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		h.t.Fatalf("json.Unmarshal(next output) error = %v", err)
+	if continueBias {
+		sortByContinueBias(annotated, details)
 	}
-	return got
+	next, ok := pickFirstReady(annotated)
+	if !ok {
+		h.t.Fatal("pickFirstReady found no ready row")
+	}
+	return next
 }
 
 func (h readyTestHarness) runNextErr(args ...string) error {
@@ -37,7 +43,7 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
 	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextJSON()
+	got := h.runNextRow(false)
 	if got.ID != first.ID {
 		t.Fatalf("next.ID = %q, want %q (top of ready order)", got.ID, first.ID)
 	}
@@ -54,7 +60,7 @@ func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	}
 	openLeaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextJSON()
+	got := h.runNextRow(false)
 	if got.ID != openLeaf.ID {
 		t.Fatalf("next.ID = %q, want %q (in-progress leaves are not startable)", got.ID, openLeaf.ID)
 	}
@@ -71,7 +77,7 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	h.addDependency(dependent.ID, blocker.ID)
 	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextJSON()
+	got := h.runNextRow(false)
 	if got.ID == dependent.ID {
 		t.Fatalf("next.ID = %q (dependent), want a non-blocked leaf", got.ID)
 	}
@@ -113,7 +119,7 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	}
 
 	// Default order would pick A.1 (top composite rank).
-	defaultPick := h.runNextJSON()
+	defaultPick := h.runNextRow(false)
 	if defaultPick.ID != a1.ID {
 		t.Fatalf("default next = %q, want A.1 %q (composite-rank top)", defaultPick.ID, a1.ID)
 	}
@@ -128,7 +134,7 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	b2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID, Lane: "b2"})
 	_ = a2
 
-	continuePick := h.runNextJSON("--continue")
+	continuePick := h.runNextRow(true)
 	if continuePick.ID != b2.ID {
 		t.Fatalf("--continue next = %q, want B.2 %q (under in_progress epic)", continuePick.ID, b2.ID)
 	}
@@ -141,21 +147,20 @@ func TestRunNextContinueFallsBackWhenNoInProgressEpic(t *testing.T) {
 	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
 	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
 
-	got := h.runNextJSON("--continue")
+	got := h.runNextRow(true)
 	if got.ID != a1.ID {
 		t.Fatalf("--continue with no in-progress epic returned %q, want %q (fallback to top)", got.ID, a1.ID)
 	}
 }
 
-// The JSON shape carries enough context for the agent to claim the leaf:
-// id, annotations, and parent_epic when present. Verify the contract since
-// scripts depend on it.
-func TestRunNextJSONShapeCarriesParentEpic(t *testing.T) {
+// A leaf picked by `lit next` carries its parent epic inline so the agent knows
+// which epic it would be joining before it claims the leaf.
+func TestRunNextCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
 	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
 	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
-	got := h.runNextJSON()
+	got := h.runNextRow(false)
 	if got.ID != leaf.ID {
 		t.Fatalf("next.ID = %q, want %q", got.ID, leaf.ID)
 	}
@@ -164,8 +169,5 @@ func TestRunNextJSONShapeCarriesParentEpic(t *testing.T) {
 	}
 	if got.ParentEpic.ID != epic.ID {
 		t.Fatalf("next.ParentEpic.ID = %q, want %q", got.ParentEpic.ID, epic.ID)
-	}
-	if got.Annotations == nil {
-		t.Fatal("next.Annotations = nil, want non-nil slice (even if empty) so JSON is stable")
 	}
 }

@@ -3,7 +3,6 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
@@ -34,16 +33,14 @@ func TestReadCommandDoesNotCreateStartupCommit(t *testing.T) {
 	}
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"ls", "--json"}); err != nil {
-		t.Fatalf("Run(ls --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"ls"}); err != nil {
+		t.Fatalf("Run(ls) error = %v", err)
 	}
 
-	var issues []map[string]any
-	if err := json.Unmarshal(stdout.Bytes(), &issues); err != nil {
-		t.Fatalf("json.Unmarshal(ls output) error = %v", err)
-	}
-	if len(issues) != 0 {
-		t.Fatalf("ls issues = %#v, want empty", issues)
+	// A freshly initialized workspace has no issues; the text listing emits no
+	// rows. (The point of this test is that the read did not create a commit.)
+	if got := strings.TrimSpace(stdout.String()); got != "" {
+		t.Fatalf("ls on an empty workspace = %q, want no rows", got)
 	}
 
 	afterLog, err := doltcli.Run(context.Background(), repoPath, "log", "--oneline")
@@ -70,8 +67,8 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	t.Cleanup(func() { _ = os.Chdir(prevWD) })
 
 	var stdout bytes.Buffer
-	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks", "--skip-agents", "--json"}); err != nil {
-		t.Fatalf("Run(init --skip-hooks --skip-agents --json) error = %v", err)
+	if err := Run(context.Background(), &stdout, &stdout, []string{"init", "--skip-hooks", "--skip-agents"}); err != nil {
+		t.Fatalf("Run(init --skip-hooks --skip-agents) error = %v", err)
 	}
 
 	ws, err := workspace.Resolve(repo)
@@ -95,10 +92,8 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 		want app.AccessMode
 	}{
 		{name: "no flags defaults to read", args: nil, want: app.AccessRead},
-		{name: "json only is read", args: []string{"--json"}, want: app.AccessRead},
 		{name: "fix all implies write", args: []string{"--fix"}, want: app.AccessWrite},
 		{name: "fix named implies write", args: []string{"--fix", "rank"}, want: app.AccessWrite},
-		{name: "fix with json implies write", args: []string{"--fix", "--json"}, want: app.AccessWrite},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

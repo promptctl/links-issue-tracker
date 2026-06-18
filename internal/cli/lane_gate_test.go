@@ -1,29 +1,23 @@
 package cli
 
 import (
-	"bytes"
-	"encoding/json"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// runQueueJSON runs `lit queue --json` against the ready harness so the lane
-// gate can be observed across all three membership surfaces (ready/queue/next)
-// from one fixture.
-func (h readyTestHarness) runQueueJSON(args ...string) []annotation.AnnotatedIssue {
+// runQueueAnnotated reproduces what `lit queue` computes — the shared workable
+// pipeline narrowed to the pullable (not-blocked) set — so the lane gate can be
+// observed across all three membership surfaces (ready/queue/next) from one
+// fixture, reading real annotated rows rather than a removed JSON encoding.
+func (h readyTestHarness) runQueueAnnotated(rf workableFilter) []annotation.AnnotatedIssue {
 	h.t.Helper()
-	var stdout bytes.Buffer
-	all := append(append([]string{}, args...), "--json")
-	if err := runQueue(h.ctx, newOutputModeWriter(&stdout, outputModeText), h.ap, all); err != nil {
-		h.t.Fatalf("runQueue(%v) error = %v", all, err)
+	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
+	if err != nil {
+		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
-	var got []annotation.AnnotatedIssue
-	if err := json.Unmarshal(stdout.Bytes(), &got); err != nil {
-		h.t.Fatalf("json.Unmarshal(queue) error = %v", err)
-	}
-	return got
+	return filterPullable(annotated)
 }
 
 func containsID(rows []annotation.AnnotatedIssue, id string) bool {
@@ -46,7 +40,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	urgentLater := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "urgent later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	// queue drops the blocked urgent sibling; only the earlier one is pullable.
-	queue := h.runQueueJSON()
+	queue := h.runQueueAnnotated(workableFilter{})
 	if !containsID(queue, first.ID) {
 		t.Fatalf("queue missing earlier sibling %q; got=%v", first.ID, ids(queue))
 	}
@@ -55,13 +49,13 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	}
 
 	// next hands back the earlier sibling, never the urgent-but-blocked one.
-	if pick := h.runNextJSON(); pick.ID != first.ID {
+	if pick := h.runNextRow(false); pick.ID != first.ID {
 		t.Fatalf("next = %q, want earlier sibling %q", pick.ID, first.ID)
 	}
 
 	// ready sinks the blocked sibling below the ready one and annotates it with
 	// the blocking fact pointing at the earlier sibling.
-	ready := h.runReadyJSON()
+	ready := h.runReadyAnnotated(workableFilter{}, 0)
 	if ready[0].ID != first.ID {
 		t.Fatalf("ready[0] = %q, want earlier sibling %q; order=%v", ready[0].ID, first.ID, ids(ready))
 	}
@@ -80,11 +74,11 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	// The moment the earlier sibling closes, the later one becomes pullable —
 	// membership flips on the close, no rank or priority change needed.
 	h.closeIssue(first.ID, "done")
-	queueAfter := h.runQueueJSON()
+	queueAfter := h.runQueueAnnotated(workableFilter{})
 	if !containsID(queueAfter, urgentLater.ID) {
 		t.Fatalf("after closing earlier sibling, queue should contain %q; got=%v", urgentLater.ID, ids(queueAfter))
 	}
-	if pick := h.runNextJSON(); pick.ID != urgentLater.ID {
+	if pick := h.runNextRow(false); pick.ID != urgentLater.ID {
 		t.Fatalf("after closing earlier sibling, next = %q, want %q", pick.ID, urgentLater.ID)
 	}
 }
@@ -99,12 +93,12 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
 	otherLane := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "other lane", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "b"})
 
-	queue := h.runQueueJSON()
+	queue := h.runQueueAnnotated(workableFilter{})
 	if !containsID(queue, first.ID) || !containsID(queue, otherLane.ID) {
 		t.Fatalf("both lanes should be pullable in parallel; got=%v", ids(queue))
 	}
 	// Among ready items urgent still orders first — ordering is unchanged.
-	if pick := h.runNextJSON(); pick.ID != otherLane.ID {
+	if pick := h.runNextRow(false); pick.ID != otherLane.ID {
 		t.Fatalf("next = %q, want urgent distinct-lane sibling %q (ordering among ready)", pick.ID, otherLane.ID)
 	}
 }
@@ -121,7 +115,7 @@ func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 
 	// Viewing only alice's work, her later sibling is still gated by bob's open
 	// earlier sibling even though bob's ticket is filtered out of the view.
-	queue := h.runQueueJSON("--assignee", "alice")
+	queue := h.runQueueAnnotated(workableFilter{Assignee: "alice"})
 	if containsID(queue, mineLater.ID) {
 		t.Fatalf("alice's later sibling should be gated by bob's open earlier sibling; got=%v", ids(queue))
 	}

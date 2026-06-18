@@ -67,7 +67,6 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) err
 func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -91,16 +90,12 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 	}); err != nil {
 		return err
 	}
-	return printValue(stdout, snap, func(w io.Writer, v any) error {
-		s := v.(dbsnapshot.Snapshot)
-		_, err := fmt.Fprintf(w, "%s %s\n", s.Name, s.Path)
-		return err
-	})
+	_, err = fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path)
+	return err
 }
 
 func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("snapshots list")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -108,30 +103,26 @@ func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error 
 	if err != nil {
 		return err
 	}
-	return printValue(stdout, snapshots, func(w io.Writer, v any) error {
-		list := v.([]dbsnapshot.Snapshot)
-		for _, snap := range list {
-			if _, err := fmt.Fprintf(w, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
-				return err
-			}
+	for _, snap := range snapshots {
+		if _, err := fmt.Fprintf(stdout, "%s %s %s\n", snap.Name, snap.Created.Format("2006-01-02T15:04:05Z"), snap.Path); err != nil {
+			return err
 		}
-		return nil
-	})
+	}
+	return nil
 }
 
 func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) (err error) {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("snapshots restore")
-	fs.JSONFlag()
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit snapshots restore <name> [--json]"}
+		return UsageError{Message: "usage: lit snapshots restore <name>"}
 	}
 	name := strings.TrimSpace(positional[0])
 	if name == "" {
-		return UsageError{Message: "usage: lit snapshots restore <name> [--json]"}
+		return UsageError{Message: "usage: lit snapshots restore <name>"}
 	}
 	// [LAW:single-enforcer] Exclusive workspace lock owns reader-vs-restore
 	// exclusion; commit lock (held inside withCommitLock below) owns
@@ -163,19 +154,10 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	}); err != nil {
 		return err
 	}
-	payload := map[string]string{
-		"status":     "restored",
-		"name":       name,
-		"database":   ws.DatabasePath,
-		"rotated_to": rotated,
-	}
-	return printValue(stdout, payload, func(w io.Writer, v any) error {
-		p := v.(map[string]string)
-		if p["rotated_to"] == "" {
-			_, err := fmt.Fprintf(w, "%s %s\n", p["status"], p["name"])
-			return err
-		}
-		_, err := fmt.Fprintf(w, "%s %s rotated_to=%s\n", p["status"], p["name"], p["rotated_to"])
+	if rotated == "" {
+		_, err = fmt.Fprintf(stdout, "restored %s\n", name)
 		return err
-	})
+	}
+	_, err = fmt.Fprintf(stdout, "restored %s rotated_to=%s\n", name, rotated)
+	return err
 }

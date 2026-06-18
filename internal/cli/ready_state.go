@@ -569,8 +569,7 @@ func pickFirstReady(rows []annotation.AnnotatedIssue) (annotation.AnnotatedIssue
 // standard id+state+topic+title line, indented epic context if any, and inline
 // dependency annotations so the agent knows what context to load before
 // `lit start`.
-func printNextSummary(w io.Writer, v any) error {
-	row := v.(annotation.AnnotatedIssue)
+func printNextSummary(w io.Writer, row annotation.AnnotatedIssue) error {
 	columns := resolveColumns(nil)
 	line := formatIssueColumns(row.Issue, columns, "  ")
 	if _, err := fmt.Fprintln(w, line); err != nil {

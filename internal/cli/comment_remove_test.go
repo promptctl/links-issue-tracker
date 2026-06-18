@@ -3,9 +3,9 @@ package cli
 import (
 	"bytes"
 	"context"
-	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -41,35 +41,29 @@ func TestCommentRemove(t *testing.T) {
 		}
 	}
 
-	if _, err := run("init", "--skip-hooks", "--skip-agents", "--json"); err != nil {
+	if _, err := run("init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("init error = %v", err)
 	}
 
-	newOut, err := run("new", "--title", "comment removal", "--topic", "comments", "--type", "task", "--priority", "1", "--json")
+	// `lit new` text prints the issue summary, whose first token is the id.
+	newOut, err := run("new", "--title", "comment removal", "--topic", "comments", "--type", "task", "--priority", "1")
 	if err != nil {
 		t.Fatalf("new error = %v", err)
 	}
-	var issue map[string]any
-	if err := json.Unmarshal(newOut.Bytes(), &issue); err != nil {
-		t.Fatalf("new output should be json: %v (out=%s)", err, newOut.String())
-	}
-	issueID, _ := issue["id"].(string)
+	issueID := firstToken(newOut.String())
 	if issueID == "" {
 		t.Fatalf("new returned no id: %s", newOut.String())
 	}
 
 	const marker = "delete-me-marker-xyz"
-	addOut, err := run("comment", "add", issueID, "--body", marker, "--json")
+	// `lit comment add` text prints "<issueID> <commentID>".
+	addOut, err := run("comment", "add", issueID, "--body", marker)
 	if err != nil {
 		t.Fatalf("comment add error = %v", err)
 	}
-	var added map[string]any
-	if err := json.Unmarshal(addOut.Bytes(), &added); err != nil {
-		t.Fatalf("comment add output should be json: %v (out=%s)", err, addOut.String())
-	}
-	commentID, _ := added["id"].(string)
+	commentID := secondToken(addOut.String())
 	if commentID == "" {
-		t.Fatalf("comment add returned no id: %s", addOut.String())
+		t.Fatalf("comment add returned no comment id: %s", addOut.String())
 	}
 
 	before, err := run("show", issueID)
@@ -80,19 +74,14 @@ func TestCommentRemove(t *testing.T) {
 		t.Fatalf("comment not visible in show before delete: %s", before.String())
 	}
 
-	rmOut, err := run("comment", "rm", commentID, "--json")
+	// `lit comment rm` text prints "<issueID> <commentID>" for the removed
+	// comment; assert it names the comment we just removed.
+	rmOut, err := run("comment", "rm", commentID)
 	if err != nil {
 		t.Fatalf("comment rm error = %v", err)
 	}
-	var removed map[string]any
-	if err := json.Unmarshal(rmOut.Bytes(), &removed); err != nil {
-		t.Fatalf("comment rm output should be json: %v (out=%s)", err, rmOut.String())
-	}
-	if removed["id"] != commentID {
-		t.Fatalf("comment rm --json id = %v, want %s", removed["id"], commentID)
-	}
-	if removed["body"] != marker {
-		t.Fatalf("comment rm --json body = %v, want %q", removed["body"], marker)
+	if secondToken(rmOut.String()) != commentID {
+		t.Fatalf("comment rm output = %q, want comment id %s", rmOut.String(), commentID)
 	}
 
 	after, err := run("show", issueID)
@@ -103,7 +92,29 @@ func TestCommentRemove(t *testing.T) {
 		t.Fatalf("comment still visible in show after delete: %s", after.String())
 	}
 
-	if _, err := run("comment", "rm", commentID, "--json"); err == nil {
+	if _, err := run("comment", "rm", commentID); err == nil {
 		t.Fatalf("expected error deleting already-removed comment, got nil")
 	}
+}
+
+// firstToken returns the first whitespace-delimited token of the first
+// non-empty line — the id leading a `lit new` / issue-summary text row.
+func firstToken(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) > 0 {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+// secondToken returns the second whitespace-delimited token of the first
+// non-empty line — the comment id in `lit comment add/rm`'s "<issue> <comment>".
+func secondToken(out string) string {
+	for _, line := range strings.Split(out, "\n") {
+		if fields := strings.Fields(line); len(fields) >= 2 {
+			return fields[1]
+		}
+	}
+	return ""
 }
