@@ -8,16 +8,34 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-type IssueConflict struct {
-	IssueID string       `json:"issue_id"`
-	Base    *model.Issue `json:"base,omitempty"`
-	Local   *model.Issue `json:"local,omitempty"`
-	Remote  *model.Issue `json:"remote,omitempty"`
+// MergeResult is the whole-export merge: the converged export plus the prose
+// fields that diverged on both sides and need the calling agent's semantic
+// merge. The export is reachable only through Settled (gated) or Provisional
+// (explicitly named) for the same reason IssueResolution gates its row — a
+// caller must not commit a provisional export while prose is unresolved.
+// [LAW:single-enforcer] One merge policy lives in this package — the per-row
+// field-aware decisions are ResolveIssue's; ThreeWay only fans it across the
+// export and unions the append-only tables.
+type MergeResult struct {
+	export  model.Export
+	Pending []ProsePending
 }
 
-type MergeResult struct {
-	Export    model.Export    `json:"export"`
-	Conflicts []IssueConflict `json:"conflicts"`
+// Settled returns the merged export to commit autonomously, and ok=true ONLY
+// when no prose field anywhere in the export needs the agent. A non-empty
+// Pending set returns ok=false, so the autonomous-commit path cannot publish an
+// export carrying provisional prose. [LAW:no-silent-failure] the gate is the
+// return value, not a convention.
+func (r MergeResult) Settled() (model.Export, bool) {
+	return r.export, len(r.Pending) == 0
+}
+
+// Provisional returns the merged export carrying provisional prose values, for
+// the reconcile boundary that persists the code-resolved fields while holding
+// the Pending prose for the agent surface. The name marks the callsite that has
+// accepted responsibility for the unresolved prose.
+func (r MergeResult) Provisional() model.Export {
+	return r.export
 }
 
 func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult {
@@ -27,7 +45,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 
 	allIDs := unionIssueIDs(baseMap, localMap, remoteMap)
 	mergedIssues := make([]model.Issue, 0, len(allIDs))
-	conflicts := make([]IssueConflict, 0)
+	pending := make([]ProsePending, 0)
 
 	for _, id := range allIDs {
 		baseIssue, hasBase := baseMap[id]
@@ -54,20 +72,23 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 				mergedIssues = append(mergedIssues, remoteIssue)
 			}
 		default:
-			if issueEqual(localPtr, remotePtr) {
-				if hasLocal {
-					mergedIssues = append(mergedIssues, localIssue)
-				}
-				continue
-			}
-			conflicts = append(conflicts, IssueConflict{
-				IssueID: id,
-				Base:    basePtr,
-				Local:   localPtr,
-				Remote:  remotePtr,
-			})
-			if hasLocal {
+			// Both sides changed. A field-aware merge needs both rows present; a
+			// missing side here means one machine removed the whole row while the
+			// other edited it. (Routine deletion is soft — a DeletedAt stamp on a
+			// still-present row — so this whole-row-absence path is reached only by
+			// genuine row removal, and presence is a collection fact, not a field.)
+			switch {
+			case hasLocal && hasRemote:
+				resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+				mergedIssues = append(mergedIssues, resolution.Provisional())
+				pending = append(pending, resolution.Pending...)
+			case hasLocal:
+				// remote removed it, local edited -> preserve the surviving edit.
 				mergedIssues = append(mergedIssues, localIssue)
+			case hasRemote:
+				// local removed it, remote edited -> preserve the surviving edit.
+				mergedIssues = append(mergedIssues, remoteIssue)
+				// both removed a base-only row -> converged removal, append nothing.
 			}
 		}
 	}
@@ -85,10 +106,10 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Issues:      mergedIssues,
 		Relations:   mergeRelations(issueSet, local.Relations, remote.Relations),
 		Comments:    mergeComments(issueSet, local.Comments, remote.Comments),
-		Labels:      mergeLabels(issueSet, local.Labels, remote.Labels),
+		Labels:      mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
-	return MergeResult{Export: merged, Conflicts: conflicts}
+	return MergeResult{export: merged, Pending: pending}
 }
 
 func mapIssues(issues []model.Issue) map[string]model.Issue {
@@ -140,12 +161,14 @@ type issueProjection struct {
 	ID          string
 	Title       string
 	Description string
+	Prompt      string
 	Status      string
 	Priority    int
 	IssueType   string
 	Topic       string
 	Assignee    string
 	Rank        string
+	Lane        string
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
@@ -156,16 +179,20 @@ type issueProjection struct {
 
 func issueProjectionFrom(issue model.Issue) issueProjection {
 	// [LAW:one-source-of-truth] Merge equality compares the same lossless issue data that the sync wire owns, without depending on lifecycle-derived JSON fields.
+	// Every field ResolveIssue merges must appear here, or a change to an omitted
+	// field reads as "unchanged" and ThreeWay drops the edit. [LAW:no-silent-failure]
 	return issueProjection{
 		ID:          issue.ID,
 		Title:       issue.Title,
 		Description: issue.Description,
+		Prompt:      issue.Prompt,
 		Status:      issue.StatusValue(),
 		Priority:    issue.Priority,
 		IssueType:   issue.IssueType,
 		Topic:       issue.Topic,
 		Assignee:    issue.AssigneeValue(),
 		Rank:        issue.Rank,
+		Lane:        issue.Lane,
 		Labels:      append([]string{}, issue.Labels...),
 		CreatedAt:   issue.CreatedAt,
 		UpdatedAt:   issue.UpdatedAt,
@@ -194,6 +221,7 @@ func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relati
 	for _, relation := range merged {
 		out = append(out, relation)
 	}
+	out = enforceSingleParent(out)
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].SrcID != out[j].SrcID {
 			return out[i].SrcID < out[j].SrcID
@@ -203,6 +231,90 @@ func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relati
 		}
 		return out[i].Type < out[j].Type
 	})
+	return out
+}
+
+// enforceSingleParent collapses concurrent parent-child edges so the graph stays
+// a valid forest: each child keeps exactly one parent and no parent chain loops.
+// blocks / related-to are additive and pass through; only parent-child is
+// single-valued (a child's parent relation is stored src=child, dst=parent, one
+// per child). [LAW:decomposition] This is the "choose-only, no semantic winner"
+// branch of the merge cut: two parents cannot be combined, so a deterministic,
+// symmetric tiebreak keeps the DAG invariant without inventing a clock.
+func enforceSingleParent(relations []model.Relation) []model.Relation {
+	parentOf := map[string]model.Relation{}
+	out := make([]model.Relation, 0, len(relations))
+	for _, relation := range relations {
+		if relation.Type != model.RelParentChild {
+			out = append(out, relation)
+			continue
+		}
+		existing, seen := parentOf[relation.SrcID]
+		if !seen || relation.DstID > existing.DstID {
+			parentOf[relation.SrcID] = relation
+		}
+	}
+	breakParentCycles(parentOf)
+	for _, relation := range parentOf {
+		out = append(out, relation)
+	}
+	return out
+}
+
+// breakParentCycles deletes one edge from every parent cycle so the union never
+// commits a cycle (the store has no acyclicity guard, so a cycle here would be
+// silent corruption — [LAW:no-silent-failure]). With single-parent already
+// enforced the parent map is functional, so each cycle is a simple loop; the
+// victim is the lexicographically greatest child id in the loop — a choice both
+// machines compute identically from the same data.
+func breakParentCycles(parentOf map[string]model.Relation) {
+	const (
+		unvisited = 0
+		onPath    = 1
+		settled   = 2
+	)
+	state := map[string]int{}
+	for start := range parentOf {
+		if state[start] != unvisited {
+			continue
+		}
+		var path []string
+		node := start
+		for {
+			if _, ok := parentOf[node]; !ok || state[node] == settled {
+				break
+			}
+			if state[node] == onPath {
+				cycle := path[indexOf(path, node):]
+				delete(parentOf, maxString(cycle))
+				break
+			}
+			state[node] = onPath
+			path = append(path, node)
+			node = parentOf[node].DstID
+		}
+		for _, n := range path {
+			state[n] = settled
+		}
+	}
+}
+
+func indexOf(items []string, target string) int {
+	for idx, item := range items {
+		if item == target {
+			return idx
+		}
+	}
+	return -1
+}
+
+func maxString(items []string) string {
+	out := items[0]
+	for _, item := range items[1:] {
+		if item > out {
+			out = item
+		}
+	}
 	return out
 }
 
@@ -222,18 +334,57 @@ func mergeComments(issueSet map[string]struct{}, locals, remotes []model.Comment
 	return out
 }
 
-func mergeLabels(issueSet map[string]struct{}, locals, remotes []model.Label) []model.Label {
+// mergeLabels converges the authoritative label table the same way the resolver
+// converges a row's label view: per (issue, name) the two-tier rule decides
+// membership, so a label one side removed is not resurrected by the other side
+// merely retaining it. base is the merge-base label set that supplies that
+// "which side changed" causality. [LAW:one-source-of-truth] The label table is
+// authoritative (issue.Labels is a derived view); this is where removal must be
+// honored.
+func mergeLabels(issueSet map[string]struct{}, base, locals, remotes []model.Label) []model.Label {
 	type key struct{ IssueID, Name string }
-	merged := map[key]model.Label{}
-	for _, label := range append(locals, remotes...) {
-		if _, ok := issueSet[label.IssueID]; !ok {
+	keyOf := func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} }
+	keySet := func(labels []model.Label) map[key]struct{} {
+		out := make(map[key]struct{}, len(labels))
+		for _, label := range labels {
+			out[keyOf(label)] = struct{}{}
+		}
+		return out
+	}
+	baseSet, localSet, remoteSet := keySet(base), keySet(locals), keySet(remotes)
+
+	// One row per key carries the label's metadata; remote wins ties, matching
+	// the existing last-write preference.
+	rows := map[key]model.Label{}
+	for _, label := range locals {
+		rows[keyOf(label)] = label
+	}
+	for _, label := range remotes {
+		rows[keyOf(label)] = label
+	}
+
+	candidates := map[key]struct{}{}
+	for _, set := range []map[key]struct{}{baseSet, localSet, remoteSet} {
+		for k := range set {
+			candidates[k] = struct{}{}
+		}
+	}
+
+	out := make([]model.Label, 0, len(rows))
+	for k := range candidates {
+		if _, ok := issueSet[k.IssueID]; !ok {
 			continue
 		}
-		merged[key{IssueID: label.IssueID, Name: label.Name}] = label
-	}
-	out := make([]model.Label, 0, len(merged))
-	for _, label := range merged {
-		out = append(out, label)
+		_, inBase := baseSet[k]
+		_, inLocal := localSet[k]
+		_, inRemote := remoteSet[k]
+		// base is always supplied; an empty base makes every present label an add.
+		if !twoTier(true, inBase, inLocal, inRemote, presentOr) {
+			continue
+		}
+		if row, ok := rows[k]; ok {
+			out = append(out, row)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].IssueID != out[j].IssueID {

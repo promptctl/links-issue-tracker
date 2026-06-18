@@ -14,7 +14,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
-	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
@@ -1632,8 +1631,7 @@ func parseSortSpecs(input string) ([]store.SortSpec, error) {
 }
 
 type MergeConflictError struct {
-	Message   string
-	Conflicts []merge.IssueConflict
+	Message string
 }
 
 func (e MergeConflictError) Error() string {
