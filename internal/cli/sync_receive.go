@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -83,6 +84,19 @@ type syncReceiveOutcome struct {
 	behind     int64
 	traceErr   error
 	receiveErr error // the receive failure; the trace is already recorded when set
+	// reconcile carries the inline reconcile that runs when the receive found a
+	// divergence the fast-forward could not absorb. Zero-valued unless state was
+	// SyncReceiveDiverged. [LAW:decomposition] Receiving and reconciling are
+	// distinct steps; the receive owns fetch+ff, the reconcile owns the field-
+	// aware three-way merge.
+	reconcile *reconcileOutcome
+}
+
+// reconcileOutcome is the inline reconcile result the diverged receive triggers.
+type reconcileOutcome struct {
+	state   store.SyncReconcileState
+	pending []merge.ProsePending
+	err     error // the reconcile failure; its trace is already recorded when set
 }
 
 // performSyncReceive reconciles Dolt remotes from git, resolves the remote and
@@ -149,7 +163,7 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		traceReason,
 		traceMetadata,
 	)
-	return syncReceiveOutcome{
+	outcome := syncReceiveOutcome{
 		status:     "ok",
 		remote:     remoteName,
 		branch:     syncBranch,
@@ -158,7 +172,75 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		behind:     result.Behind,
 		traceErr:   traceRecordErr,
 		receiveErr: receiveErr,
-	}, nil
+	}
+	// The reconcile runs INLINE on this same engine because embedded Dolt permits
+	// only one read-write engine per path — a worker would collide with the next
+	// foreground command. [LAW:no-ambient-temporal-coupling]
+	if receiveErr == nil && result.State == store.SyncReceiveDiverged {
+		outcome.reconcile = performInlineReconcile(ctx, syncStore, ws, remoteName, syncBranch)
+	}
+	return outcome, nil
+}
+
+// performInlineReconcile runs the field-aware reconcile on a diverged clone and
+// records its own automation trace. A settled divergence converges to linear
+// history transparently (like a fast-forward); a prose divergence is held as
+// prose-pending for the agent surface, never auto-committed by picking a side.
+// [LAW:single-enforcer] One reconcile entrypoint and one trace writer, whether
+// the receive was inline or foreground.
+func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote, branch string) *reconcileOutcome {
+	result, reconcileErr := syncStore.SyncReconcile(ctx, remote, branch)
+	traceMetadata := map[string]string{
+		"remote":      remote,
+		"sync_branch": branch,
+		"state":       string(result.State),
+	}
+	traceStatus := "ok"
+	traceReason := reconcileReasonForState(result.State)
+	if reconcileErr != nil {
+		traceStatus = "error"
+		traceReason = reconcileErr.Error()
+		traceMetadata["error"] = reconcileErr.Error()
+	} else if result.State == store.SyncReconcileProsePending {
+		traceMetadata["pending"] = strconv.Itoa(len(result.Pending))
+	}
+	if _, traceErr := maybeRecordAutomatedCommandTrace(
+		ws,
+		"lit sync reconcile",
+		"reconcile a diverged clone into linear history with the field-aware merge engine",
+		traceStatus,
+		traceReason,
+		traceMetadata,
+	); traceErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
+	}
+	// A reconcile FAILURE leaves the clone unable to converge with the remote — a
+	// more consequential state than a routine receive hiccup — so it is surfaced to
+	// stderr now, in addition to the trace, rather than discovered only by reading
+	// traces later. It still does not fail the command: this runs after the
+	// command's output is already produced, on the one engine embedded Dolt permits,
+	// and the next interval retries. [LAW:no-silent-failure] A prose-pending result
+	// is NOT a failure — it is the intended outcome for a concurrent free-text
+	// rewrite, held for the agent surface — so it is not surfaced as an error here.
+	if reconcileErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: automatic reconcile of the diverged clone failed; it remains diverged and will retry: %v\n", reconcileErr)
+	}
+	return &reconcileOutcome{state: result.State, pending: result.Pending, err: reconcileErr}
+}
+
+// reconcileReasonForState maps a reconcile outcome to its automation-trace
+// reason. [LAW:one-source-of-truth] One mapping over the closed state set.
+func reconcileReasonForState(state store.SyncReconcileState) string {
+	switch state {
+	case store.SyncReconcileLinearized:
+		return "automatic reconcile merged the divergence into linear history"
+	case store.SyncReconcileProsePending:
+		return "automatic reconcile resolved every field but free-text diverged on both sides; held for the agent surface"
+	case store.SyncReconcileNotDiverged:
+		return "automatic reconcile found the branch no longer diverged; nothing to do"
+	default:
+		return "automatic reconcile completed with state " + string(state)
+	}
 }
 
 // receiveReasonForState maps a receive outcome to the human reason recorded on

@@ -174,7 +174,16 @@ func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 }
 
 func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) error {
-	return s.withMutation(ctx, "replace from export", func(ctx context.Context, tx *sql.Tx) error {
+	return s.replaceFromExport(ctx, export, "replace from export")
+}
+
+// replaceFromExport is the single body that clears the live tables and rewrites
+// them from an export, parameterized only by the commit message. Restore uses
+// the default message; the field-aware reconcile passes its own so a forward-
+// replayed merge reads as a reconcile in history rather than a generic restore.
+// [LAW:single-enforcer] One import body; the message is the only per-caller value.
+func (s *Store) replaceFromExport(ctx context.Context, export model.Export, message string) error {
+	return s.withMutation(ctx, message, func(ctx context.Context, tx *sql.Tx) error {
 		for _, table := range []string{"labels", "comments", "relations", "issues"} {
 			if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 				return fmt.Errorf("clear %s: %w", table, err)
