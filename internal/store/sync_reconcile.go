@@ -220,13 +220,22 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 }
 
 // cleanupReconcileScratch returns the session to the data branch and deletes the
-// scratch branch. It is best-effort: the data-branch pointer already holds the
-// durable result and a fresh connection always opens on the data branch, so a
-// cleanup failure cannot corrupt state — but it is surfaced, never swallowed.
-// [LAW:no-silent-failure]
+// scratch branch. The data-branch pointer already holds the durable result before
+// this runs, so the one thing cleanup must still guarantee is that the session is
+// not left on the scratch branch — otherwise a later use of this store would
+// silently read/write the wrong branch. If the switch back fails, the connection
+// IS stranded on scratch, so it is rotated: a fresh connection always opens on the
+// data branch, which makes "reconcile returned success while stranded on scratch"
+// unrepresentable rather than merely logged. [LAW:no-silent-failure] the failure
+// is surfaced, and the bad state is made unreachable rather than tolerated.
 func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string) {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not return to data branch %q: %v\n", dataBranch, err)
+		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
+		if reconnectErr := s.reconnect(); reconnectErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: reconcile connection rotation failed: %v\n", reconnectErr)
+		}
+		// The stale scratch branch is harmless — the next reconcile force-recreates
+		// it under the same name and it is never pushed (only the data branch is).
 		return
 	}
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", reconcileScratchBranch); err != nil {
