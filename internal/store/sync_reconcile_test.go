@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -150,6 +151,97 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	}
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("Close(B): %v", err)
+	}
+}
+
+// TestSyncReconcileResolvedFinalizesWithAgentText proves the finalize boundary:
+// after a prose divergence the agent supplies merged text, and SyncReconcileResolved
+// re-derives the same divergence, splices the text in, and replays it as ONE
+// forward commit on the remote head — linear history the next push fast-forwards.
+func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Title: strptr("A's rewritten title")})
+	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Title: strptr("B's rewritten title")})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+		{IssueID: id, Field: merge.ProseTitle, Text: "both A's and B's intent merged"},
+	})
+	if err != nil {
+		t.Fatalf("SyncReconcileResolved(B): %v", err)
+	}
+	if res.State != SyncReconcileLinearized {
+		t.Fatalf("resolved state = %q, want %q", res.State, SyncReconcileLinearized)
+	}
+	got := getIssueOrFatal(t, ctx, syncB, id)
+	if got.Title != "both A's and B's intent merged" {
+		t.Fatalf("title after finalize = %q, want the agent's merged text", got.Title)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(B): %v", err)
+	}
+	if fresh.State() != SyncAhead {
+		t.Fatalf("post-finalize freshness = %q, want ahead (linear, fast-forward-pushable)", fresh.State())
+	}
+}
+
+// TestSyncReconcileResolvedRejectsStaleResolutions proves the safety gate: a
+// resolution that does not match the live divergence (here, for a field that is
+// not pending) commits nothing and re-surfaces the CURRENT prose conflicts.
+// [LAW:no-silent-failure] the agent can never overwrite a field whose divergence
+// changed underneath it.
+func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Title: strptr("A's rewritten title")})
+	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Title: strptr("B's rewritten title")})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+	// Only the title diverged; resolving the description is a stale/mismatched set.
+	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+		{IssueID: id, Field: merge.ProseDescription, Text: "wrong field"},
+	})
+	if err != nil {
+		t.Fatalf("SyncReconcileResolved(B): %v", err)
+	}
+	if res.State != SyncReconcileProsePending {
+		t.Fatalf("stale-resolution state = %q, want %q (re-surfaced)", res.State, SyncReconcileProsePending)
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("data branch moved on a rejected finalize: %s -> %s", headBefore, got)
+	}
+	if len(res.Pending) != 1 || res.Pending[0].Field != "title" {
+		t.Fatalf("re-surfaced pending = %+v, want the live title conflict", res.Pending)
+	}
+	got := getIssueOrFatal(t, ctx, syncB, id)
+	if got.Title != "B's rewritten title" {
+		t.Fatalf("local title after rejected finalize = %q, want B's (untouched)", got.Title)
 	}
 }
 

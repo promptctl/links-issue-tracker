@@ -10,7 +10,7 @@ _lit_completions() {
   local label_subcommands="add rm"
   local parent_subcommands="set clear"
   local dep_subcommands="add rm ls"
-  local sync_subcommands="status remote fetch pull push"
+  local sync_subcommands="status remote fetch pull push reconcile"
   local sync_remote_subcommands="ls"
   local backup_subcommands="create list restore"
   local bulk_subcommands="label close archive import"
@@ -133,7 +133,7 @@ _lit() {
           _values 'dep commands' add rm ls
           ;;
         sync)
-          _values 'sync commands' status remote fetch pull push
+          _values 'sync commands' status remote fetch pull push reconcile
           ;;
         remote)
           if [[ "$line[1]" = "sync" ]]; then
@@ -166,7 +166,7 @@ complete -c lit -n '__fish_seen_subcommand_from comment' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from label' -a 'add rm'
 complete -c lit -n '__fish_seen_subcommand_from parent' -a 'set clear'
 complete -c lit -n '__fish_seen_subcommand_from dep' -a 'add rm ls'
-complete -c lit -n '__fish_seen_subcommand_from sync' -a 'status remote fetch pull push'
+complete -c lit -n '__fish_seen_subcommand_from sync' -a 'status remote fetch pull push reconcile'
 complete -c lit -n '__fish_seen_subcommand_from remote' -a 'ls'
 complete -c lit -n '__fish_seen_subcommand_from backup' -a 'create list restore'
 complete -c lit -n '__fish_seen_subcommand_from bulk' -a 'label close archive import'

@@ -1,0 +1,105 @@
+package merge
+
+import (
+	"sort"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
+
+// ProseResolution is the calling agent's semantic merge of one prose field that
+// diverged on both sides: the single coherent Text that preserves BOTH the Ours
+// and Theirs intent. It is the enactment of the one judgment step the engine
+// deliberately refuses to make. [LAW:decomposition] The agent owns the decision
+// (the Text); this package owns only where that text lands in the export.
+type ProseResolution struct {
+	IssueID string
+	Field   ProseField
+	Text    string
+}
+
+// proseKey identifies one prose field of one issue — the unit a ProsePending and
+// a ProseResolution must agree on. [LAW:types-are-the-program] Making the pairing
+// a comparable key lets the bijection check be a set comparison, not field-by-
+// field prose.
+type proseKey struct {
+	IssueID string
+	Field   ProseField
+}
+
+// ApplyProseResolutions turns a prose-pending merge into a fully settled export
+// by splicing the agent's merged text into the provisional rows — but ONLY when
+// the supplied resolutions are an exact bijection with the live pending set. A
+// resolution missing for a pending field, or a resolution for a field that is no
+// longer pending, returns ok=false: the caller re-derives and re-surfaces the
+// CURRENT divergence rather than committing against a stale picture.
+// [LAW:no-silent-failure] An incomplete or mismatched resolution never produces a
+// committable export, so a provisional prose value can never be published by
+// omission, and the agent can never silently overwrite a field whose divergence
+// changed underneath it.
+//
+// It is pure: the live pending set comes from the MergeResult, the merged text
+// from the agent — no IO, no clock. [LAW:effects-at-boundaries]
+func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (model.Export, bool) {
+	pendingByKey := make(map[proseKey]struct{}, len(result.Pending))
+	for _, pending := range result.Pending {
+		pendingByKey[proseKey{IssueID: pending.IssueID, Field: pending.Field}] = struct{}{}
+	}
+
+	resolvedByKey := make(map[proseKey]string, len(resolutions))
+	for _, resolution := range resolutions {
+		key := proseKey{IssueID: resolution.IssueID, Field: resolution.Field}
+		// A resolution for a field that is not pending means the agent merged
+		// against a divergence that no longer matches the live one. Reject the whole
+		// set rather than apply the rest. [LAW:no-silent-failure]
+		if _, ok := pendingByKey[key]; !ok {
+			return model.Export{}, false
+		}
+		resolvedByKey[key] = resolution.Text
+	}
+	// Every pending field must be resolved, or the export would still carry a
+	// provisional prose value. The two equal-size maps with no rejected key above
+	// make this an exact bijection.
+	if len(resolvedByKey) != len(pendingByKey) {
+		return model.Export{}, false
+	}
+
+	export := result.Provisional()
+	issues := make([]model.Issue, len(export.Issues))
+	copy(issues, export.Issues)
+	for i := range issues {
+		applyIssueProse(&issues[i], resolvedByKey)
+	}
+	export.Issues = issues
+	return export, true
+}
+
+// applyIssueProse writes the resolved text for each of an issue's pending prose
+// fields. [LAW:single-enforcer] This is the one mapping from ProseField to the
+// concrete export field; ResolveIssue emits these same three fields and nothing
+// else ever reaches the agent surface.
+func applyIssueProse(issue *model.Issue, resolved map[proseKey]string) {
+	for field, set := range map[ProseField]func(string){
+		ProseTitle:       func(text string) { issue.Title = text },
+		ProseDescription: func(text string) { issue.Description = text },
+		ProsePrompt:      func(text string) { issue.Prompt = text },
+	} {
+		if text, ok := resolved[proseKey{IssueID: issue.ID, Field: field}]; ok {
+			set(text)
+		}
+	}
+}
+
+// SortPending orders a pending set deterministically (by issue id, then field) so
+// the agent surface renders it the same way every time. [LAW:one-source-of-truth]
+// the engine emits in map order; the one place that fixes a display order is here.
+func SortPending(pending []ProsePending) []ProsePending {
+	out := make([]ProsePending, len(pending))
+	copy(out, pending)
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IssueID != out[j].IssueID {
+			return out[i].IssueID < out[j].IssueID
+		}
+		return out[i].Field < out[j].Field
+	})
+	return out
+}
