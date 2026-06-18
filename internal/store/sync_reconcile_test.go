@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -249,23 +250,23 @@ func headCommit(t *testing.T, ctx context.Context, st *Store) string {
 	return head
 }
 
-// assertScratchBranchCleanedUp fails if the reconcile left its throwaway scratch
+// assertScratchBranchCleanedUp fails if the reconcile left any throwaway scratch
 // branch behind, and confirms the session is back on the data branch.
 func assertScratchBranchCleanedUp(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
 	var count int
-	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_branches WHERE name = ?`, reconcileScratchBranch).Scan(&count); err != nil {
+	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_branches WHERE name LIKE ?`, reconcileScratchPrefix+"-%").Scan(&count); err != nil {
 		t.Fatalf("count scratch branches: %v", err)
 	}
 	if count != 0 {
-		t.Fatalf("reconcile left %d scratch branch(es) %q behind", count, reconcileScratchBranch)
+		t.Fatalf("reconcile left %d scratch branch(es) under %q behind", count, reconcileScratchPrefix)
 	}
 	branch, err := activeBranch(ctx, st.db)
 	if err != nil {
 		t.Fatalf("read active branch: %v", err)
 	}
-	if branch == reconcileScratchBranch {
-		t.Fatalf("session left on scratch branch after reconcile")
+	if strings.HasPrefix(branch, reconcileScratchPrefix) {
+		t.Fatalf("session left on scratch branch %q after reconcile", branch)
 	}
 }
 

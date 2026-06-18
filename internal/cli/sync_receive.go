@@ -218,6 +218,17 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 	); traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
+	// A reconcile FAILURE leaves the clone unable to converge with the remote — a
+	// more consequential state than a routine receive hiccup — so it is surfaced to
+	// stderr now, in addition to the trace, rather than discovered only by reading
+	// traces later. It still does not fail the command: this runs after the
+	// command's output is already produced, on the one engine embedded Dolt permits,
+	// and the next interval retries. [LAW:no-silent-failure] A prose-pending result
+	// is NOT a failure — it is the intended outcome for a concurrent free-text
+	// rewrite, held for the agent surface — so it is not surfaced as an error here.
+	if reconcileErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: automatic reconcile of the diverged clone failed; it remains diverged and will retry: %v\n", reconcileErr)
+	}
 	return &reconcileOutcome{state: result.State, pending: result.Pending, err: reconcileErr}
 }
 

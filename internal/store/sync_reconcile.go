@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -14,12 +15,23 @@ import (
 // replays onto the remote head, so the linear history names what produced it.
 const reconcileCommitMessage = "reconcile: field-aware merge of remote divergence"
 
-// reconcileScratchBranch is the throwaway branch the reconcile builds the merged
-// commit on. The live data branch is never advanced off the local head until that
-// commit is finished here, so an interruption before the final atomic move leaves
-// the data branch — and the local work on it — untouched. One reused name is safe
-// because the commit lock serializes reconciles. [LAW:no-shared-mutable-globals]
-const reconcileScratchBranch = "links-reconcile-scratch"
+// reconcileScratchPrefix names the throwaway branches the reconcile builds its
+// merged commit on. Each reconcile derives a UNIQUE branch under this prefix, so
+// cleanup only ever touches a branch this run created — never an unrelated branch
+// that happened to share a fixed name. [LAW:locality-or-seam] the scratch ref is
+// this run's private seam. A startup sweep drops any leftovers a killed run
+// abandoned, so unique names cannot accumulate.
+const reconcileScratchPrefix = "links-reconcile-scratch"
+
+// reconcileScratchName derives this reconcile's unique scratch branch from the
+// process id and a high-resolution timestamp. The commit lock already serializes
+// reconciles within and across processes, so this is belt-and-suspenders against
+// ever touching a branch another context owns. [LAW:effects-at-boundaries] the one
+// nondeterministic input (the clock) is read here, at the boundary, not threaded
+// through the pure merge.
+func reconcileScratchName() string {
+	return fmt.Sprintf("%s-%d-%d", reconcileScratchPrefix, os.Getpid(), time.Now().UnixNano())
+}
 
 // SyncReconcileState classifies what a single foreground reconcile did with a
 // diverged local branch. [LAW:one-source-of-truth] One mapping from the engine's
@@ -129,8 +141,14 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 		}
 		result.LocalHead, result.RemoteHead, result.BaseCommit = localHead, remoteHead, baseCommit
 
+		// Sweep any scratch branches a previously-killed reconcile abandoned, then
+		// derive this run's own unique scratch name. The commit lock guarantees no
+		// other reconcile is live, so every existing scratch branch is an orphan.
+		s.sweepStaleReconcileScratch(ctx)
+		scratchBranch := reconcileScratchName()
+
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			return s.reconcileFromAnchors(ctx, &result, dataBranch, localHead, remoteHead, baseCommit)
+			return s.reconcileFromAnchors(ctx, &result, dataBranch, scratchBranch, localHead, remoteHead, baseCommit)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 	if err != nil {
@@ -150,19 +168,19 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, dataBranch, localHead, remoteHead, baseCommit string) (err error) {
-	// Force-create the scratch branch at the local head and switch to it; -B
-	// recreates it whether or not a prior run left one behind.
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", reconcileScratchBranch, localHead); err != nil {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) (err error) {
+	// Force-create this run's unique scratch branch at the local head and switch to
+	// it; -B recreates it if a prior retry of this same run left it behind.
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", scratchBranch, localHead); err != nil {
 		return fmt.Errorf("create reconcile scratch branch: %w", err)
 	}
-	// Whatever happens, return the session to the data branch and drop the scratch
-	// branch. Cleanup recovers a failed switch-back by rotating the connection; only
-	// if THAT also fails is the store left unusable, and then the failure is
-	// promoted to the reconcile's result (when it would not otherwise mask a durable
-	// error) rather than swallowed. [LAW:no-silent-failure]
+	// Whatever happens, return the session to the data branch and drop this run's
+	// scratch branch. Cleanup recovers a failed switch-back by rotating the
+	// connection; only if THAT also fails is the store left unusable, and then the
+	// failure is promoted to the reconcile's result (when it would not otherwise
+	// mask a durable error) rather than swallowed. [LAW:no-silent-failure]
 	defer func() {
-		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch); cleanupErr != nil && err == nil {
+		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, scratchBranch); cleanupErr != nil && err == nil {
 			err = cleanupErr
 		}
 	}()
@@ -237,21 +255,54 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 // force-recreates the name and it is never pushed), so it is surfaced but not
 // promoted. [LAW:no-silent-failure] recoverable failures recover loudly;
 // unrecoverable ones fail the operation.
-func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string) error {
+func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch, scratchBranch string) error {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
 		if reconnectErr := s.reconnect(); reconnectErr != nil {
 			return fmt.Errorf("reconcile left the store on the scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", dataBranch, err, reconnectErr)
 		}
-		// Rotation recovered: the fresh connection is on the data branch. The stale
-		// scratch branch is harmless — the next reconcile force-recreates it under
-		// the same name and it is never pushed (only the data branch is).
+		// Rotation recovered: the fresh connection is on the data branch. The leftover
+		// scratch branch is harmless — the next reconcile's startup sweep drops it and
+		// it is never pushed (only the data branch is).
 		return nil
 	}
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", reconcileScratchBranch); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch: %v\n", err)
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", scratchBranch); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch %q: %v\n", scratchBranch, err)
 	}
 	return nil
+}
+
+// sweepStaleReconcileScratch deletes scratch branches abandoned by a previously
+// killed reconcile. The commit lock guarantees no other reconcile is live, so
+// every branch under the scratch prefix is an orphan — deleting them keeps the
+// unique-per-run names from accumulating. Best-effort: a sweep failure is surfaced
+// but never fails the reconcile, since a leftover scratch branch is inert (never
+// the data branch, never pushed). [LAW:no-silent-failure]
+func (s *Store) sweepStaleReconcileScratch(ctx context.Context) {
+	rows, err := s.db.QueryContext(ctx, `SELECT name FROM dolt_branches WHERE name LIKE ?`, reconcileScratchPrefix+"-%")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: reconcile could not list stale scratch branches: %v\n", err)
+		return
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if scanErr := rows.Scan(&name); scanErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: reconcile could not scan stale scratch branch: %v\n", scanErr)
+			rows.Close()
+			return
+		}
+		names = append(names, name)
+	}
+	if iterErr := rows.Err(); iterErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: reconcile could not iterate stale scratch branches: %v\n", iterErr)
+	}
+	rows.Close()
+	for _, name := range names {
+		if delErr := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", name); delErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: reconcile could not delete stale scratch branch %q: %v\n", name, delErr)
+		}
+	}
 }
 
 // exportAtCommit hard-resets the (scratch) branch to a commit and exports it.
