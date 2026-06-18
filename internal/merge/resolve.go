@@ -32,12 +32,32 @@ type ProsePending struct {
 
 // IssueResolution is the output of ResolveIssue: the merged row with every
 // code-resolvable field already settled, plus the prose fields that still need
-// the agent. [LAW:no-silent-failure] An empty Pending set is the signal that the
-// reconcile may commit autonomously; a non-empty set must gate the commit so a
-// provisionally-chosen prose value is never silently adopted.
+// the agent. The merged row is not a public field: it is reachable only through
+// Settled (gated) or Provisional (explicitly named), so a caller cannot extract
+// a committable row while ignoring unresolved prose. [LAW:types-are-the-program]
+// The unsafe state — autonomously committing a provisionally-chosen prose value —
+// is made unrepresentable rather than left to a discipline a caller might skip.
 type IssueResolution struct {
-	Merged  model.Issue
+	merged  model.Issue
 	Pending []ProsePending
+}
+
+// Settled returns the merged row to commit autonomously, and ok=true ONLY when
+// no prose field needs the agent. A non-empty Pending set returns ok=false, so
+// the autonomous-commit path cannot adopt a provisional prose value by accident.
+// [LAW:no-silent-failure] the gate is the return value, not a convention.
+func (r IssueResolution) Settled() (model.Issue, bool) {
+	return r.merged, len(r.Pending) == 0
+}
+
+// Provisional returns the merged row carrying provisional prose values, for the
+// reconcile boundary that persists the code-resolved fields while holding the
+// Pending prose for the agent surface. The name marks the callsite as the place
+// that has accepted responsibility for the unresolved prose. [LAW:effects-at-boundaries]
+// blocking the actual commit is the reconcile sibling's job; this only hands it
+// the row, explicitly.
+func (r IssueResolution) Provisional() model.Issue {
+	return r.merged
 }
 
 // ResolveIssue is the deterministic core of multi-machine reconcile: given the
@@ -102,7 +122,7 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 		merged = r.resolveStatus(merged)
 	}
 
-	return IssueResolution{Merged: merged, Pending: r.pending}
+	return IssueResolution{merged: merged, Pending: r.pending}
 }
 
 type resolver struct {

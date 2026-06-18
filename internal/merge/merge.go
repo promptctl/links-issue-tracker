@@ -60,7 +60,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			switch {
 			case hasLocal && hasRemote:
 				resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
-				mergedIssues = append(mergedIssues, resolution.Merged)
+				mergedIssues = append(mergedIssues, resolution.Provisional())
 				pending = append(pending, resolution.Pending...)
 			case hasLocal:
 				// remote removed it, local edited -> preserve the surviving edit.

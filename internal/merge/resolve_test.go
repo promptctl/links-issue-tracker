@@ -51,8 +51,8 @@ func TestResolveIssueStatusTwoTier(t *testing.T) {
 			ours := leaf(t, "i1", model.StatusView{Value: tc.ours}, nil)
 			theirs := leaf(t, "i1", model.StatusView{Value: tc.theirs}, nil)
 			got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-			if got.Merged.StatusValue() != string(tc.want) {
-				t.Fatalf("status = %q, want %q", got.Merged.StatusValue(), tc.want)
+			if got.Provisional().StatusValue() != string(tc.want) {
+				t.Fatalf("status = %q, want %q", got.Provisional().StatusValue(), tc.want)
 			}
 			if len(got.Pending) != 0 {
 				t.Fatalf("status is code-resolvable; unexpected pending = %#v", got.Pending)
@@ -66,8 +66,8 @@ func TestResolveIssuePriorityUrgentWins(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityUrgent })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityNormal })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Merged.Priority != model.PriorityUrgent {
-		t.Fatalf("priority = %d, want urgent", got.Merged.Priority)
+	if got.Provisional().Priority != model.PriorityUrgent {
+		t.Fatalf("priority = %d, want urgent", got.Provisional().Priority)
 	}
 }
 
@@ -79,8 +79,27 @@ func TestResolveIssueProseTier1TakesMover(t *testing.T) {
 	if len(got.Pending) != 0 {
 		t.Fatalf("only one side rewrote title; should not need the agent: %#v", got.Pending)
 	}
-	if got.Merged.Title != "b" {
-		t.Fatalf("title = %q, want b", got.Merged.Title)
+	if got.Provisional().Title != "b" {
+		t.Fatalf("title = %q, want b", got.Provisional().Title)
+	}
+}
+
+func TestIssueResolutionSettledGatesOnPending(t *testing.T) {
+	// No prose conflict -> Settled hands back a committable row.
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, nil)
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, nil)
+	if row, ok := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Settled(); !ok || row.StatusValue() != string(model.StateClosed) {
+		t.Fatalf("Settled() = (%v, %v), want a committable closed row", row.StatusValue(), ok)
+	}
+
+	// Concurrent prose rewrite -> Settled refuses; only Provisional yields the row.
+	pbase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a" })
+	pours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "ours" })
+	ptheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "theirs" })
+	res := ResolveIssue(&pbase, &pours, &ptheirs, "wsA", "wsB")
+	if _, ok := res.Settled(); ok {
+		t.Fatalf("Settled() ok=true with prose pending; the autonomous-commit path must refuse unresolved prose")
 	}
 }
 
@@ -112,11 +131,11 @@ func TestResolveIssueTiebreakSymmetry(t *testing.T) {
 
 	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
 	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
-	if forward.Merged.Topic != swapped.Merged.Topic {
-		t.Fatalf("tiebreak not symmetric: forward=%q swapped=%q", forward.Merged.Topic, swapped.Merged.Topic)
+	if forward.Provisional().Topic != swapped.Provisional().Topic {
+		t.Fatalf("tiebreak not symmetric: forward=%q swapped=%q", forward.Provisional().Topic, swapped.Provisional().Topic)
 	}
-	if forward.Merged.Topic != "bob" {
-		t.Fatalf("tiebreak winner = %q, want the value from the greater workspace id (wsB->bob)", forward.Merged.Topic)
+	if forward.Provisional().Topic != "bob" {
+		t.Fatalf("tiebreak winner = %q, want the value from the greater workspace id (wsB->bob)", forward.Provisional().Topic)
 	}
 }
 
@@ -126,10 +145,10 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t2}, nil)
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Merged.StatusValue() != string(model.StateClosed) {
-		t.Fatalf("status = %q, want closed", got.Merged.StatusValue())
+	if got.Provisional().StatusValue() != string(model.StateClosed) {
+		t.Fatalf("status = %q, want closed", got.Provisional().StatusValue())
 	}
-	closedAt := got.Merged.ClosedAtValue()
+	closedAt := got.Provisional().ClosedAtValue()
 	if closedAt == nil || !closedAt.Equal(t1) {
 		t.Fatalf("closed_at = %v, want earliest close %v", closedAt, t1)
 	}
@@ -139,11 +158,11 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	reopenOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	reopenTheirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
 	reopened := ResolveIssue(&reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB")
-	if reopened.Merged.StatusValue() != string(model.StateOpen) {
-		t.Fatalf("reopen status = %q, want open", reopened.Merged.StatusValue())
+	if reopened.Provisional().StatusValue() != string(model.StateOpen) {
+		t.Fatalf("reopen status = %q, want open", reopened.Provisional().StatusValue())
 	}
-	if reopened.Merged.ClosedAtValue() != nil {
-		t.Fatalf("closed_at = %v, want nil (slaved to non-closed status)", reopened.Merged.ClosedAtValue())
+	if reopened.Provisional().ClosedAtValue() != nil {
+		t.Fatalf("closed_at = %v, want nil (slaved to non-closed status)", reopened.Provisional().ClosedAtValue())
 	}
 }
 
@@ -152,8 +171,8 @@ func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t1 })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Merged.ArchivedAt == nil || !got.Merged.ArchivedAt.Equal(t1) {
-		t.Fatalf("archived_at = %v, want earliest %v", got.Merged.ArchivedAt, t1)
+	if got.Provisional().ArchivedAt == nil || !got.Provisional().ArchivedAt.Equal(t1) {
+		t.Fatalf("archived_at = %v, want earliest %v", got.Provisional().ArchivedAt, t1)
 	}
 
 	// Only ours archived -> tier1 takes the archive; timestamp is ours.
@@ -161,8 +180,8 @@ func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
 	soloTheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	solo := ResolveIssue(&soloBase, &soloOurs, &soloTheirs, "wsA", "wsB")
-	if solo.Merged.ArchivedAt == nil || !solo.Merged.ArchivedAt.Equal(t2) {
-		t.Fatalf("solo archive = %v, want %v", solo.Merged.ArchivedAt, t2)
+	if solo.Provisional().ArchivedAt == nil || !solo.Provisional().ArchivedAt.Equal(t2) {
+		t.Fatalf("solo archive = %v, want %v", solo.Provisional().ArchivedAt, t2)
 	}
 }
 
@@ -172,12 +191,12 @@ func TestResolveIssueLabelsUnion(t *testing.T) {
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "theirs"} })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
 	want := []string{"keep", "ours", "theirs"}
-	if len(got.Merged.Labels) != len(want) {
-		t.Fatalf("labels = %#v, want union %#v", got.Merged.Labels, want)
+	if len(got.Provisional().Labels) != len(want) {
+		t.Fatalf("labels = %#v, want union %#v", got.Provisional().Labels, want)
 	}
 	for idx, label := range want {
-		if got.Merged.Labels[idx] != label {
-			t.Fatalf("labels = %#v, want sorted union %#v", got.Merged.Labels, want)
+		if got.Provisional().Labels[idx] != label {
+			t.Fatalf("labels = %#v, want sorted union %#v", got.Provisional().Labels, want)
 		}
 	}
 }
@@ -187,11 +206,11 @@ func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t2 })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Merged.ID != "i1" {
-		t.Fatalf("id = %q, want i1", got.Merged.ID)
+	if got.Provisional().ID != "i1" {
+		t.Fatalf("id = %q, want i1", got.Provisional().ID)
 	}
-	if !got.Merged.CreatedAt.Equal(t0) {
-		t.Fatalf("created_at = %v, want immutable base %v", got.Merged.CreatedAt, t0)
+	if !got.Provisional().CreatedAt.Equal(t0) {
+		t.Fatalf("created_at = %v, want immutable base %v", got.Provisional().CreatedAt, t0)
 	}
 }
 
@@ -202,8 +221,8 @@ func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.Title = "ours" })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, func(i *model.Issue) { i.Title = "theirs" })
 	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
-	if got.Merged.StatusValue() != string(model.StateClosed) {
-		t.Fatalf("status = %q, want closed (dominant join with no base)", got.Merged.StatusValue())
+	if got.Provisional().StatusValue() != string(model.StateClosed) {
+		t.Fatalf("status = %q, want closed (dominant join with no base)", got.Provisional().StatusValue())
 	}
 	if len(got.Pending) != 1 || got.Pending[0].Field != ProseTitle {
 		t.Fatalf("pending = %#v, want concurrent title", got.Pending)
