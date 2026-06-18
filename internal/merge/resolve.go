@@ -101,7 +101,7 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 	merged.Topic = twoTier(r.hasBase, r.base.Topic, ours.Topic, theirs.Topic, r.tiebreak)
 	merged.Lane = twoTier(r.hasBase, r.base.Lane, ours.Lane, theirs.Lane, r.tiebreak)
 	merged.Rank = twoTier(r.hasBase, r.base.Rank, ours.Rank, theirs.Rank, r.tiebreak)
-	merged.Labels = unionLabels(ours.Labels, theirs.Labels)
+	merged.Labels = mergeLabelNames(r.hasBase, r.base.Labels, ours.Labels, theirs.Labels)
 
 	// [LAW:one-source-of-truth] id/created_at are immutable; the archive/delete
 	// timestamps are DERIVED, slaved to the resolved archive/delete state, never
@@ -223,7 +223,7 @@ func (r *resolver) tiebreak(ours, theirs string) string {
 // Tier 2 (both sides moving from base land on the same value), so the tier2 OR
 // is only ever a formality.
 func (r *resolver) derivedFlagTime(base bool, ours, theirs *time.Time) *time.Time {
-	set := twoTier(r.hasBase, base, ours != nil, theirs != nil, func(ours, theirs bool) bool { return ours || theirs })
+	set := twoTier(r.hasBase, base, ours != nil, theirs != nil, presentOr)
 	if !set {
 		return nil
 	}
@@ -265,22 +265,48 @@ func boolBase(t *time.Time, hasBase bool) bool {
 	return hasBase && t != nil
 }
 
-func unionLabels(ours, theirs []string) []string {
-	set := map[string]struct{}{}
-	for _, label := range ours {
-		set[label] = struct{}{}
+// mergeLabelNames converges a label SET by applying the per-element two-tier
+// rule to each name's membership: a label one side removed (and the other left
+// untouched) stays removed instead of being resurrected by a naive union, while
+// a label either side added is kept. presentOr is the Tier-2 join — both adding
+// or both removing agree, so it only ever formalizes that agreement.
+// [LAW:single-enforcer] Set convergence is twoTier per element, the same rule
+// every scalar field uses, not a second label-specific policy.
+func mergeLabelNames(hasBase bool, base, ours, theirs []string) []string {
+	baseSet, oursSet, theirsSet := nameSet(base), nameSet(ours), nameSet(theirs)
+	out := make([]string, 0, len(oursSet)+len(theirsSet))
+	for name := range unionNameSet(baseSet, oursSet, theirsSet) {
+		_, inBase := baseSet[name]
+		_, inOurs := oursSet[name]
+		_, inTheirs := theirsSet[name]
+		if twoTier(hasBase, inBase, inOurs, inTheirs, presentOr) {
+			out = append(out, name)
+		}
 	}
-	for _, label := range theirs {
-		set[label] = struct{}{}
-	}
-	if len(set) == 0 {
+	if len(out) == 0 {
 		return nil
 	}
-	out := make([]string, 0, len(set))
-	for label := range set {
-		out = append(out, label)
-	}
 	sort.Strings(out)
+	return out
+}
+
+func presentOr(ours, theirs bool) bool { return ours || theirs }
+
+func nameSet(names []string) map[string]struct{} {
+	out := make(map[string]struct{}, len(names))
+	for _, name := range names {
+		out[name] = struct{}{}
+	}
+	return out
+}
+
+func unionNameSet(sets ...map[string]struct{}) map[string]struct{} {
+	out := map[string]struct{}{}
+	for _, set := range sets {
+		for name := range set {
+			out[name] = struct{}{}
+		}
+	}
 	return out
 }
 

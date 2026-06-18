@@ -201,6 +201,45 @@ func TestResolveIssueLabelsUnion(t *testing.T) {
 	}
 }
 
+func TestResolveIssueLabelRemovalNotResurrected(t *testing.T) {
+	// base=[a,b]; ours removed b; theirs left both -> b stays removed (Tier 1),
+	// a survives. A naive union would resurrect b.
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a"} })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Provisional()
+	if len(got.Labels) != 1 || got.Labels[0] != "a" {
+		t.Fatalf("labels = %#v, want [a] (b removed by ours must not be resurrected)", got.Labels)
+	}
+}
+
+func TestThreeWayLabelTableHonorsConcurrentRemoval(t *testing.T) {
+	issues := []model.Issue{open(t, "i1")}
+	base := model.Export{
+		WorkspaceID: "wsA",
+		Issues:      issues,
+		Labels:      []model.Label{{IssueID: "i1", Name: "a"}, {IssueID: "i1", Name: "b"}},
+	}
+	local := model.Export{ // local removed b
+		WorkspaceID: "wsA",
+		Issues:      issues,
+		Labels:      []model.Label{{IssueID: "i1", Name: "a"}},
+	}
+	remote := model.Export{ // remote left both untouched
+		WorkspaceID: "wsB",
+		Issues:      issues,
+		Labels:      []model.Label{{IssueID: "i1", Name: "a"}, {IssueID: "i1", Name: "b"}},
+	}
+	got := ThreeWay(base, local, remote)
+	names := map[string]bool{}
+	for _, label := range got.Export.Labels {
+		names[label.Name] = true
+	}
+	if names["b"] || !names["a"] {
+		t.Fatalf("labels = %#v, want only [a] (authoritative table must honor removal)", got.Export.Labels)
+	}
+}
+
 func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil) // created_at = t0
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t2 })

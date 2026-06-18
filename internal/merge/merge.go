@@ -86,7 +86,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Issues:      mergedIssues,
 		Relations:   mergeRelations(issueSet, local.Relations, remote.Relations),
 		Comments:    mergeComments(issueSet, local.Comments, remote.Comments),
-		Labels:      mergeLabels(issueSet, local.Labels, remote.Labels),
+		Labels:      mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
 	return MergeResult{Export: merged, Pending: pending}
@@ -308,18 +308,57 @@ func mergeComments(issueSet map[string]struct{}, locals, remotes []model.Comment
 	return out
 }
 
-func mergeLabels(issueSet map[string]struct{}, locals, remotes []model.Label) []model.Label {
+// mergeLabels converges the authoritative label table the same way the resolver
+// converges a row's label view: per (issue, name) the two-tier rule decides
+// membership, so a label one side removed is not resurrected by the other side
+// merely retaining it. base is the merge-base label set that supplies that
+// "which side changed" causality. [LAW:one-source-of-truth] The label table is
+// authoritative (issue.Labels is a derived view); this is where removal must be
+// honored.
+func mergeLabels(issueSet map[string]struct{}, base, locals, remotes []model.Label) []model.Label {
 	type key struct{ IssueID, Name string }
-	merged := map[key]model.Label{}
-	for _, label := range append(locals, remotes...) {
-		if _, ok := issueSet[label.IssueID]; !ok {
+	keyOf := func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} }
+	keySet := func(labels []model.Label) map[key]struct{} {
+		out := make(map[key]struct{}, len(labels))
+		for _, label := range labels {
+			out[keyOf(label)] = struct{}{}
+		}
+		return out
+	}
+	baseSet, localSet, remoteSet := keySet(base), keySet(locals), keySet(remotes)
+
+	// One row per key carries the label's metadata; remote wins ties, matching
+	// the existing last-write preference.
+	rows := map[key]model.Label{}
+	for _, label := range locals {
+		rows[keyOf(label)] = label
+	}
+	for _, label := range remotes {
+		rows[keyOf(label)] = label
+	}
+
+	candidates := map[key]struct{}{}
+	for _, set := range []map[key]struct{}{baseSet, localSet, remoteSet} {
+		for k := range set {
+			candidates[k] = struct{}{}
+		}
+	}
+
+	out := make([]model.Label, 0, len(rows))
+	for k := range candidates {
+		if _, ok := issueSet[k.IssueID]; !ok {
 			continue
 		}
-		merged[key{IssueID: label.IssueID, Name: label.Name}] = label
-	}
-	out := make([]model.Label, 0, len(merged))
-	for _, label := range merged {
-		out = append(out, label)
+		_, inBase := baseSet[k]
+		_, inLocal := localSet[k]
+		_, inRemote := remoteSet[k]
+		// base is always supplied; an empty base makes every present label an add.
+		if !twoTier(true, inBase, inLocal, inRemote, presentOr) {
+			continue
+		}
+		if row, ok := rows[k]; ok {
+			out = append(out, row)
+		}
 	}
 	sort.Slice(out, func(i, j int) bool {
 		if out[i].IssueID != out[j].IssueID {
