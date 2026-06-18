@@ -176,8 +176,17 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
+	// Read the live conflict to obtain the fingerprint the agent would copy from the
+	// surface, then finalize against it.
+	pendingRes, err := syncB.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B): %v", err)
+	}
+	if len(pendingRes.Pending) != 1 {
+		t.Fatalf("expected one pending field, got %+v", pendingRes.Pending)
+	}
 	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
-		{IssueID: id, Field: merge.ProseTitle, Text: "both A's and B's intent merged"},
+		{IssueID: id, Field: merge.ProseTitle, Fingerprint: pendingRes.Pending[0].Fingerprint(), Text: "both A's and B's intent merged"},
 	})
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)

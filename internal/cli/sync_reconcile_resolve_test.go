@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -12,20 +13,20 @@ import (
 )
 
 func TestParseProseResolutions(t *testing.T) {
-	// TEXT may itself contain ':' and '=' and newlines; only the first ':' (id) and
-	// the first '=' (field) are separators.
+	// TEXT may itself contain ':' and '=' and newlines; the prefix before the first
+	// '=' splits on ':' into exactly id/field/fingerprint.
 	got, err := parseProseResolutions([]string{
-		"links-x.1:description=line one\nline two: with = signs",
-		"links-x.1:title=merged title",
-		"links-x.1:agent_prompt=do the thing",
+		"links-x.1:description:abc123=line one\nline two: with = signs",
+		"links-x.1:title:def456=merged title",
+		"links-x.1:agent_prompt:99=do the thing",
 	})
 	if err != nil {
 		t.Fatalf("parseProseResolutions() error = %v", err)
 	}
 	want := []merge.ProseResolution{
-		{IssueID: "links-x.1", Field: merge.ProseDescription, Text: "line one\nline two: with = signs"},
-		{IssueID: "links-x.1", Field: merge.ProseTitle, Text: "merged title"},
-		{IssueID: "links-x.1", Field: merge.ProsePrompt, Text: "do the thing"},
+		{IssueID: "links-x.1", Field: merge.ProseDescription, Fingerprint: "abc123", Text: "line one\nline two: with = signs"},
+		{IssueID: "links-x.1", Field: merge.ProseTitle, Fingerprint: "def456", Text: "merged title"},
+		{IssueID: "links-x.1", Field: merge.ProsePrompt, Fingerprint: "99", Text: "do the thing"},
 	}
 	if len(got) != len(want) {
 		t.Fatalf("parsed %d resolutions, want %d: %#v", len(got), len(want), got)
@@ -38,7 +39,8 @@ func TestParseProseResolutions(t *testing.T) {
 }
 
 func TestParseProseResolutionsRejectsMalformed(t *testing.T) {
-	for _, raw := range []string{"no-separators", "links-x.1=missing-colon-field", "links-x.1:nofield", ":description=text"} {
+	// no '='; only two prefix parts (missing fingerprint); empty fingerprint; empty id.
+	for _, raw := range []string{"no-separators", "links-x.1:title=text", "links-x.1:title:=text", ":title:fp=text"} {
 		if _, err := parseProseResolutions([]string{raw}); err == nil {
 			t.Fatalf("parseProseResolutions(%q) accepted a malformed value", raw)
 		}
@@ -46,7 +48,7 @@ func TestParseProseResolutionsRejectsMalformed(t *testing.T) {
 }
 
 func TestParseProseResolutionsRejectsUnknownField(t *testing.T) {
-	if _, err := parseProseResolutions([]string{"links-x.1:status=closed"}); err == nil {
+	if _, err := parseProseResolutions([]string{"links-x.1:status:fp=closed"}); err == nil {
 		t.Fatalf("parseProseResolutions accepted a non-prose field")
 	}
 }
@@ -101,6 +103,19 @@ func TestGuardReconcileInputRejectsJSONMode(t *testing.T) {
 	if code := ExitCode(err); code != ExitValidation {
 		t.Fatalf("JSON-mode exit code = %d, want %d (ExitValidation for an unsupported flag)", code, ExitValidation)
 	}
+}
+
+// extractResolveFingerprint pulls the conflict fingerprint the guidance printed
+// for one issue+field out of its `--resolve ID:FIELD:FP=...` template, mirroring
+// what the calling agent copies.
+func extractResolveFingerprint(t *testing.T, guidance, issueID, field string) string {
+	t.Helper()
+	re := regexp.MustCompile(regexp.QuoteMeta(issueID+":"+field+":") + `([^=]+)=`)
+	m := re.FindStringSubmatch(guidance)
+	if m == nil {
+		t.Fatalf("no resolve template for %s:%s in guidance:\n%s", issueID, field, guidance)
+	}
+	return m[1]
 }
 
 // runCLIInDirErr runs the CLI and returns its output and error instead of failing
@@ -176,8 +191,10 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 		}
 	}
 
-	// The agent supplies its merged text; the reconcile finalizes into linear history.
-	resolved := runCLIInDir(t, consumer, "sync", "reconcile", "resolve", "--resolve", ticketID+":description=alpha-desc and bravo-desc merged")
+	// The agent copies the conflict fingerprint the guidance prints, merges the
+	// text, and finalizes into linear history.
+	fp := extractResolveFingerprint(t, surfaced, ticketID, "description")
+	resolved := runCLIInDir(t, consumer, "sync", "reconcile", "resolve", "--resolve", ticketID+":description:"+fp+"=alpha-desc and bravo-desc merged")
 	if !strings.Contains(strings.ToLower(resolved), "reconciled") {
 		t.Fatalf("resolve did not report a reconciled state:\n%s", resolved)
 	}

@@ -46,11 +46,11 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error
 		b.WriteString("\n")
 	}
 
-	b.WriteString("To finalize, supply your merged text for EVERY field above in ONE command (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced):\n\n")
+	b.WriteString("To finalize, supply your merged text for EVERY field above in ONE command (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced — copy the prefix verbatim, the trailing token pins your merge to THIS conflict):\n\n")
 	b.WriteString("  ")
 	b.WriteString(proseResolveCommand)
 	for _, p := range ordered {
-		fmt.Fprintf(&b, " \\\n    --resolve '%s:%s=<your merged text>'", p.IssueID, p.Field)
+		fmt.Fprintf(&b, " \\\n    --resolve '%s:%s:%s=<your merged text>'", p.IssueID, p.Field, p.Fingerprint())
 	}
 	b.WriteString("\n\n")
 	fmt.Fprintf(&b, "To leave the clone diverged for now (it stays usable, and a later command re-surfaces this): %s\n\n", proseReconcileAbortHint)
@@ -102,33 +102,33 @@ func writeProseSection(b *strings.Builder, label, text string) {
 	fmt.Fprintf(b, "  %s: %s\n", label, text)
 }
 
-// parseProseResolutions turns the repeated `--resolve ID:FIELD=TEXT` values into
-// resolutions. The value is split on the FIRST ':' (issue ids never contain one)
-// then the FIRST '=' (field names never contain one), so the remaining TEXT may
-// hold any character, including ':' '=' and newlines. A malformed token or an
-// unknown field is a usage error, surfaced loudly rather than silently dropped.
-// [LAW:no-silent-failure]
+// parseProseResolutions turns the repeated `--resolve ID:FIELD:FINGERPRINT=TEXT`
+// values into resolutions. The prefix before the FIRST '=' splits on ':' into
+// exactly three parts (issue id, field, and the conflict fingerprint — none of
+// which contain ':' or '='), so the remaining TEXT may hold any character,
+// including ':' '=' and newlines. A malformed token or an unknown field is a
+// usage error, surfaced loudly rather than silently dropped. [LAW:no-silent-failure]
 func parseProseResolutions(values []string) ([]merge.ProseResolution, error) {
+	const shape = "expected ISSUE_ID:FIELD:FINGERPRINT=TEXT (copy the prefix from `lit sync reconcile`)"
 	resolutions := make([]merge.ProseResolution, 0, len(values))
 	for _, raw := range values {
-		colon := strings.IndexByte(raw, ':')
-		if colon <= 0 {
-			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: expected ISSUE_ID:FIELD=TEXT", raw)}
-		}
-		issueID := raw[:colon]
-		rest := raw[colon+1:]
-		eq := strings.IndexByte(rest, '=')
+		eq := strings.IndexByte(raw, '=')
 		if eq <= 0 {
-			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: expected ISSUE_ID:FIELD=TEXT", raw)}
+			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: %s", raw, shape)}
 		}
-		field, err := parseProseField(rest[:eq])
+		parts := strings.Split(raw[:eq], ":")
+		if len(parts) != 3 || parts[0] == "" || parts[2] == "" {
+			return nil, UsageError{Message: fmt.Sprintf("invalid --resolve %q: %s", raw, shape)}
+		}
+		field, err := parseProseField(parts[1])
 		if err != nil {
 			return nil, err
 		}
 		resolutions = append(resolutions, merge.ProseResolution{
-			IssueID: issueID,
-			Field:   field,
-			Text:    rest[eq+1:],
+			IssueID:     parts[0],
+			Field:       field,
+			Fingerprint: parts[2],
+			Text:        raw[eq+1:],
 		})
 	}
 	return resolutions, nil

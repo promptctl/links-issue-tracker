@@ -375,9 +375,9 @@ lit sync remote ls [--json]
 lit sync fetch [--remote <name>] [--prune] [--verbose] [--json]
 lit sync pull  [--remote <name>] [--verbose] [--json]
 lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose] [--json]
-lit sync reconcile                                   # run the field-aware reconcile; surface any prose divergence
-lit sync reconcile resolve --resolve ID:FIELD=TEXT … # finalize with the agent's merged text
-lit sync reconcile abort                             # leave the clone diverged for now
+lit sync reconcile                                              # run the field-aware reconcile; surface any prose divergence
+lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT … # finalize with the agent's merged text
+lit sync reconcile abort                                        # leave the clone diverged for now
 ```
 
 Mirrors issue data through git remotes so one backlog is shared across clones — see
@@ -389,9 +389,12 @@ engine. When both sides rewrote the same free-text field (`title`, `description`
 or `agent_prompt`) the engine cannot pick a winner, so `lit sync reconcile`
 prints `base`/`ours`/`theirs` for each field and exits 5; the calling agent merges
 both intents into one text and supplies it via `lit sync reconcile resolve
---resolve 'ID:FIELD=<merged text>'` (one `--resolve` per pending field, all in one
-command). The pending state is re-derived live and never persisted, so a partial
-or stale resolution is rejected and re-surfaced. `abort` defers — the clone stays
+--resolve 'ID:FIELD:FINGERPRINT=<merged text>'` (one `--resolve` per pending field,
+all in one command — copy the `ID:FIELD:FINGERPRINT` prefix verbatim from the
+guidance). The pending state is re-derived live and never persisted; the
+fingerprint pins each merge to the exact conflict it was made against, so a
+partial or stale resolution (including one merged against a since-changed
+base/ours/theirs) is rejected and re-surfaced. `abort` defers — the clone stays
 diverged and usable.
 
 ### `lit export`
