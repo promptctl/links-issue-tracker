@@ -1043,6 +1043,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// action rejects the flag below. The sealed set is parsed at this trust
 	// boundary via model.ParseResolution. [LAW:single-enforcer]
 	resolution := fs.String("resolution", "", "Close resolution (required for close): duplicate|superseded|obsolete|wontfix")
+	// Only duplicate/superseded closes consume --of: the canonical ticket this
+	// issue redirects to. The store records it as a related-to edge atomically
+	// with the close. Required for those two resolutions, rejected for the
+	// terminal ones (obsolete, wontfix) and every non-close action. [LAW:single-enforcer]
+	target := fs.String("of", "", "Canonical ticket a duplicate/superseded close redirects to (required for those, rejected otherwise)")
 	// [LAW:types-are-the-program] `--apply` carries the token printed by the
 	// preview phase as its value (`--apply=<token>`). Empty default = preview;
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
@@ -1116,15 +1121,37 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// and a bare `close` is rejected with a usage error naming the valid set. Any
 	// other action that received the flag is a misuse — reject it rather than
 	// silently discard a value the user expected to take effect. [LAW:no-silent-failure]
-	var closeResolution *model.Resolution
+	var (
+		closeResolution *model.Resolution
+		redirectTarget  string
+	)
 	if action == model.ActionClose {
 		parsed, parseErr := model.ParseResolution(*resolution)
 		if parseErr != nil {
-			return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--reason <text>]\n%v", parseErr)}
+			return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]\n%v", parseErr)}
 		}
 		closeResolution = &parsed
-	} else if strings.TrimSpace(*resolution) != "" {
-		return UsageError{Message: fmt.Sprintf("--resolution applies only to close, not %s", transitionCommandName(action))}
+		// [LAW:single-enforcer] The redirect subset is named once, in
+		// Resolution.RedirectsToCanonical; the target is required exactly for those
+		// resolutions and rejected for the terminal ones. The store consults the
+		// same predicate to write the edge, so the requirement here and the write
+		// there cannot drift.
+		trimmedTarget := strings.TrimSpace(*target)
+		if parsed.RedirectsToCanonical() {
+			if trimmedTarget == "" {
+				return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution %s --of <canonical-id>\nclosing as %s redirects to a canonical ticket — name it with --of", parsed, parsed)}
+			}
+		} else if trimmedTarget != "" {
+			return UsageError{Message: fmt.Sprintf("--of applies only to duplicate/superseded closes, not %s", parsed)}
+		}
+		redirectTarget = trimmedTarget
+	} else {
+		if strings.TrimSpace(*resolution) != "" {
+			return UsageError{Message: fmt.Sprintf("--resolution applies only to close, not %s", transitionCommandName(action))}
+		}
+		if strings.TrimSpace(*target) != "" {
+			return UsageError{Message: fmt.Sprintf("--of applies only to close, not %s", transitionCommandName(action))}
+		}
 	}
 
 	// [LAW:types-are-the-program] Start is the only action that carries an assignee;
@@ -1148,11 +1175,12 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		})
 	} else {
 		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-			IssueID:    issueID,
-			Action:     action,
-			Reason:     *reason,
-			CreatedBy:  actor,
-			Resolution: closeResolution,
+			IssueID:        issueID,
+			Action:         action,
+			Reason:         *reason,
+			CreatedBy:      actor,
+			Resolution:     closeResolution,
+			RedirectTarget: redirectTarget,
 		})
 	}
 	if err != nil {

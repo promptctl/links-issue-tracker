@@ -182,6 +182,25 @@ func TestParseResolutionRejectsInvalid(t *testing.T) {
 	}
 }
 
+// TestRedirectsToCanonical pins the redirect subset: duplicate and superseded
+// close in favor of a canonical ticket and carry a target; obsolete and wontfix
+// are terminal. This predicate is the single source for "which resolutions take
+// a target" — the `lit close` requirement and the store's redirect-edge write
+// both key on it, so it must enumerate exactly the two redirect members.
+func TestRedirectsToCanonical(t *testing.T) {
+	want := map[Resolution]bool{
+		ResolutionDuplicate:  true,
+		ResolutionSuperseded: true,
+		ResolutionObsolete:   false,
+		ResolutionWontfix:    false,
+	}
+	for res, expect := range want {
+		if got := res.RedirectsToCanonical(); got != expect {
+			t.Fatalf("%s.RedirectsToCanonical() = %v, want %v", res, got, expect)
+		}
+	}
+}
+
 func TestApplyRejectsParseBypass(t *testing.T) {
 	if _, err := NewStatus(Open, nil, nil).Apply(ActionName("bogus"), "tester", ""); err == nil {
 		t.Fatal("Apply(bogus) error = nil, want unsupported-action error")

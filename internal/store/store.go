@@ -237,6 +237,13 @@ type TransitionIssueInput struct {
 	// resolution" close that `done`, legacy rows, and merges also produce). The
 	// `lit close` command is the boundary that requires it; this seam carries it.
 	Resolution *model.Resolution
+	// RedirectTarget is the canonical ticket a duplicate/superseded close
+	// redirects to — the issue this one is a duplicate of, or was superseded by.
+	// Empty for terminal resolutions (obsolete, wontfix) and every non-close
+	// action. writeStatusTransition writes a related-to edge to it inside the
+	// close transaction exactly when Resolution.RedirectsToCanonical(), so the
+	// edge and the close commit or roll back together.
+	RedirectTarget string
 }
 
 // StartIssueInput is the input for the start (claim) transition. It is the only
@@ -1161,7 +1168,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	// ActionStart is absent: start carries an assignee and routes through StartIssue.
 	switch in.Action {
 	case model.ActionDone, model.ActionClose, model.ActionReopen:
-		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "", in.Resolution)
+		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "", in.Resolution, in.RedirectTarget)
 	}
 	now := time.Now().UTC()
 	priorArchivedAt := issue.ArchivedAt
@@ -1238,10 +1245,10 @@ func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue
 	if actor == "" {
 		actor = "unknown"
 	}
-	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee), nil)
+	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee), nil, "")
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution) (model.Issue, error) {
+func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (model.Issue, error) {
 	updated, err := applyTransition(issue, action, actor, reason)
 	if err != nil {
 		return model.Issue{}, err
@@ -1283,6 +1290,16 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	if postResolution != nil {
 		resolutionArg = string(*postResolution)
 	}
+	// The redirect edge is a function of the resolved resolution, not of which
+	// caller passed a target: it exists iff the post-transition resolution
+	// redirects to a canonical ticket. Building (and validating) it before the
+	// transaction mirrors AddRelation, which checks endpoint existence outside
+	// its mutation. The result is 0 or 1 edges; the tx writes them by iteration,
+	// so the close path stays branch-free. [LAW:dataflow-not-control-flow]
+	redirectEdges, err := s.buildRedirectEdges(ctx, issue.ID, postResolution, redirectTarget, actor, now)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
 		// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
 		result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ? WHERE id = ? AND status = ?`,
@@ -1320,6 +1337,15 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		if priorAssignee != postAssignee {
 			changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 		}
+		// [LAW:no-silent-failure] The redirect edge shares this transaction with
+		// the close UPDATE: if it fails, the whole close rolls back, so a
+		// duplicate/superseded close can never persist without its edge to the
+		// canonical ticket ("duplicate of nothing").
+		for _, edge := range redirectEdges {
+			if err := insertRelationTx(ctx, tx, edge); err != nil {
+				return err
+			}
+		}
 		return s.recordEvent(ctx, tx, issue.ID, string(action), reason, actor, changes)
 	}); err != nil {
 		return model.Issue{}, err
@@ -1338,6 +1364,42 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		return updated, nil
 	}
 	return rehydrated, nil
+}
+
+// buildRedirectEdges produces the related-to edge a duplicate/superseded close
+// records — at most one, to the canonical ticket the closing issue redirects
+// to. It returns no edge for terminal resolutions (obsolete, wontfix) and for
+// transitions that resolve to no resolution, and validates the target the way
+// AddRelation does: it must exist and cannot be the issue itself, so the
+// redirect points at a real, distinct ticket. Endpoints are normalized to
+// related-to's canonical (sorted) orientation, since the edge is undirected.
+// [LAW:single-enforcer] Whether an edge is written keys on
+// Resolution.RedirectsToCanonical — the same predicate `lit close` uses to
+// require the target — so the two boundaries cannot disagree about which closes
+// carry a redirect.
+func (s *Store) buildRedirectEdges(ctx context.Context, closingID string, resolution *model.Resolution, target, actor string, now time.Time) ([]model.Relation, error) {
+	trimmedTarget := strings.TrimSpace(target)
+	if resolution == nil || !resolution.RedirectsToCanonical() {
+		// [LAW:no-silent-failure] A close that does not redirect carrying a target
+		// is incoherent input — reject it rather than silently dropping the target
+		// the caller supplied. `lit close` rejects this at its boundary; this is
+		// the store's integrity floor for any other caller.
+		if trimmedTarget != "" {
+			return nil, errors.New("redirect target given for a resolution that does not redirect to a canonical ticket")
+		}
+		return nil, nil
+	}
+	if trimmedTarget == "" {
+		return nil, fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
+	}
+	if trimmedTarget == closingID {
+		return nil, fmt.Errorf("cannot redirect %s to itself", closingID)
+	}
+	if _, err := s.GetIssue(ctx, trimmedTarget); err != nil {
+		return nil, err
+	}
+	srcID, dstID := model.RelRelatedTo.CanonicalEndpoints(closingID, trimmedTarget)
+	return []model.Relation{{SrcID: srcID, DstID: dstID, Type: model.RelRelatedTo, CreatedAt: now, CreatedBy: actor}}, nil
 }
 
 func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
