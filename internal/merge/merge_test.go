@@ -10,9 +10,9 @@ import (
 
 func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.Issue {
 	t.Helper()
-	hydrated, err := model.HydrateOwnedStatus(issue, model.StatusView{Value: status})
+	hydrated, err := model.HydrateStatus(issue, model.StatusView{Value: status})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+		t.Fatalf("HydrateStatus() error = %v", err)
 	}
 	return hydrated
 }

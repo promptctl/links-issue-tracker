@@ -22,9 +22,9 @@ func leaf(t *testing.T, id string, view model.StatusView, mut func(*model.Issue)
 	if mut != nil {
 		mut(&iss)
 	}
-	hydrated, err := model.HydrateOwnedStatus(iss, view)
+	hydrated, err := model.HydrateStatus(iss, view)
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus(%s): %v", id, err)
+		t.Fatalf("HydrateStatus(%s): %v", id, err)
 	}
 	return hydrated
 }
@@ -144,12 +144,15 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 	// field with no semantic winner, settled by the symmetric workspace-id
 	// tiebreak. Swapping ours/theirs (and their workspace ids) must yield the
 	// same winner, or the two machines would converge to different assignees.
-	mk := func(assignee string) model.StatusView {
-		return model.StatusView{Value: model.StateInProgress, Assignee: assignee}
+	// Assignee is an issue-level field now, set via the mutator rather than the
+	// status view — the lifecycle no longer carries it.
+	mk := func(assignee string) func(*model.Issue) {
+		return func(i *model.Issue) { i.Assignee = assignee }
 	}
-	base := leaf(t, "i1", mk("root"), nil)
-	alice := leaf(t, "i1", mk("alice"), nil)
-	bob := leaf(t, "i1", mk("bob"), nil)
+	inProgress := model.StatusView{Value: model.StateInProgress}
+	base := leaf(t, "i1", inProgress, mk("root"))
+	alice := leaf(t, "i1", inProgress, mk("alice"))
+	bob := leaf(t, "i1", inProgress, mk("bob"))
 
 	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
 	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
