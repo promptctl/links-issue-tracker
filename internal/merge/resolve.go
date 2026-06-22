@@ -185,16 +185,18 @@ func (r *resolver) resolveStatus(merged model.Issue) model.Issue {
 		baseAssignee = r.base.AssigneeValue()
 	}
 	state := stateFromRank(twoTier(r.hasBase, baseState, stateRank(r.ours.StatusValue()), stateRank(r.theirs.StatusValue()), higher))
-	assignee := twoTier(r.hasBase, baseAssignee, r.ours.AssigneeValue(), r.theirs.AssigneeValue(), r.tiebreak)
+	// Assignee is an issue-level field resolved independently of state — it is not
+	// part of the lifecycle, so it travels on merged.Assignee, not the StatusView.
+	merged.Assignee = twoTier(r.hasBase, baseAssignee, r.ours.AssigneeValue(), r.theirs.AssigneeValue(), r.tiebreak)
 
 	var closedAt *time.Time
 	if state == model.StateClosed {
 		closedAt = earliestTime(r.ours.ClosedAtValue(), r.theirs.ClosedAtValue())
 	}
 
-	hydrated, err := model.HydrateOwnedStatus(merged, model.StatusView{Value: state, Assignee: assignee, ClosedAt: closedAt})
+	hydrated, err := model.HydrateStatus(merged, model.StatusView{Value: state, ClosedAt: closedAt})
 	if err != nil {
-		// HydrateOwnedStatus never errors for a leaf StatusView; surface loudly
+		// HydrateStatus never errors for a leaf StatusView; surface loudly
 		// rather than silently keep an unmerged status. [LAW:no-silent-failure]
 		panic(err)
 	}

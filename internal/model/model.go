@@ -48,7 +48,7 @@ func IsContainerType(issueType string) bool {
 }
 
 // ValidIssueTypes is the canonical set of issue types. ContainerIssueTypes is
-// the subset that uses container-style lifecycle (no OwnedStatus).
+// the subset that uses container-style lifecycle (no leaf status primitive).
 // [LAW:one-source-of-truth] Issue-type vocabulary lives here; persistence validation and lifecycle dispatch both consult these sets.
 var (
 	ValidIssueTypes     = []string{"task", "feature", "bug", "chore", "epic"}
@@ -87,24 +87,28 @@ func IsValidIssueType(issueType string) bool {
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
 type Issue struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Prompt      string     `json:"prompt,omitempty"`
-	Priority    int        `json:"priority"`
-	IssueType   string     `json:"issue_type"`
-	Topic       string     `json:"topic"`
-	Rank        string     `json:"rank"`
+	ID          string `json:"id"`
+	Title       string `json:"title"`
+	Description string `json:"description"`
+	Prompt      string `json:"prompt,omitempty"`
+	Priority    int    `json:"priority"`
+	IssueType   string `json:"issue_type"`
+	Topic       string `json:"topic"`
+	// Assignee is the issue's owner — orthogonal to the status state machine and
+	// preserved across every transition. [LAW:one-source-of-truth] One home for
+	// ownership; the lifecycle leaf carries no assignee.
+	Assignee string `json:"assignee,omitempty"`
+	Rank     string `json:"rank"`
 	// Lane partitions an epic's children into parallel rank-ordered
 	// sub-sequences: same lane → sequenced by rank, different lanes → parallel.
 	// Empty string is the shared default lane (fully-sequential). Meaningful
 	// only within an epic; the readiness gate is what scopes it.
-	Lane        string     `json:"lane"`
-	Labels      []string   `json:"labels"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	Lane       string     `json:"lane"`
+	Labels     []string   `json:"labels"`
+	CreatedAt  time.Time  `json:"created_at"`
+	UpdatedAt  time.Time  `json:"updated_at"`
+	ArchivedAt *time.Time `json:"archived_at,omitempty"`
+	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
 
 	lifecycle        lifecycle.Lifecycle
 	pendingHydration bool
@@ -167,7 +171,7 @@ func (e ContainerActionError) Error() string {
 }
 
 // Apply is root-only: it dispatches to the root lifecycle primitive's Apply.
-// Multi-OwnedStatus composition (AllOf containing multiple actionable members)
+// Multi-leaf composition (AllOf containing multiple actionable members)
 // is intentionally unsupported here; that requires a dedicated disambiguation
 // design before containers ever become actionable. Containers reject every
 // action because their state is derived from children — structurally: AllOf
@@ -207,11 +211,7 @@ func (i Issue) StatusValue() string {
 }
 
 func (i Issue) AssigneeValue() string {
-	status := i.Capabilities().Status
-	if status == nil {
-		return ""
-	}
-	return status.Assignee
+	return i.Assignee
 }
 
 func (i Issue) ClosedAtValue() *time.Time {
@@ -227,7 +227,7 @@ func (i Issue) IsContainer() bool {
 }
 
 // IsHydrated reports whether this issue carries a fully-hydrated lifecycle.
-// Returns false for issues constructed without HydrateOwnedStatus/HydrateAllOf
+// Returns false for issues constructed without HydrateStatus/HydrateAllOf
 // and for JSON-decoded containers that have not yet passed through store
 // hydration.
 func (i Issue) IsHydrated() bool {
@@ -237,16 +237,12 @@ func (i Issue) IsHydrated() bool {
 	return i.lifecycle != nil
 }
 
-// HydrateOwnedStatus is the model-owned boundary that turns persisted row
-// status fields into the lifecycle expression stored inside Issue.
+// HydrateStatus is the model-owned boundary that turns a persisted row's status
+// fields into the leaf lifecycle expression stored inside Issue. Assignee is not
+// a lifecycle field, so it is carried on Issue.Assignee, not through here.
 // [LAW:single-enforcer] Row status fields become lifecycle state only through this model API.
-func HydrateOwnedStatus(issue Issue, view StatusView) (Issue, error) {
-	state := lifecycle.DefaultOpen(string(view.Value))
-	issue.replaceLifecycle(lifecycle.OwnedStatus{
-		Value:    state,
-		Assignee: view.Assignee,
-		ClosedAt: cloneTime(view.ClosedAt),
-	})
+func HydrateStatus(issue Issue, view StatusView) (Issue, error) {
+	issue.replaceLifecycle(lifecycle.NewStatus(view.Value, view.ClosedAt))
 	return issue, nil
 }
 
@@ -256,8 +252,8 @@ func (i *Issue) replaceLifecycle(next lifecycle.Lifecycle) {
 	i.pendingHydration = false
 }
 
-// HydrateRow is the single shape-dispatch entry point: it picks AllOf vs
-// OwnedStatus based on issue type and applies the matching hydrator. Callers
+// HydrateRow is the single shape-dispatch entry point: it picks AllOf vs the
+// leaf status primitive based on issue type and applies the matching hydrator. Callers
 // that have already loaded both the row's status view and (for containers) the
 // child issues should route through this function instead of repeating the
 // IsContainerType discriminator.
@@ -267,7 +263,7 @@ func HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error) {
 	if IsContainerType(issue.IssueType) {
 		return HydrateAllOf(issue, children)
 	}
-	return HydrateOwnedStatus(issue, view)
+	return HydrateStatus(issue, view)
 }
 
 // HydrateAllOf composes child issue lifecycles into a non-actionable container.
@@ -292,10 +288,10 @@ func UpdateStatusCapability(issue Issue, view StatusView) (Issue, error) {
 	if err != nil {
 		return Issue{}, err
 	}
-	if _, ok := root.(lifecycle.OwnedStatus); !ok {
+	if _, ok := root.(lifecycle.StatusPrimitive); !ok {
 		return Issue{}, fmt.Errorf("issue %s does not expose a status capability", issue.ID)
 	}
-	return HydrateOwnedStatus(issue, view)
+	return HydrateStatus(issue, view)
 }
 
 func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {
@@ -303,7 +299,7 @@ func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {
 		return nil, fmt.Errorf("issue %s requires store hydration", i.ID)
 	}
 	if i.lifecycle == nil {
-		panic(fmt.Sprintf("issue %q has no lifecycle (constructed without HydrateOwnedStatus/HydrateAllOf)", i.ID))
+		panic(fmt.Sprintf("issue %q has no lifecycle (constructed without HydrateStatus/HydrateAllOf)", i.ID))
 	}
 	return i.lifecycle, nil
 }
@@ -342,12 +338,10 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		return nil, err
 	}
 	var statusValue *State
-	var assignee string
 	var closedAt *time.Time
 	if caps.Status != nil {
 		value := caps.Status.Value
 		statusValue = &value
-		assignee = caps.Status.Assignee
 		closedAt = cloneTime(caps.Status.ClosedAt)
 	}
 	return json.Marshal(issueJSON{
@@ -359,7 +353,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		Priority:    i.Priority,
 		IssueType:   i.IssueType,
 		Topic:       i.Topic,
-		Assignee:    assignee,
+		Assignee:    i.Assignee,
 		Rank:        i.Rank,
 		Lane:        i.Lane,
 		Labels:      i.Labels,
@@ -384,6 +378,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		Priority:    payload.Priority,
 		IssueType:   payload.IssueType,
 		Topic:       payload.Topic,
+		Assignee:    payload.Assignee,
 		Rank:        payload.Rank,
 		Lane:        payload.Lane,
 		Labels:      payload.Labels,
@@ -398,9 +393,8 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		i.pendingHydration = true
 		i.lifecycle = nil
 	case payload.Status != nil:
-		hydrated, err := HydrateOwnedStatus(*i, StatusView{
+		hydrated, err := HydrateStatus(*i, StatusView{
 			Value:    *payload.Status,
-			Assignee: payload.Assignee,
 			ClosedAt: cloneTime(payload.ClosedAt),
 		})
 		if err != nil {

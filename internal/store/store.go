@@ -509,10 +509,11 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		Topic:       topic,
 		Lane:        strings.TrimSpace(in.Lane),
 		Labels:      labels,
+		Assignee:    strings.TrimSpace(in.Assignee),
 		CreatedAt:   now,
 		UpdatedAt:   now,
 	}
-	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen, Assignee: strings.TrimSpace(in.Assignee)}, nil)
+	issue, err = model.HydrateRow(issue, model.StatusView{Value: model.StateOpen}, nil)
 	if err != nil {
 		return model.Issue{}, err
 	}
@@ -917,8 +918,8 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		// [LAW:single-enforcer] Container vs leaf is encoded in the lifecycle
 		// expression at hydration time. Switching across that boundary would
 		// orphan the lifecycle: epic → leaf would leave AllOf attached to a
-		// row whose schema requires an OwnedStatus, and leaf → epic would
-		// silently drop the leaf's status/assignee/closed_at. Refuse here
+		// row whose schema requires a leaf status, and leaf → epic would
+		// silently drop the leaf's status/closed_at. Refuse here
 		// instead of patching it up downstream with an invented default.
 		if model.IsContainerType(issue.IssueType) != model.IsContainerType(issueType) {
 			return model.Issue{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerIssueTypes)
@@ -935,19 +936,9 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		issue.Priority = *in.Priority
 	}
 	if in.Assignee != nil {
-		caps := issue.Capabilities()
-		if caps.Status == nil {
-			return model.Issue{}, fmt.Errorf("issue %s does not expose a status capability", issue.ID)
-		}
-		updated, err := model.UpdateStatusCapability(issue, model.StatusView{
-			Value:    caps.Status.Value,
-			Assignee: strings.TrimSpace(*in.Assignee),
-			ClosedAt: caps.Status.ClosedAt,
-		})
-		if err != nil {
-			return model.Issue{}, err
-		}
-		issue = updated
+		// [LAW:decomposition] Assignee is an issue-level field independent of the
+		// lifecycle; reassigning is a plain field write, not a status mutation.
+		issue.Assignee = strings.TrimSpace(*in.Assignee)
 	}
 	if in.Lane != nil {
 		issue.Lane = strings.TrimSpace(*in.Lane)
@@ -1223,17 +1214,19 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		return model.Issue{}, err
 	}
 	priorAssignee := issue.AssigneeValue()
-	// Only `start` rewrites the assignee column. Other transitions inherit
-	// whatever the issue already had — done/close/reopen all preserve ownership.
+	// Only `start` rewrites the assignee — it carries the new owner. Every other
+	// transition preserves ownership: assignee is an issue-level field orthogonal
+	// to the status state machine, untouched by changing state.
 	postAssignee := priorAssignee
 	if string(action) == "start" {
 		postAssignee = newAssignee
 	}
+	updated.Assignee = postAssignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	// [LAW:one-source-of-truth] History records actual mutations only. A call
 	// whose target state and resulting assignee both match the current row is
-	// the documented OwnedStatus.Apply no-op: no write, no event. The claim
+	// the documented leaf-state Apply no-op: no write, no event. The claim
 	// audit substrate survives because a reclaim (same state, new assignee)
 	// falls through and records the assignee change with the calling actor.
 	if toStatus == fromStatus && postAssignee == priorAssignee {
@@ -1282,13 +1275,12 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		return model.Issue{}, err
 	}
 	updated.UpdatedAt = now
-	// [LAW:one-source-of-truth] The DB row carries the post-write assignee; the
-	// returned in-memory lifecycle must match it so JSON output and callers see
-	// the same value the next read would yield. Apply() preserved the prior
-	// assignee on the OwnedStatus copy; re-hydrate with the value just written.
+	// [LAW:one-source-of-truth] Re-hydrate the leaf lifecycle from the values just
+	// written so callers see the same status the next read would yield. The
+	// post-write assignee already lives on updated.Assignee (set above), so it is
+	// not part of this lifecycle projection.
 	rehydrated, err := model.UpdateStatusCapability(updated, model.StatusView{
 		Value:    model.DefaultOpen(toStatus),
-		Assignee: postAssignee,
 		ClosedAt: updated.ClosedAtValue(),
 	})
 	if err != nil {
@@ -1687,6 +1679,7 @@ type partialIssue struct {
 	Priority    int
 	IssueType   string
 	Topic       string
+	Assignee    string
 	Rank        string
 	Lane        string
 	Labels      []string
@@ -1783,7 +1776,8 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 	// and constructs the lifecycle via HydrateAllOf instead.
 	// [LAW:single-enforcer] The decision "use StatusView vs derive from children"
 	// lives in hydrateIssues; here we just carry the row data as it appears.
-	statusView := model.StatusView{Value: model.State(status.String), Assignee: assignee}
+	issue.Assignee = assignee
+	statusView := model.StatusView{Value: model.State(status.String)}
 	if closedAt.Valid {
 		t, err := scanTime(closedAt.String)
 		if err != nil {
@@ -1881,6 +1875,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 			Priority:    row.Issue.Priority,
 			IssueType:   row.Issue.IssueType,
 			Topic:       row.Issue.Topic,
+			Assignee:    row.Issue.Assignee,
 			Rank:        row.Issue.Rank,
 			Lane:        row.Issue.Lane,
 			Labels:      labelsByID[row.Issue.ID],
