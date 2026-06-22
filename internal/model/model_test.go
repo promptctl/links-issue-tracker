@@ -9,9 +9,9 @@ import (
 
 func hydratedIssue(t *testing.T, issue Issue, status State) Issue {
 	t.Helper()
-	hydrated, err := HydrateOwnedStatus(issue, StatusView{Value: status})
+	hydrated, err := HydrateStatus(issue, StatusView{Value: status})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+		t.Fatalf("HydrateStatus() error = %v", err)
 	}
 	return hydrated
 }
@@ -99,15 +99,16 @@ func TestIssueJSONRoundTripEpicRequiresStoreHydration(t *testing.T) {
 
 func TestIssueJSONRoundTripLeafPreservesStatusFields(t *testing.T) {
 	closedAt := time.Now().UTC()
-	leaf, err := HydrateOwnedStatus(Issue{
+	leaf, err := HydrateStatus(Issue{
 		ID:        "task-1",
 		Title:     "Leaf",
 		IssueType: "task",
+		Assignee:  "dev",
 		CreatedAt: time.Now().UTC(),
 		UpdatedAt: time.Now().UTC(),
-	}, StatusView{Value: StateClosed, Assignee: "dev", ClosedAt: &closedAt})
+	}, StatusView{Value: StateClosed, ClosedAt: &closedAt})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+		t.Fatalf("HydrateStatus() error = %v", err)
 	}
 	data, err := json.Marshal(leaf)
 	if err != nil {
@@ -129,7 +130,7 @@ func TestIssueJSONRoundTripLeafPreservesStatusFields(t *testing.T) {
 }
 
 func TestIssueJSONRoundTripPreservesPrompt(t *testing.T) {
-	leaf, err := HydrateOwnedStatus(Issue{
+	leaf, err := HydrateStatus(Issue{
 		ID:        "task-1",
 		Title:     "Leaf with prompt",
 		IssueType: "task",
@@ -138,7 +139,7 @@ func TestIssueJSONRoundTripPreservesPrompt(t *testing.T) {
 		UpdatedAt: time.Now().UTC(),
 	}, StatusView{Value: StateOpen})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+		t.Fatalf("HydrateStatus() error = %v", err)
 	}
 	data, err := json.Marshal(leaf)
 	if err != nil {
@@ -153,7 +154,7 @@ func TestIssueJSONRoundTripPreservesPrompt(t *testing.T) {
 	}
 
 	// Empty prompt should be omitted from the JSON wire shape entirely.
-	bare, err := HydrateOwnedStatus(Issue{
+	bare, err := HydrateStatus(Issue{
 		ID:        "task-2",
 		Title:     "Leaf without prompt",
 		IssueType: "task",
@@ -161,7 +162,7 @@ func TestIssueJSONRoundTripPreservesPrompt(t *testing.T) {
 		UpdatedAt: time.Now().UTC(),
 	}, StatusView{Value: StateOpen})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus(bare) error = %v", err)
+		t.Fatalf("HydrateStatus(bare) error = %v", err)
 	}
 	bareData, err := json.Marshal(bare)
 	if err != nil {

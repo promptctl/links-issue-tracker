@@ -671,6 +671,7 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Priority:    cellInt(rec["priority"]),
 		IssueType:   cellString(rec["issue_type"]),
 		Topic:       cellString(rec["topic"]),
+		Assignee:    cellString(rec["assignee"]),
 		Rank:        cellString(rec["rank"]),
 		CreatedAt:   cellTime(rec["created_at"]),
 		UpdatedAt:   cellTime(rec["updated_at"]),
@@ -680,7 +681,6 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 	view := model.StatusView{}
 	if !model.IsContainerType(issue.IssueType) {
 		view.Value = model.DefaultOpen(cellString(rec["status"]))
-		view.Assignee = cellString(rec["assignee"])
 		view.ClosedAt = cellTimePtr(rec["closed_at"])
 	}
 	return model.HydrateRow(issue, view, nil)

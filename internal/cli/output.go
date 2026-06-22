@@ -48,7 +48,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// answer to leaf-vs-container; the printer dispatches once on that single
 	// shape signal rather than asking IsContainer or comparing issue types.
 	if caps := issue.Capabilities(); caps.Status != nil {
-		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(caps.Status.Assignee)); err != nil {
+		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(issue.AssigneeValue())); err != nil {
 			return err
 		}
 	} else {

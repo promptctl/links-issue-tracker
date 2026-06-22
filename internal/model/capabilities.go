@@ -13,27 +13,27 @@ type Capabilities struct {
 	Status *StatusView `json:"status,omitempty"`
 }
 
+// StatusView is the flat projection of a leaf status primitive — the boundary
+// representation persistence and CLI output consume. Assignee is NOT here:
+// ownership is an issue-level field orthogonal to the status state machine, not
+// a status-capability field. [LAW:decomposition]
 type StatusView struct {
 	Value    State      `json:"value"`
-	Assignee string     `json:"assignee,omitempty"`
 	ClosedAt *time.Time `json:"closed_at,omitempty"`
 }
 
-// capabilitiesFrom is root-only by design: it switches on the root lifecycle
+// capabilitiesFrom is root-only by design: it inspects the root lifecycle
 // primitive only and does not recurse into Containers. Adding capability
-// kinds means extending this switch, not walking deeper.
+// kinds means extending this function, not walking deeper.
 // [LAW:one-source-of-truth] Capability presence is derived from the root lifecycle primitive rather than duplicated issue-type checks.
 func capabilitiesFrom(l lifecycle.Lifecycle) Capabilities {
-	switch typed := l.(type) {
-	case lifecycle.OwnedStatus:
+	if status, ok := l.(lifecycle.StatusPrimitive); ok {
 		return Capabilities{Status: &StatusView{
-			Value:    State(typed.Value),
-			Assignee: typed.Assignee,
-			ClosedAt: cloneTime(typed.ClosedAt),
+			Value:    status.State(),
+			ClosedAt: status.ClosedAt(),
 		}}
-	default:
-		return Capabilities{}
 	}
+	return Capabilities{}
 }
 
 func cloneTime(value *time.Time) *time.Time {

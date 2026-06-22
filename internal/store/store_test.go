@@ -1224,9 +1224,9 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 
 func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.Issue {
 	t.Helper()
-	hydrated, err := model.HydrateOwnedStatus(issue, model.StatusView{Value: status})
+	hydrated, err := model.HydrateStatus(issue, model.StatusView{Value: status})
 	if err != nil {
-		t.Fatalf("HydrateOwnedStatus() error = %v", err)
+		t.Fatalf("HydrateStatus() error = %v", err)
 	}
 	return hydrated
 }
@@ -1550,7 +1550,7 @@ func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
 
 // TestTransitionIssueSameStateSameAssigneeRecordsNothing pins the other half
 // of the same-state policy: a transition whose target state AND resulting
-// assignee both match the current row is the documented OwnedStatus.Apply
+// assignee both match the current row is the documented leaf-state Apply
 // no-op — no event, no row write. History reflects actual mutations; the
 // diagonal of the 3x3 matrix is silent.
 func TestTransitionIssueSameStateSameAssigneeRecordsNothing(t *testing.T) {
@@ -2014,8 +2014,8 @@ func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
 
 // (links-agent-epic-model-uew.7) Container ↔ non-container IssueType changes
 // would orphan the lifecycle expression: an epic carries an AllOf lifecycle
-// that derives state from children, and a leaf carries an OwnedStatus carrying
-// status/assignee/closed_at. Crossing that boundary via UpdateIssue would
+// that derives state from children, and a leaf carries a status primitive
+// carrying status/closed_at. Crossing that boundary via UpdateIssue would
 // either drop the leaf's status or leave AllOf attached to a row whose schema
 // requires owned status. Refused at the trust boundary instead of patched up
 // downstream with an invented default.
