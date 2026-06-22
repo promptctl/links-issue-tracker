@@ -2168,10 +2168,10 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", ""); err != nil {
+	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil); err != nil {
 		t.Fatalf("writeStatusTransition(first) error = %v", err)
 	}
-	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "")
+	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil)
 	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
 		t.Fatalf("writeStatusTransition(second) error = %v, want close conflict", err)
 	}

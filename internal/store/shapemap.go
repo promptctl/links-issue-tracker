@@ -239,7 +239,7 @@ func buildTargetRegistry() map[TargetKey]targetField {
 		}
 	}
 	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
-	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane")
+	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution")
 	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
 	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
 	add(collIssues, TransformLegacyStatus, required, "status")
@@ -682,6 +682,13 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 	if !model.IsContainerType(issue.IssueType) {
 		view.Value = model.DefaultOpen(cellString(rec["status"]))
 		view.ClosedAt = cellTimePtr(rec["closed_at"])
+		// Raw conversion on the restore boundary, conserving the sealed bytes a
+		// prior ParseResolution already validated; NewStatus drops it for any
+		// non-closed state, so a stray value cannot leak onto a non-closed leaf.
+		if raw := cellString(rec["resolution"]); raw != "" {
+			resolution := model.Resolution(raw)
+			view.Resolution = &resolution
+		}
 	}
 	return model.HydrateRow(issue, view, nil)
 }

@@ -60,7 +60,7 @@ func TestMutationCommandsDoNotDeadlock(t *testing.T) {
 	if _, err := runWithTimeout([]string{"update", issueID, "--status", "in_progress", "--assignee", "tester"}, 10*time.Second); err != nil {
 		t.Fatalf("Run(update --status in_progress --assignee tester) error = %v", err)
 	}
-	if _, err := runWithTimeout([]string{"close", issueID, "--reason", "deadlock regression probe cleanup"}, 10*time.Second); err != nil {
+	if _, err := runWithTimeout([]string{"close", issueID, "--resolution", "wontfix", "--reason", "deadlock regression probe cleanup"}, 10*time.Second); err != nil {
 		t.Fatalf("Run(close) error = %v", err)
 	}
 }
