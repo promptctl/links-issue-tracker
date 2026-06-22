@@ -72,7 +72,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var closeOut bytes.Buffer
-	if err := runTransition(ctx, &closeOut, ap, []string{issueID, "--reason", "probe done"}, "close"); err != nil {
+	if err := runTransition(ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, "close"); err != nil {
 		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	if got, want := lastLine(closeOut.String()), quickstartBreadcrumb("done"); got != want {

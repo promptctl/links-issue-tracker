@@ -7,7 +7,7 @@ import (
 
 func TestNewStatusStateMirrorsValue(t *testing.T) {
 	for _, state := range []State{Open, InProgress, Closed} {
-		if got := NewStatus(state, nil).State(); got != state {
+		if got := NewStatus(state, nil, nil).State(); got != state {
 			t.Fatalf("State() = %q, want %q", got, state)
 		}
 	}
@@ -18,13 +18,13 @@ func TestNewStatusStateMirrorsValue(t *testing.T) {
 // no field to hold it, so ClosedAt() is nil regardless of what gets passed in.
 func TestNewStatusClosedAtBelongsOnlyToClosed(t *testing.T) {
 	stamp := time.Unix(1_700_000_000, 0).UTC()
-	if got := NewStatus(Open, &stamp).ClosedAt(); got != nil {
+	if got := NewStatus(Open, &stamp, nil).ClosedAt(); got != nil {
 		t.Fatalf("open ClosedAt() = %v, want nil — open carries no close time", got)
 	}
-	if got := NewStatus(InProgress, &stamp).ClosedAt(); got != nil {
+	if got := NewStatus(InProgress, &stamp, nil).ClosedAt(); got != nil {
 		t.Fatalf("in_progress ClosedAt() = %v, want nil — in_progress carries no close time", got)
 	}
-	if got := NewStatus(Closed, &stamp).ClosedAt(); got == nil || !got.Equal(stamp) {
+	if got := NewStatus(Closed, &stamp, nil).ClosedAt(); got == nil || !got.Equal(stamp) {
 		t.Fatalf("closed ClosedAt() = %v, want %v", got, stamp)
 	}
 }
@@ -40,7 +40,7 @@ func TestApplyTargetStateMatrix(t *testing.T) {
 		for _, action := range allActions {
 			target, _ := ActionTargetState(action)
 			t.Run(string(from)+"_"+string(action), func(t *testing.T) {
-				next, err := NewStatus(from, nil).Apply(action, "tester", "")
+				next, err := NewStatus(from, nil, nil).Apply(action, "tester", "")
 				if err != nil {
 					t.Fatalf("Apply(%s on %s) error = %v, want success", action, from, err)
 				}
@@ -62,10 +62,10 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 		from   StatusPrimitive
 		action ActionName
 	}{
-		{NewStatus(Open, nil), ActionReopen},
-		{NewStatus(InProgress, nil), ActionStart},
-		{NewStatus(Closed, &closedAt), ActionDone},
-		{NewStatus(Closed, &closedAt), ActionClose},
+		{NewStatus(Open, nil, nil), ActionReopen},
+		{NewStatus(InProgress, nil, nil), ActionStart},
+		{NewStatus(Closed, &closedAt, nil), ActionDone},
+		{NewStatus(Closed, &closedAt, nil), ActionClose},
 	}
 	for _, tc := range cases {
 		next, err := tc.from.Apply(tc.action, "tester", "")
@@ -90,7 +90,7 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 func TestApplyClosedAtBookkeeping(t *testing.T) {
 	priorClosed := time.Unix(1_700_000_000, 0).UTC()
 
-	openToClosed, err := NewStatus(Open, nil).Apply(ActionClose, "tester", "")
+	openToClosed, err := NewStatus(Open, nil, nil).Apply(ActionClose, "tester", "")
 	if err != nil {
 		t.Fatalf("Apply(close on open) error = %v", err)
 	}
@@ -98,7 +98,7 @@ func TestApplyClosedAtBookkeeping(t *testing.T) {
 		t.Fatal("Apply(close on open).ClosedAt() = nil, want stamped")
 	}
 
-	inProgressToClosed, err := NewStatus(InProgress, nil).Apply(ActionDone, "tester", "")
+	inProgressToClosed, err := NewStatus(InProgress, nil, nil).Apply(ActionDone, "tester", "")
 	if err != nil {
 		t.Fatalf("Apply(done on in_progress) error = %v", err)
 	}
@@ -106,7 +106,7 @@ func TestApplyClosedAtBookkeeping(t *testing.T) {
 		t.Fatal("Apply(done on in_progress).ClosedAt() = nil, want stamped")
 	}
 
-	closedToOpen, err := NewStatus(Closed, &priorClosed).Apply(ActionReopen, "tester", "")
+	closedToOpen, err := NewStatus(Closed, &priorClosed, nil).Apply(ActionReopen, "tester", "")
 	if err != nil {
 		t.Fatalf("Apply(reopen on closed) error = %v", err)
 	}
@@ -114,7 +114,7 @@ func TestApplyClosedAtBookkeeping(t *testing.T) {
 		t.Fatalf("Apply(reopen on closed).ClosedAt() = %v, want nil", closedAt)
 	}
 
-	closedToInProgress, err := NewStatus(Closed, &priorClosed).Apply(ActionStart, "tester", "")
+	closedToInProgress, err := NewStatus(Closed, &priorClosed, nil).Apply(ActionStart, "tester", "")
 	if err != nil {
 		t.Fatalf("Apply(start on closed) error = %v", err)
 	}
@@ -123,8 +123,67 @@ func TestApplyClosedAtBookkeeping(t *testing.T) {
 	}
 }
 
+// TestNewStatusResolutionBelongsOnlyToClosed is the resolution analogue of the
+// closed-at invariant: a resolution is carried only by the closed variant. The
+// non-closed variants have no field to hold it, so Resolution() is nil no matter
+// what gets passed in — a resolution on a non-closed state is unrepresentable.
+func TestNewStatusResolutionBelongsOnlyToClosed(t *testing.T) {
+	wontfix := ResolutionWontfix
+	if got := NewStatus(Open, nil, &wontfix).Resolution(); got != nil {
+		t.Fatalf("open Resolution() = %v, want nil — open carries no resolution", got)
+	}
+	if got := NewStatus(InProgress, nil, &wontfix).Resolution(); got != nil {
+		t.Fatalf("in_progress Resolution() = %v, want nil — in_progress carries no resolution", got)
+	}
+	got := NewStatus(Closed, nil, &wontfix).Resolution()
+	if got == nil || *got != ResolutionWontfix {
+		t.Fatalf("closed Resolution() = %v, want %q", got, ResolutionWontfix)
+	}
+}
+
+// TestApplyReopenClearsResolution pins that transitioning out of closed lands on
+// a variant that structurally cannot hold a resolution, so reopening drops it —
+// the same bookkeeping the close timestamp gets.
+func TestApplyReopenClearsResolution(t *testing.T) {
+	duplicate := ResolutionDuplicate
+	closed := NewStatus(Closed, nil, &duplicate)
+	if got := closed.Resolution(); got == nil || *got != ResolutionDuplicate {
+		t.Fatalf("precondition: closed Resolution() = %v, want %q", got, ResolutionDuplicate)
+	}
+	reopened, err := closed.Apply(ActionReopen, "tester", "")
+	if err != nil {
+		t.Fatalf("Apply(reopen on closed) error = %v", err)
+	}
+	if got := reopened.(StatusPrimitive).Resolution(); got != nil {
+		t.Fatalf("Apply(reopen on closed).Resolution() = %v, want nil — open carries no resolution", got)
+	}
+}
+
+func TestParseResolutionRoundTrips(t *testing.T) {
+	for _, want := range []Resolution{ResolutionDuplicate, ResolutionSuperseded, ResolutionObsolete, ResolutionWontfix} {
+		got, err := ParseResolution(string(want))
+		if err != nil {
+			t.Fatalf("ParseResolution(%q) error = %v", want, err)
+		}
+		if got != want {
+			t.Fatalf("ParseResolution(%q) = %q, want %q", want, got, want)
+		}
+	}
+	if got, err := ParseResolution("  wontfix  "); err != nil || got != ResolutionWontfix {
+		t.Fatalf("ParseResolution(padded) = %q, %v; want %q, nil", got, err, ResolutionWontfix)
+	}
+}
+
+func TestParseResolutionRejectsInvalid(t *testing.T) {
+	for _, input := range []string{"", "  ", "done", "fixed", "garbage"} {
+		if _, err := ParseResolution(input); err == nil {
+			t.Fatalf("ParseResolution(%q) = nil error, want rejection", input)
+		}
+	}
+}
+
 func TestApplyRejectsParseBypass(t *testing.T) {
-	if _, err := NewStatus(Open, nil).Apply(ActionName("bogus"), "tester", ""); err == nil {
+	if _, err := NewStatus(Open, nil, nil).Apply(ActionName("bogus"), "tester", ""); err == nil {
 		t.Fatal("Apply(bogus) error = nil, want unsupported-action error")
 	}
 }
@@ -142,10 +201,10 @@ func TestAllOfState(t *testing.T) {
 		members []Lifecycle
 		want    State
 	}{
-		{name: "all open", members: []Lifecycle{NewStatus(Open, nil), NewStatus(Open, nil)}, want: Open},
-		{name: "mixed closed", members: []Lifecycle{NewStatus(Open, nil), NewStatus(Closed, nil)}, want: InProgress},
-		{name: "in progress", members: []Lifecycle{NewStatus(Open, nil), NewStatus(InProgress, nil)}, want: InProgress},
-		{name: "all closed", members: []Lifecycle{NewStatus(Closed, nil), NewStatus(Closed, nil)}, want: Closed},
+		{name: "all open", members: []Lifecycle{NewStatus(Open, nil, nil), NewStatus(Open, nil, nil)}, want: Open},
+		{name: "mixed closed", members: []Lifecycle{NewStatus(Open, nil, nil), NewStatus(Closed, nil, nil)}, want: InProgress},
+		{name: "in progress", members: []Lifecycle{NewStatus(Open, nil, nil), NewStatus(InProgress, nil, nil)}, want: InProgress},
+		{name: "all closed", members: []Lifecycle{NewStatus(Closed, nil, nil), NewStatus(Closed, nil, nil)}, want: Closed},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -159,10 +218,10 @@ func TestAllOfState(t *testing.T) {
 
 func TestAllOfProgressAndActions(t *testing.T) {
 	all := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil),
+		NewStatus(Open, nil, nil),
 		AllOf{Members: []Lifecycle{
-			NewStatus(InProgress, nil),
-			NewStatus(Closed, nil),
+			NewStatus(InProgress, nil, nil),
+			NewStatus(Closed, nil, nil),
 		}},
 	}}
 	progress := all.Progress()
@@ -174,7 +233,7 @@ func TestAllOfProgressAndActions(t *testing.T) {
 // Containers are structurally non-actionable: the model dispatch boundary
 // relies on this to route them to the epic-aware rejection instead.
 func TestAllOfIsNotActionable(t *testing.T) {
-	var container Lifecycle = AllOf{Members: []Lifecycle{NewStatus(Open, nil)}}
+	var container Lifecycle = AllOf{Members: []Lifecycle{NewStatus(Open, nil, nil)}}
 	if _, ok := container.(Actionable); ok {
 		t.Fatal("AllOf satisfies Actionable; containers must not be actionable — their state derives from children")
 	}
@@ -182,10 +241,10 @@ func TestAllOfIsNotActionable(t *testing.T) {
 
 func TestWalkVisitsAllPrimitives(t *testing.T) {
 	tree := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil),
+		NewStatus(Open, nil, nil),
 		AllOf{Members: []Lifecycle{
-			NewStatus(InProgress, nil),
-			NewStatus(Closed, nil),
+			NewStatus(InProgress, nil, nil),
+			NewStatus(Closed, nil, nil),
 		}},
 	}}
 	var states []State
@@ -220,7 +279,7 @@ func (p progressOnly) Progress() Progress {
 
 func TestAllOfProgressIncludesNonStatusLeafPrimitives(t *testing.T) {
 	tree := AllOf{Members: []Lifecycle{
-		NewStatus(Open, nil),
+		NewStatus(Open, nil, nil),
 		progressOnly{progress: Progress{InProgress: 2, Total: 2}},
 	}}
 	progress := tree.Progress()

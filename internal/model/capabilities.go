@@ -18,8 +18,9 @@ type Capabilities struct {
 // ownership is an issue-level field orthogonal to the status state machine, not
 // a status-capability field. [LAW:decomposition]
 type StatusView struct {
-	Value    State      `json:"value"`
-	ClosedAt *time.Time `json:"closed_at,omitempty"`
+	Value      State                 `json:"value"`
+	ClosedAt   *time.Time            `json:"closed_at,omitempty"`
+	Resolution *lifecycle.Resolution `json:"resolution,omitempty"`
 }
 
 // capabilitiesFrom is root-only by design: it inspects the root lifecycle
@@ -29,14 +30,23 @@ type StatusView struct {
 func capabilitiesFrom(l lifecycle.Lifecycle) Capabilities {
 	if status, ok := l.(lifecycle.StatusPrimitive); ok {
 		return Capabilities{Status: &StatusView{
-			Value:    status.State(),
-			ClosedAt: status.ClosedAt(),
+			Value:      status.State(),
+			ClosedAt:   status.ClosedAt(),
+			Resolution: status.Resolution(),
 		}}
 	}
 	return Capabilities{}
 }
 
 func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneResolution(value *lifecycle.Resolution) *lifecycle.Resolution {
 	if value == nil {
 		return nil
 	}
