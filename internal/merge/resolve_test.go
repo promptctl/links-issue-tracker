@@ -139,6 +139,65 @@ func TestResolveIssueTiebreakSymmetry(t *testing.T) {
 	}
 }
 
+func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
+	// Both sides reassign to different agents off a shared base: a single-valued
+	// field with no semantic winner, settled by the symmetric workspace-id
+	// tiebreak. Swapping ours/theirs (and their workspace ids) must yield the
+	// same winner, or the two machines would converge to different assignees.
+	mk := func(assignee string) model.StatusView {
+		return model.StatusView{Value: model.StateInProgress, Assignee: assignee}
+	}
+	base := leaf(t, "i1", mk("root"), nil)
+	alice := leaf(t, "i1", mk("alice"), nil)
+	bob := leaf(t, "i1", mk("bob"), nil)
+
+	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
+	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
+	if forward.Provisional().AssigneeValue() != swapped.Provisional().AssigneeValue() {
+		t.Fatalf("assignee tiebreak not symmetric: forward=%q swapped=%q",
+			forward.Provisional().AssigneeValue(), swapped.Provisional().AssigneeValue())
+	}
+	if forward.Provisional().AssigneeValue() != "bob" {
+		t.Fatalf("assignee tiebreak winner = %q, want the value from the greater workspace id (wsB->bob)",
+			forward.Provisional().AssigneeValue())
+	}
+	if len(forward.Pending) != 0 {
+		t.Fatalf("assignee is code-resolvable; unexpected pending = %#v", forward.Pending)
+	}
+}
+
+func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
+	// blocks / related-to are additively unioned: a blocks edge added on one side
+	// and a related-to edge added on the other both survive. They are different
+	// keys with no single-valued constraint, so unlike parent-child neither is
+	// pruned — concurrent links from two machines accrue rather than overwrite.
+	issues := []model.Issue{open(t, "a"), open(t, "b"), open(t, "c")}
+	base := model.Export{WorkspaceID: "wsA", Issues: issues}
+	local := model.Export{
+		WorkspaceID: "wsA",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlocks, CreatedAt: t1}},
+	}
+	remote := model.Export{
+		WorkspaceID: "wsB",
+		Issues:      issues,
+		Relations:   []model.Relation{{SrcID: "a", DstID: "c", Type: model.RelRelatedTo, CreatedAt: t2}},
+	}
+	got := ThreeWay(base, local, remote)
+	var hasBlocks, hasRelated bool
+	for _, relation := range got.Provisional().Relations {
+		if relation.SrcID == "a" && relation.DstID == "b" && relation.Type == model.RelBlocks {
+			hasBlocks = true
+		}
+		if relation.SrcID == "a" && relation.DstID == "c" && relation.Type == model.RelRelatedTo {
+			hasRelated = true
+		}
+	}
+	if !hasBlocks || !hasRelated || len(got.Provisional().Relations) != 2 {
+		t.Fatalf("relations = %#v, want both concurrent non-parent edges unioned", got.Provisional().Relations)
+	}
+}
+
 func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	// Both sides closed concurrently -> closed; closed_at is the earliest close.
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
