@@ -407,7 +407,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:in_progress type:task has:comments text")
+	queryExpr := fs.String("query", "", "Query language: status:in_progress resolution:wontfix type:task has:comments text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
@@ -1038,6 +1038,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// The resolver overrides this with CLAUDE_CODE_SESSION_ID whenever set;
 	// the flag survives only as a fallback for environments without the env var.
 	assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
+	// Only `close` consumes --resolution: it is the close reason (why the work was
+	// not finished). `done` is the success path and carries none; every other
+	// action rejects the flag below. The sealed set is parsed at this trust
+	// boundary via model.ParseResolution. [LAW:single-enforcer]
+	resolution := fs.String("resolution", "", "Close resolution (required for close): duplicate|superseded|obsolete|wontfix")
 	// [LAW:types-are-the-program] `--apply` carries the token printed by the
 	// preview phase as its value (`--apply=<token>`). Empty default = preview;
 	// non-empty = apply attempt. The two-phase contract is the type: a valid
@@ -1106,6 +1111,22 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
+	// [LAW:types-are-the-program] Resolution travels only with `close`. Parse it at
+	// this boundary so an unknown value is rejected here, not deeper in the stack,
+	// and a bare `close` is rejected with a usage error naming the valid set. Any
+	// other action that received the flag is a misuse — reject it rather than
+	// silently discard a value the user expected to take effect. [LAW:no-silent-failure]
+	var closeResolution *model.Resolution
+	if action == model.ActionClose {
+		parsed, parseErr := model.ParseResolution(*resolution)
+		if parseErr != nil {
+			return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--reason <text>]\n%v", parseErr)}
+		}
+		closeResolution = &parsed
+	} else if strings.TrimSpace(*resolution) != "" {
+		return UsageError{Message: fmt.Sprintf("--resolution applies only to close, not %s", transitionCommandName(action))}
+	}
+
 	// [LAW:types-are-the-program] Start is the only action that carries an assignee;
 	// routing to the typed StartIssue method encodes the constraint structurally.
 	var (
@@ -1127,10 +1148,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		})
 	} else {
 		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-			IssueID:   issueID,
-			Action:    action,
-			Reason:    *reason,
-			CreatedBy: actor,
+			IssueID:    issueID,
+			Action:     action,
+			Reason:     *reason,
+			CreatedBy:  actor,
+			Resolution: closeResolution,
 		})
 	}
 	if err != nil {

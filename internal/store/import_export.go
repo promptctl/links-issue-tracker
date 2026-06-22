@@ -204,9 +204,9 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, mess
 			// reject a restore. Owned here at the import boundary, not scattered
 			// across mutation callsites.
 			priority := clampPriorityToCanonical(issue.Priority)
-			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?)`,
-				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
 				return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 			}
 		}

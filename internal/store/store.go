@@ -201,6 +201,7 @@ type SortSpec struct {
 
 type ListIssuesFilter struct {
 	Statuses          []model.State
+	Resolutions       []model.Resolution
 	IssueTypes        []string
 	ExcludeIssueTypes []string
 	Assignees         []string
@@ -231,6 +232,11 @@ type TransitionIssueInput struct {
 	Action    model.ActionName
 	Reason    string
 	CreatedBy string
+	// Resolution is the sealed close reason. It travels only with a `close`
+	// transition; nil for every other action (and a nil close is the "no recorded
+	// resolution" close that `done`, legacy rows, and merges also produce). The
+	// `lit close` command is the boundary that requires it; this seam carries it.
+	Resolution *model.Resolution
 }
 
 // StartIssueInput is the input for the start (claim) transition. It is the only
@@ -572,7 +578,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 }
 
 func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error) {
-	query := `SELECT i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at FROM issues i`
+	query := `SELECT i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.resolution, i.archived_at, i.deleted_at FROM issues i`
 	var where []string
 	var args []any
 	if !filter.IncludeArchived {
@@ -712,7 +718,7 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 	}
 	// [LAW:dataflow-not-control-flow] Filter and cap always run; the helpers absorb
 	// "no filter" and "no limit" as data so the body stays a straight pipe.
-	return capLimit(filterByState(hydrated, allowedStates), filter.Limit), nil
+	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
 }
 
 func parseStatusFilter(input []model.State) ([]model.State, error) {
@@ -740,6 +746,33 @@ func filterByState(issues []model.Issue, allowed []model.State) []model.Issue {
 	out := make([]model.Issue, 0, len(issues))
 	for _, issue := range issues {
 		if _, ok := allow[issue.State()]; ok {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
+// filterByResolution keeps only issues whose recorded close resolution is in
+// allowed; an empty allow-list passes everything through. Resolution lives in
+// the lifecycle, so the filter reads the derived ResolutionValue() rather than
+// the DB column — the same post-hydration discipline as filterByState. An issue
+// with no resolution (open, in_progress, or a `done`/legacy close) matches no
+// non-empty allow-list. [LAW:single-enforcer]
+func filterByResolution(issues []model.Issue, allowed []model.Resolution) []model.Issue {
+	if len(allowed) == 0 {
+		return issues
+	}
+	allow := make(map[model.Resolution]struct{}, len(allowed))
+	for _, r := range allowed {
+		allow[r] = struct{}{}
+	}
+	out := make([]model.Issue, 0, len(issues))
+	for _, issue := range issues {
+		resolution := issue.ResolutionValue()
+		if resolution == nil {
+			continue
+		}
+		if _, ok := allow[*resolution]; ok {
 			out = append(out, issue)
 		}
 	}
@@ -838,7 +871,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch load issues: %w", err)
@@ -867,7 +900,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at FROM issues WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at FROM issues WHERE id = ?`, id)
 	scanned, err := scanIssue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1128,7 +1161,7 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	// ActionStart is absent: start carries an assignee and routes through StartIssue.
 	switch in.Action {
 	case model.ActionDone, model.ActionClose, model.ActionReopen:
-		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "")
+		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "", in.Resolution)
 	}
 	now := time.Now().UTC()
 	priorArchivedAt := issue.ArchivedAt
@@ -1205,10 +1238,10 @@ func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue
 	if actor == "" {
 		actor = "unknown"
 	}
-	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee))
+	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee), nil)
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string) (model.Issue, error) {
+func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution) (model.Issue, error) {
 	updated, err := applyTransition(issue, action, actor, reason)
 	if err != nil {
 		return model.Issue{}, err
@@ -1237,10 +1270,23 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	if value := updated.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
 	}
+	// Resolution lives only on the closed state: a transition whose target is not
+	// closed (reopen, start) drops it to NULL, so a resolution can never linger on
+	// a non-closed row — the same guarantee the type gives in memory.
+	// [LAW:types-are-the-program] The post-transition resolution is a function of
+	// the resolved state, not of which caller supplied the param.
+	var postResolution *model.Resolution
+	if model.DefaultOpen(toStatus) == model.StateClosed {
+		postResolution = resolution
+	}
+	var resolutionArg any
+	if postResolution != nil {
+		resolutionArg = string(*postResolution)
+	}
 	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
 		// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-		result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ? WHERE id = ? AND status = ?`,
-			toStatus, postAssignee, now.Format(time.RFC3339Nano), closedAt, issue.ID, fromStatus)
+		result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ? WHERE id = ? AND status = ?`,
+			toStatus, postAssignee, now.Format(time.RFC3339Nano), closedAt, resolutionArg, issue.ID, fromStatus)
 		if err != nil {
 			return fmt.Errorf("update issue status: %w", err)
 		}
@@ -1267,6 +1313,10 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 		if !timesEqual(priorClosedAt, newClosedAt) {
 			changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
 		}
+		priorResolution := issue.ResolutionValue()
+		if !resolutionsEqual(priorResolution, postResolution) {
+			changes = append(changes, model.FieldChange{Field: "resolution", From: formatNullableResolution(priorResolution), To: formatNullableResolution(postResolution)})
+		}
 		if priorAssignee != postAssignee {
 			changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 		}
@@ -1280,8 +1330,9 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	// post-write assignee already lives on updated.Assignee (set above), so it is
 	// not part of this lifecycle projection.
 	rehydrated, err := model.UpdateStatusCapability(updated, model.StatusView{
-		Value:    model.DefaultOpen(toStatus),
-		ClosedAt: updated.ClosedAtValue(),
+		Value:      model.DefaultOpen(toStatus),
+		ClosedAt:   updated.ClosedAtValue(),
+		Resolution: postResolution,
 	})
 	if err != nil {
 		return updated, nil
@@ -1738,12 +1789,12 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &archivedAt, &deletedAt); err != nil {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, archivedAt, deletedAt)
+	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, archivedAt, deletedAt)
 }
 
 func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
@@ -1753,16 +1804,16 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &archivedAt, &deletedAt); err != nil {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, archivedAt, deletedAt)
+	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, archivedAt, deletedAt)
 	return parentID, parsed, err
 }
 
-func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
+func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, resolution sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
 	var err error
 	issue.CreatedAt, err = scanTime(createdAt)
 	if err != nil {
@@ -1784,6 +1835,15 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 			return issueRow{}, err
 		}
 		statusView.ClosedAt = &t
+	}
+	if resolution.Valid {
+		// Raw conversion on a read boundary: the bytes were sealed by
+		// ParseResolution at write time and the DB CHECK rejects anything else, so
+		// this salvage path conserves them without re-parsing. NewStatus drops the
+		// resolution for any non-closed state, so a stray value cannot leak onto a
+		// non-closed leaf. [LAW:types-are-the-program]
+		r := model.Resolution(resolution.String)
+		statusView.Resolution = &r
 	}
 	if archivedAt.Valid {
 		t, err := scanTime(archivedAt.String)
@@ -1923,7 +1983,7 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	//   parent dead, child live -> include (snapshot semantics: container's state at archive)
 	//   parent dead, child dead -> include (snapshot semantics)
 	// The WHERE clause encodes "include if parent is dead OR child is live."
-	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.archived_at, i.deleted_at
+	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.resolution, i.archived_at, i.deleted_at
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
@@ -2003,6 +2063,16 @@ func nullableTime(value *time.Time) any {
 	return value.Format(time.RFC3339Nano)
 }
 
+// nullableResolution stores a nil resolution as SQL NULL so a closed-without-
+// resolution row (a `done` close, legacy, or merged) reads back as the absent
+// state, never the empty string.
+func nullableResolution(value *model.Resolution) any {
+	if value == nil {
+		return nil
+	}
+	return string(*value)
+}
+
 // nullableString stores empty strings as SQL NULL so the agent_prompt column reads
 // back as "" via sql.NullString.String regardless of whether the row predates
 // the column add.
@@ -2032,6 +2102,26 @@ func timesEqual(a, b *time.Time) bool {
 		return false
 	}
 	return a.Equal(*b)
+}
+
+func formatNullableResolution(value *model.Resolution) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
+}
+
+// resolutionsEqual compares two *model.Resolution pointers by value, the same
+// nil-aware contract as timesEqual so the event-change diff treats "no
+// resolution" symmetrically on both sides.
+func resolutionsEqual(a, b *model.Resolution) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
 }
 
 func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {

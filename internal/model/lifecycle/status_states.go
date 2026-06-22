@@ -27,6 +27,11 @@ type StatusPrimitive interface {
 	// ClosedAt is the close timestamp, present only on the closed state and nil
 	// on every other. The projection seam reads it without knowing the variant.
 	ClosedAt() *time.Time
+	// Resolution is the close reason, present only on the closed state and nil
+	// on every other. Like ClosedAt it is read through the seam without the
+	// caller discriminating the variant; on a non-closed state it is structurally
+	// absent, so a resolution on open/in_progress is unrepresentable.
+	Resolution() *Resolution
 }
 
 type openState struct{}
@@ -34,6 +39,9 @@ type openState struct{}
 func (openState) State() State       { return Open }
 func (openState) Progress() Progress { return Progress{Open: 1, Total: 1} }
 func (openState) ClosedAt() *time.Time {
+	return nil
+}
+func (openState) Resolution() *Resolution {
 	return nil
 }
 func (o openState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
@@ -47,6 +55,9 @@ func (inProgressState) Progress() Progress { return Progress{InProgress: 1, Tota
 func (inProgressState) ClosedAt() *time.Time {
 	return nil
 }
+func (inProgressState) Resolution() *Resolution {
+	return nil
+}
 func (s inProgressState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
 	return applyStatusAction(s, name)
 }
@@ -56,6 +67,11 @@ type closedState struct {
 	// on a closed state without a known timestamp; the strongest TRUE theorem is
 	// "closed may carry a close time," not "closed always has one".
 	closedAt *time.Time
+	// resolution is a pointer for the same reason closedAt is: a `done` close, a
+	// legacy row, or a field-wise merge can settle on closed with no resolution.
+	// The strongest TRUE theorem is "closed may carry a resolution"; `lit close`
+	// requires one at its command boundary, but the type does not.
+	resolution *Resolution
 }
 
 func (closedState) State() State       { return Closed }
@@ -63,19 +79,23 @@ func (closedState) Progress() Progress { return Progress{Closed: 1, Total: 1} }
 func (c closedState) ClosedAt() *time.Time {
 	return cloneTime(c.closedAt)
 }
+func (c closedState) Resolution() *Resolution {
+	return cloneResolution(c.resolution)
+}
 func (c closedState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
 	return applyStatusAction(c, name)
 }
 
-// NewStatus builds the leaf variant for state, attaching closedAt only to the
-// closed variant (ignored for the others). Blank or unrecognized states default
-// to open, matching the lenient hydration boundary.
-// [LAW:single-enforcer] The one place flat (state, closedAt) row data becomes a
-// typed leaf lifecycle, so no caller can mint a variant with a mismatched field.
-func NewStatus(state State, closedAt *time.Time) StatusPrimitive {
+// NewStatus builds the leaf variant for state, attaching closedAt and
+// resolution only to the closed variant (ignored for the others). Blank or
+// unrecognized states default to open, matching the lenient hydration boundary.
+// [LAW:single-enforcer] The one place flat (state, closedAt, resolution) row
+// data becomes a typed leaf lifecycle, so no caller can mint a variant with a
+// field meaningless in its state.
+func NewStatus(state State, closedAt *time.Time, resolution *Resolution) StatusPrimitive {
 	switch DefaultOpen(string(state)) {
 	case Closed:
-		return closedState{closedAt: cloneTime(closedAt)}
+		return closedState{closedAt: cloneTime(closedAt), resolution: cloneResolution(resolution)}
 	case InProgress:
 		return inProgressState{}
 	default:
