@@ -26,6 +26,19 @@ const (
 	ResolutionWontfix    Resolution = "wontfix"
 )
 
+// RedirectsToCanonical reports whether this resolution closes the issue *in
+// favor of* another, canonical ticket — duplicate and superseded both do; the
+// non-canonical issue redirects to its canonical counterpart. obsolete and
+// wontfix are terminal: the need is gone or the decision stands, with nowhere
+// to redirect.
+// [LAW:single-enforcer] The one place that names the redirect subset. The
+// `lit close` boundary requires a target exactly for these resolutions, and the
+// store writes the related-to redirect edge exactly for these — both consult
+// this predicate, so "which resolutions carry a target" cannot drift.
+func (r Resolution) RedirectsToCanonical() bool {
+	return r == ResolutionDuplicate || r == ResolutionSuperseded
+}
+
 // ParseResolution maps an untrusted resolution string (CLI flag, import
 // payload) into the sealed set.
 // [LAW:single-enforcer] The only string-to-Resolution gate; every trust

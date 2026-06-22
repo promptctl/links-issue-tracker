@@ -2168,10 +2168,10 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil); err != nil {
+	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil, ""); err != nil {
 		t.Fatalf("writeStatusTransition(first) error = %v", err)
 	}
-	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil)
+	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil, "")
 	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
 		t.Fatalf("writeStatusTransition(second) error = %v, want close conflict", err)
 	}
@@ -2254,6 +2254,159 @@ func TestReopenClearsClosedAt(t *testing.T) {
 	}
 	if loaded.ClosedAtValue() != nil {
 		t.Fatalf("loaded ClosedAtValue() = %#v, want nil", loaded.ClosedAtValue())
+	}
+}
+
+// TestCloseAsDuplicateWritesRedirectEdge is the happy path: a duplicate close
+// records the resolution and a related-to edge to the canonical ticket, visible
+// in the closed issue's relations.
+func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(canonical) error = %v", err)
+	}
+	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(dup) error = %v", err)
+	}
+	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:        dup.ID,
+		Action:         "close",
+		CreatedBy:      "tester",
+		Resolution:     ptr(model.ResolutionDuplicate),
+		RedirectTarget: canonical.ID,
+	})
+	if err != nil {
+		t.Fatalf("TransitionIssue(close duplicate) error = %v", err)
+	}
+	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionDuplicate {
+		t.Fatalf("ResolutionValue() = %v, want duplicate", got)
+	}
+	detail, err := st.GetIssueDetail(ctx, dup.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if len(detail.Related) != 1 || detail.Related[0].ID != canonical.ID {
+		t.Fatalf("Related = %#v, want exactly one edge to %s", detail.Related, canonical.ID)
+	}
+}
+
+// TestCloseAsObsoleteWritesNoRedirectEdge pins that terminal resolutions record
+// the resolution but no edge — there is nowhere to redirect.
+func TestCloseAsObsoleteWritesNoRedirectEdge(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Obsolete", Topic: "term", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:    issue.ID,
+		Action:     "close",
+		CreatedBy:  "tester",
+		Resolution: ptr(model.ResolutionObsolete),
+	})
+	if err != nil {
+		t.Fatalf("TransitionIssue(close obsolete) error = %v", err)
+	}
+	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionObsolete {
+		t.Fatalf("ResolutionValue() = %v, want obsolete", got)
+	}
+	detail, err := st.GetIssueDetail(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related = %#v, want no edges for a terminal resolution", detail.Related)
+	}
+}
+
+// TestCloseRedirectToMissingTargetRollsBack is the atomicity guarantee: when the
+// edge cannot be written (the canonical ticket does not exist), the whole close
+// rolls back — the issue stays open with no resolution, never a "duplicate of
+// nothing". [LAW:no-silent-failure]
+func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:        dup.ID,
+		Action:         "close",
+		CreatedBy:      "tester",
+		Resolution:     ptr(model.ResolutionSuperseded),
+		RedirectTarget: "test-does-not-exist",
+	})
+	if err == nil {
+		t.Fatal("TransitionIssue(close to missing target) error = nil, want rejection")
+	}
+	loaded, err := st.GetIssue(ctx, dup.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if loaded.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("status = %q, want open — the failed close must not persist", loaded.StatusValue())
+	}
+	if loaded.ResolutionValue() != nil || loaded.ClosedAtValue() != nil {
+		t.Fatalf("resolution/closed_at = %v/%v, want nil — the failed close must not persist", loaded.ResolutionValue(), loaded.ClosedAtValue())
+	}
+}
+
+// TestCloseRedirectToSelfRejected pins that an issue cannot redirect to itself —
+// a duplicate-of-itself is meaningless and the close is rejected outright.
+func TestCloseRedirectToSelfRejected(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Self", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:        issue.ID,
+		Action:         "close",
+		CreatedBy:      "tester",
+		Resolution:     ptr(model.ResolutionDuplicate),
+		RedirectTarget: issue.ID,
+	})
+	if err == nil {
+		t.Fatal("TransitionIssue(close as duplicate of itself) error = nil, want rejection")
+	}
+	loaded, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if loaded.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("status = %q, want open — the rejected close must not persist", loaded.StatusValue())
+	}
+}
+
+// TestCloseTerminalWithTargetRejected is the store's integrity floor: a terminal
+// resolution carrying a redirect target is incoherent and rejected rather than
+// silently dropping the target. [LAW:no-silent-failure]
+func TestCloseTerminalWithTargetRejected(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "term", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(canonical) error = %v", err)
+	}
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Wontfix", Topic: "term", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
+		IssueID:        issue.ID,
+		Action:         "close",
+		CreatedBy:      "tester",
+		Resolution:     ptr(model.ResolutionWontfix),
+		RedirectTarget: canonical.ID,
+	})
+	if err == nil {
+		t.Fatal("TransitionIssue(wontfix with target) error = nil, want rejection")
 	}
 }
 
