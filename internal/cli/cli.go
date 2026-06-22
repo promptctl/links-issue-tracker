@@ -781,12 +781,14 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// [LAW:dataflow-not-control-flow] Always build one UpdateInput; variability lives in empty fields/status, not in which branch runs.
 	// The actor and reason values apply to both transitions (TransitionBy/Reason)
 	// and plain field updates (Fields.By/Reason) so every mutation consistently
-	// records them. [LAW:single-enforcer]
+	// records them. The actor resolves through the same identity rule as the
+	// assignee — the agent's session wins, else --by/$USER. [LAW:single-enforcer]
+	actor := resolveIdentity(*by)
 	in := store.ApplyUpdateInput{
 		TransitionReason: strings.TrimSpace(*reason),
-		TransitionBy:     *by,
+		TransitionBy:     actor,
 		Fields: store.UpdateIssueInput{
-			By:     *by,
+			By:     actor,
 			Reason: strings.TrimSpace(*reason),
 		},
 	}
@@ -816,7 +818,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if visited["assignee"] {
 		// Update is a field write, not a claim: the explicit value is honored
 		// verbatim and empty means clear. Session-identity resolution
-		// (resolveAssigneeIdentity) is a claim-time convenience that belongs to
+		// (resolveIdentity) is a claim-time convenience that belongs to
 		// `start` only — applying it here would silently turn an explicit
 		// clear (or an explicit third-party assignee) into "assign to me".
 		// [LAW:no-silent-failure]
@@ -833,7 +835,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// discriminator is flag presence, not value emptiness — an explicit empty
 	// is a clear, never an invitation to self-assign. [LAW:no-silent-failure]
 	if !visited["assignee"] && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
-		in.TransitionAssignee = resolveAssigneeIdentity("")
+		in.TransitionAssignee = resolveIdentity("")
 	}
 	if visited["labels"] {
 		value := splitCSV(*labels)
@@ -987,15 +989,17 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 // passed without `=<token>`. It cannot collide with a real token (which is hex).
 const applyNoTokenSentinel = "__no_token__"
 
-// resolveAssigneeIdentity returns the assignee identity to use for any
-// command that reads an --assignee flag. When CLAUDE_CODE_SESSION_ID is set
-// the value is always claude_<sessionId>, regardless of what (if anything)
-// the caller passed. When the env var is empty the caller's explicit value
-// (trimmed) passes through.
-// [LAW:one-source-of-truth] sole producer of the agent assignee identity.
+// resolveIdentity returns the identity this lit invocation acts as — used for
+// both the assignee (who owns the work) and the event actor (who performed the
+// transition), which are the same agent. When CLAUDE_CODE_SESSION_ID is set the
+// value is always claude_<sessionId>, regardless of what (if anything) the
+// caller passed. When the env var is empty the caller's explicit value (an
+// --assignee or --by fallback, trimmed) passes through.
+// [LAW:one-source-of-truth] sole producer of the acting identity; assignee and
+// actor cannot diverge because both derive from this one rule.
 // [LAW:types-are-the-program] env presence is the discriminator; no callsite
 // re-decides precedence or re-parses the env var.
-func resolveAssigneeIdentity(explicit string) string {
+func resolveIdentity(explicit string) string {
 	if sessionID := strings.TrimSpace(os.Getenv("CLAUDE_CODE_SESSION_ID")); sessionID != "" {
 		return "claude_" + sessionID
 	}
@@ -1108,20 +1112,25 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		issue            model.Issue
 		resolvedAssignee string
 	)
+	// [LAW:single-enforcer] The event actor resolves through the same identity
+	// rule as the assignee: the agent's session wins, else --by/$USER. History
+	// must record who actually performed the transition (claude_<session>), not
+	// the shell user, now that ownership survives close as an orthogonal field.
+	actor := resolveIdentity(*by)
 	if action == model.ActionStart {
-		resolvedAssignee = resolveAssigneeIdentity(*assignee)
+		resolvedAssignee = resolveIdentity(*assignee)
 		issue, err = ap.Store.StartIssue(ctx, store.StartIssueInput{
 			IssueID:   issueID,
 			Assignee:  resolvedAssignee,
 			Reason:    *reason,
-			CreatedBy: *by,
+			CreatedBy: actor,
 		})
 	} else {
 		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 			IssueID:   issueID,
 			Action:    action,
 			Reason:    *reason,
-			CreatedBy: *by,
+			CreatedBy: actor,
 		})
 	}
 	if err != nil {
@@ -1179,8 +1188,10 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 	issue, err := ap.Store.UpdateIssue(ctx, id, store.UpdateIssueInput{
 		Assignee: &newAssignee,
-		By:       *by,
-		Reason:   *reason,
+		// [LAW:single-enforcer] Actor resolves through the shared identity rule;
+		// the second positional arg is the new owner, the actor is who acted.
+		By:     resolveIdentity(*by),
+		Reason: *reason,
 	})
 	if err != nil {
 		return err
@@ -1211,7 +1222,9 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if fs.NArg() != 0 {
 		return UsageError{Message: "usage: lit comment add <id> --body <text>"}
 	}
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: *by})
+	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
+	// through the same identity rule as every other actor.
+	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveIdentity(*by)})
 	if err != nil {
 		return err
 	}
