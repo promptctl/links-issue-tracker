@@ -267,14 +267,25 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 				return err
 			}
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
-			return fmt.Errorf("insert relation: %w", err)
-		}
-		return nil
+		return insertRelationTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
 	}
 	return rel, nil
+}
+
+// insertRelationTx writes one relation row on the given transaction. It is the
+// single INSERT for the relations table, shared by AddRelation's own mutation
+// and by writeStatusTransition's close transaction — letting a duplicate/
+// superseded redirect edge join the close in one atomic unit rather than
+// opening a second transaction. Endpoint canonicalization and validation are
+// the caller's responsibility; this is the raw write.
+// [LAW:one-source-of-truth] The relations INSERT statement lives only here.
+func insertRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
+		return fmt.Errorf("insert relation: %w", err)
+	}
+	return nil
 }
 
 // rejectBlocksCycle errors if inserting the blocks edge dependent->dependency
