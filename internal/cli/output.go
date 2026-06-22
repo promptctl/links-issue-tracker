@@ -51,6 +51,14 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		if _, err := fmt.Fprintf(w, "status: %s\nassignee: %s\n", caps.Status.Value, emptyDash(issue.AssigneeValue())); err != nil {
 			return err
 		}
+		// Resolution is closed-only optional data; the line appears exactly when a
+		// close recorded one (absent for open/in_progress and for a `done`/legacy
+		// close). [LAW:dataflow-not-control-flow] presence of the value, not a mode.
+		if caps.Status.Resolution != nil {
+			if _, err := fmt.Fprintf(w, "resolution: %s\n", *caps.Status.Resolution); err != nil {
+				return err
+			}
+		}
 	} else {
 		progress := issue.Progress()
 		if _, err := fmt.Fprintf(w, "children: %d closed, %d in_progress, %d open (%d total)\n", progress.Closed, progress.InProgress, progress.Open, progress.Total); err != nil {

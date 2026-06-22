@@ -190,11 +190,18 @@ func (r *resolver) resolveStatus(merged model.Issue) model.Issue {
 	merged.Assignee = twoTier(r.hasBase, baseAssignee, r.ours.AssigneeValue(), r.theirs.AssigneeValue(), r.tiebreak)
 
 	var closedAt *time.Time
+	var resolution *model.Resolution
 	if state == model.StateClosed {
 		closedAt = earliestTime(r.ours.ClosedAtValue(), r.theirs.ClosedAtValue())
+		// Resolution is a closed-state payload, so it is settled only when the
+		// merged state is closed. The symmetric tiebreak makes both machines pick
+		// the same winner when each side closed with a different resolution; a side
+		// with no resolution (a `done` or legacy close) contributes the empty
+		// string, which loses to any real resolution.
+		resolution = resolveResolution(r.ours.ResolutionValue(), r.theirs.ResolutionValue(), r.tiebreak)
 	}
 
-	hydrated, err := model.HydrateStatus(merged, model.StatusView{Value: state, ClosedAt: closedAt})
+	hydrated, err := model.HydrateStatus(merged, model.StatusView{Value: state, ClosedAt: closedAt, Resolution: resolution})
 	if err != nil {
 		// HydrateStatus never errors for a leaf StatusView; surface loudly
 		// rather than silently keep an unmerged status. [LAW:no-silent-failure]
@@ -217,6 +224,37 @@ func (r *resolver) tiebreak(ours, theirs string) string {
 		return ours
 	}
 	return theirs
+}
+
+// resolveResolution settles the closed-state resolution payload. Absent on a
+// side is the empty string; a real resolution always beats absence, and two
+// different real resolutions go to the symmetric tiebreak so both machines agree.
+// Returns nil when neither side carries one (a `done`/legacy close on both).
+func resolveResolution(ours, theirs *model.Resolution, tiebreak func(ours, theirs string) string) *model.Resolution {
+	o, t := resolutionString(ours), resolutionString(theirs)
+	var winner string
+	switch {
+	case o == t:
+		winner = o
+	case o == "":
+		winner = t
+	case t == "":
+		winner = o
+	default:
+		winner = tiebreak(o, t)
+	}
+	if winner == "" {
+		return nil
+	}
+	resolution := model.Resolution(winner)
+	return &resolution
+}
+
+func resolutionString(value *model.Resolution) string {
+	if value == nil {
+		return ""
+	}
+	return string(*value)
 }
 
 // derivedFlagTime resolves an archive/delete flag by the two-tier rule on the

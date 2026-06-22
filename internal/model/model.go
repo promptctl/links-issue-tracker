@@ -14,6 +14,7 @@ import (
 type State = lifecycle.State
 type Progress = lifecycle.Progress
 type ActionName = lifecycle.ActionName
+type Resolution = lifecycle.Resolution
 
 const (
 	StateOpen       = lifecycle.Open
@@ -29,12 +30,18 @@ const (
 	ActionUnarchive = lifecycle.ActionUnarchive
 	ActionDelete    = lifecycle.ActionDelete
 	ActionRestore   = lifecycle.ActionRestore
+
+	ResolutionDuplicate  = lifecycle.ResolutionDuplicate
+	ResolutionSuperseded = lifecycle.ResolutionSuperseded
+	ResolutionObsolete   = lifecycle.ResolutionObsolete
+	ResolutionWontfix    = lifecycle.ResolutionWontfix
 )
 
 var (
-	ParseState  = lifecycle.ParseState
-	ParseAction = lifecycle.ParseAction
-	DefaultOpen = lifecycle.DefaultOpen
+	ParseState      = lifecycle.ParseState
+	ParseAction     = lifecycle.ParseAction
+	DefaultOpen     = lifecycle.DefaultOpen
+	ParseResolution = lifecycle.ParseResolution
 )
 
 func IsContainerType(issueType string) bool {
@@ -222,6 +229,17 @@ func (i Issue) ClosedAtValue() *time.Time {
 	return cloneTime(status.ClosedAt)
 }
 
+// ResolutionValue is the close reason projected to the issue level, nil unless
+// the issue is closed with a recorded resolution. Read through the capability
+// seam so the accessor stays oblivious to which leaf variant backs the issue.
+func (i Issue) ResolutionValue() *lifecycle.Resolution {
+	status := i.Capabilities().Status
+	if status == nil {
+		return nil
+	}
+	return cloneResolution(status.Resolution)
+}
+
 func (i Issue) IsContainer() bool {
 	return IsContainerType(i.IssueType)
 }
@@ -242,7 +260,7 @@ func (i Issue) IsHydrated() bool {
 // a lifecycle field, so it is carried on Issue.Assignee, not through here.
 // [LAW:single-enforcer] Row status fields become lifecycle state only through this model API.
 func HydrateStatus(issue Issue, view StatusView) (Issue, error) {
-	issue.replaceLifecycle(lifecycle.NewStatus(view.Value, view.ClosedAt))
+	issue.replaceLifecycle(lifecycle.NewStatus(view.Value, view.ClosedAt, view.Resolution))
 	return issue, nil
 }
 
@@ -305,23 +323,24 @@ func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {
 }
 
 type issueJSON struct {
-	ID          string     `json:"id"`
-	Title       string     `json:"title"`
-	Description string     `json:"description"`
-	Prompt      string     `json:"prompt,omitempty"`
-	Status      *State     `json:"status,omitempty"`
-	Priority    int        `json:"priority"`
-	IssueType   string     `json:"issue_type"`
-	Topic       string     `json:"topic"`
-	Assignee    string     `json:"assignee,omitempty"`
-	Rank        string     `json:"rank"`
-	Lane        string     `json:"lane"`
-	Labels      []string   `json:"labels"`
-	CreatedAt   time.Time  `json:"created_at"`
-	UpdatedAt   time.Time  `json:"updated_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
-	ArchivedAt  *time.Time `json:"archived_at,omitempty"`
-	DeletedAt   *time.Time `json:"deleted_at,omitempty"`
+	ID          string                `json:"id"`
+	Title       string                `json:"title"`
+	Description string                `json:"description"`
+	Prompt      string                `json:"prompt,omitempty"`
+	Status      *State                `json:"status,omitempty"`
+	Priority    int                   `json:"priority"`
+	IssueType   string                `json:"issue_type"`
+	Topic       string                `json:"topic"`
+	Assignee    string                `json:"assignee,omitempty"`
+	Rank        string                `json:"rank"`
+	Lane        string                `json:"lane"`
+	Labels      []string              `json:"labels"`
+	CreatedAt   time.Time             `json:"created_at"`
+	UpdatedAt   time.Time             `json:"updated_at"`
+	ClosedAt    *time.Time            `json:"closed_at,omitempty"`
+	Resolution  *lifecycle.Resolution `json:"resolution,omitempty"`
+	ArchivedAt  *time.Time            `json:"archived_at,omitempty"`
+	DeletedAt   *time.Time            `json:"deleted_at,omitempty"`
 }
 
 func (i Issue) MarshalJSON() ([]byte, error) {
@@ -339,10 +358,12 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 	}
 	var statusValue *State
 	var closedAt *time.Time
+	var resolution *lifecycle.Resolution
 	if caps.Status != nil {
 		value := caps.Status.Value
 		statusValue = &value
 		closedAt = cloneTime(caps.Status.ClosedAt)
+		resolution = cloneResolution(caps.Status.Resolution)
 	}
 	return json.Marshal(issueJSON{
 		ID:          i.ID,
@@ -360,6 +381,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		CreatedAt:   i.CreatedAt,
 		UpdatedAt:   i.UpdatedAt,
 		ClosedAt:    closedAt,
+		Resolution:  resolution,
 		ArchivedAt:  i.ArchivedAt,
 		DeletedAt:   i.DeletedAt,
 	})
@@ -394,8 +416,9 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		i.lifecycle = nil
 	case payload.Status != nil:
 		hydrated, err := HydrateStatus(*i, StatusView{
-			Value:    *payload.Status,
-			ClosedAt: cloneTime(payload.ClosedAt),
+			Value:      *payload.Status,
+			ClosedAt:   cloneTime(payload.ClosedAt),
+			Resolution: cloneResolution(payload.Resolution),
 		})
 		if err != nil {
 			return err

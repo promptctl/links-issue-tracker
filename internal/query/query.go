@@ -38,6 +38,9 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 		return store.ListIssuesFilter{}, err
 	}
 	filter.Statuses = mergeStateSlice(normalizedBase, normalizedIncoming)
+	// Resolution filtering is OR within the set, so duplicates are absorbed by the
+	// allow-map in the store; a plain append needs no dedup.
+	filter.Resolutions = append(filter.Resolutions, incoming.Resolutions...)
 	filter.IssueTypes = mergeSlice(filter.IssueTypes, incoming.IssueTypes)
 	filter.Assignees = mergeSlice(filter.Assignees, incoming.Assignees)
 	filter.SearchTerms = append(filter.SearchTerms, incoming.SearchTerms...)
@@ -66,6 +69,16 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 			return err
 		}
 		filter.Statuses = append(filter.Statuses, parsed)
+		return nil
+	case strings.HasPrefix(term, "resolution:"):
+		// [LAW:single-enforcer] The sealed resolution set is gated by the one
+		// ParseResolution boundary; the query layer reuses it rather than
+		// re-listing the members.
+		parsed, err := model.ParseResolution(strings.TrimPrefix(term, "resolution:"))
+		if err != nil {
+			return err
+		}
+		filter.Resolutions = append(filter.Resolutions, parsed)
 		return nil
 	case strings.HasPrefix(term, "type:"):
 		t := strings.TrimSpace(strings.TrimPrefix(term, "type:"))
@@ -224,7 +237,6 @@ func validateFilter(filter store.ListIssuesFilter) error {
 	}
 	return nil
 }
-
 
 func mergeBoolPointer(name string, dst **bool, incoming *bool) error {
 	if incoming == nil {

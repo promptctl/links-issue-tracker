@@ -339,6 +339,12 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				if verb.action == "start" {
 					extra = []string{"--assignee", owner}
 				}
+				// `lit close` requires a resolution at its command boundary; supply
+				// a valid one so the cell exercises the transition, not the parse
+				// rejection (which has its own dedicated test).
+				if verb.action == "close" {
+					extra = []string{"--resolution", "wontfix"}
+				}
 				driveTransition(t, ctx, ap, issue.ID, verb.action, extra...)
 
 				after, err := ap.Store.GetIssueDetail(ctx, issue.ID)
@@ -390,14 +396,21 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 			// Guided actions (e.g. `done`) preview before they act, so the
 			// container rejection only surfaces at the apply phase; drive past
 			// the preview when a token is offered.
+			// `close` requires a resolution at its command boundary; supply a valid
+			// one so the cell reaches the deeper container rejection rather than the
+			// parse rejection. The other actions take no resolution.
+			baseArgs := []string{epic.ID}
+			if action == "close" {
+				baseArgs = append(baseArgs, "--resolution", "wontfix")
+			}
 			var preview bytes.Buffer
-			err := runTransition(ctx, &preview, ap, []string{epic.ID}, action)
+			err := runTransition(ctx, &preview, ap, baseArgs, action)
 			if err == nil {
 				m := applyTokenRE.FindStringSubmatch(preview.String())
 				if m == nil {
 					t.Fatalf("runTransition(%s epic) = nil with no apply token, want container rejection; output %q", action, preview.String())
 				}
-				err = runTransition(ctx, &bytes.Buffer{}, ap, []string{epic.ID, "--apply=" + m[1]}, action)
+				err = runTransition(ctx, &bytes.Buffer{}, ap, append(append([]string{}, baseArgs...), "--apply="+m[1]), action)
 			}
 			if err == nil {
 				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
