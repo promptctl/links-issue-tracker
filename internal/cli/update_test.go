@@ -695,7 +695,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	}
 }
 
-func TestResolveAssigneeIdentity(t *testing.T) {
+func TestResolveIdentity(t *testing.T) {
 	tests := []struct {
 		name     string
 		explicit string
@@ -712,9 +712,9 @@ func TestResolveAssigneeIdentity(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CLAUDE_CODE_SESSION_ID", tc.env)
-			got := resolveAssigneeIdentity(tc.explicit)
+			got := resolveIdentity(tc.explicit)
 			if got != tc.want {
-				t.Fatalf("resolveAssigneeIdentity(%q) with env=%q = %q, want %q", tc.explicit, tc.env, got, tc.want)
+				t.Fatalf("resolveIdentity(%q) with env=%q = %q, want %q", tc.explicit, tc.env, got, tc.want)
 			}
 		})
 	}
@@ -766,6 +766,69 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 	}
 	if got, want := started.AssigneeValue(), "claude_sess-abc"; got != want {
 		t.Fatalf("started.AssigneeValue() = %q, want %q", got, want)
+	}
+}
+
+// lastEventActorForAction returns the actor recorded on the most recent event
+// with the given action — the durable "who performed this transition" signal.
+func lastEventActorForAction(t *testing.T, ap *app.App, ctx context.Context, id, action string) string {
+	t.Helper()
+	detail, err := ap.Store.GetIssueDetail(ctx, id)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	actor := ""
+	found := false
+	for _, e := range detail.Events {
+		if e.Action == action {
+			actor = e.Actor
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no event with action %q recorded for %s", action, id)
+	}
+	return actor
+}
+
+// TestRunTransitionActorFromSessionEnv pins the attribution fix: with
+// CLAUDE_CODE_SESSION_ID set, the event actor (not just the assignee) resolves
+// to claude_<session>, so history shows the agent performed the transition.
+func TestRunTransitionActorFromSessionEnv(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-actor")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Actor from session", Topic: "attribution", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	driveTransition(t, ctx, ap, issue.ID, "start")
+	driveTransition(t, ctx, ap, issue.ID, "done")
+	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "start"), "claude_sess-actor"; got != want {
+		t.Fatalf("start event actor = %q, want %q", got, want)
+	}
+	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "done"), "claude_sess-actor"; got != want {
+		t.Fatalf("done event actor = %q, want %q", got, want)
+	}
+}
+
+// TestRunTransitionActorFallsBackToByFlag pins the no-agent path: without the
+// session env, the actor keeps the existing --by/$USER behavior.
+func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Actor from by flag", Topic: "attribution", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	driveTransition(t, ctx, ap, issue.ID, "start", "--by=alice")
+	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "start"), "alice"; got != want {
+		t.Fatalf("start event actor = %q, want %q", got, want)
 	}
 }
 
