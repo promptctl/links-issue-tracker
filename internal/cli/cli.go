@@ -985,10 +985,6 @@ func filterWorkableIssues(issues []model.Issue) []model.Issue {
 	return filtered
 }
 
-// applyNoTokenSentinel is the value StringOptional resolves to when --apply is
-// passed without `=<token>`. It cannot collide with a real token (which is hex).
-const applyNoTokenSentinel = "__no_token__"
-
 // resolveIdentity returns the identity this lit invocation acts as — used for
 // both the assignee (who owns the work) and the event actor (who performed the
 // transition), which are the same agent. When CLAUDE_CODE_SESSION_ID is set the
@@ -1048,72 +1044,22 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// with the close. Required for those two resolutions, rejected for the
 	// terminal ones (obsolete, wontfix) and every non-close action. [LAW:single-enforcer]
 	target := fs.String("of", "", "Canonical ticket a duplicate/superseded close redirects to (required for those, rejected otherwise)")
-	// [LAW:types-are-the-program] `--apply` carries the token printed by the
-	// preview phase as its value (`--apply=<token>`). Empty default = preview;
-	// non-empty = apply attempt. The two-phase contract is the type: a valid
-	// apply requires a value matching the plan's hash, no other state needed.
-	applyVal := fs.StringOptional("apply", applyNoTokenSentinel, "", "Apply the transition with the token printed by the preview phase (use `--apply=<token>`)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	remaining := fs.cmd.Flags().Args()
-	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>] [--apply=<token>]", transitionCommandName(action))
+	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
 	if len(remaining) != 1 {
 		return errors.New(usage)
 	}
 
 	issueID := remaining[0]
-	// [LAW:types-are-the-program] Apply intent is "did the caller pass --apply
-	// in any form" — both `--apply` (no value) and `--apply=` (explicit empty)
-	// are apply attempts whose tokens cannot match the expected hash.
-	// `*applyVal != ""` would mis-classify the empty-value form as "no apply".
-	applyRequested := fs.Changed("apply")
 
-	// [LAW:dataflow-not-control-flow] Pre-guidance template existence is the data
-	// that activates the two-phase (preview/apply) flow. When the template exists
-	// the bare command prints guidance with a state-derived token, and only
-	// `--apply=<token>` with a matching token may execute the transition. When no
-	// template exists, the command keeps the single-phase contract.
-	preGuidance, hasPreGuidance, err := loadTransitionGuidance(action, "pre", ap.Workspace.RootDir)
-	if err != nil {
-		return fmt.Errorf("load pre-guidance: %w", err)
-	}
-	guided := hasPreGuidance
-
-	// One pre-transition read serves both consumers of the prior row: the
-	// guided-mode token fingerprint and the claim-transfer notice below.
+	// The pre-transition read feeds the claim-transfer notice below: `start` may
+	// take an issue over from a prior owner, and that hand-off must be surfaced.
 	prior, err := ap.Store.GetIssue(ctx, issueID)
 	if err != nil {
 		return err
-	}
-
-	if guided {
-		// [LAW:types-are-the-program] In guided mode the pre-guidance template
-		// is the only surface that communicates the apply token to the agent.
-		// A template that omits `<token>` cannot satisfy that contract — apply
-		// would refuse with no way to discover the token. Refuse at load time
-		// and name the offending override so the user can fix it.
-		if err := requireTokenPlaceholder(preGuidance, string(action), ap.Workspace.RootDir); err != nil {
-			return err
-		}
-
-		// [LAW:types-are-the-program] The token is a function of the plan
-		// (action + id + the issue's UpdatedAt fingerprint). Reading the issue
-		// before transitioning lets the apply phase recompute the same hash and
-		// reject any drift — including stale tokens from previous sessions.
-		expected := applyToken("transition", string(action), issueID, prior.UpdatedAt.UTC().Format(time.RFC3339Nano))
-
-		if !applyRequested {
-			rendered := renderGuidance(preGuidance, issueID, expected)
-			if _, err := fmt.Fprintln(stdout, rendered); err != nil {
-				return err
-			}
-			return nil
-		}
-
-		if *applyVal != expected {
-			return fmt.Errorf("run `lit %s %s` first", transitionCommandName(action), issueID)
-		}
 	}
 
 	// [LAW:types-are-the-program] Resolution travels only with `close`. Parse it at
