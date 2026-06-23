@@ -243,18 +243,69 @@ func formatOptionalTime(value *time.Time) string {
 	return value.Format(time.RFC3339)
 }
 
-// openUnblockIDs returns the IDs of issues from blocks that are still active
-// (not closed, not archived, not deleted) — the set this issue's closure
-// would actually unblock from a "ready" perspective.
+// isLiveIssue reports whether an issue is still in play — open or in_progress,
+// and neither archived nor deleted. This is the single definition of "live
+// adjacency" shared by the now-unblocked-dependents line and the open-siblings
+// filter, so the two surfaces cannot drift on what counts as actionable.
+// [LAW:single-enforcer] Liveness decided once, here.
+func isLiveIssue(issue model.Issue) bool {
+	return issue.State() != model.StateClosed && issue.ArchivedAt == nil && issue.DeletedAt == nil
+}
+
+// openUnblockIDs returns the IDs of issues from blocks that are still live —
+// the set this issue's closure would actually unblock from a "ready" perspective.
 func openUnblockIDs(blocks []model.Issue) []string {
 	ids := make([]string, 0, len(blocks))
 	for _, b := range blocks {
-		if b.State() == model.StateClosed || b.ArchivedAt != nil || b.DeletedAt != nil {
+		if !isLiveIssue(b) {
 			continue
 		}
 		ids = append(ids, b.ID)
 	}
 	return ids
+}
+
+// liveIssues returns the live members of issues, preserving order. The full set
+// stays intact upstream (lit show needs every sibling); callers that want only
+// the actionable neighborhood — the close/done adjacency view — filter here.
+func liveIssues(issues []model.Issue) []model.Issue {
+	out := make([]model.Issue, 0, len(issues))
+	for _, issue := range issues {
+		if isLiveIssue(issue) {
+			out = append(out, issue)
+		}
+	}
+	return out
+}
+
+// printCloseAdjacency renders a just-closed ticket's live neighborhood at the
+// capture moment: its parent, the siblings still in play, related neighbors,
+// and the dependents this close unblocked. Each group is omitted when empty, so
+// closing an isolated ticket prints nothing. These are relationship FACTS, not a
+// cue to act — the post-close guidance already carries the "why".
+// [LAW:one-source-of-truth] Reuses lit show's group renderer and its
+// now-unblocked-dependents derivation rather than minting a second
+// representation of the same graph.
+func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
+	parent := []model.Issue{}
+	if detail.Parent != nil {
+		parent = append(parent, *detail.Parent)
+	}
+	if err := printIssueGroup(w, "parent", parent); err != nil {
+		return err
+	}
+	if err := printIssueGroup(w, "siblings", liveIssues(detail.Siblings)); err != nil {
+		return err
+	}
+	if err := printIssueGroup(w, "related", detail.Related); err != nil {
+		return err
+	}
+	if ids := openUnblockIDs(detail.Blocks); len(ids) > 0 {
+		if _, err := fmt.Fprintf(w, "\nunblocks: %s\n", strings.Join(ids, ", ")); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func formatIssueState(issue model.Issue) string {

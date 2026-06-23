@@ -1155,6 +1155,22 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
+	// At the capture moment a closing agent's freshest need is "which adjacent
+	// tickets just became actionable or stale" — a relationship question the
+	// one-line summary above answers with nothing. Render the live neighborhood
+	// from the canonical graph, in the command already running.
+	// [LAW:one-source-of-truth] "Closes the issue" is the lifecycle table's fact
+	// (done and close both target Closed), not a re-enumerated action list here,
+	// so a future closing action inherits this block for free.
+	if target, ok := model.ActionTargetState(action); ok && target == model.StateClosed {
+		detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+		if err != nil {
+			return err
+		}
+		if err := printCloseAdjacency(stdout, detail); err != nil {
+			return err
+		}
+	}
 	if topic, ok := transitionBreadcrumbTopics[action]; ok {
 		return emitBreadcrumb(stdout, topic)
 	}
