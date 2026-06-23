@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // seedOpenIssueRaw creates an issue through the CLI and returns its id.
@@ -71,7 +72,8 @@ func TestRedirectTargetRejectedOnNonClose(t *testing.T) {
 }
 
 // TestCloseAsDuplicateRecordsRedirectEdge is the CLI happy path: a duplicate
-// close with --of records the related-to edge to the canonical ticket.
+// close with --of records the canonical ticket as the redirect target, lifted
+// out of the generic related group.
 func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -86,7 +88,119 @@ func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.Related) != 1 || detail.Related[0].ID != canonical {
-		t.Fatalf("Related = %#v, want one edge to %s", detail.Related, canonical)
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical {
+		t.Fatalf("RedirectTarget = %#v, want the canonical ticket %s", detail.RedirectTarget, canonical)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related = %#v, want empty (redirect lifted out)", detail.Related)
+	}
+}
+
+// TestShowRendersRedirectDistinctFromRelated pins the rendering acceptance: a
+// ticket closed as duplicate presents its canonical target under a `redirect:`
+// group, not flattened into `related:`.
+func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runShow(ctx, &out, ap, []string{dup}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", dup, err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "redirect:\n- "+canonical) {
+		t.Fatalf("show output missing redirect group for %s; got:\n%s", canonical, text)
+	}
+	if strings.Contains(text, "related:") {
+		t.Fatalf("redirect must not render under related:; got:\n%s", text)
+	}
+}
+
+// TestShowManualRelatedRendersUnchanged pins the no-regression half of the
+// acceptance: a ticket with a manual related edge and no redirect renders the
+// related group exactly as before, with no redirect group.
+func TestShowManualRelatedRendersUnchanged(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	focal := seedOpenIssueRaw(t, ctx, ap, "Focal")
+	peer := seedOpenIssueRaw(t, ctx, ap, "Peer")
+	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: focal, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddRelation(related) error = %v", err)
+	}
+
+	var out bytes.Buffer
+	if err := runShow(ctx, &out, ap, []string{focal}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", focal, err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "related:\n- "+peer) {
+		t.Fatalf("show output missing related group for %s; got:\n%s", peer, text)
+	}
+	if strings.Contains(text, "redirect:") {
+		t.Fatalf("a manual related edge must not render as a redirect; got:\n%s", text)
+	}
+}
+
+// TestShowRedirectAmbiguousWhenManualEdgePresent pins the no-mislabel fallback:
+// when a duplicate-closed ticket also carries a manual related edge, storage
+// cannot tell the redirect from the peer, so neither is promoted — both stay
+// under related and no redirect group is emitted.
+func TestShowRedirectAmbiguousWhenManualEdgePresent(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	peer := seedOpenIssueRaw(t, ctx, ap, "Peer")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: dup, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddRelation(related) error = %v", err)
+	}
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.RedirectTarget != nil {
+		t.Fatalf("RedirectTarget = %#v, want nil when redirect is indistinguishable from a manual peer", detail.RedirectTarget)
+	}
+	if len(detail.Related) != 2 {
+		t.Fatalf("Related = %#v, want both edges under related", detail.Related)
+	}
+
+	var out bytes.Buffer
+	if err := runShow(ctx, &out, ap, []string{dup}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", dup, err)
+	}
+	if strings.Contains(out.String(), "redirect:") {
+		t.Fatalf("ambiguous redirect must not be promoted; got:\n%s", out.String())
+	}
+}
+
+// TestCloseAsDuplicateRendersRedirectAdjacency pins the epic's done/close arm:
+// closing as duplicate surfaces the redirect target in the capture-at-close
+// adjacency output, the moment the closing agent most needs "where it went".
+func TestCloseAsDuplicateRendersRedirectAdjacency(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+
+	var out bytes.Buffer
+	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+		t.Fatalf("runTransition(close duplicate) error = %v", err)
+	}
+	if !strings.Contains(out.String(), "redirect:\n- "+canonical) {
+		t.Fatalf("close adjacency missing redirect group for %s; got:\n%s", canonical, out.String())
 	}
 }

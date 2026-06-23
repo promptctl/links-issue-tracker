@@ -111,6 +111,12 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "blocks", detail.Blocks); err != nil {
 		return err
 	}
+	// redirect precedes related: it is the canonical "where did this work go"
+	// edge, distinct from incidental peer links. The store already excluded it
+	// from Related, so the two groups never overlap. [LAW:dataflow-not-control-flow]
+	if err := printIssueGroup(w, "redirect", redirectGroup(detail.RedirectTarget)); err != nil {
+		return err
+	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {
 		return err
 	}
@@ -144,6 +150,17 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		}
 	}
 	return nil
+}
+
+// redirectGroup adapts the single optional redirect target to the slice
+// printIssueGroup renders, so the redirect reuses the one definition of the
+// "- id [state] title" line format and the omit-when-empty rule. A nil target
+// yields the empty slice, which printIssueGroup omits.
+func redirectGroup(target *model.Issue) []model.Issue {
+	if target == nil {
+		return nil
+	}
+	return []model.Issue{*target}
 }
 
 func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
@@ -341,6 +358,12 @@ func printCloseAdjacency(w io.Writer, detail model.IssueDetail) error {
 		return err
 	}
 	if err := printIssueGroup(w, "siblings", liveIssues(detail.Siblings)); err != nil {
+		return err
+	}
+	// Surface the redirect at the close moment too: closing as duplicate/
+	// superseded, the freshest fact is where the work went. Same store-shaped
+	// IssueDetail, same omit-when-empty group as lit show.
+	if err := printIssueGroup(w, "redirect", redirectGroup(detail.RedirectTarget)); err != nil {
 		return err
 	}
 	if err := printIssueGroup(w, "related", detail.Related); err != nil {
