@@ -481,16 +481,24 @@ type IssueEvent struct {
 }
 
 type IssueDetail struct {
-	Issue     Issue        `json:"issue"`
-	Relations []Relation   `json:"relations"`
-	Comments  []Comment    `json:"comments"`
-	Children  []Issue      `json:"children"`
-	Siblings  []Issue      `json:"siblings"`
-	DependsOn []Issue      `json:"depends_on"`
-	Related   []Issue      `json:"related"`
-	Blocks    []Issue      `json:"blocks"`
-	Parent    *Issue       `json:"parent,omitempty"`
-	Events    []IssueEvent `json:"events"`
+	Issue     Issue      `json:"issue"`
+	Relations []Relation `json:"relations"`
+	Comments  []Comment  `json:"comments"`
+	Children  []Issue    `json:"children"`
+	Siblings  []Issue    `json:"siblings"`
+	DependsOn []Issue    `json:"depends_on"`
+	Related   []Issue    `json:"related"`
+	Blocks    []Issue    `json:"blocks"`
+	Parent    *Issue     `json:"parent,omitempty"`
+	// RedirectTarget is the canonical ticket a duplicate/superseded close
+	// redirects to — the load-bearing "where did this work go" relationship,
+	// lifted out of Related so it is not flattened into a generic peer link. It
+	// is non-nil exactly when the store can identify the redirect unambiguously
+	// (see splitRedirect); when present it is absent from Related, so the two
+	// slices are disjoint and a renderer shows each without re-deriving which
+	// edge is the redirect. [LAW:one-source-of-truth]
+	RedirectTarget *Issue       `json:"redirect_target,omitempty"`
+	Events         []IssueEvent `json:"events"`
 }
 
 type Export struct {

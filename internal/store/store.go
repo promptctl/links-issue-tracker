@@ -840,17 +840,22 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		}
 		siblings = siblingsOf(id, parentChildren)
 	}
+	// The redirect target is lifted out of related at the store — the single
+	// owner of graph semantics — so every renderer reads two disjoint slices
+	// without re-deriving which related edge is the redirect.
+	redirectTarget, related := splitRedirect(issue, relations, relatedFrom(id, relations, relatedByID))
 	detail := model.IssueDetail{
-		Issue:     issue,
-		Relations: relations,
-		Comments:  comments,
-		Events:    events,
-		Children:  structural.Children,
-		Siblings:  siblings,
-		DependsOn: structural.DependsOn,
-		Blocks:    structural.Blocks,
-		Parent:    structural.Parent,
-		Related:   relatedFrom(id, relations, relatedByID),
+		Issue:          issue,
+		Relations:      relations,
+		Comments:       comments,
+		Events:         events,
+		Children:       structural.Children,
+		Siblings:       siblings,
+		DependsOn:      structural.DependsOn,
+		Blocks:         structural.Blocks,
+		Parent:         structural.Parent,
+		Related:        related,
+		RedirectTarget: redirectTarget,
 	}
 	return detail, nil
 }

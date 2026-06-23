@@ -93,6 +93,43 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 	return out
 }
 
+// splitRedirect separates the redirect target from the generic related
+// counterparts of a closed issue. A duplicate/superseded close records the
+// canonical ticket it redirects to as a related-to edge — the same shape a
+// manual peer link uses, with no stored marker to tell them apart. The one
+// reliable signal is the close itself: lifecycle.Resolution.RedirectsToCanonical
+// holds iff exactly one redirect edge was written. So when the resolution
+// redirects AND the issue has exactly one related-to edge, that edge is provably
+// the redirect (a manual peer would make the count two or more); its hydrated
+// counterpart is the redirect target, lifted out of related. With more than one
+// related-to edge the redirect is not distinguishable from a manual peer, so
+// every counterpart stays under related rather than risk mislabeling one.
+// [LAW:single-enforcer] Redirect-subset membership is lifecycle.Resolution's
+// predicate, consulted here so renderers never re-derive graph semantics.
+// [LAW:no-silent-failure] The ambiguous case falls back to the prior rendering
+// instead of guessing which edge is the redirect.
+func splitRedirect(issue model.Issue, relations []model.Relation, related []model.Issue) (*model.Issue, []model.Issue) {
+	resolution := issue.ResolutionValue()
+	if resolution == nil || !resolution.RedirectsToCanonical() || countRelatedEdges(relations) != 1 || len(related) != 1 {
+		return nil, related
+	}
+	target := related[0]
+	return &target, []model.Issue{}
+}
+
+// countRelatedEdges returns how many related-to edges are incident to the issue.
+// A redirect close guarantees exactly one; a count of one with a redirecting
+// resolution therefore identifies that edge as the redirect.
+func countRelatedEdges(relations []model.Relation) int {
+	count := 0
+	for _, rel := range relations {
+		if rel.Type == model.RelRelatedTo {
+			count++
+		}
+	}
+	return count
+}
+
 // siblingsOf returns parentChildren with the focal issue removed — the
 // "children-of-parent-minus-self" derivation. Order is preserved (callers pass
 // already rank-ordered children), so the result needs no resort. A focal issue

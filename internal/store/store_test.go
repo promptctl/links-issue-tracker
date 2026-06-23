@@ -2258,8 +2258,8 @@ func TestReopenClearsClosedAt(t *testing.T) {
 }
 
 // TestCloseAsDuplicateWritesRedirectEdge is the happy path: a duplicate close
-// records the resolution and a related-to edge to the canonical ticket, visible
-// in the closed issue's relations.
+// records the resolution and a related-to edge to the canonical ticket, surfaced
+// as the redirect target (lifted out of related) and present in the raw graph.
 func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -2288,8 +2288,24 @@ func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if len(detail.Related) != 1 || detail.Related[0].ID != canonical.ID {
-		t.Fatalf("Related = %#v, want exactly one edge to %s", detail.Related, canonical.ID)
+	// The canonical ticket is the redirect target, lifted out of the generic
+	// related group so it reads as "where this work went", not a peer link.
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical.ID {
+		t.Fatalf("RedirectTarget = %#v, want the canonical ticket %s", detail.RedirectTarget, canonical.ID)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related = %#v, want empty (redirect lifted out)", detail.Related)
+	}
+	// The redirect is still a related-to edge in the canonical graph; only its
+	// projection into IssueDetail changed.
+	var hasEdge bool
+	for _, rel := range detail.Relations {
+		if rel.Type == model.RelRelatedTo && (rel.SrcID == canonical.ID || rel.DstID == canonical.ID) {
+			hasEdge = true
+		}
+	}
+	if !hasEdge {
+		t.Fatalf("Relations = %#v, want a related-to edge to %s", detail.Relations, canonical.ID)
 	}
 }
 
