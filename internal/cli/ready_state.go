@@ -571,7 +571,7 @@ func pickFirstReady(rows []annotation.AnnotatedIssue) (annotation.AnnotatedIssue
 // `lit start`.
 func printNextSummary(w io.Writer, row annotation.AnnotatedIssue) error {
 	columns := resolveColumns(nil)
-	line := formatIssueColumns(row.Issue, columns, "  ")
+	line := formatIssueColumns(row.Issue, columns, "  ", nil)
 	if _, err := fmt.Fprintln(w, line); err != nil {
 		return err
 	}
@@ -671,7 +671,7 @@ func printReadySection(w io.Writer, columns []string, ready []annotation.Annotat
 	// numbered-line + dependency rendering path. Empty dependency slices produce
 	// no output lines, not skipped operations.
 	for i, entry := range display {
-		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  "))
+		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", nil))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
@@ -720,7 +720,7 @@ func printInProgressSection(w io.Writer, columns []string, issues []annotation.A
 		return err
 	}
 	for _, entry := range issues {
-		line := formatIssueColumns(entry.Issue, columns, " | ")
+		line := formatIssueColumns(entry.Issue, columns, " | ", nil)
 		line += " | Last Update: " + inProgressSuffix(entry)
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
