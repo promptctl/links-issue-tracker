@@ -88,7 +88,7 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 
 	unblocksMap := buildUnblocksMap(issues)
 	for i, entry := range issues {
-		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  "))
+		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  ", nil))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
