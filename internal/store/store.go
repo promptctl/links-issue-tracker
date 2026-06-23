@@ -127,7 +127,7 @@ func (a ApplyUpdateInput) IsEmpty() bool {
 
 // canonicalActionForTargetState returns the lifecycle action that lit update
 // records when transitioning to target. lit update is the neutral path and
-// records "close" for Closed; done's two-phase guidance ceremony belongs to
+// records "close" for Closed; done's capture-deposit guidance belongs to
 // lit done, not to a target-state update. The fallthrough is unreachable in
 // practice — DefaultOpen at the call site narrows arbitrary input to one of
 // the three known states — and is left empty so a future bypass surfaces

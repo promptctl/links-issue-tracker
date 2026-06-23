@@ -90,12 +90,13 @@ lit show <id>             # read the full ticket before you touch code
 lit start <id>            # claim it (moves it to in_progress, assigns it to you)
 # ...do the work...
 lit comment add <id> --body "Starting: <plan>"   # leave a trail as you go
-lit done <id>             # finish — this prints an `--apply=<token>` command to run next
+lit done <id>             # finish — closes the ticket and prints follow-up capture guidance
 ```
 
-`lit done <id>` does **not** close the ticket on its own. It prints pre-completion guidance
-and the exact `lit done <id> --apply=<token>` command; run that to actually close it. This
-two-step is deliberate — it's a checkpoint to confirm the work is genuinely complete.
+`lit done <id>` closes the ticket and prints post-close guidance: a prompt to capture, while
+context is fresh, anything the next agent needs (follow-ups, comments on adjacent tickets).
+Verifying the work is correct belongs *before* the merge — in CI and PR review — not in this
+post-merge close, which runs after the change has already landed.
 
 Other commands you'll need:
 
