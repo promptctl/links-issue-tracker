@@ -38,10 +38,11 @@ const (
 )
 
 var (
-	ParseState      = lifecycle.ParseState
-	ParseAction     = lifecycle.ParseAction
-	DefaultOpen     = lifecycle.DefaultOpen
-	ParseResolution = lifecycle.ParseResolution
+	ParseState        = lifecycle.ParseState
+	ParseAction       = lifecycle.ParseAction
+	DefaultOpen       = lifecycle.DefaultOpen
+	ParseResolution   = lifecycle.ParseResolution
+	ActionTargetState = lifecycle.ActionTargetState
 )
 
 func IsContainerType(issueType string) bool {
