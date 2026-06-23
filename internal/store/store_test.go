@@ -2577,3 +2577,65 @@ func countNonEmptyLines(input string) int {
 	}
 	return count
 }
+
+// GetIssueDetail.Siblings is the parent's other children in rank order, never
+// the focal issue itself. Parentless issues and only children have no siblings.
+func TestStoreGetIssueDetailSiblings(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "sib", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epic) error = %v", err)
+	}
+	// Created bottom-to-bottom so creation order equals rank order.
+	first, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "First", Topic: "sib", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(first) error = %v", err)
+	}
+	focus, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Focus", Topic: "sib", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(focus) error = %v", err)
+	}
+	third, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Third", Topic: "sib", IssueType: "task", Priority: 0, ParentID: epic.ID, Placement: RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(third) error = %v", err)
+	}
+
+	detail, err := st.GetIssueDetail(ctx, focus.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(focus) error = %v", err)
+	}
+	if got, want := issueIDs(detail.Siblings), []string{first.ID, third.ID}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("Siblings ids = %#v, want %#v (rank order, self excluded)", got, want)
+	}
+	if containsIssueID(detail.Siblings, focus.ID) {
+		t.Fatalf("Siblings must exclude the focal issue, got %#v", issueIDs(detail.Siblings))
+	}
+
+	// A parentless issue has no siblings.
+	epicDetail, err := st.GetIssueDetail(ctx, epic.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(epic) error = %v", err)
+	}
+	if len(epicDetail.Siblings) != 0 {
+		t.Fatalf("parentless issue Siblings = %#v, want empty", issueIDs(epicDetail.Siblings))
+	}
+
+	// An only child has a parent but no siblings.
+	soloEpic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Solo epic", Topic: "sib", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(soloEpic) error = %v", err)
+	}
+	only, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Only", Topic: "sib", IssueType: "task", Priority: 0, ParentID: soloEpic.ID, Placement: RankBottom})
+	if err != nil {
+		t.Fatalf("CreateIssue(only) error = %v", err)
+	}
+	onlyDetail, err := st.GetIssueDetail(ctx, only.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail(only) error = %v", err)
+	}
+	if len(onlyDetail.Siblings) != 0 {
+		t.Fatalf("only-child Siblings = %#v, want empty", issueIDs(onlyDetail.Siblings))
+	}
+}

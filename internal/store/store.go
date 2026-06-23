@@ -828,12 +828,25 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	// bucketed by the same helper the batch accessor uses, so the blocks
 	// convention has one definition. Related is GetIssueDetail's own concern.
 	structural := bucketRelations(id, relations, relatedByID)
+	// Siblings are the parent's other children. The set exists only when the
+	// issue has a parent; an only child yields the empty slice and the renderer
+	// omits the group. [LAW:one-source-of-truth] derived from the same
+	// rank-ordered children query other consumers read, minus self.
+	siblings := []model.Issue{}
+	if structural.Parent != nil {
+		parentChildren, err := s.ListChildren(ctx, structural.Parent.ID)
+		if err != nil {
+			return model.IssueDetail{}, err
+		}
+		siblings = siblingsOf(id, parentChildren)
+	}
 	detail := model.IssueDetail{
 		Issue:     issue,
 		Relations: relations,
 		Comments:  comments,
 		Events:    events,
 		Children:  structural.Children,
+		Siblings:  siblings,
 		DependsOn: structural.DependsOn,
 		Blocks:    structural.Blocks,
 		Parent:    structural.Parent,
