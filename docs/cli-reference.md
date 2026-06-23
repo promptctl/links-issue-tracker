@@ -46,18 +46,21 @@ commands — `new`, `followup`, `update`, `assign` — honor an explicit `--assi
 verbatim and never substitute the caller's identity; on `lit update`, an empty
 `--assignee ""` clears the assignee, returning the issue to unassigned.
 
-### Two-phase transitions
+### Transition guidance
 
-`lit done` is two-phase by default. The bare command performs no transition: it prints a
-pre-completion checklist and an exact `--apply=<token>` command; only re-running with
-that token closes the ticket. The token is derived from the issue's current state, so it
-goes stale if the issue changes between preview and apply — rerun the bare command to get
-a fresh one.
+Every lifecycle transition is single-phase: one invocation performs the action. `lit done`
+additionally prints **post-close guidance** — a prompt to capture, while context is fresh,
+whatever the next agent needs (follow-ups, comments on adjacent tickets). It does not gate
+the close.
 
-The mechanism is template-driven: any lifecycle transition becomes two-phase when a
-pre-guidance template exists for it in the workspace, and `done` is the only one with a
-built-in template. All other transitions (`start`, `close`, `open`, `archive`,
-`unarchive`, `delete`, `restore`) apply immediately out of the box.
+Verifying that finished work is *correct* is not lit's job: `lit done` runs after the change
+has merged, so it cannot gate the merge. Pre-merge verification belongs at the boundary that
+runs before merge — CI and required PR checks — which lit deliberately does not own. lit
+dictates nothing about a repository's CI, PR, or merge process.
+
+The guidance is template-driven: a transition prints guidance for a phase when a
+`guidance-<action>-<phase>.md` template exists in the workspace, and `done`'s built-in
+`post` template is the only one shipped by default.
 
 ### Lifecycle
 
@@ -284,17 +287,17 @@ Reassigns without changing status — hand-off of claimed work.
 
 ## Lifecycle transitions
 
-All seven share one shape (see [Two-phase transitions](#two-phase-transitions) and
-[Identity](#identity) for `--apply` and `--assignee` semantics):
+All seven share one shape (see [Transition guidance](#transition-guidance) and
+[Identity](#identity) for guidance and `--assignee` semantics):
 
 ```text
-lit <verb> <id> [--reason <text>] [--apply=<token>] [--assignee <fallback>]
+lit <verb> <id> [--reason <text>] [--assignee <fallback>]
 ```
 
 | Command | Transition | Notes |
 |---------|-----------|-------|
 | `lit start` | `open → in_progress` | Claims the issue and assigns it to you. |
-| `lit done` | `in_progress → closed` | Success path; **two-phase by default**. Refuses from any status but `in_progress`. |
+| `lit done` | `in_progress → closed` | Success path; prints post-close capture guidance. Refuses from any status but `in_progress`. |
 | `lit close` | any non-closed → `closed` | Wontfix / obsolete / duplicate — closing without finishing. |
 | `lit open` | reopen a closed issue | |
 | `lit archive` / `lit unarchive` | set / clear the archived flag | Archived issues hide from listings. |
