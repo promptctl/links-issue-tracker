@@ -82,18 +82,12 @@ lit comment add <id> --body "Plan: poke at the basic loop, then read the concept
 lit done <id>
 ```
 
-This **does not close the ticket**. It prints a pre-completion checklist and an exact
-`lit done <id> --apply=<token>` command. Run that printed command to actually close:
-
-```sh
-lit done <id> --apply=<token-from-the-output>
-```
-
-The two-phase close is deliberate: the pause is a checkpoint to confirm the work is
-genuinely complete, and the token is derived from the ticket's current state, so a stale
-token from an earlier look at the ticket won't apply. If the ticket should be closed
-*without* being finished — obsolete, duplicate, won't-fix — use `lit close <id>` instead,
-which records that distinction honestly.
+This closes the ticket and prints post-close guidance: a prompt to capture, while the work
+is fresh, anything the next agent needs — follow-ups, comments on adjacent tickets. Confirming
+the work is *correct* belongs before the merge, in CI and PR review; `lit done` runs after the
+change has landed, so it captures rather than gates. If the ticket should be closed *without*
+being finished — obsolete, duplicate, won't-fix — use `lit close <id>` instead, which records
+that distinction honestly.
 
 ## You've done the whole loop
 

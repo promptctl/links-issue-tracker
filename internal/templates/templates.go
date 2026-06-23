@@ -200,14 +200,14 @@ func globalTemplatesDir() pathspec.PathSpec {
 }
 
 // GuidanceTemplateName returns the canonical template filename for a
-// transition action's guidance phase (e.g. "guidance-done-pre.md").
+// transition action's guidance phase (e.g. "guidance-done-post.md").
 func GuidanceTemplateName(action, phase string) string {
 	return guidanceNamePrefix + action + "-" + phase + ".md"
 }
 
 // LoadGuidance resolves a guidance template for the given action and phase
 // ("pre" or "post"). Unlike Load, guidance templates are optional — absence is
-// not an error, it just deactivates the two-phase flow for that action.
+// not an error, the action simply prints no guidance for that phase.
 // Real I/O errors (permission denied, path-is-a-dir) propagate so callers can
 // surface them instead of silently skipping user-configured guidance.
 func LoadGuidance(action, phase, workspaceRoot string) (string, error) {
