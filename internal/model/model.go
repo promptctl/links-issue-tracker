@@ -484,6 +484,7 @@ type IssueDetail struct {
 	Relations []Relation   `json:"relations"`
 	Comments  []Comment    `json:"comments"`
 	Children  []Issue      `json:"children"`
+	Siblings  []Issue      `json:"siblings"`
 	DependsOn []Issue      `json:"depends_on"`
 	Related   []Issue      `json:"related"`
 	Blocks    []Issue      `json:"blocks"`
