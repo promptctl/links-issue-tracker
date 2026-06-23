@@ -484,14 +484,59 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	columns := parseColumns(*columnsExpr)
+	rels, err := listRelationColumns(ctx, ap.Store, columns, issues)
+	if err != nil {
+		return err
+	}
 	formatMode := strings.ToLower(strings.TrimSpace(*format))
 	switch formatMode {
 	case "", "lines":
-		return printIssueLines(stdout, issues, columns)
+		return printIssueLines(stdout, issues, columns, rels)
 	case "table":
-		return printIssueTable(stdout, issues, columns)
+		return printIssueTable(stdout, issues, columns, rels)
 	default:
 		return UnsupportedError{Message: fmt.Sprintf("unsupported --format %q", formatMode), Feature: "--format"}
+	}
+}
+
+// listRelationColumns builds the per-issue relationship facts the relationship
+// columns project, but only when one is actually selected — the default and
+// every non-relationship projection load no relation-graph data and render
+// byte-for-byte as before. The projected column set is the data that selects the
+// load; a nil result means "no relationship column asked for", and every
+// formatter lookup then yields the zero relationColumns.
+// [LAW:dataflow-not-control-flow] which data to load is a value (the column set),
+// not a forked code path.
+// [LAW:one-source-of-truth] reuses fetchIssueRelations + the canonical graph
+// rather than reinterpreting parent/blocks edges for the list view.
+func listRelationColumns(ctx context.Context, st *store.Store, columns []string, issues []model.Issue) (map[string]relationColumns, error) {
+	if !projectsRelationColumn(resolveColumns(columns)) {
+		return nil, nil
+	}
+	relations, err := fetchIssueRelations(ctx, st, issues)
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]relationColumns, len(relations))
+	for id, rel := range relations {
+		out[id] = deriveRelationColumns(rel)
+	}
+	return out, nil
+}
+
+// deriveRelationColumns projects one issue's graph edges down to the flat facts
+// the list columns show: its parent/epic id, and whether a still-live dependency
+// blocks it. Blocked reuses liveIssues — the single liveness predicate — so the
+// list's "blocked" cannot drift from the close view's "unblocks".
+// [LAW:single-enforcer] liveness decided once, in isLiveIssue.
+func deriveRelationColumns(rel store.IssueRelations) relationColumns {
+	parentID := ""
+	if rel.Parent != nil {
+		parentID = rel.Parent.ID
+	}
+	return relationColumns{
+		parentID: parentID,
+		blocked:  len(liveIssues(rel.DependsOn)) > 0,
 	}
 }
 
@@ -716,7 +761,7 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 	}
 	columns := []string{"id", "state", "topic", "assignee", "title"}
 	for _, entry := range rows {
-		line := formatIssueColumns(entry.Issue, columns, " | ")
+		line := formatIssueColumns(entry.Issue, columns, " | ", nil)
 		age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
 		line += " | Last Update: " + age.String()
 		if _, err := fmt.Fprintln(w, line); err != nil {
