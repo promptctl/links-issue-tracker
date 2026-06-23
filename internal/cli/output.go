@@ -15,24 +15,24 @@ func printIssueSummary(w io.Writer, issue model.Issue) error {
 	return err
 }
 
-func printIssueTable(w io.Writer, issues []model.Issue, columns []string) error {
+func printIssueTable(w io.Writer, issues []model.Issue, columns []string, rels map[string]relationColumns) error {
 	resolved := resolveColumns(columns)
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(resolved, "\t"))); err != nil {
 		return err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, resolved, "\t")); err != nil {
+		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, resolved, "\t", rels)); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
 }
 
-func printIssueLines(w io.Writer, issues []model.Issue, columns []string) error {
+func printIssueLines(w io.Writer, issues []model.Issue, columns []string, rels map[string]relationColumns) error {
 	resolved := resolveColumns(columns)
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, resolved, " | ")); err != nil {
+		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, resolved, " | ", rels)); err != nil {
 			return err
 		}
 	}
@@ -164,7 +164,37 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 	return nil
 }
 
-func formatIssueColumns(issue model.Issue, columns []string, delimiter string) string {
+// relationColumns carries the per-issue relationship facts the relationship
+// columns project, derived once from the canonical graph (store.IssueRelations)
+// so the list view never reinterprets edge semantics. The zero value is the
+// honest answer for an issue with no relations loaded (no parent, not blocked),
+// which is exactly what a nil rels map yields on lookup.
+type relationColumns struct {
+	parentID string
+	blocked  bool
+}
+
+// relationColumnNames is the single definition of which projection columns are
+// served from the relationship graph rather than the issue row. Selecting one
+// is what triggers the batch relation load in the list path. These are populated
+// only on the `lit ls` path (listRelationColumns); other --columns surfaces pass
+// a nil rels map, so until they thread one these columns render "-" there.
+// [LAW:one-source-of-truth] relationship-column membership decided once, here.
+var relationColumnNames = map[string]struct{}{"parent": {}, "blocked": {}}
+
+// projectsRelationColumn reports whether any resolved column is served from the
+// relationship graph — the data-shaped signal the list path uses to decide
+// whether to pay the relation-graph query.
+func projectsRelationColumn(columns []string) bool {
+	for _, column := range columns {
+		if _, ok := relationColumnNames[column]; ok {
+			return true
+		}
+	}
+	return false
+}
+
+func formatIssueColumns(issue model.Issue, columns []string, delimiter string, rels map[string]relationColumns) string {
 	values := make([]string, 0, len(columns))
 	for _, column := range columns {
 		switch column {
@@ -188,9 +218,25 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string) s
 			values = append(values, issue.UpdatedAt.Format(time.RFC3339))
 		case "created_at":
 			values = append(values, issue.CreatedAt.Format(time.RFC3339))
+		case "parent":
+			// Reading a nil map yields the zero relationColumns — "-" for an issue
+			// whose relations weren't loaded — so the column needs no guard.
+			values = append(values, emptyDash(rels[issue.ID].parentID))
+		case "blocked":
+			values = append(values, blockedLabel(rels[issue.ID].blocked))
 		}
 	}
 	return strings.Join(values, delimiter)
+}
+
+// blockedLabel renders the blocked indicator as a self-describing token rather
+// than a bare boolean, so the default headerless `lines` format stays legible
+// (`id | blocked`) without relying on a column header.
+func blockedLabel(blocked bool) string {
+	if blocked {
+		return "blocked"
+	}
+	return "-"
 }
 
 func resolveColumns(columns []string) []string {
@@ -199,7 +245,7 @@ func resolveColumns(columns []string) []string {
 		return []string{"id", "state", "topic", "title"}
 	}
 	valid := map[string]struct{}{
-		"id": {}, "state": {}, "type": {}, "topic": {}, "priority": {}, "title": {}, "assignee": {}, "labels": {}, "updated_at": {}, "created_at": {},
+		"id": {}, "state": {}, "type": {}, "topic": {}, "priority": {}, "title": {}, "assignee": {}, "labels": {}, "updated_at": {}, "created_at": {}, "parent": {}, "blocked": {},
 	}
 	out := make([]string, 0, len(columns))
 	for _, column := range columns {

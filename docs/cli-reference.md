@@ -158,6 +158,13 @@ text; `--query` is a compact query language combining filters and text (e.g.
 `status:in_progress type:task has:comments login`). Archived and deleted issues are
 hidden unless explicitly included.
 
+`--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
+issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `title`, `assignee`,
+`labels`, `created_at`, `updated_at`) two opt-in columns surface relationships from
+the canonical graph: `parent` (the parent/epic id, `-` if none) and `blocked`
+(`blocked` when a still-open dependency blocks the ticket, else `-`). Default output
+is unchanged unless a relationship column is selected.
+
 ### `lit show`
 
 ```text
