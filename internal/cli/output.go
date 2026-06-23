@@ -100,6 +100,11 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "children", detail.Children); err != nil {
 		return err
 	}
+	// Siblings sit beside children so the parent-child neighborhood reads as one
+	// block: this ticket's children, then its peers under the shared parent.
+	if err := printIssueGroup(w, "siblings", detail.Siblings); err != nil {
+		return err
+	}
 	if err := printIssueGroup(w, "depends_on", detail.DependsOn); err != nil {
 		return err
 	}
