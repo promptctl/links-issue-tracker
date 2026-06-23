@@ -93,6 +93,23 @@ func relatedFrom(focalID string, relations []model.Relation, issuesByID map[stri
 	return out
 }
 
+// siblingsOf returns parentChildren with the focal issue removed — the
+// "children-of-parent-minus-self" derivation. Order is preserved (callers pass
+// already rank-ordered children), so the result needs no resort. A focal issue
+// that is an only child yields an empty slice. This is the single definition of
+// the sibling set, shared by GetIssueDetail and the done/close adjacency view.
+// [LAW:one-source-of-truth] Sibling derivation decided once, here.
+func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
+	out := make([]model.Issue, 0, len(parentChildren))
+	for _, child := range parentChildren {
+		if child.ID == focalID {
+			continue
+		}
+		out = append(out, child)
+	}
+	return out
+}
+
 // GetRelationsByIDs batch-loads the structural relations for every listed id in
 // a fixed number of queries rather than GetIssueDetail-per-id. Subjects that no
 // longer exist are simply absent from the result, mirroring getIssuesByIDs;
