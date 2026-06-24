@@ -162,7 +162,6 @@ type issueProjection struct {
 	Title       string
 	Description string
 	Prompt      string
-	Status      string
 	Priority    int
 	IssueType   string
 	Topic       string
@@ -172,33 +171,38 @@ type issueProjection struct {
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	ClosedAt    *time.Time
 	ArchivedAt  *time.Time
 	DeletedAt   *time.Time
+	// Capabilities carries the whole lifecycle payload (status value, closed_at,
+	// resolution) as the one StatusView type ResolveIssue merges through, rather
+	// than a per-field mirror the change-gate maintains by hand.
+	Capabilities model.Capabilities
 }
 
 func issueProjectionFrom(issue model.Issue) issueProjection {
-	// [LAW:one-source-of-truth] Merge equality compares the same lossless issue data that the sync wire owns, without depending on lifecycle-derived JSON fields.
-	// Every field ResolveIssue merges must appear here, or a change to an omitted
-	// field reads as "unchanged" and ThreeWay drops the edit. [LAW:no-silent-failure]
+	// [LAW:one-source-of-truth] The change-gate and the resolver read the lifecycle
+	// through the same projection (model.Capabilities / its StatusView), so the
+	// field set that decides "did this side move" cannot drift from the field set
+	// ResolveIssue merges — a new lifecycle field is covered by construction.
+	// [LAW:no-silent-failure] Omission would now over-report a change (routed to the
+	// field-aware resolver) instead of silently reading a real edit as "unchanged".
 	return issueProjection{
-		ID:          issue.ID,
-		Title:       issue.Title,
-		Description: issue.Description,
-		Prompt:      issue.Prompt,
-		Status:      issue.StatusValue(),
-		Priority:    issue.Priority,
-		IssueType:   issue.IssueType,
-		Topic:       issue.Topic,
-		Assignee:    issue.AssigneeValue(),
-		Rank:        issue.Rank,
-		Lane:        issue.Lane,
-		Labels:      append([]string{}, issue.Labels...),
-		CreatedAt:   issue.CreatedAt,
-		UpdatedAt:   issue.UpdatedAt,
-		ClosedAt:    issue.ClosedAtValue(),
-		ArchivedAt:  issue.ArchivedAt,
-		DeletedAt:   issue.DeletedAt,
+		ID:           issue.ID,
+		Title:        issue.Title,
+		Description:  issue.Description,
+		Prompt:       issue.Prompt,
+		Priority:     issue.Priority,
+		IssueType:    issue.IssueType,
+		Topic:        issue.Topic,
+		Assignee:     issue.AssigneeValue(),
+		Rank:         issue.Rank,
+		Lane:         issue.Lane,
+		Labels:       append([]string{}, issue.Labels...),
+		CreatedAt:    issue.CreatedAt,
+		UpdatedAt:    issue.UpdatedAt,
+		ArchivedAt:   issue.ArchivedAt,
+		DeletedAt:    issue.DeletedAt,
+		Capabilities: issue.Capabilities(),
 	}
 }
 
