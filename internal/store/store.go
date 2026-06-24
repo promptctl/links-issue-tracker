@@ -968,7 +968,8 @@ type fieldWrite struct {
 // row the write starts from: GetIssue for a standalone UpdateIssue, or the
 // post-transition issue when ApplyUpdate composes a transition and a field edit
 // — so the field UPDATE's lifecycle columns restate the transition's values
-// rather than clobber them. [LAW:effects-at-boundaries] Pure; every effect is
+// rather than clobber them. [LAW:effects-at-boundaries] A pure function of
+// (baseline, in): no clock, no IO. The UpdatedAt stamp and every write are
 // deferred to applyFieldsTx.
 func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, error) {
 	issue := baseline
@@ -1031,7 +1032,6 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, err
 		}
 		issue.Labels = labels
 	}
-	issue.UpdatedAt = time.Now().UTC()
 	// [LAW:dataflow-not-control-flow] Every field write emits one event with a
 	// field-change row per actually-changed field.
 	var changes []model.FieldChange
@@ -1071,6 +1071,9 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, err
 // it composes into any transaction a caller already holds. [LAW:single-enforcer]
 func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) error {
 	issue := w.issue
+	// [LAW:effects-at-boundaries] The clock is read here, at the write boundary,
+	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
+	issue.UpdatedAt = time.Now().UTC()
 	var closedAt any
 	if value := issue.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
@@ -1344,13 +1347,17 @@ func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
-// against a tx. planStatusTransition computes it (pure: applyTransition guards,
-// the assignee rule, redirect-edge validation, and the change-row diff);
-// applyTransitionTx performs the guarded write. The plan also carries `post` —
-// the rehydrated post-transition issue — which writeStatusTransition returns and
+// against a tx. planStatusTransition is the read+validate+compute half — it runs
+// the applyTransition guards, the assignee rule, the redirect-edge validation
+// (which reads the DB to confirm the target exists), and the change-row diff,
+// but performs no writes. applyTransitionTx is the write half: the single
+// guarded UPDATE plus the redirect edge and event. The split is read/compute vs
+// write, not pure vs impure — planStatusTransition does read the clock and the
+// store; what it defers is every mutation. The plan also carries `post` — the
+// rehydrated post-transition issue — which writeStatusTransition returns and
 // ApplyUpdate uses as the baseline for a following field write. A noop plan
 // records that the target state and assignee already hold, so no write is owed.
-// [LAW:decomposition] [LAW:effects-at-boundaries]
+// [LAW:decomposition]
 type transitionWrite struct {
 	issueID       string
 	fromStatus    string
