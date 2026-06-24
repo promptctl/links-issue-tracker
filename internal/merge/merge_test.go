@@ -170,3 +170,75 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 		t.Fatalf("merged titles = %#v", merged)
 	}
 }
+
+// parentEdges projects parentOf to a child->parent string map for assertions.
+func parentEdges(parentOf map[string]model.Relation) map[string]string {
+	edges := map[string]string{}
+	for child, relation := range parentOf {
+		edges[child] = relation.DstID
+	}
+	return edges
+}
+
+// hasParentCycle reports whether following parent edges from any node loops.
+func hasParentCycle(edges map[string]string) bool {
+	for start := range edges {
+		seen := map[string]bool{}
+		node := start
+		for {
+			parent, ok := edges[node]
+			if !ok {
+				break
+			}
+			if seen[node] {
+				return true
+			}
+			seen[node] = true
+			node = parent
+		}
+	}
+	return false
+}
+
+func TestBreakParentCyclesBreaksTailEnteredCycle(t *testing.T) {
+	// a -> b -> c -> b: a is a tail feeding a b<->c loop, so the cycle does not
+	// begin at whatever node the walk starts from. The victim is the
+	// lexicographically greatest child in the loop (c), regardless of walk order.
+	parentOf := map[string]model.Relation{
+		"a": {SrcID: "a", DstID: "b", Type: model.RelParentChild},
+		"b": {SrcID: "b", DstID: "c", Type: model.RelParentChild},
+		"c": {SrcID: "c", DstID: "b", Type: model.RelParentChild},
+	}
+	breakParentCycles(parentOf)
+	edges := parentEdges(parentOf)
+	if hasParentCycle(edges) {
+		t.Fatalf("cycle survived: %#v", edges)
+	}
+	if _, ok := edges["c"]; ok {
+		t.Fatalf("expected c's parent edge deleted as the loop victim, got %#v", edges)
+	}
+	if edges["a"] != "b" || edges["b"] != "c" {
+		t.Fatalf("non-victim edges altered: %#v", edges)
+	}
+}
+
+func TestBreakParentCyclesBreaksThreeNodeCycle(t *testing.T) {
+	// a -> b -> c -> a: a clean 3-cycle. Exactly one edge is removed and the
+	// greatest child in the loop (c) is the victim.
+	parentOf := map[string]model.Relation{
+		"a": {SrcID: "a", DstID: "b", Type: model.RelParentChild},
+		"b": {SrcID: "b", DstID: "c", Type: model.RelParentChild},
+		"c": {SrcID: "c", DstID: "a", Type: model.RelParentChild},
+	}
+	breakParentCycles(parentOf)
+	edges := parentEdges(parentOf)
+	if hasParentCycle(edges) {
+		t.Fatalf("cycle survived: %#v", edges)
+	}
+	if len(edges) != 2 {
+		t.Fatalf("expected exactly one edge removed, got %#v", edges)
+	}
+	if _, ok := edges["c"]; ok {
+		t.Fatalf("expected c's parent edge deleted as the loop victim, got %#v", edges)
+	}
+}
