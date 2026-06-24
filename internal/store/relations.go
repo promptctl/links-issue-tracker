@@ -328,12 +328,10 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 	return rel, nil
 }
 
-// insertRelationTx writes one relation row on the given transaction. It is the
-// single INSERT for the relations table, shared by AddRelation's own mutation
-// and by writeStatusTransition's close transaction — letting a duplicate/
-// superseded redirect edge join the close in one atomic unit rather than
-// opening a second transaction. Endpoint canonicalization and validation are
-// the caller's responsibility; this is the raw write.
+// insertRelationTx writes one relation row on the given transaction. It runs on
+// a caller-supplied tx so the write can join a larger atomic unit rather than
+// opening its own transaction. Endpoint canonicalization and validation are the
+// caller's responsibility; this is the raw write.
 // [LAW:one-source-of-truth] The relations INSERT statement lives only here.
 func insertRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
@@ -435,10 +433,9 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, in.ChildID); err != nil {
 			return fmt.Errorf("clear parent relation: %w", err)
 		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`, rel.SrcID, rel.DstID, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
-			return fmt.Errorf("insert parent relation: %w", err)
-		}
-		return nil
+		// [LAW:one-source-of-truth] Route through insertRelationTx so the relations
+		// INSERT lives only there; rel.Type carries the parent-child discriminator.
+		return insertRelationTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
 	}
