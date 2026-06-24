@@ -141,7 +141,7 @@ func (e *DowngradeRollbackError) Unwrap() error { return e.Cause }
 // even though Down returned ErrNoNextVersion. A silent success in this case
 // would lie to the operator that the downgrade reached the target.
 //
-// [LAW:no-silent-fallbacks] ErrNoNextVersion with current > target is a
+// [LAW:no-silent-failure] ErrNoNextVersion with current > target is a
 // registry-vs-target mismatch, not "we're done"; it must surface so the
 // operator can investigate which versions are missing inversions.
 type DowngradeIncompleteError struct {
@@ -247,7 +247,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 // loop and commitWorkingSet records each step. The commit lock is already
 // held by Downgrade, so commitWorkingSet's withCommitLock short-circuits.
 //
-// [LAW:no-silent-fallbacks] ErrNoNextVersion with current > target is a
+// [LAW:no-silent-failure] ErrNoNextVersion with current > target is a
 // registry-vs-target mismatch, not a successful exit; it raises
 // DowngradeIncompleteError so the operator sees that the target was never
 // reached.

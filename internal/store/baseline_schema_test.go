@@ -55,7 +55,7 @@ func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
 // commit-254f86b deletion that stranded such workspaces in "partial schema,
 // restore or recreate" (destroy your data) refusals.
 //
-// [LAW:no-silent-fallbacks] Old workspaces at any prior canonical shape
+// [LAW:no-silent-failure] Old workspaces at any prior canonical shape
 // reach v1 by forward migration, not by being told to recreate themselves.
 // [LAW:dataflow-not-control-flow] The reconcile is idempotent and probe-
 // driven; the missing column gets filled regardless of which earlier shape

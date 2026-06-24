@@ -192,7 +192,7 @@ func emitterSortKey(ew emitterWire) string {
 // malformations the downstream Validate cannot detect: unknown discriminators (no
 // sealed variant to produce) and repeated keys (which would silently collapse).
 func (m *ShapeMapping) UnmarshalJSON(data []byte) error {
-	// [LAW:no-silent-fallbacks] The mapping file is an operator's authored artifact
+	// [LAW:no-silent-failure] The mapping file is an operator's authored artifact
 	// at a trust boundary: an unknown field is a typo, not data to discard. Reject
 	// it here, where the byte that is wrong is still in hand, rather than let json
 	// silently drop it and surface a confusing error several steps downstream.

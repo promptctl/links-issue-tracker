@@ -66,7 +66,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 	if err != nil {
 		return RawDump{}, err
 	}
-	// [LAW:no-silent-fallbacks] A release failure is rare but real and leaves
+	// [LAW:no-silent-failure] A release failure is rare but real and leaves
 	// the workspace stuck busy for subsequent commands; surface it via the
 	// named return joined with any read error rather than discarding it.
 	defer func() {
@@ -75,7 +75,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 		}
 	}()
 	if _, statErr := os.Stat(doltRootDir); statErr != nil {
-		// [LAW:no-silent-fallbacks] Only ENOENT means "uninitialized"; every
+		// [LAW:no-silent-failure] Only ENOENT means "uninitialized"; every
 		// other stat error is its own failure mode the operator needs to see.
 		if errors.Is(statErr, os.ErrNotExist) {
 			return RawDump{}, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
@@ -91,7 +91,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 			err = errors.Join(err, closeErr)
 		}
 	}()
-	// [LAW:no-silent-fallbacks] The head read is part of the dump, not optional: a
+	// [LAW:no-silent-failure] The head read is part of the dump, not optional: a
 	// snapshot whose provenance commit is unknown cannot be protected against a
 	// concurrent advance, so an unreadable head fails the whole dump loudly rather
 	// than yielding an artifact that silently forfeits the lost-update guarantee.

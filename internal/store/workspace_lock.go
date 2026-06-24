@@ -73,7 +73,7 @@ func WorkspaceLockPath(databasePath string) string {
 func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, false, workspaceSharedRetryAttempts, workspaceSharedRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
-		// [LAW:no-silent-fallbacks] Wrap the original error (which may
+		// [LAW:no-silent-failure] Wrap the original error (which may
 		// itself be an errors.Join containing close-side diagnostics
 		// from joinWithClose) instead of replacing with a fresh sentinel.
 		// errors.Is(err, ErrWorkspaceBusy) continues to detect contention;
@@ -151,7 +151,7 @@ func acquireFileLock(ctx context.Context, lockPath string, exclusive bool, maxAt
 		err = tryLockFile(file, exclusive)
 		if err == nil {
 			fd := file
-			// [LAW:no-silent-fallbacks] Both unlock and close failures
+			// [LAW:no-silent-failure] Both unlock and close failures
 			// matter (FD leak; lock stuck held) so the release contract
 			// surfaces them jointly via errors.Join instead of picking one.
 			return func() error {
@@ -184,7 +184,7 @@ func acquireFileLock(ctx context.Context, lockPath string, exclusive bool, maxAt
 // acquireWorkspaceLock so an FD leak / close-time error stays observable
 // alongside the failure that triggered the release.
 //
-// [LAW:no-silent-fallbacks] A leaked FD or a close error is real signal —
+// [LAW:no-silent-failure] A leaked FD or a close error is real signal —
 // silently dropping it (`_ = file.Close()`) hid debugging information on
 // the exact paths that are hardest to diagnose.
 func joinWithClose(primary error, file *os.File) error {

@@ -47,7 +47,7 @@ type Candidate struct {
 // mapping is known good. [LAW:types-are-the-program] The cause is carried in the
 // error itself, so the recovery loop routes a mapping problem back as repair
 // feedback while a build failure surfaces loudly — without re-deriving which kind
-// it was. [LAW:no-silent-fallbacks] A disk or store error must never be relabeled
+// it was. [LAW:no-silent-failure] A disk or store error must never be relabeled
 // as mapping feedback and silently retried.
 var ErrInvalidMapping = errors.New("mapping is not applicable to the dump")
 
@@ -130,7 +130,7 @@ func (c *Candidate) Store() *Store { return c.store }
 // Clearing store here makes a later Discard's store-close a no-op by its own
 // state, so detach + Discard compose without a double-close.
 func (c *Candidate) detachForPromotion() (string, error) {
-	// [LAW:no-silent-fallbacks] An empty root means the candidate was already
+	// [LAW:no-silent-failure] An empty root means the candidate was already
 	// discarded (or is a zero value); filepath.Join("", "workspace") would hand
 	// back a cwd-relative "workspace" path that a promotion would then rename into
 	// the canonical location. Fail loudly rather than operate on an unintended

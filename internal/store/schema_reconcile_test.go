@@ -28,7 +28,7 @@ import (
 //      reconcile is a no-op on data and converted predictably where it
 //      normalizes legacy values (status canonicalization, etc.).
 //
-// [LAW:no-silent-fallbacks] Old workspaces reach v1 by forward migration,
+// [LAW:no-silent-failure] Old workspaces reach v1 by forward migration,
 // not by being told to recreate themselves.
 // [LAW:dataflow-not-control-flow] The reconcile is idempotent and probe-
 // driven; every test exercises the same Open path with different
@@ -619,7 +619,7 @@ func nullableStrPtr(p *string) any {
 // these rows; PR #143's recovery on unreal-3d-maps lost 184 of them
 // and PR #145's on cc-nerf-buster lost 4.
 //
-// [LAW:no-silent-fallbacks] Drop-without-translate was the silent
+// [LAW:no-silent-failure] Drop-without-translate was the silent
 // fallback this ticket eliminates.
 func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	ctx := context.Background()
@@ -812,7 +812,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 // the FK constraint on issue_events.issue_id and the whole reconcile
 // would abort — turning a recoverable workspace into a refused one.
 //
-// [LAW:no-silent-fallbacks] Orphan-skipping is the only safe behavior:
+// [LAW:no-silent-failure] Orphan-skipping is the only safe behavior:
 // the alternative is "refuse the bridge" which strands the workspace.
 // The orphan rows are unrecoverable regardless — there is no issue to
 // attach the audit row to. Logging the skipped IDs would be an
@@ -1308,7 +1308,7 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 // duplicate any existing rank.Initial() row and break the strict-
 // ordering invariant rank mutations depend on.
 //
-// [LAW:no-silent-fallbacks] Generated ranks cannot duplicate any
+// [LAW:no-silent-failure] Generated ranks cannot duplicate any
 // existing rank value in the workspace, even in mixed states.
 func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	ctx := context.Background()
@@ -1376,7 +1376,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 // adoption would stamp v1 on a non-baseline schema — recreating the
 // PR #119 failure shape adoption was supposed to prevent.
 //
-// [LAW:no-silent-fallbacks] After reconcile finishes, runMigration
+// [LAW:no-silent-failure] After reconcile finishes, runMigration
 // verifies the actual shape matches baseline; any remaining gap aborts
 // with a structural error before the stamp lands.
 func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {

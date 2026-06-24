@@ -259,7 +259,7 @@ func collectArtifacts(distDir, baseURL, ver, tag string) ([]release.Artifact, er
 		// into a checked fact before we promise a URL to it. Catches stale
 		// checksums (an aborted goreleaser run that wrote checksums.txt but
 		// failed to produce one of the archives) before they ship as 404s.
-		// [LAW:enumeration-gap] accept-shape now requires "filename matches
+		// [LAW:types-are-the-program] accept-shape now requires "filename matches
 		// pattern AND file exists", not just "filename matches pattern".
 		artifactPath := filepath.Join(distDir, filename)
 		if _, err := os.Stat(artifactPath); err != nil {

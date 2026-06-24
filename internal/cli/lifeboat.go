@@ -105,7 +105,7 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 	case store.Reconciled:
 		return promoteReconciled(ctx, stdout, ws, o)
 	case store.RequiresDrop:
-		// [LAW:no-silent-fallbacks] Discard the rebuild and refuse to commit: an
+		// [LAW:no-silent-failure] Discard the rebuild and refuse to commit: an
 		// unexplained drop silently loses data, so the human is notified and
 		// nothing changes on disk until they decide.
 		discardErr := o.Candidate.Discard()
@@ -119,7 +119,7 @@ func runLifeboatRecover(ctx context.Context, stdout io.Writer, ws workspace.Info
 }
 
 func promoteReconciled(ctx context.Context, stdout io.Writer, ws workspace.Info, o store.Reconciled) (err error) {
-	// [LAW:no-silent-fallbacks] Promotion has succeeded once PromoteCandidate
+	// [LAW:no-silent-failure] Promotion has succeeded once PromoteCandidate
 	// returns, but a failure to remove the candidate's scratch tree leaves residue
 	// in the storage dir the operator must see; join it to the return rather than
 	// discard it — the same shape snapshots restore uses for its deferred release.
