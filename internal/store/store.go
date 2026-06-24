@@ -948,15 +948,30 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 	return hydrated[0], nil
 }
 
-func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput) (model.Issue, error) {
-	// [LAW:dataflow-not-control-flow] Empty input is a defined no-op; callers need not branch on whether fields were set.
-	if in.IsEmpty() {
-		return s.GetIssue(ctx, id)
-	}
-	issue, err := s.GetIssue(ctx, id)
-	if err != nil {
-		return model.Issue{}, err
-	}
+// fieldWrite is a fully-planned field mutation, ready to execute against a tx.
+// planFieldUpdate computes it (pure: validation + in-memory mutation + the
+// change-row diff); applyFieldsTx performs the writes. The plan/apply split is
+// what lets ApplyUpdate run a field write inside the same transaction as a
+// status transition, so a combined update lands as one Dolt commit instead of
+// two. [LAW:decomposition] [LAW:effects-at-boundaries]
+type fieldWrite struct {
+	issue         model.Issue
+	replaceLabels bool
+	labelActor    string
+	reason        string
+	by            string
+	changes       []model.FieldChange
+}
+
+// planFieldUpdate validates in against baseline and computes the post-write
+// issue plus its field-change rows, without touching the store. baseline is the
+// row the write starts from: GetIssue for a standalone UpdateIssue, or the
+// post-transition issue when ApplyUpdate composes a transition and a field edit
+// — so the field UPDATE's lifecycle columns restate the transition's values
+// rather than clobber them. [LAW:effects-at-boundaries] Pure; every effect is
+// deferred to applyFieldsTx.
+func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, error) {
+	issue := baseline
 	priorTitle := issue.Title
 	priorDescription := issue.Description
 	priorIssueType := issue.IssueType
@@ -967,7 +982,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if in.Title != nil {
 		issue.Title = strings.TrimSpace(*in.Title)
 		if issue.Title == "" {
-			return model.Issue{}, errors.New("title cannot be empty")
+			return fieldWrite{}, errors.New("title cannot be empty")
 		}
 	}
 	if in.Description != nil {
@@ -979,7 +994,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if in.IssueType != nil {
 		issueType, err := validateIssueType(*in.IssueType)
 		if err != nil {
-			return model.Issue{}, err
+			return fieldWrite{}, err
 		}
 		// [LAW:single-enforcer] Container vs leaf is encoded in the lifecycle
 		// expression at hydration time. Switching across that boundary would
@@ -988,16 +1003,16 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 		// silently drop the leaf's status/closed_at. Refuse here
 		// instead of patching it up downstream with an invented default.
 		if model.IsContainerType(issue.IssueType) != model.IsContainerType(issueType) {
-			return model.Issue{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerIssueTypes)
+			return fieldWrite{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerIssueTypes)
 		}
 		issue.IssueType = issueType
 	}
 	if in.Status != nil {
-		return model.Issue{}, errors.New("status transitions require dedicated lifecycle commands")
+		return fieldWrite{}, errors.New("status transitions require dedicated lifecycle commands")
 	}
 	if in.Priority != nil {
 		if err := validatePriority(*in.Priority); err != nil {
-			return model.Issue{}, err
+			return fieldWrite{}, err
 		}
 		issue.Priority = *in.Priority
 	}
@@ -1012,62 +1027,87 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	if in.Labels != nil {
 		labels, err := canonicalizeLabels(*in.Labels)
 		if err != nil {
-			return model.Issue{}, err
+			return fieldWrite{}, err
 		}
 		issue.Labels = labels
 	}
 	issue.UpdatedAt = time.Now().UTC()
+	// [LAW:dataflow-not-control-flow] Every field write emits one event with a
+	// field-change row per actually-changed field.
+	var changes []model.FieldChange
+	if priorTitle != issue.Title {
+		changes = append(changes, model.FieldChange{Field: "title", From: priorTitle, To: issue.Title})
+	}
+	if priorDescription != issue.Description {
+		changes = append(changes, model.FieldChange{Field: "description", From: priorDescription, To: issue.Description})
+	}
+	if priorIssueType != issue.IssueType {
+		changes = append(changes, model.FieldChange{Field: "issue_type", From: priorIssueType, To: issue.IssueType})
+	}
+	if priorPriority != issue.Priority {
+		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(priorPriority), To: strconv.Itoa(issue.Priority)})
+	}
+	newAssignee := issue.AssigneeValue()
+	if priorAssignee != newAssignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: newAssignee})
+	}
+	if priorLane != issue.Lane {
+		changes = append(changes, model.FieldChange{Field: "lane", From: priorLane, To: issue.Lane})
+	}
+	newLabels := strings.Join(issue.Labels, ",")
+	if priorLabels != newLabels {
+		changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
+	}
+	labelActor := in.By
+	if labelActor == "" {
+		labelActor = "unknown"
+	}
+	return fieldWrite{issue: issue, replaceLabels: in.Labels != nil, labelActor: labelActor, reason: in.Reason, by: in.By, changes: changes}, nil
+}
+
+// applyFieldsTx writes a planned field mutation against tx: the issue UPDATE,
+// the label replacement (when requested), and the change event (when any field
+// moved). It owns only writes — every decision was made in planFieldUpdate — so
+// it composes into any transaction a caller already holds. [LAW:single-enforcer]
+func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) error {
+	issue := w.issue
 	var closedAt any
 	if value := issue.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
 	}
+	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
+		title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
+		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+		return fmt.Errorf("update issue: %w", err)
+	}
+	if w.replaceLabels {
+		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.labelActor); err != nil {
+			return err
+		}
+	}
+	if len(w.changes) > 0 {
+		if err := s.recordEvent(ctx, tx, issue.ID, "", w.reason, w.by, w.changes); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput) (model.Issue, error) {
+	// [LAW:dataflow-not-control-flow] Empty input is a defined no-op; callers need not branch on whether fields were set.
+	if in.IsEmpty() {
+		return s.GetIssue(ctx, id)
+	}
+	issue, err := s.GetIssue(ctx, id)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	w, err := planFieldUpdate(issue, in)
+	if err != nil {
+		return model.Issue{}, err
+	}
 	if err := s.withMutation(ctx, "update issue", func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `UPDATE issues SET
-			title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
-			WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
-			return fmt.Errorf("update issue: %w", err)
-		}
-		if in.Labels != nil {
-			labelActor := in.By
-			if labelActor == "" {
-				labelActor = "unknown"
-			}
-			if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, labelActor); err != nil {
-				return err
-			}
-		}
-		// [LAW:dataflow-not-control-flow] Every UpdateIssue call emits one event
-		// with a field-change row per actually-changed field.
-		var changes []model.FieldChange
-		if priorTitle != issue.Title {
-			changes = append(changes, model.FieldChange{Field: "title", From: priorTitle, To: issue.Title})
-		}
-		if priorDescription != issue.Description {
-			changes = append(changes, model.FieldChange{Field: "description", From: priorDescription, To: issue.Description})
-		}
-		if priorIssueType != issue.IssueType {
-			changes = append(changes, model.FieldChange{Field: "issue_type", From: priorIssueType, To: issue.IssueType})
-		}
-		if priorPriority != issue.Priority {
-			changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(priorPriority), To: strconv.Itoa(issue.Priority)})
-		}
-		newAssignee := issue.AssigneeValue()
-		if priorAssignee != newAssignee {
-			changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: newAssignee})
-		}
-		if priorLane != issue.Lane {
-			changes = append(changes, model.FieldChange{Field: "lane", From: priorLane, To: issue.Lane})
-		}
-		newLabels := strings.Join(issue.Labels, ",")
-		if priorLabels != newLabels {
-			changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
-		}
-		if len(changes) > 0 {
-			if err := s.recordEvent(ctx, tx, issue.ID, "", in.Reason, in.By, changes); err != nil {
-				return err
-			}
-		}
-		return nil
+		return s.applyFieldsTx(ctx, tx, w)
 	}); err != nil {
 		return model.Issue{}, err
 	}
@@ -1079,7 +1119,7 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 // empty Fields = no field write.
 // [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
-// Same-state transitions flow through to TransitionIssue unconditionally; the leaf decides what they
+// Same-state transitions flow through planStatusTransition unconditionally; the leaf decides what they
 // mean. A pure no-op (same state, same resulting assignee) records nothing — history reflects actual
 // mutations. A same-state start with a new assignee is the canonical agent-reclaim path and records
 // the assignee change with the calling Actor, which is the audit substrate for "who interacted with
@@ -1089,36 +1129,65 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	if err != nil {
 		return model.Issue{}, err
 	}
-	if action, transitions := transitionFor(in.TargetStatus); transitions {
-		reason := in.TransitionReason
+	// [LAW:no-ambient-temporal-coupling] The combined transition+field update has
+	// exactly one atomicity owner: this method plans both writes (pure: reads,
+	// validation, in-memory mutation) and then performs them inside a SINGLE
+	// withMutation, so they share one SQL transaction and one Dolt commit. A
+	// validation error or crash between the two writes can no longer leave a
+	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
+	baseline := current
+	var tw transitionWrite
+	action, transitions := transitionFor(in.TargetStatus)
+	if transitions {
+		actor := strings.TrimSpace(in.TransitionBy)
+		if actor == "" {
+			actor = "unknown"
+		}
+		reason := strings.TrimSpace(in.TransitionReason)
 		if reason == "" {
 			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), model.DefaultOpen(in.TargetStatus))
 		}
-		// [LAW:types-are-the-program] StartIssue vs TransitionIssue is the single
-		// structural encoding of "assignee only travels with start" — routing
-		// to the typed method replaces the former runtime guard and ApplyUpdate's
-		// pre-strip. The field-level assignee goes through Fields.Assignee below.
-		var transErr error
-		if action == model.ActionStart {
-			_, transErr = s.StartIssue(ctx, StartIssueInput{
-				IssueID:   id,
-				Assignee:  in.TransitionAssignee,
-				Reason:    reason,
-				CreatedBy: in.TransitionBy,
-			})
-		} else {
-			_, transErr = s.TransitionIssue(ctx, TransitionIssueInput{
-				IssueID:   id,
-				Action:    action,
-				Reason:    reason,
-				CreatedBy: in.TransitionBy,
-			})
+		// [LAW:types-are-the-program] planStatusTransition consumes the typed
+		// action and applies the assignee only for start; the same plan drives
+		// the standalone lifecycle methods, so the transition decision cannot
+		// drift between `lit update --status` and `lit start`/`lit close`. The
+		// field-level assignee flows through in.Fields.Assignee below.
+		tw, err = s.planStatusTransition(ctx, current, actor, reason, action, strings.TrimSpace(in.TransitionAssignee), nil, "")
+		if err != nil {
+			return model.Issue{}, err
 		}
-		if transErr != nil {
-			return model.Issue{}, transErr
+		// The field write starts from the post-transition issue so its lifecycle
+		// columns (and a start's new assignee) restate, not overwrite, what the
+		// transition just set.
+		baseline = tw.post
+	}
+	var fw fieldWrite
+	hasFields := !in.Fields.IsEmpty()
+	if hasFields {
+		fw, err = planFieldUpdate(baseline, in.Fields)
+		if err != nil {
+			return model.Issue{}, err
 		}
 	}
-	return s.UpdateIssue(ctx, id, in.Fields)
+	needsTransitionWrite := transitions && !tw.noop
+	if needsTransitionWrite || hasFields {
+		if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
+			if needsTransitionWrite {
+				if err := s.applyTransitionTx(ctx, tx, tw); err != nil {
+					return err
+				}
+			}
+			if hasFields {
+				if err := s.applyFieldsTx(ctx, tx, fw); err != nil {
+					return err
+				}
+			}
+			return nil
+		}); err != nil {
+			return model.Issue{}, err
+		}
+	}
+	return s.GetIssue(ctx, id)
 }
 
 func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
@@ -1274,10 +1343,35 @@ func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue
 	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee), nil, "")
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (model.Issue, error) {
+// transitionWrite is a fully-planned status transition, ready to execute
+// against a tx. planStatusTransition computes it (pure: applyTransition guards,
+// the assignee rule, redirect-edge validation, and the change-row diff);
+// applyTransitionTx performs the guarded write. The plan also carries `post` —
+// the rehydrated post-transition issue — which writeStatusTransition returns and
+// ApplyUpdate uses as the baseline for a following field write. A noop plan
+// records that the target state and assignee already hold, so no write is owed.
+// [LAW:decomposition] [LAW:effects-at-boundaries]
+type transitionWrite struct {
+	issueID       string
+	fromStatus    string
+	toStatus      string
+	postAssignee  string
+	now           time.Time
+	closedAtArg   any
+	resolutionArg any
+	action        model.ActionName
+	reason        string
+	actor         string
+	redirectEdges []model.Relation
+	changes       []model.FieldChange
+	post          model.Issue
+	noop          bool
+}
+
+func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (transitionWrite, error) {
 	updated, err := applyTransition(issue, action, actor, reason)
 	if err != nil {
-		return model.Issue{}, err
+		return transitionWrite{}, err
 	}
 	priorAssignee := issue.AssigneeValue()
 	// Only `start` rewrites the assignee — it carries the new owner. Every other
@@ -1296,12 +1390,12 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	// audit substrate survives because a reclaim (same state, new assignee)
 	// falls through and records the assignee change with the calling actor.
 	if toStatus == fromStatus && postAssignee == priorAssignee {
-		return issue, nil
+		return transitionWrite{noop: true, post: issue}, nil
 	}
 	now := time.Now().UTC()
-	var closedAt any
+	var closedAtArg any
 	if value := updated.ClosedAtValue(); value != nil {
-		closedAt = value.Format(time.RFC3339Nano)
+		closedAtArg = value.Format(time.RFC3339Nano)
 	}
 	// Resolution lives only on the closed state: a transition whose target is not
 	// closed (reopen, start) drops it to NULL, so a resolution can never linger on
@@ -1324,72 +1418,106 @@ func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, ac
 	// so the close path stays branch-free. [LAW:dataflow-not-control-flow]
 	redirectEdges, err := s.buildRedirectEdges(ctx, issue.ID, postResolution, redirectTarget, actor, now)
 	if err != nil {
-		return model.Issue{}, err
+		return transitionWrite{}, err
 	}
-	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-		result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ? WHERE id = ? AND status = ?`,
-			toStatus, postAssignee, now.Format(time.RFC3339Nano), closedAt, resolutionArg, issue.ID, fromStatus)
-		if err != nil {
-			return fmt.Errorf("update issue status: %w", err)
-		}
-		affected, err := result.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("read status transition result: %w", err)
-		}
-		if affected == 0 {
-			currentStatus, lookupErr := currentStatusTx(ctx, tx, issue.ID)
-			if lookupErr != nil {
-				return lookupErr
-			}
-			return fmt.Errorf("%s conflict: issue status is %q", action, currentStatus)
-		}
-		// [LAW:one-source-of-truth] Change rows mirror the columns that actually
-		// moved. A same-state reclaim records only the assignee row — the legacy
-		// from==to status row was a schema lie.
-		var changes []model.FieldChange
-		if fromStatus != toStatus {
-			changes = append(changes, model.FieldChange{Field: "status", From: fromStatus, To: toStatus})
-		}
-		priorClosedAt := issue.ClosedAtValue()
-		newClosedAt := updated.ClosedAtValue()
-		if !timesEqual(priorClosedAt, newClosedAt) {
-			changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
-		}
-		priorResolution := issue.ResolutionValue()
-		if !resolutionsEqual(priorResolution, postResolution) {
-			changes = append(changes, model.FieldChange{Field: "resolution", From: formatNullableResolution(priorResolution), To: formatNullableResolution(postResolution)})
-		}
-		if priorAssignee != postAssignee {
-			changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
-		}
-		// [LAW:no-silent-failure] The redirect edge shares this transaction with
-		// the close UPDATE: if it fails, the whole close rolls back, so a
-		// duplicate/superseded close can never persist without its edge to the
-		// canonical ticket ("duplicate of nothing").
-		for _, edge := range redirectEdges {
-			if err := insertRelationTx(ctx, tx, edge); err != nil {
-				return err
-			}
-		}
-		return s.recordEvent(ctx, tx, issue.ID, string(action), reason, actor, changes)
-	}); err != nil {
-		return model.Issue{}, err
+	// [LAW:one-source-of-truth] Change rows mirror the columns that actually
+	// moved. A same-state reclaim records only the assignee row — the legacy
+	// from==to status row was a schema lie.
+	var changes []model.FieldChange
+	if fromStatus != toStatus {
+		changes = append(changes, model.FieldChange{Field: "status", From: fromStatus, To: toStatus})
+	}
+	priorClosedAt := issue.ClosedAtValue()
+	newClosedAt := updated.ClosedAtValue()
+	if !timesEqual(priorClosedAt, newClosedAt) {
+		changes = append(changes, model.FieldChange{Field: "closed_at", From: formatNullableTime(priorClosedAt), To: formatNullableTime(newClosedAt)})
+	}
+	priorResolution := issue.ResolutionValue()
+	if !resolutionsEqual(priorResolution, postResolution) {
+		changes = append(changes, model.FieldChange{Field: "resolution", From: formatNullableResolution(priorResolution), To: formatNullableResolution(postResolution)})
+	}
+	if priorAssignee != postAssignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 	}
 	updated.UpdatedAt = now
-	// [LAW:one-source-of-truth] Re-hydrate the leaf lifecycle from the values just
-	// written so callers see the same status the next read would yield. The
-	// post-write assignee already lives on updated.Assignee (set above), so it is
-	// not part of this lifecycle projection.
-	rehydrated, err := model.UpdateStatusCapability(updated, model.StatusView{
+	// [LAW:one-source-of-truth] Re-hydrate the leaf lifecycle from the values the
+	// write will persist so callers (and a following field write) see the same
+	// status the next read would yield. The post-write assignee already lives on
+	// updated.Assignee (set above), so it is not part of this lifecycle projection.
+	post := updated
+	if rehydrated, rerr := model.UpdateStatusCapability(updated, model.StatusView{
 		Value:      model.DefaultOpen(toStatus),
 		ClosedAt:   updated.ClosedAtValue(),
 		Resolution: postResolution,
-	})
-	if err != nil {
-		return updated, nil
+	}); rerr == nil {
+		post = rehydrated
 	}
-	return rehydrated, nil
+	return transitionWrite{
+		issueID:       issue.ID,
+		fromStatus:    fromStatus,
+		toStatus:      toStatus,
+		postAssignee:  postAssignee,
+		now:           now,
+		closedAtArg:   closedAtArg,
+		resolutionArg: resolutionArg,
+		action:        action,
+		reason:        reason,
+		actor:         actor,
+		redirectEdges: redirectEdges,
+		changes:       changes,
+		post:          post,
+	}, nil
+}
+
+// applyTransitionTx writes a planned status transition against tx: the guarded
+// status UPDATE, the redirect edge (when the close carries one), and the change
+// event. It owns only writes, so it composes into any transaction a caller
+// already holds — which is how ApplyUpdate folds a transition and a field write
+// into one commit. [LAW:single-enforcer]
+func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
+	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ? WHERE id = ? AND status = ?`,
+		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.issueID, w.fromStatus)
+	if err != nil {
+		return fmt.Errorf("update issue status: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read status transition result: %w", err)
+	}
+	if affected == 0 {
+		currentStatus, lookupErr := currentStatusTx(ctx, tx, w.issueID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		return fmt.Errorf("%s conflict: issue status is %q", w.action, currentStatus)
+	}
+	// [LAW:no-silent-failure] The redirect edge shares this transaction with
+	// the close UPDATE: if it fails, the whole close rolls back, so a
+	// duplicate/superseded close can never persist without its edge to the
+	// canonical ticket ("duplicate of nothing").
+	for _, edge := range w.redirectEdges {
+		if err := insertRelationTx(ctx, tx, edge); err != nil {
+			return err
+		}
+	}
+	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
+}
+
+func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (model.Issue, error) {
+	w, err := s.planStatusTransition(ctx, issue, actor, reason, action, newAssignee, resolution, redirectTarget)
+	if err != nil {
+		return model.Issue{}, err
+	}
+	if w.noop {
+		return issue, nil
+	}
+	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		return s.applyTransitionTx(ctx, tx, w)
+	}); err != nil {
+		return model.Issue{}, err
+	}
+	return w.post, nil
 }
 
 // buildRedirectEdges produces the related-to edge a duplicate/superseded close
