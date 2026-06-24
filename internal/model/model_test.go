@@ -86,12 +86,6 @@ func TestIssueJSONRoundTripEpicRequiresStoreHydration(t *testing.T) {
 	if !decoded.pendingHydration {
 		t.Fatalf("decoded epic pendingHydration = false, want true")
 	}
-	if decoded.Capabilities().Status != nil {
-		t.Fatalf("Capabilities().Status = %#v, want nil", decoded.Capabilities().Status)
-	}
-	if decoded.State() != "" || decoded.Progress() != (Progress{}) {
-		t.Fatalf("decoded epic state/progress = %q/%#v, want zero values before store hydration", decoded.State(), decoded.Progress())
-	}
 	if _, err := json.Marshal(decoded); err == nil || !strings.Contains(err.Error(), "requires store hydration") {
 		t.Fatalf("Marshal(decoded epic) error = %v, want hydration error", err)
 	}
@@ -191,20 +185,64 @@ func TestNilLifecycleIssueLifecycleMethodsPanic(t *testing.T) {
 	_ = Issue{ID: "task-1", IssueType: "task"}.State()
 }
 
-func TestNeedsStoreHydrationLifecycleMethodsReturnZero(t *testing.T) {
+func TestNeedsStoreHydrationChildDerivedReadsPanic(t *testing.T) {
+	// State and Progress are derived from a container's children, so they cannot
+	// be answered on a pendingHydration issue (a JSON-decoded container awaiting
+	// store hydration). They must fail loud, not return a zero value that aliases
+	// a legitimately open / empty issue downstream in merge, readiness, and column
+	// formatting.
+	newPending := func() Issue {
+		var issue Issue
+		issue.ID = "epic-1"
+		issue.IssueType = "epic"
+		issue.pendingHydration = true
+		return issue
+	}
+	for _, tc := range []struct {
+		name string
+		read func(Issue)
+	}{
+		{"State", func(i Issue) { _ = i.State() }},
+		{"Progress", func(i Issue) { _ = i.Progress() }},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if r := recover(); r == nil {
+					t.Fatalf("%s() on pendingHydration issue did not panic", tc.name)
+				}
+			}()
+			tc.read(newPending())
+		})
+	}
+}
+
+func TestContainerCapabilitiesAreEmptyWithoutHydration(t *testing.T) {
+	// A container exposes no status capability regardless of hydration — its state
+	// is derived from children. So Capabilities() on a pendingHydration container
+	// answers empty by type, the true answer, not a swallowed error: empty cannot
+	// alias a leaf, which always carries a non-nil Status. This is what lets the
+	// merge change-gate and the import path read a JSON-decoded container without
+	// either a spurious panic or a wrong value.
 	var issue Issue
 	issue.ID = "epic-1"
 	issue.IssueType = "epic"
 	issue.pendingHydration = true
-	if issue.State() != "" {
-		t.Fatalf("State() = %q, want zero", issue.State())
+	if caps := issue.Capabilities(); caps != (Capabilities{}) {
+		t.Fatalf("Capabilities() = %#v on unhydrated container, want empty", caps)
 	}
-	if issue.Progress() != (Progress{}) {
-		t.Fatalf("Progress() = %#v, want zero", issue.Progress())
-	}
-	if issue.Capabilities() != (Capabilities{}) {
-		t.Fatalf("Capabilities() = %#v, want empty", issue.Capabilities())
-	}
+}
+
+func TestNilLifecycleLeafCapabilitiesPanic(t *testing.T) {
+	// A leaf (non-container) must be hydrated to answer Capabilities(): its status
+	// capability lives in the lifecycle, so an unhydrated leaf has no answer and
+	// must fail loud rather than return an empty Capabilities indistinguishable
+	// from the legitimately-empty container case.
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("Capabilities() on nil-lifecycle leaf did not panic")
+		}
+	}()
+	_ = Issue{ID: "task-1", IssueType: "task"}.Capabilities()
 }
 
 func TestNilLifecycleIssueMarshalJSONErrors(t *testing.T) {
