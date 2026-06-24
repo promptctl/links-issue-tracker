@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -29,8 +28,7 @@ var parentFamily = commandFamily[appSubcommand]{
 func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("label add")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -40,7 +38,7 @@ func runLabelAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if fs.NArg() != 0 {
 		return UsageError{Message: "usage: lit label add <issue-id> <label>"}
 	}
-	labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: *by})
+	labels, err := ap.Store.AddLabel(ctx, store.AddLabelInput{IssueID: positional[0], Name: positional[1], CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
@@ -75,8 +73,7 @@ func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("parent set")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -86,7 +83,7 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
 		ChildID:   positional[0],
 		ParentID:  positional[1],
-		CreatedBy: *by,
+		CreatedBy: resolveActor(),
 	})
 	if err != nil {
 		return err
