@@ -106,34 +106,26 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
 func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
-	const indent = "    "
 	readiness := ClassifyReadiness(entry.Annotations)
-	if entry.ParentEpic != nil {
-		if _, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, entry.ParentEpic.ID, entry.ParentEpic.Title); err != nil {
-			return err
-		}
+	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
+		return err
 	}
+	// "blocked:" joins reasons with "; " (not IDs with ", "), so it is its own
+	// line shape rather than the shared printIDListLine. [LAW:carrying-cost]
 	if reasons := nonDependencyBlockingReasons(readiness); len(reasons) > 0 {
-		if _, err := fmt.Fprintf(w, "%sblocked: %s\n", indent, strings.Join(reasons, "; ")); err != nil {
+		if _, err := fmt.Fprintf(w, "%sblocked: %s\n", contextIndent, strings.Join(reasons, "; ")); err != nil {
 			return err
 		}
 	}
-	if deps := readiness.DependencyIDs(); len(deps) > 0 {
-		if _, err := fmt.Fprintf(w, "%sdepends on: %s\n", indent, strings.Join(deps, ", ")); err != nil {
-			return err
-		}
+	if err := printIDListLine(w, contextIndent, "depends on", readiness.DependencyIDs()); err != nil {
+		return err
 	}
 	if entry.State() == model.StateInProgress {
-		if _, err := fmt.Fprintf(w, "%sin_progress: %s\n", indent, inProgressSuffix(entry)); err != nil {
+		if _, err := fmt.Fprintf(w, "%sin_progress: %s\n", contextIndent, inProgressSuffix(entry)); err != nil {
 			return err
 		}
 	}
-	if unblocks := unblocksMap[entry.ID]; len(unblocks) > 0 {
-		if _, err := fmt.Fprintf(w, "%sunblocks: %s\n", indent, strings.Join(unblocks, ", ")); err != nil {
-			return err
-		}
-	}
-	return nil
+	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }
 
 // nonDependencyBlockingReasons formats the classified blocking reasons that
