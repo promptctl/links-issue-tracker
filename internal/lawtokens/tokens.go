@@ -27,9 +27,14 @@ import "sort"
 // not contain is drift, and the gate is meant to catch it.
 //
 // Keying by the full "NAMESPACE:token" (not the bare token) is load-bearing: it
-// makes a right-token/wrong-namespace citation — e.g. "[LAW:representation]",
-// where representation is a FRAMING idea, not a LAW — unrepresentable as
-// canonical, because only "FRAMING:representation" is a member.
+// makes a right-token/wrong-namespace citation — one pairing the LAW namespace
+// with `representation`, which is a FRAMING idea, not a LAW — unrepresentable as
+// canonical, because only the `FRAMING:representation` key is a member.
+//
+// This doc names example tokens in backticks rather than in bracketed marker
+// form on purpose: the gate scans this file too, so the only bracketed
+// citations it may legally contain are the real canonical ones cited inline,
+// never a non-canonical example.
 var Canonical = newMarkerSet(
 	// Framing — higher-level ideas referenced in reasoning, rarely cited in code.
 	"FRAMING:parts-and-seams",
