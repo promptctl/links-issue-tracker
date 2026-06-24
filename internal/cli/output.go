@@ -7,8 +7,39 @@ import (
 	"text/tabwriter"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
+
+// contextIndent is the single indent used for every context line printed under
+// a ready or backlog row. [LAW:one-source-of-truth] one width, referenced by
+// both renderers, so a change moves both views together.
+const contextIndent = "    "
+
+// printEpicLine renders the indented "epic:" context line shown identically
+// under ready and backlog rows. A nil ref (issue has no epic parent) emits
+// nothing — absence is data, not a caller-side branch.
+// [LAW:dataflow-not-control-flow]
+func printEpicLine(w io.Writer, indent string, epic *annotation.ParentEpicRef) error {
+	if epic == nil {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, epic.ID, epic.Title)
+	return err
+}
+
+// printIDListLine renders one indented "<label>: id, id, ..." context line —
+// the shared shape behind both "depends on:" and "unblocks:". An empty list
+// emits nothing, so callers pass the list rather than branching on its length.
+// [LAW:one-type-per-behavior] both lines are one behavior differing only in
+// label and data. [LAW:dataflow-not-control-flow]
+func printIDListLine(w io.Writer, indent, label string, ids []string) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "%s%s: %s\n", indent, label, strings.Join(ids, ", "))
+	return err
+}
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
 	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), issue.Title, formatLabels(issue.Labels))
