@@ -648,7 +648,12 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	// CLI narrowing) on every gather — the focus fact lives on the one goal
 	// ticket; chain membership is never stored, so it cannot drift.
 	// [LAW:one-source-of-truth]
-	focusPaths, err := fetchFocusPathGoals(ctx, ap.Store)
+	//
+	// The walk reuses the relations already fetched for the workable leaves
+	// (details) and their parent epics (siblingRelations) rather than re-querying
+	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
+	// byte-identical to a refetch. (links-query-efficiency-988d.2)
+	focusPaths, err := fetchFocusPathGoals(ctx, ap.Store, details, siblingRelations)
 	if err != nil {
 		return nil, nil, err
 	}
