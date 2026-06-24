@@ -272,44 +272,35 @@ func enforceSingleParent(relations []model.Relation) []model.Relation {
 // victim is the lexicographically greatest child id in the loop — a choice both
 // machines compute identically from the same data.
 func breakParentCycles(parentOf map[string]model.Relation) {
-	const (
-		unvisited = 0
-		onPath    = 1
-		settled   = 2
-	)
-	state := map[string]int{}
+	// [LAW:no-defensive-null-guards] A node's on-path fact and its position in the
+	// walk are one value: presence in onPath means it is on the current path, and
+	// the stored int is where. So a cycle's position cannot be "absent" for a node
+	// known to be on the path — the -1 not-found sentinel is unrepresentable here,
+	// not merely unreached. settled spans walks; onPath is scoped to one walk.
+	settled := map[string]bool{}
 	for start := range parentOf {
-		if state[start] != unvisited {
+		if settled[start] {
 			continue
 		}
+		onPath := map[string]int{}
 		var path []string
 		node := start
 		for {
-			if _, ok := parentOf[node]; !ok || state[node] == settled {
+			if _, ok := parentOf[node]; !ok || settled[node] {
 				break
 			}
-			if state[node] == onPath {
-				cycle := path[indexOf(path, node):]
-				delete(parentOf, maxString(cycle))
+			if idx, looping := onPath[node]; looping {
+				delete(parentOf, maxString(path[idx:]))
 				break
 			}
-			state[node] = onPath
+			onPath[node] = len(path)
 			path = append(path, node)
 			node = parentOf[node].DstID
 		}
 		for _, n := range path {
-			state[n] = settled
+			settled[n] = true
 		}
 	}
-}
-
-func indexOf(items []string, target string) int {
-	for idx, item := range items {
-		if item == target {
-			return idx
-		}
-	}
-	return -1
 }
 
 func maxString(items []string) string {
