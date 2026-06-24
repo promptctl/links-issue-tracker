@@ -560,9 +560,17 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 			return fmt.Errorf("insert issue: %w", err)
 		}
 		if parentID != "" {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, 'parent-child', ?, ?)`,
-				issue.ID, parentID, issue.CreatedAt.Format(time.RFC3339Nano), createdBy); err != nil {
-				return fmt.Errorf("insert parent relation: %w", err)
+			// [LAW:one-source-of-truth] Build the edge as a value and route through
+			// insertRelationTx; the relations INSERT statement lives only there.
+			parentEdge := model.Relation{
+				SrcID:     issue.ID,
+				DstID:     parentID,
+				Type:      model.RelParentChild,
+				CreatedAt: issue.CreatedAt,
+				CreatedBy: createdBy,
+			}
+			if err := insertRelationTx(ctx, tx, parentEdge); err != nil {
+				return err
 			}
 		}
 		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, createdBy); err != nil {
