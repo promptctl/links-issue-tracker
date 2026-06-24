@@ -129,8 +129,9 @@ jobs:
           # `lit_<version>_<goos>_<goarch>.<ext>` — four underscore-separated
           # parts. The triple-* globs require that shape, which rejects any
           # other archive that lands in dist/ (e.g. a future source archive
-          # `lit-<version>.tar.gz`). [LAW:enumeration-gap] each glob's
-          # accept-shape mirrors the producer's actual output format.
+          # `lit-<version>.tar.gz`). [LAW:types-are-the-program] each glob's
+          # accept-shape mirrors the producer's actual output format, making a
+          # wrong-shaped archive unrepresentable as a release asset.
           # tar.gz covers linux/darwin; zip covers windows/amd64.
           gh release create "${{ github.ref_name }}" \
             ./dist/lit_*_*_*.tar.gz ./dist/lit_*_*_*.zip \
