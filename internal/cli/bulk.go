@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -24,17 +23,18 @@ var bulkFamily = commandFamily[appSubcommand]{
 	},
 }
 
-// bulkLabelOp is the per-issue mutation a bulk label action applies.
-type bulkLabelOp func(ctx context.Context, ap *app.App, issueID, label, by string) error
+// bulkLabelOp is the per-issue mutation a bulk label action applies. The actor
+// is the resolved acting identity for the invocation, not a raw flag value.
+type bulkLabelOp func(ctx context.Context, ap *app.App, issueID, label, actor string) error
 
 var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	usage: "usage: lit bulk label <add|rm> ...",
 	subcommands: []subcommandRow[bulkLabelOp]{
-		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID, label, by string) error {
+		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
 			_, err := ap.Store.AddLabel(ctx, store.AddLabelInput{
 				IssueID:   issueID,
 				Name:      label,
-				CreatedBy: by,
+				CreatedBy: actor,
 			})
 			return err
 		}},
@@ -52,8 +52,7 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	fs := newCobraFlagSet("bulk label")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
 	label := fs.String("label", "", "Label name")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, args[1:], stdout); err != nil {
 		return err
 	}
@@ -70,9 +69,10 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	if err != nil {
 		return err
 	}
+	actor := resolveActor()
 	results := map[string]string{}
 	for _, issueID := range issueIDs {
-		if err := op(ctx, ap, issueID, *label, *by); err != nil {
+		if err := op(ctx, ap, issueID, *label, actor); err != nil {
 			results[issueID] = err.Error()
 			continue
 		}
@@ -94,8 +94,7 @@ func runBulkTransition(action model.ActionName) appRunFn {
 		fs := newCobraFlagSet("bulk transition")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
-		by := fs.String("by", os.Getenv("USER"), "")
-		fs.Hide("by")
+		resolveActor := registerActor(fs)
 		if err := parseFlagSet(fs, args, stdout); err != nil {
 			return err
 		}
@@ -103,13 +102,14 @@ func runBulkTransition(action model.ActionName) appRunFn {
 		if len(issueIDs) == 0 {
 			return ValidationError{Message: "--ids is required"}
 		}
+		actor := resolveActor()
 		results := map[string]string{}
 		for _, issueID := range issueIDs {
 			_, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 				IssueID:   issueID,
 				Action:    action,
 				Reason:    *reason,
-				CreatedBy: *by,
+				CreatedBy: actor,
 			})
 			if err != nil {
 				results[issueID] = err.Error()

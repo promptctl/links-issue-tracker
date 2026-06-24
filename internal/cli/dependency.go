@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -27,8 +26,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
 	blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
 	blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -57,7 +55,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		}
 	}
 	srcID, dstID := rt.StoreEndpoints(fromID, toID)
-	rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: *by})
+	rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
