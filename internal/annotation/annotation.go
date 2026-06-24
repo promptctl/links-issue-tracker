@@ -9,14 +9,41 @@ import (
 )
 
 type kindDef struct {
-	key string
+	key  string
+	role ReadinessRole
 }
+
+// ReadinessRole is the readiness family a kind belongs to. Every kind declares
+// one at construction, so whether a kind blocks readiness is a property carried
+// by the kind itself — not a side-list a consumer maintains in parallel.
+// [LAW:types-are-the-program] The disposition a switch would otherwise infer
+// from a maintained slice is encoded where the kind is defined; a new kind
+// cannot be added without classifying it (register requires this argument).
+type ReadinessRole int
+
+const (
+	roleInvalid       ReadinessRole = iota // zero value: never a valid classification
+	RoleBlocking                           // prevents pulling the issue now
+	RoleOrphaned                           // staleness signal, not a blocker
+	RoleRankInversion                      // rank-hygiene signal, not a blocker
+	RoleNone                               // ordering/advisory only, invisible to readiness
+)
 
 // Kind identifies a category of annotation.
 // The zero value is invalid; only the package registry produces valid kinds.
 // [LAW:single-enforcer] New annotation types and kind validity are enforced here.
 type Kind struct {
 	def *kindDef
+}
+
+// ReadinessRole reports the readiness family this kind belongs to. The zero
+// Kind has no role; ClassifyReadiness fails loudly rather than treating it as
+// ready, so a corrupt or unclassified kind can never silently pass the gate.
+func (k Kind) ReadinessRole() ReadinessRole {
+	if k.def == nil {
+		return roleInvalid
+	}
+	return k.def.role
 }
 
 // String returns the serialization key for this kind.
@@ -49,37 +76,53 @@ func (k *Kind) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
+// [LAW:single-enforcer] The registry is the single authority for valid kinds,
+// populated only by register — there is no second hand-maintained list to drift.
 var (
-	missingFieldDef          = &kindDef{key: "missing_field"}
-	openDependencyDef        = &kindDef{key: "open_dependency"}
-	rankInversionDef         = &kindDef{key: "rank_inversion"}
-	orphanedDef              = &kindDef{key: "orphaned"}
-	needsDesignDef           = &kindDef{key: "needs_design"}
-	earlierSiblingPendingDef = &kindDef{key: "earlier_sibling_pending"}
-	focusPathDef             = &kindDef{key: "focus_path"}
-
-	MissingField          = Kind{def: missingFieldDef}          // a required field is empty or unset
-	OpenDependency        = Kind{def: openDependencyDef}        // issue depends on an open ticket
-	RankInversion         = Kind{def: rankInversionDef}         // dependency is ranked below the dependent
-	Orphaned              = Kind{def: orphanedDef}              // in_progress with no update past the orphaned threshold
-	NeedsDesign           = Kind{def: needsDesignDef}           // carries the needs-design label; consumer may treat as not-yet-ready
-	EarlierSiblingPending = Kind{def: earlierSiblingPendingDef} // an earlier same-lane sibling under the parent epic is still open
-	FocusPath             = Kind{def: focusPathDef}             // issue is a focused goal or a derived prerequisite of one; ordering signal, never blocks
-
-	// [LAW:single-enforcer] The registry is the single authority for valid kinds.
-	// "blocked_by" is a deserialization alias for backwards compatibility after
-	// the rename to "open_dependency".
-	kindRegistry = map[string]Kind{
-		missingFieldDef.key:          MissingField,
-		openDependencyDef.key:        OpenDependency,
-		"blocked_by":                 OpenDependency,
-		rankInversionDef.key:         RankInversion,
-		orphanedDef.key:              Orphaned,
-		needsDesignDef.key:           NeedsDesign,
-		earlierSiblingPendingDef.key: EarlierSiblingPending,
-		focusPathDef.key:             FocusPath,
-	}
+	kindRegistry    = map[string]Kind{}
+	registeredKinds []Kind // canonical kinds in declaration order, for stable enumeration
 )
+
+// register mints a kind, records it as the single authority for kind validity,
+// and requires its readiness role. Requiring role at the one birth site is the
+// compile-time gate: a new kind line cannot be written without classifying how
+// it disposes toward readiness, and var, registry, and role are set together.
+// [LAW:one-source-of-truth] One birth site for every kind.
+func register(key string, role ReadinessRole) Kind {
+	if role == roleInvalid {
+		panic("annotation: kind " + key + " registered without a readiness role")
+	}
+	if _, exists := kindRegistry[key]; exists {
+		panic("annotation: duplicate kind key " + key)
+	}
+	k := Kind{def: &kindDef{key: key, role: role}}
+	kindRegistry[key] = k
+	registeredKinds = append(registeredKinds, k)
+	return k
+}
+
+var (
+	MissingField          = register("missing_field", RoleBlocking)           // a required field is empty or unset
+	OpenDependency        = register("open_dependency", RoleBlocking)         // issue depends on an open ticket
+	RankInversion         = register("rank_inversion", RoleRankInversion)     // dependency is ranked below the dependent
+	Orphaned              = register("orphaned", RoleOrphaned)                // in_progress with no update past the orphaned threshold
+	NeedsDesign           = register("needs_design", RoleBlocking)            // carries the needs-design label
+	EarlierSiblingPending = register("earlier_sibling_pending", RoleBlocking) // an earlier same-lane sibling under the parent epic is still open
+	FocusPath             = register("focus_path", RoleNone)                  // a focused goal or a derived prerequisite of one; an ordering signal
+)
+
+func init() {
+	// "blocked_by" is a deserialization alias for data written before the rename
+	// to "open_dependency"; it resolves to the same kind, not a new one — so it
+	// is registered as an alias here, never minted as its own kind.
+	kindRegistry["blocked_by"] = OpenDependency
+}
+
+// Kinds returns all registered kinds in declaration order. Aliases are not
+// included — only the canonical kinds register mints.
+func Kinds() []Kind {
+	return append([]Kind(nil), registeredKinds...)
+}
 
 func parseKind(key string) (Kind, bool) {
 	kind, ok := kindRegistry[key]

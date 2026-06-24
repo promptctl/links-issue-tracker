@@ -4,37 +4,17 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 )
 
-// This file is the annotation→policy boundary. Annotations are neutral facts
-// (per project invariant); readiness is an interpretation a consumer applies
-// over them. ClassifyReadiness is the ONLY place that interpretation happens —
-// every ready/blocked/orphaned/inversion consumer reads the typed result
-// instead of re-walking annotation.Kind.
+// This file is the annotation→policy boundary. Each annotation kind declares
+// its readiness ROLE where the kind is defined (annotation.ReadinessRole);
+// ClassifyReadiness is the ONLY place those roles are INTERPRETED into a pull
+// decision — every ready/blocked/orphaned/inversion consumer reads the typed
+// result instead of re-walking annotation.Kind.
 // [LAW:single-enforcer] Single annotation→readiness interpreter.
 //
-// FocusPath is deliberately NOT classified here. It is an ordering fact
-// (sortByFocusPath), never a membership or readiness one; folding it into the
-// classifier would re-tangle ordering with readiness — the exact entanglement
-// the focus feature was designed to avoid. ClassifyReadiness treats it as it
-// treats any unknown-to-policy kind: invisible.
-
-// blockingKinds enumerates the annotation kinds that block readiness.
-// [LAW:one-source-of-truth] The single definition of what "blocks readiness";
-// both classification and the summary's display order read it.
-var blockingKinds = []annotation.Kind{
-	annotation.MissingField,
-	annotation.OpenDependency,
-	annotation.NeedsDesign,
-	annotation.EarlierSiblingPending,
-}
-
-func isBlockingKind(kind annotation.Kind) bool {
-	for _, k := range blockingKinds {
-		if kind == k {
-			return true
-		}
-	}
-	return false
-}
+// RoleNone kinds (e.g. FocusPath, an ordering fact consumed by sortByFocusPath)
+// contribute nothing here. That is an explicit, classified case — not an
+// unhandled default — so folding ordering back into membership would require a
+// deliberate role change, not a silent omission.
 
 // BlockingReason is one classified fact that prevents pulling an issue now.
 // Detail carries the annotation message: the missing field name, the open
@@ -82,21 +62,28 @@ func (r IssueReadiness) DependencyIDs() []string {
 	return ids
 }
 
-// ClassifyReadiness interprets an issue's neutral annotations into a typed
-// readiness classification. Pure: one pass over the values, no store access.
+// ClassifyReadiness interprets an issue's annotations into a typed readiness
+// classification. Pure: one pass over the values, no store access.
 // [LAW:dataflow-not-control-flow] Every annotation flows through the same
-// classification; non-policy kinds (FocusPath) contribute nothing rather than
-// being skipped by a caller-side branch.
+// classification, keyed on its declared readiness role; RoleNone contributes
+// nothing as an explicit case, not a caller-side skip.
+// [LAW:no-silent-failure] The default panics: every registry kind has a valid
+// role, so the only way here is a zero/corrupt kind — surfaced loudly rather
+// than defaulting to ready (the exact silent path this seam used to have).
 func ClassifyReadiness(anns []annotation.Annotation) IssueReadiness {
 	var r IssueReadiness
 	for _, a := range anns {
-		switch {
-		case isBlockingKind(a.Kind):
+		switch a.Kind.ReadinessRole() {
+		case annotation.RoleBlocking:
 			r.blocking = append(r.blocking, BlockingReason{Kind: a.Kind, Detail: a.Message})
-		case a.Kind == annotation.Orphaned:
+		case annotation.RoleOrphaned:
 			r.orphaned = true
-		case a.Kind == annotation.RankInversion:
+		case annotation.RoleRankInversion:
 			r.rankInversions = append(r.rankInversions, a.Message)
+		case annotation.RoleNone:
+			// ordering/advisory fact; deliberately invisible to readiness
+		default:
+			panic("ClassifyReadiness: annotation carries an unclassified kind: " + a.Kind.String())
 		}
 	}
 	return r
@@ -108,9 +95,22 @@ type kindCount struct {
 	Count int
 }
 
+// blockingKinds is the canonical display order of readiness-blocking kinds,
+// derived from the single source — the role each kind declares — so it cannot
+// drift from what ClassifyReadiness actually treats as blocking.
+func blockingKinds() []annotation.Kind {
+	var out []annotation.Kind
+	for _, k := range annotation.Kinds() {
+		if k.ReadinessRole() == annotation.RoleBlocking {
+			out = append(out, k)
+		}
+	}
+	return out
+}
+
 // blockingKindCounts aggregates classified issues into per-kind blocked
-// counts, in the canonical blockingKinds order. An issue with several reasons
-// of one kind counts once for that kind.
+// counts, in canonical blocking-kind order. An issue with several reasons of
+// one kind counts once for that kind.
 func blockingKindCounts(rs []IssueReadiness) []kindCount {
 	counts := map[annotation.Kind]int{}
 	for _, r := range rs {
@@ -124,7 +124,7 @@ func blockingKindCounts(rs []IssueReadiness) []kindCount {
 		}
 	}
 	var out []kindCount
-	for _, kind := range blockingKinds {
+	for _, kind := range blockingKinds() {
 		if n := counts[kind]; n > 0 {
 			out = append(out, kindCount{Kind: kind, Count: n})
 		}
