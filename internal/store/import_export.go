@@ -11,18 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// clampPriorityToCanonical maps a raw priority value into the canonical
-// 2-level domain. Anything other than PriorityUrgent (=1) becomes
-// PriorityNormal (=0). Used at trust boundaries (import/restore) so legacy
-// exports with priority=2..4 remain restorable under the tightened CHECK
-// constraint. [LAW:single-enforcer]
-func clampPriorityToCanonical(priority int) int {
-	if priority == model.PriorityUrgent {
-		return model.PriorityUrgent
-	}
-	return model.PriorityNormal
-}
-
 type HealthReport struct {
 	IntegrityCheck       string   `json:"integrity_check"`
 	ForeignKeyIssues     int      `json:"foreign_key_issues"`
@@ -198,12 +186,12 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, mess
 			// decision; the import path inherits it instead of inventing its own
 			// default for containers.
 			status := statusForStorage(issue)
-			// [LAW:single-enforcer] Trust-boundary clamp: legacy exports may carry
-			// priorities outside the canonical {normal, urgent} range. Map any
-			// such value to PriorityNormal so the new CHECK constraint can never
-			// reject a restore. Owned here at the import boundary, not scattered
-			// across mutation callsites.
-			priority := clampPriorityToCanonical(issue.Priority)
+			// Legacy exports may carry priorities outside the canonical
+			// {normal, urgent} range. canonicalPriority — the same authority the
+			// live validator rejects against — coerces any such value so the
+			// CHECK constraint can never reject a restore, without the import
+			// path inventing its own notion of the domain. [LAW:single-enforcer]
+			priority := canonicalPriority(issue.Priority)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt)); err != nil {
