@@ -18,6 +18,38 @@ func TestKindStringReturnsKey(t *testing.T) {
 	}
 }
 
+// TestEveryRegisteredKindHasReadinessRole pins the construction-time invariant:
+// register refuses a kind with no readiness role, so every kind the registry
+// produced carries a valid (non-zero) classification. This is the guard against
+// a kind ever silently defaulting to "ready" — the disposition is mandatory at
+// the birth site, not a side-list a consumer keeps in sync.
+func TestEveryRegisteredKindHasReadinessRole(t *testing.T) {
+	kinds := Kinds()
+	if len(kinds) == 0 {
+		t.Fatal("Kinds() returned no registered kinds")
+	}
+	for _, k := range kinds {
+		if k.ReadinessRole() == roleInvalid {
+			t.Errorf("kind %q has no readiness role", k.String())
+		}
+	}
+}
+
+// TestKindsExcludesAliases pins that Kinds() enumerates only canonical kinds —
+// the "blocked_by" deserialization alias resolves to OpenDependency but is not
+// itself a kind, so it must not appear as a distinct entry.
+func TestKindsExcludesAliases(t *testing.T) {
+	for _, k := range Kinds() {
+		if k.String() == "blocked_by" {
+			t.Fatal("Kinds() must not include the blocked_by alias as a distinct kind")
+		}
+	}
+	parsed, ok := parseKind("blocked_by")
+	if !ok || parsed != OpenDependency {
+		t.Fatalf("blocked_by must still resolve to OpenDependency, got (%v, %v)", parsed, ok)
+	}
+}
+
 func TestKindJSONRoundTrip(t *testing.T) {
 	original := MissingField
 	data, err := json.Marshal(original)
