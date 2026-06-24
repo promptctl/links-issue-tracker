@@ -2145,25 +2145,6 @@ func statusForStorage(issue model.Issue) sql.NullString {
 	return sql.NullString{}
 }
 
-// statusForStorageRaw is the (issueType, status) entry point for write paths
-// that haven't yet built a hydrated Issue (import / restore). It hydrates a
-// minimal Issue through the canonical shape parser, then delegates the column
-// projection to statusForStorage so both write entrypoints share one rule.
-// [LAW:single-enforcer] One rule for "what goes in the status column" applies
-// to every write path; statusForStorage is that rule and this routes through it.
-func statusForStorageRaw(issueType string, status string) (sql.NullString, error) {
-	view := model.StatusView{}
-	if !model.IsContainerType(issueType) {
-		state := model.DefaultOpen(status)
-		view.Value = state
-	}
-	issue, err := model.HydrateRow(model.Issue{IssueType: issueType}, view, nil)
-	if err != nil {
-		return sql.NullString{}, err
-	}
-	return statusForStorage(issue), nil
-}
-
 func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Issue, error) {
 	if len(rows) == 0 {
 		return []model.Issue{}, nil
