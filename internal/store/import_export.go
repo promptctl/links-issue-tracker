@@ -211,8 +211,9 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, mess
 			}
 		}
 		for _, relation := range export.Relations {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-				relation.SrcID, relation.DstID, relation.Type, relation.CreatedAt.Format(time.RFC3339Nano), relation.CreatedBy); err != nil {
+			// [LAW:one-source-of-truth] Restore each exported edge through
+			// insertRelationTx so the relations INSERT lives only there.
+			if err := insertRelationTx(ctx, tx, relation); err != nil {
 				return fmt.Errorf("restore relation %s->%s: %w", relation.SrcID, relation.DstID, err)
 			}
 		}
