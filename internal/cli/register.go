@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -21,6 +22,20 @@ type CommandSpec struct {
 	Long    string
 	GroupID string
 	Run     CommandRunner
+	// Subcommands is the visible first-argument tree for a family command (nil
+	// for a leaf command). It is the registry's authoritative answer to "what
+	// can follow this command", which the shell-completion projection reads so
+	// the scripts cannot enumerate a subcommand the registry doesn't.
+	// [LAW:one-source-of-truth]
+	Subcommands []SubcommandSpec
+}
+
+// SubcommandSpec is one legal first-argument name plus its own nested tree
+// (e.g. `sync remote` carries `ls`). Names here are derived from the owning
+// commandFamily table, never restated. [LAW:one-source-of-truth]
+type SubcommandSpec struct {
+	Name        string
+	Subcommands []SubcommandSpec
 }
 
 // CommandRunner is the fully-wrapped passthrough handler. Each spec's Run
@@ -53,6 +68,12 @@ var commandGroups = []GroupSpec{
 type subcommandRow[P any] struct {
 	name    string
 	payload P
+	// hidden keeps a real, dispatchable subcommand out of the advertised
+	// surface (usage, help, completion) without removing it from resolve. The
+	// background mirror entrypoint is the only such row. Visibility is a typed
+	// property here, not a name omitted from a usage string by convention.
+	// [LAW:types-are-the-program]
+	hidden bool
 }
 
 // commandFamily is the single source of truth for a subcommand family: which
@@ -84,6 +105,37 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 		}
 	}
 	return zero, errors.New(f.usage)
+}
+
+// visibleSubcommands projects the family's advertised first-argument names for
+// completion. Hidden rows are dropped, so the projection cannot leak the
+// background mirror, and the names come from the one table that resolve also
+// reads — completion and dispatch can never disagree. [LAW:one-source-of-truth]
+func (f commandFamily[P]) visibleSubcommands() []SubcommandSpec {
+	subs := make([]SubcommandSpec, 0, len(f.subcommands))
+	for _, s := range f.subcommands {
+		if s.hidden {
+			continue
+		}
+		subs = append(subs, SubcommandSpec{Name: s.name})
+	}
+	return subs
+}
+
+// nestUnder grafts a nested family's names beneath the subcommand named name,
+// so a sub-subcommand surface (e.g. `sync remote ls`) is derived from that
+// family rather than restated in the completion scripts. It panics when name is
+// absent: the wiring topology and the family table must agree, and a silent
+// miss would reintroduce exactly the drift this projection removes.
+// [LAW:no-silent-failure]
+func nestUnder(subs []SubcommandSpec, name string, children []SubcommandSpec) []SubcommandSpec {
+	for i := range subs {
+		if subs[i].Name == name {
+			subs[i].Subcommands = children
+			return subs
+		}
+	}
+	panic(fmt.Sprintf("completion: no subcommand %q to nest under", name))
 }
 
 // appSubcommand is the row payload for app-mode families: the access the
@@ -184,19 +236,27 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		return runVersion(stdout, args)
 	}
 
+	// Nested family surfaces are grafted onto their parent subcommand so the
+	// completion projection carries the full `sync remote ls`, `sync reconcile
+	// <...>`, and `bulk label <...>` trees — every name still sourced from the
+	// owning family table. [LAW:one-source-of-truth]
+	syncSubcommands := nestUnder(syncFamily.visibleSubcommands(), "remote", syncRemoteFamily.visibleSubcommands())
+	syncSubcommands = nestUnder(syncSubcommands, "reconcile", reconcileFamily.visibleSubcommands())
+	bulkSubcommands := nestUnder(bulkFamily.visibleSubcommands(), "label", bulkLabelFamily.visibleSubcommands())
+
 	return []CommandSpec{
 		{Name: "init", Summary: "Initialize links", Long: humanBootstrapHelp, GroupID: "bootstrap",
 			Run: r.wsCmd(runInit)},
 		{Name: "quickstart", Summary: "Agent quickstart workflow", GroupID: "guidance",
 			Run: r.wsCmd(runQuickstart)},
 		{Name: "completion", Summary: "Generate shell completion script", GroupID: "guidance",
-			Run: completionRun},
+			Run: completionRun, Subcommands: completionFamily.visibleSubcommands()},
 		{Name: "version", Summary: "Print binary version, build metadata, and supported schema range", GroupID: "guidance",
 			Run: versionRun},
 		{Name: "hooks", Summary: "Install git hook automation", GroupID: "maintenance",
-			Run: r.wsFamilyCmd(hooksFamily)},
+			Run: r.wsFamilyCmd(hooksFamily), Subcommands: hooksFamily.visibleSubcommands()},
 		{Name: "sync", Summary: "Mirror Dolt data through git remotes", GroupID: "data",
-			Run: r.wsFamilyCmd(syncFamily)},
+			Run: r.wsFamilyCmd(syncFamily), Subcommands: syncSubcommands},
 		{Name: "new", Summary: "Create an issue", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
@@ -238,15 +298,15 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "operations",
 			Run: r.transitionCmd(model.ActionRestore)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
-			Run: r.familyCmd(commentFamily)},
+			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",
-			Run: r.familyCmd(labelFamily)},
+			Run: r.familyCmd(labelFamily), Subcommands: labelFamily.visibleSubcommands()},
 		{Name: "parent", Summary: "Manage parent relationships", GroupID: "structure",
-			Run: r.familyCmd(parentFamily)},
+			Run: r.familyCmd(parentFamily), Subcommands: parentFamily.visibleSubcommands()},
 		{Name: "children", Summary: "List child issues by rank", GroupID: "structure",
 			Run: r.appCmd(app.AccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
-			Run: r.familyCmd(depFamily)},
+			Run: r.familyCmd(depFamily), Subcommands: depFamily.visibleSubcommands()},
 		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
 			Run: r.appCmd(app.AccessRead, runExport)},
 		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
@@ -262,17 +322,17 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
 		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
-			Run: r.familyCmd(backupFamily)},
+			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.visibleSubcommands()},
 		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
-			Run: r.wsFamilyCmd(snapshotsFamily)},
+			Run: r.wsFamilyCmd(snapshotsFamily), Subcommands: snapshotsFamily.visibleSubcommands()},
 		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
 			Run: r.appCmd(app.AccessWrite, runRecover)},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
-			Run: r.wsFamilyCmd(lifeboatFamily)},
+			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(app.AccessWrite, runDowngrade)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
-			Run: r.familyCmd(bulkFamily)},
+			Run: r.familyCmd(bulkFamily), Subcommands: bulkSubcommands},
 	}
 }
 

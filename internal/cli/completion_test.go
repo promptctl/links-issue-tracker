@@ -23,23 +23,81 @@ func TestCompletionScriptsRender(t *testing.T) {
 	}
 }
 
-func TestCompletionScriptsIncludeUpdateCommand(t *testing.T) {
-	cases := []struct {
-		shell string
-		want  string
-	}{
-		{shell: "bash", want: "show update rank start"},
-		{shell: "zsh", want: "'update:update issue fields'"},
-		{shell: "zsh", want: "'rank:reorder"},
-		{shell: "fish", want: "show update rank start"},
+func renderCompletion(t *testing.T, shell string) string {
+	t.Helper()
+	var stdout bytes.Buffer
+	if err := runCompletion(&stdout, []string{shell}); err != nil {
+		t.Fatalf("runCompletion(%q) error = %v", shell, err)
 	}
-	for _, tc := range cases {
-		var stdout bytes.Buffer
-		if err := runCompletion(&stdout, []string{tc.shell}); err != nil {
-			t.Fatalf("runCompletion(%q) error = %v", tc.shell, err)
+	return stdout.String()
+}
+
+// TestCompletionTopLevelDerivedFromRegistry pins the law contract: the top-level
+// command list every shell offers is exactly the registry projection, in order.
+// A command added to commandSpecs flows into completion with no second edit;
+// none can silently drop. [LAW:one-source-of-truth]
+func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
+	joined := strings.Join(topLevelNames(commandCompletionModel()), " ")
+
+	bash := renderCompletion(t, "bash")
+	if !strings.Contains(bash, `local commands="`+joined+`"`) {
+		t.Errorf("bash command list not the registry projection; got:\n%s", bash)
+	}
+	fish := renderCompletion(t, "fish")
+	if !strings.Contains(fish, `__fish_use_subcommand' -a '`+joined+`'`) {
+		t.Errorf("fish command list not the registry projection; got:\n%s", fish)
+	}
+	zsh := renderCompletion(t, "zsh")
+	for _, name := range topLevelNames(commandCompletionModel()) {
+		if !strings.Contains(zsh, "'"+name+":") {
+			t.Errorf("zsh completion missing describe entry for %q", name)
 		}
-		if !strings.Contains(stdout.String(), tc.want) {
-			t.Fatalf("%s completion missing update marker %q", tc.shell, tc.want)
+	}
+}
+
+// TestCompletionIncludesPreviouslyDriftedCommands pins the specific regression
+// this ticket fixes: these eleven were absent from the hand-written bash literal
+// before completion became a registry projection.
+func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
+	drifted := []string{"assign", "backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "queue", "snapshots"}
+	have := map[string]bool{}
+	for _, name := range topLevelNames(commandCompletionModel()) {
+		have[name] = true
+	}
+	for _, name := range drifted {
+		if !have[name] {
+			t.Errorf("completion model missing command %q that the registry registers", name)
+		}
+	}
+}
+
+// TestCompletionSubcommandsDerivedFromFamilies checks subcommand enumeration is
+// projected from the family tables — including nested families — and excludes
+// the deliberately hidden mirror entrypoint. [LAW:one-source-of-truth]
+func TestCompletionSubcommandsDerivedFromFamilies(t *testing.T) {
+	bash := renderCompletion(t, "bash")
+	wants := []string{
+		`sync)
+      COMPREPLY=( $(compgen -W "status remote fetch pull push reconcile"`,
+		`remote)
+      COMPREPLY=( $(compgen -W "ls"`,
+		`reconcile)
+      COMPREPLY=( $(compgen -W "resolve abort"`,
+	}
+	for _, want := range wants {
+		if !strings.Contains(bash, want) {
+			t.Errorf("bash completion missing derived subcommand arm:\n%s\n--- full ---\n%s", want, bash)
+		}
+	}
+}
+
+// TestCompletionExcludesHiddenMirror guards the one row flagged hidden: a real,
+// dispatchable subcommand that must never reach the advertised surface.
+func TestCompletionExcludesHiddenMirror(t *testing.T) {
+	for _, shell := range []string{"bash", "zsh", "fish"} {
+		out := renderCompletion(t, shell)
+		if strings.Contains(out, backgroundMirrorSubcommand) {
+			t.Errorf("%s completion leaks hidden subcommand %q", shell, backgroundMirrorSubcommand)
 		}
 	}
 }

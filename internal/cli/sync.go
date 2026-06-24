@@ -60,7 +60,7 @@ var syncFamily = commandFamily[wsRunFn]{
 		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
 		// above, so it never shows in help; it manages its own store lifecycle
 		// (wait-for-parent, then open) and so is registered without withSyncStore.
-		{name: backgroundMirrorSubcommand, payload: runBackgroundMirror},
+		{name: backgroundMirrorSubcommand, payload: runBackgroundMirror, hidden: true},
 	},
 }
 
