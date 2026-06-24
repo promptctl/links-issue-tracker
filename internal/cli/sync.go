@@ -4,9 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
-	"path"
 	"regexp"
 	"sort"
 	"strings"
@@ -676,75 +674,4 @@ func mapRemotesByName(remotes []store.SyncRemote) map[string]string {
 		out[name] = url
 	}
 	return out
-}
-
-func sameRemoteURL(left, right string) bool {
-	return normalizeRemoteURL(left) == normalizeRemoteURL(right)
-}
-
-func normalizeRemoteURL(input string) string {
-	trimmed := strings.TrimSpace(input)
-	trimmed = strings.TrimPrefix(trimmed, "git+")
-	if trimmed == "" {
-		return ""
-	}
-	// [LAW:one-source-of-truth] Remote URL comparison uses one canonical normalizer so sync reconciliation decisions do not drift across URL spellings.
-	trimmed = normalizeSCPLikeRemoteURL(trimmed)
-	parsed, err := url.Parse(trimmed)
-	if err != nil || parsed.Scheme == "" || parsed.Host == "" {
-		return trimmed
-	}
-	parsed.Scheme = strings.ToLower(strings.TrimSpace(parsed.Scheme))
-	parsed.Host = strings.ToLower(strings.TrimSpace(parsed.Host))
-	parsed.Path = normalizeRemotePath(parsed.Path)
-	return parsed.String()
-}
-
-func normalizeSCPLikeRemoteURL(input string) string {
-	if strings.Contains(input, "://") {
-		return input
-	}
-	separator := scpHostPathSeparator(input)
-	if separator <= 0 {
-		return input
-	}
-	hostPart := strings.TrimSpace(input[:separator])
-	pathPart := strings.TrimSpace(input[separator+1:])
-	if hostPart == "" || pathPart == "" || strings.Contains(hostPart, "/") {
-		return input
-	}
-	if strings.HasPrefix(pathPart, "/") {
-		return "ssh://" + hostPart + pathPart
-	}
-	return "ssh://" + hostPart + "/" + pathPart
-}
-
-func scpHostPathSeparator(input string) int {
-	separator := -1
-	inBrackets := false
-	for index, character := range input {
-		switch character {
-		case '[':
-			inBrackets = true
-		case ']':
-			inBrackets = false
-		case ':':
-			if !inBrackets {
-				separator = index
-				return separator
-			}
-		}
-	}
-	return separator
-}
-
-func normalizeRemotePath(input string) string {
-	if strings.TrimSpace(input) == "" {
-		return ""
-	}
-	cleaned := path.Clean(strings.TrimSpace(input))
-	if strings.HasPrefix(input, "/") && !strings.HasPrefix(cleaned, "/") {
-		cleaned = "/" + cleaned
-	}
-	return cleaned
 }
