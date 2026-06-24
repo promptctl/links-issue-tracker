@@ -418,7 +418,7 @@ case "$mode" in
         # path the extractor's user can write to. The tar-path entry
         # validator already rejects non-regular entries by file-type char;
         # this is the parallel guard for the zip path (and a belt-and-braces
-        # check for tar). [LAW:no-silent-fallbacks] reject the unsafe shape
+        # check for tar). [LAW:no-silent-failure] reject the unsafe shape
         # explicitly instead of acting on it.
         if [ -L "$tmp/$BIN_NAME" ]; then
             echo "error: extracted '$BIN_NAME' is a symlink; archive rejected" >&2

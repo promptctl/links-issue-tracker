@@ -48,6 +48,18 @@ your PATH. If you have [`just`](https://github.com/casey/just) installed, the
 The install story is the same one end users follow — see
 [README.md](README.md#install).
 
+## Architectural-law markers
+
+Decisions in this codebase are cited inline against the architectural laws they
+serve — `// [LAW:single-enforcer] ...`, `// [LAW:no-silent-failure] ...`. The
+markers are the codebase's machine-greppable record of *why* a seam is shaped
+the way it is. Every token you cite must be a canonical one: the single in-repo
+authority is [`internal/lawtokens`](internal/lawtokens), and a gate
+(`go test ./internal/lawtokens/`, which runs as part of `go test ./...`) fails
+loudly naming any marker whose token is absent from that set. Don't invent a
+token to make a comment read well — if a citation fails the gate, fix the token;
+adding a genuinely new law means adding it to `lawtokens.Canonical` first.
+
 ## Issue tracking — this repo uses `lit`
 
 Work is tracked with `lit`, not GitHub Issues. After cloning and building, run:
