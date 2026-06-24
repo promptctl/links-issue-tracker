@@ -5,8 +5,66 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
+
+// resolveRestorePath is the single authority both `backup restore` and `recover`
+// resolve their source through; these assert the documented cap of two sources
+// (explicit path, latest backup) and that the degenerate combinations fail loudly
+// rather than picking a silent precedence.
+func TestResolveRestorePathCap(t *testing.T) {
+	const usage = "lit backup restore (--latest | --path <snapshot.json>) [--force]"
+
+	t.Run("no source is a usage error", func(t *testing.T) {
+		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
+		_, err := resolveRestorePath(ap, "  ", false, usage)
+		if _, ok := err.(UsageError); !ok {
+			t.Fatalf("resolveRestorePath(no source) error = %v, want UsageError", err)
+		}
+	})
+
+	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
+		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
+		_, err := resolveRestorePath(ap, "/some/export.json", true, usage)
+		ue, ok := err.(UsageError)
+		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
+			t.Fatalf("resolveRestorePath(both) error = %v, want mutually-exclusive UsageError", err)
+		}
+	})
+
+	t.Run("explicit path passes through trimmed", func(t *testing.T) {
+		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
+		got, err := resolveRestorePath(ap, "  /some/export.json  ", false, usage)
+		if err != nil || got != "/some/export.json" {
+			t.Fatalf("resolveRestorePath(path) = %q, %v; want trimmed path", got, err)
+		}
+	})
+
+	t.Run("latest with no backups fails loudly", func(t *testing.T) {
+		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
+		_, err := resolveRestorePath(ap, "", true, usage)
+		if err == nil || !strings.Contains(err.Error(), "no backups available") {
+			t.Fatalf("resolveRestorePath(latest, empty) error = %v, want no backups available", err)
+		}
+	})
+
+	t.Run("latest resolves to the newest snapshot path", func(t *testing.T) {
+		dir := t.TempDir()
+		ap := &app.App{Workspace: workspace.Info{StorageDir: dir}}
+		export := model.Export{Version: 1, WorkspaceID: "ws", ExportedAt: time.Now().UTC()}
+		snapshot, err := backup.Create(dir, export)
+		if err != nil {
+			t.Fatalf("backup.Create() error = %v", err)
+		}
+		got, err := resolveRestorePath(ap, "", true, usage)
+		if err != nil || got != snapshot.Path {
+			t.Fatalf("resolveRestorePath(latest) = %q, %v; want %q", got, err, snapshot.Path)
+		}
+	})
+}
 
 func TestHashExportRefusesUnhydratedIssue(t *testing.T) {
 	// hashExport relies on Issue.MarshalJSON to reject unhydrated values; the
