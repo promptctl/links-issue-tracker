@@ -585,7 +585,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 }
 
 func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error) {
-	query := `SELECT i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.resolution, i.archived_at, i.deleted_at FROM issues i`
+	query := `SELECT ` + issueColumnsQualified + ` FROM issues i`
 	var where []string
 	var args []any
 	if !filter.IncludeArchived {
@@ -896,7 +896,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 		placeholders[i] = "?"
 		args[i] = id
 	}
-	query := fmt.Sprintf(`SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
+	query := fmt.Sprintf(`SELECT `+issueColumnsBare+` FROM issues WHERE id IN (%s)`, strings.Join(placeholders, ","))
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("batch load issues: %w", err)
@@ -925,7 +925,7 @@ func (s *Store) getIssuesByIDs(ctx context.Context, ids []string) (map[string]mo
 }
 
 func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at FROM issues WHERE id = ?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT `+issueColumnsBare+` FROM issues WHERE id = ?`, id)
 	scanned, err := scanIssue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
@@ -1863,6 +1863,44 @@ func nextRankAtTop(ctx context.Context, tx *sql.Tx) (string, error) {
 	return rank.Before(firstRank.String), nil
 }
 
+// issueColumns is the single authoritative ordered projection of the issues
+// table. Every read site selects exactly these columns in this order, and the
+// positional scanners below (scanIssue, scanIssueWithParent) consume them by
+// position — each scanner's Scan() argument order MUST match this slice. A
+// column added, removed, or reordered is one edit here that flows to every read
+// site through the derived projections, leaving only the two adjacent scanners
+// to move with it. [LAW:one-source-of-truth] [FRAMING:representation]
+var issueColumns = []string{
+	"id", "title", "description", "agent_prompt", "status", "priority",
+	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
+	"updated_at", "closed_at", "resolution", "archived_at", "deleted_at",
+}
+
+// issueProjection renders issueColumns as a SELECT list. A non-empty alias
+// qualifies every column (alias "i" yields "i.id, i.title, ..."); the empty
+// alias yields the bare form for single-table reads.
+func issueProjection(alias string) string {
+	qualifier := ""
+	if alias != "" {
+		qualifier = alias + "."
+	}
+	cols := make([]string, len(issueColumns))
+	for i, c := range issueColumns {
+		cols[i] = qualifier + c
+	}
+	return strings.Join(cols, ", ")
+}
+
+// Derived once from issueColumns: the bare form for single-table reads and the
+// "i."-qualified form for reads that join the relations table.
+var (
+	issueColumnsBare      = issueProjection("")
+	issueColumnsQualified = issueProjection("i")
+)
+
+// scanIssue and scanIssueWithParent consume a row positionally; the Scan()
+// argument order below is the other half of issueColumns' positional contract
+// and must stay in lockstep with that slice.
 func scanIssue(row issueScanner) (issueRow, error) {
 	var issue partialIssue
 	var prompt sql.NullString
@@ -2063,7 +2101,7 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 	//   parent dead, child live -> include (snapshot semantics: container's state at archive)
 	//   parent dead, child dead -> include (snapshot semantics)
 	// The WHERE clause encodes "include if parent is dead OR child is live."
-	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, i.id, i.title, i.description, i.agent_prompt, i.status, i.priority, i.issue_type, i.topic, i.assignee, i.item_rank, i.lane, i.created_at, i.updated_at, i.closed_at, i.resolution, i.archived_at, i.deleted_at
+	rows, err := s.db.QueryContext(ctx, `SELECT r.dst_id, `+issueColumnsQualified+`
 		FROM relations r
 		JOIN issues i ON i.id = r.src_id
 		JOIN issues p ON p.id = r.dst_id
