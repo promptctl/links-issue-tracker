@@ -811,8 +811,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
 	status := fs.String("status", "", "Status: open|in_progress|closed")
 	reason := fs.String("reason", "", "Status transition reason")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -833,7 +832,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// and plain field updates (Fields.By/Reason) so every mutation consistently
 	// records them. The actor resolves through the same identity rule as the
 	// assignee — the agent's session wins, else --by/$USER. [LAW:single-enforcer]
-	actor := resolveIdentity(*by)
+	actor := resolveActor()
 	in := store.ApplyUpdateInput{
 		TransitionReason: strings.TrimSpace(*reason),
 		TransitionBy:     actor,
@@ -1052,6 +1051,26 @@ func resolveIdentity(explicit string) string {
 	return strings.TrimSpace(explicit)
 }
 
+// actorResolver yields the identity this lit invocation acts as. It is the only
+// way to read the --by flag: registerActor captures the raw flag pointer and
+// never exposes it, so the unresolved $USER fallback cannot reach a
+// CreatedBy/actor field — every value a callsite can obtain has already passed
+// through resolveIdentity. [LAW:single-enforcer] one boundary resolves the
+// actor for every mutating command; [LAW:types-are-the-program] the
+// raw-$USER-to-CreatedBy path is unrepresentable, so a new mutating command
+// cannot reintroduce the split-provenance bug by forgetting to resolve.
+type actorResolver func() string
+
+// registerActor declares the hidden --by fallback flag on fs and returns the
+// resolver that reads it. Call the returned resolver after parseFlagSet has run.
+// [LAW:one-source-of-truth] the $USER default lives here alone, not at each
+// mutating callsite.
+func registerActor(fs *cobraFlagSet) actorResolver {
+	by := fs.String("by", os.Getenv("USER"), "")
+	fs.Hide("by")
+	return func() string { return resolveIdentity(*by) }
+}
+
 // displayAssignee renders an assignee value for human output; the empty value
 // means "nobody owns this" and must read that way rather than vanish.
 func displayAssignee(assignee string) string {
@@ -1076,8 +1095,7 @@ var transitionBreadcrumbTopics = map[model.ActionName]string{
 func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action model.ActionName) error {
 	fs := newCobraFlagSet(string(action))
 	reason := fs.String("reason", "", "Transition reason")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	// Only `start` consumes --assignee. Defining the flag for every action
 	// keeps the parser uniform; non-start paths route to TransitionIssue, which
 	// has no Assignee field — the constraint is structural, not a runtime guard.
@@ -1160,7 +1178,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// rule as the assignee: the agent's session wins, else --by/$USER. History
 	// must record who actually performed the transition (claude_<session>), not
 	// the shell user, now that ownership survives close as an orthogonal field.
-	actor := resolveIdentity(*by)
+	actor := resolveActor()
 	if action == model.ActionStart {
 		resolvedAssignee = resolveIdentity(*assignee)
 		issue, err = ap.Store.StartIssue(ctx, store.StartIssueInput{
@@ -1235,8 +1253,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("assign")
 	reason := fs.String("reason", "", "Reassignment reason (optional)")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1252,7 +1269,7 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		Assignee: &newAssignee,
 		// [LAW:single-enforcer] Actor resolves through the shared identity rule;
 		// the second positional arg is the new owner, the actor is who acted.
-		By:     resolveIdentity(*by),
+		By:     resolveActor(),
 		Reason: *reason,
 	})
 	if err != nil {
@@ -1273,8 +1290,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("comment add")
 	body := fs.String("body", "", "Comment body")
-	by := fs.String("by", os.Getenv("USER"), "")
-	fs.Hide("by")
+	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
@@ -1286,7 +1302,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 	// through the same identity rule as every other actor.
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveIdentity(*by)})
+	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
