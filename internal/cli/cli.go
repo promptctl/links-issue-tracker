@@ -1420,15 +1420,19 @@ func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {
 	return nil
 }
 
-// completionFamily routes a shell name straight to its script: the payload is
-// the data the command emits, so dispatch needs no handler at all.
-// [LAW:dataflow-not-control-flow]
+// completionFamily is the single source of the supported shells: its rows both
+// validate the `lit completion <shell>` argument and feed the completion
+// command's own completion surface. The payload is the shell name; the renderer
+// is selected by completionRenderer rather than stored here, because a render
+// closure projects the command registry (commandSpecs), and the registry refers
+// back to this family — holding the closure here would form a package
+// initialization cycle. [LAW:dataflow-not-control-flow]
 var completionFamily = commandFamily[string]{
 	usage: "usage: lit completion <bash|zsh|fish>",
 	subcommands: []subcommandRow[string]{
-		{name: "bash", payload: bashCompletionScript},
-		{name: "zsh", payload: zshCompletionScript},
-		{name: "fish", payload: fishCompletionScript},
+		{name: "bash", payload: "bash"},
+		{name: "zsh", payload: "zsh"},
+		{name: "fish", payload: "fish"},
 	},
 }
 
@@ -1436,11 +1440,11 @@ func runCompletion(stdout io.Writer, args []string) error {
 	if len(args) != 1 {
 		return errors.New(completionFamily.usage)
 	}
-	script, err := completionFamily.resolve(args)
+	shell, err := completionFamily.resolve(args)
 	if err != nil {
 		return err
 	}
-	_, err = io.WriteString(stdout, script)
+	_, err = io.WriteString(stdout, completionRenderer(shell)())
 	return err
 }
 
