@@ -249,6 +249,16 @@ func isUnfinished(issue model.Issue) bool {
 // [LAW:one-source-of-truth] Single definition of the focus label.
 const FocusLabel = "focus"
 
+// focusGraphSource is the exact store surface the focus-path walk consumes:
+// listing the focus-labeled goals and batch-loading structural relations. The
+// walk depends on this two-method seam rather than the whole *store.Store, so
+// its real input is nameable and a memo/decorator can stand in.
+// [LAW:decomposition] The seam carries the whole truth of what the part needs.
+type focusGraphSource interface {
+	ListIssues(ctx context.Context, filter store.ListIssuesFilter) ([]model.Issue, error)
+	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]store.IssueRelations, error)
+}
+
 // fetchFocusPathGoals returns issueID -> focused-goal ID for every unfinished
 // issue on the prerequisite closure of a focus-labeled goal, the goal itself
 // included. An issue's prerequisites are its unfinished explicit dependencies,
@@ -260,13 +270,27 @@ const FocusLabel = "focus"
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
 // values; no caller mode decides whether it runs — an empty focus set yields
 // an empty map through the same code path.
-func fetchFocusPathGoals(ctx context.Context, st *store.Store) (map[string]string, error) {
-	goals, err := st.ListIssues(ctx, store.ListIssuesFilter{
+//
+// seeds donate relations the caller already fetched (the listing pipeline loads
+// the workable leaves and their parent epics before this runs). They prime a
+// per-invocation memo so subjects fetched once — by the caller or an earlier
+// BFS level — are never re-queried. The memo is a derived cache over one
+// read-only pass with no intervening writes, so a hit is byte-identical to a
+// refetch; an empty seed set leaves behavior unchanged.
+// [LAW:one-source-of-truth] The memo is derived, never authoritative.
+func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map[string]store.IssueRelations) (map[string]string, error) {
+	goals, err := src.ListIssues(ctx, store.ListIssuesFilter{
 		Statuses:  []model.State{model.StateOpen, model.StateInProgress},
 		LabelsAll: []string{FocusLabel},
 	})
 	if err != nil {
 		return nil, err
+	}
+	cache := make(map[string]store.IssueRelations)
+	for _, seed := range seeds {
+		for id, rel := range seed {
+			cache[id] = rel
+		}
 	}
 	path := make(map[string]string, len(goals))
 	frontier := make([]string, 0, len(goals))
@@ -278,11 +302,11 @@ func fetchFocusPathGoals(ctx context.Context, st *store.Store) (map[string]strin
 	// The path map doubles as the visited set, so shared prerequisites are
 	// attributed to the first goal that reaches them and cycles terminate.
 	for len(frontier) > 0 {
-		rels, err := st.GetRelationsByIDs(ctx, frontier)
+		rels, err := relationsByID(ctx, src, cache, frontier)
 		if err != nil {
 			return nil, err
 		}
-		parentRels, err := st.GetRelationsByIDs(ctx, parentEpicIDs(rels))
+		parentRels, err := relationsByID(ctx, src, cache, parentEpicIDs(rels))
 		if err != nil {
 			return nil, err
 		}
@@ -326,6 +350,38 @@ func fetchFocusPathGoals(ctx context.Context, st *store.Store) (map[string]strin
 		frontier = next
 	}
 	return path, nil
+}
+
+// relationsByID returns the relations for ids, fetching only the subjects not
+// already in cache and recording new fetches back into it, so a subject is
+// loaded at most once per walk. Nonexistent subjects stay absent (mirroring
+// GetRelationsByIDs), so callers' presence checks still fire; only positive
+// results are memoized.
+// [LAW:single-enforcer] Every relation load on the focus walk goes through this
+// one memo, so cross-level repeats and caller-donated subjects never re-query.
+func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]store.IssueRelations, ids []string) (map[string]store.IssueRelations, error) {
+	missing := make([]string, 0, len(ids))
+	for _, id := range ids {
+		if _, ok := cache[id]; !ok {
+			missing = append(missing, id)
+		}
+	}
+	if len(missing) > 0 {
+		fetched, err := src.GetRelationsByIDs(ctx, missing)
+		if err != nil {
+			return nil, err
+		}
+		for id, rel := range fetched {
+			cache[id] = rel
+		}
+	}
+	out := make(map[string]store.IssueRelations, len(ids))
+	for _, id := range ids {
+		if rel, ok := cache[id]; ok {
+			out[id] = rel
+		}
+	}
+	return out, nil
 }
 
 // newFocusPathAnnotator returns an annotator that emits a FocusPath annotation
