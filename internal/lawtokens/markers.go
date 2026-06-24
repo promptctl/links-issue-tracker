@@ -27,10 +27,11 @@ func (m Marker) String() string {
 // markerPattern matches a citation by its SHAPE, not by a fixed token list:
 // "[", a namespace, ":", then everything up to the first "]" on the line. The
 // token is captured loosely (any run of non-"]" characters) on purpose — a
-// miscased or malformed token like "[LAW:No-Silent-Failure]" must still be
-// *recognized* as a marker so it can be reported as non-canonical, rather than
-// silently failing to match and riding in unflagged ([LAW:no-silent-failure]).
-// Canonicity is then decided by exact membership in Canonical, not by the regex.
+// miscased or malformed token (say `No-Silent-Failure` rather than the
+// canonical lowercase `no-silent-failure`) must still be *recognized* as a
+// marker so it can be reported as non-canonical, rather than silently failing
+// to match and riding in unflagged ([LAW:no-silent-failure]). Canonicity is
+// then decided by exact membership in Canonical, not by the regex.
 var markerPattern = regexp.MustCompile(`\[(LAW|FRAMING):([^\]\n]+)\]`)
 
 // ScanMarkers returns every architectural-law citation in content, in order,

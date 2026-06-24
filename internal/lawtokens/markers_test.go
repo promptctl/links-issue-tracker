@@ -10,10 +10,10 @@ import (
 )
 
 // brackets wraps a namespace and token into a citation at runtime. Tests build
-// their example markers through this rather than writing literal "[LAW:...]"
-// text, so that the repo gate (TestRepoMarkersAreCanonical) — which scans every
-// tracked file, this one included — never mistakes a deliberately-invalid test
-// fixture for real drift.
+// their example markers through this rather than writing the bracketed marker
+// form literally, so that the repo gate (TestRepoMarkersAreCanonical) — which
+// scans every tracked file, this one included — never mistakes a
+// deliberately-invalid test fixture for real drift.
 func brackets(namespace, token string) string {
 	return "[" + namespace + ":" + token + "]"
 }
