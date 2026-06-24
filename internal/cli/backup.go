@@ -67,6 +67,41 @@ func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	return nil
 }
 
+// restoreSourceUsage is the one canonical restore surface shared by `backup
+// restore` and `recover`. [LAW:no-mode-explosion] the cap is two sources — an
+// explicit export path or the latest backup snapshot — and it lives here once
+// so neither command can grow a private fourth flag without editing this line.
+const restoreSourceUsage = "(--latest | --path <snapshot.json>) [--force]"
+
+// resolveRestorePath is the single authority that turns a restore source into a
+// path. The two sources are the only ones there can be: restoreFromExportPath
+// reads any model.Export JSON identically and is blind to whether the file came
+// from `backup create` or the sync engine, so a file's provenance is not a
+// behavioral axis and earns no separate flag. [LAW:one-source-of-truth] both
+// restore commands resolve here, so the overlap is a declared alias rather than
+// two surfaces that drift. [LAW:no-silent-failure] passing both sources is an
+// explicit error, never a silent precedence between them.
+func resolveRestorePath(ap *app.App, explicitPath string, latest bool, usage string) (string, error) {
+	path := strings.TrimSpace(explicitPath)
+	if latest {
+		if path != "" {
+			return "", UsageError{Message: "usage: " + usage + " — --latest and --path are mutually exclusive"}
+		}
+		snapshot, err := backup.Latest(ap.Workspace.StorageDir)
+		if err != nil {
+			return "", err
+		}
+		if snapshot == nil {
+			return "", errors.New("no backups available")
+		}
+		return snapshot.Path, nil
+	}
+	if path == "" {
+		return "", UsageError{Message: "usage: " + usage}
+	}
+	return path, nil
+}
+
 func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("backup restore")
 	path := fs.String("path", "", "Backup snapshot path")
@@ -75,58 +110,37 @@ func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args [
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	restorePath := strings.TrimSpace(*path)
-	if *latest {
-		latestSnapshot, err := backup.Latest(ap.Workspace.StorageDir)
-		if err != nil {
-			return err
-		}
-		if latestSnapshot == nil {
-			return errors.New("no backups available")
-		}
-		restorePath = latestSnapshot.Path
-	}
-	if restorePath == "" {
-		return UsageError{Message: "usage: lit backup restore --path <snapshot.json> [--force] or --latest"}
+	restorePath, err := resolveRestorePath(ap, *path, *latest, "lit backup restore "+restoreSourceUsage)
+	if err != nil {
+		return err
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(stdout, "restored %s\n", restorePath)
+	_, err = fmt.Fprintf(stdout, "restored %s\n", restorePath)
 	return err
 }
 
+// runRecover is the top-level disaster-recovery alias of `backup restore`: same
+// canonical source surface, same resolver, same operation. It exists as its own
+// discoverable verb (downgrade failures point users at it), differing only in
+// that --path here accepts any export JSON — a backup snapshot or a sync file.
 func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("recover")
-	fromSync := fs.String("from-sync", "", "Restore from sync file")
-	fromBackup := fs.String("from-backup", "", "Restore from backup snapshot")
-	latestBackup := fs.Bool("latest-backup", false, "Restore from latest backup snapshot")
+	path := fs.String("path", "", "Export snapshot path (backup snapshot or sync file)")
+	latest := fs.Bool("latest", false, "Recover from latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	var restorePath string
-	switch {
-	case strings.TrimSpace(*fromSync) != "":
-		restorePath = strings.TrimSpace(*fromSync)
-	case strings.TrimSpace(*fromBackup) != "":
-		restorePath = strings.TrimSpace(*fromBackup)
-	case *latestBackup:
-		latest, err := backup.Latest(ap.Workspace.StorageDir)
-		if err != nil {
-			return err
-		}
-		if latest == nil {
-			return errors.New("no backups available")
-		}
-		restorePath = latest.Path
-	default:
-		return UsageError{Message: "usage: lit recover --from-sync <path> | --from-backup <path> | --latest-backup [--force]"}
+	restorePath, err := resolveRestorePath(ap, *path, *latest, "lit recover "+restoreSourceUsage)
+	if err != nil {
+		return err
 	}
 	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
 		return err
 	}
-	_, err := fmt.Fprintf(stdout, "recovered %s\n", restorePath)
+	_, err = fmt.Fprintf(stdout, "recovered %s\n", restorePath)
 	return err
 }
 
