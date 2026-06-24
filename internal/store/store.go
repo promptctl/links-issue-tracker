@@ -2120,23 +2120,33 @@ func (s *Store) lifecycleChildrenByEpicIDs(ctx context.Context, epicIDs []string
 		return nil, fmt.Errorf("load lifecycle children: %w", err)
 	}
 	defer rows.Close()
-	childRowsByEpicID := make(map[string][]issueRow, len(epicIDs))
+	// [LAW:dataflow-not-control-flow] Hydrate every epic's children in a single
+	// pass rather than once per epic. A parallel parentID slice carries the epic
+	// each child row belongs to, so the per-recursion-level query count is fixed
+	// regardless of how many epics are open instead of scaling as one label query
+	// plus one child-relation query per epic. hydrateIssues preserves input order
+	// and the SELECT groups children by epic (dst_id) then item_rank, so
+	// re-bucketing the hydrated result by parentID reproduces the identical
+	// per-epic, rank-ordered grouping the per-epic loop produced.
+	childRows := make([]issueRow, 0)
+	parentIDs := make([]string, 0)
 	for rows.Next() {
 		parentID, child, err := scanIssueWithParent(rows)
 		if err != nil {
 			return nil, err
 		}
-		childRowsByEpicID[parentID] = append(childRowsByEpicID[parentID], child)
+		childRows = append(childRows, child)
+		parentIDs = append(parentIDs, parentID)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
 	}
-	for epicID, childRows := range childRowsByEpicID {
-		hydrated, err := s.hydrateIssues(ctx, childRows)
-		if err != nil {
-			return nil, err
-		}
-		out[epicID] = hydrated
+	hydrated, err := s.hydrateIssues(ctx, childRows)
+	if err != nil {
+		return nil, err
+	}
+	for i, issue := range hydrated {
+		out[parentIDs[i]] = append(out[parentIDs[i]], issue)
 	}
 	return out, nil
 }
