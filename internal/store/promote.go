@@ -89,7 +89,7 @@ func PromoteCandidate(ctx context.Context, canonicalDoltDir string, cand *Candid
 		return PromotionResult{}, headErr
 	}
 
-	// [LAW:no-silent-fallbacks] Roll BACK, never forward: any failure between the
+	// [LAW:no-silent-failure] Roll BACK, never forward: any failure between the
 	// two renames restores the known-good original, never the unverified
 	// candidate. The handler fires only on error, so a successful swap is never
 	// undone.
@@ -141,12 +141,12 @@ var ErrMissingDumpProvenance = errors.New("dump has no recorded head commit")
 // read takes no workspace lock — PromoteCandidate already holds the exclusive hold,
 // so the head cannot move between this read and the swap.
 //
-// [LAW:no-silent-fallbacks] A read failure aborts the promotion: if the live head
+// [LAW:no-silent-failure] A read failure aborts the promotion: if the live head
 // cannot be confirmed unchanged, installing the candidate could silently regress a
 // concurrent commit, so the safe action is to refuse and surface why. Read-only
 // below the gate, the worst case is a read error with the live workspace untouched.
 func verifyHeadUnchanged(ctx context.Context, canonicalDoltDir, workspaceID, expectedHead string) (err error) {
-	// [LAW:no-silent-fallbacks] A candidate with no recorded head cannot be checked
+	// [LAW:no-silent-failure] A candidate with no recorded head cannot be checked
 	// for staleness; promoting it would gamble the live workspace on an unverifiable
 	// snapshot. Refuse with the provenance-specific error rather than comparing
 	// against "" and reporting a bogus advance.
@@ -210,7 +210,7 @@ func HealWorkspace(ctx context.Context, canonicalDoltDir string) (err error) {
 // moveAside renames the canonical directory to its backup path, returning the
 // backup path it actually created — empty when nothing pre-existed to preserve, so
 // the caller never reports a path that does not exist. An absent canonical is a
-// legitimate no-op: the install proceeds with no backup. [LAW:no-silent-fallbacks]
+// legitimate no-op: the install proceeds with no backup. [LAW:no-silent-failure]
 // Any stat error other than not-exist is a distinct failure mode the operator must
 // see, not a missing dir.
 func moveAside(canonicalDoltDir, backup string) (string, error) {
@@ -312,7 +312,7 @@ func isPromotionBackup(name, prefix string) bool {
 
 // newestBackup returns the most recent promotion backup for the canonical path,
 // or "" when none exist. Backups are named with a fixed-width nanosecond stamp,
-// so lexical order is chronological order. [LAW:no-silent-fallbacks] Listing is
+// so lexical order is chronological order. [LAW:no-silent-failure] Listing is
 // by directory scan with a prefix filter rather than a glob, so a path containing
 // glob metacharacters cannot silently skip a real backup.
 func newestBackup(canonicalDoltDir string) (string, error) {

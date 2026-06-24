@@ -132,7 +132,7 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	if err != nil {
 		return err
 	}
-	// [LAW:no-silent-fallbacks] A release failure is rare but real (e.g.
+	// [LAW:no-silent-failure] A release failure is rare but real (e.g.
 	// EBADF on a torn FD) and signals workspace-lock state the operator
 	// needs to know about; surface it via the named return rather than
 	// discarding. errors.Join keeps both observable — a release failure

@@ -276,7 +276,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if err := s.quarantineFastFail(ctx, state); err != nil {
 		return err
 	}
-	// [LAW:no-silent-fallbacks] Verify reconcile prerequisites BEFORE
+	// [LAW:no-silent-failure] Verify reconcile prerequisites BEFORE
 	// the snapshot guard fires, so a workspace whose shape reconcile
 	// cannot recover from does not accumulate a recovery snapshot per
 	// Open. The check is gated to phaseAdopt because that is the only
@@ -314,7 +314,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		if _, err := s.reconcileToBaseline(ctx, guard); err != nil {
 			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
 		}
-		// [LAW:no-silent-fallbacks] After reconcile, verify the
+		// [LAW:no-silent-failure] After reconcile, verify the
 		// workspace shape actually matches the baseline before
 		// stamping. The reconcile's CREATE TABLE steps are gated on
 		// table presence, NOT column presence — so a workspace that
@@ -587,7 +587,7 @@ func (s *Store) recordQuarantine(ctx context.Context, version int64, name, error
 // arithmetic — so the function reads the schema and reacts; it never mutates
 // bookkeeping to make the numbers agree.
 //
-// [LAW:no-silent-fallbacks] A binary that cannot find its baseline shape
+// [LAW:no-silent-failure] A binary that cannot find its baseline shape
 // refuses loudly with the missing tables/columns named, rather than operating
 // against a schema it does not understand.
 // [LAW:dataflow-not-control-flow] The verify result (present count and missing

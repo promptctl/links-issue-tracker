@@ -1866,7 +1866,7 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 // verifyIssuesReconcilable preflight in runMigration — the structural refusal
 // fires BEFORE any reconcile DDL runs, naming the specific missing column(s).
 //
-// [LAW:no-silent-fallbacks] An unrecoverable shape produces a specific
+// [LAW:no-silent-failure] An unrecoverable shape produces a specific
 // error naming the missing prerequisite column, not a vague refusal —
 // and refuses before any mutation lands on the workspace.
 func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {

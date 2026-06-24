@@ -33,7 +33,7 @@ var tagAcceptPattern = regexp.MustCompile(`^v[A-Za-z0-9._+-]+$`)
 // time of writing, so without this bound a stalled server would wedge the
 // command forever.
 //
-// [LAW:enumeration-gap] The accept shape of "an HTTP manifest fetch"
+// [LAW:types-are-the-program] The accept shape of "an HTTP manifest fetch"
 // includes a deadline. http.DefaultClient has none; the boundary needs
 // its own bounded default.
 const defaultResolverTimeout = 60 * time.Second

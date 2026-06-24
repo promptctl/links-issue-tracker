@@ -90,7 +90,7 @@ func runDowngradeWith(
 	}
 
 	if err := installer.Install(ctx, target, binPath); err != nil {
-		// [LAW:no-silent-fallbacks] schema is already downgraded at this point;
+		// [LAW:no-silent-failure] schema is already downgraded at this point;
 		// surface the install failure with the exact recovery the operator
 		// needs (run the prior binary themselves, or restore the snapshot).
 		return fmt.Errorf(

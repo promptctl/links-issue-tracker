@@ -59,7 +59,7 @@ const (
 	LawRank ConservationLaw = "rank_permutation"
 )
 
-// VerifyFinding is one discrepancy. [LAW:errors] It is dual-purpose by
+// VerifyFinding is one discrepancy. [LAW:types-are-the-program] It is dual-purpose by
 // construction: Law is the machine-checkable discriminator a caller branches on,
 // and Detail is the localized human/LLM sentence — it names the exact ids, ranks
 // or collections unaccounted for, so the same value drives both an assertion and

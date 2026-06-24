@@ -365,7 +365,7 @@ func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syn
 func resolveSyncRemote(requestedRemote string, upstreamRemote string, gitRemotes []workspace.GitRemote) (string, error) {
 	validatedRequestedRemote := strings.TrimSpace(requestedRemote)
 	if validatedRequestedRemote != "" {
-		// [LAW:no-silent-fallbacks] Explicit remote that doesn't exist is a configuration error, not a skip condition.
+		// [LAW:no-silent-failure] Explicit remote that doesn't exist is a configuration error, not a skip condition.
 		if !syncRemoteExists(validatedRequestedRemote, gitRemotes) {
 			return "", fmt.Errorf("requested remote %q not found in configured git remotes", validatedRequestedRemote)
 		}
