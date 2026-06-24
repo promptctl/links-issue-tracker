@@ -2320,8 +2320,25 @@ func validateIssueType(issueType string) (string, error) {
 	return trimmed, nil
 }
 
+// canonicalPriority is the single authority on the priority domain: it maps any
+// raw int onto the canonical {normal, urgent} set and is idempotent, so its
+// fixed points ARE the legal priorities. validatePriority (live writes) and the
+// import boundary (legacy restores) are both defined in terms of it, so they
+// cannot disagree about what a legal priority is — extending the domain is a
+// one-function edit here. [LAW:one-source-of-truth] [LAW:single-enforcer]
+func canonicalPriority(priority int) int {
+	if priority == model.PriorityUrgent {
+		return model.PriorityUrgent
+	}
+	return model.PriorityNormal
+}
+
+// validatePriority rejects exactly the values canonicalPriority would rewrite —
+// i.e. anything that is not already canonical. [LAW:single-enforcer] The live
+// write path rejects where the import path coerces, but both read "what is a
+// legal priority" from canonicalPriority, so the two resolutions stay in lockstep.
 func validatePriority(priority int) error {
-	if priority != model.PriorityNormal && priority != model.PriorityUrgent {
+	if canonicalPriority(priority) != priority {
 		return ValidationError{Message: fmt.Sprintf("priority must be %d (normal) or %d (urgent)", model.PriorityNormal, model.PriorityUrgent)}
 	}
 	return nil
