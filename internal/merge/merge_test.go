@@ -89,6 +89,58 @@ func TestIssueEqualTreatsNilAndEmptyLabelsAsEquivalent(t *testing.T) {
 	}
 }
 
+// issueClosedWith builds a closed leaf that is byte-for-byte identical across
+// calls except for its resolution — fixed timestamps keep the resolution the
+// ONLY varying field, so a detected change can only be the resolution divergence.
+func issueClosedWith(t *testing.T, id string, closedAt time.Time, resolution model.Resolution) model.Issue {
+	t.Helper()
+	fixed := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	res := resolution
+	hydrated, err := model.HydrateStatus(
+		model.Issue{ID: id, Title: id, Priority: 0, IssueType: "task", CreatedAt: fixed, UpdatedAt: fixed},
+		model.StatusView{Value: model.StateClosed, ClosedAt: &closedAt, Resolution: &res},
+	)
+	if err != nil {
+		t.Fatalf("HydrateStatus() error = %v", err)
+	}
+	return hydrated
+}
+
+// A side that re-closes an already-closed ticket with a DIFFERENT resolution
+// (status stays closed, same closed_at) has genuinely moved the row. The
+// change-gate must detect it, or ThreeWay routes the side through the
+// "unchanged" branch and the new resolution is silently dropped.
+func TestIssueChangedDetectsResolutionOnlyDivergence(t *testing.T) {
+	closedAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	base := issueClosedWith(t, "i1", closedAt, model.ResolutionWontfix)
+	reResolved := issueClosedWith(t, "i1", closedAt, model.ResolutionDuplicate)
+	if !issueChanged(&base, &reResolved) {
+		t.Fatalf("issueChanged = false for a resolution-only re-close (wontfix -> duplicate); the edit would be dropped on sync")
+	}
+}
+
+func TestThreeWayPreservesResolutionOnlyReClose(t *testing.T) {
+	closedAt := time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC)
+	baseIssue := issueClosedWith(t, "i1", closedAt, model.ResolutionWontfix)
+	base := model.Export{WorkspaceID: "ws", Issues: []model.Issue{baseIssue}}
+	// remote leaves the ticket exactly as base; local re-closes with a new reason.
+	remote := model.Export{WorkspaceID: "ws", Issues: []model.Issue{baseIssue}}
+	local := model.Export{WorkspaceID: "ws", Issues: []model.Issue{issueClosedWith(t, "i1", closedAt, model.ResolutionDuplicate)}}
+
+	result := ThreeWay(base, local, remote)
+	if len(result.Pending) != 0 {
+		t.Fatalf("unexpected pending = %#v", result.Pending)
+	}
+	issues := result.Provisional().Issues
+	if len(issues) != 1 {
+		t.Fatalf("issues = %#v", issues)
+	}
+	got := issues[0].ResolutionValue()
+	if got == nil || *got != model.ResolutionDuplicate {
+		t.Fatalf("merged resolution = %v, want duplicate; the lone-side resolution edit must survive the merge", got)
+	}
+}
+
 func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	now := time.Now().UTC()
 	base := model.Export{
