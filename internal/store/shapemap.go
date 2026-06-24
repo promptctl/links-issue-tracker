@@ -710,7 +710,7 @@ func applyTransform(t Transform, cell any) (any, error) {
 		if !ok {
 			return nil, fmt.Errorf("%s requires a string cell, got %T", t, cell)
 		}
-		// [LAW:no-silent-fallbacks] A non-NULL value that does not parse is a
+		// [LAW:no-silent-failure] A non-NULL value that does not parse is a
 		// corrupt dump, not an absent timestamp; surface it (Apply wraps this with
 		// the source table and column) rather than zeroing the field and quietly
 		// losing recovery data.

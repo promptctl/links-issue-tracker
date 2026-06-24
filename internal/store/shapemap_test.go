@@ -472,7 +472,7 @@ func TestApplyTransformPreservesNull(t *testing.T) {
 
 // TestApplyRejectsCorruptTimestamp proves a non-NULL timestamp that does not
 // parse fails loudly with source context rather than vanishing into a zero
-// value — [LAW:no-silent-fallbacks], the conservation guarantee a recovery tool
+// value — [LAW:no-silent-failure], the conservation guarantee a recovery tool
 // must hold.
 func TestApplyRejectsCorruptTimestamp(t *testing.T) {
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{

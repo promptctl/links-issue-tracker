@@ -270,7 +270,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	if err != nil {
 		return nil, err
 	}
-	// [LAW:no-silent-fallbacks] On any failure path before the Store owns
+	// [LAW:no-silent-failure] On any failure path before the Store owns
 	// the lock, release the hold AND surface a release error via the named
 	// return — a leaked shared hold would block subsequent restores with
 	// workspace-busy from a vanished caller. success guards the happy path
@@ -327,7 +327,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		}
 	}()
 	if _, statErr := os.Stat(doltRootDir); statErr != nil {
-		// [LAW:no-silent-fallbacks] Only ENOENT means "uninitialized";
+		// [LAW:no-silent-failure] Only ENOENT means "uninitialized";
 		// every other stat error (EACCES, EIO, ELOOP, etc.) is its own
 		// failure mode the operator needs to see, not a vague downstream
 		// Dolt-connection error.

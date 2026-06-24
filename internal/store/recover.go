@@ -156,7 +156,7 @@ func runAttempt(ctx context.Context, parentDir string, dump RawDump, mapper Mapp
 	}
 	cand, err := RebuildCandidate(ctx, parentDir, dump, mapping)
 	if err != nil {
-		// [LAW:no-silent-fallbacks] Only a mapping rejection is self-repairable
+		// [LAW:no-silent-failure] Only a mapping rejection is self-repairable
 		// feedback. A build failure past a valid mapping — filesystem, store I/O,
 		// corrupt source data — cannot be fixed by re-mapping, so it surfaces as a
 		// hard error rather than being relabeled as feedback and silently burning

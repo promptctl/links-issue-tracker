@@ -42,7 +42,7 @@ type ImportTreeResult struct {
 // [LAW:single-enforcer] The store owns the ImportTreeSpec schema, so the store
 // owns its deserialization — the CLI hands bytes here rather than running its
 // own permissive decode.
-// [LAW:no-silent-fallbacks] DisallowUnknownFields + trailing-data check make
+// [LAW:no-silent-failure] DisallowUnknownFields + trailing-data check make
 // the parse total: every byte stream that is not exactly one array of
 // known-field specs is an explicit error.
 func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
