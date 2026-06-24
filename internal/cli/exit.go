@@ -59,6 +59,13 @@ func ExitCode(err error) int {
 	if errors.As(err, &outsideWorkspace) {
 		return ExitGeneric
 	}
+	var bulkFailure BulkFailureError
+	if errors.As(err, &bulkFailure) {
+		// Per-item failures are heterogeneous (not-found, conflict, …); the exit
+		// code carries only the binary any-failed signal, while the per-item
+		// typed reasons live in the stderr message. [LAW:no-silent-failure]
+		return ExitGeneric
+	}
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return ExitGeneric
 	}

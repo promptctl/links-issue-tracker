@@ -57,6 +57,10 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &outsideWorkspace) {
 		return "outside_git_workspace"
 	}
+	var bulkFailure BulkFailureError
+	if errors.As(err, &bulkFailure) {
+		return "bulk_partial_failure"
+	}
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return "transient_gc_contention"
 	}
@@ -81,6 +85,8 @@ func commandErrorRemediation(reason string) string {
 		return "Retry once. If the error persists, run `lit doctor --fix`. <agent-instructions>Run it yourself, do NOT ask the user — it is idempotent and safe.</agent-instructions>"
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
+	case "bulk_partial_failure":
+		return "Some items failed; see the per-item errors above. Re-run the command for only the failed IDs after addressing each error."
 	default:
 		return "Retry the command. If it still fails, run `lit doctor` for diagnostics."
 	}

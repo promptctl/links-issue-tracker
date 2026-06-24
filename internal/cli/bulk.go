@@ -27,6 +27,53 @@ var bulkFamily = commandFamily[appSubcommand]{
 // is the resolved acting identity for the invocation, not a raw flag value.
 type bulkLabelOp func(ctx context.Context, ap *app.App, issueID, label, actor string) error
 
+// itemFailure pairs a bulk-operation target with the error that befell it.
+type itemFailure struct {
+	IssueID string
+	Err     error
+}
+
+// BulkFailureError aggregates the per-item failures of a bulk operation. Its
+// presence is the machine-checkable signal that at least one item failed, so the
+// exit-code boundary maps it to a non-zero code and a script chaining off a bulk
+// command does not proceed on partial or total failure. The per-item failures
+// are carried as data, never written to the stdout result channel.
+// [LAW:no-silent-failure] [LAW:types-are-the-program]
+type BulkFailureError struct {
+	Failures []itemFailure
+}
+
+func (e BulkFailureError) Error() string {
+	parts := make([]string, len(e.Failures))
+	for i, f := range e.Failures {
+		parts[i] = fmt.Sprintf("%s: %v", f.IssueID, f.Err)
+	}
+	return fmt.Sprintf("bulk operation: %d item(s) failed: %s", len(e.Failures), strings.Join(parts, "; "))
+}
+
+// runBulkOver applies op to each issue ID in order, writing one "id ok" line per
+// success to stdout — the data channel carries results only — and collecting
+// every failure. If any item failed it returns a BulkFailureError so the exit
+// code reflects it; per-item failures never reach stdout. This is the single
+// place bulk success/failure is decided, so the exit-code contract cannot drift
+// between bulk verbs. [LAW:single-enforcer] [LAW:no-silent-failure]
+func runBulkOver(stdout io.Writer, issueIDs []string, op func(issueID string) error) error {
+	var failures []itemFailure
+	for _, issueID := range issueIDs {
+		if err := op(issueID); err != nil {
+			failures = append(failures, itemFailure{IssueID: issueID, Err: err})
+			continue
+		}
+		if _, err := fmt.Fprintf(stdout, "%s ok\n", issueID); err != nil {
+			return err
+		}
+	}
+	if len(failures) > 0 {
+		return BulkFailureError{Failures: failures}
+	}
+	return nil
+}
+
 var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	usage: "usage: lit bulk label <add|rm> ...",
 	subcommands: []subcommandRow[bulkLabelOp]{
@@ -70,20 +117,9 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 		return err
 	}
 	actor := resolveActor()
-	results := map[string]string{}
-	for _, issueID := range issueIDs {
-		if err := op(ctx, ap, issueID, *label, actor); err != nil {
-			results[issueID] = err.Error()
-			continue
-		}
-		results[issueID] = "ok"
-	}
-	for issueID, status := range results {
-		if _, err := fmt.Fprintf(stdout, "%s %s\n", issueID, status); err != nil {
-			return err
-		}
-	}
-	return nil
+	return runBulkOver(stdout, issueIDs, func(issueID string) error {
+		return op(ctx, ap, issueID, *label, actor)
+	})
 }
 
 // runBulkTransition builds the handler for a bulk lifecycle action. The
@@ -103,26 +139,15 @@ func runBulkTransition(action model.ActionName) appRunFn {
 			return ValidationError{Message: "--ids is required"}
 		}
 		actor := resolveActor()
-		results := map[string]string{}
-		for _, issueID := range issueIDs {
+		return runBulkOver(stdout, issueIDs, func(issueID string) error {
 			_, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
 				IssueID:   issueID,
 				Action:    action,
 				Reason:    *reason,
 				CreatedBy: actor,
 			})
-			if err != nil {
-				results[issueID] = err.Error()
-				continue
-			}
-			results[issueID] = "ok"
-		}
-		for issueID, status := range results {
-			if _, err := fmt.Fprintf(stdout, "%s %s\n", issueID, status); err != nil {
-				return err
-			}
-		}
-		return nil
+			return err
+		})
 	}
 }
 

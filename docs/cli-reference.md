@@ -360,6 +360,12 @@ lit bulk archive --ids <csv> [--reason <text>]
 
 Apply one label edit or lifecycle transition across many issues in one call.
 
+Each successful item prints `<id> ok` to stdout (the data channel carries
+results only). If any item fails, the per-item errors go to stderr and the
+command exits non-zero — so `lit bulk close --ids a,b,c && next-step` does **not**
+run `next-step` on partial or total failure. Successful items are still applied;
+re-run the command for only the failed IDs after addressing each error.
+
 ### `lit import` / `lit bulk import`
 
 ```text
