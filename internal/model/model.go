@@ -122,28 +122,50 @@ type Issue struct {
 	pendingHydration bool
 }
 
+// State and Progress are derived from the issue's children for a container and
+// from the leaf primitive otherwise — both genuinely require a hydrated
+// lifecycle, so they fail loud on an unhydrated issue rather than returning a
+// zero value. An empty State() aliases a legitimately-open issue and a zero
+// Progress aliases an empty container; both then flow into merge ranking,
+// readiness, and column formatting as plausible wrong data far from the missing
+// hydration call. [LAW:no-silent-failure] The unhydrated condition is surfaced,
+// matching lifecycleOrError's own nil-lifecycle panic and MarshalJSON's error.
 func (i Issue) State() State {
-	lifecycle, err := i.lifecycleOrError()
-	if err != nil {
-		return ""
-	}
-	return State(lifecycle.State())
+	return State(i.mustLifecycle().State())
 }
 
 func (i Issue) Progress() Progress {
-	lifecycle, err := i.lifecycleOrError()
-	if err != nil {
-		return Progress{}
-	}
-	return lifecycle.Progress()
+	return i.mustLifecycle().Progress()
 }
 
+// Capabilities reports the issue's structural lifecycle capabilities. Whether an
+// issue exposes a status capability is fixed by its type — leaves do, containers
+// (whose state is derived from children) never do — so a container answers
+// empty without a hydrated lifecycle, and that empty is the true answer rather
+// than a swallowed error: it cannot alias a leaf, which always carries a Status.
+// A leaf, by contrast, must be hydrated to answer, so mustLifecycle fails loud.
+// [LAW:types-are-the-program] Container-has-no-status is a structural fact of the
+// issue type, not a value that requires reading a possibly-absent lifecycle;
+// State/Progress — which ARE child-derived — still demand hydration above.
 func (i Issue) Capabilities() Capabilities {
-	lifecycle, err := i.lifecycleOrError()
-	if err != nil {
+	if i.IsContainer() {
 		return Capabilities{}
 	}
-	return capabilitiesFrom(lifecycle)
+	return capabilitiesFrom(i.mustLifecycle())
+}
+
+// mustLifecycle is the single enforcer for lifecycle reads that have no error
+// channel to a caller. An unhydrated read is a programmer error — the store
+// boundary hydrates every issue before lifecycle state is read — so it fails
+// loud rather than returning a zero value the caller cannot distinguish from a
+// real state. [LAW:no-silent-failure] The recoverable callers of lifecycleOrError
+// keep its error return; only these no-error-channel accessors route through here.
+func (i Issue) mustLifecycle() lifecycle.Lifecycle {
+	root, err := i.lifecycleOrError()
+	if err != nil {
+		panic(fmt.Sprintf("issue %q: lifecycle read on unhydrated issue: %v", i.ID, err))
+	}
+	return root
 }
 
 // ContainerActionError rejects a lifecycle action on a container, whose state
