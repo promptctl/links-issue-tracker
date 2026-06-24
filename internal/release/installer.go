@@ -41,7 +41,7 @@ const BinaryName = "lit"
 // Current per-platform archives are ~10MB; 256MiB is generous headroom while
 // still refusing pathological responses that could OOM a workstation.
 //
-// [LAW:enumeration-gap] The accept-shape of "this is a release archive"
+// [LAW:types-are-the-program] The accept-shape of "this is a release archive"
 // includes a size bound; without it any HTTP body — including a hostile one
 // — would flow into ReadAll. Refuse oversized inputs at the boundary.
 const maxArchiveBytes = 256 << 20
@@ -149,7 +149,7 @@ func downloadAndVerify(ctx context.Context, client *http.Client, a Artifact) ([]
 		return nil, fmt.Errorf("release: artifact SHA256 %q is not a 64-char hex digest", a.SHA256)
 	}
 	h := sha256.New()
-	// [LAW:enumeration-gap] LimitReader caps the body at maxArchiveBytes+1 so
+	// [LAW:types-are-the-program] LimitReader caps the body at maxArchiveBytes+1 so
 	// we can distinguish "exactly at the limit" from "exceeded": if ReadAll
 	// returns maxArchiveBytes+1 bytes, the source overflowed the cap.
 	limited := io.LimitReader(resp.Body, maxArchiveBytes+1)
@@ -171,7 +171,7 @@ func downloadAndVerify(ctx context.Context, client *http.Client, a Artifact) ([]
 // while refusing gzip bombs that fit under the compressed download cap but
 // expand to gigabytes.
 //
-// [LAW:enumeration-gap] The compressed-bytes cap (maxArchiveBytes) doesn't
+// [LAW:types-are-the-program] The compressed-bytes cap (maxArchiveBytes) doesn't
 // bound expansion; the trust-boundary accept shape must include the
 // uncompressed bound too, or a 1 MiB tar.gz of zeros could fill the disk.
 const maxUncompressedBytes = 256 << 20
@@ -182,7 +182,7 @@ const maxUncompressedBytes = 256 << 20
 // at time of writing, so without this bound a stalled server would wedge
 // `lit downgrade` forever.
 //
-// [LAW:enumeration-gap] The accept shape of "an HTTP archive download"
+// [LAW:types-are-the-program] The accept shape of "an HTTP archive download"
 // includes a deadline. http.DefaultClient has none; the boundary needs
 // its own bounded default.
 const defaultInstallerTimeout = 5 * time.Minute
@@ -200,7 +200,7 @@ const maxTotalUncompressedBytes = 2 * maxUncompressedBytes
 // Used to refuse archive streams whose total uncompressed size would
 // balloon past maxTotalUncompressedBytes regardless of per-entry sizes.
 //
-// [LAW:enumeration-gap] The implementation mirrors the compressed-bytes
+// [LAW:types-are-the-program] The implementation mirrors the compressed-bytes
 // pattern in downloadAndVerify: allow reading up to cap+1 internally, so
 // "exactly at the limit" and "over the limit" are mechanically
 // distinguishable. A `>= cap` short-circuit would surface a spurious cap
@@ -243,7 +243,7 @@ type archiveFormat struct {
 
 // archiveFormatForURL derives the format from the artifact URL suffix.
 //
-// [LAW:enumeration-gap] The accept shape of a release artifact URL is exactly
+// [LAW:types-are-the-program] The accept shape of a release artifact URL is exactly
 // {.tar.gz, .zip}; any other extension is refused here so the extractor can
 // assume one of the two known shapes rather than mis-extracting.
 func archiveFormatForURL(url string) (archiveFormat, error) {
@@ -292,7 +292,7 @@ func openTarGz(archive []byte) (archiveReader, error) {
 	if err != nil {
 		return nil, fmt.Errorf("release: open gzip: %w", err)
 	}
-	// [LAW:enumeration-gap] The per-entry cap doesn't bound the sum across many
+	// [LAW:types-are-the-program] The per-entry cap doesn't bound the sum across many
 	// entries; this stream-level cap refuses a many-small-entries gzip bomb by
 	// construction. Any tar Read() past the cap errors out.
 	tr := tar.NewReader(&boundedReader{r: gzr, cap: maxTotalUncompressedBytes})
@@ -415,7 +415,7 @@ func copyCappedEntry(dest io.Writer, e archiveEntry) error {
 		return fmt.Errorf("release: open entry %q: %w", e.name, err)
 	}
 	defer body.Close()
-	// [LAW:enumeration-gap] CopyN bounds the actual bytes streamed even if the
+	// [LAW:types-are-the-program] CopyN bounds the actual bytes streamed even if the
 	// header size lied. The +1 distinguishes "exactly at the cap" from
 	// "overflow," matching the compressed-byte handling in downloadAndVerify.
 	n, err := io.CopyN(dest, body, maxUncompressedBytes+1)

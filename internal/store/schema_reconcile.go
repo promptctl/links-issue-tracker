@@ -190,7 +190,7 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 		// (status-only, from/to columns that lied for archive/delete) is
 		// translated row-by-row into issue_events (+ issue_event_changes
 		// for status transitions) by translateIssueHistoryToEvents below,
-		// then the table itself is dropped. [LAW:no-silent-fallbacks] —
+		// then the table itself is dropped. [LAW:no-silent-failure] —
 		// the legacy→v1 bridge no longer destroys audit history.
 		{target: "issue_events", stmt: `CREATE TABLE issue_events (
 			id VARCHAR(191) PRIMARY KEY,
@@ -261,7 +261,7 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 		return changed, err
 	}
 	changed = changed || actorColumnChanged
-	// [LAW:no-silent-fallbacks] Before issue_history goes away, lift every
+	// [LAW:no-silent-failure] Before issue_history goes away, lift every
 	// row that maps cleanly onto the canonical event log forward — the
 	// previous drop-without-translate path silently discarded audit data
 	// on every legacy→v1 bridge. MUST run AFTER the assignee→actor rename
@@ -418,7 +418,7 @@ func (s *Store) reconcileToBaseline(ctx context.Context, guard *snapshotGuard) (
 // [LAW:single-enforcer] One structural-precondition probe at the
 // reconcile boundary; downstream steps trust that their preconditions
 // hold.
-// [LAW:no-silent-fallbacks] A specific, named structural error is
+// [LAW:no-silent-failure] A specific, named structural error is
 // emitted before any mutation; the operator sees the actual anomaly.
 // reconcileRequiredIssueColumns is the column set reconcile's downstream steps
 // read from the existing issues table: an issues table missing any of them is
@@ -498,7 +498,7 @@ var legacyIssueHistoryColumns = []string{
 // change rows) or none of them — a half-translated state would make
 // the drop step lose any rows that had not yet copied.
 //
-// [LAW:no-silent-fallbacks] The previous drop-only bridge silently
+// [LAW:no-silent-failure] The previous drop-only bridge silently
 // destroyed audit history. Translation makes the bridge lossless for
 // every row whose shape the canonical mapping accepts.
 // [LAW:dataflow-not-control-flow] The per-row loop runs the same
@@ -999,7 +999,7 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	if _, err := guard.ensure(); err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: %w", err)
 	}
-	// [LAW:no-silent-fallbacks] The rank backfill is all-or-nothing: a
+	// [LAW:no-silent-failure] The rank backfill is all-or-nothing: a
 	// mid-loop failure (context cancel, transient DB error, partial
 	// commit) would otherwise leave the first N rows with ranks
 	// r1..rN, and the next Open would re-query the unranked set and
@@ -1012,7 +1012,7 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 		return false, fmt.Errorf("ensureIssueRanks: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
-	// [LAW:no-silent-fallbacks] Seed `current` from the max existing
+	// [LAW:no-silent-failure] Seed `current` from the max existing
 	// non-empty rank (or rank.Initial() if there are no ranked rows
 	// yet), so the assigned sequence cannot collide with any rank
 	// already in the workspace. The mixed-state case — some rows
