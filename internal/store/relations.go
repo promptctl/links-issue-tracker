@@ -321,6 +321,15 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 				return err
 			}
 		}
+		// [LAW:single-enforcer] Single-parent cardinality is enforced here for
+		// every write path, not only in SetParent: a single-valued type clears any
+		// existing edge from this src before inserting, so 'lit dep add --type
+		// parent-child' can never leave a child with two parents.
+		// [LAW:dataflow-not-control-flow] The clear-or-not choice is driven by the
+		// type's cardinality value, not by which store method the caller invoked.
+		if rel.Type.SingleValuedFromSrc() {
+			return setSingleValuedEdgeTx(ctx, tx, rel)
+		}
 		return insertRelationTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
@@ -338,6 +347,23 @@ func insertRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error
 		return fmt.Errorf("insert relation: %w", err)
 	}
 	return nil
+}
+
+// setSingleValuedEdgeTx writes rel while enforcing its src's outgoing
+// cardinality: it first deletes any existing edge of rel.Type sharing rel.SrcID,
+// so the src ends with exactly one such edge. Keyed on rel.Type rather than a
+// hardcoded type, it is the single owner of the clear-then-insert that
+// single-valued relation types (RelationType.SingleValuedFromSrc) require — every
+// write path routes here, so the cardinality is enforced once, not per-caller.
+// It sits above insertRelationTx, which stays the raw replay-faithful write that
+// import restore depends on; the clear belongs to the relation boundary, not the
+// raw insert.
+// [LAW:single-enforcer] The single-valued clear-then-insert lives only here.
+func setSingleValuedEdgeTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
+	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = ?`, rel.SrcID, string(rel.Type)); err != nil {
+		return fmt.Errorf("clear single-valued relation: %w", err)
+	}
+	return insertRelationTx(ctx, tx, rel)
 }
 
 // rejectBlocksCycle errors if inserting the blocks edge dependent->dependency
@@ -430,12 +456,10 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "set parent", func(ctx context.Context, tx *sql.Tx) error {
-		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND type = 'parent-child'`, in.ChildID); err != nil {
-			return fmt.Errorf("clear parent relation: %w", err)
-		}
-		// [LAW:one-source-of-truth] Route through insertRelationTx so the relations
-		// INSERT lives only there; rel.Type carries the parent-child discriminator.
-		return insertRelationTx(ctx, tx, rel)
+		// [LAW:single-enforcer] The single-parent clear-then-insert is owned by
+		// setSingleValuedEdgeTx; SetParent is one validated caller of it, not a
+		// second copy of the cardinality rule.
+		return setSingleValuedEdgeTx(ctx, tx, rel)
 	}); err != nil {
 		return model.Relation{}, err
 	}

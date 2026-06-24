@@ -44,6 +44,17 @@ func (rt RelationType) StoreEndpoints(from, to string) (string, string) {
 	return from, to
 }
 
+// SingleValuedFromSrc reports whether a src endpoint may have at most one edge
+// of this type — the type's outgoing cardinality. parent-child is single-valued
+// (a child has at most one parent); blocks and related-to are many-valued. The
+// rule lives on the type so every write boundary enforces it by asking the type,
+// not by which store method the caller happened to invoke.
+// [LAW:types-are-the-program] Single-parent cardinality is a property of the
+// relation type, which makes a two-parent child unrepresentable at the boundary.
+func (rt RelationType) SingleValuedFromSrc() bool {
+	return rt == RelParentChild
+}
+
 // CanonicalEndpoints returns the endpoint pair in storage-canonical order.
 // related-to is undirected, so its endpoints are stored sorted to give each
 // pair exactly one representation; directed types pass through unchanged.

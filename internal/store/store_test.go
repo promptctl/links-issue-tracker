@@ -514,6 +514,61 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	}
 }
 
+// A child has at most one parent. That cardinality must hold no matter which
+// write path created the edge — including AddRelation, reachable via 'lit dep
+// add --type parent-child', not only SetParent. Adding a second parent-child
+// edge for a child must replace the first, leaving exactly one parent edge, so a
+// two-parent child is unrepresentable.
+func TestAddRelationEnforcesSingleParentCardinality(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	epicA, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "cardinality", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicA) error = %v", err)
+	}
+	epicB, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "cardinality", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(epicB) error = %v", err)
+	}
+	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "cardinality", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: epicA.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(child parent-child epicA) error = %v", err)
+	}
+	// The previously-buggy path: a second parent-child edge through AddRelation.
+	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: epicB.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("AddRelation(child parent-child epicB) error = %v", err)
+	}
+
+	// Counting the edges, not the scalar parent, is what gives the test teeth:
+	// the read layer keeps the last edge, so a two-parent child looks fine via
+	// detail.Parent while still corrupting epic membership / rank derivation.
+	parentEdges, err := st.ListRelationsForIssue(ctx, child.ID, model.RelParentChild)
+	if err != nil {
+		t.Fatalf("ListRelationsForIssue error = %v", err)
+	}
+	if len(parentEdges) != 1 {
+		t.Fatalf("parent-child edges = %d, want 1 (single-parent cardinality)", len(parentEdges))
+	}
+	if parentEdges[0].DstID != epicB.ID {
+		t.Fatalf("parent = %s, want %s (second edge replaces the first)", parentEdges[0].DstID, epicB.ID)
+	}
+
+	// AddRelation and SetParent are the same single-valued write: the surviving
+	// edge is identical whichever method set the parent.
+	detail, err := st.GetIssueDetail(ctx, child.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail error = %v", err)
+	}
+	if detail.Parent == nil || detail.Parent.ID != epicB.ID {
+		t.Fatalf("detail.Parent = %#v, want %s", detail.Parent, epicB.ID)
+	}
+}
+
 // A blocks cycle has no valid rank order, so the only durable fix is to keep
 // it from existing. AddRelation rejects the edge that would close the loop.
 func TestAddRelationRejectsBlocksCycle(t *testing.T) {
