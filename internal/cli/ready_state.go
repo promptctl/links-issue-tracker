@@ -744,28 +744,18 @@ func printReadySection(w io.Writer, columns []string, ready []annotation.Annotat
 	return nil
 }
 
-// printInlineDeps prints "depends on:" and "unblocks:" lines indented under a ready item.
+// printInlineDeps prints the shared epic/depends-on/unblocks context lines
+// indented under a ready item. The ready view shows exactly the common core;
+// the backlog view (printBacklogContext) composes its extra lines around the
+// same emitters. [LAW:single-enforcer]
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
-	const indent = "    "
-	deps := ClassifyReadiness(entry.Annotations).DependencyIDs()
-	unblocks := unblocksMap[entry.ID]
-
-	if entry.ParentEpic != nil {
-		if _, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, entry.ParentEpic.ID, entry.ParentEpic.Title); err != nil {
-			return err
-		}
+	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
+		return err
 	}
-	if len(deps) > 0 {
-		if _, err := fmt.Fprintf(w, "%sdepends on: %s\n", indent, strings.Join(deps, ", ")); err != nil {
-			return err
-		}
+	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyIDs()); err != nil {
+		return err
 	}
-	if len(unblocks) > 0 {
-		if _, err := fmt.Fprintf(w, "%sunblocks: %s\n", indent, strings.Join(unblocks, ", ")); err != nil {
-			return err
-		}
-	}
-	return nil
+	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }
 
 func printInProgressSection(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
