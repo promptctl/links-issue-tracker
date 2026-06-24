@@ -81,6 +81,41 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 	}
 }
 
+// TestClassifyReadinessCoversEveryRegisteredKind pins that the readiness gate
+// is total over the kind registry: every kind annotation can produce flows
+// through ClassifyReadiness routed by its declared role, never falling through
+// to a silent "ready". A kind whose role is RoleBlocking must make the issue
+// not-ready; only RoleNone/Orphaned/RankInversion kinds classify as ready.
+// This is the regression guard for the original bug — a new kind that should
+// block but isn't classified reading as pullable.
+func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
+	for _, kind := range annotation.Kinds() {
+		t.Run(kind.String(), func(t *testing.T) {
+			r := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "x"}})
+			switch kind.ReadinessRole() {
+			case annotation.RoleBlocking:
+				if r.IsReady() {
+					t.Errorf("blocking kind %q classified as ready", kind.String())
+				}
+			case annotation.RoleOrphaned:
+				if !r.IsOrphaned() || !r.IsReady() {
+					t.Errorf("orphaned kind %q: IsOrphaned=%v IsReady=%v, want true/true", kind.String(), r.IsOrphaned(), r.IsReady())
+				}
+			case annotation.RoleRankInversion:
+				if len(r.RankInversions()) != 1 || !r.IsReady() {
+					t.Errorf("rank-inversion kind %q: inversions=%d IsReady=%v, want 1/true", kind.String(), len(r.RankInversions()), r.IsReady())
+				}
+			case annotation.RoleNone:
+				if !r.IsReady() || r.IsOrphaned() || len(r.RankInversions()) != 0 {
+					t.Errorf("ordering kind %q must be invisible to readiness, got ready=%v orphaned=%v inversions=%d", kind.String(), r.IsReady(), r.IsOrphaned(), len(r.RankInversions()))
+				}
+			default:
+				t.Fatalf("kind %q has an uninterpreted readiness role", kind.String())
+			}
+		})
+	}
+}
+
 // TestClassifyReadinessNoAnnotations pins the project invariant: an empty
 // annotation set classifies as ready because there are zero blocking reasons —
 // readiness is always the typed interpretation, never `len(annotations) == 0`
