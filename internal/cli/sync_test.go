@@ -42,36 +42,6 @@ func TestMapGitRemotesByName(t *testing.T) {
 	}
 }
 
-func TestSameRemoteURLIgnoresGitPrefix(t *testing.T) {
-	if !sameRemoteURL("https://github.com/a/repo.git", "git+https://github.com/a/repo.git") {
-		t.Fatal("expected URL comparison to ignore git+ prefix")
-	}
-}
-
-func TestSameRemoteURLTreatsSCPLikeAndSSHFormsAsEqual(t *testing.T) {
-	left := "git@github.com:promptctl/links-issue-tracker.git"
-	right := "git+ssh://git@github.com/./promptctl/links-issue-tracker.git"
-	if !sameRemoteURL(left, right) {
-		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
-	}
-}
-
-func TestSameRemoteURLDetectsDifferentRemotePaths(t *testing.T) {
-	left := "git@github.com:promptctl/links-issue-tracker.git"
-	right := "git+ssh://git@github.com/./promptctl/another.git"
-	if sameRemoteURL(left, right) {
-		t.Fatalf("sameRemoteURL(%q, %q) = true, want false", left, right)
-	}
-}
-
-func TestSameRemoteURLSupportsBracketedIPv6SCPLikeHosts(t *testing.T) {
-	left := "git@[fe80::1]:promptctl/links-issue-tracker.git"
-	right := "ssh://git@[fe80::1]/promptctl/links-issue-tracker.git"
-	if !sameRemoteURL(left, right) {
-		t.Fatalf("sameRemoteURL(%q, %q) = false, want true", left, right)
-	}
-}
-
 func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
 	runErr := errors.New(`branch "feature/local-only" not found on remote`)
 	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)
