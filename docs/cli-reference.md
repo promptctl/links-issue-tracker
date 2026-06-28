@@ -171,9 +171,10 @@ is unchanged unless a relationship column is selected.
 lit show <id>
 ```
 
-Full detail for one issue: description, status, labels, comments, history. For an issue
-inside an epic, also prints the epic plan — siblings in rank order with status and any
-cross-epic dependencies. Exits 4 if the ID doesn't exist.
+Full detail for one issue: description, status, labels, comments, history. History
+entries include the actor and RFC3339 timestamp for the entry. For an issue inside an
+epic, also prints the epic plan — siblings in rank order with status and any cross-epic
+dependencies. Exits 4 if the ID doesn't exist.
 
 ---
 

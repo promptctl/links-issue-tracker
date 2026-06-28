@@ -170,7 +170,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			if action == "" {
 				action = "update"
 			}
-			if _, err := fmt.Fprintf(w, "- [%s] %s %s\n", event.Actor, action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
+			if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, event.CreatedAt.Format(time.RFC3339), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
 				return err
 			}
 			for _, change := range event.Changes {
