@@ -10,6 +10,16 @@ import (
 )
 
 func TestPrintIssueDetailHistoryIncludesEntryTimestamp(t *testing.T) {
+	denver, err := time.LoadLocation("America/Denver")
+	if err != nil {
+		t.Fatalf("LoadLocation() error = %v", err)
+	}
+	previousLocal := time.Local
+	time.Local = denver
+	t.Cleanup(func() {
+		time.Local = previousLocal
+	})
+
 	issue, err := model.HydrateStatus(model.Issue{
 		ID:        "links-test.1",
 		Title:     "Show history timestamps",
@@ -36,7 +46,7 @@ func TestPrintIssueDetailHistoryIncludesEntryTimestamp(t *testing.T) {
 		t.Fatalf("printIssueDetail() error = %v", err)
 	}
 
-	want := "- [alice @ 2026-01-02T03:04:05Z] start began work"
+	want := "- [alice @ Jan 1, 2026 8:04 PM MST] start began work"
 	if !strings.Contains(stdout.String(), want) {
 		t.Fatalf("history entry missing timestamp line %q in:\n%s", want, stdout.String())
 	}

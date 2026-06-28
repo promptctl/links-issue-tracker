@@ -16,6 +16,10 @@ import (
 // both renderers, so a change moves both views together.
 const contextIndent = "    "
 
+// The CLI owns history timestamp presentation; store/model keep time.Time as
+// canonical data. [LAW:one-source-of-truth]
+const historyTimestampLayout = "Jan 2, 2006 3:04 PM MST"
+
 // printEpicLine renders the indented "epic:" context line shown identically
 // under ready and backlog rows. A nil ref (issue has no epic parent) emits
 // nothing — absence is data, not a caller-side branch.
@@ -170,7 +174,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			if action == "" {
 				action = "update"
 			}
-			if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, event.CreatedAt.Format(time.RFC3339), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
+			if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, formatHistoryTimestamp(event.CreatedAt), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
 				return err
 			}
 			for _, change := range event.Changes {
@@ -335,6 +339,10 @@ func formatOptionalTime(value *time.Time) string {
 		return "-"
 	}
 	return value.Format(time.RFC3339)
+}
+
+func formatHistoryTimestamp(value time.Time) string {
+	return value.Local().Format(historyTimestampLayout)
 }
 
 // isLiveIssue reports whether an issue is still in play — open or in_progress,
