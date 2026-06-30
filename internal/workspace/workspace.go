@@ -83,6 +83,22 @@ func RemoteHasRefs(cwd string, remote string) (bool, error) {
 	return strings.TrimSpace(output) != "", nil
 }
 
+// RemoteHasDoltData reports whether the remote advertises lit's Dolt ticket data
+// — the refs/dolt/* namespace lit pushes its store into. This is the
+// authoritative "the remote carries a backlog" signal: RemoteHasRefs is true for
+// any git repo (code refs alone), so only the presence of refs/dolt/* tells
+// "remote has tickets to adopt" apart from "remote is just a code repo". The
+// adopt step keys its loud-vs-silent decision on this so an empty store that
+// hides a real remote backlog is unrepresentable. [LAW:one-source-of-truth]
+func RemoteHasDoltData(cwd string, remote string) (bool, error) {
+	remoteName := normalizeRemoteName(remote)
+	output, err := gitOutput(cwd, "ls-remote", remoteName, "refs/dolt/*")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(output) != "", nil
+}
+
 func DefaultRemoteBranch(cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
 	symbolicRefOutput, _ := gitOutput(cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")

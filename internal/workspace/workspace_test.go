@@ -353,6 +353,64 @@ func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
 	}
 }
 
+// TestRemoteHasDoltDataFalseForCodeOnlyRemote is the distinction that makes the
+// adopt decision honest: a normal code remote has git refs (RemoteHasRefs is
+// true) but carries no lit ticket data, so RemoteHasDoltData must be false. This
+// is what lets init tell "remote is just a code repo" apart from "remote has a
+// backlog we failed to adopt".
+func TestRemoteHasDoltDataFalseForCodeOnlyRemote(t *testing.T) {
+	repo := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "init")
+	run(t, repo, "git", "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+	run(t, repo, "git", "add", "README.md")
+	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	run(t, repo, "git", "init", "--bare", remote)
+	run(t, repo, "git", "remote", "add", "origin", remote)
+	run(t, repo, "git", "push", "-u", "origin", "master")
+
+	hasRefs, err := RemoteHasRefs(repo, "origin")
+	if err != nil || !hasRefs {
+		t.Fatalf("precondition: RemoteHasRefs() = %v, err = %v; want true,nil", hasRefs, err)
+	}
+	hasData, err := RemoteHasDoltData(repo, "origin")
+	if err != nil {
+		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
+	}
+	if hasData {
+		t.Fatalf("RemoteHasDoltData() = true for a code-only remote, want false")
+	}
+}
+
+// TestRemoteHasDoltDataTrueWhenDoltRefPresent confirms the refs/dolt/* namespace
+// is what RemoteHasDoltData keys on.
+func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
+	repo := t.TempDir()
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	run(t, repo, "git", "init")
+	run(t, repo, "git", "checkout", "-b", "master")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("test\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(README.md) error = %v", err)
+	}
+	run(t, repo, "git", "add", "README.md")
+	run(t, repo, "git", "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	run(t, repo, "git", "init", "--bare", remote)
+	run(t, repo, "git", "remote", "add", "origin", remote)
+	// Mirror how lit's sync lands data: a ref under the refs/dolt/* namespace.
+	run(t, repo, "git", "push", "origin", "HEAD:refs/dolt/data")
+
+	hasData, err := RemoteHasDoltData(repo, "origin")
+	if err != nil {
+		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
+	}
+	if !hasData {
+		t.Fatalf("RemoteHasDoltData() = false when refs/dolt/data is present, want true")
+	}
+}
+
 func TestUpstreamRemoteFromRef(t *testing.T) {
 	if got := upstreamRemoteFromRef("origin/master"); got != "origin" {
 		t.Fatalf("upstreamRemoteFromRef() = %q, want origin", got)
