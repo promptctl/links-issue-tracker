@@ -4,3 +4,6 @@ site/
 tools/session-analysis/processed/
 __pycache__/
 .claude/*.lock
+
+# `just build` / `go build ./cmd/lit` drop the binary here
+/lit
