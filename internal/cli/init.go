@@ -34,9 +34,26 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		return UsageError{Message: "usage: lit init [--skip-hooks] [--skip-agents]"}
 	}
 
-	dbCreated, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
-	if err != nil {
-		return err
+	// Adopt runs BEFORE creating an empty store: when the remote carries a
+	// backlog, adopt clones it directly into the target path, so the path's
+	// first on-disk state is the cloned data (a pre-created empty store would
+	// poison dolt's in-process chunk-store cache). [LAW:types-are-the-program]
+	// adoptRemoteTicketsOnInit owns the whole decision and returns the
+	// discriminated outcome; only initSyncAdopted means the store now exists.
+	syncOutcome := adoptRemoteTicketsOnInit(ctx, ws)
+
+	// Every non-adopt outcome (greenfield, local tickets already present, no
+	// eligible remote, remote empty, no remote data, or a failed adopt) leaves
+	// the workspace needing a local store; EnsureDatabase is idempotent, so a
+	// store that already exists reports created=false. [LAW:dataflow-not-control-flow]
+	// the create runs on a single value (did we adopt?), not a scatter of cases.
+	dbCreated := true
+	if syncOutcome.State != initSyncAdopted {
+		created, err := store.EnsureDatabase(ctx, ws.DatabasePath, ws.WorkspaceID)
+		if err != nil {
+			return err
+		}
+		dbCreated = created
 	}
 
 	report := initReport{
@@ -47,11 +64,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		Hooks:        "skipped",
 		Agents:       "skipped",
 		Claude:       "skipped",
-		// Detect-and-adopt gates on local emptiness, not on dbCreated, so a
-		// re-init after a transient adopt failure can still pick up the remote
-		// backlog. [LAW:types-are-the-program] adoptRemoteTicketsOnInit owns the
-		// whole decision and returns the discriminated outcome.
-		Sync: adoptRemoteTicketsOnInit(ctx, ws),
+		Sync:         syncOutcome,
 	}
 
 	if !*skipHooks {
