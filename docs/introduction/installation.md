@@ -91,22 +91,26 @@ your `PATH`, and warns about any stale `lit` binaries that would shadow it.
 
 ### macOS Homebrew note
 
-Building from source on macOS links ICU and zstd. If `go build` fails with ICU
-header or zstd linker errors, install the native dependencies and persist the
-cgo search paths:
+Building from source on macOS links ICU and zstd, which Homebrew installs
+keg-only (off the default toolchain path). `scripts/install.sh` sources
+`scripts/cgo-env.sh` automatically, so a source build wires the paths for you —
+it only needs the native deps present:
 
 ```sh
 brew install icu4c@78 zstd
-ICU_PREFIX="$(brew --prefix icu4c@78)"
-ZSTD_PREFIX="$(brew --prefix zstd)"
-go env -w CGO_CPPFLAGS="-I${ICU_PREFIX}/include -I${ZSTD_PREFIX}/include"
-go env -w CGO_CFLAGS="-I${ICU_PREFIX}/include -I${ZSTD_PREFIX}/include"
-go env -w CGO_CXXFLAGS="-I${ICU_PREFIX}/include -I${ZSTD_PREFIX}/include"
-go env -w CGO_LDFLAGS="-L${ICU_PREFIX}/lib -L${ZSTD_PREFIX}/lib"
+./scripts/install.sh
 ```
 
-(The prebuilt binaries above need none of this — ICU is statically linked into
-them.)
+If you're developing `lit` (running `go build` / `go test` directly or from an
+IDE), run the one-time setup instead, which also installs the deps and persists
+the cgo paths into `go env`:
+
+```sh
+just setup
+```
+
+(The prebuilt binaries above need none of this — ICU and zstd are statically
+linked into them; only compiling lit's own code needs them on the path.)
 
 ## Enable shell completion (optional)
 

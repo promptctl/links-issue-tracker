@@ -27,23 +27,40 @@ You need:
   [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
   installs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
 
-> On macOS, building the embedded engine needs ICU and zstd headers. If
-> `go build` hits ICU/zstd errors, see
+> On macOS, building the embedded engine needs ICU and zstd headers, which
+> Homebrew installs keg-only. Run `just setup` once (it installs `icu4c@78` +
+> `zstd` and persists the cgo paths into `go env`), and every build below — `just`
+> recipes, raw `go build`/`go test`, and your IDE — just works. Details:
 > [docs/introduction/installation.md](docs/introduction/installation.md).
 
 ## Build, install, test, lint
 
+With [`just`](https://github.com/casey/just) installed, the
+[`Justfile`](Justfile) is the build entrypoint — its recipes put ICU/zstd on the
+cgo path automatically (via `scripts/cgo-env.sh`), so they work on macOS even if
+you skip `just setup`:
+
+```sh
+just setup    # one-time per machine: native deps + persist cgo paths (macOS)
+just build    # build the lit binary
+just test     # run the full suite (needs the dolt CLI; see above) — args pass through
+just lint     # golangci-lint against .golangci.yml
+just install  # build from source and install onto your PATH
+```
+
+The equivalent raw commands (these need the cgo paths already on your env — i.e.
+after `just setup`, or run via `just`):
+
 ```sh
 go build ./cmd/lit    # build the lit binary
-./scripts/install.sh  # build and install onto your PATH
+./scripts/install.sh  # build and install onto your PATH (wires cgo paths itself)
 go test ./...         # run the full test suite (needs the dolt CLI; see above)
 golangci-lint run     # lint against .golangci.yml before opening a PR
 go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff
 ```
 
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
-your PATH. If you have [`just`](https://github.com/casey/just) installed, the
-[`Justfile`](Justfile) provides `build` and `install` convenience targets.
+your PATH.
 
 The install story is the same one end users follow — see
 [README.md](README.md#install).
