@@ -178,3 +178,10 @@ require (
 	gopkg.in/src-d/go-errors.v1 v1.0.0 // indirect
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
+
+// Transient fork carrying a single patch: dolt's git-backed blobstore served a
+// ranged read by re-streaming (and re-inflating) the whole blob per read, making
+// a large sync pull/fetch O(reads x blobsize). The fork materializes each blob to
+// a local file once and serves ranges by seek. Upstream PR: dolthub/dolt#11264.
+// Drop this replace and bump the dolthub/dolt/go pin once that PR merges.
+replace github.com/dolthub/dolt/go => github.com/brandon-fryslie/dolt/go v0.40.5-0.20260630102541-e6f5f8e3a886
