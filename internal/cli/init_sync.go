@@ -10,10 +10,11 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// adoptRemoteTimeout caps the whole adopt fetch+reset. The adopt reads the
-// entire remote ticket store, and an un-GC'd / oversized remote has been
-// observed to spin for many minutes — an unacceptable lockup for a setup step.
-// A bounded operation that fails loudly always beats one that hangs forever.
+// adoptRemoteTimeout caps the whole adopt fetch+reset. The data transfers
+// quickly, but dolt's pull has been observed to spend many minutes *processing*
+// the fetched chunks (mostly blocked in its pull pipeline — not transfer, not
+// data size) before the adopt completes — an unacceptable lockup for a setup
+// step. A bounded operation that fails loudly always beats one that hangs.
 // [LAW:no-ambient-temporal-coupling] init owns the time budget explicitly here;
 // it does not depend on the remote, the network, or dolt finishing "eventually".
 //
@@ -96,9 +97,10 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 			State: initSyncFailed,
 			Error: fmt.Sprintf(
 				"adopting the remote backlog exceeded %s and was aborted — the store is empty, do NOT push "+
-					"from it (a sync push of an empty store cannot help and risks the remote backlog). The remote "+
-					"ticket data is too large/slow to pull; it likely needs a `dolt gc`/prune, after which "+
-					"`lit sync pull` will fetch it",
+					"from it (a sync push of an empty store cannot help and risks the remote backlog). The data "+
+					"transferred, but the embedded dolt pull did not finish processing it in time (a slow-adopt "+
+					"issue in dolt's pull, not a transfer or data-size problem). Retry `lit init`; if it keeps "+
+					"timing out, escalate the slow adopt rather than re-running blindly",
 				adoptRemoteTimeout),
 		}
 	}
