@@ -1,10 +1,10 @@
 module github.com/promptctl/links-issue-tracker
 
-go 1.25.7
+go 1.26.2
 
 require (
-	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
-	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
+	github.com/dolthub/dolt/go v0.40.5-0.20260507221239-14b38e279fc6
+	github.com/dolthub/driver v1.88.1
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.1
@@ -70,12 +70,12 @@ require (
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
 	github.com/dolthub/fslock v0.0.3 // indirect
-	github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790 // indirect
-	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe // indirect
+	github.com/dolthub/go-icu-regex v0.0.0-20260412212219-49724d547866 // indirect
+	github.com/dolthub/go-mysql-server v0.20.1-0.20260507202550-43d6daf5958b // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect
-	github.com/dolthub/ishell v0.0.0-20240701202509-2b217167d718 // indirect
+	github.com/dolthub/ishell v0.0.0-20260414231531-5f031e3e9037 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
-	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab // indirect
+	github.com/dolthub/vitess v0.0.0-20260505163811-77e5224be390 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/edsrzf/mmap-go v1.2.0 // indirect
 	github.com/envoyproxy/go-control-plane/envoy v1.36.0 // indirect
