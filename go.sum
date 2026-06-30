@@ -283,6 +283,8 @@ github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bobg/gcsobj v0.1.2/go.mod h1:vS49EQ1A1Ib8FgrL58C8xXYZyOCR2TgzAdopy6/ipa8=
 github.com/boombuler/barcode v1.0.0/go.mod h1:paBWMcWSl3LHKBqUq+rly7CNSldXjb2rDl3JlRe0mD8=
+github.com/brandon-fryslie/dolt/go v0.40.5-0.20260630102541-e6f5f8e3a886 h1:xFUXKhO1lWNC+0A48AjAGkwfnti+KvLHpBuhHCYX8k4=
+github.com/brandon-fryslie/dolt/go v0.40.5-0.20260630102541-e6f5f8e3a886/go.mod h1:x0TL0LQX70EdjIcj+RdIxYqGAVRpZk3IXDrHG6NW9B8=
 github.com/cenkalti/backoff/v4 v4.2.1 h1:y4OZtCnogmCPw98Zjyt5a6+QwPLGkiQsYW5oUqylYbM=
 github.com/cenkalti/backoff/v4 v4.2.1/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/census-instrumentation/opencensus-proto v0.2.1/go.mod h1:f6KPmirojxKA12rnyqOA5BBL4O983OfeGPqjHWSTneU=
@@ -332,8 +334,6 @@ github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 h1:I
 github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12/go.mod h1:rN7X8BHwkjPcfMQQ2QTAq/xM3leUSGLfb+1Js7Y6TVo=
 github.com/dolthub/dolt-mcp v0.3.4 h1:AyG5cw+fNWXDHXujtQnqUPZrpWtPg6FN6yYtjv1pP44=
 github.com/dolthub/dolt-mcp v0.3.4/go.mod h1:bCZ7KHvDYs+M0e+ySgmGiNvLhcwsN7bbf5YCyillLrk=
-github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36 h1:6BtCM/UXy7HIEkdKWAep38qT6xD0cA2LckjT3duGRUE=
-github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36/go.mod h1:x0TL0LQX70EdjIcj+RdIxYqGAVRpZk3IXDrHG6NW9B8=
 github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a h1:VikLtbMMuTif4wqaf7Ou0i/HBx74mfNq6O15dwpjrU4=
 github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a/go.mod h1:56/20kpTzCJN1K8zrEv1FAMMV7FAJp0i2gKiI4qcVfA=
 github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 h1:JShhbqMw26nKx3pqqu/cFxOpzBkN+4elVhzuUfgDw2k=
