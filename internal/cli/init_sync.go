@@ -10,11 +10,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// adoptRemoteTimeout caps the whole adopt fetch+reset. The data transfers
-// quickly, but dolt's pull has been observed to spend many minutes *processing*
-// the fetched chunks (mostly blocked in its pull pipeline — not transfer, not
-// data size) before the adopt completes — an unacceptable lockup for a setup
-// step. A bounded operation that fails loudly always beats one that hangs.
+// adoptRemoteTimeout caps the whole adopt. Adopt now CLONES (bulk whole-archive
+// copy), which is fast — but the cap stays as defense-in-depth: dolt's git-backed
+// transport does not honor context cancellation mid-operation, so a bounded,
+// loud failure always beats any possibility of an unbounded hang on a setup step.
+// (The prior fetch-based adopt routinely spent 20+ minutes re-inflating archive
+// blobs for chunk-by-chunk reads; clone reads each blob once.)
 // [LAW:no-ambient-temporal-coupling] init owns the time budget explicitly here;
 // it does not depend on the remote, the network, or dolt finishing "eventually".
 //
@@ -107,89 +108,131 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 }
 
 func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSyncOutcome {
-	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
-	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Error: err.Error()}
+	plan, outcome := planRemoteAdopt(ctx, ws)
+	if plan == nil {
+		// A terminal outcome was already decided (local tickets to preserve, no
+		// remote, remote empty, no lit data on the remote, or a resolution error).
+		// planRemoteAdopt has closed its probe connection in every case.
+		return outcome
 	}
-	defer syncStore.Close()
+	// The remote advertises lit data (refs/dolt/*) and the local store is empty,
+	// so adopt it by CLONING — the bulk whole-archive transfer the git-backed
+	// medium supports — rather than the chunk-by-chunk fetch pipeline that turned
+	// a real backlog adopt into a 20-minute lockup. The probe connection is
+	// closed; AdoptRemoteByClone takes the exclusive workspace hold and swaps the
+	// Dolt directory in place. [LAW:decomposition] adopt is a clone, not a fetch.
+	if err := store.AdoptRemoteByClone(ctx, ws.DatabasePath, ws.WorkspaceID, plan.remote, plan.url, plan.branch); err != nil {
+		// The remote DID carry data (we checked before cloning), so an empty
+		// store here is a hazard, not a benign result: surface it loudly and name
+		// the refs/dolt/* data we could not adopt so the operator knows not to
+		// push from the empty store. [LAW:no-silent-failure]
+		return initSyncOutcome{
+			State:  initSyncFailed,
+			Remote: plan.remote,
+			Branch: plan.branch,
+			Error: fmt.Sprintf(
+				"remote %q carries lit ticket data (refs/dolt/*) but cloning it into the local store failed, so the store "+
+					"is empty — do NOT push from it (a sync push of an empty store cannot help and risks the remote "+
+					"backlog). Retry `lit init`; underlying error: %v",
+				plan.remote, err,
+			),
+		}
+	}
+	return initSyncOutcome{State: initSyncAdopted, Remote: plan.remote, Branch: plan.branch}
+}
 
-	localIssues, err := syncStore.LocalIssueCount(ctx)
+// adoptClonePlan carries the resolved inputs the clone-based adopt needs. It is
+// produced only when the remote genuinely carries lit data and the local store
+// is empty — i.e. only when an adopt should actually happen.
+type adoptClonePlan struct {
+	remote string
+	branch string
+	url    string
+}
+
+// planRemoteAdopt opens a short-lived probe connection to decide whether init
+// should adopt a remote backlog, returning either a non-nil plan (clone this)
+// or a terminal initSyncOutcome (do nothing more). It always closes its probe
+// connection before returning, so the caller can take the exclusive workspace
+// hold the clone-swap requires. The "remote carries lit data" decision is made
+// from the authoritative refs/dolt/* signal directly — not derived from a
+// post-fetch tracking ref — so no slow fetch happens here.
+// [LAW:dataflow-not-control-flow] [LAW:types-are-the-program]
+func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, initSyncOutcome) {
+	// Preserve any existing local backlog: only an empty or absent store may
+	// adopt, because adopt-by-clone replaces the store wholesale. The check does
+	// not create the store, so a fresh init leaves the target path untouched for
+	// the clone to be its first writer. [LAW:no-silent-failure]
+	hasTickets, err := store.LocalHasTickets(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Error: err.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	if localIssues > 0 {
-		return initSyncOutcome{State: initSyncHasLocalTickets}
+	if hasTickets {
+		return nil, initSyncOutcome{State: initSyncHasLocalTickets}
 	}
 
-	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	// The whole adopt decision is made from git signals alone — no Dolt store is
+	// opened — so a fresh store's first on-disk state is the clone itself.
+	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
 	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Error: err.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), syncState.gitRemotes)
+	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), gitRemotes)
 	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Error: err.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
 	if remote == "" {
-		return initSyncOutcome{State: initSyncNotConfigured}
+		return nil, initSyncOutcome{State: initSyncNotConfigured}
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remote)
 	if refsErr != nil {
-		return initSyncOutcome{State: initSyncFailed, Remote: remote, Error: refsErr.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: refsErr.Error()}
 	}
 	if !hasRefs {
-		return initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote}
+		return nil, initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote}
 	}
 	branch, err := resolveSyncBranch(ws.RootDir, remote)
 	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Remote: remote, Error: err.Error()}
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: err.Error()}
 	}
-	// Fetch populates remotes/<remote>/<branch>; SyncFreshness.Synced then reports
-	// whether the remote actually carries lit data on that branch — the adopt
-	// signal links-doctor-9dnu's freshness check was built to answer. The caller
-	// (adoptRemoteTicketsOnInit) owns the time bound on this fetch.
-	if err := syncStore.SyncFetch(ctx, remote, false); err != nil {
-		return initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: err.Error()}
+	// The refs/dolt/* namespace is the authoritative "remote carries lit data"
+	// signal; RemoteHasRefs (any git ref) cannot tell a code-only repo from one
+	// carrying a backlog. A code-only remote (refs but no lit data) is a genuine
+	// empty result, reported silently; a remote that DOES carry data is adopted
+	// by clone. The old silent-empty-despite-data bug is now unrepresentable:
+	// hasData==true always leads to a clone, never to a silent empty store.
+	// [LAW:no-silent-failure] [LAW:types-are-the-program]
+	hasData, dataErr := workspace.RemoteHasDoltData(ws.RootDir, remote)
+	if dataErr != nil {
+		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
 	}
-	freshness, err := syncStore.SyncFreshness(ctx, remote, branch)
-	if err != nil {
-		return initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: err.Error()}
+	if !hasData {
+		return nil, initSyncOutcome{State: initSyncNoRemoteData, Remote: remote, Branch: branch}
 	}
-	if !freshness.Synced {
-		// The remote-tracking ref for the resolved branch did not materialize
-		// even though the fetch reported success. Two very different realities
-		// reach here and must NOT collapse to one silent outcome: a remote that
-		// genuinely carries no lit data (an empty store is the correct result)
-		// versus a remote that advertises ticket data we then failed to adopt
-		// (an empty store is silent data loss — and, with the push hook live, a
-		// hazard that can clobber the real backlog). The refs/dolt/* namespace
-		// lit stores its data in is the authoritative signal; RemoteHasRefs (any
-		// git ref) cannot tell a code-only repo from one carrying a backlog.
-		// [LAW:no-silent-failure] [LAW:types-are-the-program]
-		hasData, dataErr := workspace.RemoteHasDoltData(ws.RootDir, remote)
-		if dataErr != nil {
-			return initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
+	url := gitBackedURLForRemote(gitRemotes, remote)
+	if url == "" {
+		return nil, initSyncOutcome{
+			State:  initSyncFailed,
+			Remote: remote,
+			Branch: branch,
+			Error:  fmt.Sprintf("remote %q carries lit data but its git URL could not be resolved for clone", remote),
 		}
-		if hasData {
-			return initSyncOutcome{
-				State:  initSyncFailed,
-				Remote: remote,
-				Branch: branch,
-				Error: fmt.Sprintf(
-					"remote carries lit ticket data (refs/dolt/*) but it did not adopt onto %q, so the store is empty — "+
-						"do NOT push from it (a sync push of an empty store cannot help and risks the remote backlog). "+
-						"Re-run `lit init` (the first adopt fetch can be slow); if it persists, `lit sync pull --remote %s`",
-					branch, remote,
-				),
-			}
+	}
+	return &adoptClonePlan{remote: remote, branch: branch, url: url}, initSyncOutcome{}
+}
+
+// gitBackedURLForRemote returns the Dolt git-backed transport URL for the named
+// git remote, or "" when no such remote is present. [LAW:one-source-of-truth]
+// the translation is store.GitBackedRemoteURL, the same one sync uses.
+func gitBackedURLForRemote(gitRemotes []workspace.GitRemote, remote string) string {
+	for _, r := range gitRemotes {
+		if r.Name == remote {
+			return store.GitBackedRemoteURL(r.URL)
 		}
-		return initSyncOutcome{State: initSyncNoRemoteData, Remote: remote, Branch: branch}
 	}
-	if err := syncStore.SyncResetToRemoteHead(ctx, remote, branch); err != nil {
-		return initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: err.Error()}
-	}
-	return initSyncOutcome{State: initSyncAdopted, Remote: remote, Branch: branch}
+	return ""
 }
 
 // writeInitSyncLine renders the one human-facing line the adopt step contributes.
