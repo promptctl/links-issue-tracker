@@ -214,6 +214,13 @@ case "$mode" in
         commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
         date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         pkg="github.com/promptctl/links-issue-tracker/internal/version"
+        # Put ICU/zstd on the cgo search path for the embedded Dolt engine. This
+        # is the single source of truth for those flags (a no-op off macOS), so
+        # the source build here and the Justfile recipes never drift apart.
+        # [LAW:one-source-of-truth] Sourced only in source mode — the
+        # release/latest download modes build nothing and must not require ICU.
+        # shellcheck source=scripts/cgo-env.sh
+        . "$ROOT_DIR/scripts/cgo-env.sh"
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
             -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${commit} -X ${pkg}.Date=${date}" \
             -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit

@@ -46,8 +46,10 @@ cd links-issue-tracker
 ./scripts/install.sh        # no flags = build from source
 ```
 
-Full matrix, manual download, version pinning, and the macOS ICU/zstd build notes are in
-[introduction/installation.md](introduction/installation.md).
+On macOS the source build links keg-only Homebrew ICU/zstd; install them first with
+`brew install icu4c@78 zstd` (or run `just setup` once). `install.sh` wires the cgo
+paths for you. Full matrix, manual download, version pinning, and the macOS ICU/zstd
+build notes are in [introduction/installation.md](introduction/installation.md).
 
 ## 3. Initialize the workspace (once per clone)
 
