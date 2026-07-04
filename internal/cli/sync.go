@@ -128,6 +128,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
+	progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return err
@@ -164,6 +165,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err != nil {
 		return err
 	}
+	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 	result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
 	payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, result.Message, err)
 	if handledErr != nil {

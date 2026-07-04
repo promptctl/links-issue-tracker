@@ -86,6 +86,7 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 	// lockout loudly. The short-lived `lit init` process reclaims the abandoned
 	// goroutine when it exits. A bounded, loud failure always beats an unbounded
 	// hang. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
+	progressf("init", "checking whether a git remote already carries a lit backlog")
 	runCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	done := make(chan initSyncOutcome, 1)
@@ -113,8 +114,12 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 		// A terminal outcome was already decided (local tickets to preserve, no
 		// remote, remote empty, no lit data on the remote, or a resolution error).
 		// planRemoteAdopt has closed its probe connection in every case.
+		if situation := remoteSituationLine(outcome.State); situation != "" {
+			progressf("init", "%s", situation)
+		}
 		return outcome
 	}
+	progressf("init", "remote %s/%s carries lit data (refs/dolt/*); downloading the backlog now", plan.remote, plan.branch)
 	// The remote advertises lit data (refs/dolt/*) and the local store is empty,
 	// so adopt it by CLONING — the bulk whole-archive transfer the git-backed
 	// medium supports — rather than the chunk-by-chunk fetch pipeline that turned
@@ -221,6 +226,28 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		}
 	}
 	return &adoptClonePlan{remote: remote, branch: branch, url: url}, initSyncOutcome{}
+}
+
+// remoteSituationLine renders the resolved remote-data situation for the
+// benign non-adopt outcomes, so a user watching init knows what lit decided
+// about the remote rather than inferring it from silence. The failed state is
+// deliberately absent: a failure has exactly one loud channel
+// (writeInitSyncLine's warning), never a second copy here. [LAW:single-enforcer]
+// An exhaustive match on the sealed state — variability lives in the outcome
+// value, not in whether a caller logs. [LAW:dataflow-not-control-flow]
+func remoteSituationLine(state initSyncState) string {
+	switch state {
+	case initSyncHasLocalTickets:
+		return "local store already holds tickets; leaving it untouched (ongoing sync handles updates)"
+	case initSyncNotConfigured:
+		return "no eligible git remote; starting with an empty backlog"
+	case initSyncRemoteEmpty:
+		return "remote has no refs yet (brand-new repo); starting with an empty backlog"
+	case initSyncNoRemoteData:
+		return "remote has git refs but no lit data; starting with an empty backlog"
+	default:
+		return ""
+	}
 }
 
 // gitBackedURLForRemote returns the Dolt git-backed transport URL for the named

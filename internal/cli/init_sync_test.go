@@ -78,9 +78,13 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
+		progress := captureProgress(t)
 		outcome := adoptRemoteTicketsOnInit(context.Background(), ws)
 		if outcome.State != initSyncHasLocalTickets {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncHasLocalTickets)
+		}
+		if !strings.Contains(progress.String(), "already holds tickets") {
+			t.Fatalf("progress missing the resolved-situation line:\n%s", progress.String())
 		}
 	})
 
@@ -90,9 +94,13 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		if err != nil {
 			t.Fatalf("workspace.Resolve() error = %v", err)
 		}
+		progress := captureProgress(t)
 		outcome := adoptRemoteTicketsOnInit(context.Background(), ws)
 		if outcome.State != initSyncNotConfigured {
 			t.Fatalf("outcome.State = %q, want %q", outcome.State, initSyncNotConfigured)
+		}
+		if !strings.Contains(progress.String(), "no eligible git remote") {
+			t.Fatalf("progress missing the resolved-situation line:\n%s", progress.String())
 		}
 	})
 }
@@ -127,13 +135,37 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	runGit(t, base, "clone", remote, "bravo")
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
+	progress := captureProgress(t)
 	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
 	if !strings.Contains(initOut, "Pulled existing backlog from origin/master") {
 		t.Fatalf("consumer init output missing adopt line:\n%s", initOut)
 	}
+	// The phase narration a user watching a slow init depends on: the adopt
+	// announces itself, then announces the resolved remote situation as the
+	// download begins — on the progress channel, never mixed into the report.
+	if !strings.Contains(progress.String(), "lit: init: checking whether a git remote already carries a lit backlog") {
+		t.Fatalf("init progress missing the start announcement:\n%s", progress.String())
+	}
+	if !strings.Contains(progress.String(), "lit: init: remote origin/master carries lit data (refs/dolt/*); downloading the backlog now") {
+		t.Fatalf("init progress missing the download announcement:\n%s", progress.String())
+	}
 	backlog := runCLIInDir(t, consumer, "backlog")
 	if !strings.Contains(backlog, "remote-ticket") {
 		t.Fatalf("consumer backlog missing adopted ticket:\n%s", backlog)
+	}
+
+	// A subsequent pull narrates the same way: operation start, then the
+	// resolved source as the transfer begins.
+	progress.Reset()
+	pullOut := runCLIInDir(t, consumer, "sync", "pull")
+	if !strings.Contains(pullOut, "pulled") {
+		t.Fatalf("sync pull output missing result line:\n%s", pullOut)
+	}
+	if !strings.Contains(progress.String(), "lit: sync pull: starting: reconciling remotes and resolving the sync source") {
+		t.Fatalf("sync pull progress missing the start announcement:\n%s", progress.String())
+	}
+	if !strings.Contains(progress.String(), "lit: sync pull: pulling lit data from origin/master") {
+		t.Fatalf("sync pull progress missing the transfer announcement:\n%s", progress.String())
 	}
 }
 
