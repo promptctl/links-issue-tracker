@@ -160,8 +160,14 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				if in.Fields.Labels != nil && strings.Join(updated.Labels, ",") != strings.Join(*in.Fields.Labels, ",") {
 					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Labels, *in.Fields.Labels)
 				}
-				if carriesTransition && updated.State() != in.Action.Target() {
-					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), in.Action.Target())
+				// Every action-carrying combo drives the status machine, so the
+				// expected post-state is the variant's own Target.
+				var target model.State
+				if carriesTransition {
+					target = in.Action.(model.StatusAction).Target()
+				}
+				if carriesTransition && updated.State() != target {
+					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), target)
 				}
 
 				// The ov6 guard, made explicit: a field-only cell records zero
@@ -171,7 +177,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				// documented no-op and likewise records nothing; only a
 				// transition that mutates the row earns an event.
 				wantTransitions := 0
-				if carriesTransition && in.Action.Target() != created.State() {
+				if carriesTransition && target != created.State() {
 					wantTransitions = 1
 				}
 				if n := transitionActionCount(added); n != wantTransitions {

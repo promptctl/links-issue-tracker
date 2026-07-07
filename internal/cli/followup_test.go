@@ -27,7 +27,7 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 	if _, err := ap.Store.Apply(ctx, parent.ID, store.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(done) error = %v", err)
+		t.Fatalf("Apply(done) error = %v", err)
 	}
 
 	var stdout bytes.Buffer

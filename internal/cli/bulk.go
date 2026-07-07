@@ -18,7 +18,7 @@ var bulkFamily = commandFamily[appSubcommand]{
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
 		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkClose}},
-		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.ActionArchive)}},
+		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.Archive{})}},
 		{name: "import", payload: appSubcommand{access: app.AccessWrite, run: runBulkImport}},
 	},
 }
@@ -158,7 +158,7 @@ func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 // runBulkTransition builds the handler for a bulk retention action. The
 // action is fixed by the family row, so the body never re-reads argv to
 // learn which subcommand it is serving. [LAW:dataflow-not-control-flow]
-func runBulkTransition(action model.ActionName) appRunFn {
+func runBulkTransition(action model.Action) appRunFn {
 	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 		fs := newCobraFlagSet("bulk transition")
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
@@ -173,12 +173,7 @@ func runBulkTransition(action model.ActionName) appRunFn {
 		}
 		actor := resolveActor()
 		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			_, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-				IssueID:   issueID,
-				Action:    action,
-				Reason:    *reason,
-				CreatedBy: actor,
-			})
+			_, err := ap.Store.Apply(ctx, issueID, store.Change{Action: action, Actor: actor, Reason: *reason})
 			return err
 		})
 	}
