@@ -11,16 +11,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// resolveRestorePath is the single authority both `backup restore` and `recover`
-// resolve their source through; these assert the documented cap of two sources
-// (explicit path, latest backup) and that the degenerate combinations fail loudly
-// rather than picking a silent precedence.
+// resolveRestorePath is the single authority `backup restore` resolves its
+// source through; these assert the documented cap of two sources (explicit
+// path, latest backup) and that the degenerate combinations fail loudly rather
+// than picking a silent precedence.
 func TestResolveRestorePathCap(t *testing.T) {
-	const usage = "lit backup restore (--latest | --path <snapshot.json>) [--force]"
-
 	t.Run("no source is a usage error", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
-		_, err := resolveRestorePath(ap, "  ", false, usage)
+		_, err := resolveRestorePath(ap, "  ", false)
 		if _, ok := err.(UsageError); !ok {
 			t.Fatalf("resolveRestorePath(no source) error = %v, want UsageError", err)
 		}
@@ -28,7 +26,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 
 	t.Run("both sources is a mutual-exclusion error, not silent precedence", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
-		_, err := resolveRestorePath(ap, "/some/export.json", true, usage)
+		_, err := resolveRestorePath(ap, "/some/export.json", true)
 		ue, ok := err.(UsageError)
 		if !ok || !strings.Contains(ue.Message, "mutually exclusive") {
 			t.Fatalf("resolveRestorePath(both) error = %v, want mutually-exclusive UsageError", err)
@@ -37,7 +35,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 
 	t.Run("explicit path passes through trimmed", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
-		got, err := resolveRestorePath(ap, "  /some/export.json  ", false, usage)
+		got, err := resolveRestorePath(ap, "  /some/export.json  ", false)
 		if err != nil || got != "/some/export.json" {
 			t.Fatalf("resolveRestorePath(path) = %q, %v; want trimmed path", got, err)
 		}
@@ -45,7 +43,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 
 	t.Run("latest with no backups fails loudly", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{StorageDir: t.TempDir()}}
-		_, err := resolveRestorePath(ap, "", true, usage)
+		_, err := resolveRestorePath(ap, "", true)
 		if err == nil || !strings.Contains(err.Error(), "no backups available") {
 			t.Fatalf("resolveRestorePath(latest, empty) error = %v, want no backups available", err)
 		}
@@ -59,7 +57,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 		if err != nil {
 			t.Fatalf("backup.Create() error = %v", err)
 		}
-		got, err := resolveRestorePath(ap, "", true, usage)
+		got, err := resolveRestorePath(ap, "", true)
 		if err != nil || got != snapshot.Path {
 			t.Fatalf("resolveRestorePath(latest) = %q, %v; want %q", got, err, snapshot.Path)
 		}

@@ -67,25 +67,23 @@ func runBackupList(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	return nil
 }
 
-// restoreSourceUsage is the one canonical restore surface shared by `backup
-// restore` and `recover`. [LAW:no-mode-explosion] the cap is two sources — an
-// explicit export path or the latest backup snapshot — and it lives here once
-// so neither command can grow a private fourth flag without editing this line.
-const restoreSourceUsage = "(--latest | --path <snapshot.json>) [--force]"
+// restoreUsage is the one canonical restore surface. [LAW:no-mode-explosion]
+// the cap is two sources — an explicit export path or the latest backup
+// snapshot — and a third source is a new alternative in this line, never a
+// private flag elsewhere.
+const restoreUsage = "usage: lit backup restore (--latest | --path <export.json>) [--force]"
 
 // resolveRestorePath is the single authority that turns a restore source into a
 // path. The two sources are the only ones there can be: restoreFromExportPath
 // reads any model.Export JSON identically and is blind to whether the file came
 // from `backup create` or the sync engine, so a file's provenance is not a
-// behavioral axis and earns no separate flag. [LAW:one-source-of-truth] both
-// restore commands resolve here, so the overlap is a declared alias rather than
-// two surfaces that drift. [LAW:no-silent-failure] passing both sources is an
-// explicit error, never a silent precedence between them.
-func resolveRestorePath(ap *app.App, explicitPath string, latest bool, usage string) (string, error) {
+// behavioral axis and earns no separate flag. [LAW:no-silent-failure] passing
+// both sources is an explicit error, never a silent precedence between them.
+func resolveRestorePath(ap *app.App, explicitPath string, latest bool) (string, error) {
 	path := strings.TrimSpace(explicitPath)
 	if latest {
 		if path != "" {
-			return "", UsageError{Message: "usage: " + usage + " — --latest and --path are mutually exclusive"}
+			return "", UsageError{Message: restoreUsage + " — --latest and --path are mutually exclusive"}
 		}
 		snapshot, err := backup.Latest(ap.Workspace.StorageDir)
 		if err != nil {
@@ -97,20 +95,20 @@ func resolveRestorePath(ap *app.App, explicitPath string, latest bool, usage str
 		return snapshot.Path, nil
 	}
 	if path == "" {
-		return "", UsageError{Message: "usage: " + usage}
+		return "", UsageError{Message: restoreUsage}
 	}
 	return path, nil
 }
 
 func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("backup restore")
-	path := fs.String("path", "", "Backup snapshot path")
+	path := fs.String("path", "", "Path to an export JSON (backup snapshot or sync file)")
 	latest := fs.Bool("latest", false, "Restore latest backup snapshot")
 	force := fs.Bool("force", false, "Force restore over unsynced state")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	restorePath, err := resolveRestorePath(ap, *path, *latest, "lit backup restore "+restoreSourceUsage)
+	restorePath, err := resolveRestorePath(ap, *path, *latest)
 	if err != nil {
 		return err
 	}
@@ -118,29 +116,6 @@ func runBackupRestore(ctx context.Context, stdout io.Writer, ap *app.App, args [
 		return err
 	}
 	_, err = fmt.Fprintf(stdout, "restored %s\n", restorePath)
-	return err
-}
-
-// runRecover is the top-level disaster-recovery alias of `backup restore`: same
-// canonical source surface, same resolver, same operation. It exists as its own
-// discoverable verb (downgrade failures point users at it), differing only in
-// that --path here accepts any export JSON — a backup snapshot or a sync file.
-func runRecover(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("recover")
-	path := fs.String("path", "", "Export snapshot path (backup snapshot or sync file)")
-	latest := fs.Bool("latest", false, "Recover from latest backup snapshot")
-	force := fs.Bool("force", false, "Force restore over unsynced state")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	restorePath, err := resolveRestorePath(ap, *path, *latest, "lit recover "+restoreSourceUsage)
-	if err != nil {
-		return err
-	}
-	if err := restoreFromExportPath(ctx, ap, restorePath, *force); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "recovered %s\n", restorePath)
 	return err
 }
 

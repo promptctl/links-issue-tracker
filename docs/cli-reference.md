@@ -444,7 +444,10 @@ lit backup restore (--latest | --path <p>) [--force]
 ```
 
 Logical backup snapshots with rotation (`--keep`, default 20). `restore` refuses to
-overwrite unsynced state without `--force`.
+overwrite unsynced state without `--force`. `--path` accepts any export JSON — a
+backup snapshot or a sync file; provenance does not change behavior. You must name
+a source; there is no implicit default, and `--latest` with `--path` is an error
+rather than a silent precedence.
 
 ### `lit snapshots`
 
@@ -456,21 +459,6 @@ lit snapshots restore <name>
 
 Filesystem-level workspace snapshots — coarser and lower-level than `lit backup`,
 capturing the store directory wholesale.
-
-### `lit recover`
-
-```text
-lit recover (--latest | --path <p>) [--force]
-```
-
-Top-level disaster-recovery alias of `lit backup restore`: the same two restore
-sources (the latest backup snapshot, or an explicit export path) resolved through
-the same path, so the two commands never drift. The division is discoverability,
-not behavior — reach for `recover` in a crisis (downgrade failures point here),
-and for `backup restore` as the inverse of `backup create`. The only nuance:
-`recover --path` accepts any export JSON, a backup snapshot or a sync file. You
-must name a source; there is no implicit default, and `--latest` with `--path` is
-an error rather than a silent precedence.
 
 ### `lit lifeboat`
 
