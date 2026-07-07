@@ -356,8 +356,7 @@ func formatHistoryTimestamp(value time.Time) string {
 // left the flow and must neither block nor be traversed.
 // [LAW:single-enforcer] Liveness decided once, here.
 func isLiveIssue(issue model.Issue) bool {
-	_, live := issue.Retention().(model.Live)
-	return live && issue.State() != model.StateClosed
+	return !model.Frozen(issue.Retention()) && issue.State() != model.StateClosed
 }
 
 // openUnblockIDs returns the IDs of issues from blocks that are still live —

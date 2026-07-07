@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"errors"
 	"fmt"
 	"time"
 )
@@ -32,6 +33,81 @@ type Deleted struct{ At time.Time }
 func (Live) isRetention()     {}
 func (Archived) isRetention() {}
 func (Deleted) isRetention()  {}
+
+// Frozen reports whether r has left the flow: archived and deleted issues are
+// read-only for activity transitions and invisible to pending-work traversal
+// until a retention transition returns them to Live.
+// [LAW:single-enforcer] The one definition of out-of-the-flow; consumers ask
+// this predicate instead of matching retention variants themselves.
+func Frozen(r Retention) bool {
+	switch r.(type) {
+	case Live:
+		return false
+	case Archived, Deleted:
+		return true
+	default:
+		// [LAW:no-silent-failure] Same refusal as RetentionTimestamps: an
+		// impostor answered either way would silently mislabel the issue.
+		panic(fmt.Sprintf("illegal Retention value %T", r))
+	}
+}
+
+// Retain is the total retention-transition function: the Retention that
+// applying action to cur at time at yields, or the reason the move is illegal.
+// Pure — no clock, no store; the caller supplies the stamp time.
+// [LAW:types-are-the-program] The whole retention state machine lives in this
+// one table. Every (variant, action) cell is written out, so a rejection is an
+// exhaustive match arm here, never an imperative guard at a callsite.
+// [LAW:one-source-of-truth] action stays ActionName rather than a sealed
+// retention-only sum: the four retention actions are already named by the
+// ActionName constants, and the sealed action sum that will carry payloads is
+// the mutation recut's charter (links-recut-mutation-0fqw). Non-retention
+// actions are rejected as a table row, keeping Retain total over its inputs.
+func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
+	switch action {
+	case ActionArchive:
+		switch cur.(type) {
+		case Live:
+			return Archived{At: at}, nil
+		case Archived:
+			return nil, errors.New("issue is already archived")
+		case Deleted:
+			return nil, errors.New("cannot archive deleted issue")
+		}
+	case ActionUnarchive:
+		switch cur.(type) {
+		case Live:
+			return nil, errors.New("issue is not archived")
+		case Archived:
+			return Live{}, nil
+		case Deleted:
+			return nil, errors.New("cannot unarchive deleted issue")
+		}
+	case ActionDelete:
+		switch cur.(type) {
+		case Live, Archived:
+			// Deleted carries no prior-archived bit — deleting an archived
+			// issue drops the archive stamp by construction, so restore always
+			// lands on Live. Decided in the lifecycle recut: the remembered
+			// stamp was the only reachable both-set state of the old encoding.
+			return Deleted{At: at}, nil
+		case Deleted:
+			return nil, errors.New("issue is already deleted")
+		}
+	case ActionRestore:
+		switch cur.(type) {
+		case Live, Archived:
+			return nil, errors.New("issue is not deleted")
+		case Deleted:
+			return Live{}, nil
+		}
+	default:
+		return nil, fmt.Errorf("unsupported lifecycle action %q", action)
+	}
+	// [LAW:no-silent-failure] Every sealed value variant returned above; only
+	// an impostor Retention (typed-nil pointer variant, raw nil) reaches here.
+	panic(fmt.Sprintf("illegal Retention value %T", cur))
+}
 
 // RetentionFromTimestamps decodes the two-nullable-timestamp encoding (the
 // archived_at/deleted_at DB columns and JSON wire keys) into the sum. A legacy
