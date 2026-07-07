@@ -37,6 +37,15 @@ func (h readyTestHarness) runNextErr(args ...string) error {
 	return runWorkable(h.ctx, &stdout, h.ap, args, nextView)
 }
 
+func (h readyTestHarness) runNextText(args ...string) string {
+	h.t.Helper()
+	var stdout bytes.Buffer
+	if err := runWorkable(h.ctx, &stdout, h.ap, args, nextView); err != nil {
+		h.t.Fatalf("runNext(%v) error = %v", args, err)
+	}
+	return stdout.String()
+}
+
 // `lit next` returns the top of the ready partition: the first open, unblocked
 // leaf in the same composite-rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
@@ -84,6 +93,36 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	}
 	if got.ID != blocker.ID {
 		t.Fatalf("next.ID = %q, want %q (top of ready order after skipping blocked dependent)", got.ID, blocker.ID)
+	}
+}
+
+// `lit next` exposes the standard narrowing knobs so "the next workable bug"
+// is expressible; the filter runs in the shared pipeline, so next answers the
+// same narrowed question ready/backlog/queue would.
+func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
+	h := newReadyTestHarness(t)
+	task := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1})
+	bug := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Lower-ranked bug", Topic: "next", IssueType: "bug", Priority: 0})
+
+	text := h.runNextText("--type", "bug")
+	if !strings.Contains(text, bug.ID) {
+		t.Fatalf("next --type bug output = %q, want %q picked", text, bug.ID)
+	}
+	if strings.Contains(text, task.ID) {
+		t.Fatalf("next --type bug output = %q, want %q filtered out despite outranking the bug", text, task.ID)
+	}
+}
+
+// --limit and --columns stay off next: a single-row summary has no row count
+// or column set to vary, so accepting them would be accepting input the
+// command cannot honor.
+func TestRunNextRejectsLimitAndColumns(t *testing.T) {
+	h := newReadyTestHarness(t)
+	for _, args := range [][]string{{"--limit", "2"}, {"--columns", "id"}} {
+		err := h.runNextErr(args...)
+		if err == nil || !strings.Contains(err.Error(), "unknown flag") {
+			t.Fatalf("runNext(%v) error = %v, want unknown-flag usage error", args, err)
+		}
 	}
 }
 

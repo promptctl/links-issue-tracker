@@ -106,6 +106,10 @@ The pull view: epics with their top workable ticket, plus in-progress and orphan
 tickets — what should be picked up next, top item first. Blocked items are excluded and
 counted in a footer.
 
+`--status` accepts exactly `open` or `in_progress` on all four workable commands
+(`ready`, `backlog`, `queue`, `next`); anything else — including `closed`, which could
+only ever match nothing — is a usage error (exit 2) naming the legal values.
+
 ### `lit backlog`
 
 ```text
@@ -127,11 +131,13 @@ minimal machine-friendly pull order.
 ### `lit next`
 
 ```text
-lit next [--assignee <a>] [--continue]
+lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--continue] [--assignee <a>]
 ```
 
-Prints the single next workable leaf to `lit start`. `--continue` biases toward leaves
-under epics that are already in progress.
+Prints the single next workable leaf to `lit start`, narrowed by the same filters as
+`ready` — so "the next workable bug" is `lit next --type bug`. `--continue` biases
+toward leaves under epics that are already in progress. `--limit` and `--columns` do
+not apply to a single-row summary and are not accepted.
 
 ### `lit orphaned`
 
