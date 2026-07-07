@@ -2403,6 +2403,72 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 	}
 }
 
+// TestCloseRedirectToArchivedCanonicalAllowed pins the accept half of the
+// retention rule: an Archived canonical is completed work aged out of the
+// flow, and "duplicate of something already done" is the most common real
+// redirect — the close succeeds and records the redirect.
+func TestCloseRedirectToArchivedCanonicalAllowed(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(canonical) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, canonical.ID, Change{Action: model.Archive{}, Reason: "aged out", Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(archive canonical) error = %v", err)
+	}
+	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(dup) error = %v", err)
+	}
+	closed, err := st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	if err != nil {
+		t.Fatalf("Apply(close duplicate-of archived canonical) error = %v, want success", err)
+	}
+	if got := closed.RedirectTargetValue(); got == nil || *got != canonical.ID {
+		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
+	}
+}
+
+// TestCloseRedirectToDeletedCanonicalRejected pins the reject half of the
+// retention rule: a Deleted canonical is trash-bound, so a redirect there is
+// a dangling pointer by design. The close is rejected with an error naming
+// the retention conflict, and nothing persists — the issue stays open with
+// no resolution and no redirect. [LAW:no-silent-failure]
+func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(canonical) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, canonical.ID, Change{Action: model.Delete{}, Reason: "trash", Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(delete canonical) error = %v", err)
+	}
+	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(dup) error = %v", err)
+	}
+	_, err = st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	if err == nil {
+		t.Fatal("Apply(close duplicate-of deleted canonical) error = nil, want rejection")
+	}
+	if !strings.Contains(err.Error(), canonical.ID) || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("error = %v, want the target and its retention state named", err)
+	}
+	loaded, err := st.GetIssue(ctx, dup.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if loaded.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("status = %q, want open — the rejected close must not persist", loaded.StatusValue())
+	}
+	if loaded.ResolutionValue() != nil || loaded.RedirectTargetValue() != nil || loaded.ClosedAtValue() != nil {
+		t.Fatalf("resolution/redirect/closed_at = %v/%v/%v, want all nil — the rejected close must not persist",
+			loaded.ResolutionValue(), loaded.RedirectTargetValue(), loaded.ClosedAtValue())
+	}
+}
+
 // TestCloseRedirectingWithoutTargetRejected is the store's integrity floor for
 // programmatic callers that bypass the CLI gate: a redirecting outcome minted
 // with an empty target is incoherent and rejected rather than persisted as a
