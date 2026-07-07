@@ -160,8 +160,22 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				if in.Fields.Labels != nil && strings.Join(updated.Labels, ",") != strings.Join(*in.Fields.Labels, ",") {
 					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Labels, *in.Fields.Labels)
 				}
-				if carriesTransition && updated.State() != in.Action.Target() {
-					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), in.Action.Target())
+				// Every action-carrying combo drives the status machine, so the
+				// expected post-state is the variant's own Target. The matrix's
+				// expected outcomes (wantErr, target state, event count) are all
+				// computed on status-axis premises — a retention combo needs its
+				// own expectations, so refuse it with the reason rather than
+				// panicking on the assertion.
+				var target model.State
+				if carriesTransition {
+					statusAction, ok := in.Action.(model.StatusAction)
+					if !ok {
+						t.Fatalf("combo %s carries non-status action %T: this matrix covers the status axis only — retention combos need their own expected-outcome model", combo.name, in.Action)
+					}
+					target = statusAction.Target()
+				}
+				if carriesTransition && updated.State() != target {
+					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), target)
 				}
 
 				// The ov6 guard, made explicit: a field-only cell records zero
@@ -171,7 +185,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				// documented no-op and likewise records nothing; only a
 				// transition that mutates the row earns an event.
 				wantTransitions := 0
-				if carriesTransition && in.Action.Target() != created.State() {
+				if carriesTransition && target != created.State() {
 					wantTransitions = 1
 				}
 				if n := transitionActionCount(added); n != wantTransitions {

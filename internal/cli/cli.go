@@ -1247,20 +1247,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// must record who actually performed the transition (claude_<session>), not
 	// the shell user, now that ownership survives close as an orthogonal field.
 	actor := resolveActor()
-	// Status actions travel the typed Change seam; retention actions keep the
-	// TransitionIssue path until the retention fold lands, at which point this
-	// split collapses into one Apply call.
-	var issue model.Issue
-	if statusAction, ok := action.(model.StatusAction); ok {
-		issue, err = ap.Store.Apply(ctx, issueID, store.Change{Action: statusAction, Actor: actor, Reason: *reason})
-	} else {
-		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-			IssueID:   issueID,
-			Action:    action.Name(),
-			Reason:    *reason,
-			CreatedBy: actor,
-		})
-	}
+	issue, err := ap.Store.Apply(ctx, issueID, store.Change{Action: action, Actor: actor, Reason: *reason})
 	if err != nil {
 		return err
 	}

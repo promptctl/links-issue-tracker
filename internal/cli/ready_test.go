@@ -96,7 +96,7 @@ func (h readyTestHarness) createIssue(input store.CreateIssueInput) model.Issue 
 func (h readyTestHarness) closeIssue(issueID, reason string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, store.Change{Action: model.Done{}, Actor: "tester", Reason: reason}); err != nil {
-		h.t.Fatalf("TransitionIssue(close) error = %v", err)
+		h.t.Fatalf("Apply(close) error = %v", err)
 	}
 }
 
