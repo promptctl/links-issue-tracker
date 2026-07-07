@@ -236,9 +236,8 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 // relation rows into the workable population; they are boundary translation,
 // not a guard against a should-not-happen state.
 func isUnfinished(issue model.Issue) bool {
-	return issue.ArchivedAt == nil &&
-		issue.DeletedAt == nil &&
-		issue.State() != model.StateClosed
+	_, live := issue.Retention().(model.Live)
+	return live && issue.State() != model.StateClosed
 }
 
 // FocusLabel is the reserved label that marks an issue as a focused goal.

@@ -76,7 +76,8 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []string, rels m
 
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(issue.ArchivedAt), formatOptionalTime(issue.DeletedAt)); err != nil {
+	archivedAt, deletedAt := model.RetentionTimestamps(issue.Retention())
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Capability presence is the type-encoded
@@ -351,7 +352,8 @@ func formatHistoryTimestamp(value time.Time) string {
 // filter, so the two surfaces cannot drift on what counts as actionable.
 // [LAW:single-enforcer] Liveness decided once, here.
 func isLiveIssue(issue model.Issue) bool {
-	return issue.State() != model.StateClosed && issue.ArchivedAt == nil && issue.DeletedAt == nil
+	_, live := issue.Retention().(model.Live)
+	return issue.State() != model.StateClosed && live
 }
 
 // openUnblockIDs returns the IDs of issues from blocks that are still live —
@@ -421,10 +423,13 @@ func formatIssueState(issue model.Issue) string {
 	// return the state derived from children. StatusValue() with an empty-string
 	// fallback was a pellet — duplicate dispatch across the same discriminator.
 	parts := []string{string(issue.State())}
-	if issue.ArchivedAt != nil {
+	// [LAW:types-are-the-program] Retention is a sum, so at most one tag applies;
+	// the old field pair could stack "+archived+deleted", a state the domain
+	// never had.
+	switch issue.Retention().(type) {
+	case model.Archived:
 		parts = append(parts, "archived")
-	}
-	if issue.DeletedAt != nil {
+	case model.Deleted:
 		parts = append(parts, "deleted")
 	}
 	return strings.Join(parts, "+")

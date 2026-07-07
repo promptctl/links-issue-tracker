@@ -1386,7 +1386,7 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(archive) error = %v", err)
 	}
-	if archived.ArchivedAt == nil {
+	if _, ok := archived.Retention().(model.Archived); !ok {
 		t.Fatalf("archived = %#v", archived)
 	}
 
@@ -2247,8 +2247,8 @@ func TestArchiveReturnsHydratedIssue(t *testing.T) {
 		t.Fatalf("TransitionIssue(archive) error = %v", err)
 	}
 	progress := archived.Progress()
-	if archived.ArchivedAt == nil || !archived.IsContainer() || progress.Total != 1 {
-		t.Fatalf("archived issue = archived_at:%v container:%v progress:%#v, want hydrated archived epic", archived.ArchivedAt, archived.IsContainer(), progress)
+	if _, ok := archived.Retention().(model.Archived); !ok || !archived.IsContainer() || progress.Total != 1 {
+		t.Fatalf("archived issue = retention:%#v container:%v progress:%#v, want hydrated archived epic", archived.Retention(), archived.IsContainer(), progress)
 	}
 }
 
@@ -2512,8 +2512,8 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(archive) error = %v", err)
 	}
-	if archived.ArchivedAt == nil {
-		t.Fatalf("archived issue has nil ArchivedAt")
+	if _, ok := archived.Retention().(model.Archived); !ok {
+		t.Fatalf("archived issue retention = %#v, want Archived", archived.Retention())
 	}
 	_, err = st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
 	if err == nil || err.Error() != "issue is already archived" {

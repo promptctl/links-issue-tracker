@@ -230,20 +230,20 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 
 func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
-	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t1 })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Provisional().ArchivedAt == nil || !got.Provisional().ArchivedAt.Equal(t1) {
-		t.Fatalf("archived_at = %v, want earliest %v", got.Provisional().ArchivedAt, t1)
+	if archived, ok := got.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t1) {
+		t.Fatalf("retention = %#v, want Archived at earliest %v", got.Provisional().Retention(), t1)
 	}
 
 	// Only ours archived -> tier1 takes the archive; timestamp is ours.
 	soloBase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
-	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
+	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
 	soloTheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	solo := ResolveIssue(&soloBase, &soloOurs, &soloTheirs, "wsA", "wsB")
-	if solo.Provisional().ArchivedAt == nil || !solo.Provisional().ArchivedAt.Equal(t2) {
-		t.Fatalf("solo archive = %v, want %v", solo.Provisional().ArchivedAt, t2)
+	if archived, ok := solo.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t2) {
+		t.Fatalf("solo archive = %#v, want Archived at %v", solo.Provisional().Retention(), t2)
 	}
 }
 

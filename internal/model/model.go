@@ -16,6 +16,11 @@ type Progress = lifecycle.Progress
 type ActionName = lifecycle.ActionName
 type Resolution = lifecycle.Resolution
 
+type Retention = lifecycle.Retention
+type Live = lifecycle.Live
+type Archived = lifecycle.Archived
+type Deleted = lifecycle.Deleted
+
 const (
 	StateOpen       = lifecycle.Open
 	StateInProgress = lifecycle.InProgress
@@ -43,6 +48,9 @@ var (
 	DefaultOpen       = lifecycle.DefaultOpen
 	ParseResolution   = lifecycle.ParseResolution
 	ActionTargetState = lifecycle.ActionTargetState
+
+	RetentionFromTimestamps = lifecycle.RetentionFromTimestamps
+	RetentionTimestamps     = lifecycle.RetentionTimestamps
 )
 
 func IsContainerType(issueType string) bool {
@@ -111,15 +119,38 @@ type Issue struct {
 	// sub-sequences: same lane → sequenced by rank, different lanes → parallel.
 	// Empty string is the shared default lane (fully-sequential). Meaningful
 	// only within an epic; the readiness gate is what scopes it.
-	Lane       string     `json:"lane"`
-	Labels     []string   `json:"labels"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
-	ArchivedAt *time.Time `json:"archived_at,omitempty"`
-	DeletedAt  *time.Time `json:"deleted_at,omitempty"`
+	Lane      string    `json:"lane"`
+	Labels    []string  `json:"labels"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+
+	// retention is the sealed retention axis (Live | Archived | Deleted). The
+	// wire and storage encodings keep the legacy archived_at/deleted_at pair,
+	// projected through lifecycle.RetentionTimestamps/RetentionFromTimestamps at
+	// the serialization boundaries. [LAW:types-are-the-program] One value where
+	// two nullable timestamps once left the archived+deleted combo representable.
+	retention lifecycle.Retention
 
 	lifecycle        lifecycle.Lifecycle
 	pendingHydration bool
+}
+
+// Retention reports the issue's retention state. The zero value of the axis is
+// Live — an issue constructed without an explicit retention is in the flow —
+// so the nil interface normalizes here rather than forcing every construction
+// site to state the origin. [LAW:types-are-the-program]
+func (i Issue) Retention() lifecycle.Retention {
+	if i.retention == nil {
+		return lifecycle.Live{}
+	}
+	return i.retention
+}
+
+// SetRetention replaces the retention state.
+// [LAW:single-enforcer] Mirrors replaceLifecycle: retention changes flow
+// through this one mutator, not ad-hoc field writes.
+func (i *Issue) SetRetention(r lifecycle.Retention) {
+	i.retention = r
 }
 
 // State and Progress are derived from the issue's children for a container and
@@ -388,6 +419,7 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		closedAt = cloneTime(caps.Status.ClosedAt)
 		resolution = cloneResolution(caps.Status.Resolution)
 	}
+	archivedAt, deletedAt := lifecycle.RetentionTimestamps(i.Retention())
 	return json.Marshal(issueJSON{
 		ID:          i.ID,
 		Title:       i.Title,
@@ -405,8 +437,8 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 		UpdatedAt:   i.UpdatedAt,
 		ClosedAt:    closedAt,
 		Resolution:  resolution,
-		ArchivedAt:  i.ArchivedAt,
-		DeletedAt:   i.DeletedAt,
+		ArchivedAt:  archivedAt,
+		DeletedAt:   deletedAt,
 	})
 }
 
@@ -429,8 +461,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		Labels:      payload.Labels,
 		CreatedAt:   payload.CreatedAt,
 		UpdatedAt:   payload.UpdatedAt,
-		ArchivedAt:  payload.ArchivedAt,
-		DeletedAt:   payload.DeletedAt,
+		retention:   lifecycle.RetentionFromTimestamps(payload.ArchivedAt, payload.DeletedAt),
 	}
 	switch {
 	case IsContainerType(payload.IssueType):
