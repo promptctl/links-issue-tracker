@@ -322,8 +322,6 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.visibleSubcommands()},
 		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
 			Run: r.wsFamilyCmd(snapshotsFamily), Subcommands: snapshotsFamily.visibleSubcommands()},
-		{Name: "recover", Summary: "Recover from backup or sync", GroupID: "data",
-			Run: r.appCmd(app.AccessWrite, runRecover)},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
 			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
