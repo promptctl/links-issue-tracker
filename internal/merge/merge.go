@@ -162,7 +162,7 @@ type issueProjection struct {
 	Title       string
 	Description string
 	Prompt      string
-	Priority    int
+	Priority    model.Priority
 	IssueType   model.IssueType
 	Topic       string
 	Assignee    string

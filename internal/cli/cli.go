@@ -311,7 +311,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
-	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
+	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
@@ -323,8 +323,12 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
+	priorityValue, err := parsePriorityFlag(*priority)
+	if err != nil {
+		return err
+	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Placement: rankPlacement(*bottom),
 		Prefix:    ap.Workspace.IssuePrefix.Value(),
 	})
@@ -352,7 +356,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
-	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
+	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	bottom := fs.Bool("bottom", false, "Rank the follow-up at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
@@ -380,6 +384,10 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
+	priorityValue, err := parsePriorityFlag(*priority)
+	if err != nil {
+		return err
+	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:       titleValue,
 		Description: resolvedDescription,
@@ -387,7 +395,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		IssueType:   issueTypeValue,
 		Topic:       resolvedTopic,
 		ParentID:    parent.ID,
-		Priority:    *priority,
+		Priority:    priorityValue,
 		Assignee:    strings.TrimSpace(*assignee),
 		Labels:      splitCSV(*labels),
 		Placement:   rankPlacement(*bottom),
@@ -749,7 +757,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	description := fs.String("description", "", "Issue description")
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", "", "Issue type: "+issueTypeChoices())
-	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
+	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
@@ -842,7 +850,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		in.Fields.IssueType = &value
 	}
 	if visited["priority"] {
-		value := *priority
+		value, err := parsePriorityFlag(*priority)
+		if err != nil {
+			return err
+		}
 		in.Fields.Priority = &value
 	}
 	if visited["assignee"] {
@@ -1563,6 +1574,18 @@ func parseIssueTypeFlag(raw string) (model.IssueType, error) {
 		return "", ValidationError{Message: err.Error()}
 	}
 	return t, nil
+}
+
+// parsePriorityFlag is the strict trust boundary for the write-path --priority
+// flags (new/followup/update). The ValidationError wrapper keeps the exit-code
+// contract these commands have always had: a bad priority is ExitValidation,
+// as it was when the store performed this check.
+func parsePriorityFlag(raw int) (model.Priority, error) {
+	p, err := model.ParsePriority(raw)
+	if err != nil {
+		return 0, ValidationError{Message: err.Error()}
+	}
+	return p, nil
 }
 
 // issueTypeChoices renders the sealed vocabulary for flag help, derived from

@@ -167,11 +167,12 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, mess
 			// default for containers.
 			status := statusForStorage(issue)
 			// Legacy exports may carry priorities outside the canonical
-			// {normal, urgent} range. canonicalPriority — the same authority the
-			// live validator rejects against — coerces any such value so the
-			// CHECK constraint can never reject a restore, without the import
-			// path inventing its own notion of the domain. [LAW:single-enforcer]
-			priority := canonicalPriority(issue.Priority)
+			// {normal, urgent} range. model.CanonicalPriority — the same
+			// authority the live parse gate rejects against — coerces any such
+			// value so the CHECK constraint can never reject a restore, without
+			// the import path inventing its own notion of the domain.
+			// [LAW:single-enforcer]
+			priority := model.CanonicalPriority(int(issue.Priority))
 			archivedCol, deletedCol := retentionColumns(issue)
 			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
 				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,

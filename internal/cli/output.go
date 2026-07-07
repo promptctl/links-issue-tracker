@@ -46,7 +46,7 @@ func printIDListLine(w io.Writer, indent, label string, ids []string) error {
 }
 
 func printIssueSummary(w io.Writer, issue model.Issue) error {
-	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), issue.Title, formatLabels(issue.Labels))
+	_, err := fmt.Fprintf(w, "%s [%s/%s/%s/%s] %s%s\n", issue.ID, formatIssueState(issue), issue.IssueType, issue.Topic, issue.Priority, issue.Title, formatLabels(issue.Labels))
 	return err
 }
 
@@ -77,7 +77,7 @@ func printIssueLines(w io.Writer, issues []model.Issue, columns []string, rels m
 func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	issue := detail.Issue
 	archivedAt, deletedAt := model.RetentionTimestamps(issue.Retention())
-	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, model.PriorityName(issue.Priority), emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\ntype: %s\ntopic: %s\npriority: %s\nlabels: %s\narchived: %s\ndeleted: %s\n", issue.ID, issue.Title, issue.IssueType, issue.Topic, issue.Priority, emptyDash(strings.Join(issue.Labels, ", ")), formatOptionalTime(archivedAt), formatOptionalTime(deletedAt)); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Capability presence is the type-encoded
@@ -260,7 +260,7 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string, r
 		case "topic":
 			values = append(values, issue.Topic)
 		case "priority":
-			values = append(values, model.PriorityName(issue.Priority))
+			values = append(values, issue.Priority.String())
 		case "title":
 			values = append(values, issue.Title)
 		case "assignee":

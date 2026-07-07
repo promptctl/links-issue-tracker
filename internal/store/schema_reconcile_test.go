@@ -1486,10 +1486,10 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	}
 }
 
-// The issue-type CHECK clauses are derived from the sealed model.IssueTypes
-// vocabulary (links-recut-types-mweb.3). This pins the derivation to the exact
-// literals reconcile has always installed: a byte-level change would make
-// every existing workspace's normalized-clause probes miss, dropping and
+// The issue-type and priority CHECK clauses are derived from the sealed model
+// vocabularies (links-recut-types-mweb.3, .2). This pins the derivations to
+// the exact literals reconcile has always installed: a byte-level change would
+// make every existing workspace's normalized-clause probes miss, dropping and
 // re-adding constraints on each Open. [LAW:one-source-of-truth] The literals
 // below are the test's independent copy of the at-rest schema, not a second
 // authority in production code.
@@ -1503,5 +1503,8 @@ func TestDerivedTypeCheckClausesMatchHistoricalLiterals(t *testing.T) {
 	want := `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
 	if canonicalStatusCheckClause != want {
 		t.Fatalf("canonicalStatusCheckClause = %q, want %q", canonicalStatusCheckClause, want)
+	}
+	if want := `priority >= 0 AND priority <= 1`; priorityCheckClause != want {
+		t.Fatalf("priorityCheckClause = %q, want %q", priorityCheckClause, want)
 	}
 }

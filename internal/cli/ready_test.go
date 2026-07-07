@@ -570,7 +570,7 @@ func TestRunReadyTextOutputCapsAt10(t *testing.T) {
 			Title:     fmt.Sprintf("Task %d", i),
 			Topic:     fmt.Sprintf("topic-%02d", i),
 			IssueType: "task",
-			Priority:  i % 2,
+			Priority:  model.Priority(i % 2),
 		})
 	}
 
