@@ -280,6 +280,49 @@ func TestReopenAfterPlainDuplicateCloseLeavesNoResidue(t *testing.T) {
 	}
 }
 
+// TestCloseAsSupersededRoundTrip covers the second redirecting resolution end
+// to end: --resolution superseded --of travels its own case arms (the
+// Superseded{By} outcome, distinct from Duplicate{Of}) through the CLI, the
+// store, and both renderers, so the redirect contract is pinned for the whole
+// redirecting subset, not just duplicate.
+func TestCloseAsSupersededRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	replacement := seedOpenIssueRaw(t, ctx, ap, "Replacement")
+	old := seedOpenIssueRaw(t, ctx, ap, "Superseded")
+
+	var out bytes.Buffer
+	if err := runTransition(ctx, &out, ap, []string{old, "--resolution", "superseded", "--of", replacement}, closeSpec); err != nil {
+		t.Fatalf("runTransition(close superseded) error = %v", err)
+	}
+	// The close adjacency output surfaces the redirect at the close moment.
+	if !strings.Contains(out.String(), "redirect:\n- "+replacement) {
+		t.Fatalf("close adjacency missing redirect group for %s; got:\n%s", replacement, out.String())
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, old)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if got := detail.Issue.ResolutionValue(); got == nil || *got != "superseded" {
+		t.Fatalf("ResolutionValue() = %v, want superseded", got)
+	}
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != replacement {
+		t.Fatalf("RedirectTarget = %#v, want the replacement ticket %s", detail.RedirectTarget, replacement)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related = %#v, want empty (the redirect is not a peer link)", detail.Related)
+	}
+
+	var show bytes.Buffer
+	if err := runShow(ctx, &show, ap, []string{old}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", old, err)
+	}
+	if !strings.Contains(show.String(), "redirect:\n- "+replacement) {
+		t.Fatalf("show output missing redirect group for %s; got:\n%s", replacement, show.String())
+	}
+}
+
 // TestCloseAsDuplicateRendersRedirectAdjacency pins the epic's done/close arm:
 // closing as duplicate surfaces the redirect target in the capture-at-close
 // adjacency output, the moment the closing agent most needs "where it went".

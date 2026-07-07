@@ -1391,8 +1391,9 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 		t.Fatalf("Open(first) error = %v", err)
 	}
 	// Revert to the pre-goose shape FIRST — the revert replays the
-	// post-baseline Down migrations, which read the intact head schema
-	// (00004's Down reads relations.created_by) — then drop
+	// post-baseline Down migrations against the intact head schema
+	// (00004's Down names relations.created_by in its INSERT column
+	// list, so the column must still exist) — then drop
 	// relations.created_by from the baseline shape. The reconcile's
 	// {target: "relations"} ddlStep probes table presence — sees
 	// relations exists — and skips the CREATE TABLE. Adoption would

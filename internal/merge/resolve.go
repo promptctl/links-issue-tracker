@@ -292,17 +292,26 @@ func resolveClosePayload(ours, theirs model.Issue, tiebreak func(ours, theirs st
 }
 
 // closePayload is the comparable projection of one side's close payload;
-// empty strings encode absence so the whole payload is one comparable value.
+// empty strings encode absence so the whole payload is one comparable value
+// (o == t is what makes the atom cheap to settle). The projection's invariant
+// — a target only ever accompanies a resolution — is enforced by its single
+// producer below, so a {resolution:"", target:"x"} value is unconstructible
+// rather than merely unreachable. [LAW:types-are-the-program]
 type closePayload struct {
 	resolution string
 	target     string
 }
 
+// closePayloadOf derives the target only under a resolution, mirroring the
+// leaf type it projects (NewStatus attaches a target only beside a
+// redirecting resolution), so every constructed payload is legal by
+// construction.
 func closePayloadOf(issue model.Issue) closePayload {
-	out := closePayload{}
-	if r := issue.ResolutionValue(); r != nil {
-		out.resolution = string(*r)
+	r := issue.ResolutionValue()
+	if r == nil {
+		return closePayload{}
 	}
+	out := closePayload{resolution: string(*r)}
 	if t := issue.RedirectTargetValue(); t != nil {
 		out.target = *t
 	}
