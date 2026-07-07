@@ -82,10 +82,10 @@ func (Restore) isAction()        {}
 // Outcome is the sealed close reason a Close action carries. The redirecting
 // outcomes (Duplicate, Superseded) each carry the canonical ticket they
 // redirect to; the terminal outcomes (Obsolete, Wontfix) carry nothing, so a
-// redirect target on them cannot be expressed. The write side reads the target
-// structurally from the variant; the read side, which only has the persisted
-// resolution string, keeps using Resolution.RedirectsToCanonical — the two
-// must agree, and that agreement is pinned by test.
+// redirect target on them cannot be expressed. The target travels through the
+// status machine into the closed leaf and persists as its own column beside
+// resolution, so write and read are projections of this one shape — there is
+// no read-time re-derivation to keep in agreement.
 type Outcome interface {
 	// Resolution is the persisted column encoding of this outcome.
 	Resolution() Resolution

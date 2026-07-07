@@ -201,17 +201,21 @@ func (r *resolver) resolveStatus(merged model.Issue) model.Issue {
 
 	var closedAt *time.Time
 	var resolution *model.Resolution
+	var redirectTarget *string
 	if state == model.StateClosed {
 		closedAt = earliestTime(r.ours.ClosedAtValue(), r.theirs.ClosedAtValue())
-		// Resolution is a closed-state payload, so it is settled only when the
-		// merged state is closed. The symmetric tiebreak makes both machines pick
-		// the same winner when each side closed with a different resolution; a side
-		// with no resolution (a `done` or legacy close) contributes the empty
-		// string, which loses to any real resolution.
-		resolution = resolveResolution(r.ours.ResolutionValue(), r.theirs.ResolutionValue(), r.tiebreak)
+		// The close payload (resolution + its redirect target) is settled only
+		// when the merged state is closed. The symmetric tiebreak makes both
+		// machines pick the same winner when each side closed with a different
+		// payload; a side with no resolution (a `done` or legacy close)
+		// contributes the empty payload, which loses to any real one. The target
+		// travels WITH its resolution as one atom — mixing one side's resolution
+		// with the other side's target could fabricate a close nobody performed.
+		// [LAW:one-source-of-truth]
+		resolution, redirectTarget = resolveClosePayload(r.ours, r.theirs, r.tiebreak)
 	}
 
-	hydrated, err := model.HydrateStatus(merged, model.StatusView{Value: state, ClosedAt: closedAt, Resolution: resolution})
+	hydrated, err := model.HydrateStatus(merged, model.StatusView{Value: state, ClosedAt: closedAt, Resolution: resolution, RedirectTarget: redirectTarget})
 	if err != nil {
 		// HydrateStatus never errors for a leaf StatusView; surface loudly
 		// rather than silently keep an unmerged status. [LAW:no-silent-failure]
@@ -236,35 +240,73 @@ func (r *resolver) tiebreak(ours, theirs string) string {
 	return theirs
 }
 
-// resolveResolution settles the closed-state resolution payload. Absent on a
-// side is the empty string; a real resolution always beats absence, and two
-// different real resolutions go to the symmetric tiebreak so both machines agree.
-// Returns nil when neither side carries one (a `done`/legacy close on both).
-func resolveResolution(ours, theirs *model.Resolution, tiebreak func(ours, theirs string) string) *model.Resolution {
-	o, t := resolutionString(ours), resolutionString(theirs)
-	var winner string
+// resolveClosePayload settles the closed-state why-not payload — the
+// resolution together with the redirect target that redirecting resolutions
+// carry. The two fields are one atom: whichever side's resolution wins
+// contributes its own target, so the merge can never pair one side's
+// resolution with the other side's target. Absent on a side is the empty
+// payload; a real resolution always beats absence, and two different real
+// payloads go to the symmetric tiebreak (resolution first, then target as the
+// second key when the resolutions agree) so both machines pick the same
+// winner. Returns (nil, nil) when neither side carries a resolution (a
+// `done`/legacy close on both); the target⟹redirecting-resolution invariant
+// is re-sealed by NewStatus at hydration regardless.
+func resolveClosePayload(ours, theirs model.Issue, tiebreak func(ours, theirs string) string) (*model.Resolution, *string) {
+	o := closePayloadOf(ours)
+	t := closePayloadOf(theirs)
+	var winner closePayload
 	switch {
 	case o == t:
 		winner = o
-	case o == "":
+	case o.resolution == "":
 		winner = t
-	case t == "":
+	case t.resolution == "":
+		winner = o
+	case o.resolution != t.resolution:
+		if tiebreak(o.resolution, t.resolution) == o.resolution {
+			winner = o
+		} else {
+			winner = t
+		}
+	// Same resolution, different targets (one possibly absent): a real target
+	// beats absence; two real targets tiebreak symmetrically.
+	case o.target == "":
+		winner = t
+	case t.target == "":
 		winner = o
 	default:
-		winner = tiebreak(o, t)
+		winner = o
+		if tiebreak(o.target, t.target) != o.target {
+			winner = t
+		}
 	}
-	if winner == "" {
-		return nil
+	if winner.resolution == "" {
+		return nil, nil
 	}
-	resolution := model.Resolution(winner)
-	return &resolution
+	resolution := model.Resolution(winner.resolution)
+	var target *string
+	if winner.target != "" {
+		target = &winner.target
+	}
+	return &resolution, target
 }
 
-func resolutionString(value *model.Resolution) string {
-	if value == nil {
-		return ""
+// closePayload is the comparable projection of one side's close payload;
+// empty strings encode absence so the whole payload is one comparable value.
+type closePayload struct {
+	resolution string
+	target     string
+}
+
+func closePayloadOf(issue model.Issue) closePayload {
+	out := closePayload{}
+	if r := issue.ResolutionValue(); r != nil {
+		out.resolution = string(*r)
 	}
-	return string(*value)
+	if t := issue.RedirectTargetValue(); t != nil {
+		out.target = *t
+	}
+	return out
 }
 
 // derivedFlagTime resolves an archive/delete flag by the two-tier rule on the
