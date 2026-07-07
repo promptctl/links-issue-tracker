@@ -1,22 +1,26 @@
 name: Release smoke
 
-# Fast PR gate for the release path. Builds ONE native target (linux/amd64) with
-# goreleaser, so a PR proves the things that break per code change — Go compiles,
-# the cgo + ICU link recipe works, and .goreleaser.yml parses — without paying
-# for the cross-toolchain.
+# Fast PR gate for the release path. Builds ONE target (linux/amd64) with
+# goreleaser inside the release-builder image's `smoke` stage, so a PR proves
+# the things that break per code change — Go compiles, the cgo + ICU link
+# recipe works, .goreleaser.yml parses, and the produced linux binary is the
+# fully static musl artifact we actually ship — without paying for the
+# five-target cross-build.
 #
 # [LAW:single-enforcer] this workflow owns the *code-level* release invariant
-# (does a goreleaser build of this commit produce a binary?); release-validate.yml
-# owns the *release-level* invariant (do all five cross-targets + the manifest
-# assemble?) and runs out-of-band. Splitting them by change-reason keeps the PR
-# feedback loop fast: the 5-platform cross-build is a release-time cost, not a
-# per-PR cost, so it must never sit on this path.
+# (does a goreleaser build of this commit produce a runnable linux binary?);
+# release-validate.yml owns the *release-level* invariant (do all five
+# cross-targets + the manifest assemble?) and runs out-of-band. Splitting them
+# by change-reason keeps the PR feedback loop fast: the 5-platform cross-build
+# is a release-time cost, not a per-PR cost, so it must never sit on this path.
 #
-# linux/amd64 is the native target — CC=gcc, system libicu-dev, no zig, no SDK,
-# no /opt/icu prefix (the .goreleaser.yml env block leaves CGO_*FLAGS empty and
-# the icu_static tag unset for exactly this target). goreleaser --single-target
-# builds only the runner's GOOS/GOARCH, so none of the cross-target env (zig CC,
-# /opt/icu paths) is evaluated.
+# The `smoke` Dockerfile stage carries the toolchain plus only the linux/amd64
+# ICU prefix. Its layers are shared with the full `final` image (same GHA cache
+# scope), so a PR that doesn't touch build/Dockerfile.release loads cached
+# layers; a PR that does touch it pays for ONE ICU cross-build, not five.
+# [LAW:one-type-per-behavior] the smoke build is the identical recipe the
+# release ships (zig cc x86_64-linux-musl, static ICU, -static link) — not a
+# native-glibc stand-in that would hide a broken musl link until release time.
 
 on:
   pull_request:
@@ -42,56 +46,69 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # System ICU for the native linux/amd64 cgo link — the same libs the
-      # release image's base stage installs. gcc/g++ (with its static
-      # libstdc++.a, needed by -static-libstdc++) are already on the runner.
-      #
-      # Reproduce the static-only ICU lib dir the release image's `final` stage
-      # builds, so this PR gate links linux/amd64 by the IDENTICAL static recipe
-      # .goreleaser.yml uses (CGO_LDFLAGS=-L/opt/icu/linux_amd64/lib): symlinks
-      # to the system libicu *.a, nothing else, so the bare `-licui18n` resolves
-      # to the static archive instead of the .so. [LAW:one-type-per-behavior]
-      # the smoke build is the same shape as the release build, not a dynamic
-      # stand-in that hides a broken static link until release time.
-      - name: Install ICU
+      # setup-go RESTORES a module cache keyed on go.sum; it does not run any
+      # `go` command, so on a cold cache GOMODCACHE is empty. The build mounts
+      # it :ro into the container, where goreleaser cannot then download the
+      # missing modules. Populate it here so the read-only mount is correct by
+      # construction. [LAW:one-source-of-truth] this step is the populated
+      # GOMODCACHE; the :ro mount consumes it.
+      - name: Populate module cache
+        run: go mod download
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Same Dockerfile and GHA cache scope as release-validate/release, so the
+      # base + native-icu + cross-linux-amd64 layers are typically already
+      # populated by a recent master run. [LAW:single-enforcer] the image owns
+      # the toolchain inventory; this workflow installs no compilers or ICU of
+      # its own.
+      - name: Build release-builder smoke image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile.release
+          target: smoke
+          tags: lit-release-builder:smoke
+          load: true
+          cache-from: type=gha,scope=release-builder
+          cache-to: type=gha,scope=release-builder,mode=max
+
+      # --single-target builds only linux/amd64 (the container arch);
+      # --snapshot avoids needing a tag. No cross-build: fast.
+      - name: Build linux/amd64 target (snapshot)
         run: |
           set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends libicu-dev pkg-config
-          sudo mkdir -p /opt/icu/linux_amd64/lib
-          for lib in libicui18n libicuuc libicudata; do
-            sudo ln -sf "/usr/lib/x86_64-linux-gnu/${lib}.a" "/opt/icu/linux_amd64/lib/${lib}.a"
-            test -f "/opt/icu/linux_amd64/lib/${lib}.a" \
-              || { echo "MISSING static archive ${lib}.a (system libicu-dev)" >&2; exit 1; }
-          done
+          docker run --rm \
+            -v "$PWD":/go/src/app -w /go/src/app \
+            -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
+            lit-release-builder:smoke \
+            build --single-target --snapshot --clean
 
-      # Same goreleaser major as the release image, so config semantics match.
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          version: "2.16.0"
-          install-only: true
-
-      # --single-target builds only linux/amd64 (the runner arch); --snapshot
-      # avoids needing a tag. This is the whole point: no cross-build, fast.
-      - name: Build native target (snapshot)
-        run: goreleaser build --single-target --snapshot --clean
-
-      # Prove the artifact is self-contained, not just that it compiled. The
-      # released linux/amd64 binary must run on a clean host with no libicu /
-      # libstdc++ installed, so it must NOT carry a NEEDED entry for any of them.
-      # readelf asserting their ABSENCE is what would have caught the original
-      # dynamically-linked binary (NEEDED libicui18n.so.72) that built green but
-      # failed to run. [LAW:verifiable-goals] [LAW:no-silent-failure]
-      - name: Assert linux/amd64 binary is self-contained
+      # Prove the artifact is the universal static binary we claim to ship, not
+      # just that it compiled — and prove it by EXECUTION, on both libcs:
+      #   - no PT_INTERP program header and no NEEDED entries (fully static;
+      #     this is what would have caught the original glibc-dynamic binary
+      #     that built green but could not start on Alpine),
+      #   - runs on this glibc (ubuntu) runner,
+      #   - runs on a stock Alpine (musl) container.
+      # [LAW:verifiable-goals] [LAW:no-silent-failure]
+      - name: Assert linux/amd64 binary is static and runs on glibc + musl
         run: |
           set -euo pipefail
           BIN=$(find dist -type f -name lit | head -n1)
           test -n "$BIN" || { echo "no lit binary found in dist/" >&2; exit 1; }
           echo "Inspecting $BIN"
-          NEEDED=$(readelf -d "$BIN" | grep NEEDED || true)
-          echo "$NEEDED"
-          if echo "$NEEDED" | grep -qiE 'libicu|libstdc\+\+|libgcc_s'; then
-            echo "FAIL: binary dynamically links ICU/libstdc++/libgcc_s; not self-contained" >&2
+          if readelf -l "$BIN" | grep -q 'INTERP'; then
+            echo "FAIL: binary has a PT_INTERP (dynamic loader) entry; not static" >&2
             exit 1
           fi
-          echo "OK: no NEEDED libicu / libstdc++ / libgcc_s"
+          if readelf -d "$BIN" | grep -q 'NEEDED'; then
+            echo "FAIL: binary has NEEDED dynamic dependencies; not static" >&2
+            exit 1
+          fi
+          echo "OK: no PT_INTERP, no NEEDED — fully static"
+          echo "--- execute on glibc host (ubuntu runner)"
+          "./$BIN" version
+          echo "--- execute on musl host (alpine container)"
+          docker run --rm -v "$PWD/$BIN":/usr/local/bin/lit:ro alpine:3.20 lit version
