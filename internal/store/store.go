@@ -111,11 +111,13 @@ func (u UpdateIssueInput) IsEmpty() bool {
 		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
 }
 
-// Change is THE issue-record mutation input: an optional status action paired
-// with a field patch and the transition's provenance. nil Action means no
-// transition; empty Fields means no field mutations. The action variant
+// Change is THE issue-record mutation input: an optional lifecycle action
+// paired with a field patch and the transition's provenance. nil Action means
+// no transition; empty Fields means no field mutations. The action variant
 // carries exactly its payload (Start the assignee, Close the outcome), so the
 // loose per-action parameters this seam used to thread are unrepresentable.
+// Which axis the action drives — status machine or retention — is the sum's
+// own structure (StatusAction vs not), never a caller-side mode.
 // [LAW:types-are-the-program]
 //
 // Actor/Reason are the transition event's provenance; Fields carries its own
@@ -123,11 +125,7 @@ func (u UpdateIssueInput) IsEmpty() bool {
 // field edit), each with its own reason — `lit update` deliberately synthesizes
 // a transition reason while leaving the field reason as typed.
 type Change struct {
-	// Action is typed StatusAction, not Action: retention transitions still
-	// travel TransitionIssue, and widening this seam to the full sum is the
-	// retention-fold recut's move. Until then a retention action here cannot
-	// be expressed, rather than being runtime-rejected.
-	Action model.StatusAction
+	Action model.Action
 	Fields UpdateIssueInput
 	Actor  string
 	Reason string
@@ -177,18 +175,6 @@ type ListIssuesFilter struct {
 type AddCommentInput struct {
 	IssueID   string
 	Body      string
-	CreatedBy string
-}
-
-// TransitionIssueInput is the retention transition input (archive, unarchive,
-// delete, restore). Status transitions travel Apply with a typed StatusAction;
-// folding retention into that seam — and deleting this type — is the
-// retention-fold recut's move. Retain rejects every non-retention action, so
-// this seam cannot be used to smuggle a status change.
-type TransitionIssueInput struct {
-	IssueID   string
-	Action    model.ActionName
-	Reason    string
 	CreatedBy string
 }
 
@@ -1075,20 +1061,20 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 	// validation error or crash between the two writes can no longer leave a
 	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
 	baseline := current
-	var tw transitionWrite
+	var lw lifecycleWrite
 	if c.Action != nil {
 		actor := strings.TrimSpace(c.Actor)
 		if actor == "" {
 			actor = "unknown"
 		}
-		tw, err = s.planStatusTransition(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
+		lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
 		if err != nil {
 			return model.Issue{}, err
 		}
-		// The field write starts from the post-transition issue so its lifecycle
+		// The field write starts from the post-action issue so its lifecycle
 		// columns (and a start's new assignee) restate, not overwrite, what the
-		// transition just set.
-		baseline = tw.post
+		// action just set.
+		baseline = lw.postIssue()
 	}
 	var fw fieldWrite
 	hasFields := !c.Fields.IsEmpty()
@@ -1098,11 +1084,11 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 			return model.Issue{}, err
 		}
 	}
-	needsTransitionWrite := c.Action != nil && !tw.noop
-	if needsTransitionWrite || hasFields {
+	needsActionWrite := lw != nil && !lw.isNoop()
+	if needsActionWrite || hasFields {
 		if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
-			if needsTransitionWrite {
-				if err := s.applyTransitionTx(ctx, tx, tw); err != nil {
+			if needsActionWrite {
+				if err := lw.applyTx(ctx, s, tx); err != nil {
 					return err
 				}
 			}
@@ -1177,63 +1163,39 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 	return deleted, nil
 }
 
-// TransitionIssue applies a retention transition (archive/unarchive/delete/
-// restore). Status transitions travel Apply; Retain rejects their action names
-// here, so the two seams cannot overlap. Folding retention into Apply — and
-// deleting this method — is the retention-fold recut's move.
-func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
-	issue, err := s.GetIssue(ctx, in.IssueID)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	reason := strings.TrimSpace(in.Reason)
-	actor := strings.TrimSpace(in.CreatedBy)
-	if actor == "" {
-		actor = "unknown"
-	}
-	now := time.Now().UTC()
-	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
-	// [LAW:single-enforcer] The retention state machine — legal moves, rejection
-	// reasons, the delete-on-archived stamp drop, unknown-action refusal — is
-	// the pure Retain transition table; this branch supplies the clock and
-	// persists the result.
-	next, err := model.Retain(issue.Retention(), in.Action, now)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	issue.SetRetention(next)
-	issue.UpdatedAt = now
-	nextArchivedAt, nextDeletedAt := model.RetentionTimestamps(issue.Retention())
-	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		archivedCol, deletedCol := retentionColumns(issue)
-		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-			statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), archivedCol, deletedCol, issue.ID); err != nil {
-			return fmt.Errorf("update issue lifecycle: %w", err)
+// lifecycleWrite is the planned lifecycle mutation Apply executes — a sealed
+// two-variant sum mirroring the action sum's axis split: transitionWrite for
+// StatusActions, retentionWrite for the retention actions. Apply holds exactly
+// one plan whichever axis the action drives, so the axis is a value flowing
+// through one seam, not a second code path. [LAW:dataflow-not-control-flow]
+type lifecycleWrite interface {
+	// applyTx performs the planned writes against tx; it owns only writes, so
+	// it composes into the transaction Apply already holds.
+	applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
+	// postIssue is the post-action issue a following field write baselines on.
+	postIssue() model.Issue
+	// isNoop reports that the plan owes no write.
+	isNoop() bool
+}
+
+// planLifecycleAction plans any lifecycle action by its axis: StatusActions
+// travel the status state machine, everything else in the sealed sum is a
+// retention action and travels the Retain transition table. The dispatch is
+// the sum's own structure — a retention action reaching the status machine, or
+// vice versa, is unrepresentable. [LAW:types-are-the-program]
+func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, actor string, reason string, action model.Action) (lifecycleWrite, error) {
+	if statusAction, ok := action.(model.StatusAction); ok {
+		w, err := s.planStatusTransition(ctx, issue, actor, reason, statusAction)
+		if err != nil {
+			return nil, err
 		}
-		// Field-change emission: history rows keep the archived_at/deleted_at
-		// field names, diffed on the wire projection of the Retention value so the
-		// history format is the same encoding the columns store. No status change
-		// row — the legacy "from_status==to_status" pattern was a schema lie and
-		// has been retired.
-		var changes []model.FieldChange
-		if !timesEqual(priorArchivedAt, nextArchivedAt) {
-			changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(nextArchivedAt)})
-		}
-		if !timesEqual(priorDeletedAt, nextDeletedAt) {
-			changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
-		}
-		return s.recordEvent(ctx, tx, issue.ID, string(in.Action), reason, actor, changes)
-	}); err != nil {
-		return model.Issue{}, err
+		return w, nil
 	}
-	reloaded, err := s.GetIssue(ctx, issue.ID)
+	w, err := planRetentionTransition(issue, actor, reason, action)
 	if err != nil {
-		// [LAW:dataflow-not-control-flow] Write succeeded; surface the in-memory
-		// post-mutation state so callers don't see a write+error combo and retry
-		// an already-applied transition.
-		return issue, nil
+		return nil, err
 	}
-	return reloaded, nil
+	return w, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
@@ -1263,6 +1225,12 @@ type transitionWrite struct {
 	post          model.Issue
 	noop          bool
 }
+
+func (w transitionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
+	return s.applyTransitionTx(ctx, tx, w)
+}
+func (w transitionWrite) postIssue() model.Issue { return w.post }
+func (w transitionWrite) isNoop() bool           { return w.noop }
 
 func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
 	updated, err := applyTransition(issue, action)
@@ -1393,6 +1361,108 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
 
+// retentionWrite is a fully-planned retention transition, the retention-axis
+// variant of lifecycleWrite. planRetentionTransition is the compute half: the
+// Retain transition table derives the post-state (or the rejection), and the
+// change-row diff is taken on the wire projection of the Retention value so
+// the history format is the same encoding the columns store. applyTx is the
+// write half: one guarded UPDATE plus the event. The prior column pair rides
+// along as the compare-and-swap guard, so a plan computed against a stale
+// snapshot fails loudly instead of last-write-wins. [LAW:no-silent-failure]
+type retentionWrite struct {
+	issueID string
+	now     time.Time
+	// priorArchived/priorDeleted are the CAS guard: the column pair the plan
+	// read; the UPDATE matches them or affects no row. nextArchived/nextDeleted
+	// are the pair Retain produced. All four are retentionColumns projections.
+	priorArchived any
+	priorDeleted  any
+	nextArchived  any
+	nextDeleted   any
+	action        model.ActionName
+	reason        string
+	actor         string
+	changes       []model.FieldChange
+	post          model.Issue
+}
+
+func (w retentionWrite) postIssue() model.Issue { return w.post }
+
+// isNoop is always false: the Retain table has no same-state success cell —
+// re-archiving an archived issue is a rejection, not a silent no-op — so every
+// planned retention transition owes a write.
+func (w retentionWrite) isNoop() bool { return false }
+
+// planRetentionTransition plans a retention action against issue. The whole
+// retention state machine — legal moves, rejection reasons, the
+// delete-on-archived stamp drop — is the pure Retain transition table; this
+// plan supplies the clock and projects the result into column values.
+// [LAW:single-enforcer] The action arrives as the sealed sum's variant and
+// adapts to Retain via its Name(); the four non-StatusAction variants are
+// exactly the four retention actions, so Retain's unsupported-action row is
+// unreachable from this seam.
+func planRetentionTransition(issue model.Issue, actor string, reason string, action model.Action) (retentionWrite, error) {
+	now := time.Now().UTC()
+	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
+	priorArchived, priorDeleted := retentionColumns(issue)
+	next, err := model.Retain(issue.Retention(), action.Name(), now)
+	if err != nil {
+		return retentionWrite{}, err
+	}
+	post := issue
+	post.SetRetention(next)
+	post.UpdatedAt = now
+	nextArchivedAt, nextDeletedAt := model.RetentionTimestamps(next)
+	nextArchived, nextDeleted := retentionColumns(post)
+	var changes []model.FieldChange
+	if !timesEqual(priorArchivedAt, nextArchivedAt) {
+		changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(nextArchivedAt)})
+	}
+	if !timesEqual(priorDeletedAt, nextDeletedAt) {
+		changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
+	}
+	return retentionWrite{
+		issueID:       issue.ID,
+		now:           now,
+		priorArchived: priorArchived,
+		priorDeleted:  priorDeleted,
+		nextArchived:  nextArchived,
+		nextDeleted:   nextDeleted,
+		action:        action.Name(),
+		reason:        reason,
+		actor:         actor,
+		changes:       changes,
+		post:          post,
+	}, nil
+}
+
+// applyTx writes a planned retention transition against tx. The UPDATE sets
+// only the columns the retention axis owns — updated_at plus the pair — so a
+// concurrent status change can never be clobbered by a stale restatement, and
+// it is guarded on the pair it planned from with null-safe equality (the
+// columns are the exact RFC3339Nano strings retentionColumns writes), the same
+// affected-rows contention discipline the status write uses.
+// [LAW:single-enforcer] [LAW:one-source-of-truth]
+func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET updated_at = ?, archived_at = ?, deleted_at = ? WHERE id = ? AND archived_at <=> ? AND deleted_at <=> ?`,
+		w.now.Format(time.RFC3339Nano), w.nextArchived, w.nextDeleted, w.issueID, w.priorArchived, w.priorDeleted)
+	if err != nil {
+		return fmt.Errorf("update issue retention: %w", err)
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("read retention transition result: %w", err)
+	}
+	if affected == 0 {
+		current, lookupErr := currentRetentionTx(ctx, tx, w.issueID)
+		if lookupErr != nil {
+			return lookupErr
+		}
+		return fmt.Errorf("%s conflict: issue retention is %q", w.action, retentionWord(current))
+	}
+	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
+}
+
 // buildRedirectEdges produces the related-to edge a duplicate/superseded close
 // records — at most one, to the canonical ticket the closing issue redirects
 // to. Which outcomes carry a target is structural: only the redirecting
@@ -1443,6 +1513,44 @@ func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, e
 		return "", fmt.Errorf("read issue status: %w", err)
 	}
 	return status.String, nil
+}
+
+// currentRetentionTx reads the live retention state of issueID inside tx, for
+// naming the winner when a retention CAS fails. The pair decodes through the
+// single RetentionFromTimestamps boundary like every other read.
+func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.Retention, error) {
+	var archivedAt, deletedAt sql.NullString
+	if err := tx.QueryRowContext(ctx, `SELECT archived_at, deleted_at FROM issues WHERE id = ?`, issueID).Scan(&archivedAt, &deletedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, NotFoundError{Entity: "issue", ID: issueID}
+		}
+		return nil, fmt.Errorf("read issue retention: %w", err)
+	}
+	archived, err := scanNullableTime(archivedAt)
+	if err != nil {
+		return nil, err
+	}
+	deleted, err := scanNullableTime(deletedAt)
+	if err != nil {
+		return nil, err
+	}
+	return model.RetentionFromTimestamps(archived, deleted), nil
+}
+
+// retentionWord renders a Retention state for human-facing conflict messages.
+func retentionWord(r model.Retention) string {
+	switch r.(type) {
+	case model.Live:
+		return "live"
+	case model.Archived:
+		return "archived"
+	case model.Deleted:
+		return "deleted"
+	default:
+		// [LAW:no-silent-failure] Same refusal as RetentionTimestamps: an
+		// impostor named either way would mislabel the conflict.
+		panic(fmt.Sprintf("illegal Retention value %T", r))
+	}
 }
 
 func (s *Store) ListTopics(ctx context.Context) ([]string, error) {
@@ -2000,6 +2108,19 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 // one edit, not 12.
 func scanTime(value string) (time.Time, error) {
 	return time.Parse(time.RFC3339Nano, value)
+}
+
+// scanNullableTime parses a nullable RFC3339Nano timestamp column: SQL NULL is
+// the absent state (nil), anything else must parse.
+func scanNullableTime(value sql.NullString) (*time.Time, error) {
+	if !value.Valid {
+		return nil, nil
+	}
+	t, err := scanTime(value.String)
+	if err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 // statusForStorage returns the value to persist in the issues.status column.

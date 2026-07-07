@@ -49,8 +49,8 @@ const (
 	ActionClose  ActionName = "close"
 	ActionReopen ActionName = "reopen"
 
-	// [LAW:types-are-the-program] Lifecycle actions complete the sealed set so
-	// every legal TransitionIssue action is a named constant, not a raw string.
+	// [LAW:types-are-the-program] Retention actions complete the sealed set so
+	// every legal lifecycle event verb is a named constant, not a raw string.
 	ActionArchive   ActionName = "archive"
 	ActionUnarchive ActionName = "unarchive"
 	ActionDelete    ActionName = "delete"

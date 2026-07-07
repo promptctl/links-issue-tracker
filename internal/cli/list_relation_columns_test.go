@@ -72,7 +72,7 @@ func TestListRelationColumns(t *testing.T) {
 		}
 	}
 	if _, err := ap.Store.Apply(ctx, closedBlocker.ID, store.Change{Action: model.Done{}, Actor: "test", Reason: "done"}); err != nil {
-		t.Fatalf("TransitionIssue(close): %v", err)
+		t.Fatalf("Apply(close): %v", err)
 	}
 
 	// --columns id,parent,blocked surfaces the relationship facts.

@@ -117,10 +117,10 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 		t.Fatalf("CreateIssue(closed leaf) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, closedLeaf.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(start) error = %v", err)
+		t.Fatalf("Apply(start) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, closedLeaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(done) error = %v", err)
+		t.Fatalf("Apply(done) error = %v", err)
 	}
 	leaf, err := st.GetIssue(ctx, openLeaf.ID)
 	if err != nil {
@@ -194,7 +194,7 @@ func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
 
 	for _, child := range children {
 		if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-			t.Fatalf("TransitionIssue(child done) error = %v", err)
+			t.Fatalf("Apply(child done) error = %v", err)
 		}
 	}
 
@@ -202,10 +202,10 @@ func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
 	_, err = st.Apply(ctx, epic.ID, Change{Action: model.Done{}, Actor: "tester"})
 	var containerErr model.ContainerActionError
 	if !errors.As(err, &containerErr) {
-		t.Fatalf("TransitionIssue(epic, close) after children done error = %v, want model.ContainerActionError", err)
+		t.Fatalf("Apply(epic, close) after children done error = %v, want model.ContainerActionError", err)
 	}
 	if containerErr.Unfinished() != 0 {
-		t.Fatalf("TransitionIssue(epic, close) after children done unfinished = %d, want 0 (rejection must reflect live child state)", containerErr.Unfinished())
+		t.Fatalf("Apply(epic, close) after children done unfinished = %d, want 0 (rejection must reflect live child state)", containerErr.Unfinished())
 	}
 }
 
@@ -236,10 +236,10 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 		t.Fatalf("CreateIssue(mixedEpic closed child) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, mixedClosedChild.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(mixed closed start) error = %v", err)
+		t.Fatalf("Apply(mixed closed start) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, mixedClosedChild.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(mixed closed done) error = %v", err)
+		t.Fatalf("Apply(mixed closed done) error = %v", err)
 	}
 
 	closedEpic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "All closed", Topic: "derived", IssueType: "epic", Priority: 1})
@@ -251,10 +251,10 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 		t.Fatalf("CreateIssue(closedEpic child) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, closedChild.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(closed child start) error = %v", err)
+		t.Fatalf("Apply(closed child start) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, closedChild.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(closed child done) error = %v", err)
+		t.Fatalf("Apply(closed child done) error = %v", err)
 	}
 
 	cases := []struct {
@@ -453,10 +453,10 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 		t.Fatalf("CreateIssue(epic child) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(child start) error = %v", err)
+		t.Fatalf("Apply(child start) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(child done) error = %v", err)
+		t.Fatalf("Apply(child done) error = %v", err)
 	}
 	if err := st.RankToBottom(ctx, epic.ID); err != nil {
 		t.Fatalf("RankToBottom(epic) error = %v", err)
@@ -489,13 +489,8 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: dependent.ID, DstID: blocker.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(dependent blocks blocker) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:   blocker.ID,
-		Action:    "delete",
-		Reason:    "removed",
-		CreatedBy: "tester",
-	}); err != nil {
-		t.Fatalf("TransitionIssue(delete blocker) error = %v", err)
+	if _, err := st.Apply(ctx, blocker.ID, Change{Action: model.Delete{}, Reason: "removed", Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(delete blocker) error = %v", err)
 	}
 
 	report, err := st.Doctor(ctx)
@@ -718,9 +713,9 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 
 	// The archived/deleted guard refuses a transition regardless of the action's
 	// own legality — an archived issue is frozen.
-	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: leaf.ID, Action: "archive", Reason: "inactive", CreatedBy: "tester"})
+	archived, err := st.Apply(ctx, leaf.ID, Change{Action: model.Archive{}, Reason: "inactive", Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(archive) error = %v", err)
+		t.Fatalf("Apply(archive) error = %v", err)
 	}
 	if _, err := applyTransition(archived, model.Close{Outcome: model.Obsolete{}}); err == nil {
 		t.Fatal("applyTransition(archived, close) = nil, want refusal (archived issue is frozen)")
@@ -1301,14 +1296,14 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	}
 	reopened, err := st.Apply(ctx, issue.ID, Change{Action: model.Reopen{}, Actor: "tester", Reason: "follow-up work"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(reopen) error = %v", err)
+		t.Fatalf("Apply(reopen) error = %v", err)
 	}
 	if reopened.State() != model.StateOpen || reopened.ClosedAtValue() != nil {
 		t.Fatalf("reopened = %#v", reopened)
 	}
-	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "archive", Reason: "inactive", CreatedBy: "tester"})
+	archived, err := st.Apply(ctx, issue.ID, Change{Action: model.Archive{}, Reason: "inactive", Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(archive) error = %v", err)
+		t.Fatalf("Apply(archive) error = %v", err)
 	}
 	if _, ok := archived.Retention().(model.Archived); !ok {
 		t.Fatalf("archived = %#v", archived)
@@ -1515,12 +1510,12 @@ func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
 	}
 }
 
-// TestTransitionIssueSameStateSameAssigneeRecordsNothing pins the other half
+// TestApplySameStateSameAssigneeRecordsNothing pins the other half
 // of the same-state policy: a transition whose target state AND resulting
 // assignee both match the current row is the documented leaf-state Apply
 // no-op — no event, no row write. History reflects actual mutations; the
 // diagonal of the 3x3 matrix is silent.
-func TestTransitionIssueSameStateSameAssigneeRecordsNothing(t *testing.T) {
+func TestApplySameStateSameAssigneeRecordsNothing(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{
@@ -1600,7 +1595,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 
 	done, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "agent-a", Reason: "implemented"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(done) error = %v", err)
+		t.Fatalf("Apply(done) error = %v", err)
 	}
 	if done.State() != model.StateClosed || done.ClosedAtValue() == nil {
 		t.Fatalf("done = %#v, want closed with ClosedAt", done)
@@ -1818,7 +1813,7 @@ func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, leaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(close) error = %v", err)
+		t.Fatalf("Apply(close) error = %v", err)
 	}
 
 	children, err := st.ListChildren(ctx, root.ID)
@@ -1855,7 +1850,7 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 		t.Fatalf("CreateIssue(dependency leaf) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, dependencyLeaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(close dependency leaf) error = %v", err)
+		t.Fatalf("Apply(close dependency leaf) error = %v", err)
 	}
 	related, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related epic", Topic: "detail", IssueType: "epic", Priority: 1})
 	if err != nil {
@@ -1916,7 +1911,7 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
 	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(close) error = %v", err)
+		t.Fatalf("Apply(close) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: leaf.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
@@ -2078,7 +2073,7 @@ func TestSyncRoundTripIncludingEpic(t *testing.T) {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
 	if _, err := source.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(close) error = %v", err)
+		t.Fatalf("Apply(close) error = %v", err)
 	}
 	before, err := source.GetIssue(ctx, epic.ID)
 	if err != nil {
@@ -2135,6 +2130,36 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	}
 }
 
+// TestRetentionUsesOptimisticConcurrency pins the retention axis to the same
+// contention discipline as the status axis: a retention write planned against
+// a snapshot another writer has since moved must surface a conflict, not
+// silently last-write-win.
+func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	// Plan an archive against the LIVE snapshot, then let a competing archive
+	// win the race. (Apply itself re-reads, which would turn the loser into the
+	// already-archived rejection — the contention window under test is
+	// plan-vs-write.)
+	w, err := planRetentionTransition(issue, "tester", "", model.Archive{})
+	if err != nil {
+		t.Fatalf("planRetentionTransition(live) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(competing archive) error = %v", err)
+	}
+	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		return w.applyTx(ctx, st, tx)
+	})
+	if err == nil || err.Error() != `archive conflict: issue retention is "archived"` {
+		t.Fatalf("retentionWrite.applyTx(stale archive) error = %v, want archive conflict", err)
+	}
+}
+
 func TestArchiveReturnsHydratedIssue(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -2145,9 +2170,9 @@ func TestArchiveReturnsHydratedIssue(t *testing.T) {
 	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "life", IssueType: "task", Priority: 0, ParentID: epic.ID}); err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	archived, err := st.Apply(ctx, epic.ID, Change{Action: model.Archive{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(archive) error = %v", err)
+		t.Fatalf("Apply(archive) error = %v", err)
 	}
 	progress := archived.Progress()
 	if _, ok := archived.Retention().(model.Archived); !ok || !archived.IsContainer() || progress.Total != 1 {
@@ -2166,8 +2191,8 @@ func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "archive", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(archive child) error = %v", err)
+	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(archive child) error = %v", err)
 	}
 	activeEpic, err := st.GetIssue(ctx, epic.ID)
 	if err != nil {
@@ -2176,9 +2201,9 @@ func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
 	if progress := activeEpic.Progress(); progress.Total != 0 {
 		t.Fatalf("active epic Progress() = %#v, want archived child excluded", progress)
 	}
-	archivedEpic, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	archivedEpic, err := st.Apply(ctx, epic.ID, Change{Action: model.Archive{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(archive epic) error = %v", err)
+		t.Fatalf("Apply(archive epic) error = %v", err)
 	}
 	if progress := archivedEpic.Progress(); progress.Total != 1 || progress.Open != 1 {
 		t.Fatalf("archived epic Progress() = %#v, want archived child snapshot included", progress)
@@ -2194,14 +2219,14 @@ func TestReopenClearsClosedAt(t *testing.T) {
 	}
 	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(close) error = %v", err)
+		t.Fatalf("Apply(close) error = %v", err)
 	}
 	if closed.ClosedAtValue() == nil {
 		t.Fatalf("ClosedAtValue() = nil after close")
 	}
 	reopened, err := st.Apply(ctx, issue.ID, Change{Action: model.Reopen{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(reopen) error = %v", err)
+		t.Fatalf("Apply(reopen) error = %v", err)
 	}
 	if reopened.StatusValue() != string(model.StateOpen) || reopened.ClosedAtValue() != nil {
 		t.Fatalf("reopened status/closed_at = %q/%#v, want open/nil", reopened.StatusValue(), reopened.ClosedAtValue())
@@ -2231,7 +2256,7 @@ func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
 	}
 	closed, err := st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(close duplicate) error = %v", err)
+		t.Fatalf("Apply(close duplicate) error = %v", err)
 	}
 	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionDuplicate {
 		t.Fatalf("ResolutionValue() = %v, want duplicate", got)
@@ -2272,7 +2297,7 @@ func TestCloseAsObsoleteWritesNoRedirectEdge(t *testing.T) {
 	}
 	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(close obsolete) error = %v", err)
+		t.Fatalf("Apply(close obsolete) error = %v", err)
 	}
 	if got := closed.ResolutionValue(); got == nil || *got != model.ResolutionObsolete {
 		t.Fatalf("ResolutionValue() = %v, want obsolete", got)
@@ -2299,7 +2324,7 @@ func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
 	}
 	_, err = st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Superseded{By: "test-does-not-exist"}}, Actor: "tester"})
 	if err == nil {
-		t.Fatal("TransitionIssue(close to missing target) error = nil, want rejection")
+		t.Fatal("Apply(close to missing target) error = nil, want rejection")
 	}
 	loaded, err := st.GetIssue(ctx, dup.ID)
 	if err != nil {
@@ -2324,7 +2349,7 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 	}
 	_, err = st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: issue.ID}}, Actor: "tester"})
 	if err == nil {
-		t.Fatal("TransitionIssue(close as duplicate of itself) error = nil, want rejection")
+		t.Fatal("Apply(close as duplicate of itself) error = nil, want rejection")
 	}
 	loaded, err := st.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -2380,14 +2405,14 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	archived, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	archived, err := st.Apply(ctx, epic.ID, Change{Action: model.Archive{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(archive) error = %v", err)
+		t.Fatalf("Apply(archive) error = %v", err)
 	}
 	if _, ok := archived.Retention().(model.Archived); !ok {
 		t.Fatalf("archived issue retention = %#v, want Archived", archived.Retention())
 	}
-	_, err = st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "archive", CreatedBy: "tester"})
+	_, err = st.Apply(ctx, epic.ID, Change{Action: model.Archive{}, Actor: "tester"})
 	if err == nil || err.Error() != "issue is already archived" {
 		t.Fatalf("re-archive error = %v, want already archived", err)
 	}
@@ -2596,19 +2621,19 @@ func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "archive", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(archive) error = %v", err)
 	}
-	deleted, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "delete", CreatedBy: "tester"})
+	deleted, err := st.Apply(ctx, issue.ID, Change{Action: model.Delete{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(delete) on archived issue error = %v", err)
+		t.Fatalf("Apply(delete) on archived issue error = %v", err)
 	}
 	if _, ok := deleted.Retention().(model.Deleted); !ok {
 		t.Fatalf("delete on archived issue = %#v, want Deleted", deleted.Retention())
 	}
-	restored, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "restore", CreatedBy: "tester"})
+	restored, err := st.Apply(ctx, issue.ID, Change{Action: model.Restore{}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(restore) error = %v", err)
+		t.Fatalf("Apply(restore) error = %v", err)
 	}
 	if _, ok := restored.Retention().(model.Live); !ok {
 		t.Fatalf("restore after delete-on-archived = %#v, want Live", restored.Retention())
