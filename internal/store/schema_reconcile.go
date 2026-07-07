@@ -76,12 +76,35 @@ func (d ddlStep) existsProbe() string {
 // cannot drift. [LAW:one-source-of-truth]
 var priorityCheckClause = fmt.Sprintf("priority >= %d AND priority <= %d", model.PriorityNormal, model.PriorityUrgent)
 
+// quotedIssueTypeList renders a type set as the SQL literal list the CHECK
+// clauses embed: 'a','b','c' in canonical order.
+func quotedIssueTypeList(types []model.IssueType) string {
+	quoted := make([]string, len(types))
+	for i, t := range types {
+		quoted[i] = "'" + string(t) + "'"
+	}
+	return strings.Join(quoted, ",")
+}
+
+// issueTypeCheckClause and containerTypeMembership are the schema-level
+// encodings of the issue-type vocabulary and its container subset. Derived
+// from the canonical model.IssueTypes list and the IsContainer predicate so
+// the schema cannot drift from the sealed type; byte-identical to the
+// literals reconcile has always installed, so existing workspaces see no
+// churn and the normalized-clause probes keep matching. [LAW:one-source-of-truth]
+var (
+	issueTypeCheckClause    = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.IssueTypes()))
+	containerTypeMembership = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
+)
+
 // canonicalStatusCheckClause encodes the invariant that container rows
 // store NULL status (state is derived from children) and leaf rows
 // carry one of the known states. Shared by createIssuesTableStmt and
 // ensureStatusConstraint so the fresh and upgrade paths cannot diverge.
 // [LAW:one-source-of-truth]
-const canonicalStatusCheckClause = `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
+var canonicalStatusCheckClause = fmt.Sprintf(
+	`(issue_type IN (%[1]s) AND status IS NULL) OR (issue_type NOT IN (%[1]s) AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`,
+	quotedIssueTypeList(model.ContainerTypes()))
 
 // createIssuesTableStmt is the v1 canonical shape of the issues table.
 // Mirrors the issues table in 00001_baseline.sql exactly, including
@@ -119,8 +142,8 @@ func createIssuesTableStmt() string {
 			item_rank TEXT NOT NULL DEFAULT '',
 			CONSTRAINT issues_status_check CHECK (%s),
 			CONSTRAINT issues_priority_check CHECK (%s),
-			CONSTRAINT issues_type_check CHECK (issue_type IN ('task','feature','bug','chore','epic'))
-		);`, canonicalStatusCheckClause, priorityCheckClause)
+			CONSTRAINT issues_type_check CHECK (%s)
+		);`, canonicalStatusCheckClause, priorityCheckClause, issueTypeCheckClause)
 }
 
 // reconcileToBaseline brings a pre-goose workspace at any historical
@@ -941,8 +964,8 @@ func (s *Store) ensureUnifiedStatusSchema(ctx context.Context, guard *snapshotGu
 			// probe exactly (also gating on `status IS NOT NULL`) so
 			// the UPDATE writes only inconsistent rows. The probe-only
 			// shape would full-scan the epic set on every reconcile.
-			probe:   `SELECT 1 FROM issues WHERE issue_type IN ('epic') AND status IS NOT NULL LIMIT 1`,
-			stmt:    `UPDATE issues SET status = NULL WHERE issue_type IN ('epic') AND status IS NOT NULL`,
+			probe:   fmt.Sprintf(`SELECT 1 FROM issues WHERE %s AND status IS NOT NULL LIMIT 1`, containerTypeMembership),
+			stmt:    fmt.Sprintf(`UPDATE issues SET status = NULL WHERE %s AND status IS NOT NULL`, containerTypeMembership),
 			context: "null out container status",
 		},
 	}

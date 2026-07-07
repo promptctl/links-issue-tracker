@@ -293,14 +293,24 @@ func TestIsContainerUsesIssueTypeNotLifecycle(t *testing.T) {
 	}
 }
 
-func TestContainerTypesIsSubsetOfValidTypes(t *testing.T) {
-	valid := map[string]bool{}
-	for _, value := range ValidIssueTypes {
-		valid[value] = true
+// The container⊆valid invariant the old parallel slices needed a test for is
+// now structural: ContainerTypes() filters IssueTypes through the IsContainer
+// predicate, so a container outside the vocabulary is unrepresentable. What
+// remains testable is the parse gate's contract. [LAW:behavior-not-structure]
+func TestParseIssueType(t *testing.T) {
+	for _, valid := range IssueTypes() {
+		got, err := ParseIssueType(string(valid))
+		if err != nil || got != valid {
+			t.Fatalf("ParseIssueType(%q) = %q, %v; want %q, nil", valid, got, err, valid)
+		}
 	}
-	for _, container := range ContainerIssueTypes {
-		if !valid[container] {
-			t.Fatalf("ContainerIssueTypes contains %q which is not in ValidIssueTypes", container)
+	canonicalized, err := ParseIssueType("  Epic ")
+	if err != nil || canonicalized != TypeEpic {
+		t.Fatalf("ParseIssueType(\"  Epic \") = %q, %v; want %q, nil", canonicalized, err, TypeEpic)
+	}
+	for _, invalid := range []string{"", "bogus", "epics", "task,bug"} {
+		if got, err := ParseIssueType(invalid); err == nil {
+			t.Fatalf("ParseIssueType(%q) = %q, nil; want error naming the valid set", invalid, got)
 		}
 	}
 }

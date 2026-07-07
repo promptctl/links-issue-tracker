@@ -68,3 +68,15 @@ func TestParseRejectsInvalidStatus(t *testing.T) {
 		t.Fatal("expected invalid status error")
 	}
 }
+
+// The type: term parses through the sealed gate: a typo'd type is an error at
+// the grammar seam, never an empty result, and an empty value is no longer a
+// silent no-op. [LAW:no-silent-failure]
+func TestParseRejectsInvalidType(t *testing.T) {
+	if _, err := Parse(`type:bogus`); err == nil {
+		t.Fatal("expected invalid type error")
+	}
+	if _, err := Parse(`type:`); err == nil {
+		t.Fatal("expected invalid type error for empty value")
+	}
+}

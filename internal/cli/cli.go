@@ -308,7 +308,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
-	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
+	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
 	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
@@ -319,8 +319,12 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
+	issueTypeValue, err := parseIssueTypeFlag(*issueType)
+	if err != nil {
+		return err
+	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Title: *title, Description: *description, Prompt: *prompt, IssueType: *issueType, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
+		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: *priority, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Placement: rankPlacement(*bottom),
 		Prefix:    ap.Workspace.IssuePrefix.Value(),
 	})
@@ -346,7 +350,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	title := fs.String("title", "", "Required follow-up title")
 	description := fs.String("description", "", "Optional description; defaults to a reference back to --on")
 	prompt := fs.String("prompt", "", "Optional reusable agent prompt for the follow-up")
-	issueType := fs.String("type", "task", "Issue type: task|feature|bug|chore|epic")
+	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Topic slug; inherits from --on when omitted")
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
@@ -372,11 +376,15 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if resolvedDescription == "" {
 		resolvedDescription = fmt.Sprintf("Follow-up surfaced at the close of %s: %s", parent.ID, parent.Title)
 	}
+	issueTypeValue, err := parseIssueTypeFlag(*issueType)
+	if err != nil {
+		return err
+	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title:       titleValue,
 		Description: resolvedDescription,
 		Prompt:      strings.TrimSpace(*prompt),
-		IssueType:   *issueType,
+		IssueType:   issueTypeValue,
 		Topic:       resolvedTopic,
 		ParentID:    parent.ID,
 		Priority:    *priority,
@@ -421,9 +429,13 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return fmt.Errorf("parse --status: %w", err)
 	}
+	issueTypes, err := parseIssueTypeSlice(*issueType)
+	if err != nil {
+		return fmt.Errorf("parse --type: %w", err)
+	}
 	filter := store.ListIssuesFilter{
 		Statuses:        statuses,
-		IssueTypes:      toSlice(strings.TrimSpace(*issueType)),
+		IssueTypes:      issueTypes,
 		Assignees:       toSlice(strings.TrimSpace(*assignee)),
 		IncludeArchived: *includeArchived,
 		IncludeDeleted:  *includeDeleted,
@@ -543,12 +555,13 @@ func deriveRelationColumns(rel store.IssueRelations) relationColumns {
 // workableFilter carries the user-supplied narrowing options for the
 // shared workable pipeline. Empty fields mean "no narrowing"; the
 // workable definition (open/in_progress, leaves only) is layered on top
-// by gatherWorkableAnnotated. Status is already-parsed state, never a raw
-// flag string — the CLI seam validates before constructing the filter, so
-// an unvalidated status cannot reach the query. [LAW:types-are-the-program]
+// by gatherWorkableAnnotated. Status and IssueType are already-parsed
+// values, never raw flag strings — the CLI seam validates before
+// constructing the filter, so unvalidated input cannot reach the query.
+// [LAW:types-are-the-program]
 type workableFilter struct {
 	Assignee  string
-	IssueType string
+	IssueType model.IssueType
 	Status    model.State
 	Labels    []string
 }
@@ -735,7 +748,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	title := fs.String("title", "", "Issue title")
 	description := fs.String("description", "", "Issue description")
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
-	issueType := fs.String("type", "", "Issue type: task|feature|bug|chore|epic")
+	issueType := fs.String("type", "", "Issue type: "+issueTypeChoices())
 	priority := fs.Int("priority", model.PriorityNormal, "Priority: 0=normal, 1=urgent") // [LAW:one-source-of-truth] default derives from model constant; matches runNew/runFollowup
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
@@ -822,7 +835,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		in.Fields.Prompt = &value
 	}
 	if visited["type"] {
-		value := *issueType
+		value, err := parseIssueTypeFlag(*issueType)
+		if err != nil {
+			return err
+		}
 		in.Fields.IssueType = &value
 	}
 	if visited["priority"] {
@@ -1522,11 +1538,50 @@ func parseStateSlice(s string) ([]model.State, error) {
 	return []model.State{state}, nil
 }
 
-func toSlice(s string) []string {
+// parseIssueTypeSlice is the strict trust boundary for the read-path --type
+// filter: blank means "no narrowing", anything else must parse. A typo'd type
+// fails loudly instead of flowing into the query and reporting "nothing
+// matches". [LAW:no-silent-failure]
+func parseIssueTypeSlice(s string) ([]model.IssueType, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	t, err := model.ParseIssueType(s)
+	if err != nil {
+		return nil, err
+	}
+	return []model.IssueType{t}, nil
+}
+
+// parseIssueTypeFlag is the strict trust boundary for the write-path --type
+// flags (new/followup/update). The ValidationError wrapper keeps the exit-code
+// contract these commands have always had: a bad type is ExitValidation, as it
+// was when the store performed this check.
+func parseIssueTypeFlag(raw string) (model.IssueType, error) {
+	t, err := model.ParseIssueType(raw)
+	if err != nil {
+		return "", ValidationError{Message: err.Error()}
+	}
+	return t, nil
+}
+
+// issueTypeChoices renders the sealed vocabulary for flag help, derived from
+// the canonical list so help text cannot drift from the parse gate.
+// [LAW:one-source-of-truth]
+func issueTypeChoices() string {
+	types := model.IssueTypes()
+	names := make([]string, len(types))
+	for i, t := range types {
+		names[i] = string(t)
+	}
+	return strings.Join(names, "|")
+}
+
+func toSlice[S ~string](s S) []S {
 	if s == "" {
 		return nil
 	}
-	return []string{s}
+	return []S{s}
 }
 
 // loadTransitionGuidance loads a guidance template for the given action/phase.

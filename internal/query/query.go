@@ -37,7 +37,7 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	if err != nil {
 		return store.ListIssuesFilter{}, err
 	}
-	filter.Statuses = mergeStateSlice(normalizedBase, normalizedIncoming)
+	filter.Statuses = mergeSlice(normalizedBase, normalizedIncoming)
 	// Resolution filtering is OR within the set, so duplicates are absorbed by the
 	// allow-map in the store; a plain append needs no dedup.
 	filter.Resolutions = append(filter.Resolutions, incoming.Resolutions...)
@@ -81,11 +81,14 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 		filter.Resolutions = append(filter.Resolutions, parsed)
 		return nil
 	case strings.HasPrefix(term, "type:"):
-		t := strings.TrimSpace(strings.TrimPrefix(term, "type:"))
-		if t == "" {
-			return nil
+		// [LAW:single-enforcer] The sealed issue-type set is gated by the one
+		// ParseIssueType boundary, mirroring the status: and resolution: terms;
+		// a typo'd type is an error, never an empty result. [LAW:no-silent-failure]
+		parsed, err := model.ParseIssueType(strings.TrimPrefix(term, "type:"))
+		if err != nil {
+			return err
 		}
-		filter.IssueTypes = append(filter.IssueTypes, t)
+		filter.IssueTypes = append(filter.IssueTypes, parsed)
 		return nil
 	case strings.HasPrefix(term, "assignee:"):
 		filter.Assignees = append(filter.Assignees, strings.TrimSpace(strings.TrimPrefix(term, "assignee:")))
@@ -124,33 +127,18 @@ func normalizeQueryStatuses(statuses []model.State) ([]model.State, error) {
 	return result, nil
 }
 
-func mergeStateSlice(base, incoming []model.State) []model.State {
+// mergeSlice appends incoming onto base, dropping values base already carries.
+// [LAW:one-type-per-behavior] One dedup-merge over every filter slice; the
+// element type is the instance, not a reason for a copy.
+func mergeSlice[T comparable](base, incoming []T) []T {
 	if len(incoming) == 0 {
 		return base
 	}
-	seen := make(map[model.State]bool, len(base))
+	seen := make(map[T]bool, len(base))
 	for _, v := range base {
 		seen[v] = true
 	}
-	result := append([]model.State{}, base...)
-	for _, v := range incoming {
-		if !seen[v] {
-			result = append(result, v)
-			seen[v] = true
-		}
-	}
-	return result
-}
-
-func mergeSlice(base, incoming []string) []string {
-	if len(incoming) == 0 {
-		return base
-	}
-	seen := make(map[string]bool, len(base))
-	for _, v := range base {
-		seen[v] = true
-	}
-	result := append([]string{}, base...)
+	result := append([]T{}, base...)
 	for _, v := range incoming {
 		if !seen[v] {
 			result = append(result, v)

@@ -256,7 +256,7 @@ func formatIssueColumns(issue model.Issue, columns []string, delimiter string, r
 		case "state":
 			values = append(values, formatIssueState(issue))
 		case "type":
-			values = append(values, issue.IssueType)
+			values = append(values, string(issue.IssueType))
 		case "topic":
 			values = append(values, issue.Topic)
 		case "priority":
