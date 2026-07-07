@@ -225,8 +225,6 @@ func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
 func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []CommandSpec {
 	r := &commandRegistrar{ctx: ctx, stdout: stdout, stderr: stderr}
 
-	readyRun := r.appCmd(app.AccessRead, runReady)
-
 	completionRun := func(args []string) error {
 		return runCompletion(stdout, args)
 	}
@@ -261,13 +259,13 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runFollowup)},
 		{Name: "ready", Summary: "List open work by readiness and rank", GroupID: "operations",
-			Run: readyRun},
+			Run: r.appCmd(app.AccessRead, workableRun(readyView))},
 		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runBacklog)},
+			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
 		{Name: "queue", Summary: "List the rank-ordered pull sequence (pullable items only, terse)", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runQueue)},
+			Run: r.appCmd(app.AccessRead, workableRun(queueView))},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runNext)},
+			Run: r.appCmd(app.AccessRead, workableRun(nextView))},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runOrphaned)},
 		{Name: "ls", Summary: "List issues (rank by default)", GroupID: "operations",
