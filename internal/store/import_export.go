@@ -173,9 +173,9 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, mess
 			// path inventing its own notion of the domain. [LAW:single-enforcer]
 			priority := canonicalPriority(issue.Priority)
 			archivedCol, deletedCol := retentionColumns(issue)
-			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, archived_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), archivedCol, deletedCol); err != nil {
+			if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+				issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()), archivedCol, deletedCol); err != nil {
 				return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 			}
 		}

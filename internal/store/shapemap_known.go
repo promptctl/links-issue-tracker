@@ -159,24 +159,25 @@ func issueHistoryFanOut(table RawTable) (TableMapping, bool) {
 // shape lives in issueHistoryFanOut.
 var knownSourceColumns = map[string]map[string]TargetKey{
 	"issues": {
-		"id":           "issues.id",
-		"title":        "issues.title",
-		"description":  "issues.description",
-		"agent_prompt": "issues.prompt", // v1 name
-		"prompt":       "issues.prompt", // pre-goose, pre-rename
-		"status":       "issues.status",
-		"priority":     "issues.priority",
-		"issue_type":   "issues.issue_type",
-		"topic":        "issues.topic",
-		"assignee":     "issues.assignee",
-		"created_at":   "issues.created_at",
-		"updated_at":   "issues.updated_at",
-		"closed_at":    "issues.closed_at",
-		"resolution":   "issues.resolution",
-		"archived_at":  "issues.archived_at",
-		"deleted_at":   "issues.deleted_at",
-		"item_rank":    "issues.rank", // v1 name
-		"lane":         "issues.lane",
+		"id":              "issues.id",
+		"title":           "issues.title",
+		"description":     "issues.description",
+		"agent_prompt":    "issues.prompt", // v1 name
+		"prompt":          "issues.prompt", // pre-goose, pre-rename
+		"status":          "issues.status",
+		"priority":        "issues.priority",
+		"issue_type":      "issues.issue_type",
+		"topic":           "issues.topic",
+		"assignee":        "issues.assignee",
+		"created_at":      "issues.created_at",
+		"updated_at":      "issues.updated_at",
+		"closed_at":       "issues.closed_at",
+		"resolution":      "issues.resolution",
+		"redirect_target": "issues.redirect_target",
+		"archived_at":     "issues.archived_at",
+		"deleted_at":      "issues.deleted_at",
+		"item_rank":       "issues.rank", // v1 name
+		"lane":            "issues.lane",
 	},
 	"relations": {
 		"src_id":     "relations.src_id",

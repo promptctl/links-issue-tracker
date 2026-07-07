@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"strings"
 	"time"
 )
 
@@ -31,6 +32,12 @@ type StatusPrimitive interface {
 	// caller discriminating the variant; on a non-closed state it is structurally
 	// absent, so a resolution on open/in_progress is unrepresentable.
 	Resolution() *Resolution
+	// RedirectTarget is the canonical ticket a duplicate/superseded close
+	// redirects to, present only on a closed state whose resolution redirects
+	// and nil on every other. The target is the redirecting resolution's
+	// payload: NewStatus attaches it only beside a redirecting resolution, so a
+	// target on a terminal or absent resolution is unrepresentable.
+	RedirectTarget() *string
 }
 
 type openState struct{}
@@ -41,6 +48,9 @@ func (openState) ClosedAt() *time.Time {
 	return nil
 }
 func (openState) Resolution() *Resolution {
+	return nil
+}
+func (openState) RedirectTarget() *string {
 	return nil
 }
 func (o openState) Apply(action StatusAction) Lifecycle {
@@ -57,6 +67,9 @@ func (inProgressState) ClosedAt() *time.Time {
 func (inProgressState) Resolution() *Resolution {
 	return nil
 }
+func (inProgressState) RedirectTarget() *string {
+	return nil
+}
 func (s inProgressState) Apply(action StatusAction) Lifecycle {
 	return applyStatusAction(s, action)
 }
@@ -71,6 +84,14 @@ type closedState struct {
 	// The strongest TRUE theorem is "closed may carry a resolution"; `lit close`
 	// requires one at its command boundary, but the type does not.
 	resolution *Resolution
+	// redirectTarget is the canonical ticket a redirecting resolution points to.
+	// It is a pointer because a legacy redirecting close (backfill-ambiguous, or
+	// pre-column) may carry no recoverable target; the strongest TRUE theorem is
+	// "a redirecting close may carry its target". The store's close-validation
+	// floor requires one for every NEW redirecting close, and NewStatus refuses
+	// a target beside a non-redirecting resolution, so the pairings this type
+	// leaves representable are exactly the legal ones.
+	redirectTarget *string
 }
 
 func (closedState) State() State       { return Closed }
@@ -81,20 +102,29 @@ func (c closedState) ClosedAt() *time.Time {
 func (c closedState) Resolution() *Resolution {
 	return cloneResolution(c.resolution)
 }
+func (c closedState) RedirectTarget() *string {
+	return cloneString(c.redirectTarget)
+}
 func (c closedState) Apply(action StatusAction) Lifecycle {
 	return applyStatusAction(c, action)
 }
 
-// NewStatus builds the leaf variant for state, attaching closedAt and
-// resolution only to the closed variant (ignored for the others). Blank or
-// unrecognized states default to open, matching the lenient hydration boundary.
-// [LAW:single-enforcer] The one place flat (state, closedAt, resolution) row
-// data becomes a typed leaf lifecycle, so no caller can mint a variant with a
-// field meaningless in its state.
-func NewStatus(state State, closedAt *time.Time, resolution *Resolution) StatusPrimitive {
+// NewStatus builds the leaf variant for state, attaching closedAt, resolution,
+// and redirectTarget only to the closed variant (ignored for the others). Blank
+// or unrecognized states default to open, matching the lenient hydration
+// boundary. The redirect target attaches only beside a redirecting resolution —
+// the target is that resolution's payload — so a target on a terminal or absent
+// resolution is dropped here and cannot reach a leaf.
+// [LAW:single-enforcer] The one place flat (state, closedAt, resolution,
+// redirectTarget) row data becomes a typed leaf lifecycle, so no caller can
+// mint a variant with a field meaningless in its state.
+func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirectTarget *string) StatusPrimitive {
 	switch DefaultOpen(string(state)) {
 	case Closed:
-		return closedState{closedAt: cloneTime(closedAt), resolution: cloneResolution(resolution)}
+		if resolution == nil || !resolution.RedirectsToCanonical() {
+			redirectTarget = nil
+		}
+		return closedState{closedAt: cloneTime(closedAt), resolution: cloneResolution(resolution), redirectTarget: normalizeRedirectTarget(redirectTarget)}
 	case InProgress:
 		return inProgressState{}
 	default:
@@ -107,10 +137,11 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution) StatusP
 // variant. A same-state call returns the receiver so the store recognizes it as
 // a no-op — including a re-close, which keeps the existing resolution rather
 // than silently rewriting it. Transitioning into closed stamps the close time
-// and attaches the action's outcome, so a close's payload travels through the
-// machine instead of being re-attached after it; every other target carries
-// neither, so a close time or resolution can never linger on a non-closed
-// state. It cannot fail: Target is total over StatusAction, so the old
+// and attaches the action's outcome — resolution and redirect target both — so
+// a close's payload travels through the machine instead of being re-attached
+// after it; every other target carries none of them, so a close time,
+// resolution, or redirect target can never linger on a non-closed state.
+// It cannot fail: Target is total over StatusAction, so the old
 // "unsupported lifecycle action" arm is unrepresentable.
 // [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
 // this function maintains no parallel table.
@@ -122,7 +153,7 @@ func applyStatusAction(current Lifecycle, action StatusAction) Lifecycle {
 	switch target {
 	case Closed:
 		now := time.Now().UTC()
-		return closedState{closedAt: &now, resolution: closeResolution(action)}
+		return closedState{closedAt: &now, resolution: closeResolution(action), redirectTarget: closeRedirectTarget(action)}
 	case InProgress:
 		return inProgressState{}
 	default:
@@ -147,7 +178,56 @@ func closeResolution(action StatusAction) *Resolution {
 	return nil
 }
 
+// closeRedirectTarget projects the redirect target a closing action records:
+// only the redirecting Outcome variants carry one, read structurally off the
+// variant's field.
+// [LAW:dataflow-not-control-flow] Like closeResolution, the variant is the
+// value the one transition varies on.
+func closeRedirectTarget(action StatusAction) *string {
+	c, ok := action.(Close)
+	if !ok {
+		return nil
+	}
+	var target string
+	switch o := c.Outcome.(type) {
+	case Duplicate:
+		target = o.Of
+	case Superseded:
+		target = o.By
+	default:
+		return nil
+	}
+	return normalizeRedirectTarget(&target)
+}
+
+// normalizeRedirectTarget is the one definition of the target's canonical
+// form: trimmed, with blank as nil, so "a redirecting close whose target is
+// unknown" has exactly one representation for the store's validation floor
+// and every reader to key on. Both leaf-construction boundaries — the close
+// transition and NewStatus hydration (which can receive an empty string from
+// JSON or a legacy row) — route through it, so a second representation of
+// absence cannot reach a leaf. Returns a fresh pointer, never an alias of
+// the input. [LAW:one-source-of-truth]
+func normalizeRedirectTarget(target *string) *string {
+	if target == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*target)
+	if trimmed == "" {
+		return nil
+	}
+	return &trimmed
+}
+
 func cloneTime(value *time.Time) *time.Time {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneString(value *string) *string {
 	if value == nil {
 		return nil
 	}

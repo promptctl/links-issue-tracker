@@ -62,11 +62,14 @@ func hijackToPreGoose(t *testing.T, st *Store) {
 // to reach baseline" — so pre-goose simulation stays correct as migrations
 // accrue, with no per-migration edits. [LAW:one-source-of-truth]
 //
-// The Down migrations operate on the issues table. A caller that has already
-// dropped issues is simulating a below-baseline workspace (reconcile recreates
-// every table at baseline), so there is nothing to revert — running the Down
-// would fail on the missing table. Revert only when the schema it targets is
-// present; that is a precondition of the operation, not a swallowed failure.
+// The Down migrations read the intact head schema (they touch issues, and
+// 00004's Down also writes relations), so callers simulating a malformed
+// legacy shape must mutilate tables AFTER reverting, not before. A caller
+// that has already dropped issues is simulating a below-baseline workspace
+// (reconcile recreates every table at baseline), so there is nothing to
+// revert — running the Down would fail on the missing table. Revert only when
+// the schema it targets is present; that is a precondition of the operation,
+// not a swallowed failure.
 func revertToBaseline(t *testing.T, st *Store) {
 	t.Helper()
 	ctx := context.Background()
@@ -1387,17 +1390,25 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	// Drop relations.created_by. The reconcile's {target: "relations"}
-	// ddlStep probes table presence — sees relations exists — and skips
-	// the CREATE TABLE. Adoption would then stamp v1 on a workspace
-	// where relations is missing created_by. The post-reconcile
-	// baseline check must catch this.
+	// Revert to the pre-goose shape FIRST — the revert replays the
+	// post-baseline Down migrations against the intact head schema
+	// (00004's Down names relations.created_by in its INSERT column
+	// list, so the column must still exist) — then drop
+	// relations.created_by from the baseline shape. The reconcile's
+	// {target: "relations"} ddlStep probes table presence — sees
+	// relations exists — and skips the CREATE TABLE. Adoption would
+	// then stamp v1 on a workspace where relations is missing
+	// created_by. The post-reconcile baseline check must catch this.
 	// (Cannot drop relations.type — it's part of the PRIMARY KEY.)
+	hijackToPreGoose(t, first)
 	if err := first.ExecRawForTest(ctx, `ALTER TABLE relations DROP COLUMN created_by`); err != nil {
 		_ = first.Close()
 		t.Fatalf("drop relations.created_by error = %v", err)
 	}
-	hijackToPreGoose(t, first)
+	if err := first.commitWorkingSet(ctx, "test: drop relations.created_by"); err != nil {
+		_ = first.Close()
+		t.Fatalf("commit dropped column error = %v", err)
+	}
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}

@@ -2284,10 +2284,10 @@ func TestReopenClearsClosedAt(t *testing.T) {
 	}
 }
 
-// TestCloseAsDuplicateWritesRedirectEdge is the happy path: a duplicate close
-// records the resolution and a related-to edge to the canonical ticket, surfaced
-// as the redirect target (lifted out of related) and present in the raw graph.
-func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
+// TestCloseAsDuplicateRecordsRedirectTarget is the happy path: a duplicate
+// close records the resolution and the canonical ticket as the issue's own
+// redirect target — no graph edge; related-to means only manual peer links.
+func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2309,30 +2309,29 @@ func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	// The canonical ticket is the redirect target, lifted out of the generic
-	// related group so it reads as "where this work went", not a peer link.
+	// The canonical ticket is the redirect target, read from the issue's own
+	// column so it reads as "where this work went", not a peer link.
 	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical.ID {
 		t.Fatalf("RedirectTarget = %#v, want the canonical ticket %s", detail.RedirectTarget, canonical.ID)
 	}
 	if len(detail.Related) != 0 {
-		t.Fatalf("Related = %#v, want empty (redirect lifted out)", detail.Related)
+		t.Fatalf("Related = %#v, want empty (the redirect is not a peer link)", detail.Related)
 	}
-	// The redirect is still a related-to edge in the canonical graph; only its
-	// projection into IssueDetail changed.
-	var hasEdge bool
+	// The close writes NO graph edge: the redirect lives on the issue row, and
+	// the relations graph carries only user-authored links.
 	for _, rel := range detail.Relations {
-		if rel.Type == model.RelRelatedTo && (rel.SrcID == canonical.ID || rel.DstID == canonical.ID) {
-			hasEdge = true
+		if rel.Type == model.RelRelatedTo {
+			t.Fatalf("Relations = %#v, want no related-to edge — the redirect is a column, not an edge", detail.Relations)
 		}
 	}
-	if !hasEdge {
-		t.Fatalf("Relations = %#v, want a related-to edge to %s", detail.Relations, canonical.ID)
+	if got := closed.RedirectTargetValue(); got == nil || *got != canonical.ID {
+		t.Fatalf("RedirectTargetValue() = %v, want %s", got, canonical.ID)
 	}
 }
 
-// TestCloseAsObsoleteWritesNoRedirectEdge pins that terminal resolutions record
-// the resolution but no edge — there is nowhere to redirect.
-func TestCloseAsObsoleteWritesNoRedirectEdge(t *testing.T) {
+// TestCloseAsObsoleteRecordsNoRedirect pins that terminal resolutions record
+// the resolution but no redirect — there is nowhere to redirect.
+func TestCloseAsObsoleteRecordsNoRedirect(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Obsolete", Topic: "term", IssueType: "task", Priority: 0})
@@ -2355,10 +2354,10 @@ func TestCloseAsObsoleteWritesNoRedirectEdge(t *testing.T) {
 	}
 }
 
-// TestCloseRedirectToMissingTargetRollsBack is the atomicity guarantee: when the
-// edge cannot be written (the canonical ticket does not exist), the whole close
-// rolls back — the issue stays open with no resolution, never a "duplicate of
-// nothing". [LAW:no-silent-failure]
+// TestCloseRedirectToMissingTargetRollsBack is the atomicity guarantee: when
+// the redirect target fails validation (the canonical ticket does not exist),
+// the whole close is rejected — the issue stays open with no resolution, never
+// a "duplicate of nothing". [LAW:no-silent-failure]
 func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

@@ -32,9 +32,10 @@ const (
 // wontfix are terminal: the need is gone or the decision stands, with nowhere
 // to redirect.
 // [LAW:single-enforcer] The one place that names the redirect subset. The
-// `lit close` boundary requires a target exactly for these resolutions, and the
-// store writes the related-to redirect edge exactly for these — both consult
-// this predicate, so "which resolutions carry a target" cannot drift.
+// `lit close` boundary requires a target exactly for these resolutions, and
+// NewStatus attaches a redirect target to the closed leaf exactly beside these
+// — both consult this predicate, so "which resolutions carry a target" cannot
+// drift.
 func (r Resolution) RedirectsToCanonical() bool {
 	return r == ResolutionDuplicate || r == ResolutionSuperseded
 }
