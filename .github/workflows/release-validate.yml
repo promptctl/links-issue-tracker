@@ -191,28 +191,27 @@ jobs:
       - name: Assert linux binaries are static and run on glibc + musl (amd64 + arm64)
         run: |
           set -euo pipefail
+          declare -A bin
           for arch in amd64 arm64; do
             workdir=$(mktemp -d)
             tar -xzf dist/lit_*_linux_"$arch".tar.gz -C "$workdir" lit
-            BIN="$workdir/lit"
-            echo "=== linux/$arch: $BIN"
-            if readelf -l "$BIN" | grep -q 'INTERP'; then
+            bin[$arch]="$workdir/lit"
+            echo "=== linux/$arch: ${bin[$arch]}"
+            if readelf -l "${bin[$arch]}" | grep -q 'INTERP'; then
               echo "FAIL: linux/$arch binary has a PT_INTERP entry; not static" >&2
               exit 1
             fi
-            if readelf -d "$BIN" | grep -q 'NEEDED'; then
+            if readelf -d "${bin[$arch]}" | grep -q 'NEEDED'; then
               echo "FAIL: linux/$arch binary has NEEDED dynamic deps; not static" >&2
               exit 1
             fi
             echo "OK: no PT_INTERP, no NEEDED — fully static"
             echo "--- execute on musl (alpine, $arch)"
             docker run --rm --platform "linux/$arch" \
-              -v "$BIN":/usr/local/bin/lit:ro alpine:3.20 lit version
+              -v "${bin[$arch]}":/usr/local/bin/lit:ro alpine:3.20 lit version
           done
           echo "--- execute on glibc host (ubuntu runner, amd64)"
-          workdir=$(mktemp -d)
-          tar -xzf dist/lit_*_linux_amd64.tar.gz -C "$workdir" lit
-          "$workdir/lit" version
+          "${bin[amd64]}" version
 
       - name: Upload snapshot dist/ for inspection
         if: always()
