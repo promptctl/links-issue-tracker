@@ -170,7 +170,7 @@ func transitionFor(targetStatus string) (model.ActionName, bool) {
 // error, so a transition a user could not perform is judged identically by the
 // mutating path and the read-only dry-run.
 func applyTransition(issue model.Issue, action model.ActionName, actor, reason string) (model.Issue, error) {
-	if issue.DeletedAt != nil || issue.ArchivedAt != nil {
+	if _, live := issue.Retention().(model.Live); !live {
 		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
 	}
 	return issue.Apply(action, actor, reason)
@@ -552,11 +552,12 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		if err != nil {
 			return err
 		}
+		archivedCol, deletedCol := retentionColumns(issue)
 		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(
 			id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, archived_at, deleted_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL)`,
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
 			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.Topic,
-			issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano)); err != nil {
+			issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), archivedCol, deletedCol); err != nil {
 			return fmt.Errorf("insert issue: %w", err)
 		}
 		if parentID != "" {
@@ -1078,9 +1079,10 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	if value := issue.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
 	}
+	archivedCol, deletedCol := retentionColumns(issue)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
-		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, archivedCol, deletedCol, issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	if w.replaceLabels {
@@ -1269,53 +1271,61 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "", in.Resolution, in.RedirectTarget)
 	}
 	now := time.Now().UTC()
-	priorArchivedAt := issue.ArchivedAt
-	priorDeletedAt := issue.DeletedAt
+	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
+	// Four imperative guards, now matching on the sealed Retention sum; ticket
+	// links-recut-lifecycle-tnka.3 collapses them into one total transition
+	// function. [LAW:types-are-the-program] The sum already removed the
+	// archived+deleted combo these guards once had to fence off, so deleting an
+	// archived issue drops its archive stamp rather than stacking both.
 	switch in.Action {
 	case model.ActionArchive:
-		if issue.DeletedAt != nil {
+		switch issue.Retention().(type) {
+		case model.Deleted:
 			return model.Issue{}, errors.New("cannot archive deleted issue")
-		}
-		if issue.ArchivedAt != nil {
+		case model.Archived:
 			return model.Issue{}, errors.New("issue is already archived")
 		}
-		issue.ArchivedAt = &now
+		issue.SetRetention(model.Archived{At: now})
 	case model.ActionUnarchive:
-		if issue.DeletedAt != nil {
+		switch issue.Retention().(type) {
+		case model.Deleted:
 			return model.Issue{}, errors.New("cannot unarchive deleted issue")
-		}
-		if issue.ArchivedAt == nil {
+		case model.Live:
 			return model.Issue{}, errors.New("issue is not archived")
 		}
-		issue.ArchivedAt = nil
+		issue.SetRetention(model.Live{})
 	case model.ActionDelete:
-		if issue.DeletedAt != nil {
+		if _, deleted := issue.Retention().(model.Deleted); deleted {
 			return model.Issue{}, errors.New("issue is already deleted")
 		}
-		issue.DeletedAt = &now
+		issue.SetRetention(model.Deleted{At: now})
 	case model.ActionRestore:
-		if issue.DeletedAt == nil {
+		if _, deleted := issue.Retention().(model.Deleted); !deleted {
 			return model.Issue{}, errors.New("issue is not deleted")
 		}
-		issue.DeletedAt = nil
+		issue.SetRetention(model.Live{})
 	default:
 		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", in.Action)
 	}
 	issue.UpdatedAt = now
+	nextArchivedAt, nextDeletedAt := model.RetentionTimestamps(issue.Retention())
 	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		archivedCol, deletedCol := retentionColumns(issue)
 		if _, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ? WHERE id = ?`,
-			statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), nullableTime(issue.ArchivedAt), nullableTime(issue.DeletedAt), issue.ID); err != nil {
+			statusForStorage(issue), issue.UpdatedAt.Format(time.RFC3339Nano), nullableTime(issue.ClosedAtValue()), archivedCol, deletedCol, issue.ID); err != nil {
 			return fmt.Errorf("update issue lifecycle: %w", err)
 		}
-		// Field-change emission: archive/unarchive flip archived_at; delete/restore
-		// flip deleted_at. No status change row — the legacy "from_status==to_status"
-		// pattern was a schema lie and has been retired.
+		// Field-change emission: history rows keep the archived_at/deleted_at
+		// field names, diffed on the wire projection of the Retention value so the
+		// history format is the same encoding the columns store. No status change
+		// row — the legacy "from_status==to_status" pattern was a schema lie and
+		// has been retired.
 		var changes []model.FieldChange
-		if !timesEqual(priorArchivedAt, issue.ArchivedAt) {
-			changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(issue.ArchivedAt)})
+		if !timesEqual(priorArchivedAt, nextArchivedAt) {
+			changes = append(changes, model.FieldChange{Field: "archived_at", From: formatNullableTime(priorArchivedAt), To: formatNullableTime(nextArchivedAt)})
 		}
-		if !timesEqual(priorDeletedAt, issue.DeletedAt) {
-			changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(issue.DeletedAt)})
+		if !timesEqual(priorDeletedAt, nextDeletedAt) {
+			changes = append(changes, model.FieldChange{Field: "deleted_at", From: formatNullableTime(priorDeletedAt), To: formatNullableTime(nextDeletedAt)})
 		}
 		return s.recordEvent(ctx, tx, issue.ID, string(in.Action), reason, actor, changes)
 	}); err != nil {
@@ -1959,8 +1969,7 @@ type partialIssue struct {
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	ArchivedAt  *time.Time
-	DeletedAt   *time.Time
+	Retention   model.Retention
 }
 
 // nextRankForPlacement resolves a new issue's rank from its requested
@@ -2106,20 +2115,22 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 		r := model.Resolution(resolution.String)
 		statusView.Resolution = &r
 	}
+	var archivedTime, deletedTime *time.Time
 	if archivedAt.Valid {
 		t, err := scanTime(archivedAt.String)
 		if err != nil {
 			return issueRow{}, err
 		}
-		issue.ArchivedAt = &t
+		archivedTime = &t
 	}
 	if deletedAt.Valid {
 		t, err := scanTime(deletedAt.String)
 		if err != nil {
 			return issueRow{}, err
 		}
-		issue.DeletedAt = &t
+		deletedTime = &t
 	}
+	issue.Retention = model.RetentionFromTimestamps(archivedTime, deletedTime)
 	issue.Labels = []string{}
 	return issueRow{Issue: issue, Status: statusView}, nil
 }
@@ -2183,9 +2194,8 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 			Labels:      labelsByID[row.Issue.ID],
 			CreatedAt:   row.Issue.CreatedAt,
 			UpdatedAt:   row.Issue.UpdatedAt,
-			ArchivedAt:  row.Issue.ArchivedAt,
-			DeletedAt:   row.Issue.DeletedAt,
 		}
+		base.SetRetention(row.Issue.Retention)
 		if base.Labels == nil {
 			base.Labels = []string{}
 		}
@@ -2330,6 +2340,16 @@ func nullableTime(value *time.Time) any {
 		return nil
 	}
 	return value.Format(time.RFC3339Nano)
+}
+
+// retentionColumns projects an issue's Retention into the two physical
+// archived_at/deleted_at column values. Every SQL statement that writes the
+// pair binds this function's outputs, and its input cannot represent
+// archived-and-deleted, so the both-set row is unwritable from this codebase.
+// [LAW:single-enforcer] The one feeder of the two columns.
+func retentionColumns(issue model.Issue) (archivedAt, deletedAt any) {
+	a, d := model.RetentionTimestamps(issue.Retention())
+	return nullableTime(a), nullableTime(d)
 }
 
 // nullableResolution stores a nil resolution as SQL NULL so a closed-without-

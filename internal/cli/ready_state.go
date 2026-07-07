@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -218,27 +217,12 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 	out := make(map[string][]model.Issue, len(relations))
 	for epicID, rel := range relations {
 		for _, child := range rel.Children {
-			if isUnfinished(child) {
+			if isLiveIssue(child) {
 				out[epicID] = append(out[epicID], child)
 			}
 		}
 	}
 	return out
-}
-
-// isUnfinished reports whether an issue still represents pending work — the
-// predicate that decides whether a sibling gates its later lane-mates and
-// whether an edge belongs on a focused goal's prerequisite path. Unfiltered
-// relation fetches are a trust boundary: unlike the store-filtered workable
-// list, they carry archived and deleted rows, which have left the flow and
-// must neither block nor be traversed.
-// [LAW:no-defensive-null-guards] The archived/deleted checks translate the raw
-// relation rows into the workable population; they are boundary translation,
-// not a guard against a should-not-happen state.
-func isUnfinished(issue model.Issue) bool {
-	return issue.ArchivedAt == nil &&
-		issue.DeletedAt == nil &&
-		issue.State() != model.StateClosed
 }
 
 // FocusLabel is the reserved label that marks an issue as a focused goal.
@@ -264,7 +248,7 @@ type focusGraphSource interface {
 // included. An issue's prerequisites are its unfinished explicit dependencies,
 // the unfinished children of a container, and its earlier same-lane unfinished
 // siblings — the same implicit edge the lane gate blocks membership on, read
-// through the shared isEarlierSameLaneSibling/isUnfinished predicates.
+// through the shared isEarlierSameLaneSibling/isLiveIssue predicates.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -321,13 +305,13 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 			}
 			var prereqs []model.Issue
 			for _, dep := range rel.DependsOn {
-				if isUnfinished(dep) {
+				if isLiveIssue(dep) {
 					prereqs = append(prereqs, dep)
 				}
 			}
 			if rel.Issue.IsContainer() {
 				for _, child := range rel.Children {
-					if isUnfinished(child) {
+					if isLiveIssue(child) {
 						prereqs = append(prereqs, child)
 					}
 				}
@@ -423,40 +407,17 @@ func newOrphanedAnnotator(threshold time.Duration) annotation.Annotator {
 }
 
 func issueJSONFieldNames() map[string]struct{} {
-	// [LAW:one-source-of-truth] model.Issue JSON tags are the canonical ready-field schema.
-	issueType := reflect.TypeOf(model.Issue{})
-	fields := make(map[string]struct{}, issueType.NumField())
-	for i := 0; i < issueType.NumField(); i++ {
-		field := issueType.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		name := issueJSONFieldName(field)
-		if name == "" {
-			continue
-		}
+	// [LAW:one-source-of-truth] The wire struct behind Issue.MarshalJSON is the
+	// canonical ready-field schema. Issue's struct fields are the in-memory
+	// shape and diverge from the wire (status, closed_at, resolution, and the
+	// retention pair exist only on the wire), so validation reads the same set
+	// serialization writes and the two cannot drift.
+	names := model.IssueWireFields()
+	fields := make(map[string]struct{}, len(names))
+	for _, name := range names {
 		fields[name] = struct{}{}
 	}
-	fields["status"] = struct{}{}
-	fields["assignee"] = struct{}{}
-	fields["closed_at"] = struct{}{}
 	return fields
-}
-
-func issueJSONFieldName(field reflect.StructField) string {
-	tag, ok := field.Tag.Lookup("json")
-	if !ok {
-		return field.Name
-	}
-	name, _, _ := strings.Cut(tag, ",")
-	switch name {
-	case "":
-		return field.Name
-	case "-":
-		return ""
-	default:
-		return name
-	}
 }
 
 func issueFieldValues(issue model.Issue) (map[string]any, error) {

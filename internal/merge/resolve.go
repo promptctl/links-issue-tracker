@@ -113,8 +113,18 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 		merged.CreatedAt = earliest(ours.CreatedAt, theirs.CreatedAt)
 	}
 	merged.UpdatedAt = latest(ours.UpdatedAt, theirs.UpdatedAt)
-	merged.ArchivedAt = r.derivedFlagTime(boolBase(r.base.ArchivedAt, r.hasBase), ours.ArchivedAt, theirs.ArchivedAt)
-	merged.DeletedAt = r.derivedFlagTime(boolBase(r.base.DeletedAt, r.hasBase), ours.DeletedAt, theirs.DeletedAt)
+	// Retention merges on its two-timestamp wire projection: the per-flag
+	// two-tier rule is the three-way's unit, and the fold back through the one
+	// decoder resolves a cross-workspace archive/delete race the way every read
+	// boundary does — deletion dominates. [LAW:one-source-of-truth] The sum stays
+	// the domain representation; merge touches only its derived encoding.
+	baseArchivedAt, baseDeletedAt := model.RetentionTimestamps(r.base.Retention())
+	oursArchivedAt, oursDeletedAt := model.RetentionTimestamps(ours.Retention())
+	theirsArchivedAt, theirsDeletedAt := model.RetentionTimestamps(theirs.Retention())
+	merged.SetRetention(model.RetentionFromTimestamps(
+		r.derivedFlagTime(boolBase(baseArchivedAt, r.hasBase), oursArchivedAt, theirsArchivedAt),
+		r.derivedFlagTime(boolBase(baseDeletedAt, r.hasBase), oursDeletedAt, theirsDeletedAt),
+	))
 
 	// Status/assignee/closed_at live in the lifecycle and exist only for leaves;
 	// a container's state is derived from its children and is never merged here.
