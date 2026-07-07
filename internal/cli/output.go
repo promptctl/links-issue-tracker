@@ -353,7 +353,7 @@ func formatHistoryTimestamp(value time.Time) string {
 // [LAW:single-enforcer] Liveness decided once, here.
 func isLiveIssue(issue model.Issue) bool {
 	_, live := issue.Retention().(model.Live)
-	return issue.State() != model.StateClosed && live
+	return live && issue.State() != model.StateClosed
 }
 
 // openUnblockIDs returns the IDs of issues from blocks that are still live —

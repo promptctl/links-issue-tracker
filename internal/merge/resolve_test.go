@@ -247,6 +247,52 @@ func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	}
 }
 
+// The retention axis merges per flag on its two-timestamp wire projection and
+// folds the result back through the one decoder, so a cross-workspace
+// archive-vs-delete race resolves the way every read boundary resolves the
+// encoding: deletion dominates. These rows pin the fold and the per-flag
+// two-tier rule for each concurrent-retention shape.
+func TestResolveIssueRetentionRaces(t *testing.T) {
+	open := model.StatusView{Value: model.StateOpen}
+
+	// Concurrent archive vs delete (no base): both flags win their per-flag
+	// merge; the fold resolves the pair to Deleted.
+	ours := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	theirs := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
+		t.Fatalf("archive vs delete = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
+	}
+
+	// Concurrent delete vs delete: the timestamp is slaved to the resolved flag
+	// as the earliest of the two stamps.
+	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	got = ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t1) {
+		t.Fatalf("delete vs delete = %#v, want Deleted at earliest %v", got.Provisional().Retention(), t1)
+	}
+
+	// Solo restore off a deleted base: tier 1 takes the lone mover; the delete
+	// is not resurrected by the unchanged side.
+	base := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("solo restore = %#v, want Live", got.Provisional().Retention())
+	}
+
+	// Solo unarchive off an archived base: same tier-1 rule on the archive flag.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("solo unarchive = %#v, want Live", got.Provisional().Retention())
+	}
+}
+
 func TestResolveIssueLabelsUnion(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep"} })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "ours"} })
