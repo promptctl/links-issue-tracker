@@ -420,7 +420,16 @@ func IssueWireFields() []string {
 	wire := reflect.TypeOf(issueJSON{})
 	names := make([]string, 0, wire.NumField())
 	for i := 0; i < wire.NumField(); i++ {
-		name, _, _ := strings.Cut(wire.Field(i).Tag.Get("json"), ",")
+		field := wire.Field(i)
+		// encoding/json's tag contract: "-" excludes the field from the wire;
+		// an absent tag or empty tag name marshals under the Go field name.
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		if name == "-" {
+			continue
+		}
+		if name == "" {
+			name = field.Name
+		}
 		names = append(names, name)
 	}
 	return names

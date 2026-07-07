@@ -264,6 +264,18 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 		t.Fatalf("archive vs delete = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
 	}
 
+	// Archive vs delete with a real base: each flag resolves by tier 1 to a
+	// different side, producing a both-set timestamp pair from two independent
+	// winners — the decoder fold is the only thing standing between that pair
+	// and the domain, and resolves it to Deleted.
+	liveBase := leaf(t, "i1", open, nil)
+	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	got = ResolveIssue(&liveBase, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
+		t.Fatalf("archive vs delete with base = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
+	}
+
 	// Concurrent delete vs delete: the timestamp is slaved to the resolved flag
 	// as the earliest of the two stamps.
 	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
