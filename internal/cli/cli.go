@@ -543,11 +543,13 @@ func deriveRelationColumns(rel store.IssueRelations) relationColumns {
 // workableFilter carries the user-supplied narrowing options for the
 // shared workable pipeline. Empty fields mean "no narrowing"; the
 // workable definition (open/in_progress, leaves only) is layered on top
-// by gatherWorkableAnnotated.
+// by gatherWorkableAnnotated. Status is already-parsed state, never a raw
+// flag string — the CLI seam validates before constructing the filter, so
+// an unvalidated status cannot reach the query. [LAW:types-are-the-program]
 type workableFilter struct {
 	Assignee  string
 	IssueType string
-	Status    string
+	Status    model.State
 	Labels    []string
 }
 
@@ -572,11 +574,7 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	}
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
 	if rf.Status != "" {
-		// User-supplied status overrides the workable default. Unrecognized
-		// values default to Open via DefaultOpen — the shared pipeline mirrors
-		// store/import lenient parsing rather than enforcing strict CLI flag
-		// validation. [LAW:comments-explain-why-only]
-		statuses = []model.State{model.DefaultOpen(rf.Status)}
+		statuses = []model.State{rf.Status}
 	}
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.

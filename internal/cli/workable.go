@@ -3,11 +3,13 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -28,7 +30,7 @@ import (
 type workableKnobs struct {
 	assignee     string
 	issueType    string
-	status       string
+	status       model.State
 	labels       []string
 	limit        int
 	columns      []string
@@ -114,9 +116,12 @@ var queueView = workableView{
 // `next` — "the one leaf to lit start now": optional --continue bias is one
 // extra stable sort over the same data; it never changes which rows are
 // workable, only where we look first. Empty selection is a loud error, not an
-// empty list — the agent asked for work and there is none.
+// empty list — the agent asked for work and there is none. Filters make "the
+// next workable bug" expressible; --limit/--columns stay off because a
+// single-row summary has no row count or column set to vary.
 var nextView = workableView{
 	name:        "next",
+	hasFilters:  true,
 	hasContinue: true,
 	order: func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs) {
 		if knobs.continueBias {
@@ -153,7 +158,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	fs := newCobraFlagSet(view.name)
 	assignee := fs.String("assignee", "", "Filter by assignee")
 	issueType := optionalString(fs, view.hasFilters, "type", "Filter by issue type")
-	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress (closed excludes everything)")
+	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", "Comma-separated output columns")
@@ -164,10 +169,14 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if fs.NArg() != 0 {
 		return UsageError{Message: view.usage()}
 	}
+	statusState, err := parseWorkableStatus(*status)
+	if err != nil {
+		return err
+	}
 	knobs := workableKnobs{
 		assignee:     strings.TrimSpace(*assignee),
 		issueType:    strings.TrimSpace(*issueType),
-		status:       strings.TrimSpace(*status),
+		status:       statusState,
 		labels:       splitCSV(*labels),
 		limit:        *limit,
 		columns:      parseColumns(*columnsExpr),
@@ -186,6 +195,23 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	rows := view.keep(annotated)
 	rows = applyLimit(rows, knobs.limit)
 	return view.render(stdout, knobs.columns, rows)
+}
+
+// parseWorkableStatus is the strict trust boundary for --status: blank means
+// "no narrowing", and only the states a workable row can hold are legal.
+// Closed is rejected rather than accepted-and-empty — a filter whose result is
+// empty by construction is a question the user didn't mean to ask.
+// [LAW:no-silent-failure] lenient DefaultOpen coercion stays at ingestion
+// boundaries (store/import); the CLI flag fails loudly instead.
+func parseWorkableStatus(raw string) (model.State, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	state, err := model.ParseState(raw)
+	if err != nil || state == model.StateClosed {
+		return "", UsageError{Message: fmt.Sprintf("invalid --status %q (valid: open, in_progress)", raw)}
+	}
+	return state, nil
 }
 
 // optionalString registers the flag only when the view exposes it; an
