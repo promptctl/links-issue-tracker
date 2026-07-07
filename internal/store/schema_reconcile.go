@@ -93,7 +93,7 @@ func quotedIssueTypeList(types []model.IssueType) string {
 // literals reconcile has always installed, so existing workspaces see no
 // churn and the normalized-clause probes keep matching. [LAW:one-source-of-truth]
 var (
-	issueTypeCheckClause    = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.IssueTypes))
+	issueTypeCheckClause    = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.IssueTypes()))
 	containerTypeMembership = fmt.Sprintf("issue_type IN (%s)", quotedIssueTypeList(model.ContainerTypes()))
 )
 

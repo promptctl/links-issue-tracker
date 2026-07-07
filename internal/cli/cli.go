@@ -1569,8 +1569,9 @@ func parseIssueTypeFlag(raw string) (model.IssueType, error) {
 // the canonical list so help text cannot drift from the parse gate.
 // [LAW:one-source-of-truth]
 func issueTypeChoices() string {
-	names := make([]string, len(model.IssueTypes))
-	for i, t := range model.IssueTypes {
+	types := model.IssueTypes()
+	names := make([]string, len(types))
+	for i, t := range types {
 		names[i] = string(t)
 	}
 	return strings.Join(names, "|")

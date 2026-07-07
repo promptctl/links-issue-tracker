@@ -76,7 +76,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 		{name: "title_and_status_open", in: Change{Fields: UpdateIssueInput{Title: ptr("Renamed")}, Action: model.Reopen{}}},
 	}
 
-	for _, issueType := range model.IssueTypes {
+	for _, issueType := range model.IssueTypes() {
 		for _, combo := range combos {
 			t.Run(string(issueType)+"/"+combo.name, func(t *testing.T) {
 				created, err := st.CreateIssue(ctx, CreateIssueInput{

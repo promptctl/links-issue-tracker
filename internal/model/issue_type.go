@@ -22,13 +22,17 @@ const (
 	TypeEpic    IssueType = "epic"
 )
 
-// IssueTypes is the canonical enumeration in canonical order.
+// IssueTypes returns the canonical enumeration in canonical order.
 // [LAW:one-source-of-truth] Issue-type vocabulary lives here; the parse gate,
 // help text, matrix tests, and the schema CHECK clauses all derive from this
-// list rather than repeating it.
-var IssueTypes = []IssueType{TypeTask, TypeFeature, TypeBug, TypeChore, TypeEpic}
+// list rather than repeating it. A fresh slice per call keeps the
+// authoritative storage unreachable, so the sealed set cannot be widened at
+// runtime the way an exported slice variable could. [LAW:types-are-the-program]
+func IssueTypes() []IssueType {
+	return []IssueType{TypeTask, TypeFeature, TypeBug, TypeChore, TypeEpic}
+}
 
-var errInvalidIssueType = errors.New("issue type must be " + oxfordOr(IssueTypes))
+var errInvalidIssueType = errors.New("issue type must be " + oxfordOr(IssueTypes()))
 
 // ParseIssueType maps an untrusted issue-type string (CLI flag, query token,
 // import payload) into the sealed set, canonicalizing case and surrounding
@@ -37,7 +41,7 @@ var errInvalidIssueType = errors.New("issue type must be " + oxfordOr(IssueTypes
 // boundary calls this instead of carrying its own membership scan.
 func ParseIssueType(s string) (IssueType, error) {
 	t := IssueType(strings.ToLower(strings.TrimSpace(s)))
-	for _, valid := range IssueTypes {
+	for _, valid := range IssueTypes() {
 		if t == valid {
 			return t, nil
 		}
@@ -58,7 +62,7 @@ func (t IssueType) IsContainer() bool {
 // set and the predicate cannot disagree. [LAW:one-source-of-truth]
 func ContainerTypes() []IssueType {
 	var out []IssueType
-	for _, t := range IssueTypes {
+	for _, t := range IssueTypes() {
 		if t.IsContainer() {
 			out = append(out, t)
 		}

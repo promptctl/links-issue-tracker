@@ -298,7 +298,7 @@ func TestIsContainerUsesIssueTypeNotLifecycle(t *testing.T) {
 // predicate, so a container outside the vocabulary is unrepresentable. What
 // remains testable is the parse gate's contract. [LAW:behavior-not-structure]
 func TestParseIssueType(t *testing.T) {
-	for _, valid := range IssueTypes {
+	for _, valid := range IssueTypes() {
 		got, err := ParseIssueType(string(valid))
 		if err != nil || got != valid {
 			t.Fatalf("ParseIssueType(%q) = %q, %v; want %q, nil", valid, got, err, valid)
