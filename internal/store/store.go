@@ -1454,7 +1454,13 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 // close because legacy rows genuinely occupy that state). A present target is
 // validated the way AddRelation validates endpoints: it must exist and cannot
 // be the issue itself, so the redirect points at a real, distinct ticket.
-// [LAW:single-enforcer] The one validation site for every close path.
+// It must also not be trash-bound: a redirect to a Deleted canonical is a
+// dangling pointer by design, while Archived stays legal — "duplicate of
+// something already done" is the most common real redirect (decision on
+// links-recut-relations-61nv.1). Deleted is matched as the specific variant,
+// not a broader frozen notion, so Archived falls into the accept set by the
+// same match. [LAW:single-enforcer] The one validation site for every close
+// path.
 func (s *Store) validateRedirectTarget(ctx context.Context, closingID string, resolution *model.Resolution, target *string) error {
 	if target == nil {
 		if resolution != nil && resolution.RedirectsToCanonical() {
@@ -1465,8 +1471,12 @@ func (s *Store) validateRedirectTarget(ctx context.Context, closingID string, re
 	if *target == closingID {
 		return fmt.Errorf("cannot redirect %s to itself", closingID)
 	}
-	if _, err := s.GetIssue(ctx, *target); err != nil {
+	canonical, err := s.GetIssue(ctx, *target)
+	if err != nil {
 		return err
+	}
+	if _, gone := canonical.Retention().(model.Deleted); gone {
+		return fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)
 	}
 	return nil
 }
