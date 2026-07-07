@@ -160,7 +160,7 @@ func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 // learn which subcommand it is serving. [LAW:dataflow-not-control-flow]
 func runBulkTransition(action model.Action) appRunFn {
 	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		fs := newCobraFlagSet("bulk transition")
+		fs := newCobraFlagSet("bulk " + string(action.Name()))
 		ids := fs.String("ids", "", "Comma-separated issue IDs")
 		reason := fs.String("reason", "", "Lifecycle reason")
 		resolveActor := registerActor(fs)
