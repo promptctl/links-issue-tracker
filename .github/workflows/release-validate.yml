@@ -20,7 +20,11 @@ name: Release validate
 #
 # [LAW:verifiable-goals] The acceptance check is a concrete artifact list +
 # manifest shape, not "did goreleaser exit 0" — a silent build skip cannot
-# pass jq's per-field assertions below.
+# pass jq's per-field assertions below. The linux artifacts are additionally
+# proven by EXECUTION on both libcs and both arches (glibc runner + Alpine/musl
+# containers, arm64 via qemu): the shipped linux binaries are fully static
+# musl builds precisely so one binary per arch runs everywhere, and that claim
+# is only real if something runs them.
 
 on:
   push:
@@ -63,6 +67,13 @@ jobs:
       # Dockerfile edits or ARG bumps invalidate them.
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+
+      # qemu user-mode emulation so the arm64 Alpine execution check below can
+      # run the linux/arm64 artifact on this amd64 runner.
+      - name: Set up QEMU (arm64)
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
 
       - name: Build release-builder image
         uses: docker/build-push-action@v6
@@ -160,6 +171,12 @@ jobs:
             ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
           ' "$MANIFEST" >/dev/null
 
+          # This list is the release contract, restated independently of
+          # .goreleaser.yml ON PURPOSE: deriving it from the config that
+          # drives the build would make this check pass on a silent build
+          # skip — the exact failure it exists to catch. When the goreleaser
+          # goos/goarch matrix changes, update this array in the same PR.
+          # [LAW:verifiable-goals]
           EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
           GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
           if [ "$GOT" != "$EXPECTED" ]; then
@@ -170,6 +187,37 @@ jobs:
           fi
 
           echo "release-manifest.json shape OK; platforms: $GOT"
+
+      # The linux artifacts must be fully static musl binaries: no PT_INTERP,
+      # no NEEDED, and they must EXECUTE on both a glibc host (this runner) and
+      # a stock Alpine/musl container, on both arches (arm64 under qemu). This
+      # is the release-level twin of release-smoke.yml's per-PR check, extended
+      # to arm64 — the arch the original glibc-only bug shipped broken.
+      # [LAW:verifiable-goals] [LAW:no-silent-failure]
+      - name: Assert linux binaries are static and run on glibc + musl (amd64 + arm64)
+        run: |
+          set -euo pipefail
+          declare -A bin
+          for arch in amd64 arm64; do
+            workdir=$(mktemp -d)
+            tar -xzf dist/lit_*_linux_"$arch".tar.gz -C "$workdir" lit
+            bin[$arch]="$workdir/lit"
+            echo "=== linux/$arch: ${bin[$arch]}"
+            if readelf -l "${bin[$arch]}" | grep -q 'INTERP'; then
+              echo "FAIL: linux/$arch binary has a PT_INTERP entry; not static" >&2
+              exit 1
+            fi
+            if readelf -d "${bin[$arch]}" | grep -q 'NEEDED'; then
+              echo "FAIL: linux/$arch binary has NEEDED dynamic deps; not static" >&2
+              exit 1
+            fi
+            echo "OK: no PT_INTERP, no NEEDED — fully static"
+            echo "--- execute on musl (alpine, $arch)"
+            docker run --rm --platform "linux/$arch" \
+              -v "${bin[$arch]}":/usr/local/bin/lit:ro alpine:3.20 lit version
+          done
+          echo "--- execute on glibc host (ubuntu runner, amd64)"
+          "${bin[amd64]}" version
 
       - name: Upload snapshot dist/ for inspection
         if: always()
