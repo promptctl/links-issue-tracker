@@ -72,24 +72,6 @@ var (
 	Frozen                  = lifecycle.Frozen
 )
 
-// Priority constants for the two-level priority system.
-// [LAW:one-source-of-truth] Canonical priority values live here; all other
-// references derive from these constants rather than repeating magic ints.
-const (
-	PriorityNormal = 0
-	PriorityUrgent = 1
-)
-
-// PriorityName returns the display name for a priority value.
-func PriorityName(p int) string {
-	switch p {
-	case PriorityUrgent:
-		return "urgent"
-	default:
-		return "normal"
-	}
-}
-
 // [LAW:one-type-per-behavior] Issues and epics are one record type; lifecycle
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
@@ -98,7 +80,7 @@ type Issue struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Prompt      string `json:"prompt,omitempty"`
-	Priority    int       `json:"priority"`
+	Priority    Priority  `json:"priority"`
 	IssueType   IssueType `json:"issue_type"`
 	Topic       string    `json:"topic"`
 	// Assignee is the issue's owner — orthogonal to the status state machine and
@@ -380,7 +362,7 @@ type issueJSON struct {
 	Description string                `json:"description"`
 	Prompt      string                `json:"prompt,omitempty"`
 	Status      *State                `json:"status,omitempty"`
-	Priority    int                   `json:"priority"`
+	Priority    Priority              `json:"priority"`
 	IssueType   IssueType             `json:"issue_type"`
 	Topic       string                `json:"topic"`
 	Assignee    string                `json:"assignee,omitempty"`

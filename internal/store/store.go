@@ -81,9 +81,13 @@ type CreateIssueInput struct {
 	// [LAW:types-are-the-program]
 	IssueType model.IssueType
 	Topic     string
-	ParentID    string
-	Priority    int
-	Assignee    string
+	ParentID string
+	// Priority is already-parsed domain vocabulary, never a raw flag int —
+	// trust boundaries route through model.ParsePriority (or the
+	// model.CanonicalPriority salvage coercion) before constructing the input.
+	// [LAW:types-are-the-program]
+	Priority model.Priority
+	Assignee string
 	Lane        string
 	Labels      []string
 	// Placement decides where the new issue lands in the rank order. Zero value
@@ -103,7 +107,7 @@ type UpdateIssueInput struct {
 	Description *string
 	Prompt      *string
 	IssueType   *model.IssueType
-	Priority    *int
+	Priority    *model.Priority
 	Assignee    *string
 	Lane        *string
 	Labels      *[]string
@@ -430,10 +434,6 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 	if issueType == "" {
 		issueType = model.TypeTask
 	}
-	priority := in.Priority
-	if err := validatePriority(priority); err != nil {
-		return model.Issue{}, err
-	}
 	now := time.Now().UTC()
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
@@ -448,7 +448,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		Title:       strings.TrimSpace(in.Title),
 		Description: strings.TrimSpace(in.Description),
 		Prompt:      strings.TrimSpace(in.Prompt),
-		Priority:    priority,
+		Priority:    in.Priority,
 		IssueType:   issueType,
 		Topic:       topic,
 		Lane:        strings.TrimSpace(in.Lane),
@@ -937,9 +937,6 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (f
 		issue.IssueType = *in.IssueType
 	}
 	if in.Priority != nil {
-		if err := validatePriority(*in.Priority); err != nil {
-			return fieldWrite{}, err
-		}
 		issue.Priority = *in.Priority
 	}
 	if in.Assignee != nil {
@@ -970,7 +967,9 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (f
 		changes = append(changes, model.FieldChange{Field: "issue_type", From: string(priorIssueType), To: string(issue.IssueType)})
 	}
 	if priorPriority != issue.Priority {
-		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(priorPriority), To: strconv.Itoa(issue.Priority)})
+		// [LAW:one-source-of-truth] History rows keep the numeric wire encoding
+		// the column stores, not the display name.
+		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(int(priorPriority)), To: strconv.Itoa(int(issue.Priority))})
 	}
 	newAssignee := issue.AssigneeValue()
 	if priorAssignee != newAssignee {
@@ -1899,7 +1898,7 @@ type partialIssue struct {
 	Title       string
 	Description string
 	Prompt      string
-	Priority    int
+	Priority    model.Priority
 	IssueType   model.IssueType
 	Topic       string
 	Assignee    string
@@ -2257,30 +2256,6 @@ func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (ma
 		out[issueID] = append(out[issueID], label)
 	}
 	return out, rows.Err()
-}
-
-// canonicalPriority is the single authority on the priority domain: it maps any
-// raw int onto the canonical {normal, urgent} set and is idempotent, so its
-// fixed points ARE the legal priorities. validatePriority (live writes) and the
-// import boundary (legacy restores) are both defined in terms of it, so they
-// cannot disagree about what a legal priority is — extending the domain is a
-// one-function edit here. [LAW:one-source-of-truth] [LAW:single-enforcer]
-func canonicalPriority(priority int) int {
-	if priority == model.PriorityUrgent {
-		return model.PriorityUrgent
-	}
-	return model.PriorityNormal
-}
-
-// validatePriority rejects exactly the values canonicalPriority would rewrite —
-// i.e. anything that is not already canonical. [LAW:single-enforcer] The live
-// write path rejects where the import path coerces, but both read "what is a
-// legal priority" from canonicalPriority, so the two resolutions stay in lockstep.
-func validatePriority(priority int) error {
-	if canonicalPriority(priority) != priority {
-		return ValidationError{Message: fmt.Sprintf("priority must be %d (normal) or %d (urgent)", model.PriorityNormal, model.PriorityUrgent)}
-	}
-	return nil
 }
 
 func nullableTime(value *time.Time) any {
