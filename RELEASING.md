@@ -49,17 +49,23 @@ above. No manual steps.
 
 Two tiers, split by cost so the per-PR loop stays fast:
 
-- **Per PR (fast, ~2-3 min):** `.github/workflows/release-smoke.yml` builds the
-  native `linux/amd64` target with `goreleaser build --single-target --snapshot`.
-  It proves the things that break per code change — the code compiles, the
-  cgo + ICU link works, and `.goreleaser.yml` parses — without the cross-build.
-  The full ~35-minute 5-platform build is deliberately NOT on the PR path.
+- **Per PR (fast):** `.github/workflows/release-smoke.yml` builds the
+  `linux/amd64` target with `goreleaser build --single-target --snapshot`
+  inside the release image's `smoke` stage (toolchain + linux/amd64 ICU only,
+  layer-cached). It proves the things that break per code change — the code
+  compiles, the cgo + ICU link works, `.goreleaser.yml` parses, and the
+  resulting binary is fully static and executes on both glibc (the runner) and
+  musl (an Alpine container). The full ~35-minute 5-platform build is
+  deliberately NOT on the PR path.
 - **Out-of-band (full):** `.github/workflows/release-validate.yml` builds the
   release-builder image and runs the SAME goreleaser invocation release.yml uses,
   producing a real cross-platform `dist/`, running `mkmanifest`, and asserting
-  the manifest has every expected platform with a valid SHA256. It runs on every
-  push to `master` (catching a broken pipeline before any tag is cut) and on
-  demand via `workflow_dispatch` — never on `pull_request`.
+  the manifest has every expected platform with a valid SHA256 — then executing
+  both linux binaries (amd64 + arm64, the latter under qemu) on stock Alpine
+  containers and the glibc runner, proving the static-musl universality claim
+  by running, not just linking. It runs on every push to `master` (catching a
+  broken pipeline before any tag is cut) and on demand via `workflow_dispatch`
+  — never on `pull_request`.
 
 If `release-validate` is green on `master`, the next `git push <tag>` will
 produce a working GitHub Release. That workflow also uploads `dist/` as a
@@ -70,9 +76,11 @@ without re-running it.
 
 Local dry-runs require a container runtime + the custom release-builder
 image. The image starts from `golang:1.25.7-bookworm` and installs zig 0.14.0
-as the single cross-compiler for every non-native target (a pinned macOS SDK
-supplies the Apple frameworks zig omits, used link-only), with ICU built from
-source per target; linux/amd64 uses the system libicu-dev directly.
+as the single cross-compiler for every target (a pinned macOS SDK supplies
+the Apple frameworks zig omits, used link-only), with ICU built from source
+per target. The linux targets are musl and fully static — one
+interpreter-free binary per arch that runs on both glibc distros and
+musl/Alpine containers.
 
 Build the image once, then use it:
 

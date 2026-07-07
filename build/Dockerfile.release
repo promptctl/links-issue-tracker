@@ -3,7 +3,7 @@
 # the `go-icu-regex` package (transitive Dolt dep) hard-requires the ICU C
 # library headers and shared objects at link time.
 #
-# We use zig cc as the cross-compiler for all non-native targets because:
+# We use zig cc as the cross-compiler for all targets because:
 # - zig bundles libc + macOS libc headers for arm64 and amd64, plus a
 #   MinGW-compatible Windows toolchain — one compiler substrate, no osxcross or
 #   mingw packages to maintain.
@@ -20,15 +20,28 @@
 # cross-compile path is unchanged.
 #
 # Supported targets (matches the goos/goarch matrix in .goreleaser.yml):
-#   - linux/amd64   (native, system gcc, system libicu-dev)
-#   - linux/arm64   (zig cc -target aarch64-linux-gnu)
+#   - linux/amd64   (zig cc -target x86_64-linux-musl, fully static)
+#   - linux/arm64   (zig cc -target aarch64-linux-musl, fully static)
 #   - darwin/arm64  (zig cc -target aarch64-macos.11.0-none)
 #   - darwin/amd64  (zig cc -target x86_64-macos.10.15-none)
 #   - windows/amd64 (zig cc -target x86_64-windows-gnu)
 #
-# STRUCTURE: multi-stage build. The four cross-* stages each depend only on
-# `native-icu` and run IN PARALLEL during `docker buildx build`. The `final`
-# stage COPYs each /opt/icu/<target>/ prefix into one image.
+# The linux targets are musl + fully static, NOT glibc: a glibc-dynamic binary
+# cannot even start on musl distros (Alpine — most slim containers and CI
+# images — has no /lib/ld-linux-*.so interpreter), and a *static* glibc link is
+# not an option because glibc's getaddrinfo/NSS dlopen()s at runtime (Dolt's
+# cloud SDKs need working DNS). musl links fully static cleanly, so one
+# interpreter-free binary per arch runs on BOTH glibc and musl hosts.
+# [LAW:one-type-per-behavior] one universal linux artifact per arch, no
+# glibc/musl asset split for consumers to select between.
+#
+# STRUCTURE: multi-stage build. The five cross-* stages each depend only on
+# `native-icu` and run IN PARALLEL during `docker buildx build`. The `smoke`
+# stage carries base + the linux/amd64 ICU prefix only — it is the PR gate's
+# build environment (release-smoke.yml), kept small so a Dockerfile-editing PR
+# pays for one ICU cross-build, not five. `final` builds ON `smoke` and COPYs
+# the remaining /opt/icu/<target>/ prefixes into the one image the release
+# workflows run goreleaser in.
 #
 # [LAW:single-enforcer] release-validate.yml builds this image once per
 # Dockerfile change (GHA layer cache reuses unchanged stages); release.yml
@@ -79,7 +92,6 @@ RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-ins
         libtool \
         pkg-config \
         build-essential \
-        libicu-dev \
         xz-utils \
     && rm -rf /var/lib/apt/lists/*
 
@@ -149,7 +161,8 @@ COPY build/zig-macos-stubs/tzfile.h    /usr/local/include/zig-macos-stubs/tzfile
 # targets get plain wrappers.
 RUN SDK_FLAGS="-F/opt/macos-sdk/System/Library/Frameworks -L/opt/macos-sdk/usr/lib"; \
     for pair in \
-        "aarch64-linux-gnu:aarch64-linux-gnu:" \
+        "x86_64-linux-musl:x86_64-linux-musl:" \
+        "aarch64-linux-musl:aarch64-linux-musl:" \
         "x86_64-windows-gnu:x86_64-windows-gnu:" \
         "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}" \
         "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}"; do \
@@ -187,13 +200,22 @@ RUN cp -r /tmp/icu-build/src /tmp/icu-build/native-build \
     && make -j"$(nproc)"
 
 # -----------------------------------------------------------------------------
+# Stage: cross-linux-amd64
+# Runs in parallel with the other cross-* stages. musl, not glibc — see header.
+# -----------------------------------------------------------------------------
+FROM native-icu AS cross-linux-amd64
+RUN icu-cross-build linux amd64 \
+    x86_64-linux-musl \
+    zig-cc-x86_64-linux-musl zig-cxx-x86_64-linux-musl \
+    zig-ar zig-ranlib
+
+# -----------------------------------------------------------------------------
 # Stage: cross-linux-arm64
-# Runs in parallel with the other cross-* stages.
 # -----------------------------------------------------------------------------
 FROM native-icu AS cross-linux-arm64
 RUN icu-cross-build linux arm64 \
-    aarch64-linux-gnu \
-    zig-cc-aarch64-linux-gnu zig-cxx-aarch64-linux-gnu \
+    aarch64-linux-musl \
+    zig-cc-aarch64-linux-musl zig-cxx-aarch64-linux-musl \
     zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
@@ -224,51 +246,28 @@ RUN icu-cross-build darwin amd64 \
     zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
-# Stage: final
-# Assembles the per-target ICU prefixes from the parallel cross-* stages into
-# the single image that release-validate / release will run goreleaser against.
+# Stage: smoke
+# The PR gate's build environment (release-smoke.yml): the full toolchain plus
+# ONLY the linux/amd64 ICU prefix, so a Dockerfile-editing PR pays for one ICU
+# cross-build instead of five. `final` extends this stage, so the container run
+# ergonomics (WORKDIR, git trust, entrypoint) are defined exactly once here and
+# both images behave identically under `docker run`. [LAW:single-enforcer]
 # -----------------------------------------------------------------------------
-FROM base AS final
+FROM base AS smoke
 # [LAW:types-are-the-program] pin the shell so `set -o pipefail` and pipeline
 # exit semantics are defined by this stage, not by whichever /bin/sh the base
-# ships.
+# ships. (SHELL is image config, so `final` inherits it.)
 SHELL ["/bin/bash", "-c"]
-COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
-COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
-COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
-COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
+COPY --from=cross-linux-amd64    /opt/icu/linux_amd64    /opt/icu/linux_amd64
 
-# linux/amd64 is the native target: it compiles against the system libicu-dev
-# (installed in `base`) rather than a cross-built prefix. But go-icu-regex emits
-# a bare `-licui18n`, which the linker resolves to the SHARED .so whenever a dir
-# holds both .so and .a — leaving the binary with a NEEDED libicui18n.so the
-# target host must supply. The four cross-targets avoid this only because their
-# -L points at a dir holding ONLY static archives. Give linux/amd64 the same
-# shape: a static-only lib dir of symlinks to the system *.a, which .goreleaser's
-# `CGO_LDFLAGS=-L/opt/icu/linux_amd64/lib` points the link at so the .a wins.
-# Headers stay on the system include path (no include/ dir here). The same dir
-# is reproduced on the bare release-smoke runner so the PR gate builds the
-# identical static recipe. [LAW:one-type-per-behavior]
+# Sanity check at image-build time — fail loudly if the prefix this stage
+# exists to carry is missing headers/libs. [LAW:verifiable-goals]
 RUN set -euo pipefail; \
-    mkdir -p /opt/icu/linux_amd64/lib; \
-    for lib in libicui18n libicuuc libicudata; do \
-        ln -sf "/usr/lib/x86_64-linux-gnu/${lib}.a" "/opt/icu/linux_amd64/lib/${lib}.a"; \
-    done
-
-# Sanity check at image-build time — fail loudly if any prefix is missing
-# headers/libs the consumer expects. [LAW:verifiable-goals]
-RUN set -euo pipefail; \
-    for target in linux_arm64 darwin_arm64 darwin_amd64 windows_amd64; do \
-        test -f "/opt/icu/${target}/include/unicode/regex.h" \
-            || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
-        ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \
-            || { echo "MISSING: ICU libraries in /opt/icu/${target}/lib/" >&2; exit 1; }; \
-    done; \
-    for lib in libicui18n libicuuc libicudata; do \
-        test -f "/opt/icu/linux_amd64/lib/${lib}.a" \
-            || { echo "MISSING: static archive /opt/icu/linux_amd64/lib/${lib}.a (system libicu-dev *.a)" >&2; exit 1; }; \
-    done; \
-    echo "ICU prefixes verified for all targets."
+    test -f /opt/icu/linux_amd64/include/unicode/regex.h \
+        || { echo "MISSING: /opt/icu/linux_amd64/include/unicode/regex.h" >&2; exit 1; }; \
+    ls /opt/icu/linux_amd64/lib/ | grep -qE 'libicuuc\.a$' \
+        || { echo "MISSING: ICU libraries in /opt/icu/linux_amd64/lib/" >&2; exit 1; }; \
+    echo "ICU prefix verified for linux_amd64."
 
 WORKDIR /go/src/app
 
@@ -287,3 +286,26 @@ WORKDIR /go/src/app
 RUN git config --global --add safe.directory /go/src/app
 
 ENTRYPOINT ["/usr/local/bin/goreleaser"]
+
+# -----------------------------------------------------------------------------
+# Stage: final
+# Assembles the remaining per-target ICU prefixes from the parallel cross-*
+# stages on top of `smoke`, producing the single image that release-validate /
+# release run goreleaser against.
+# -----------------------------------------------------------------------------
+FROM smoke AS final
+COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
+COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
+COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
+COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
+
+# Sanity check at image-build time for the prefixes this stage adds (`smoke`
+# already verified linux_amd64). [LAW:verifiable-goals]
+RUN set -euo pipefail; \
+    for target in linux_arm64 darwin_arm64 darwin_amd64 windows_amd64; do \
+        test -f "/opt/icu/${target}/include/unicode/regex.h" \
+            || { echo "MISSING: /opt/icu/${target}/include/unicode/regex.h" >&2; exit 1; }; \
+        ls "/opt/icu/${target}/lib/" | grep -qE '(libicuuc|sicuuc)\.(a|lib)$' \
+            || { echo "MISSING: ICU libraries in /opt/icu/${target}/lib/" >&2; exit 1; }; \
+    done; \
+    echo "ICU prefixes verified for all targets."

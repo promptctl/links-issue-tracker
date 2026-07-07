@@ -8,8 +8,8 @@
 # zig omits, link-only).
 #
 # CGO is required by gozstd in Dolt; that Dockerfile image owns the per-target C
-# toolchains (zig cc for darwin + windows + linux/arm64, native gcc for
-# linux/amd64), invoked via the per-target CC env entries below.
+# toolchains (zig cc for every target: darwin, windows, and linux via musl),
+# invoked via the per-target CC env entries below.
 #
 # [LAW:one-source-of-truth] The version/commit/date a release reports come from
 # a single place: the ldflags injected here. internal/version.{Version,Commit,Date}
@@ -37,8 +37,9 @@ builds:
     # CGO is REQUIRED: Dolt's embedded MySQL library (gozstd, the regex build
     # tag) does not build with CGO_ENABLED=0. release.yml runs goreleaser
     # inside the build/Dockerfile.release image, which installs zig 0.14.0 as
-    # the single cross-toolchain for every non-native target (darwin arm64/amd64
-    # and windows via zig cc; linux/amd64 uses the image's native gcc).
+    # the single cross-toolchain for every target (darwin arm64/amd64, windows,
+    # and linux arm64/amd64 via *musl*, producing fully static universal linux
+    # binaries that run on glibc and musl/Alpine hosts alike).
     # Per-target CC/CXX is selected via the template-driven env entries below.
     #
     # [LAW:single-enforcer] One Docker image owns the cross-toolchain inventory;
@@ -49,8 +50,7 @@ builds:
       # (file.cpp). Without CXX, Go falls back to the host's default g++ which
       # produces "unrecognized -arch" errors when linking cross-targets.
       # Wrapper scripts installed by build/Dockerfile.release call
-      # `zig cc -target <triple>` / `zig c++ -target <triple>` for each
-      # non-native target; linux/amd64 uses the image's native system gcc.
+      # `zig cc -target <triple>` / `zig c++ -target <triple>` for each target.
       # [LAW:one-source-of-truth] the actual zig target triples live only in
       # the wrapper definitions in Dockerfile.release; these are just names.
       - >-
@@ -73,51 +73,44 @@ builds:
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CC=gcc{{- end -}}
-          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-linux-gnu{{- end }}
+          {{- if eq .Arch "amd64" }}CC=zig-cc-x86_64-linux-musl{{- end -}}
+          {{- if eq .Arch "arm64" }}CC=zig-cc-aarch64-linux-musl{{- end }}
         {{- end -}}
       - >-
         {{- if eq .Os "linux" -}}
-          {{- if eq .Arch "amd64" }}CXX=g++{{- end -}}
-          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-linux-gnu{{- end }}
+          {{- if eq .Arch "amd64" }}CXX=zig-cxx-x86_64-linux-musl{{- end -}}
+          {{- if eq .Arch "arm64" }}CXX=zig-cxx-aarch64-linux-musl{{- end }}
         {{- end -}}
       # CGO include + link paths per target — points cgo at the ICU prefix
-      # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. For
-      # linux/amd64 the include path is empty (it compiles against the system
-      # libicu-dev headers already on the default search path), but the link
-      # path is NOT empty: it points at the static-only /opt/icu/linux_amd64/lib
-      # the Dockerfile populates with symlinks to the system libicu *.a, so the
-      # bare `-licui18n` go-icu-regex emits resolves to the static archive
-      # instead of the .so. [LAW:one-type-per-behavior] every target now links
-      # ICU statically and ships a self-contained binary; linux/amd64 is no
-      # longer the dynamically-linked exception.
+      # build/Dockerfile.release installs at /opt/icu/<goos>_<goarch>. Every
+      # target has the same shape: cross-built static-only ICU prefix, so the
+      # bare `-licui18n` go-icu-regex emits can only resolve to the static
+      # archive. [LAW:one-type-per-behavior] no per-target exceptions.
       #
       # We set CGO_CPPFLAGS (preprocessor: -I) so the include path applies to
       # BOTH C and C++ source. go-icu-regex has file.cpp; CGO_CFLAGS alone
       # is C-only and would leave the C++ include search path empty (-> the
       # observed "unicode/regex.h not found" failure mode).
+      - CGO_CPPFLAGS=-I/opt/icu/{{ .Os }}_{{ .Arch }}/include
+      # linux gets `-static`: the targets are musl (see the CC wrappers), and a
+      # fully static musl link is the point — no /lib/ld-* interpreter, so the
+      # one binary runs on glibc AND musl/Alpine hosts. Stated here explicitly
+      # rather than relying on zig's musl default, so the invariant the release
+      # smoke asserts (no INTERP, no NEEDED) is declared where it is produced.
+      # (Static *glibc* was never an option: its getaddrinfo/NSS dlopen()s at
+      # runtime, and Dolt's cloud SDKs need working DNS.)
       - >-
-        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
-          CGO_CPPFLAGS=
-        {{- else -}}
-          CGO_CPPFLAGS=-I/opt/icu/{{ .Os }}_{{ .Arch }}/include
-        {{- end -}}
-      - >-
-        {{- if and (eq .Os "linux") (eq .Arch "amd64") -}}
-          CGO_LDFLAGS=-L/opt/icu/linux_amd64/lib -static-libstdc++ -static-libgcc
+        {{- if eq .Os "linux" -}}
+          CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib -static
         {{- else -}}
           CGO_LDFLAGS=-L/opt/icu/{{ .Os }}_{{ .Arch }}/lib
         {{- end -}}
       # icu_static build tag: every target links ICU's STATIC archives, so
       # go-icu-regex's static-link cgo recipe (-DU_STATIC_IMPLEMENTATION) is the
-      # one we want everywhere. The cross-targets build ICU from source
-      # (--enable-static --disable-shared) at /opt/icu/<target>; linux/amd64
-      # links the system libicu *.a via the static-only -L above. The extra
-      # -static-libstdc++ -static-libgcc on linux/amd64 bundles the C++ runtime
-      # (ICU is C++): without them the native gcc link leaves NEEDED libstdc++.so
-      # / libgcc_s.so, which a clean target host need not have. The zig
-      # cross-targets bundle their libc++ statically by default, so they don't
-      # need (and zig cc would reject) these gcc driver flags.
+      # one we want everywhere. Every target's ICU is built from source
+      # (--enable-static --disable-shared) at /opt/icu/<target>. zig bundles
+      # its libc++ statically by default, so no -static-libstdc++/-static-libgcc
+      # gcc driver flags are needed (zig cc would reject them).
       - GOFLAGS=-tags=icu_static
     # goos/goarch enumerate every target we know how to build; the active
     # set ships only those NOT in the ignore: block below.
