@@ -98,7 +98,6 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 
 				in := combo.in
 				in.Actor = "tester"
-				in.Fields.By = "tester"
 
 				carriesTransition := in.Action != nil
 				// [LAW:types-are-the-program] The single discriminator: a

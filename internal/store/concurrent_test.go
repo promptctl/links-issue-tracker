@@ -164,9 +164,9 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		priorityPlan[id] = newPriority
 		eg.Go(func() error {
 			p := newPriority
-			_, err := st.UpdateIssue(egCtx, id, UpdateIssueInput{
+			_, err := st.Apply(egCtx, id, Change{Fields: UpdateIssueInput{
 				Priority: &p,
-			})
+			}})
 			return err
 		})
 	}
