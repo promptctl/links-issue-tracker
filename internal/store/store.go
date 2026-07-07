@@ -89,26 +89,25 @@ type CreateIssueInput struct {
 	Prefix string
 }
 
+// UpdateIssueInput is the field-axis patch of a Change: only columns the field
+// axis owns are representable, so a status write through the field path is
+// unconstructible rather than guarded at runtime. [LAW:types-are-the-program]
 type UpdateIssueInput struct {
 	Title       *string
 	Description *string
 	Prompt      *string
 	IssueType   *string
-	Status      *string
 	Priority    *int
 	Assignee    *string
 	Lane        *string
 	Labels      *[]string
-	// By identifies the actor performing the update so the resulting event
-	// log records who changed what. Empty falls back to "unknown".
-	By string
-	// Reason is optional free text recorded on the event.
+	// Reason is optional free text recorded on the field-change event.
 	Reason string
 }
 
 func (u UpdateIssueInput) IsEmpty() bool {
 	return u.Title == nil && u.Description == nil && u.Prompt == nil && u.IssueType == nil &&
-		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
+		u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
 }
 
 // Change is THE issue-record mutation input: an optional lifecycle action
@@ -120,10 +119,12 @@ func (u UpdateIssueInput) IsEmpty() bool {
 // own structure (StatusAction vs not), never a caller-side mode.
 // [LAW:types-are-the-program]
 //
-// Actor/Reason are the transition event's provenance; Fields carries its own
-// By/Reason because a combined change records two events (one transition, one
-// field edit), each with its own reason — `lit update` deliberately synthesizes
-// a transition reason while leaving the field reason as typed.
+// Actor is THE actor for the whole change — one call, one author, recorded on
+// both events it may produce. [LAW:one-source-of-truth] Reasons stay
+// per-event: Reason belongs to the transition event, Fields.Reason to the
+// field-change event, because a combined change records two events whose
+// reasons are independently set — `lit update` deliberately synthesizes a
+// transition reason while leaving the field reason as typed.
 type Change struct {
 	Action model.Action
 	Fields UpdateIssueInput
@@ -879,21 +880,19 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 type fieldWrite struct {
 	issue         model.Issue
 	replaceLabels bool
-	labelActor    string
+	actor         string
 	reason        string
-	by            string
 	changes       []model.FieldChange
 }
 
 // planFieldUpdate validates in against baseline and computes the post-write
-// issue plus its field-change rows, without touching the store. baseline is the
-// row the write starts from: GetIssue for a standalone UpdateIssue, or the
-// post-transition issue when Apply composes a transition and a field edit
-// — so the field UPDATE's lifecycle columns restate the transition's values
-// rather than clobber them. [LAW:effects-at-boundaries] A pure function of
-// (baseline, in): no clock, no IO. The UpdatedAt stamp and every write are
-// deferred to applyFieldsTx.
-func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, error) {
+// issue plus its field-change rows, without touching the store. baseline is
+// Apply's read of the row, or the post-action issue when the change also
+// carries a lifecycle action — so a start's new assignee is the diff's prior,
+// not a second assignee change row. [LAW:effects-at-boundaries] A pure
+// function of (baseline, in, actor): no clock, no IO. The UpdatedAt stamp and
+// every write are deferred to applyFieldsTx.
+func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (fieldWrite, error) {
 	issue := baseline
 	priorTitle := issue.Title
 	priorDescription := issue.Description
@@ -929,9 +928,6 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, err
 			return fieldWrite{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerIssueTypes)
 		}
 		issue.IssueType = issueType
-	}
-	if in.Status != nil {
-		return fieldWrite{}, errors.New("status transitions require dedicated lifecycle commands")
 	}
 	if in.Priority != nil {
 		if err := validatePriority(*in.Priority); err != nil {
@@ -980,64 +976,39 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput) (fieldWrite, err
 	if priorLabels != newLabels {
 		changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
 	}
-	labelActor := in.By
-	if labelActor == "" {
-		labelActor = "unknown"
-	}
-	return fieldWrite{issue: issue, replaceLabels: in.Labels != nil, labelActor: labelActor, reason: in.Reason, by: in.By, changes: changes}, nil
+	return fieldWrite{issue: issue, replaceLabels: in.Labels != nil, actor: actor, reason: in.Reason, changes: changes}, nil
 }
 
 // applyFieldsTx writes a planned field mutation against tx: the issue UPDATE,
 // the label replacement (when requested), and the change event (when any field
 // moved). It owns only writes — every decision was made in planFieldUpdate — so
 // it composes into any transaction a caller already holds. [LAW:single-enforcer]
+// The UPDATE sets only the columns the field axis owns: the lifecycle columns
+// (status, closed_at, archived_at, deleted_at) belong to the transition and
+// retention writes, so a stale field plan cannot clobber a concurrent
+// lifecycle change — the cross-axis write is unwritable, not guarded.
+// [LAW:dataflow-not-control-flow]
 func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) error {
 	issue := w.issue
 	// [LAW:effects-at-boundaries] The clock is read here, at the write boundary,
 	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
 	issue.UpdatedAt = time.Now().UTC()
-	var closedAt any
-	if value := issue.ClosedAtValue(); value != nil {
-		closedAt = value.Format(time.RFC3339Nano)
-	}
-	archivedCol, deletedCol := retentionColumns(issue)
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
-		title = ?, description = ?, agent_prompt = ?, status = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?, closed_at = ?, archived_at = ?, deleted_at = ?
-		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), statusForStorage(issue), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, archivedCol, deletedCol, issue.ID); err != nil {
+		title = ?, description = ?, agent_prompt = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
+		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
 		return fmt.Errorf("update issue: %w", err)
 	}
 	if w.replaceLabels {
-		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.labelActor); err != nil {
+		if err := s.replaceLabelsTx(ctx, tx, issue.ID, issue.Labels, w.actor); err != nil {
 			return err
 		}
 	}
 	if len(w.changes) > 0 {
-		if err := s.recordEvent(ctx, tx, issue.ID, "", w.reason, w.by, w.changes); err != nil {
+		if err := s.recordEvent(ctx, tx, issue.ID, "", w.reason, w.actor, w.changes); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput) (model.Issue, error) {
-	// [LAW:dataflow-not-control-flow] Empty input is a defined no-op; callers need not branch on whether fields were set.
-	if in.IsEmpty() {
-		return s.GetIssue(ctx, id)
-	}
-	issue, err := s.GetIssue(ctx, id)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	w, err := planFieldUpdate(issue, in)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	if err := s.withMutation(ctx, "update issue", func(ctx context.Context, tx *sql.Tx) error {
-		return s.applyFieldsTx(ctx, tx, w)
-	}); err != nil {
-		return model.Issue{}, err
-	}
-	return s.GetIssue(ctx, issue.ID)
 }
 
 // [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
@@ -1060,26 +1031,27 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 	// withMutation, so they share one SQL transaction and one Dolt commit. A
 	// validation error or crash between the two writes can no longer leave a
 	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
+	// [LAW:one-source-of-truth] One change has one author: the actor is
+	// normalized once here and recorded on every event the change produces.
+	actor := strings.TrimSpace(c.Actor)
+	if actor == "" {
+		actor = "unknown"
+	}
 	baseline := current
 	var lw lifecycleWrite
 	if c.Action != nil {
-		actor := strings.TrimSpace(c.Actor)
-		if actor == "" {
-			actor = "unknown"
-		}
 		lw, err = s.planLifecycleAction(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
 		if err != nil {
 			return model.Issue{}, err
 		}
-		// The field write starts from the post-action issue so its lifecycle
-		// columns (and a start's new assignee) restate, not overwrite, what the
-		// action just set.
+		// The field write starts from the post-action issue so a start's new
+		// assignee is restated, not overwritten, and the diff sees it as prior.
 		baseline = lw.postIssue()
 	}
 	var fw fieldWrite
 	hasFields := !c.Fields.IsEmpty()
 	if hasFields {
-		fw, err = planFieldUpdate(baseline, c.Fields)
+		fw, err = planFieldUpdate(baseline, c.Fields, actor)
 		if err != nil {
 			return model.Issue{}, err
 		}
@@ -1730,8 +1702,7 @@ func (s *Store) listAllLabels(ctx context.Context) ([]model.Label, error) {
 
 // recordEvent writes one issue_events row plus N issue_event_changes rows.
 // [LAW:single-enforcer] Single insertion point for issue history. Every
-// mutation site (CreateIssue, transitions, UpdateIssue, ...) computes its
-// field-change diff and routes through here.
+// mutation site computes its field-change diff and routes through here.
 func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, reason, actor string, changes []model.FieldChange) error {
 	event := model.IssueEvent{
 		ID:        "evt-" + uuid.NewString(),

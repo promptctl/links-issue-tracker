@@ -312,8 +312,8 @@ func updateLocal(t *testing.T, ctx context.Context, root, id string, in UpdateIs
 	if err != nil {
 		t.Fatalf("Open(update %s): %v", root, err)
 	}
-	if _, err := st.UpdateIssue(ctx, id, in); err != nil {
-		t.Fatalf("UpdateIssue(%s): %v", id, err)
+	if _, err := st.Apply(ctx, id, Change{Fields: in}); err != nil {
+		t.Fatalf("Apply(%s): %v", id, err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("Close(update): %v", err)

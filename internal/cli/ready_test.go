@@ -792,8 +792,8 @@ func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 // `lit label add/rm` for fixture setup.
 func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 	h.t.Helper()
-	if _, err := h.ap.Store.UpdateIssue(h.ctx, issueID, store.UpdateIssueInput{Labels: &labels}); err != nil {
-		h.t.Fatalf("UpdateIssue(labels) error = %v", err)
+	if _, err := h.ap.Store.Apply(h.ctx, issueID, store.Change{Fields: store.UpdateIssueInput{Labels: &labels}}); err != nil {
+		h.t.Fatalf("Apply(labels) error = %v", err)
 	}
 }
 

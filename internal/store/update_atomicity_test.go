@@ -45,7 +45,6 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 		Fields: UpdateIssueInput{
 			Title:    ptr("Renamed"),
 			Priority: ptr(model.PriorityUrgent),
-			By:       "tester",
 		},
 	})
 	if err != nil {
@@ -103,7 +102,6 @@ func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 		Actor:  "tester",
 		Fields: UpdateIssueInput{
 			Title: ptr(""),
-			By:    "tester",
 		},
 	})
 	if err == nil {
