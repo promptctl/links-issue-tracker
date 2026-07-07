@@ -170,7 +170,9 @@ func transitionFor(targetStatus string) (model.ActionName, bool) {
 // error, so a transition a user could not perform is judged identically by the
 // mutating path and the read-only dry-run.
 func applyTransition(issue model.Issue, action model.ActionName, actor, reason string) (model.Issue, error) {
-	if _, live := issue.Retention().(model.Live); !live {
+	// [LAW:single-enforcer] What counts as out-of-the-flow is the typed Frozen
+	// predicate beside the Retention sum, not a variant match owned here.
+	if model.Frozen(issue.Retention()) {
 		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
 	}
 	return issue.Apply(action, actor, reason)
@@ -1272,41 +1274,15 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	}
 	now := time.Now().UTC()
 	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
-	// Four imperative guards, now matching on the sealed Retention sum; ticket
-	// links-recut-lifecycle-tnka.3 collapses them into one total transition
-	// function. [LAW:types-are-the-program] The sum already removed the
-	// archived+deleted combo these guards once had to fence off, so deleting an
-	// archived issue drops its archive stamp rather than stacking both.
-	switch in.Action {
-	case model.ActionArchive:
-		switch issue.Retention().(type) {
-		case model.Deleted:
-			return model.Issue{}, errors.New("cannot archive deleted issue")
-		case model.Archived:
-			return model.Issue{}, errors.New("issue is already archived")
-		}
-		issue.SetRetention(model.Archived{At: now})
-	case model.ActionUnarchive:
-		switch issue.Retention().(type) {
-		case model.Deleted:
-			return model.Issue{}, errors.New("cannot unarchive deleted issue")
-		case model.Live:
-			return model.Issue{}, errors.New("issue is not archived")
-		}
-		issue.SetRetention(model.Live{})
-	case model.ActionDelete:
-		if _, deleted := issue.Retention().(model.Deleted); deleted {
-			return model.Issue{}, errors.New("issue is already deleted")
-		}
-		issue.SetRetention(model.Deleted{At: now})
-	case model.ActionRestore:
-		if _, deleted := issue.Retention().(model.Deleted); !deleted {
-			return model.Issue{}, errors.New("issue is not deleted")
-		}
-		issue.SetRetention(model.Live{})
-	default:
-		return model.Issue{}, fmt.Errorf("unsupported lifecycle action %q", in.Action)
+	// [LAW:single-enforcer] The retention state machine — legal moves, rejection
+	// reasons, the delete-on-archived stamp drop, unknown-action refusal — is
+	// the pure Retain transition table; this branch supplies the clock and
+	// persists the result.
+	next, err := model.Retain(issue.Retention(), in.Action, now)
+	if err != nil {
+		return model.Issue{}, err
 	}
+	issue.SetRetention(next)
 	issue.UpdatedAt = now
 	nextArchivedAt, nextDeletedAt := model.RetentionTimestamps(issue.Retention())
 	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
