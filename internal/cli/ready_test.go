@@ -141,7 +141,7 @@ func (h readyTestHarness) runReadyAnnotated(rf workableFilter, limit int) []anno
 func (h readyTestHarness) runReadyText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runReady(h.ctx, &stdout, h.ap, args); err != nil {
+	if err := runWorkable(h.ctx, &stdout, h.ap, args, readyView); err != nil {
 		h.t.Fatalf("runReady(%v) error = %v", args, err)
 	}
 	return stdout.String()
@@ -150,7 +150,7 @@ func (h readyTestHarness) runReadyText(args ...string) string {
 func (h readyTestHarness) runReadyErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runReady(h.ctx, &stdout, h.ap, args)
+	return runWorkable(h.ctx, &stdout, h.ap, args, readyView)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {

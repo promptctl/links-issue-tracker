@@ -34,7 +34,7 @@ func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssu
 func (h readyTestHarness) runNextErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runNext(h.ctx, &stdout, h.ap, args)
+	return runWorkable(h.ctx, &stdout, h.ap, args, nextView)
 }
 
 // `lit next` returns the top of the ready partition: the first open, unblocked
