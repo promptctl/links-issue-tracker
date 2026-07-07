@@ -228,6 +228,132 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	}
 }
 
+// closedLeaf builds a closed leaf carrying a close payload — resolution and
+// (optionally) its redirect target — through the real hydration boundary.
+func closedLeaf(t *testing.T, id string, resolution model.Resolution, target string) model.Issue {
+	t.Helper()
+	view := model.StatusView{Value: model.StateClosed, ClosedAt: &t1, Resolution: &resolution}
+	if target != "" {
+		view.RedirectTarget = &target
+	}
+	return leaf(t, id, view, nil)
+}
+
+// TestResolveClosePayloadAtomicity pins resolveClosePayload branch by branch:
+// the resolution and its redirect target settle as ONE atom, so the winner's
+// own target always rides along and a merged close can never pair one side's
+// resolution with the other side's target.
+func TestResolveClosePayloadAtomicity(t *testing.T) {
+	duplicate := model.ResolutionDuplicate
+	// The resolver's real tiebreak is workspace-symmetric; for the unit test a
+	// deterministic "larger string wins" stands in — the property under test is
+	// which PAYLOAD the choice selects, not how the choice is made.
+	tiebreak := func(ours, theirs string) string {
+		if ours >= theirs {
+			return ours
+		}
+		return theirs
+	}
+	cases := []struct {
+		name           string
+		ours, theirs   model.Issue
+		wantResolution string
+		wantTarget     string
+	}{
+		{
+			name:   "both absent stays absent",
+			ours:   leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil),
+			theirs: leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil),
+		},
+		{
+			name:           "one-sided resolution wins with its target",
+			ours:           leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil),
+			theirs:         closedLeaf(t, "i1", duplicate, "links-canon"),
+			wantResolution: "duplicate",
+			wantTarget:     "links-canon",
+		},
+		{
+			name:           "different resolutions: winner contributes its OWN target",
+			ours:           closedLeaf(t, "i1", model.ResolutionObsolete, ""),
+			theirs:         closedLeaf(t, "i1", duplicate, "links-canon"),
+			wantResolution: "obsolete", // tiebreak: "obsolete" > "duplicate"
+			wantTarget:     "",         // obsolete's payload carries no target — never duplicate's
+		},
+		{
+			name:           "same resolution, one absent target: real target wins",
+			ours:           closedLeaf(t, "i1", duplicate, ""),
+			theirs:         closedLeaf(t, "i1", duplicate, "links-canon"),
+			wantResolution: "duplicate",
+			wantTarget:     "links-canon",
+		},
+		{
+			name:           "same resolution, different targets: target tiebreak",
+			ours:           closedLeaf(t, "i1", duplicate, "links-aaa"),
+			theirs:         closedLeaf(t, "i1", duplicate, "links-bbb"),
+			wantResolution: "duplicate",
+			wantTarget:     "links-bbb",
+		},
+		{
+			name:           "identical payloads pass through",
+			ours:           closedLeaf(t, "i1", duplicate, "links-canon"),
+			theirs:         closedLeaf(t, "i1", duplicate, "links-canon"),
+			wantResolution: "duplicate",
+			wantTarget:     "links-canon",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			check := func(ours, theirs model.Issue, side string) {
+				resolution, target := resolveClosePayload(ours, theirs, tiebreak)
+				gotResolution := ""
+				if resolution != nil {
+					gotResolution = string(*resolution)
+				}
+				gotTarget := ""
+				if target != nil {
+					gotTarget = *target
+				}
+				if gotResolution != tc.wantResolution || gotTarget != tc.wantTarget {
+					t.Fatalf("resolveClosePayload(%s) = (%q, %q), want (%q, %q)", side, gotResolution, gotTarget, tc.wantResolution, tc.wantTarget)
+				}
+			}
+			check(tc.ours, tc.theirs, "ours,theirs")
+			// The chooser is symmetric in its inputs, so both machines converge
+			// on the same payload regardless of which side each calls its own.
+			check(tc.theirs, tc.ours, "theirs,ours")
+		})
+	}
+}
+
+// TestResolveIssueRedirectTargetSlavedToResolution is the end-to-end guard:
+// through ResolveIssue, a redirecting close on one side merges with a reopen
+// or a competing close such that the surviving payload is internally
+// consistent — target present iff its redirecting resolution won.
+func TestResolveIssueRedirectTargetSlavedToResolution(t *testing.T) {
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	theirs := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
+	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Provisional()
+	if got.StatusValue() != string(model.StateClosed) {
+		t.Fatalf("status = %q, want closed (dominant-state join)", got.StatusValue())
+	}
+	if target := got.RedirectTargetValue(); target == nil || *target != "links-canon" {
+		t.Fatalf("RedirectTargetValue() = %v, want links-canon riding with the winning duplicate resolution", target)
+	}
+
+	// Reopen wins on state -> the whole close payload clears, target included.
+	reopenBase := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
+	reopenOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	reopenTheirs := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
+	reopened := ResolveIssue(&reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB").Provisional()
+	if reopened.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("reopen status = %q, want open", reopened.StatusValue())
+	}
+	if reopened.RedirectTargetValue() != nil {
+		t.Fatalf("RedirectTargetValue() = %v, want nil (slaved to the non-closed status)", reopened.RedirectTargetValue())
+	}
+}
+
 func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })

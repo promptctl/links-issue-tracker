@@ -56,8 +56,15 @@ WHERE r.type = 'related-to';
 -- the re-materialized edge exactly as it rendered the original one. Edge
 -- created_at is approximated by the close timestamp (falling back to the
 -- row's updated_at) and created_by by 'unknown'; the original edge's exact
--- stamps are not preserved. INSERT IGNORE tolerates a manual edge that
--- already links the same pair — the edge the redirect needs already exists.
+-- stamps are not preserved. INSERT IGNORE tolerates two known-benign row
+-- classes: a manual edge already linking the same pair (the edge the
+-- redirect needs already exists), and an FK-gap row — redirect_target has
+-- no FK to issues, so a redirect whose canonical row was since hard-deleted
+-- cannot re-materialize as an edge (relations' FK would reject it) and is
+-- skipped. The pre-column reader never rendered a redirect for a vanished
+-- counterpart either, so the skip is parity, not new loss — but it IS a
+-- silent skip, accepted here only because a migration has no per-row
+-- reporting channel and both classes are enumerated above.
 -- +goose StatementBegin
 INSERT IGNORE INTO relations(src_id, dst_id, type, created_at, created_by)
 SELECT LEAST(i.id, i.redirect_target), GREATEST(i.id, i.redirect_target), 'related-to', COALESCE(i.closed_at, i.updated_at), 'unknown'

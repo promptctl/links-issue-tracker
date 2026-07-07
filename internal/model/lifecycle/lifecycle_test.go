@@ -57,6 +57,8 @@ func TestApplyTargetStateMatrix(t *testing.T) {
 func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 	closedAt := time.Unix(1_700_000_000, 0).UTC()
 	obsolete := ResolutionObsolete
+	duplicate := ResolutionDuplicate
+	target := "links-abc1"
 	cases := []struct {
 		from   StatusPrimitive
 		action StatusAction
@@ -65,6 +67,10 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 		{NewStatus(InProgress, nil, nil, nil), Start{Assignee: "someone"}},
 		{NewStatus(Closed, &closedAt, &obsolete, nil), Done{}},
 		{NewStatus(Closed, &closedAt, &obsolete, nil), Close{Outcome: Wontfix{}}},
+		// A re-close on a redirecting leaf keeps BOTH halves of the existing
+		// close payload — the new outcome's different target must not rewrite
+		// the recorded one.
+		{NewStatus(Closed, &closedAt, &duplicate, &target), Close{Outcome: Duplicate{Of: "links-other"}}},
 	}
 	for _, tc := range cases {
 		next := tc.from.Apply(tc.action)
@@ -76,6 +82,9 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 		}
 		if !resolutionPtrEqual(next.(StatusPrimitive).Resolution(), tc.from.Resolution()) {
 			t.Fatalf("Apply(%s on %s) mutated Resolution: got %v, want %v", tc.action.Name(), tc.from.State(), next.(StatusPrimitive).Resolution(), tc.from.Resolution())
+		}
+		if !stringPtrEqual(next.(StatusPrimitive).RedirectTarget(), tc.from.RedirectTarget()) {
+			t.Fatalf("Apply(%s on %s) mutated RedirectTarget: got %v, want %v", tc.action.Name(), tc.from.State(), next.(StatusPrimitive).RedirectTarget(), tc.from.RedirectTarget())
 		}
 	}
 }
@@ -228,6 +237,17 @@ func TestNewStatusRedirectTargetRequiresRedirectingResolution(t *testing.T) {
 	if got := NewStatus(InProgress, nil, &duplicate, &target).RedirectTarget(); got != nil {
 		t.Fatalf("in_progress RedirectTarget() = %v, want nil", got)
 	}
+	// The hydration boundary applies the same trim-and-nil normalization the
+	// close transition does, so a blank target from JSON or a legacy row can
+	// never mint a second representation of "no known target".
+	blank := "   "
+	if got := NewStatus(Closed, nil, &duplicate, &blank).RedirectTarget(); got != nil {
+		t.Fatalf("closed duplicate with blank target RedirectTarget() = %v, want nil (normalized)", got)
+	}
+	padded := "  links-abc1  "
+	if got := NewStatus(Closed, nil, &duplicate, &padded).RedirectTarget(); got == nil || *got != "links-abc1" {
+		t.Fatalf("closed duplicate with padded target RedirectTarget() = %v, want trimmed links-abc1", got)
+	}
 }
 
 func TestParseResolutionRoundTrips(t *testing.T) {
@@ -280,6 +300,13 @@ func timePtrEqual(a, b *time.Time) bool {
 }
 
 func resolutionPtrEqual(a, b *Resolution) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
+}
+
+func stringPtrEqual(a, b *string) bool {
 	if a == nil || b == nil {
 		return a == b
 	}

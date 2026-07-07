@@ -124,7 +124,7 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution, redirec
 		if resolution == nil || !resolution.RedirectsToCanonical() {
 			redirectTarget = nil
 		}
-		return closedState{closedAt: cloneTime(closedAt), resolution: cloneResolution(resolution), redirectTarget: cloneString(redirectTarget)}
+		return closedState{closedAt: cloneTime(closedAt), resolution: cloneResolution(resolution), redirectTarget: normalizeRedirectTarget(redirectTarget)}
 	case InProgress:
 		return inProgressState{}
 	default:
@@ -180,9 +180,7 @@ func closeResolution(action StatusAction) *Resolution {
 
 // closeRedirectTarget projects the redirect target a closing action records:
 // only the redirecting Outcome variants carry one, read structurally off the
-// variant's field. The value is normalized here — trimmed, with empty as nil —
-// so "a redirecting close whose target is unknown" has exactly one
-// representation (nil) for the store's validation floor to key on.
+// variant's field.
 // [LAW:dataflow-not-control-flow] Like closeResolution, the variant is the
 // value the one transition varies on.
 func closeRedirectTarget(action StatusAction) *string {
@@ -199,7 +197,22 @@ func closeRedirectTarget(action StatusAction) *string {
 	default:
 		return nil
 	}
-	trimmed := strings.TrimSpace(target)
+	return normalizeRedirectTarget(&target)
+}
+
+// normalizeRedirectTarget is the one definition of the target's canonical
+// form: trimmed, with blank as nil, so "a redirecting close whose target is
+// unknown" has exactly one representation for the store's validation floor
+// and every reader to key on. Both leaf-construction boundaries — the close
+// transition and NewStatus hydration (which can receive an empty string from
+// JSON or a legacy row) — route through it, so a second representation of
+// absence cannot reach a leaf. Returns a fresh pointer, never an alias of
+// the input. [LAW:one-source-of-truth]
+func normalizeRedirectTarget(target *string) *string {
+	if target == nil {
+		return nil
+	}
+	trimmed := strings.TrimSpace(*target)
 	if trimmed == "" {
 		return nil
 	}
