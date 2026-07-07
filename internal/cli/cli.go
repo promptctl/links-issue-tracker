@@ -827,22 +827,58 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return errors.New("--status requires a non-empty value")
 	}
 
-	// [LAW:dataflow-not-control-flow] Always build one UpdateInput; variability lives in empty fields/status, not in which branch runs.
-	// The actor and reason values apply to both transitions (TransitionBy/Reason)
+	// [LAW:dataflow-not-control-flow] Always build one Change; variability lives in empty fields/action, not in which branch runs.
+	// The actor and reason values apply to both the transition (Actor/Reason)
 	// and plain field updates (Fields.By/Reason) so every mutation consistently
 	// records them. The actor resolves through the same identity rule as the
 	// assignee — the agent's session wins, else --by/$USER. [LAW:single-enforcer]
 	actor := resolveActor()
-	in := store.ApplyUpdateInput{
-		TransitionReason: strings.TrimSpace(*reason),
-		TransitionBy:     actor,
+	in := store.Change{
+		Reason: strings.TrimSpace(*reason),
+		Actor:  actor,
 		Fields: store.UpdateIssueInput{
 			By:     actor,
 			Reason: strings.TrimSpace(*reason),
 		},
 	}
 	if visited["status"] {
-		in.TargetStatus = *status
+		// CLI flags are a strict boundary: an unrecognized status is an error,
+		// never leniently defaulted — DefaultOpen here would silently turn a
+		// typo into a reopen. [LAW:no-silent-failure]
+		targetState, err := model.ParseState(*status)
+		if err != nil {
+			return err
+		}
+		// Target state → canonical action is boundary constructor policy, owned
+		// where the "make the status X" intent is expressed. Closed constructs
+		// Done — the neutral success close — because a resolution-less Close is
+		// unconstructible; `lit close` is the boundary that records outcomes.
+		switch targetState {
+		case model.StateOpen:
+			in.Action = model.Reopen{}
+		case model.StateInProgress:
+			// Mirror `lit start`: when the user expressed no assignee intent at
+			// all, ask the resolver so a bare `--status in_progress` still picks
+			// up CLAUDE_CODE_SESSION_ID. The discriminator is flag presence, not
+			// value emptiness — an explicit empty is a clear, never an invitation
+			// to self-assign. [LAW:no-silent-failure]
+			transitionAssignee := resolveIdentity("")
+			if visited["assignee"] {
+				transitionAssignee = strings.TrimSpace(*assignee)
+			}
+			in.Action = model.Start{Assignee: transitionAssignee}
+		case model.StateClosed:
+			in.Action = model.Done{}
+		}
+		if in.Reason == "" {
+			// The synthesized transition reason is `lit update` provenance, not
+			// store policy, so it is composed here at the command boundary.
+			prior, err := ap.Store.GetIssue(ctx, positional[0])
+			if err != nil {
+				return err
+			}
+			in.Reason = fmt.Sprintf("status update via lit update: %s -> %s", prior.StatusValue(), targetState)
+		}
 	}
 	if visited["title"] {
 		value := *title
@@ -870,21 +906,10 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		// (resolveIdentity) is a claim-time convenience that belongs to
 		// `start` only — applying it here would silently turn an explicit
 		// clear (or an explicit third-party assignee) into "assign to me".
-		// [LAW:no-silent-failure]
+		// A Start action built above already carries this same value, so the
+		// transition and the field write cannot disagree. [LAW:no-silent-failure]
 		value := strings.TrimSpace(*assignee)
 		in.Fields.Assignee = &value
-		// `start` (in_progress) stamps the assignee column. Thread the value
-		// through so ApplyUpdate can pass it to TransitionIssue.
-		// [LAW:dataflow-not-control-flow]
-		in.TransitionAssignee = value
-	}
-	// Mirror `lit start`: when the status transition implies a `start` action
-	// and the user expressed no assignee intent at all, ask the resolver so a
-	// bare `--status in_progress` still picks up CLAUDE_CODE_SESSION_ID. The
-	// discriminator is flag presence, not value emptiness — an explicit empty
-	// is a clear, never an invitation to self-assign. [LAW:no-silent-failure]
-	if !visited["assignee"] && strings.EqualFold(strings.TrimSpace(in.TargetStatus), "in_progress") {
-		in.TransitionAssignee = resolveIdentity("")
 	}
 	if visited["labels"] {
 		value := splitCSV(*labels)
@@ -897,7 +922,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if in.IsEmpty() {
 		return errors.New("lit update requires at least one field flag")
 	}
-	issue, err := ap.Store.ApplyUpdate(ctx, positional[0], in)
+	issue, err := ap.Store.Apply(ctx, positional[0], in)
 	if err != nil {
 		return err
 	}
@@ -1092,31 +1117,113 @@ var transitionBreadcrumbTopics = map[model.ActionName]string{
 	model.ActionClose: "done",
 }
 
-func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, action model.ActionName) error {
-	fs := newCobraFlagSet(string(action))
+// transitionSpec describes one lifecycle transition command: its name and how
+// its parsed flags become the typed action value. Each command registers only
+// the flags its action consumes, so flag misuse on any other transition is the
+// parser's unknown-flag error — the per-action runtime flag rejections this
+// file used to carry are unrepresentable. [LAW:types-are-the-program]
+// [LAW:one-type-per-behavior] The eight transition commands are instances of
+// one spec, not eight handlers; variability lives in the spec value.
+type transitionSpec struct {
+	name string
+	// registerFlags declares the action's own flags on fs and returns the
+	// builder invoked after parsing, which turns the flag values into the
+	// sealed action variant.
+	registerFlags func(fs *cobraFlagSet) func() (model.Action, error)
+}
+
+// fixedAction is the registerFlags of every transition whose action carries no
+// payload and therefore consumes no flags.
+func fixedAction(action model.Action) func(fs *cobraFlagSet) func() (model.Action, error) {
+	return func(*cobraFlagSet) func() (model.Action, error) {
+		return func() (model.Action, error) { return action, nil }
+	}
+}
+
+var (
+	startSpec = transitionSpec{name: "start", registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
+		// Start is the claim transition and the only action that carries an
+		// assignee. The resolver overrides the flag with CLAUDE_CODE_SESSION_ID
+		// whenever set; the flag survives only as a fallback for environments
+		// without the env var.
+		assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
+		return func() (model.Action, error) {
+			return model.Start{Assignee: resolveIdentity(*assignee)}, nil
+		}
+	}}
+	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{})}
+	closeSpec = transitionSpec{name: "close", registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
+		resolution, target := registerCloseOutcomeFlags(fs)
+		return func() (model.Action, error) {
+			outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
+			if err != nil {
+				return nil, err
+			}
+			return model.Close{Outcome: outcome}, nil
+		}
+	}}
+	openSpec      = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{})}
+	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{})}
+	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{})}
+	deleteSpec    = transitionSpec{name: "delete", registerFlags: fixedAction(model.Delete{})}
+	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{})}
+)
+
+// registerCloseOutcomeFlags declares the close-outcome flags shared by `lit
+// close` and `lit bulk close`, so the two boundaries expose the same surface.
+// [LAW:single-enforcer]
+func registerCloseOutcomeFlags(fs *cobraFlagSet) (resolution, target *string) {
+	resolution = fs.String("resolution", "", "Close resolution (required): duplicate|superseded|obsolete|wontfix")
+	target = fs.String("of", "", "Canonical ticket a duplicate/superseded close redirects to (required for those, rejected otherwise)")
+	return resolution, target
+}
+
+// closeOutcomeFromFlags is the one flag boundary that turns untrusted
+// (--resolution, --of) strings into the sealed Outcome sum: the resolution is
+// parsed through model.ParseResolution, and the redirect target is required
+// exactly for the redirecting resolutions and rejected for the terminal ones —
+// after this gate, which outcomes carry a target is structural.
+// [LAW:single-enforcer] `lit close` and `lit bulk close` both construct their
+// outcome here, so the two commands cannot disagree about what a close
+// requires.
+func closeOutcomeFromFlags(resolution, target, usage string) (model.Outcome, error) {
+	parsed, err := model.ParseResolution(resolution)
+	if err != nil {
+		return nil, UsageError{Message: fmt.Sprintf("%s\n%v", usage, err)}
+	}
+	trimmedTarget := strings.TrimSpace(target)
+	if parsed.RedirectsToCanonical() {
+		if trimmedTarget == "" {
+			return nil, UsageError{Message: fmt.Sprintf("closing as %s redirects to a canonical ticket — name it with --of", parsed)}
+		}
+	} else if trimmedTarget != "" {
+		return nil, UsageError{Message: fmt.Sprintf("--of applies only to duplicate/superseded closes, not %s", parsed)}
+	}
+	switch parsed {
+	case model.ResolutionDuplicate:
+		return model.Duplicate{Of: trimmedTarget}, nil
+	case model.ResolutionSuperseded:
+		return model.Superseded{By: trimmedTarget}, nil
+	case model.ResolutionObsolete:
+		return model.Obsolete{}, nil
+	case model.ResolutionWontfix:
+		return model.Wontfix{}, nil
+	}
+	// Unreachable: ParseResolution seals the set. Loud beats silent if the set
+	// ever grows without this switch. [LAW:no-silent-failure]
+	return nil, fmt.Errorf("resolution %q has no close outcome", parsed)
+}
+
+func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []string, spec transitionSpec) error {
+	fs := newCobraFlagSet(spec.name)
 	reason := fs.String("reason", "", "Transition reason")
 	resolveActor := registerActor(fs)
-	// Only `start` consumes --assignee. Defining the flag for every action
-	// keeps the parser uniform; non-start paths route to TransitionIssue, which
-	// has no Assignee field — the constraint is structural, not a runtime guard.
-	// The resolver overrides this with CLAUDE_CODE_SESSION_ID whenever set;
-	// the flag survives only as a fallback for environments without the env var.
-	assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
-	// Only `close` consumes --resolution: it is the close reason (why the work was
-	// not finished). `done` is the success path and carries none; every other
-	// action rejects the flag below. The sealed set is parsed at this trust
-	// boundary via model.ParseResolution. [LAW:single-enforcer]
-	resolution := fs.String("resolution", "", "Close resolution (required for close): duplicate|superseded|obsolete|wontfix")
-	// Only duplicate/superseded closes consume --of: the canonical ticket this
-	// issue redirects to. The store records it as a related-to edge atomically
-	// with the close. Required for those two resolutions, rejected for the
-	// terminal ones (obsolete, wontfix) and every non-close action. [LAW:single-enforcer]
-	target := fs.String("of", "", "Canonical ticket a duplicate/superseded close redirects to (required for those, rejected otherwise)")
+	buildAction := spec.registerFlags(fs)
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	remaining := fs.cmd.Flags().Args()
-	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", transitionCommandName(action))
+	usage := fmt.Sprintf("usage: lit %s <id> [--reason <text>]", spec.name)
 	if len(remaining) != 1 {
 		return errors.New(usage)
 	}
@@ -1130,71 +1237,28 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 
-	// [LAW:types-are-the-program] Resolution travels only with `close`. Parse it at
-	// this boundary so an unknown value is rejected here, not deeper in the stack,
-	// and a bare `close` is rejected with a usage error naming the valid set. Any
-	// other action that received the flag is a misuse — reject it rather than
-	// silently discard a value the user expected to take effect. [LAW:no-silent-failure]
-	var (
-		closeResolution *model.Resolution
-		redirectTarget  string
-	)
-	if action == model.ActionClose {
-		parsed, parseErr := model.ParseResolution(*resolution)
-		if parseErr != nil {
-			return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]\n%v", parseErr)}
-		}
-		closeResolution = &parsed
-		// [LAW:single-enforcer] The redirect subset is named once, in
-		// Resolution.RedirectsToCanonical; the target is required exactly for those
-		// resolutions and rejected for the terminal ones. The store consults the
-		// same predicate to write the edge, so the requirement here and the write
-		// there cannot drift.
-		trimmedTarget := strings.TrimSpace(*target)
-		if parsed.RedirectsToCanonical() {
-			if trimmedTarget == "" {
-				return UsageError{Message: fmt.Sprintf("usage: lit close <id> --resolution %s --of <canonical-id>\nclosing as %s redirects to a canonical ticket — name it with --of", parsed, parsed)}
-			}
-		} else if trimmedTarget != "" {
-			return UsageError{Message: fmt.Sprintf("--of applies only to duplicate/superseded closes, not %s", parsed)}
-		}
-		redirectTarget = trimmedTarget
-	} else {
-		if strings.TrimSpace(*resolution) != "" {
-			return UsageError{Message: fmt.Sprintf("--resolution applies only to close, not %s", transitionCommandName(action))}
-		}
-		if strings.TrimSpace(*target) != "" {
-			return UsageError{Message: fmt.Sprintf("--of applies only to close, not %s", transitionCommandName(action))}
-		}
+	action, err := buildAction()
+	if err != nil {
+		return err
 	}
 
-	// [LAW:types-are-the-program] Start is the only action that carries an assignee;
-	// routing to the typed StartIssue method encodes the constraint structurally.
-	var (
-		issue            model.Issue
-		resolvedAssignee string
-	)
 	// [LAW:single-enforcer] The event actor resolves through the same identity
 	// rule as the assignee: the agent's session wins, else --by/$USER. History
 	// must record who actually performed the transition (claude_<session>), not
 	// the shell user, now that ownership survives close as an orthogonal field.
 	actor := resolveActor()
-	if action == model.ActionStart {
-		resolvedAssignee = resolveIdentity(*assignee)
-		issue, err = ap.Store.StartIssue(ctx, store.StartIssueInput{
-			IssueID:   issueID,
-			Assignee:  resolvedAssignee,
-			Reason:    *reason,
-			CreatedBy: actor,
-		})
+	// Status actions travel the typed Change seam; retention actions keep the
+	// TransitionIssue path until the retention fold lands, at which point this
+	// split collapses into one Apply call.
+	var issue model.Issue
+	if statusAction, ok := action.(model.StatusAction); ok {
+		issue, err = ap.Store.Apply(ctx, issueID, store.Change{Action: statusAction, Actor: actor, Reason: *reason})
 	} else {
 		issue, err = ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-			IssueID:        issueID,
-			Action:         action,
-			Reason:         *reason,
-			CreatedBy:      actor,
-			Resolution:     closeResolution,
-			RedirectTarget: redirectTarget,
+			IssueID:   issueID,
+			Action:    action.Name(),
+			Reason:    *reason,
+			CreatedBy: actor,
 		})
 	}
 	if err != nil {
@@ -1204,12 +1268,14 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
 	// issue over from an existing owner succeeds (intended target-state
 	// semantics) but must not do so silently.
-	if priorOwner := prior.AssigneeValue(); action == model.ActionStart && priorOwner != "" && priorOwner != resolvedAssignee {
-		if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(resolvedAssignee)); err != nil {
-			return err
+	if start, ok := action.(model.Start); ok {
+		if priorOwner := prior.AssigneeValue(); priorOwner != "" && priorOwner != start.Assignee {
+			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(start.Assignee)); err != nil {
+				return err
+			}
 		}
 	}
-	postGuidance, hasPostGuidance, err := loadTransitionGuidance(action, "post", ap.Workspace.RootDir)
+	postGuidance, hasPostGuidance, err := loadTransitionGuidance(action.Name(), "post", ap.Workspace.RootDir)
 	if err != nil {
 		return fmt.Errorf("load post-guidance: %w", err)
 	}
@@ -1227,10 +1293,10 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// tickets just became actionable or stale" — a relationship question the
 	// one-line summary above answers with nothing. Render the live neighborhood
 	// from the canonical graph, in the command already running.
-	// [LAW:one-source-of-truth] "Closes the issue" is the lifecycle table's fact
+	// [LAW:one-source-of-truth] "Closes the issue" is the variant's Target fact
 	// (done and close both target Closed), not a re-enumerated action list here,
 	// so a future closing action inherits this block for free.
-	if target, ok := model.ActionTargetState(action); ok && target == model.StateClosed {
+	if statusAction, ok := action.(model.StatusAction); ok && statusAction.Target() == model.StateClosed {
 		detail, err := ap.Store.GetIssueDetail(ctx, issueID)
 		if err != nil {
 			return err
@@ -1239,7 +1305,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 			return err
 		}
 	}
-	if topic, ok := transitionBreadcrumbTopics[action]; ok {
+	if topic, ok := transitionBreadcrumbTopics[action.Name()]; ok {
 		return emitBreadcrumb(stdout, topic)
 	}
 	return nil
@@ -1543,13 +1609,6 @@ func toSlice(s string) []string {
 		return nil
 	}
 	return []string{s}
-}
-
-func transitionCommandName(action model.ActionName) string {
-	if action == model.ActionReopen {
-		return "open"
-	}
-	return string(action)
 }
 
 // loadTransitionGuidance loads a guidance template for the given action/phase.

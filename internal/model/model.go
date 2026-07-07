@@ -22,6 +22,23 @@ type Live = lifecycle.Live
 type Archived = lifecycle.Archived
 type Deleted = lifecycle.Deleted
 
+type Action = lifecycle.Action
+type StatusAction = lifecycle.StatusAction
+type Start = lifecycle.Start
+type Done = lifecycle.Done
+type Close = lifecycle.Close
+type Reopen = lifecycle.Reopen
+type Archive = lifecycle.Archive
+type Unarchive = lifecycle.Unarchive
+type Delete = lifecycle.Delete
+type Restore = lifecycle.Restore
+
+type Outcome = lifecycle.Outcome
+type Duplicate = lifecycle.Duplicate
+type Superseded = lifecycle.Superseded
+type Obsolete = lifecycle.Obsolete
+type Wontfix = lifecycle.Wontfix
+
 const (
 	StateOpen       = lifecycle.Open
 	StateInProgress = lifecycle.InProgress
@@ -44,11 +61,10 @@ const (
 )
 
 var (
-	ParseState        = lifecycle.ParseState
-	ParseAction       = lifecycle.ParseAction
-	DefaultOpen       = lifecycle.DefaultOpen
-	ParseResolution   = lifecycle.ParseResolution
-	ActionTargetState = lifecycle.ActionTargetState
+	ParseState      = lifecycle.ParseState
+	ParseAction     = lifecycle.ParseAction
+	DefaultOpen     = lifecycle.DefaultOpen
+	ParseResolution = lifecycle.ParseResolution
 
 	RetentionFromTimestamps = lifecycle.RetentionFromTimestamps
 	RetentionTimestamps     = lifecycle.RetentionTimestamps
@@ -256,24 +272,21 @@ func (e ContainerActionError) Error() string {
 // [LAW:types-are-the-program] No idempotent / from-state branching here: the
 // leaf's Apply is target-state, so same-state inputs round-trip through the
 // leaf and back unchanged; the only rejections that survive are the real
-// invariants (parse-bypass at the leaf, container here).
-func (i Issue) Apply(action ActionName, actor string, reason string) (Issue, error) {
+// invariants (unhydrated lifecycle, container here) — the leaf itself cannot
+// fail, since StatusAction makes an unsupported action unrepresentable.
+func (i Issue) Apply(action lifecycle.StatusAction) (Issue, error) {
 	root, err := i.lifecycleOrError()
 	if err != nil {
 		return Issue{}, err
 	}
 	if _, ok := root.(lifecycle.Container); ok {
-		return Issue{}, ContainerActionError{ID: i.ID, Action: action, Progress: root.Progress()}
+		return Issue{}, ContainerActionError{ID: i.ID, Action: action.Name(), Progress: root.Progress()}
 	}
 	actionable, ok := root.(lifecycle.Actionable)
 	if !ok {
-		return Issue{}, fmt.Errorf("no %s action available on this issue", action)
+		return Issue{}, fmt.Errorf("no %s action available on this issue", action.Name())
 	}
-	next, err := actionable.Apply(lifecycle.ActionName(action), actor, reason)
-	if err != nil {
-		return Issue{}, err
-	}
-	i.replaceLifecycle(next)
+	i.replaceLifecycle(actionable.Apply(action))
 	return i, nil
 }
 
@@ -365,19 +378,6 @@ func HydrateAllOf(issue Issue, children []Issue) (Issue, error) {
 	}
 	issue.replaceLifecycle(lifecycle.AllOf{Members: members})
 	return issue, nil
-}
-
-// UpdateStatusCapability replaces the root status primitive and refuses
-// containers so callers cannot silently corrupt derived lifecycle state.
-func UpdateStatusCapability(issue Issue, view StatusView) (Issue, error) {
-	root, err := issue.lifecycleOrError()
-	if err != nil {
-		return Issue{}, err
-	}
-	if _, ok := root.(lifecycle.StatusPrimitive); !ok {
-		return Issue{}, fmt.Errorf("issue %s does not expose a status capability", issue.ID)
-	}
-	return HydrateStatus(issue, view)
 }
 
 func (i Issue) lifecycleOrError() (lifecycle.Lifecycle, error) {

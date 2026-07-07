@@ -295,21 +295,23 @@ Reassigns without changing status — hand-off of claimed work.
 
 ## Lifecycle transitions
 
-All seven share one shape (see [Transition guidance](#transition-guidance) and
-[Identity](#identity) for guidance and `--assignee` semantics):
+All transitions share one shape, and each verb accepts only the flags its
+action consumes — an inapplicable flag is an unknown-flag parse error (see
+[Transition guidance](#transition-guidance) and [Identity](#identity) for
+guidance and `--assignee` semantics):
 
 ```text
-lit <verb> <id> [--reason <text>] [--assignee <fallback>]
+lit <verb> <id> [--reason <text>]
 ```
 
-| Command | Transition | Notes |
-|---------|-----------|-------|
-| `lit start` | `open → in_progress` | Claims the issue and assigns it to you. |
-| `lit done` | `in_progress → closed` | Success path; prints post-close capture guidance. Refuses from any status but `in_progress`. |
-| `lit close` | any non-closed → `closed` | Wontfix / obsolete / duplicate — closing without finishing. |
-| `lit open` | reopen a closed issue | |
-| `lit archive` / `lit unarchive` | set / clear the archived flag | Archived issues hide from listings. |
-| `lit delete` / `lit restore` | set / clear the deleted flag | Soft delete; `restore` brings it back. |
+| Command | Transition | Flags | Notes |
+|---------|-----------|-------|-------|
+| `lit start` | `open → in_progress` | `[--assignee <fallback>]` | Claims the issue and assigns it to you. |
+| `lit done` | `in_progress → closed` | | Success path; prints post-close capture guidance. Refuses from any status but `in_progress`. |
+| `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
+| `lit open` | reopen a closed issue | | |
+| `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
+| `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back. |
 
 ---
 
@@ -355,11 +357,14 @@ Lists an issue's children in rank order.
 
 ```text
 lit bulk label <add|rm> --ids <csv> --label <label>
-lit bulk close --ids <csv> [--reason <text>]
+lit bulk close --ids <csv> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]
 lit bulk archive --ids <csv> [--reason <text>]
 ```
 
 Apply one label edit or lifecycle transition across many issues in one call.
+`bulk close` takes the same resolution flags as `lit close` — every closed
+issue records the shared outcome, so a bulk close cannot produce the
+resolution-less close the close command itself forbids.
 
 Each successful item prints `<id> ok` to stdout (the data channel carries
 results only). If any item fails, the per-item errors go to stderr and the

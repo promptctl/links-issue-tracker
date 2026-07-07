@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -22,14 +23,10 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{
-		IssueID: parent.ID, Assignee: "tester", CreatedBy: "tester",
-	}); err != nil {
+	if _, err := ap.Store.Apply(ctx, parent.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-		IssueID: parent.ID, Action: "done", CreatedBy: "tester",
-	}); err != nil {
+	if _, err := ap.Store.Apply(ctx, parent.ID, store.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(done) error = %v", err)
 	}
 

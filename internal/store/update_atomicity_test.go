@@ -8,7 +8,7 @@ import (
 )
 
 // doltCommitCount returns the number of commits in the working branch's history.
-// A combined transition+field ApplyUpdate must add exactly one — proof the two
+// A combined transition+field Apply must add exactly one — proof the two
 // writes share a single Dolt commit rather than landing as two.
 func doltCommitCount(t *testing.T, ctx context.Context, st *Store) int {
 	t.Helper()
@@ -19,10 +19,10 @@ func doltCommitCount(t *testing.T, ctx context.Context, st *Store) int {
 	return count
 }
 
-// TestApplyUpdateTransitionAndFieldsCommitAsOneUnit pins the atomicity end
+// TestApplyTransitionAndFieldsCommitAsOneUnit pins the atomicity end
 // state: an update carrying both a status change and a field edit lands as ONE
 // Dolt commit with both halves applied — not two commits that could tear apart.
-func TestApplyUpdateTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
+func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -39,9 +39,9 @@ func TestApplyUpdateTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 
 	before := doltCommitCount(t, ctx, st)
 
-	updated, err := st.ApplyUpdate(ctx, created.ID, ApplyUpdateInput{
-		TargetStatus: "closed",
-		TransitionBy: "tester",
+	updated, err := st.Apply(ctx, created.ID, Change{
+		Action: model.Done{},
+		Actor:  "tester",
 		Fields: UpdateIssueInput{
 			Title:    ptr("Renamed"),
 			Priority: ptr(model.PriorityUrgent),
@@ -49,18 +49,18 @@ func TestApplyUpdateTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 		},
 	})
 	if err != nil {
-		t.Fatalf("ApplyUpdate() error = %v", err)
+		t.Fatalf("Apply() error = %v", err)
 	}
 
 	// Both halves must be visible on the returned issue and on a fresh read.
 	if updated.State() != model.StateClosed {
-		t.Fatalf("ApplyUpdate() state = %q, want %q", updated.State(), model.StateClosed)
+		t.Fatalf("Apply() state = %q, want %q", updated.State(), model.StateClosed)
 	}
 	if updated.Title != "Renamed" {
-		t.Fatalf("ApplyUpdate() title = %q, want %q", updated.Title, "Renamed")
+		t.Fatalf("Apply() title = %q, want %q", updated.Title, "Renamed")
 	}
 	if updated.Priority != model.PriorityUrgent {
-		t.Fatalf("ApplyUpdate() priority = %d, want %d", updated.Priority, model.PriorityUrgent)
+		t.Fatalf("Apply() priority = %d, want %d", updated.Priority, model.PriorityUrgent)
 	}
 
 	after := doltCommitCount(t, ctx, st)
@@ -69,14 +69,14 @@ func TestApplyUpdateTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	}
 }
 
-// TestApplyUpdateRejectedFieldWriteLeavesNoTransition is the regression guard
+// TestApplyRejectedFieldWriteLeavesNoTransition is the regression guard
 // for the ticket's exact hazard: a status transition paired with a field edit
 // that fails validation must leave the issue WHOLLY untouched. Before the
 // plan/apply split the transition committed first, so an invalid field left a
 // status-moved-but-fields-unwritten row and an audit event for a "failed"
 // command. Field validation now runs before any write, so the transition never
 // lands — the torn state is unrepresentable.
-func TestApplyUpdateRejectedFieldWriteLeavesNoTransition(t *testing.T) {
+func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -98,16 +98,16 @@ func TestApplyUpdateRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 
 	// A valid transition (open -> closed) paired with an empty title, which
 	// planFieldUpdate rejects.
-	_, err = st.ApplyUpdate(ctx, created.ID, ApplyUpdateInput{
-		TargetStatus: "closed",
-		TransitionBy: "tester",
+	_, err = st.Apply(ctx, created.ID, Change{
+		Action: model.Done{},
+		Actor:  "tester",
 		Fields: UpdateIssueInput{
 			Title: ptr(""),
 			By:    "tester",
 		},
 	})
 	if err == nil {
-		t.Fatalf("ApplyUpdate() error = nil, want title-validation rejection")
+		t.Fatalf("Apply() error = nil, want title-validation rejection")
 	}
 
 	after, err := st.GetIssueDetail(ctx, created.ID)
@@ -117,14 +117,14 @@ func TestApplyUpdateRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 
 	// The transition must not have applied: the issue is still open.
 	if after.Issue.State() != model.StateOpen {
-		t.Fatalf("ApplyUpdate() left state = %q after a rejected field write; want %q (transition must roll back with the field write)", after.Issue.State(), model.StateOpen)
+		t.Fatalf("Apply() left state = %q after a rejected field write; want %q (transition must roll back with the field write)", after.Issue.State(), model.StateOpen)
 	}
 	if after.Issue.Title != "Original" {
-		t.Fatalf("ApplyUpdate() title = %q after rejection, want unchanged %q", after.Issue.Title, "Original")
+		t.Fatalf("Apply() title = %q after rejection, want unchanged %q", after.Issue.Title, "Original")
 	}
 	// No audit event for the half-applied command — neither a transition event
 	// nor a field event.
 	if added := len(after.Events) - len(before.Events); added != 0 {
-		t.Fatalf("ApplyUpdate() recorded %d events on a rejected update, want 0", added)
+		t.Fatalf("Apply() recorded %d events on a rejected update, want 0", added)
 	}
 }

@@ -6,8 +6,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-
-	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // Bulk operations once collected each item's outcome into a map, printed every
@@ -29,7 +27,7 @@ func TestBulkTransitionPartialFailureExitsNonZero(t *testing.T) {
 	const bogus = "does-not-exist-xyz"
 
 	var out bytes.Buffer
-	err := runBulkTransition(model.ActionClose)(ctx, &out, ap, []string{"--ids", good + "," + bogus, "--reason", "done"})
+	err := runBulkClose(ctx, &out, ap, []string{"--ids", good + "," + bogus, "--resolution", "obsolete", "--reason", "done"})
 	if err == nil {
 		t.Fatal("bulk close with one bogus ID returned nil error, want a failure that drives a non-zero exit code")
 	}

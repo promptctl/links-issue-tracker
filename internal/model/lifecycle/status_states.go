@@ -1,7 +1,6 @@
 package lifecycle
 
 import (
-	"fmt"
 	"time"
 )
 
@@ -44,8 +43,8 @@ func (openState) ClosedAt() *time.Time {
 func (openState) Resolution() *Resolution {
 	return nil
 }
-func (o openState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
-	return applyStatusAction(o, name)
+func (o openState) Apply(action StatusAction) Lifecycle {
+	return applyStatusAction(o, action)
 }
 
 type inProgressState struct{}
@@ -58,8 +57,8 @@ func (inProgressState) ClosedAt() *time.Time {
 func (inProgressState) Resolution() *Resolution {
 	return nil
 }
-func (s inProgressState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
-	return applyStatusAction(s, name)
+func (s inProgressState) Apply(action StatusAction) Lifecycle {
+	return applyStatusAction(s, action)
 }
 
 type closedState struct {
@@ -82,8 +81,8 @@ func (c closedState) ClosedAt() *time.Time {
 func (c closedState) Resolution() *Resolution {
 	return cloneResolution(c.resolution)
 }
-func (c closedState) Apply(name ActionName, actor string, reason string) (Lifecycle, error) {
-	return applyStatusAction(c, name)
+func (c closedState) Apply(action StatusAction) Lifecycle {
+	return applyStatusAction(c, action)
 }
 
 // NewStatus builds the leaf variant for state, attaching closedAt and
@@ -106,27 +105,46 @@ func NewStatus(state State, closedAt *time.Time, resolution *Resolution) StatusP
 // applyStatusAction is the target-state transition shared by every leaf state:
 // the action names the desired terminal state and we return that state's
 // variant. A same-state call returns the receiver so the store recognizes it as
-// a no-op. Transitioning into closed stamps the close time; every other target
-// carries no timestamp, so a close time can never linger on a non-closed state.
-// [LAW:one-source-of-truth] The action→target mapping is read from
-// ActionTargetState; this function maintains no parallel table.
-func applyStatusAction(current Lifecycle, name ActionName) (Lifecycle, error) {
-	target, ok := ActionTargetState(name)
-	if !ok {
-		return nil, fmt.Errorf("unsupported lifecycle action %q", name)
-	}
+// a no-op — including a re-close, which keeps the existing resolution rather
+// than silently rewriting it. Transitioning into closed stamps the close time
+// and attaches the action's outcome, so a close's payload travels through the
+// machine instead of being re-attached after it; every other target carries
+// neither, so a close time or resolution can never linger on a non-closed
+// state. It cannot fail: Target is total over StatusAction, so the old
+// "unsupported lifecycle action" arm is unrepresentable.
+// [LAW:one-source-of-truth] The action→target mapping is the variant's Target;
+// this function maintains no parallel table.
+func applyStatusAction(current Lifecycle, action StatusAction) Lifecycle {
+	target := action.Target()
 	if current.State() == target {
-		return current, nil
+		return current
 	}
 	switch target {
 	case Closed:
 		now := time.Now().UTC()
-		return closedState{closedAt: &now}, nil
+		return closedState{closedAt: &now, resolution: closeResolution(action)}
 	case InProgress:
-		return inProgressState{}, nil
+		return inProgressState{}
 	default:
-		return openState{}, nil
+		return openState{}
 	}
+}
+
+// closeResolution projects the resolution a closing action records: Close
+// carries its outcome's resolution; Done is the neutral success close and
+// records none. [LAW:dataflow-not-control-flow] The variant is the value the
+// one transition varies on. A Close minted without an outcome is a
+// constructor bug, and it panics here the same way impostor Retention values
+// do — loud at the source, never nil-guarded at readers. [LAW:no-silent-failure]
+func closeResolution(action StatusAction) *Resolution {
+	if c, ok := action.(Close); ok {
+		if c.Outcome == nil {
+			panic("lifecycle: Close action requires an Outcome; use Done for the neutral success close")
+		}
+		r := c.Outcome.Resolution()
+		return &r
+	}
+	return nil
 }
 
 func cloneTime(value *time.Time) *time.Time {

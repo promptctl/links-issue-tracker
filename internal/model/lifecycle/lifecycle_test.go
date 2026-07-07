@@ -33,19 +33,16 @@ func TestNewStatusClosedAtBelongsOnlyToClosed(t *testing.T) {
 // matrix. Each cell asserts the post-state matches the action's target state —
 // same-state cells (start@InProgress, done@Closed, close@Closed, reopen@Open)
 // are no-ops that preserve the receiver. There are no rejection cells: every
-// cell here is a legal call.
+// cell here is a legal call, and Apply cannot fail by construction.
 func TestApplyTargetStateMatrix(t *testing.T) {
-	allActions := []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen}
+	allActions := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
 	for _, from := range []State{Open, InProgress, Closed} {
 		for _, action := range allActions {
-			target, _ := ActionTargetState(action)
-			t.Run(string(from)+"_"+string(action), func(t *testing.T) {
-				next, err := NewStatus(from, nil, nil).Apply(action, "tester", "")
-				if err != nil {
-					t.Fatalf("Apply(%s on %s) error = %v, want success", action, from, err)
-				}
+			target := action.Target()
+			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
+				next := NewStatus(from, nil, nil).Apply(action)
 				if got := next.State(); got != target {
-					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action, from, got, target)
+					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, got, target)
 				}
 			})
 		}
@@ -54,29 +51,31 @@ func TestApplyTargetStateMatrix(t *testing.T) {
 
 // TestApplySameStateReturnsReceiverUnchanged pins the no-op contract that
 // downstream store layers depend on: when the action's target equals the
-// current state, Apply returns the receiver verbatim so writeStatusTransition
-// can recognize same-state calls without re-deriving them.
+// current state, Apply returns the receiver verbatim — including a re-close,
+// whose new outcome is deliberately NOT rewritten over the existing one — so
+// the store's plan can recognize same-state calls without re-deriving them.
 func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 	closedAt := time.Unix(1_700_000_000, 0).UTC()
+	obsolete := ResolutionObsolete
 	cases := []struct {
 		from   StatusPrimitive
-		action ActionName
+		action StatusAction
 	}{
-		{NewStatus(Open, nil, nil), ActionReopen},
-		{NewStatus(InProgress, nil, nil), ActionStart},
-		{NewStatus(Closed, &closedAt, nil), ActionDone},
-		{NewStatus(Closed, &closedAt, nil), ActionClose},
+		{NewStatus(Open, nil, nil), Reopen{}},
+		{NewStatus(InProgress, nil, nil), Start{Assignee: "someone"}},
+		{NewStatus(Closed, &closedAt, &obsolete), Done{}},
+		{NewStatus(Closed, &closedAt, &obsolete), Close{Outcome: Wontfix{}}},
 	}
 	for _, tc := range cases {
-		next, err := tc.from.Apply(tc.action, "tester", "")
-		if err != nil {
-			t.Fatalf("Apply(%s on %s) error = %v", tc.action, tc.from.State(), err)
-		}
+		next := tc.from.Apply(tc.action)
 		if next.State() != tc.from.State() {
-			t.Fatalf("Apply(%s on %s) changed state to %q", tc.action, tc.from.State(), next.State())
+			t.Fatalf("Apply(%s on %s) changed state to %q", tc.action.Name(), tc.from.State(), next.State())
 		}
 		if !timePtrEqual(next.(StatusPrimitive).ClosedAt(), tc.from.ClosedAt()) {
-			t.Fatalf("Apply(%s on %s) mutated ClosedAt: got %v, want %v", tc.action, tc.from.State(), next.(StatusPrimitive).ClosedAt(), tc.from.ClosedAt())
+			t.Fatalf("Apply(%s on %s) mutated ClosedAt: got %v, want %v", tc.action.Name(), tc.from.State(), next.(StatusPrimitive).ClosedAt(), tc.from.ClosedAt())
+		}
+		if !resolutionPtrEqual(next.(StatusPrimitive).Resolution(), tc.from.Resolution()) {
+			t.Fatalf("Apply(%s on %s) mutated Resolution: got %v, want %v", tc.action.Name(), tc.from.State(), next.(StatusPrimitive).Resolution(), tc.from.Resolution())
 		}
 	}
 }
@@ -90,36 +89,41 @@ func TestApplySameStateReturnsReceiverUnchanged(t *testing.T) {
 func TestApplyClosedAtBookkeeping(t *testing.T) {
 	priorClosed := time.Unix(1_700_000_000, 0).UTC()
 
-	openToClosed, err := NewStatus(Open, nil, nil).Apply(ActionClose, "tester", "")
-	if err != nil {
-		t.Fatalf("Apply(close on open) error = %v", err)
-	}
+	openToClosed := NewStatus(Open, nil, nil).Apply(Close{Outcome: Wontfix{}})
 	if closedAt := openToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil {
 		t.Fatal("Apply(close on open).ClosedAt() = nil, want stamped")
 	}
 
-	inProgressToClosed, err := NewStatus(InProgress, nil, nil).Apply(ActionDone, "tester", "")
-	if err != nil {
-		t.Fatalf("Apply(done on in_progress) error = %v", err)
-	}
+	inProgressToClosed := NewStatus(InProgress, nil, nil).Apply(Done{})
 	if closedAt := inProgressToClosed.(StatusPrimitive).ClosedAt(); closedAt == nil {
 		t.Fatal("Apply(done on in_progress).ClosedAt() = nil, want stamped")
 	}
 
-	closedToOpen, err := NewStatus(Closed, &priorClosed, nil).Apply(ActionReopen, "tester", "")
-	if err != nil {
-		t.Fatalf("Apply(reopen on closed) error = %v", err)
-	}
+	closedToOpen := NewStatus(Closed, &priorClosed, nil).Apply(Reopen{})
 	if closedAt := closedToOpen.(StatusPrimitive).ClosedAt(); closedAt != nil {
 		t.Fatalf("Apply(reopen on closed).ClosedAt() = %v, want nil", closedAt)
 	}
 
-	closedToInProgress, err := NewStatus(Closed, &priorClosed, nil).Apply(ActionStart, "tester", "")
-	if err != nil {
-		t.Fatalf("Apply(start on closed) error = %v", err)
-	}
+	closedToInProgress := NewStatus(Closed, &priorClosed, nil).Apply(Start{})
 	if closedAt := closedToInProgress.(StatusPrimitive).ClosedAt(); closedAt != nil {
 		t.Fatalf("Apply(start on closed).ClosedAt() = %v, want nil — in_progress carries no close time", closedAt)
+	}
+}
+
+// TestApplyCloseCarriesOutcomeThroughMachine pins the payload threading: a
+// close's outcome arrives WITH the close, landing on the closed variant as its
+// resolution, instead of being re-attached after the state machine. Done is
+// the neutral success close and records none.
+func TestApplyCloseCarriesOutcomeThroughMachine(t *testing.T) {
+	closed := NewStatus(Open, nil, nil).Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	got := closed.(StatusPrimitive).Resolution()
+	if got == nil || *got != ResolutionDuplicate {
+		t.Fatalf("Apply(close duplicate).Resolution() = %v, want %q", got, ResolutionDuplicate)
+	}
+
+	done := NewStatus(InProgress, nil, nil).Apply(Done{})
+	if got := done.(StatusPrimitive).Resolution(); got != nil {
+		t.Fatalf("Apply(done).Resolution() = %v, want nil — done records no resolution", got)
 	}
 }
 
@@ -150,10 +154,7 @@ func TestApplyReopenClearsResolution(t *testing.T) {
 	if got := closed.Resolution(); got == nil || *got != ResolutionDuplicate {
 		t.Fatalf("precondition: closed Resolution() = %v, want %q", got, ResolutionDuplicate)
 	}
-	reopened, err := closed.Apply(ActionReopen, "tester", "")
-	if err != nil {
-		t.Fatalf("Apply(reopen on closed) error = %v", err)
-	}
+	reopened := closed.Apply(Reopen{})
 	if got := reopened.(StatusPrimitive).Resolution(); got != nil {
 		t.Fatalf("Apply(reopen on closed).Resolution() = %v, want nil — open carries no resolution", got)
 	}
@@ -201,17 +202,18 @@ func TestRedirectsToCanonical(t *testing.T) {
 	}
 }
 
-func TestApplyRejectsParseBypass(t *testing.T) {
-	if _, err := NewStatus(Open, nil, nil).Apply(ActionName("bogus"), "tester", ""); err == nil {
-		t.Fatal("Apply(bogus) error = nil, want unsupported-action error")
-	}
-}
-
 func timePtrEqual(a, b *time.Time) bool {
 	if a == nil || b == nil {
 		return a == b
 	}
 	return a.Equal(*b)
+}
+
+func resolutionPtrEqual(a, b *Resolution) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 func TestAllOfState(t *testing.T) {
@@ -405,27 +407,74 @@ func TestParseActionRejectsUnknown(t *testing.T) {
 	}
 }
 
-func TestActionTargetState(t *testing.T) {
-	tests := []struct {
-		action ActionName
-		want   State
-	}{
-		{ActionStart, InProgress},
-		{ActionDone, Closed},
-		{ActionClose, Closed},
-		{ActionReopen, Open},
+// TestActionSumEncodings pins the persistence encodings of the sealed action
+// sum: each variant's Name (the events-table verb) and, for the status subset,
+// its Target — the one forward action→state map. The retention variants are
+// deliberately absent from the status table: they act on the Retention axis
+// and are not StatusActions.
+func TestActionSumEncodings(t *testing.T) {
+	names := map[ActionName]Action{
+		ActionStart:     Start{},
+		ActionDone:      Done{},
+		ActionClose:     Close{Outcome: Wontfix{}},
+		ActionReopen:    Reopen{},
+		ActionArchive:   Archive{},
+		ActionUnarchive: Unarchive{},
+		ActionDelete:    Delete{},
+		ActionRestore:   Restore{},
 	}
-	for _, tt := range tests {
-		got, ok := ActionTargetState(tt.action)
-		if !ok {
-			t.Fatalf("ActionTargetState(%q) ok=false; want true", tt.action)
-		}
-		if got != tt.want {
-			t.Fatalf("ActionTargetState(%q) = %q, want %q", tt.action, got, tt.want)
+	for want, action := range names {
+		if got := action.Name(); got != want {
+			t.Fatalf("%T.Name() = %q, want %q", action, got, want)
 		}
 	}
-	if _, ok := ActionTargetState(ActionName("bogus")); ok {
-		t.Fatal("ActionTargetState(\"bogus\") ok=true; want false")
+	targets := map[State]StatusAction{
+		InProgress: Start{},
+		Open:       Reopen{},
+	}
+	for want, action := range targets {
+		if got := action.Target(); got != want {
+			t.Fatalf("%T.Target() = %q, want %q", action, got, want)
+		}
+	}
+	// Done and Close both target Closed — the two closing actions.
+	if (Done{}).Target() != Closed || (Close{Outcome: Wontfix{}}).Target() != Closed {
+		t.Fatal("Done/Close must target Closed")
+	}
+	for _, retention := range []Action{Archive{}, Unarchive{}, Delete{}, Restore{}} {
+		if _, ok := retention.(StatusAction); ok {
+			t.Fatalf("%T satisfies StatusAction; retention actions have no status target", retention)
+		}
+	}
+}
+
+// TestOutcomeEncodingsAgreeWithRedirectPredicate pins the two projections of
+// "which closes redirect" against each other: the write side reads the target
+// structurally off the outcome variant, the read side (which only has the
+// persisted resolution string) uses Resolution.RedirectsToCanonical. A variant
+// carries a target field exactly when its resolution redirects.
+func TestOutcomeEncodingsAgreeWithRedirectPredicate(t *testing.T) {
+	carriesTarget := map[Outcome]bool{
+		Duplicate{Of: "links-abc1"}:  true,
+		Superseded{By: "links-abc1"}: true,
+		Obsolete{}:                   false,
+		Wontfix{}:                    false,
+	}
+	wantResolution := map[Resolution]Outcome{
+		ResolutionDuplicate:  Duplicate{Of: "links-abc1"},
+		ResolutionSuperseded: Superseded{By: "links-abc1"},
+		ResolutionObsolete:   Obsolete{},
+		ResolutionWontfix:    Wontfix{},
+	}
+	for resolution, outcome := range wantResolution {
+		if got := outcome.Resolution(); got != resolution {
+			t.Fatalf("%T.Resolution() = %q, want %q", outcome, got, resolution)
+		}
+	}
+	for outcome, hasTarget := range carriesTarget {
+		if got := outcome.Resolution().RedirectsToCanonical(); got != hasTarget {
+			t.Fatalf("%T carries a target = %v but %s.RedirectsToCanonical() = %v — the sum's shape and the read-side predicate drifted", outcome, hasTarget, outcome.Resolution(), got)
+		}
 	}
 }
 

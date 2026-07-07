@@ -46,16 +46,10 @@ func (f epicFixture) addChild(title string) string {
 	return child.ID
 }
 
-func (f epicFixture) transition(id string, action model.ActionName) {
+func (f epicFixture) transition(id string, action model.StatusAction) {
 	f.t.Helper()
-	var err error
-	if action == model.ActionStart {
-		_, err = f.ap.Store.StartIssue(f.ctx, store.StartIssueInput{IssueID: id, Assignee: "test", CreatedBy: "test"})
-	} else {
-		_, err = f.ap.Store.TransitionIssue(f.ctx, store.TransitionIssueInput{IssueID: id, Action: action, CreatedBy: "test"})
-	}
-	if err != nil {
-		f.t.Fatalf("transition(%s, %s) error = %v", id, action, err)
+	if _, err := f.ap.Store.Apply(f.ctx, id, store.Change{Action: action, Actor: "test"}); err != nil {
+		f.t.Fatalf("transition(%s, %s) error = %v", id, action.Name(), err)
 	}
 }
 
@@ -95,8 +89,8 @@ func TestRenderEpicContextAllClosed(t *testing.T) {
 	f := newEpicFixture(t, "Closed epic", "all done")
 	c1 := f.addChild("First")
 	c2 := f.addChild("Second")
-	f.transition(c1, "close")
-	f.transition(c2, "close")
+	f.transition(c1, model.Done{})
+	f.transition(c2, model.Done{})
 
 	out := f.render("")
 	for _, id := range []string{c1, c2} {
@@ -117,8 +111,8 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 	ready := f.addChild("Ready one")
 	blocked := f.addChild("Blocked one")
 
-	f.transition(closed, "close")
-	f.transition(inProgress, "start")
+	f.transition(closed, model.Done{})
+	f.transition(inProgress, model.Start{Assignee: "test"})
 	f.block(blocked, ready) // blocked depends on the still-open ready child
 
 	out := f.render(ready)
@@ -217,7 +211,7 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 	blocker := f.addChild("Done blocker")
 	blocked := f.addChild("Now ready")
 	f.block(blocked, blocker)
-	f.transition(blocker, "close")
+	f.transition(blocker, model.Done{})
 
 	out := f.render("")
 	if !strings.Contains(out, "[ready]       "+blocked+"  Now ready") {
@@ -274,7 +268,7 @@ func TestRenderEpicContextCrossEpicOneDirection(t *testing.T) {
 func TestRenderEpicContextCrossEpicBothDirections(t *testing.T) {
 	f := newEpicFixture(t, "Both directions", "deps")
 	child := f.addChild("Inside")
-	upstream := f.outsider("Upstream")   // inside depends on it
+	upstream := f.outsider("Upstream")     // inside depends on it
 	downstream := f.outsider("Downstream") // it depends on inside
 	f.block(child, upstream)
 	f.block(downstream, child)
@@ -302,10 +296,10 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 	closedExt := f.outsider("Closed outside")
 	openExt := f.outsider("Open outside")
 
-	f.block(openChild, closedExt)  // external side closed => filtered
-	f.block(closedChild, openExt)  // internal side closed => filtered
-	f.transition(closedChild, "close")
-	f.transition(closedExt, "close")
+	f.block(openChild, closedExt) // external side closed => filtered
+	f.block(closedChild, openExt) // internal side closed => filtered
+	f.transition(closedChild, model.Done{})
+	f.transition(closedExt, model.Done{})
 
 	out := f.render("")
 	if strings.Contains(out, "Cross-epic dependencies") {
