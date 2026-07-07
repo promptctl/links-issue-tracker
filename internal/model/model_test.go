@@ -52,6 +52,30 @@ func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
 	}
 }
 
+// TestApplyCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
+// accessor chain for the payload threading: a Close's outcome, having traveled
+// through the state machine into the closed leaf, must surface through
+// Issue.ResolutionValue(); the neutral Done records none.
+func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+	closed, err := leaf.Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	if err != nil {
+		t.Fatalf("Apply(close duplicate) error = %v", err)
+	}
+	got := closed.ResolutionValue()
+	if got == nil || *got != ResolutionDuplicate {
+		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
+	}
+
+	done, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).Apply(Done{})
+	if err != nil {
+		t.Fatalf("Apply(done) error = %v", err)
+	}
+	if got := done.ResolutionValue(); got != nil {
+		t.Fatalf("ResolutionValue() after done = %v, want nil — done records no resolution", got)
+	}
+}
+
 func TestIssueJSONRoundTripEpicRequiresStoreHydration(t *testing.T) {
 	epic, err := HydrateAllOf(Issue{
 		ID:        "epic-1",

@@ -307,7 +307,7 @@ lit <verb> <id> [--reason <text>]
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
 | `lit start` | `open → in_progress` | `[--assignee <fallback>]` | Claims the issue and assigns it to you. |
-| `lit done` | `in_progress → closed` | | Success path; prints post-close capture guidance. Refuses from any status but `in_progress`. |
+| `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | reopen a closed issue | | |
 | `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
