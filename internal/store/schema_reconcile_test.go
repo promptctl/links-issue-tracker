@@ -1485,3 +1485,23 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 		t.Fatalf("error still contains the data-destroying guidance from the deleted gate: %q", err)
 	}
 }
+
+// The issue-type CHECK clauses are derived from the sealed model.IssueTypes
+// vocabulary (links-recut-types-mweb.3). This pins the derivation to the exact
+// literals reconcile has always installed: a byte-level change would make
+// every existing workspace's normalized-clause probes miss, dropping and
+// re-adding constraints on each Open. [LAW:one-source-of-truth] The literals
+// below are the test's independent copy of the at-rest schema, not a second
+// authority in production code.
+func TestDerivedTypeCheckClausesMatchHistoricalLiterals(t *testing.T) {
+	if want := `issue_type IN ('task','feature','bug','chore','epic')`; issueTypeCheckClause != want {
+		t.Fatalf("issueTypeCheckClause = %q, want %q", issueTypeCheckClause, want)
+	}
+	if want := `issue_type IN ('epic')`; containerTypeMembership != want {
+		t.Fatalf("containerTypeMembership = %q, want %q", containerTypeMembership, want)
+	}
+	want := `(issue_type IN ('epic') AND status IS NULL) OR (issue_type NOT IN ('epic') AND status IS NOT NULL AND status IN ('open','in_progress','closed'))`
+	if canonicalStatusCheckClause != want {
+		t.Fatalf("canonicalStatusCheckClause = %q, want %q", canonicalStatusCheckClause, want)
+	}
+}

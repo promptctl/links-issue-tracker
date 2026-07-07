@@ -668,8 +668,10 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Title:       cellString(rec["title"]),
 		Description: cellString(rec["description"]),
 		Prompt:      cellString(rec["prompt"]),
-		Priority:    cellInt(rec["priority"]),
-		IssueType:   cellString(rec["issue_type"]),
+		Priority: cellInt(rec["priority"]),
+		// Raw conversion on the restore boundary, conserving bytes the DB
+		// CHECK constraint already vouches for — the salvage-path convention.
+		IssueType: model.IssueType(cellString(rec["issue_type"])),
 		Topic:       cellString(rec["topic"]),
 		Assignee:    cellString(rec["assignee"]),
 		Rank:        cellString(rec["rank"]),
@@ -678,7 +680,7 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 	}
 	issue.SetRetention(model.RetentionFromTimestamps(cellTimePtr(rec["archived_at"]), cellTimePtr(rec["deleted_at"])))
 	view := model.StatusView{}
-	if !model.IsContainerType(issue.IssueType) {
+	if !issue.IssueType.IsContainer() {
 		view.Value = model.DefaultOpen(cellString(rec["status"]))
 		view.ClosedAt = cellTimePtr(rec["closed_at"])
 		// Raw conversion on the restore boundary, conserving the sealed bytes a

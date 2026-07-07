@@ -36,7 +36,7 @@ func transitionActionCount(events []model.IssueEvent) int {
 }
 
 // TestApplyIssueTypeFlagMatrix asserts a documented outcome for every
-// model.ValidIssueTypes × meaningful-flag-combination cell of the unified update
+// model.IssueTypes × meaningful-flag-combination cell of the unified update
 // path. The matrix exists to close the implicit gap that let
 // links-update-container-ov6 ship: no test covered (epic, field-only), so a
 // phantom status transition on containers went unnoticed.
@@ -48,7 +48,7 @@ func transitionActionCount(events []model.IssueEvent) int {
 // [LAW:types-are-the-program] The accept/reject outcome of a cell is not hand
 // enumerated; it is the theorem the type already encodes — a cell is rejected
 // iff it asks a container to transition. wantErr is computed from
-// (IsContainerType × combo-carries-an-action), and the test proves the
+// (IsContainer × combo-carries-an-action), and the test proves the
 // implementation agrees. Field writes succeed on every type; leaf transitions
 // succeed for every target; only container transitions are refused.
 func TestApplyIssueTypeFlagMatrix(t *testing.T) {
@@ -76,9 +76,9 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 		{name: "title_and_status_open", in: Change{Fields: UpdateIssueInput{Title: ptr("Renamed")}, Action: model.Reopen{}}},
 	}
 
-	for _, issueType := range model.ValidIssueTypes {
+	for _, issueType := range model.IssueTypes() {
 		for _, combo := range combos {
-			t.Run(issueType+"/"+combo.name, func(t *testing.T) {
+			t.Run(string(issueType)+"/"+combo.name, func(t *testing.T) {
 				created, err := st.CreateIssue(ctx, CreateIssueInput{
 					Prefix:      "test",
 					Title:       initialTitle,
@@ -103,7 +103,7 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 				// [LAW:types-are-the-program] The single discriminator: a
 				// container has no own status, so any transition request is
 				// refused; every other cell is accepted.
-				wantErr := model.IsContainerType(issueType) && carriesTransition
+				wantErr := issueType.IsContainer() && carriesTransition
 
 				updated, err := st.Apply(ctx, created.ID, in)
 

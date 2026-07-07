@@ -72,24 +72,6 @@ var (
 	Frozen                  = lifecycle.Frozen
 )
 
-func IsContainerType(issueType string) bool {
-	trimmed := strings.TrimSpace(issueType)
-	for _, container := range ContainerIssueTypes {
-		if container == trimmed {
-			return true
-		}
-	}
-	return false
-}
-
-// ValidIssueTypes is the canonical set of issue types. ContainerIssueTypes is
-// the subset that uses container-style lifecycle (no leaf status primitive).
-// [LAW:one-source-of-truth] Issue-type vocabulary lives here; persistence validation and lifecycle dispatch both consult these sets.
-var (
-	ValidIssueTypes     = []string{"task", "feature", "bug", "chore", "epic"}
-	ContainerIssueTypes = []string{"epic"}
-)
-
 // Priority constants for the two-level priority system.
 // [LAW:one-source-of-truth] Canonical priority values live here; all other
 // references derive from these constants rather than repeating magic ints.
@@ -108,16 +90,6 @@ func PriorityName(p int) string {
 	}
 }
 
-func IsValidIssueType(issueType string) bool {
-	trimmed := strings.TrimSpace(issueType)
-	for _, valid := range ValidIssueTypes {
-		if valid == trimmed {
-			return true
-		}
-	}
-	return false
-}
-
 // [LAW:one-type-per-behavior] Issues and epics are one record type; lifecycle
 // capability data carries the behavior distinction without splitting shared
 // issue behavior across duplicate types.
@@ -126,9 +98,9 @@ type Issue struct {
 	Title       string `json:"title"`
 	Description string `json:"description"`
 	Prompt      string `json:"prompt,omitempty"`
-	Priority    int    `json:"priority"`
-	IssueType   string `json:"issue_type"`
-	Topic       string `json:"topic"`
+	Priority    int       `json:"priority"`
+	IssueType   IssueType `json:"issue_type"`
+	Topic       string    `json:"topic"`
 	// Assignee is the issue's owner — orthogonal to the status state machine and
 	// preserved across every transition. [LAW:one-source-of-truth] One home for
 	// ownership; the lifecycle leaf carries no assignee.
@@ -334,7 +306,7 @@ func (i Issue) RedirectTargetValue() *string {
 }
 
 func (i Issue) IsContainer() bool {
-	return IsContainerType(i.IssueType)
+	return i.IssueType.IsContainer()
 }
 
 // IsHydrated reports whether this issue carries a fully-hydrated lifecycle.
@@ -367,11 +339,11 @@ func (i *Issue) replaceLifecycle(next lifecycle.Lifecycle) {
 // leaf status primitive based on issue type and applies the matching hydrator. Callers
 // that have already loaded both the row's status view and (for containers) the
 // child issues should route through this function instead of repeating the
-// IsContainerType discriminator.
+// container discriminator.
 // [LAW:single-enforcer] Container-vs-leaf hydration dispatch lives here so
 // read paths don't grow parallel branches that drift apart.
 func HydrateRow(issue Issue, view StatusView, children []Issue) (Issue, error) {
-	if IsContainerType(issue.IssueType) {
+	if issue.IssueType.IsContainer() {
 		return HydrateAllOf(issue, children)
 	}
 	return HydrateStatus(issue, view)
@@ -409,7 +381,7 @@ type issueJSON struct {
 	Prompt      string                `json:"prompt,omitempty"`
 	Status      *State                `json:"status,omitempty"`
 	Priority    int                   `json:"priority"`
-	IssueType   string                `json:"issue_type"`
+	IssueType   IssueType             `json:"issue_type"`
 	Topic       string                `json:"topic"`
 	Assignee    string                `json:"assignee,omitempty"`
 	Rank        string                `json:"rank"`
@@ -522,7 +494,7 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		retention:   lifecycle.RetentionFromTimestamps(payload.ArchivedAt, payload.DeletedAt),
 	}
 	switch {
-	case IsContainerType(payload.IssueType):
+	case payload.IssueType.IsContainer():
 		// [LAW:single-enforcer] JSON cannot synthesize derived container lifecycle; store hydration is the only boundary that may attach child state.
 		i.pendingHydration = true
 		i.lifecycle = nil

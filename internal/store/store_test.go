@@ -269,7 +269,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			issues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: tc.statuses, IssueTypes: []string{"epic"}})
+			issues, err := st.ListIssues(ctx, ListIssuesFilter{Statuses: tc.statuses, IssueTypes: []model.IssueType{model.TypeEpic}})
 			if err != nil {
 				t.Fatalf("ListIssues(%v) error = %v", tc.statuses, err)
 			}
@@ -974,7 +974,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	hasComments := true
 	issues, err := st.ListIssues(ctx, ListIssuesFilter{
 		Statuses:      []model.State{model.StateOpen},
-		IssueTypes:    []string{"task"},
+		IssueTypes:    []model.IssueType{model.TypeTask},
 		Assignees:     []string{"bmf"},
 		SearchTerms:   []string{"renderer", "draw prep"},
 		IDs:           []string{issueA.ID, issueB.ID},
@@ -1973,15 +1973,15 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
-	taskType := "task"
+	taskType := model.TypeTask
 	if _, err := st.Apply(ctx, epic.ID, Change{Fields: UpdateIssueInput{IssueType: &taskType}}); err == nil {
 		t.Fatal("Apply(epic -> task) succeeded; container ↔ leaf type changes must be refused")
 	}
-	epicType := "epic"
+	epicType := model.TypeEpic
 	if _, err := st.Apply(ctx, leaf.ID, Change{Fields: UpdateIssueInput{IssueType: &epicType}}); err == nil {
 		t.Fatal("Apply(task -> epic) succeeded; container ↔ leaf type changes must be refused")
 	}
-	bugType := "bug"
+	bugType := model.TypeBug
 	if _, err := st.Apply(ctx, leaf.ID, Change{Fields: UpdateIssueInput{IssueType: &bugType}}); err != nil {
 		t.Fatalf("Apply(task -> bug) error = %v; same-kind type changes must remain legal", err)
 	}

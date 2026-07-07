@@ -82,7 +82,7 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 	r.theirs = *theirs
 	r.id = ours.ID
 
-	mergedType := twoTier(r.hasBase, r.base.IssueType, ours.IssueType, theirs.IssueType, r.tiebreak)
+	mergedType := twoTier(r.hasBase, r.base.IssueType, ours.IssueType, theirs.IssueType, typedTiebreak[model.IssueType](&r))
 
 	// [LAW:types-are-the-program] Build the merged row on whichever side already
 	// carries the resolved type's lifecycle shape, so a leaf stays a leaf and a
@@ -128,7 +128,7 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 
 	// Status/assignee/closed_at live in the lifecycle and exist only for leaves;
 	// a container's state is derived from its children and is never merged here.
-	if !model.IsContainerType(mergedType) {
+	if !mergedType.IsContainer() {
 		merged = r.resolveStatus(merged)
 	}
 
@@ -238,6 +238,15 @@ func (r *resolver) tiebreak(ours, theirs string) string {
 		return ours
 	}
 	return theirs
+}
+
+// typedTiebreak lifts the symmetric chooser to a named string type: the
+// contract is symmetric selection, not string-ness, so the adapter changes the
+// element type and nothing else.
+func typedTiebreak[T ~string](r *resolver) func(T, T) T {
+	return func(ours, theirs T) T {
+		return T(r.tiebreak(string(ours), string(theirs)))
+	}
 }
 
 // resolveClosePayload settles the closed-state why-not payload — the
