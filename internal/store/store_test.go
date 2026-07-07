@@ -792,12 +792,12 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	}
 
 	newPrompt := "Re-run with --headless and capture screenshot to /tmp/out.png"
-	updated, err := st.UpdateIssue(ctx, created.ID, UpdateIssueInput{Prompt: &newPrompt})
+	updated, err := st.Apply(ctx, created.ID, Change{Fields: UpdateIssueInput{Prompt: &newPrompt}})
 	if err != nil {
-		t.Fatalf("UpdateIssue() error = %v", err)
+		t.Fatalf("Apply() error = %v", err)
 	}
 	if updated.Prompt != newPrompt {
-		t.Fatalf("UpdateIssue prompt = %q, want %q", updated.Prompt, newPrompt)
+		t.Fatalf("Apply prompt = %q, want %q", updated.Prompt, newPrompt)
 	}
 
 	matches, err := st.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"headless"}})
@@ -816,12 +816,12 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	}
 
 	cleared := ""
-	cleared2, err := st.UpdateIssue(ctx, created.ID, UpdateIssueInput{Prompt: &cleared})
+	cleared2, err := st.Apply(ctx, created.ID, Change{Fields: UpdateIssueInput{Prompt: &cleared}})
 	if err != nil {
-		t.Fatalf("UpdateIssue(clear prompt) error = %v", err)
+		t.Fatalf("Apply(clear prompt) error = %v", err)
 	}
 	if cleared2.Prompt != "" {
-		t.Fatalf("UpdateIssue(clear) prompt = %q, want empty", cleared2.Prompt)
+		t.Fatalf("Apply(clear) prompt = %q, want empty", cleared2.Prompt)
 	}
 }
 
@@ -1163,9 +1163,9 @@ func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
 		t.Fatalf("labels after add = %#v", labels)
 	}
 
-	updated, err := st.UpdateIssue(ctx, issue.ID, UpdateIssueInput{Labels: &[]string{"critical", "renderer"}})
+	updated, err := st.Apply(ctx, issue.ID, Change{Fields: UpdateIssueInput{Labels: &[]string{"critical", "renderer"}}})
 	if err != nil {
-		t.Fatalf("UpdateIssue() error = %v", err)
+		t.Fatalf("Apply() error = %v", err)
 	}
 	if len(updated.Labels) != 2 || updated.Labels[0] != "critical" || updated.Labels[1] != "renderer" {
 		t.Fatalf("updated.Labels = %#v", updated.Labels)
@@ -1974,16 +1974,16 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	taskType := "task"
-	if _, err := st.UpdateIssue(ctx, epic.ID, UpdateIssueInput{IssueType: &taskType}); err == nil {
-		t.Fatal("UpdateIssue(epic -> task) succeeded; container ↔ leaf type changes must be refused")
+	if _, err := st.Apply(ctx, epic.ID, Change{Fields: UpdateIssueInput{IssueType: &taskType}}); err == nil {
+		t.Fatal("Apply(epic -> task) succeeded; container ↔ leaf type changes must be refused")
 	}
 	epicType := "epic"
-	if _, err := st.UpdateIssue(ctx, leaf.ID, UpdateIssueInput{IssueType: &epicType}); err == nil {
-		t.Fatal("UpdateIssue(task -> epic) succeeded; container ↔ leaf type changes must be refused")
+	if _, err := st.Apply(ctx, leaf.ID, Change{Fields: UpdateIssueInput{IssueType: &epicType}}); err == nil {
+		t.Fatal("Apply(task -> epic) succeeded; container ↔ leaf type changes must be refused")
 	}
 	bugType := "bug"
-	if _, err := st.UpdateIssue(ctx, leaf.ID, UpdateIssueInput{IssueType: &bugType}); err != nil {
-		t.Fatalf("UpdateIssue(task -> bug) error = %v; same-kind type changes must remain legal", err)
+	if _, err := st.Apply(ctx, leaf.ID, Change{Fields: UpdateIssueInput{IssueType: &bugType}}); err != nil {
+		t.Fatalf("Apply(task -> bug) error = %v; same-kind type changes must remain legal", err)
 	}
 }
 
@@ -2157,6 +2157,50 @@ func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
 	})
 	if err == nil || err.Error() != `archive conflict: issue retention is "archived"` {
 		t.Fatalf("retentionWrite.applyTx(stale archive) error = %v, want archive conflict", err)
+	}
+}
+
+// TestFieldWriteDoesNotClobberConcurrentLifecycle pins the field write to the
+// columns the field axis owns: a field plan taken against a snapshot whose
+// lifecycle competing writers have since moved (open→closed, live→archived)
+// must land its field change and leave both lifecycle axes untouched — the
+// stale restatement is unwritable, not raced. (Same plan-vs-write window as
+// TestRetentionUsesOptimisticConcurrency: Apply itself re-reads, so the
+// contention under test is between planning and writing.)
+func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Rename me", Topic: "life", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	w, err := planFieldUpdate(issue, UpdateIssueInput{Title: ptr("Renamed")}, "tester")
+	if err != nil {
+		t.Fatalf("planFieldUpdate(live) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(competing close) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Archive{}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(competing archive) error = %v", err)
+	}
+	if err := st.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
+		return st.applyFieldsTx(ctx, tx, w)
+	}); err != nil {
+		t.Fatalf("applyFieldsTx(stale field plan) error = %v", err)
+	}
+	got, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue() error = %v", err)
+	}
+	if got.Title != "Renamed" {
+		t.Fatalf("Title = %q, want %q (the field change must land)", got.Title, "Renamed")
+	}
+	if got.State() != model.StateClosed || got.ClosedAtValue() == nil {
+		t.Fatalf("State = %q closedAt = %v; the stale field write clobbered the concurrent close", got.State(), got.ClosedAtValue())
+	}
+	if _, ok := got.Retention().(model.Archived); !ok {
+		t.Fatalf("Retention = %#v; the stale field write clobbered the concurrent archive", got.Retention())
 	}
 }
 

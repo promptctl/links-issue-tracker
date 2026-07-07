@@ -828,16 +828,14 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	}
 
 	// [LAW:dataflow-not-control-flow] Always build one Change; variability lives in empty fields/action, not in which branch runs.
-	// The actor and reason values apply to both the transition (Actor/Reason)
-	// and plain field updates (Fields.By/Reason) so every mutation consistently
-	// records them. The actor resolves through the same identity rule as the
-	// assignee — the agent's session wins, else --by/$USER. [LAW:single-enforcer]
-	actor := resolveActor()
+	// The reason applies to both the transition event (Reason) and the field
+	// event (Fields.Reason). The actor resolves through the same identity rule
+	// as the assignee — the agent's session wins, else --by/$USER — and is
+	// recorded on every event the change produces. [LAW:single-enforcer]
 	in := store.Change{
 		Reason: strings.TrimSpace(*reason),
-		Actor:  actor,
+		Actor:  resolveActor(),
 		Fields: store.UpdateIssueInput{
-			By:     actor,
 			Reason: strings.TrimSpace(*reason),
 		},
 	}
@@ -1299,9 +1297,9 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 }
 
 // runAssign rewrites the assignee column on an issue without changing status.
-// Flows through Store.UpdateIssue so the resulting event row is a normal
-// field-update event — there is no special "assign" action type, just a
-// generic field mutation. [LAW:one-type-per-behavior]
+// Flows through Store.Apply as an action-less change so the resulting event
+// row is a normal field-update event — there is no special "assign" action
+// type, just a generic field mutation. [LAW:one-type-per-behavior]
 func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("assign")
@@ -1318,12 +1316,14 @@ func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if newAssignee == "" {
 		return errors.New("new assignee cannot be empty")
 	}
-	issue, err := ap.Store.UpdateIssue(ctx, id, store.UpdateIssueInput{
-		Assignee: &newAssignee,
+	issue, err := ap.Store.Apply(ctx, id, store.Change{
 		// [LAW:single-enforcer] Actor resolves through the shared identity rule;
 		// the second positional arg is the new owner, the actor is who acted.
-		By:     resolveActor(),
-		Reason: *reason,
+		Actor: resolveActor(),
+		Fields: store.UpdateIssueInput{
+			Assignee: &newAssignee,
+			Reason:   *reason,
+		},
 	})
 	if err != nil {
 		return err
