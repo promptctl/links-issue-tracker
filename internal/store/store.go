@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -748,8 +749,13 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 
 	// [LAW:single-enforcer] Hydrate every related issue in one query
 	// rather than running N+1 GetIssue calls. The map lets the relation
-	// loop below stay a pure data-flow over already-hydrated rows.
+	// loop below stay a pure data-flow over already-hydrated rows. The
+	// redirect target joins the same batch — hydrating it costs no extra
+	// query.
 	relatedIDs := collectRelatedIssueIDs(id, relations)
+	if target := issue.RedirectTargetValue(); target != nil && !slices.Contains(relatedIDs, *target) {
+		relatedIDs = append(relatedIDs, *target)
+	}
 	relatedByID, err := s.getIssuesByIDs(ctx, relatedIDs)
 	if err != nil {
 		return model.IssueDetail{}, err
@@ -771,10 +777,17 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 		}
 		siblings = siblingsOf(id, parentChildren)
 	}
-	// The redirect target is lifted out of related at the store — the single
-	// owner of graph semantics — so every renderer reads two disjoint slices
-	// without re-deriving which related edge is the redirect.
-	redirectTarget, related := splitRedirect(issue, relations, relatedFrom(id, relations, relatedByID))
+	// The redirect target hydrates from the issue's own column — related-to
+	// edges mean exactly one thing (manual peer links), so there is nothing to
+	// re-derive. A target whose row has vanished hydrates as absent, matching
+	// getIssuesByIDs' hole-skipping contract.
+	var redirectTarget *model.Issue
+	if target := issue.RedirectTargetValue(); target != nil {
+		if hydrated, ok := relatedByID[*target]; ok {
+			redirectTarget = &hydrated
+		}
+	}
+	related := relatedFrom(id, relations, relatedByID)
 	detail := model.IssueDetail{
 		Issue:          issue,
 		Relations:      relations,
@@ -1172,30 +1185,30 @@ func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, acto
 
 // transitionWrite is a fully-planned status transition, ready to execute
 // against a tx. planStatusTransition is the read+validate+compute half — it runs
-// the applyTransition guards, the assignee rule, the redirect-edge validation
+// the applyTransition guards, the assignee rule, the redirect-target validation
 // (which reads the DB to confirm the target exists), and the change-row diff,
 // but performs no writes. applyTransitionTx is the write half: the single
-// guarded UPDATE plus the redirect edge and event. The split is read/compute vs
+// guarded UPDATE plus the event. The split is read/compute vs
 // write, not pure vs impure — planStatusTransition does read the clock and the
 // store; what it defers is every mutation. The plan also carries `post` — the
 // post-transition issue — which Apply uses as the baseline for a following
 // field write. A noop plan records that the target state and assignee already
 // hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
-	issueID       string
-	fromStatus    string
-	toStatus      string
-	postAssignee  string
-	now           time.Time
-	closedAtArg   any
-	resolutionArg any
-	action        model.ActionName
-	reason        string
-	actor         string
-	redirectEdges []model.Relation
-	changes       []model.FieldChange
-	post          model.Issue
-	noop          bool
+	issueID           string
+	fromStatus        string
+	toStatus          string
+	postAssignee      string
+	now               time.Time
+	closedAtArg       any
+	resolutionArg     any
+	redirectTargetArg any
+	action            model.ActionName
+	reason            string
+	actor             string
+	changes           []model.FieldChange
+	post              model.Issue
+	noop              bool
 }
 
 func (w transitionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error {
@@ -1244,19 +1257,21 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if postResolution != nil {
 		resolutionArg = string(*postResolution)
 	}
-	// The redirect edge is a structural fact of the close outcome: only the
-	// redirecting variants carry a canonical target. Building (and validating)
-	// it before the transaction mirrors AddRelation, which checks endpoint
-	// existence outside its mutation. The result is 0 or 1 edges; the tx writes
-	// them by iteration, so the close path stays branch-free.
-	// [LAW:dataflow-not-control-flow]
-	var outcome model.Outcome
-	if c, ok := action.(model.Close); ok {
-		outcome = c.Outcome
-	}
-	redirectEdges, err := s.buildRedirectEdges(ctx, issue.ID, outcome, actor, now)
-	if err != nil {
+	// The redirect target traveled through the state machine into the closed
+	// leaf exactly like the resolution — only the redirecting outcomes carry
+	// one, structurally — so the plan reads it back off the post-transition
+	// issue and validates it the way AddRelation validates endpoints: it must
+	// exist and cannot be the issue itself. Validating before the transaction
+	// mirrors the target-existence read AddRelation does outside its mutation.
+	// [LAW:one-source-of-truth] The leaf is the single carrier; there is no
+	// separate outcome re-extraction to drift from it.
+	postRedirect := updated.RedirectTargetValue()
+	if err := s.validateRedirectTarget(ctx, issue.ID, postResolution, postRedirect); err != nil {
 		return transitionWrite{}, err
+	}
+	var redirectTargetArg any
+	if postRedirect != nil {
+		redirectTargetArg = *postRedirect
 	}
 	// [LAW:one-source-of-truth] Change rows mirror the columns that actually
 	// moved. A same-state reclaim records only the assignee row — the legacy
@@ -1274,6 +1289,10 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if !resolutionsEqual(priorResolution, postResolution) {
 		changes = append(changes, model.FieldChange{Field: "resolution", From: formatNullableResolution(priorResolution), To: formatNullableResolution(postResolution)})
 	}
+	priorRedirect := issue.RedirectTargetValue()
+	if !stringPointersEqual(priorRedirect, postRedirect) {
+		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
+	}
 	if priorAssignee != postAssignee {
 		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 	}
@@ -1282,31 +1301,33 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// traveled through the machine, so there is no post-hoc rehydration to
 	// re-attach a resolution. [LAW:one-source-of-truth]
 	return transitionWrite{
-		issueID:       issue.ID,
-		fromStatus:    fromStatus,
-		toStatus:      toStatus,
-		postAssignee:  postAssignee,
-		now:           now,
-		closedAtArg:   closedAtArg,
-		resolutionArg: resolutionArg,
-		action:        action.Name(),
-		reason:        reason,
-		actor:         actor,
-		redirectEdges: redirectEdges,
-		changes:       changes,
-		post:          updated,
+		issueID:           issue.ID,
+		fromStatus:        fromStatus,
+		toStatus:          toStatus,
+		postAssignee:      postAssignee,
+		now:               now,
+		closedAtArg:       closedAtArg,
+		resolutionArg:     resolutionArg,
+		redirectTargetArg: redirectTargetArg,
+		action:            action.Name(),
+		reason:            reason,
+		actor:             actor,
+		changes:           changes,
+		post:              updated,
 	}, nil
 }
 
 // applyTransitionTx writes a planned status transition against tx: the guarded
-// status UPDATE, the redirect edge (when the close carries one), and the change
-// event. It owns only writes, so it composes into any transaction a caller
-// already holds — which is how Apply folds a transition and a field write
-// into one commit. [LAW:single-enforcer]
+// status UPDATE and the change event. It owns only writes, so it composes into
+// any transaction a caller already holds — which is how Apply folds a
+// transition and a field write into one commit. [LAW:single-enforcer]
+// The redirect target rides the same UPDATE as status/closed_at/resolution, so
+// a reopen clears the whole close payload atomically — a stale redirect on a
+// live issue is unwritable, not guarded against. [LAW:one-source-of-truth]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
-	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ? WHERE id = ? AND status = ?`,
-		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.issueID, w.fromStatus)
+	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ? AND status = ?`,
+		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID, w.fromStatus)
 	if err != nil {
 		return fmt.Errorf("update issue status: %w", err)
 	}
@@ -1320,15 +1341,6 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 			return lookupErr
 		}
 		return fmt.Errorf("%s conflict: issue status is %q", w.action, currentStatus)
-	}
-	// [LAW:no-silent-failure] The redirect edge shares this transaction with
-	// the close UPDATE: if it fails, the whole close rolls back, so a
-	// duplicate/superseded close can never persist without its edge to the
-	// canonical ticket ("duplicate of nothing").
-	for _, edge := range w.redirectEdges {
-		if err := insertRelationTx(ctx, tx, edge); err != nil {
-			return err
-		}
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
@@ -1435,43 +1447,28 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
 
-// buildRedirectEdges produces the related-to edge a duplicate/superseded close
-// records — at most one, to the canonical ticket the closing issue redirects
-// to. Which outcomes carry a target is structural: only the redirecting
-// variants have the field, so "a redirect target on a terminal outcome" is
-// unrepresentable rather than rejected here. A nil outcome (no close, or a
-// close that records no resolution) and the terminal outcomes produce no edge.
-// The target is validated the way AddRelation validates endpoints: it must
-// exist and cannot be the issue itself, so the redirect points at a real,
-// distinct ticket. Endpoints are normalized to related-to's canonical (sorted)
-// orientation, since the edge is undirected. [LAW:single-enforcer] This is the
-// single edge writer; the read side infers redirects from the persisted
-// resolution via Resolution.RedirectsToCanonical, and the outcome sum's shape
-// is pinned to that predicate by test so the two projections cannot drift.
-func (s *Store) buildRedirectEdges(ctx context.Context, closingID string, outcome model.Outcome, actor string, now time.Time) ([]model.Relation, error) {
-	var target string
-	switch o := outcome.(type) {
-	case model.Duplicate:
-		target = o.Of
-	case model.Superseded:
-		target = o.By
-	default:
-		return nil, nil
+// validateRedirectTarget is the close-validation floor for the redirect
+// target the post-transition leaf carries. A NEW redirecting close must carry
+// its target (the CLI requires --of; this is the store's integrity floor for
+// any other caller — the leaf type alone admits a target-less redirecting
+// close because legacy rows genuinely occupy that state). A present target is
+// validated the way AddRelation validates endpoints: it must exist and cannot
+// be the issue itself, so the redirect points at a real, distinct ticket.
+// [LAW:single-enforcer] The one validation site for every close path.
+func (s *Store) validateRedirectTarget(ctx context.Context, closingID string, resolution *model.Resolution, target *string) error {
+	if target == nil {
+		if resolution != nil && resolution.RedirectsToCanonical() {
+			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
+		}
+		return nil
 	}
-	trimmedTarget := strings.TrimSpace(target)
-	if trimmedTarget == "" {
-		// [LAW:no-silent-failure] The CLI requires --of for redirecting closes;
-		// this is the store's integrity floor for any other caller.
-		return nil, fmt.Errorf("closing as %s requires a canonical target issue to redirect to", outcome.Resolution())
+	if *target == closingID {
+		return fmt.Errorf("cannot redirect %s to itself", closingID)
 	}
-	if trimmedTarget == closingID {
-		return nil, fmt.Errorf("cannot redirect %s to itself", closingID)
+	if _, err := s.GetIssue(ctx, *target); err != nil {
+		return err
 	}
-	if _, err := s.GetIssue(ctx, trimmedTarget); err != nil {
-		return nil, err
-	}
-	srcID, dstID := model.RelRelatedTo.CanonicalEndpoints(closingID, trimmedTarget)
-	return []model.Relation{{SrcID: srcID, DstID: dstID, Type: model.RelRelatedTo, CreatedAt: now, CreatedBy: actor}}, nil
+	return nil
 }
 
 func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, error) {
@@ -1963,7 +1960,7 @@ func nextRankAtTop(ctx context.Context, tx *sql.Tx) (string, error) {
 var issueColumns = []string{
 	"id", "title", "description", "agent_prompt", "status", "priority",
 	"issue_type", "topic", "assignee", "item_rank", "lane", "created_at",
-	"updated_at", "closed_at", "resolution", "archived_at", "deleted_at",
+	"updated_at", "closed_at", "resolution", "redirect_target", "archived_at", "deleted_at",
 }
 
 // issueProjection renders issueColumns as a SELECT list. A non-empty alias
@@ -1997,12 +1994,12 @@ func scanIssue(row issueScanner) (issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, resolution, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, redirectTarget, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &archivedAt, &deletedAt); err != nil {
 		return issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, archivedAt, deletedAt)
+	return parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 }
 
 func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
@@ -2012,16 +2009,16 @@ func scanIssueWithParent(row issueScanner) (string, issueRow, error) {
 	var status sql.NullString
 	var assignee string
 	var createdAt, updatedAt string
-	var closedAt, resolution, archivedAt, deletedAt sql.NullString
-	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &archivedAt, &deletedAt); err != nil {
+	var closedAt, resolution, redirectTarget, archivedAt, deletedAt sql.NullString
+	if err := row.Scan(&parentID, &issue.ID, &issue.Title, &issue.Description, &prompt, &status, &issue.Priority, &issue.IssueType, &issue.Topic, &assignee, &issue.Rank, &issue.Lane, &createdAt, &updatedAt, &closedAt, &resolution, &redirectTarget, &archivedAt, &deletedAt); err != nil {
 		return "", issueRow{}, err
 	}
 	issue.Prompt = prompt.String
-	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, archivedAt, deletedAt)
+	parsed, err := parsedIssueRow(issue, status, assignee, createdAt, updatedAt, closedAt, resolution, redirectTarget, archivedAt, deletedAt)
 	return parentID, parsed, err
 }
 
-func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, resolution sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
+func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, createdAt string, updatedAt string, closedAt sql.NullString, resolution sql.NullString, redirectTarget sql.NullString, archivedAt sql.NullString, deletedAt sql.NullString) (issueRow, error) {
 	var err error
 	issue.CreatedAt, err = scanTime(createdAt)
 	if err != nil {
@@ -2052,6 +2049,13 @@ func parsedIssueRow(issue partialIssue, status sql.NullString, assignee string, 
 		// non-closed leaf. [LAW:types-are-the-program]
 		r := model.Resolution(resolution.String)
 		statusView.Resolution = &r
+	}
+	if redirectTarget.Valid {
+		// Same salvage contract as resolution: the value was validated at the
+		// write boundary and the DB CHECK pins it to a redirecting resolution;
+		// NewStatus drops it for any non-redirecting pairing.
+		t := redirectTarget.String
+		statusView.RedirectTarget = &t
 	}
 	var archivedTime, deletedTime *time.Time
 	if archivedAt.Valid {
@@ -2362,6 +2366,36 @@ func resolutionsEqual(a, b *model.Resolution) bool {
 		return false
 	}
 	return *a == *b
+}
+
+// formatNullableString renders an optional string for a FieldChange's from/to
+// value: nil → "" (SQL NULL via nullableString), matching formatNullableTime.
+func formatNullableString(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
+}
+
+// stringPointersEqual compares two *string by value, the same nil-aware
+// contract as timesEqual/resolutionsEqual.
+func stringPointersEqual(a, b *string) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+// nullableStringPtr stores a nil optional string as SQL NULL, the pointer
+// counterpart of nullableResolution.
+func nullableStringPtr(value *string) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {

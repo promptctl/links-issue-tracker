@@ -321,6 +321,18 @@ func (i Issue) ResolutionValue() *lifecycle.Resolution {
 	return cloneResolution(status.Resolution)
 }
 
+// RedirectTargetValue is the canonical ticket a redirecting close points to,
+// projected to the issue level; nil unless the issue is closed with a
+// redirecting resolution that carries its target. Read through the capability
+// seam like ResolutionValue — the target is that resolution's payload.
+func (i Issue) RedirectTargetValue() *string {
+	status := i.Capabilities().Status
+	if status == nil {
+		return nil
+	}
+	return cloneString(status.RedirectTarget)
+}
+
 func (i Issue) IsContainer() bool {
 	return IsContainerType(i.IssueType)
 }
@@ -341,7 +353,7 @@ func (i Issue) IsHydrated() bool {
 // a lifecycle field, so it is carried on Issue.Assignee, not through here.
 // [LAW:single-enforcer] Row status fields become lifecycle state only through this model API.
 func HydrateStatus(issue Issue, view StatusView) (Issue, error) {
-	issue.replaceLifecycle(lifecycle.NewStatus(view.Value, view.ClosedAt, view.Resolution))
+	issue.replaceLifecycle(lifecycle.NewStatus(view.Value, view.ClosedAt, view.Resolution, view.RedirectTarget))
 	return issue, nil
 }
 
@@ -407,8 +419,11 @@ type issueJSON struct {
 	UpdatedAt   time.Time             `json:"updated_at"`
 	ClosedAt    *time.Time            `json:"closed_at,omitempty"`
 	Resolution  *lifecycle.Resolution `json:"resolution,omitempty"`
-	ArchivedAt  *time.Time            `json:"archived_at,omitempty"`
-	DeletedAt   *time.Time            `json:"deleted_at,omitempty"`
+	// RedirectTarget rides beside Resolution on the wire exactly as it does in
+	// the closed leaf and the issues row: the redirecting resolution's payload.
+	RedirectTarget *string    `json:"redirect_target,omitempty"`
+	ArchivedAt     *time.Time `json:"archived_at,omitempty"`
+	DeletedAt      *time.Time `json:"deleted_at,omitempty"`
 }
 
 // IssueWireFields lists the JSON keys of the serialized issue object, derived
@@ -453,32 +468,35 @@ func (i Issue) MarshalJSON() ([]byte, error) {
 	var statusValue *State
 	var closedAt *time.Time
 	var resolution *lifecycle.Resolution
+	var redirectTarget *string
 	if caps.Status != nil {
 		value := caps.Status.Value
 		statusValue = &value
 		closedAt = cloneTime(caps.Status.ClosedAt)
 		resolution = cloneResolution(caps.Status.Resolution)
+		redirectTarget = cloneString(caps.Status.RedirectTarget)
 	}
 	archivedAt, deletedAt := lifecycle.RetentionTimestamps(i.Retention())
 	return json.Marshal(issueJSON{
-		ID:          i.ID,
-		Title:       i.Title,
-		Description: i.Description,
-		Prompt:      i.Prompt,
-		Status:      statusValue,
-		Priority:    i.Priority,
-		IssueType:   i.IssueType,
-		Topic:       i.Topic,
-		Assignee:    i.Assignee,
-		Rank:        i.Rank,
-		Lane:        i.Lane,
-		Labels:      i.Labels,
-		CreatedAt:   i.CreatedAt,
-		UpdatedAt:   i.UpdatedAt,
-		ClosedAt:    closedAt,
-		Resolution:  resolution,
-		ArchivedAt:  archivedAt,
-		DeletedAt:   deletedAt,
+		ID:             i.ID,
+		Title:          i.Title,
+		Description:    i.Description,
+		Prompt:         i.Prompt,
+		Status:         statusValue,
+		Priority:       i.Priority,
+		IssueType:      i.IssueType,
+		Topic:          i.Topic,
+		Assignee:       i.Assignee,
+		Rank:           i.Rank,
+		Lane:           i.Lane,
+		Labels:         i.Labels,
+		CreatedAt:      i.CreatedAt,
+		UpdatedAt:      i.UpdatedAt,
+		ClosedAt:       closedAt,
+		Resolution:     resolution,
+		RedirectTarget: redirectTarget,
+		ArchivedAt:     archivedAt,
+		DeletedAt:      deletedAt,
 	})
 }
 
@@ -510,9 +528,10 @@ func (i *Issue) UnmarshalJSON(data []byte) error {
 		i.lifecycle = nil
 	case payload.Status != nil:
 		hydrated, err := HydrateStatus(*i, StatusView{
-			Value:      *payload.Status,
-			ClosedAt:   cloneTime(payload.ClosedAt),
-			Resolution: cloneResolution(payload.Resolution),
+			Value:          *payload.Status,
+			ClosedAt:       cloneTime(payload.ClosedAt),
+			Resolution:     cloneResolution(payload.Resolution),
+			RedirectTarget: cloneString(payload.RedirectTarget),
 		})
 		if err != nil {
 			return err
@@ -585,11 +604,10 @@ type IssueDetail struct {
 	Parent    *Issue     `json:"parent,omitempty"`
 	// RedirectTarget is the canonical ticket a duplicate/superseded close
 	// redirects to — the load-bearing "where did this work go" relationship,
-	// lifted out of Related so it is not flattened into a generic peer link. It
-	// is non-nil exactly when the store can identify the redirect unambiguously
-	// (see splitRedirect); when present it is absent from Related, so the two
-	// slices are disjoint and a renderer shows each without re-deriving which
-	// edge is the redirect. [LAW:one-source-of-truth]
+	// hydrated from the issue's own redirect target, never from the relations
+	// graph. Related carries only manual peer links, so the two render
+	// independently: a redirect and a manual edge to the same ticket are two
+	// facts, shown as two groups. [LAW:one-source-of-truth]
 	RedirectTarget *Issue       `json:"redirect_target,omitempty"`
 	Events         []IssueEvent `json:"events"`
 }

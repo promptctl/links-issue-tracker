@@ -150,11 +150,11 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 	}
 }
 
-// TestShowRedirectAmbiguousWhenManualEdgePresent pins the no-mislabel fallback:
-// when a duplicate-closed ticket also carries a manual related edge, storage
-// cannot tell the redirect from the peer, so neither is promoted — both stay
-// under related and no redirect group is emitted.
-func TestShowRedirectAmbiguousWhenManualEdgePresent(t *testing.T) {
+// TestShowRedirectAlongsideManualPeers pins the recut's correctness win: the
+// redirect is a stored fact on the issue row, so it renders correctly even
+// when manual related edges exist — the case the old edge-count heuristic had
+// to refuse (it showed no redirect at all when a manual peer was present).
+func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
@@ -173,19 +173,153 @@ func TestShowRedirectAmbiguousWhenManualEdgePresent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
-	if detail.RedirectTarget != nil {
-		t.Fatalf("RedirectTarget = %#v, want nil when redirect is indistinguishable from a manual peer", detail.RedirectTarget)
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical {
+		t.Fatalf("RedirectTarget = %#v, want the canonical ticket %s even with a manual peer present", detail.RedirectTarget, canonical)
 	}
-	if len(detail.Related) != 2 {
-		t.Fatalf("Related = %#v, want both edges under related", detail.Related)
+	if len(detail.Related) != 1 || detail.Related[0].ID != peer {
+		t.Fatalf("Related = %#v, want exactly the manual peer %s", detail.Related, peer)
 	}
 
 	var out bytes.Buffer
 	if err := runShow(ctx, &out, ap, []string{dup}); err != nil {
 		t.Fatalf("runShow(%s) error = %v", dup, err)
 	}
-	if strings.Contains(out.String(), "redirect:") {
-		t.Fatalf("ambiguous redirect must not be promoted; got:\n%s", out.String())
+	text := out.String()
+	if !strings.Contains(text, "redirect:\n- "+canonical) {
+		t.Fatalf("show output missing redirect group for %s; got:\n%s", canonical, text)
+	}
+	if !strings.Contains(text, "related:\n- "+peer) {
+		t.Fatalf("show output missing related group for manual peer %s; got:\n%s", peer, text)
+	}
+}
+
+// TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip pins the acceptance round
+// trip that failed before the redirect became a column: a manual related edge
+// to the canonical no longer collides with the close (the old edge INSERT hit
+// the relations primary key), a reopen clears the redirect atomically with
+// the resolution instead of leaking a machine edge into related, and the
+// re-close succeeds.
+func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: dup, DstID: canonical, Type: "related-to", CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddRelation(related) error = %v", err)
+	}
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("close duplicate-of an already-related ticket must succeed, got: %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical {
+		t.Fatalf("RedirectTarget = %#v, want %s", detail.RedirectTarget, canonical)
+	}
+	// The manual edge and the redirect are two facts about the same pair; both
+	// render.
+	if len(detail.Related) != 1 || detail.Related[0].ID != canonical {
+		t.Fatalf("Related = %#v, want the manual edge to %s preserved", detail.Related, canonical)
+	}
+
+	if err := runTransition(ctx, &sink, ap, []string{dup}, openSpec); err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	detail, err = ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() after reopen error = %v", err)
+	}
+	if detail.RedirectTarget != nil {
+		t.Fatalf("RedirectTarget after reopen = %#v, want nil (cleared with the resolution)", detail.RedirectTarget)
+	}
+	if len(detail.Related) != 1 || detail.Related[0].ID != canonical {
+		t.Fatalf("Related after reopen = %#v, want only the manual edge (no leaked machine edge)", detail.Related)
+	}
+
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("re-close duplicate-of the same canonical must succeed, got: %v", err)
+	}
+	detail, err = ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() after re-close error = %v", err)
+	}
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical {
+		t.Fatalf("RedirectTarget after re-close = %#v, want %s", detail.RedirectTarget, canonical)
+	}
+}
+
+// TestReopenAfterPlainDuplicateCloseLeavesNoResidue pins the reopen half
+// without any manual edge: close-dup then reopen leaves neither a redirect
+// nor a related entry — the machine bookkeeping cannot outlive the close it
+// belonged to.
+func TestReopenAfterPlainDuplicateCloseLeavesNoResidue(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("close duplicate error = %v", err)
+	}
+	if err := runTransition(ctx, &sink, ap, []string{dup}, openSpec); err != nil {
+		t.Fatalf("reopen error = %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.RedirectTarget != nil {
+		t.Fatalf("RedirectTarget after reopen = %#v, want nil", detail.RedirectTarget)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related after reopen = %#v, want empty (no leaked machine edge)", detail.Related)
+	}
+}
+
+// TestCloseAsSupersededRoundTrip covers the second redirecting resolution end
+// to end: --resolution superseded --of travels its own case arms (the
+// Superseded{By} outcome, distinct from Duplicate{Of}) through the CLI, the
+// store, and both renderers, so the redirect contract is pinned for the whole
+// redirecting subset, not just duplicate.
+func TestCloseAsSupersededRoundTrip(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	replacement := seedOpenIssueRaw(t, ctx, ap, "Replacement")
+	old := seedOpenIssueRaw(t, ctx, ap, "Superseded")
+
+	var out bytes.Buffer
+	if err := runTransition(ctx, &out, ap, []string{old, "--resolution", "superseded", "--of", replacement}, closeSpec); err != nil {
+		t.Fatalf("runTransition(close superseded) error = %v", err)
+	}
+	// The close adjacency output surfaces the redirect at the close moment.
+	if !strings.Contains(out.String(), "redirect:\n- "+replacement) {
+		t.Fatalf("close adjacency missing redirect group for %s; got:\n%s", replacement, out.String())
+	}
+
+	detail, err := ap.Store.GetIssueDetail(ctx, old)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if got := detail.Issue.ResolutionValue(); got == nil || *got != "superseded" {
+		t.Fatalf("ResolutionValue() = %v, want superseded", got)
+	}
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != replacement {
+		t.Fatalf("RedirectTarget = %#v, want the replacement ticket %s", detail.RedirectTarget, replacement)
+	}
+	if len(detail.Related) != 0 {
+		t.Fatalf("Related = %#v, want empty (the redirect is not a peer link)", detail.Related)
+	}
+
+	var show bytes.Buffer
+	if err := runShow(ctx, &show, ap, []string{old}); err != nil {
+		t.Fatalf("runShow(%s) error = %v", old, err)
+	}
+	if !strings.Contains(show.String(), "redirect:\n- "+replacement) {
+		t.Fatalf("show output missing redirect group for %s; got:\n%s", replacement, show.String())
 	}
 }
 

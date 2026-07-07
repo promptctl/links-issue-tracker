@@ -21,6 +21,10 @@ type StatusView struct {
 	Value      State                 `json:"value"`
 	ClosedAt   *time.Time            `json:"closed_at,omitempty"`
 	Resolution *lifecycle.Resolution `json:"resolution,omitempty"`
+	// RedirectTarget is the canonical ticket a redirecting resolution points
+	// to — the resolution's payload, present only beside a redirecting
+	// resolution (NewStatus drops any other pairing at hydration).
+	RedirectTarget *string `json:"redirect_target,omitempty"`
 }
 
 // capabilitiesFrom is root-only by design: it inspects the root lifecycle
@@ -30,9 +34,10 @@ type StatusView struct {
 func capabilitiesFrom(l lifecycle.Lifecycle) Capabilities {
 	if status, ok := l.(lifecycle.StatusPrimitive); ok {
 		return Capabilities{Status: &StatusView{
-			Value:      status.State(),
-			ClosedAt:   status.ClosedAt(),
-			Resolution: status.Resolution(),
+			Value:          status.State(),
+			ClosedAt:       status.ClosedAt(),
+			Resolution:     status.Resolution(),
+			RedirectTarget: status.RedirectTarget(),
 		}}
 	}
 	return Capabilities{}
@@ -47,6 +52,14 @@ func cloneTime(value *time.Time) *time.Time {
 }
 
 func cloneResolution(value *lifecycle.Resolution) *lifecycle.Resolution {
+	if value == nil {
+		return nil
+	}
+	clone := *value
+	return &clone
+}
+
+func cloneString(value *string) *string {
 	if value == nil {
 		return nil
 	}

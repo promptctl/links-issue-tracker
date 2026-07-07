@@ -239,7 +239,7 @@ func buildTargetRegistry() map[TargetKey]targetField {
 		}
 	}
 	add(collIssues, TransformIdentity, required, "id", "title", "description", "priority", "issue_type")
-	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution")
+	add(collIssues, TransformIdentity, optional, "prompt", "assignee", "topic", "rank", "lane", "resolution", "redirect_target")
 	add(collIssues, TransformTimestamp, required, "created_at", "updated_at", "closed_at")
 	add(collIssues, TransformTimestamp, optional, "archived_at", "deleted_at")
 	add(collIssues, TransformLegacyStatus, required, "status")
@@ -687,6 +687,9 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		if raw := cellString(rec["resolution"]); raw != "" {
 			resolution := model.Resolution(raw)
 			view.Resolution = &resolution
+		}
+		if raw := cellString(rec["redirect_target"]); raw != "" {
+			view.RedirectTarget = &raw
 		}
 	}
 	return model.HydrateRow(issue, view, nil)
