@@ -2710,3 +2710,35 @@ func TestStoreGetIssueDetailSiblings(t *testing.T) {
 		t.Fatalf("only-child Siblings = %#v, want empty", issueIDs(onlyDetail.Siblings))
 	}
 }
+
+// Deleting an archived issue moves it to Deleted outright — the archive stamp
+// is dropped, not stacked — and restoring it lands on Live, not the prior
+// Archived. This is the edge the sealed Retention sum deliberately changed:
+// the old two-flag encoding kept both stamps and restore silently resurrected
+// the archive.
+func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Retention edge", Topic: "retention", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "archive", CreatedBy: "tester"}); err != nil {
+		t.Fatalf("TransitionIssue(archive) error = %v", err)
+	}
+	deleted, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "delete", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(delete) on archived issue error = %v", err)
+	}
+	if _, ok := deleted.Retention().(model.Deleted); !ok {
+		t.Fatalf("delete on archived issue = %#v, want Deleted", deleted.Retention())
+	}
+	restored, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "restore", CreatedBy: "tester"})
+	if err != nil {
+		t.Fatalf("TransitionIssue(restore) error = %v", err)
+	}
+	if _, ok := restored.Retention().(model.Live); !ok {
+		t.Fatalf("restore after delete-on-archived = %#v, want Live", restored.Retention())
+	}
+}

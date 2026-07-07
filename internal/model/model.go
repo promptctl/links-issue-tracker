@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strings"
 	"time"
 
@@ -138,7 +139,9 @@ type Issue struct {
 // Retention reports the issue's retention state. The zero value of the axis is
 // Live — an issue constructed without an explicit retention is in the flow —
 // so the nil interface normalizes here rather than forcing every construction
-// site to state the origin. [LAW:types-are-the-program]
+// site to state the origin. SetRetention refuses everything but the sealed
+// value variants, so the field is provably either true nil (never set) or a
+// legal variant, and this normalization is complete. [LAW:types-are-the-program]
 func (i Issue) Retention() lifecycle.Retention {
 	if i.retention == nil {
 		return lifecycle.Live{}
@@ -149,8 +152,17 @@ func (i Issue) Retention() lifecycle.Retention {
 // SetRetention replaces the retention state.
 // [LAW:single-enforcer] Mirrors replaceLifecycle: retention changes flow
 // through this one mutator, not ad-hoc field writes.
+// [LAW:no-silent-failure] Go admits impostors behind the sealed interface — a
+// typed-nil pointer variant, or raw nil — which readers would silently
+// misclassify (a live issue reading as dead, retention collapsing on write).
+// The one mutator refuses them, so no reader needs a guard.
 func (i *Issue) SetRetention(r lifecycle.Retention) {
-	i.retention = r
+	switch r.(type) {
+	case lifecycle.Live, lifecycle.Archived, lifecycle.Deleted:
+		i.retention = r
+	default:
+		panic(fmt.Sprintf("issue %q: illegal Retention value %T", i.ID, r))
+	}
 }
 
 // State and Progress are derived from the issue's children for a container and
@@ -395,6 +407,23 @@ type issueJSON struct {
 	Resolution  *lifecycle.Resolution `json:"resolution,omitempty"`
 	ArchivedAt  *time.Time            `json:"archived_at,omitempty"`
 	DeletedAt   *time.Time            `json:"deleted_at,omitempty"`
+}
+
+// IssueWireFields lists the JSON keys of the serialized issue object, derived
+// from the one wire struct MarshalJSON emits. Issue's struct fields are the
+// in-memory shape, not the wire shape — status, closed_at, resolution, and the
+// retention pair exist only on the wire — so consumers validating field names
+// against the serialized form must read this set, never reflect over Issue.
+// [LAW:one-source-of-truth] Derived from issueJSON itself, so the set cannot
+// drift from what MarshalJSON writes.
+func IssueWireFields() []string {
+	wire := reflect.TypeOf(issueJSON{})
+	names := make([]string, 0, wire.NumField())
+	for i := 0; i < wire.NumField(); i++ {
+		name, _, _ := strings.Cut(wire.Field(i).Tag.Get("json"), ",")
+		names = append(names, name)
+	}
+	return names
 }
 
 func (i Issue) MarshalJSON() ([]byte, error) {

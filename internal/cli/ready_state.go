@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"reflect"
 	"sort"
 	"strings"
 	"time"
@@ -408,40 +407,17 @@ func newOrphanedAnnotator(threshold time.Duration) annotation.Annotator {
 }
 
 func issueJSONFieldNames() map[string]struct{} {
-	// [LAW:one-source-of-truth] model.Issue JSON tags are the canonical ready-field schema.
-	issueType := reflect.TypeOf(model.Issue{})
-	fields := make(map[string]struct{}, issueType.NumField())
-	for i := 0; i < issueType.NumField(); i++ {
-		field := issueType.Field(i)
-		if !field.IsExported() {
-			continue
-		}
-		name := issueJSONFieldName(field)
-		if name == "" {
-			continue
-		}
+	// [LAW:one-source-of-truth] The wire struct behind Issue.MarshalJSON is the
+	// canonical ready-field schema. Issue's struct fields are the in-memory
+	// shape and diverge from the wire (status, closed_at, resolution, and the
+	// retention pair exist only on the wire), so validation reads the same set
+	// serialization writes and the two cannot drift.
+	names := model.IssueWireFields()
+	fields := make(map[string]struct{}, len(names))
+	for _, name := range names {
 		fields[name] = struct{}{}
 	}
-	fields["status"] = struct{}{}
-	fields["assignee"] = struct{}{}
-	fields["closed_at"] = struct{}{}
 	return fields
-}
-
-func issueJSONFieldName(field reflect.StructField) string {
-	tag, ok := field.Tag.Lookup("json")
-	if !ok {
-		return field.Name
-	}
-	name, _, _ := strings.Cut(tag, ",")
-	switch name {
-	case "":
-		return field.Name
-	case "-":
-		return ""
-	default:
-		return name
-	}
 }
 
 func issueFieldValues(issue model.Issue) (map[string]any, error) {
