@@ -347,9 +347,13 @@ func formatHistoryTimestamp(value time.Time) string {
 }
 
 // isLiveIssue reports whether an issue is still in play — open or in_progress,
-// and neither archived nor deleted. This is the single definition of "live
-// adjacency" shared by the now-unblocked-dependents line and the open-siblings
-// filter, so the two surfaces cannot drift on what counts as actionable.
+// and neither archived nor deleted. This is the single definition of liveness
+// shared by the rendering surfaces (now-unblocked-dependents, open-siblings)
+// and the readiness pipeline (lane gating, focus-path prerequisites), so the
+// surfaces cannot drift on what counts as pending work. The readiness callers
+// feed it unfiltered relation fetches — a trust boundary that, unlike the
+// store-filtered workable list, carries archived and deleted rows, which have
+// left the flow and must neither block nor be traversed.
 // [LAW:single-enforcer] Liveness decided once, here.
 func isLiveIssue(issue model.Issue) bool {
 	_, live := issue.Retention().(model.Live)

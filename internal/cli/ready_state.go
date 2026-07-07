@@ -218,26 +218,12 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 	out := make(map[string][]model.Issue, len(relations))
 	for epicID, rel := range relations {
 		for _, child := range rel.Children {
-			if isUnfinished(child) {
+			if isLiveIssue(child) {
 				out[epicID] = append(out[epicID], child)
 			}
 		}
 	}
 	return out
-}
-
-// isUnfinished reports whether an issue still represents pending work — the
-// predicate that decides whether a sibling gates its later lane-mates and
-// whether an edge belongs on a focused goal's prerequisite path. Unfiltered
-// relation fetches are a trust boundary: unlike the store-filtered workable
-// list, they carry archived and deleted rows, which have left the flow and
-// must neither block nor be traversed.
-// [LAW:no-defensive-null-guards] The archived/deleted checks translate the raw
-// relation rows into the workable population; they are boundary translation,
-// not a guard against a should-not-happen state.
-func isUnfinished(issue model.Issue) bool {
-	_, live := issue.Retention().(model.Live)
-	return live && issue.State() != model.StateClosed
 }
 
 // FocusLabel is the reserved label that marks an issue as a focused goal.
@@ -263,7 +249,7 @@ type focusGraphSource interface {
 // included. An issue's prerequisites are its unfinished explicit dependencies,
 // the unfinished children of a container, and its earlier same-lane unfinished
 // siblings — the same implicit edge the lane gate blocks membership on, read
-// through the shared isEarlierSameLaneSibling/isUnfinished predicates.
+// through the shared isEarlierSameLaneSibling/isLiveIssue predicates.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -320,13 +306,13 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 			}
 			var prereqs []model.Issue
 			for _, dep := range rel.DependsOn {
-				if isUnfinished(dep) {
+				if isLiveIssue(dep) {
 					prereqs = append(prereqs, dep)
 				}
 			}
 			if rel.Issue.IsContainer() {
 				for _, child := range rel.Children {
-					if isUnfinished(child) {
+					if isLiveIssue(child) {
 						prereqs = append(prereqs, child)
 					}
 				}
