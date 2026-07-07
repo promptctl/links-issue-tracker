@@ -52,6 +52,8 @@ var (
 
 	RetentionFromTimestamps = lifecycle.RetentionFromTimestamps
 	RetentionTimestamps     = lifecycle.RetentionTimestamps
+	Retain                  = lifecycle.Retain
+	Frozen                  = lifecycle.Frozen
 )
 
 func IsContainerType(issueType string) bool {

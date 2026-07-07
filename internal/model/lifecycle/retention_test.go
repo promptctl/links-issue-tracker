@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -50,4 +51,131 @@ func TestRetentionTimestampsRefusesImpostors(t *testing.T) {
 		}
 	}()
 	RetentionTimestamps((*Archived)(nil))
+}
+
+// TestRetainTransitionTable pins every cell of the retention state machine:
+// three variants by four retention actions, plus the non-retention rejection
+// row. The completeness check below fails the test if a (variant, action)
+// pair is missing, so "total" is asserted, not assumed.
+func TestRetainTransitionTable(t *testing.T) {
+	prior := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	live := Live{}
+	archived := Archived{At: prior}
+	deleted := Deleted{At: prior}
+
+	cases := []struct {
+		cur     Retention
+		action  ActionName
+		want    Retention // nil means the transition is illegal
+		wantErr string
+	}{
+		{live, ActionArchive, Archived{At: at}, ""},
+		{archived, ActionArchive, nil, "issue is already archived"},
+		{deleted, ActionArchive, nil, "cannot archive deleted issue"},
+
+		{live, ActionUnarchive, nil, "issue is not archived"},
+		{archived, ActionUnarchive, Live{}, ""},
+		{deleted, ActionUnarchive, nil, "cannot unarchive deleted issue"},
+
+		{live, ActionDelete, Deleted{At: at}, ""},
+		// The decided delete-on-archived behavior: Deleted carries no
+		// prior-archived bit, so the archive stamp is gone at the type level.
+		{archived, ActionDelete, Deleted{At: at}, ""},
+		{deleted, ActionDelete, nil, "issue is already deleted"},
+
+		{live, ActionRestore, nil, "issue is not deleted"},
+		{archived, ActionRestore, nil, "issue is not deleted"},
+		{deleted, ActionRestore, Live{}, ""},
+	}
+
+	covered := map[string]bool{}
+	for _, tc := range cases {
+		covered[fmt.Sprintf("%T/%s", tc.cur, tc.action)] = true
+		got, err := Retain(tc.cur, tc.action, at)
+		if tc.wantErr != "" {
+			if err == nil || err.Error() != tc.wantErr {
+				t.Fatalf("Retain(%#v, %s) error = %v, want %q", tc.cur, tc.action, err, tc.wantErr)
+			}
+			if got != nil {
+				t.Fatalf("Retain(%#v, %s) returned %#v alongside an error", tc.cur, tc.action, got)
+			}
+			continue
+		}
+		if err != nil {
+			t.Fatalf("Retain(%#v, %s) error = %v, want %#v", tc.cur, tc.action, err, tc.want)
+		}
+		if got != tc.want {
+			t.Fatalf("Retain(%#v, %s) = %#v, want %#v", tc.cur, tc.action, got, tc.want)
+		}
+	}
+	for _, cur := range []Retention{live, archived, deleted} {
+		for _, action := range []ActionName{ActionArchive, ActionUnarchive, ActionDelete, ActionRestore} {
+			if !covered[fmt.Sprintf("%T/%s", cur, action)] {
+				t.Fatalf("transition table has no row for (%T, %s)", cur, action)
+			}
+		}
+	}
+}
+
+// Pins the epic-decided lifecycle sequence: archive → delete → restore lands
+// on Live, never back on Archived — Deleted remembers nothing.
+func TestRetainArchiveDeleteRestoreLandsLive(t *testing.T) {
+	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
+	var cur Retention = Live{}
+	for _, action := range []ActionName{ActionArchive, ActionDelete, ActionRestore} {
+		next, err := Retain(cur, action, at)
+		if err != nil {
+			t.Fatalf("Retain(%#v, %s) error = %v", cur, action, err)
+		}
+		cur = next
+	}
+	if cur != (Live{}) {
+		t.Fatalf("archive→delete→restore ended at %#v, want Live", cur)
+	}
+}
+
+// Retain is total over ActionName, which admits activity actions and arbitrary
+// strings; those are rejected as a table row, not passed through or panicked.
+func TestRetainRejectsNonRetentionActions(t *testing.T) {
+	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen, ActionName("bogus")} {
+		want := fmt.Sprintf("unsupported lifecycle action %q", action)
+		if _, err := Retain(Live{}, action, time.Now()); err == nil || err.Error() != want {
+			t.Fatalf("Retain(Live, %s) error = %v, want %q", action, err, want)
+		}
+	}
+}
+
+func TestRetainRefusesImpostors(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("Retain((*Deleted)(nil), archive) did not panic")
+		}
+	}()
+	_, _ = Retain((*Deleted)(nil), ActionArchive, time.Now())
+}
+
+func TestFrozen(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		r    Retention
+		want bool
+	}{
+		{Live{}, false},
+		{Archived{At: at}, true},
+		{Deleted{At: at}, true},
+	} {
+		if got := Frozen(tc.r); got != tc.want {
+			t.Fatalf("Frozen(%#v) = %v, want %v", tc.r, got, tc.want)
+		}
+	}
+}
+
+func TestFrozenRefusesImpostors(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("Frozen((*Archived)(nil)) did not panic")
+		}
+	}()
+	Frozen((*Archived)(nil))
 }
