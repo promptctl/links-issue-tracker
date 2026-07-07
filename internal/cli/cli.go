@@ -540,43 +540,8 @@ func deriveRelationColumns(rel store.IssueRelations) relationColumns {
 	}
 }
 
-func runReady(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("ready")
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	issueType := fs.String("type", "", "Filter by issue type")
-	status := fs.String("status", "", "Filter by status: open|in_progress (closed excludes everything)")
-	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
-	limit := fs.Int("limit", 0, "Limit results")
-	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit ready [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
-	}
-	rf := workableFilter{
-		Assignee:  strings.TrimSpace(*assignee),
-		IssueType: strings.TrimSpace(*issueType),
-		Status:    strings.TrimSpace(*status),
-		Labels:    splitCSV(*labels),
-	}
-	annotated, _, err := gatherWorkableAnnotated(ctx, ap, rf)
-	if err != nil {
-		return err
-	}
-	// [LAW:single-enforcer] Pushing blocked items below unblocked is a
-	// ready-specific presentation choice — `lit backlog` consumes the same
-	// pipeline and wants the unmodified rank order. The sort lives at the
-	// consumer that needs it, not in the shared gather.
-	sortByBlockingAnnotations(annotated)
-	annotated = applyLimit(annotated, *limit)
-	columns := parseColumns(*columnsExpr)
-	return printReadyOutput(stdout, columns, annotated)
-}
-
-// workableFilter carries the user-supplied narrowing options for any
-// command that consumes the shared workable pipeline (`lit ready`,
-// `lit next`, `lit backlog`). Empty fields mean "no narrowing"; the
+// workableFilter carries the user-supplied narrowing options for the
+// shared workable pipeline. Empty fields mean "no narrowing"; the
 // workable definition (open/in_progress, leaves only) is layered on top
 // by gatherWorkableAnnotated.
 type workableFilter struct {
@@ -673,38 +638,6 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	sortByFocusPath(annotated)
 	enrichWithParentEpic(annotated, details)
 	return annotated, details, nil
-}
-
-// runNext returns exactly one workable leaf — the next thing the agent should
-// `lit start`. Identical pipeline to `lit ready`; the only differences are the
-// optional --continue bias and that the output is a single row instead of the
-// sectioned backlog.
-// (links-agent-epic-model-uew.6)
-func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("next")
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	continueFlag := fs.Bool("continue", false, "Bias toward leaves under in-progress epics")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit next [--continue] [--assignee <user>]"}
-	}
-	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{Assignee: strings.TrimSpace(*assignee)})
-	if err != nil {
-		return err
-	}
-	// [LAW:dataflow-not-control-flow] --continue is one extra stable sort over the
-	// same data; it does not change which rows are workable, only the order in
-	// which we look for one to claim.
-	if *continueFlag {
-		sortByContinueBias(annotated, details)
-	}
-	next, ok := pickFirstReady(annotated)
-	if !ok {
-		return errors.New("no ready work")
-	}
-	return printNextSummary(stdout, next)
 }
 
 // runOrphaned lists in_progress issues whose last update is older than

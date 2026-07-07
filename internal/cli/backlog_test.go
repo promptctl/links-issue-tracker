@@ -64,7 +64,7 @@ func (h backlogTestHarness) runBacklogIDs(args ...string) []string {
 func (h backlogTestHarness) runBacklogText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runBacklog(h.ctx, &stdout, h.ap, args); err != nil {
+	if err := runWorkable(h.ctx, &stdout, h.ap, args, backlogView); err != nil {
 		h.t.Fatalf("runBacklog(%v) error = %v", args, err)
 	}
 	return stdout.String()

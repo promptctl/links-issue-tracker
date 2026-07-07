@@ -1,13 +1,11 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -23,45 +21,6 @@ so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
 Use 'lit next' to pick the top workable item; 'lit ready' to skip blocked items entirely.`
-
-// runBacklog renders every workable leaf in canonical priority/rank order with
-// blocking annotations inline. It reuses gatherWorkableAnnotated so the
-// "workable set + order" definition cannot drift from `lit ready` / `lit next`;
-// the only thing backlog does differently is skip the ready-specific blocking
-// sort so blocked items remain interleaved at their ranked position.
-//
-// [LAW:single-enforcer] Shared workable pipeline; backlog adds presentation only.
-// [LAW:dataflow-not-control-flow] Every row flows through the same render path;
-// variability (in_progress suffix, blocking reasons, parent epic) lives in
-// values on the annotated row, not in branches that skip operations.
-func runBacklog(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("backlog")
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	issueType := fs.String("type", "", "Filter by issue type")
-	status := fs.String("status", "", "Filter by status: open|in_progress (closed excludes everything)")
-	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
-	limit := fs.Int("limit", 0, "Limit results")
-	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit backlog [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
-	}
-	rf := workableFilter{
-		Assignee:  strings.TrimSpace(*assignee),
-		IssueType: strings.TrimSpace(*issueType),
-		Status:    strings.TrimSpace(*status),
-		Labels:    splitCSV(*labels),
-	}
-	annotated, _, err := gatherWorkableAnnotated(ctx, ap, rf)
-	if err != nil {
-		return err
-	}
-	annotated = applyLimit(annotated, *limit)
-	columns := parseColumns(*columnsExpr)
-	return printBacklogOutput(stdout, columns, annotated)
-}
 
 // printBacklogOutput renders the backlog as a numbered list with inline
 // per-row context (parent epic, dependencies, blocking reasons, in-progress

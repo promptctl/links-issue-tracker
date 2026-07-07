@@ -1,60 +1,11 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/app"
 )
-
-// runQueue renders the pull order: every workable item that is not blocked, in
-// canonical rank order, one terse row each with no preamble and no per-row
-// context. It is the third projection over gatherWorkableAnnotated, and its
-// question is the discriminator that separates it from the other two:
-// `backlog` answers "why is the queue shaped this way" (blocked items inline,
-// full per-row epic/dependency context), `ready` answers "what should the next
-// agent work on" (coaching prose, capped, sectioned), and `queue` answers "what
-// is the rank-ordered pull sequence I am shaping with lit rank" (blocked
-// dropped, terse, uncapped).
-//
-// [LAW:one-source-of-truth] Ranking is canonical in the store; queue is a
-// projection over the shared pipeline, never a second pull-order computation.
-// [LAW:single-enforcer] "What is workable, in what order" comes entirely from
-// gatherWorkableAnnotated; queue adds only the not-blocked filter and a terse
-// render. The canonical rank order is used unmodified — no ready-specific
-// re-sort.
-func runQueue(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("queue")
-	assignee := fs.String("assignee", "", "Filter by assignee")
-	issueType := fs.String("type", "", "Filter by issue type")
-	status := fs.String("status", "", "Filter by status: open|in_progress (closed excludes everything)")
-	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
-	limit := fs.Int("limit", 0, "Limit results")
-	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit queue [--type ...] [--status ...] [--labels ...] [--assignee <user>] [--limit N] [--columns ...]"}
-	}
-	rf := workableFilter{
-		Assignee:  strings.TrimSpace(*assignee),
-		IssueType: strings.TrimSpace(*issueType),
-		Status:    strings.TrimSpace(*status),
-		Labels:    splitCSV(*labels),
-	}
-	annotated, _, err := gatherWorkableAnnotated(ctx, ap, rf)
-	if err != nil {
-		return err
-	}
-	pullable := filterPullable(annotated)
-	pullable = applyLimit(pullable, *limit)
-	columns := parseColumns(*columnsExpr)
-	return printQueueOutput(stdout, columns, pullable)
-}
 
 // filterPullable keeps the rows an agent can pull now: workable and gated by no
 // readiness blocker. "Blocked" is decided once in ClassifyReadiness and read

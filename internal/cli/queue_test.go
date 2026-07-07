@@ -61,7 +61,7 @@ func (h queueTestHarness) runQueueIDs(args ...string) []string {
 func (h queueTestHarness) runQueueText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runQueue(h.ctx, &stdout, h.ap, args); err != nil {
+	if err := runWorkable(h.ctx, &stdout, h.ap, args, queueView); err != nil {
 		h.t.Fatalf("runQueue(%v) error = %v", args, err)
 	}
 	return stdout.String()
