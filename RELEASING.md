@@ -50,7 +50,7 @@ above. No manual steps.
 Two tiers, split by cost so the per-PR loop stays fast:
 
 - **Per PR (fast):** `.github/workflows/release-smoke.yml` builds the
-  `linux/amd64` target with `goreleaser build --single-target --snapshot`
+  `linux/amd64` target with `goreleaser build --single-target --snapshot --clean`
   inside the release image's `smoke` stage (toolchain + linux/amd64 ICU only,
   layer-cached). It proves the things that break per code change — the code
   compiles, the cgo + ICU link works, `.goreleaser.yml` parses, and the

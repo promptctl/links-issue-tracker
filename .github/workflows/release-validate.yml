@@ -171,6 +171,12 @@ jobs:
             ((.artifacts) | all(.sha256 | test("^[0-9a-f]{64}$")))
           ' "$MANIFEST" >/dev/null
 
+          # This list is the release contract, restated independently of
+          # .goreleaser.yml ON PURPOSE: deriving it from the config that
+          # drives the build would make this check pass on a silent build
+          # skip — the exact failure it exists to catch. When the goreleaser
+          # goos/goarch matrix changes, update this array in the same PR.
+          # [LAW:verifiable-goals]
           EXPECTED='["darwin/amd64","darwin/arm64","linux/amd64","linux/arm64","windows/amd64"]'
           GOT=$(jq -c '[.artifacts[].platform] | sort' "$MANIFEST")
           if [ "$GOT" != "$EXPECTED" ]; then
