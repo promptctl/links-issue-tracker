@@ -71,11 +71,17 @@ func ContainerTypes() []IssueType {
 }
 
 // oxfordOr renders the vocabulary as prose ("a, b, or c") for the parse error,
-// so the message the user sees names exactly the sealed set.
+// so the message the user sees names exactly the sealed set. Total over every
+// non-empty list; the empty list is out of domain — the input is the sealed
+// vocabulary whose constants are defined in this file, so an empty call is
+// unconstructible without editing the package itself.
 func oxfordOr(types []IssueType) string {
 	names := make([]string, len(types))
 	for i, t := range types {
 		names[i] = string(t)
+	}
+	if len(names) == 1 {
+		return names[0]
 	}
 	return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
 }
