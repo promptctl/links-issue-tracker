@@ -161,10 +161,18 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 					t.Fatalf("Apply(%s, %s) labels = %v, want %v", issueType, combo.name, updated.Labels, *in.Fields.Labels)
 				}
 				// Every action-carrying combo drives the status machine, so the
-				// expected post-state is the variant's own Target.
+				// expected post-state is the variant's own Target. The matrix's
+				// expected outcomes (wantErr, target state, event count) are all
+				// computed on status-axis premises — a retention combo needs its
+				// own expectations, so refuse it with the reason rather than
+				// panicking on the assertion.
 				var target model.State
 				if carriesTransition {
-					target = in.Action.(model.StatusAction).Target()
+					statusAction, ok := in.Action.(model.StatusAction)
+					if !ok {
+						t.Fatalf("combo %s carries non-status action %T: this matrix covers the status axis only — retention combos need their own expected-outcome model", combo.name, in.Action)
+					}
+					target = statusAction.Target()
 				}
 				if carriesTransition && updated.State() != target {
 					t.Fatalf("Apply(%s, %s) state = %q, want %q", issueType, combo.name, updated.State(), target)
