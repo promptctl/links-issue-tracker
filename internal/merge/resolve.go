@@ -1,6 +1,7 @@
 package merge
 
 import (
+	"cmp"
 	"sort"
 	"time"
 
@@ -342,7 +343,7 @@ func (r *resolver) derivedFlagTime(base bool, ours, theirs *time.Time) *time.Tim
 
 // higher is the Tier-2 dominant-state join: the larger value on a fixed total
 // order (priority: urgent>normal; status via rank: closed>in_progress>open).
-func higher(ours, theirs int) int {
+func higher[T cmp.Ordered](ours, theirs T) T {
 	if ours >= theirs {
 		return ours
 	}

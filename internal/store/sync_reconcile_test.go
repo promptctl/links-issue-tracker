@@ -28,7 +28,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	// A edits LANE and pushes; B edits PRIORITY locally (unpushed) — two different
 	// code-owned fields on the same issue, so B is diverged (ahead 1 / behind 1).
 	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("alpha")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: intptr(model.PriorityUrgent)})
+	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -257,7 +257,6 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 // --- helpers ---
 
 func strptr(s string) *string { return &s }
-func intptr(i int) *int       { return &i }
 
 // seedReconcileRemote creates one issue at root, adds the remote, pushes it, and
 // returns the issue id.

@@ -94,13 +94,17 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 		if err != nil {
 			return ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
+		priority, err := model.ParsePriority(spec.Priority)
+		if err != nil {
+			return ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+		}
 		issue, err := s.CreateIssue(ctx, CreateIssueInput{
 			Title:       spec.Title,
 			Description: spec.Description,
 			Prompt:      spec.Prompt,
 			IssueType:   issueType,
 			Topic:       spec.Topic,
-			Priority:    spec.Priority,
+			Priority:    priority,
 			Assignee:    spec.Assignee,
 			Labels:      spec.Labels,
 			ParentID:    parentID,
@@ -162,6 +166,9 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 		// convention.
 		if _, err := model.ParseIssueType(spec.IssueType); err != nil {
 			return fmt.Errorf("import: spec %q has invalid type %q", spec.LocalID, spec.IssueType)
+		}
+		if _, err := model.ParsePriority(spec.Priority); err != nil {
+			return fmt.Errorf("import: spec %q has invalid priority %d", spec.LocalID, spec.Priority)
 		}
 		if _, dup := seen[spec.LocalID]; dup {
 			return fmt.Errorf("import: duplicate local_id %q", spec.LocalID)

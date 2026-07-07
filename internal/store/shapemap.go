@@ -668,9 +668,9 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Title:       cellString(rec["title"]),
 		Description: cellString(rec["description"]),
 		Prompt:      cellString(rec["prompt"]),
-		Priority: cellInt(rec["priority"]),
-		// Raw conversion on the restore boundary, conserving bytes the DB
-		// CHECK constraint already vouches for — the salvage-path convention.
+		// Raw conversions on the restore boundary, conserving values the DB
+		// CHECK constraints already vouch for — the salvage-path convention.
+		Priority:  model.Priority(cellInt(rec["priority"])),
 		IssueType: model.IssueType(cellString(rec["issue_type"])),
 		Topic:       cellString(rec["topic"]),
 		Assignee:    cellString(rec["assignee"]),
