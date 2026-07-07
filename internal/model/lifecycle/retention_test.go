@@ -39,3 +39,15 @@ func TestRetentionTimestampsRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+// A typed-nil pointer variant satisfies the interface but is not one of the
+// three sealed value variants; the encoder must refuse it loudly rather than
+// silently collapsing it to Live at a write boundary.
+func TestRetentionTimestampsRefusesImpostors(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("encode((*Archived)(nil)) did not panic")
+		}
+	}()
+	RetentionTimestamps((*Archived)(nil))
+}

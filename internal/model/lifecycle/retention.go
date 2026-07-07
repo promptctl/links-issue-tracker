@@ -1,6 +1,9 @@
 package lifecycle
 
-import "time"
+import (
+	"fmt"
+	"time"
+)
 
 // Retention is the sealed retention axis of the issue lifecycle, orthogonal to
 // the activity axis (State): whether an issue is still in the flow, soft-hidden,
@@ -55,6 +58,8 @@ func RetentionFromTimestamps(archivedAt, deletedAt *time.Time) Retention {
 // boundary (SQL columns, JSON) projects through here.
 func RetentionTimestamps(r Retention) (archivedAt, deletedAt *time.Time) {
 	switch v := r.(type) {
+	case Live:
+		return nil, nil
 	case Archived:
 		at := v.At
 		return &at, nil
@@ -62,6 +67,11 @@ func RetentionTimestamps(r Retention) (archivedAt, deletedAt *time.Time) {
 		at := v.At
 		return nil, &at
 	default:
-		return nil, nil
+		// [LAW:no-silent-failure] Only the three sealed value variants are legal.
+		// Go still admits impostors — a typed-nil pointer variant, or nil when a
+		// caller bypasses the Issue accessor's zero-value normalization — and a
+		// catch-all here would silently collapse them to Live at every write
+		// boundary. Refuse loudly at the one consumer of the sum's structure.
+		panic(fmt.Sprintf("illegal Retention value %T", r))
 	}
 }

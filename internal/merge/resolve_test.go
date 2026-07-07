@@ -291,6 +291,26 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	if _, ok := got.Provisional().Retention().(model.Live); !ok {
 		t.Fatalf("solo unarchive = %#v, want Live", got.Provisional().Retention())
 	}
+
+	// Both sides unarchive off an archived base: tier 2 reached with both flags
+	// cleared; the convergent clear holds.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, nil)
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("both unarchive = %#v, want Live", got.Provisional().Retention())
+	}
+
+	// Both sides restore off a deleted base: same convergent clear on the
+	// delete flag.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, nil)
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("both restore = %#v, want Live", got.Provisional().Retention())
+	}
 }
 
 func TestResolveIssueLabelsUnion(t *testing.T) {
