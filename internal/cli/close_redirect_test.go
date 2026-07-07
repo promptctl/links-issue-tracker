@@ -323,6 +323,62 @@ func TestCloseAsSupersededRoundTrip(t *testing.T) {
 	}
 }
 
+// TestCloseAsDuplicateOfDeletedCanonicalRejected pins the retention rule at
+// the CLI surface: closing duplicate-of a deleted canonical is rejected with
+// a message naming the target and its retention state — no storage internals
+// leak — and the duplicate stays open. The archived converse succeeds, since
+// "duplicate of something already done" is the most common real redirect.
+func TestCloseAsDuplicateOfDeletedCanonicalRejected(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{canonical}, deleteSpec); err != nil {
+		t.Fatalf("runTransition(delete canonical) error = %v", err)
+	}
+	err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec)
+	if err == nil {
+		t.Fatal("close duplicate-of a deleted canonical = nil error, want rejection")
+	}
+	if !strings.Contains(err.Error(), canonical) || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("error = %v, want the canonical target and its retention state named", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.Issue.StatusValue() != "open" || detail.RedirectTarget != nil {
+		t.Fatalf("status/redirect = %q/%#v, want open with no redirect — the rejected close must not persist",
+			detail.Issue.StatusValue(), detail.RedirectTarget)
+	}
+}
+
+// TestCloseAsDuplicateOfArchivedCanonicalAllowed pins the accept half at the
+// CLI surface: an archived canonical is a legal redirect target.
+func TestCloseAsDuplicateOfArchivedCanonicalAllowed(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
+	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
+
+	var sink bytes.Buffer
+	if err := runTransition(ctx, &sink, ap, []string{canonical}, archiveSpec); err != nil {
+		t.Fatalf("runTransition(archive canonical) error = %v", err)
+	}
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
+		t.Fatalf("close duplicate-of an archived canonical must succeed, got: %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, dup)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	if detail.RedirectTarget == nil || detail.RedirectTarget.ID != canonical {
+		t.Fatalf("RedirectTarget = %#v, want the archived canonical %s", detail.RedirectTarget, canonical)
+	}
+}
+
 // TestCloseAsDuplicateRendersRedirectAdjacency pins the epic's done/close arm:
 // closing as duplicate surfaces the redirect target in the capture-at-close
 // adjacency output, the moment the closing agent most needs "where it went".
