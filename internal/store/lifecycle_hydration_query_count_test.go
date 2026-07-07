@@ -7,8 +7,6 @@ import (
 	"errors"
 	"sync/atomic"
 	"testing"
-
-	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // The listing hot path hydrates every open epic's children. The contract under
@@ -63,7 +61,7 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 	// Guard against the count being trivially equal because nothing was hydrated.
 	gotEpics := 0
 	for _, issue := range issues {
-		if model.IsContainerType(issue.IssueType) {
+		if issue.IssueType.IsContainer() {
 			gotEpics++
 		}
 	}

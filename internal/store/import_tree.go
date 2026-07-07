@@ -87,11 +87,18 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 		if spec.Parent != "" {
 			parentID = idMap[spec.Parent]
 		}
+		// validateImportTreeSpecs already gated membership before the first
+		// create; parsing again here is the same single gate producing the
+		// typed value, not a second definition of validity.
+		issueType, err := model.ParseIssueType(spec.IssueType)
+		if err != nil {
+			return ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+		}
 		issue, err := s.CreateIssue(ctx, CreateIssueInput{
 			Title:       spec.Title,
 			Description: spec.Description,
 			Prompt:      spec.Prompt,
-			IssueType:   spec.IssueType,
+			IssueType:   issueType,
 			Topic:       spec.Topic,
 			Priority:    spec.Priority,
 			Assignee:    spec.Assignee,
@@ -149,7 +156,11 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 		if strings.TrimSpace(spec.Title) == "" {
 			return fmt.Errorf("import: spec %q missing title", spec.LocalID)
 		}
-		if !model.IsValidIssueType(spec.IssueType) {
+		// [LAW:single-enforcer] Membership comes from the one ParseIssueType
+		// gate; specs are agent-authored input, so they parse strictly here —
+		// before any issue is created — rather than relying on the salvage
+		// convention.
+		if _, err := model.ParseIssueType(spec.IssueType); err != nil {
 			return fmt.Errorf("import: spec %q has invalid type %q", spec.LocalID, spec.IssueType)
 		}
 		if _, dup := seen[spec.LocalID]; dup {

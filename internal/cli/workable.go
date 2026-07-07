@@ -29,7 +29,7 @@ import (
 // exist; they consume the values unconditionally.
 type workableKnobs struct {
 	assignee     string
-	issueType    string
+	issueType    model.IssueType
 	status       model.State
 	labels       []string
 	limit        int
@@ -173,9 +173,13 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
+	issueTypeValue, err := parseWorkableType(*issueType)
+	if err != nil {
+		return err
+	}
 	knobs := workableKnobs{
 		assignee:     strings.TrimSpace(*assignee),
-		issueType:    strings.TrimSpace(*issueType),
+		issueType:    issueTypeValue,
 		status:       statusState,
 		labels:       splitCSV(*labels),
 		limit:        *limit,
@@ -212,6 +216,21 @@ func parseWorkableStatus(raw string) (model.State, error) {
 		return "", UsageError{Message: fmt.Sprintf("invalid --status %q (valid: open, in_progress)", raw)}
 	}
 	return state, nil
+}
+
+// parseWorkableType is the strict trust boundary for --type on the workable
+// commands: blank means "no narrowing", anything else must be sealed
+// vocabulary. A typo'd type fails loudly instead of flowing into the query and
+// reporting "no ready work". [LAW:no-silent-failure]
+func parseWorkableType(raw string) (model.IssueType, error) {
+	if strings.TrimSpace(raw) == "" {
+		return "", nil
+	}
+	t, err := model.ParseIssueType(raw)
+	if err != nil {
+		return "", UsageError{Message: fmt.Sprintf("invalid --type %q: %v", raw, err)}
+	}
+	return t, nil
 }
 
 // optionalString registers the flag only when the view exposes it; an

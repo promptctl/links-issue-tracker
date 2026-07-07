@@ -74,8 +74,13 @@ type CreateIssueInput struct {
 	Title       string
 	Description string
 	Prompt      string
-	IssueType   string
-	Topic       string
+	// IssueType is already-parsed vocabulary, never a raw flag string — trust
+	// boundaries route through model.ParseIssueType before constructing the
+	// input. The zero value means "unspecified" and defaults to task, mirroring
+	// how the Placement zero value is the product default.
+	// [LAW:types-are-the-program]
+	IssueType model.IssueType
+	Topic     string
 	ParentID    string
 	Priority    int
 	Assignee    string
@@ -97,7 +102,7 @@ type UpdateIssueInput struct {
 	Title       *string
 	Description *string
 	Prompt      *string
-	IssueType   *string
+	IssueType   *model.IssueType
 	Priority    *int
 	Assignee    *string
 	Lane        *string
@@ -159,8 +164,8 @@ type SortSpec struct {
 type ListIssuesFilter struct {
 	Statuses          []model.State
 	Resolutions       []model.Resolution
-	IssueTypes        []string
-	ExcludeIssueTypes []string
+	IssueTypes        []model.IssueType
+	ExcludeIssueTypes []model.IssueType
 	Assignees         []string
 	SearchTerms       []string
 	IDs               []string
@@ -418,9 +423,12 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, errors.New("title is required")
 	}
-	issueType, err := validateIssueType(in.IssueType)
-	if err != nil {
-		return model.Issue{}, err
+	// [LAW:dataflow-not-control-flow] The zero value is data meaning
+	// "unspecified"; resolving it to the task default here keeps every caller's
+	// input flowing through the same construction below.
+	issueType := in.IssueType
+	if issueType == "" {
+		issueType = model.TypeTask
 	}
 	priority := in.Priority
 	if err := validatePriority(priority); err != nil {
@@ -503,7 +511,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		// CreateIssue's "created" event records the initial status as a single
 		// field-change row. Containers don't carry status so no row for them.
 		createChanges := []model.FieldChange{}
-		if !model.IsContainerType(issue.IssueType) {
+		if !issue.IssueType.IsContainer() {
 			createChanges = append(createChanges, model.FieldChange{Field: "status", From: "", To: "open"})
 		}
 		if err := s.recordEvent(ctx, tx, issue.ID, "created", "issue created", createdBy, createChanges); err != nil {
@@ -534,19 +542,15 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 	if err != nil {
 		return nil, err
 	}
+	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary;
+	// the defensive trim/skip that the raw-string filter needed is gone with it.
 	if len(filter.IssueTypes) > 0 {
 		var placeholders []string
 		for _, t := range filter.IssueTypes {
-			trimmed := strings.TrimSpace(t)
-			if trimmed == "" {
-				continue
-			}
 			placeholders = append(placeholders, "?")
-			args = append(args, trimmed)
+			args = append(args, t)
 		}
-		if len(placeholders) > 0 {
-			where = append(where, "i.issue_type IN ("+strings.Join(placeholders, ",")+")")
-		}
+		where = append(where, "i.issue_type IN ("+strings.Join(placeholders, ",")+")")
 	}
 	if len(filter.ExcludeIssueTypes) > 0 {
 		// [LAW:single-enforcer] Exclusion filter mirrors the IssueTypes positive
@@ -554,16 +558,10 @@ func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]mode
 		// of "which types qualify" regardless of caller.
 		var placeholders []string
 		for _, t := range filter.ExcludeIssueTypes {
-			trimmed := strings.TrimSpace(t)
-			if trimmed == "" {
-				continue
-			}
 			placeholders = append(placeholders, "?")
-			args = append(args, trimmed)
+			args = append(args, t)
 		}
-		if len(placeholders) > 0 {
-			where = append(where, "i.issue_type NOT IN ("+strings.Join(placeholders, ",")+")")
-		}
+		where = append(where, "i.issue_type NOT IN ("+strings.Join(placeholders, ",")+")")
 	}
 	if len(filter.Assignees) > 0 {
 		var placeholders []string
@@ -927,20 +925,16 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (f
 		issue.Prompt = strings.TrimSpace(*in.Prompt)
 	}
 	if in.IssueType != nil {
-		issueType, err := validateIssueType(*in.IssueType)
-		if err != nil {
-			return fieldWrite{}, err
-		}
 		// [LAW:single-enforcer] Container vs leaf is encoded in the lifecycle
 		// expression at hydration time. Switching across that boundary would
 		// orphan the lifecycle: epic → leaf would leave AllOf attached to a
 		// row whose schema requires a leaf status, and leaf → epic would
 		// silently drop the leaf's status/closed_at. Refuse here
 		// instead of patching it up downstream with an invented default.
-		if model.IsContainerType(issue.IssueType) != model.IsContainerType(issueType) {
-			return fieldWrite{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerIssueTypes)
+		if issue.IssueType.IsContainer() != in.IssueType.IsContainer() {
+			return fieldWrite{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())
 		}
-		issue.IssueType = issueType
+		issue.IssueType = *in.IssueType
 	}
 	if in.Priority != nil {
 		if err := validatePriority(*in.Priority); err != nil {
@@ -973,7 +967,7 @@ func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (f
 		changes = append(changes, model.FieldChange{Field: "description", From: priorDescription, To: issue.Description})
 	}
 	if priorIssueType != issue.IssueType {
-		changes = append(changes, model.FieldChange{Field: "issue_type", From: priorIssueType, To: issue.IssueType})
+		changes = append(changes, model.FieldChange{Field: "issue_type", From: string(priorIssueType), To: string(issue.IssueType)})
 	}
 	if priorPriority != issue.Priority {
 		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(priorPriority), To: strconv.Itoa(issue.Priority)})
@@ -1906,7 +1900,7 @@ type partialIssue struct {
 	Description string
 	Prompt      string
 	Priority    int
-	IssueType   string
+	IssueType   model.IssueType
 	Topic       string
 	Assignee    string
 	Rank        string
@@ -2135,7 +2129,7 @@ func (s *Store) hydrateIssues(ctx context.Context, rows []issueRow) ([]model.Iss
 	}
 	epicIDs := make([]string, 0, len(rows))
 	for _, row := range rows {
-		if model.IsContainerType(row.Issue.IssueType) {
+		if row.Issue.IssueType.IsContainer() {
 			epicIDs = append(epicIDs, row.Issue.ID)
 		}
 	}
@@ -2263,17 +2257,6 @@ func (s *Store) loadLabelsByIssueIDs(ctx context.Context, issueIDs []string) (ma
 		out[issueID] = append(out[issueID], label)
 	}
 	return out, rows.Err()
-}
-
-func validateIssueType(issueType string) (string, error) {
-	trimmed := strings.TrimSpace(strings.ToLower(issueType))
-	if trimmed == "" {
-		return "task", nil
-	}
-	if !model.IsValidIssueType(trimmed) {
-		return "", ValidationError{Message: "issue type must be task, feature, bug, chore, or epic"}
-	}
-	return trimmed, nil
 }
 
 // canonicalPriority is the single authority on the priority domain: it maps any
