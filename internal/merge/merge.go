@@ -171,8 +171,7 @@ type issueProjection struct {
 	Labels      []string
 	CreatedAt   time.Time
 	UpdatedAt   time.Time
-	ArchivedAt  *time.Time
-	DeletedAt   *time.Time
+	Retention   model.Retention
 	// Capabilities carries the whole lifecycle payload (status value, closed_at,
 	// resolution) as the one StatusView type ResolveIssue merges through, rather
 	// than a per-field mirror the change-gate maintains by hand.
@@ -200,8 +199,7 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 		Labels:       append([]string{}, issue.Labels...),
 		CreatedAt:    issue.CreatedAt,
 		UpdatedAt:    issue.UpdatedAt,
-		ArchivedAt:   issue.ArchivedAt,
-		DeletedAt:    issue.DeletedAt,
+		Retention:    issue.Retention(),
 		Capabilities: issue.Capabilities(),
 	}
 }

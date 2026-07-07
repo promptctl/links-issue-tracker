@@ -289,3 +289,55 @@ func TestContainerTypesIsSubsetOfValidTypes(t *testing.T) {
 		}
 	}
 }
+
+// The one mutator is the gate that keeps impostors — values satisfying the
+// sealed interface without being one of the three value variants — out of the
+// retention field, so readers can trust every stored value without guards.
+func TestSetRetentionRefusesImpostors(t *testing.T) {
+	for name, impostor := range map[string]Retention{
+		"typed-nil pointer variant": (*Archived)(nil),
+		"raw nil":                   nil,
+	} {
+		func() {
+			defer func() {
+				if recover() == nil {
+					t.Fatalf("SetRetention(%s) did not panic", name)
+				}
+			}()
+			issue := Issue{ID: "i1"}
+			issue.SetRetention(impostor)
+		}()
+	}
+}
+
+// Every key MarshalJSON emits must be a valid wire-field name, so required-field
+// validation (which consumes IssueWireFields) can never reject a field that the
+// serialized form carries.
+func TestIssueWireFieldsCoverMarshalOutput(t *testing.T) {
+	now := time.Now().UTC()
+	issue := Issue{ID: "i1", IssueType: "task", Labels: []string{}}
+	issue.SetRetention(Archived{At: now})
+	hydrated := hydratedIssue(t, issue, StateOpen)
+	payload, err := json.Marshal(hydrated)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var wire map[string]any
+	if err := json.Unmarshal(payload, &wire); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	valid := map[string]struct{}{}
+	for _, name := range IssueWireFields() {
+		valid[name] = struct{}{}
+	}
+	for key := range wire {
+		if _, ok := valid[key]; !ok {
+			t.Fatalf("MarshalJSON emits %q but IssueWireFields does not name it", key)
+		}
+	}
+	for _, name := range []string{"archived_at", "deleted_at", "resolution", "status", "closed_at"} {
+		if _, ok := valid[name]; !ok {
+			t.Fatalf("IssueWireFields missing wire-only field %q", name)
+		}
+	}
+}

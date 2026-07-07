@@ -675,9 +675,8 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		Rank:        cellString(rec["rank"]),
 		CreatedAt:   cellTime(rec["created_at"]),
 		UpdatedAt:   cellTime(rec["updated_at"]),
-		ArchivedAt:  cellTimePtr(rec["archived_at"]),
-		DeletedAt:   cellTimePtr(rec["deleted_at"]),
 	}
+	issue.SetRetention(model.RetentionFromTimestamps(cellTimePtr(rec["archived_at"]), cellTimePtr(rec["deleted_at"])))
 	view := model.StatusView{}
 	if !model.IsContainerType(issue.IssueType) {
 		view.Value = model.DefaultOpen(cellString(rec["status"]))

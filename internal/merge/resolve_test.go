@@ -230,20 +230,98 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 
 func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
-	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t1 })
+	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
-	if got.Provisional().ArchivedAt == nil || !got.Provisional().ArchivedAt.Equal(t1) {
-		t.Fatalf("archived_at = %v, want earliest %v", got.Provisional().ArchivedAt, t1)
+	if archived, ok := got.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t1) {
+		t.Fatalf("retention = %#v, want Archived at earliest %v", got.Provisional().Retention(), t1)
 	}
 
 	// Only ours archived -> tier1 takes the archive; timestamp is ours.
 	soloBase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
-	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.ArchivedAt = &t2 })
+	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
 	soloTheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	solo := ResolveIssue(&soloBase, &soloOurs, &soloTheirs, "wsA", "wsB")
-	if solo.Provisional().ArchivedAt == nil || !solo.Provisional().ArchivedAt.Equal(t2) {
-		t.Fatalf("solo archive = %v, want %v", solo.Provisional().ArchivedAt, t2)
+	if archived, ok := solo.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t2) {
+		t.Fatalf("solo archive = %#v, want Archived at %v", solo.Provisional().Retention(), t2)
+	}
+}
+
+// The retention axis merges per flag on its two-timestamp wire projection and
+// folds the result back through the one decoder, so a cross-workspace
+// archive-vs-delete race resolves the way every read boundary resolves the
+// encoding: deletion dominates. These rows pin the fold and the per-flag
+// two-tier rule for each concurrent-retention shape.
+func TestResolveIssueRetentionRaces(t *testing.T) {
+	open := model.StatusView{Value: model.StateOpen}
+
+	// Concurrent archive vs delete (no base): both flags win their per-flag
+	// merge; the fold resolves the pair to Deleted.
+	ours := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	theirs := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
+		t.Fatalf("archive vs delete = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
+	}
+
+	// Archive vs delete with a real base: each flag resolves by tier 1 to a
+	// different side, producing a both-set timestamp pair from two independent
+	// winners — the decoder fold is the only thing standing between that pair
+	// and the domain, and resolves it to Deleted.
+	liveBase := leaf(t, "i1", open, nil)
+	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	got = ResolveIssue(&liveBase, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
+		t.Fatalf("archive vs delete with base = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
+	}
+
+	// Concurrent delete vs delete: the timestamp is slaved to the resolved flag
+	// as the earliest of the two stamps.
+	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	got = ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t1) {
+		t.Fatalf("delete vs delete = %#v, want Deleted at earliest %v", got.Provisional().Retention(), t1)
+	}
+
+	// Solo restore off a deleted base: tier 1 takes the lone mover; the delete
+	// is not resurrected by the unchanged side.
+	base := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("solo restore = %#v, want Live", got.Provisional().Retention())
+	}
+
+	// Solo unarchive off an archived base: same tier-1 rule on the archive flag.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("solo unarchive = %#v, want Live", got.Provisional().Retention())
+	}
+
+	// Both sides unarchive off an archived base: tier 2 reached with both flags
+	// cleared; the convergent clear holds.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, nil)
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("both unarchive = %#v, want Live", got.Provisional().Retention())
+	}
+
+	// Both sides restore off a deleted base: same convergent clear on the
+	// delete flag.
+	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
+	ours = leaf(t, "i1", open, nil)
+	theirs = leaf(t, "i1", open, nil)
+	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	if _, ok := got.Provisional().Retention().(model.Live); !ok {
+		t.Fatalf("both restore = %#v, want Live", got.Provisional().Retention())
 	}
 }
 
