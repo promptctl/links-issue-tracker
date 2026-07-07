@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -97,7 +98,7 @@ func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
 func TestRunShowInProgressChildRendersInProgressMarker(t *testing.T) {
 	f := newEpicFixture(t, "Active epic", "work underway")
 	working := f.addChild("In flight")
-	f.transition(working, "start")
+	f.transition(working, model.Start{Assignee: "test"})
 
 	out := showOutput(t, f.ap, working)
 

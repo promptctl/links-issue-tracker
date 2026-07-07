@@ -14,11 +14,11 @@ import (
 
 // driveTransition runs a transition through the real CLI to completion. Every
 // lifecycle transition is single-phase: one invocation performs the action.
-func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id string, action model.ActionName, extra ...string) {
+func driveTransition(t *testing.T, ctx context.Context, ap *app.App, id string, spec transitionSpec, extra ...string) {
 	t.Helper()
 	args := append([]string{id}, extra...)
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, args, action); err != nil {
-		t.Fatalf("runTransition(%s %s) error = %v", action, id, err)
+	if err := runTransition(ctx, &bytes.Buffer{}, ap, args, spec); err != nil {
+		t.Fatalf("runTransition(%s %s) error = %v", spec.name, id, err)
 	}
 }
 
@@ -32,14 +32,14 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{IssueID: issue.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 
 	// `lit done` is single-phase: one invocation closes the ticket and prints
 	// the post-close capture-deposit guidance. There is no preview/apply token.
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "done"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, doneSpec); err != nil {
 		t.Fatalf("runTransition(done) error = %v", err)
 	}
 	if !strings.Contains(stdout.String(), "has been closed") {
@@ -69,21 +69,21 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 	const owner = "matrix-owner"
 	fromStates := []model.State{model.StateOpen, model.StateInProgress, model.StateClosed}
 	verbs := []struct {
-		action model.ActionName
+		spec   transitionSpec
 		target model.State
 	}{
-		{action: "start", target: model.StateInProgress},
-		{action: "done", target: model.StateClosed},
-		{action: "close", target: model.StateClosed},
-		{action: "reopen", target: model.StateOpen},
+		{spec: startSpec, target: model.StateInProgress},
+		{spec: doneSpec, target: model.StateClosed},
+		{spec: closeSpec, target: model.StateClosed},
+		{spec: openSpec, target: model.StateOpen},
 	}
 
 	for _, verb := range verbs {
 		for _, from := range fromStates {
-			t.Run(string(verb.action)+"_from_"+string(from), func(t *testing.T) {
+			t.Run(verb.spec.name+"_from_"+string(from), func(t *testing.T) {
 				ap := newTestCLIApp(t)
 				issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-					Prefix: "test", Title: "matrix " + string(verb.action), Topic: "lifecycle", IssueType: "task", Priority: 0,
+					Prefix: "test", Title: "matrix " + verb.spec.name, Topic: "lifecycle", IssueType: "task", Priority: 0,
 				})
 				if err != nil {
 					t.Fatalf("CreateIssue() error = %v", err)
@@ -93,15 +93,11 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				// the same owner) is a pure no-op rather than a claim transfer.
 				switch from {
 				case model.StateInProgress:
-					if _, err := ap.Store.StartIssue(ctx, store.StartIssueInput{
-						IssueID: issue.ID, Assignee: owner, CreatedBy: owner,
-					}); err != nil {
+					if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Start{Assignee: owner}, Actor: owner}); err != nil {
 						t.Fatalf("setup start error = %v", err)
 					}
 				case model.StateClosed:
-					if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{
-						IssueID: issue.ID, Action: "close", CreatedBy: owner,
-					}); err != nil {
+					if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Done{}, Actor: owner}); err != nil {
 						t.Fatalf("setup close error = %v", err)
 					}
 				}
@@ -111,36 +107,40 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				}
 
 				var extra []string
-				if verb.action == "start" {
+				if verb.spec.name == "start" {
 					extra = []string{"--assignee", owner}
 				}
 				// `lit close` requires a resolution at its command boundary; supply
 				// a valid one so the cell exercises the transition, not the parse
 				// rejection (which has its own dedicated test).
-				if verb.action == "close" {
+				if verb.spec.name == "close" {
 					extra = []string{"--resolution", "wontfix"}
 				}
-				driveTransition(t, ctx, ap, issue.ID, verb.action, extra...)
+				driveTransition(t, ctx, ap, issue.ID, verb.spec, extra...)
 
 				after, err := ap.Store.GetIssueDetail(ctx, issue.ID)
 				if err != nil {
 					t.Fatalf("GetIssueDetail(after) error = %v", err)
 				}
 				if got := after.Issue.State(); got != verb.target {
-					t.Fatalf("state after %s from %s = %q, want %q", verb.action, from, got, verb.target)
+					t.Fatalf("state after %s from %s = %q, want %q", verb.spec.name, from, got, verb.target)
 				}
 				added := after.Events[len(before.Events):]
+				wantVerb := verb.spec.name
+				if verb.spec.name == "open" {
+					wantVerb = "reopen"
+				}
 				if from == verb.target {
 					if len(added) != 0 {
-						t.Fatalf("diagonal cell %s from %s recorded %d events, want 0 (no-ops record nothing): %#v", verb.action, from, len(added), added)
+						t.Fatalf("diagonal cell %s from %s recorded %d events, want 0 (no-ops record nothing): %#v", verb.spec.name, from, len(added), added)
 					}
 					return
 				}
 				if len(added) != 1 {
-					t.Fatalf("cell %s from %s recorded %d events, want exactly 1: %#v", verb.action, from, len(added), added)
+					t.Fatalf("cell %s from %s recorded %d events, want exactly 1: %#v", verb.spec.name, from, len(added), added)
 				}
-				if added[0].Action != string(verb.action) {
-					t.Fatalf("cell %s from %s recorded action %q, want %q (done-vs-close distinction lives in event history)", verb.action, from, added[0].Action, verb.action)
+				if added[0].Action != wantVerb {
+					t.Fatalf("cell %s from %s recorded action %q, want %q (done-vs-close distinction lives in event history)", verb.spec.name, from, added[0].Action, wantVerb)
 				}
 			})
 		}
@@ -166,22 +166,22 @@ func TestRunTransitionMatrixContainerCell(t *testing.T) {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
 
-	for _, action := range []model.ActionName{"start", "done", "close", "reopen"} {
-		t.Run(string(action), func(t *testing.T) {
+	for _, spec := range []transitionSpec{startSpec, doneSpec, closeSpec, openSpec} {
+		t.Run(spec.name, func(t *testing.T) {
 			// `close` requires a resolution at its command boundary; supply a valid
 			// one so the cell reaches the deeper container rejection rather than the
 			// parse rejection. The other actions take no resolution.
 			baseArgs := []string{epic.ID}
-			if action == "close" {
+			if spec.name == "close" {
 				baseArgs = append(baseArgs, "--resolution", "wontfix")
 			}
-			err := runTransition(ctx, &bytes.Buffer{}, ap, baseArgs, action)
+			err := runTransition(ctx, &bytes.Buffer{}, ap, baseArgs, spec)
 			if err == nil {
-				t.Fatalf("runTransition(%s epic) = nil, want container rejection", action)
+				t.Fatalf("runTransition(%s epic) = nil, want container rejection", spec.name)
 			}
 			var containerErr model.ContainerActionError
 			if !errors.As(err, &containerErr) {
-				t.Fatalf("runTransition(%s epic) error = %q, want model.ContainerActionError", action, err)
+				t.Fatalf("runTransition(%s epic) error = %q, want model.ContainerActionError", spec.name, err)
 			}
 			if got := containerErr.Unfinished(); got != 1 {
 				t.Fatalf("ContainerActionError.Unfinished() = %d, want 1 (one open child)", got)
@@ -204,12 +204,12 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, "start"); err != nil {
+	if err := runTransition(ctx, &bytes.Buffer{}, ap, []string{issue.ID, "--assignee", "agent-alice"}, startSpec); err != nil {
 		t.Fatalf("runTransition(first start) error = %v", err)
 	}
 
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID, "--assignee", "agent-bob"}, startSpec); err != nil {
 		t.Fatalf("runTransition(reclaim) error = %v, want success with notice", err)
 	}
 	out := stdout.String()
@@ -248,12 +248,12 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
 	var stdout bytes.Buffer
-	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--assignee", "tester"}, "start")
+	err = runTransition(ctx, &stdout, ap, []string{epic.ID, "--assignee", "tester"}, startSpec)
 	if err == nil {
 		t.Fatal("runTransition(start epic) returned nil; want refusal")
 	}
 	stdout.Reset()
-	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester"}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{leaf.ID, "--assignee", "tester"}, startSpec); err != nil {
 		t.Fatalf("runTransition(start leaf) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, leaf.ID)
@@ -508,7 +508,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
 		t.Fatalf("runTransition(start without --assignee) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
@@ -534,7 +534,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	var stdout bytes.Buffer
-	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, "start"); err != nil {
+	if err := runTransition(ctx, &stdout, ap, []string{issue.ID}, startSpec); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	started, err := ap.Store.GetIssue(ctx, issue.ID)
@@ -581,8 +581,8 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	driveTransition(t, ctx, ap, issue.ID, "start")
-	driveTransition(t, ctx, ap, issue.ID, "done")
+	driveTransition(t, ctx, ap, issue.ID, startSpec)
+	driveTransition(t, ctx, ap, issue.ID, doneSpec)
 	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "start"), "claude_sess-actor"; got != want {
 		t.Fatalf("start event actor = %q, want %q", got, want)
 	}
@@ -603,7 +603,7 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	driveTransition(t, ctx, ap, issue.ID, "start", "--by=alice")
+	driveTransition(t, ctx, ap, issue.ID, startSpec, "--by=alice")
 	if got, want := lastEventActorForAction(t, ap, ctx, issue.ID, "start"), "alice"; got != want {
 		t.Fatalf("start event actor = %q, want %q", got, want)
 	}

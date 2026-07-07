@@ -56,7 +56,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	issueID := strings.Fields(newOut.String())[0]
 
 	var startOut bytes.Buffer
-	if err := runTransition(ctx, &startOut, ap, []string{issueID}, "start"); err != nil {
+	if err := runTransition(ctx, &startOut, ap, []string{issueID}, startSpec); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
 	if got, want := lastLine(startOut.String()), quickstartBreadcrumb("ready"); got != want {
@@ -72,7 +72,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	}
 
 	var closeOut bytes.Buffer
-	if err := runTransition(ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, "close"); err != nil {
+	if err := runTransition(ctx, &closeOut, ap, []string{issueID, "--resolution", "wontfix", "--reason", "probe done"}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close) error = %v", err)
 	}
 	if got, want := lastLine(closeOut.String()), quickstartBreadcrumb("done"); got != want {

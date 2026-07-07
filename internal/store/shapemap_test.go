@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 // --- Validate: the single totality enforcer (acceptance #1) ---
@@ -309,7 +311,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add label: %v", err)
 		}
-		if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: solo.ID, Assignee: "claude", Reason: "begin", CreatedBy: "claude"}); err != nil {
+		if _, err := st.Apply(ctx, solo.ID, Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {
 			t.Fatalf("start solo: %v", err)
 		}
 		for _, id := range []string{epic.ID, child.ID, solo.ID} {

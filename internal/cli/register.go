@@ -7,7 +7,6 @@ import (
 	"io"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 )
@@ -215,9 +214,9 @@ func (r *commandRegistrar) wsCmd(fn wsRunFn) CommandRunner {
 	}
 }
 
-func (r *commandRegistrar) transitionCmd(action model.ActionName) CommandRunner {
+func (r *commandRegistrar) transitionCmd(spec transitionSpec) CommandRunner {
 	return r.appCmd(app.AccessWrite, func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-		return runTransition(ctx, stdout, ap, args, action)
+		return runTransition(ctx, stdout, ap, args, spec)
 	})
 }
 
@@ -280,23 +279,23 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runRank)},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionStart)},
+			Run: r.transitionCmd(startSpec)},
 		{Name: "assign", Summary: "Reassign an issue to a different agent (without changing status)", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runAssign)},
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionDone)},
+			Run: r.transitionCmd(doneSpec)},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionClose)},
+			Run: r.transitionCmd(closeSpec)},
 		{Name: "open", Summary: "Reopen issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionReopen)},
+			Run: r.transitionCmd(openSpec)},
 		{Name: "archive", Summary: "Archive issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionArchive)},
+			Run: r.transitionCmd(archiveSpec)},
 		{Name: "delete", Summary: "Delete issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionDelete)},
+			Run: r.transitionCmd(deleteSpec)},
 		{Name: "unarchive", Summary: "Unarchive issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionUnarchive)},
+			Run: r.transitionCmd(unarchiveSpec)},
 		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(model.ActionRestore)},
+			Run: r.transitionCmd(restoreSpec)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},
 		{Name: "label", Summary: "Manage labels", GroupID: "operations",

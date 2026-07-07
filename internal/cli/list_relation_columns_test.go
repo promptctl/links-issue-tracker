@@ -71,7 +71,7 @@ func TestListRelationColumns(t *testing.T) {
 			t.Fatalf("AddRelation(%s->%s): %v", edge.SrcID, edge.DstID, err)
 		}
 	}
-	if _, err := ap.Store.TransitionIssue(ctx, store.TransitionIssueInput{IssueID: closedBlocker.ID, Action: "close", Reason: "done", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, closedBlocker.ID, store.Change{Action: model.Done{}, Actor: "test", Reason: "done"}); err != nil {
 		t.Fatalf("TransitionIssue(close): %v", err)
 	}
 

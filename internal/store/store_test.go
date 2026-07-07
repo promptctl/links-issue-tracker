@@ -116,10 +116,10 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closed leaf) error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: closedLeaf.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, closedLeaf.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(start) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedLeaf.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, closedLeaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(done) error = %v", err)
 	}
 	leaf, err := st.GetIssue(ctx, openLeaf.ID)
@@ -169,37 +169,37 @@ func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
 		children[i] = child
 	}
 
-	for _, action := range []model.ActionName{"close", "done", "reopen"} {
-		_, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: action, CreatedBy: "tester"})
+	for _, action := range []model.StatusAction{model.Close{Outcome: model.Wontfix{}}, model.Done{}, model.Reopen{}} {
+		_, err := st.Apply(ctx, epic.ID, Change{Action: action, Actor: "tester"})
 		var containerErr model.ContainerActionError
 		if !errors.As(err, &containerErr) {
-			t.Fatalf("TransitionIssue(epic, %s) error = %v, want model.ContainerActionError", action, err)
+			t.Fatalf("Apply(epic, %s) error = %v, want model.ContainerActionError", action.Name(), err)
 		}
 		if containerErr.Unfinished() != len(children) {
-			t.Fatalf("TransitionIssue(epic, %s) unfinished = %d, want %d", action, containerErr.Unfinished(), len(children))
+			t.Fatalf("Apply(epic, %s) unfinished = %d, want %d", action.Name(), containerErr.Unfinished(), len(children))
 		}
 		if containerErr.ID != epic.ID {
-			t.Fatalf("TransitionIssue(epic, %s) rejection names %q, want %q", action, containerErr.ID, epic.ID)
+			t.Fatalf("Apply(epic, %s) rejection names %q, want %q", action.Name(), containerErr.ID, epic.ID)
 		}
 	}
-	// StartIssue (the typed start path) must also reject containers.
-	_, startErr := st.StartIssue(ctx, StartIssueInput{IssueID: epic.ID, Assignee: "tester", CreatedBy: "tester"})
+	// The claiming start (which carries an assignee) must also reject containers.
+	_, startErr := st.Apply(ctx, epic.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"})
 	var containerStartErr model.ContainerActionError
 	if !errors.As(startErr, &containerStartErr) {
-		t.Fatalf("StartIssue(epic) error = %v, want model.ContainerActionError", startErr)
+		t.Fatalf("Apply(start epic) error = %v, want model.ContainerActionError", startErr)
 	}
 	if containerStartErr.Unfinished() != len(children) {
-		t.Fatalf("StartIssue(epic) unfinished = %d, want %d", containerStartErr.Unfinished(), len(children))
+		t.Fatalf("Apply(start epic) unfinished = %d, want %d", containerStartErr.Unfinished(), len(children))
 	}
 
 	for _, child := range children {
-		if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+		if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 			t.Fatalf("TransitionIssue(child done) error = %v", err)
 		}
 	}
 
 	// All children done: the unfinished-children rejection must stop firing.
-	_, err = st.TransitionIssue(ctx, TransitionIssueInput{IssueID: epic.ID, Action: "close", CreatedBy: "tester"})
+	_, err = st.Apply(ctx, epic.ID, Change{Action: model.Done{}, Actor: "tester"})
 	var containerErr model.ContainerActionError
 	if !errors.As(err, &containerErr) {
 		t.Fatalf("TransitionIssue(epic, close) after children done error = %v, want model.ContainerActionError", err)
@@ -235,10 +235,10 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(mixedEpic closed child) error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: mixedClosedChild.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, mixedClosedChild.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(mixed closed start) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: mixedClosedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, mixedClosedChild.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(mixed closed done) error = %v", err)
 	}
 
@@ -250,10 +250,10 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(closedEpic child) error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: closedChild.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, closedChild.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(closed child start) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: closedChild.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, closedChild.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(closed child done) error = %v", err)
 	}
 
@@ -452,10 +452,10 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic child) error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{IssueID: child.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(child start) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "done", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(child done) error = %v", err)
 	}
 	if err := st.RankToBottom(ctx, epic.ID); err != nil {
@@ -684,36 +684,10 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 	}
 }
 
-// A blank target status is the "no --status flag" signal. transitionFor must
-// resolve it to "no transition" — the container-update bug was a normalization
-// that turned blank into a real "open" target, then attempted a transition on
-// every epic. This is the forcing function: should that normalization return,
-// the blank cases below start reporting a transition and this test fails.
-func TestTransitionForTreatsBlankTargetAsNoTransition(t *testing.T) {
-	for _, blank := range []string{"", "   ", "\t"} {
-		if action, transitions := transitionFor(blank); transitions {
-			t.Fatalf("transitionFor(%q) = (%q, true), want no transition", blank, action)
-		}
-	}
-	for _, tc := range []struct {
-		target string
-		want   model.ActionName
-	}{
-		{"open", model.ActionReopen},
-		{"in_progress", model.ActionStart},
-		{"closed", model.ActionClose},
-	} {
-		action, transitions := transitionFor(tc.target)
-		if !transitions || action != tc.want {
-			t.Fatalf("transitionFor(%q) = (%q, %v), want (%q, true)", tc.target, action, transitions, tc.want)
-		}
-	}
-}
-
-// applyTransition is the validation a no-op dry-run reports through. A container
-// derives its state from children and exposes no action, so any transition
-// resolved against it must error — this is what turns a regression's spurious
-// transition into a reported doctor failure. It must never mutate.
+// applyTransition owns the guards every status transition passes before the
+// write: a container derives its state from children and exposes no action,
+// and an archived/deleted issue is frozen regardless of the action's own
+// legality. It must never mutate.
 func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -726,13 +700,8 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(epic) error = %v", err)
 	}
-	if _, err := applyTransition(hydratedEpic, model.ActionReopen, "", ""); err == nil {
+	if _, err := applyTransition(hydratedEpic, model.Reopen{}); err == nil {
 		t.Fatal("applyTransition(container, reopen) = nil, want rejection (containers expose no action)")
-	}
-	// validateNoopUpdate on a healthy container is the post-fix contract: a true
-	// no-op resolves to no transition, so it must pass.
-	if err := validateNoopUpdate(hydratedEpic); err != nil {
-		t.Fatalf("validateNoopUpdate(container) = %v, want nil for a no-op", err)
 	}
 
 	leaf, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "dryrun", IssueType: "task", Priority: 0})
@@ -743,7 +712,7 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetIssue(leaf) error = %v", err)
 	}
-	if _, err := applyTransition(hydratedLeaf, model.ActionStart, "agent", "claim"); err != nil {
+	if _, err := applyTransition(hydratedLeaf, model.Start{Assignee: "agent"}); err != nil {
 		t.Fatalf("applyTransition(leaf, start) = %v, want acceptance", err)
 	}
 
@@ -753,53 +722,8 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 	if err != nil {
 		t.Fatalf("TransitionIssue(archive) error = %v", err)
 	}
-	if _, err := applyTransition(archived, model.ActionClose, "", ""); err == nil {
+	if _, err := applyTransition(archived, model.Close{Outcome: model.Obsolete{}}); err == nil {
 		t.Fatal("applyTransition(archived, close) = nil, want refusal (archived issue is frozen)")
-	}
-}
-
-// On a healthy repo every issue — container and leaf — accepts a no-op update,
-// so the dry-run must report zero failures and must not mutate anything.
-func TestDoctorNoopUpdateDryRunPassesHealthyRepoWithoutMutating(t *testing.T) {
-	ctx := context.Background()
-	st := openIssueStore(t, ctx)
-
-	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "dryrun", IssueType: "epic", Priority: 0})
-	if err != nil {
-		t.Fatalf("CreateIssue(epic) error = %v", err)
-	}
-	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "dryrun", IssueType: "task", Priority: 0})
-	if err != nil {
-		t.Fatalf("CreateIssue(child) error = %v", err)
-	}
-	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "tester"}); err != nil {
-		t.Fatalf("AddRelation error = %v", err)
-	}
-
-	var eventsBefore int
-	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events`).Scan(&eventsBefore); err != nil {
-		t.Fatalf("count events before error = %v", err)
-	}
-
-	report, err := st.Doctor(ctx)
-	if err != nil {
-		t.Fatalf("Doctor() error = %v", err)
-	}
-	if report.UpdateDryRunFailures != 0 {
-		t.Fatalf("Doctor().UpdateDryRunFailures = %d, want 0 (errors: %v)", report.UpdateDryRunFailures, report.Errors)
-	}
-	for _, e := range report.Errors {
-		if strings.Contains(e, "no-op update would fail") {
-			t.Fatalf("Doctor() reported a dry-run failure on a healthy repo: %q", e)
-		}
-	}
-
-	var eventsAfter int
-	if err := st.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM issue_events`).Scan(&eventsAfter); err != nil {
-		t.Fatalf("count events after error = %v", err)
-	}
-	if eventsAfter != eventsBefore {
-		t.Fatalf("Doctor() dry-run mutated history: issue_events %d -> %d", eventsBefore, eventsAfter)
 	}
 }
 
@@ -1368,14 +1292,14 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "close", Reason: "done", CreatedBy: "tester"})
+	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "tester", Reason: "done"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(close) error = %v", err)
+		t.Fatalf("Apply(close) error = %v", err)
 	}
 	if closed.State() != model.StateClosed || closed.ClosedAtValue() == nil {
 		t.Fatalf("closed = %#v", closed)
 	}
-	reopened, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "reopen", Reason: "follow-up work", CreatedBy: "tester"})
+	reopened, err := st.Apply(ctx, issue.ID, Change{Action: model.Reopen{}, Actor: "tester", Reason: "follow-up work"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(reopen) error = %v", err)
 	}
@@ -1429,7 +1353,7 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 	}
 }
 
-func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
+func TestCloseTransitionAllowsEmptyReason(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1437,9 +1361,9 @@ func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "close", CreatedBy: "tester"})
+	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"})
 	if err != nil {
-		t.Fatalf("TransitionIssue(close, empty reason) error = %v", err)
+		t.Fatalf("Apply(close, empty reason) error = %v", err)
 	}
 	if closed.State() != model.StateClosed {
 		t.Fatalf("closed.State() = %q, want closed", closed.State())
@@ -1456,27 +1380,27 @@ func TestTransitionIssueAllowsEmptyReason(t *testing.T) {
 	}
 }
 
-// TestApplyUpdateEveryTargetStateRecordsOneEvent exercises the 3x3-minus-diagonal
-// of the target-state lifecycle: each of the six non-identity (from -> to) pairs
-// must be reachable by a single ApplyUpdate call that records exactly one event
-// with the canonical action for the target state. [LAW:behavior-not-structure]
-// asserts the contract (one transition per --status change, canonical action),
-// not the implementation (no compound action chains, no dispatch table).
-func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
+// TestApplyEveryTargetStateRecordsOneEvent exercises the 3x3-minus-diagonal
+// of the target-state lifecycle: each of the six non-identity (from -> to)
+// pairs must be reachable by a single Apply call that records exactly one
+// event carrying the action's name. Closed is reached via Done — the neutral
+// success close `lit update --status closed` constructs. [LAW:behavior-not-structure]
+// asserts the contract (one transition per change, the variant's verb), not
+// the implementation (no compound action chains, no dispatch table).
+func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
 	cases := []struct {
-		from       model.State
-		to         model.State
-		wantAction string
+		from   model.State
+		action model.StatusAction
 	}{
-		{from: model.StateOpen, to: model.StateInProgress, wantAction: "start"},
-		{from: model.StateOpen, to: model.StateClosed, wantAction: "close"},
-		{from: model.StateInProgress, to: model.StateOpen, wantAction: "reopen"},
-		{from: model.StateInProgress, to: model.StateClosed, wantAction: "close"},
-		{from: model.StateClosed, to: model.StateOpen, wantAction: "reopen"},
-		{from: model.StateClosed, to: model.StateInProgress, wantAction: "start"},
+		{from: model.StateOpen, action: model.Start{Assignee: "tester"}},
+		{from: model.StateOpen, action: model.Done{}},
+		{from: model.StateInProgress, action: model.Reopen{}},
+		{from: model.StateInProgress, action: model.Done{}},
+		{from: model.StateClosed, action: model.Reopen{}},
+		{from: model.StateClosed, action: model.Start{Assignee: "tester"}},
 	}
 	for _, tc := range cases {
-		t.Run(string(tc.from)+"_to_"+string(tc.to), func(t *testing.T) {
+		t.Run(string(tc.from)+"_to_"+string(tc.action.Target()), func(t *testing.T) {
 			ctx := context.Background()
 			st := openIssueStore(t, ctx)
 			issue, err := st.CreateIssue(ctx, CreateIssueInput{
@@ -1485,21 +1409,16 @@ func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
 			if err != nil {
 				t.Fatalf("CreateIssue() error = %v", err)
 			}
-			// Drive the issue into the from-state via direct TransitionIssue
-			// calls so the setup path is independent of the ApplyUpdate path
-			// under test.
+			// Drive the issue into the from-state with separate Apply calls so
+			// the setup path is independent of the call under test.
 			if tc.from != model.StateOpen {
-				if _, err := st.StartIssue(ctx, StartIssueInput{
-					IssueID: issue.ID, Assignee: "setup", CreatedBy: "setup",
-				}); err != nil {
-					t.Fatalf("setup StartIssue error = %v", err)
+				if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "setup"}, Actor: "setup"}); err != nil {
+					t.Fatalf("setup Apply(start) error = %v", err)
 				}
 			}
 			if tc.from == model.StateClosed {
-				if _, err := st.TransitionIssue(ctx, TransitionIssueInput{
-					IssueID: issue.ID, Action: "done", CreatedBy: "setup",
-				}); err != nil {
-					t.Fatalf("setup TransitionIssue(done) error = %v", err)
+				if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "setup"}); err != nil {
+					t.Fatalf("setup Apply(done) error = %v", err)
 				}
 			}
 			before, err := st.GetIssueDetail(ctx, issue.ID)
@@ -1508,16 +1427,12 @@ func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
 			}
 			eventsBefore := len(before.Events)
 
-			updated, err := st.ApplyUpdate(ctx, issue.ID, ApplyUpdateInput{
-				TargetStatus:       string(tc.to),
-				TransitionBy:       "tester",
-				TransitionAssignee: "tester",
-			})
+			updated, err := st.Apply(ctx, issue.ID, Change{Action: tc.action, Actor: "tester"})
 			if err != nil {
-				t.Fatalf("ApplyUpdate(%s -> %s) error = %v", tc.from, tc.to, err)
+				t.Fatalf("Apply(%s -> %s) error = %v", tc.from, tc.action.Target(), err)
 			}
-			if updated.State() != tc.to {
-				t.Fatalf("updated.State() = %q, want %q", updated.State(), tc.to)
+			if updated.State() != tc.action.Target() {
+				t.Fatalf("updated.State() = %q, want %q", updated.State(), tc.action.Target())
 			}
 
 			after, err := st.GetIssueDetail(ctx, issue.ID)
@@ -1526,18 +1441,18 @@ func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
 			}
 			added := after.Events[eventsBefore:]
 			if len(added) != 1 {
-				t.Fatalf("ApplyUpdate(%s -> %s) recorded %d events, want exactly 1: %#v",
-					tc.from, tc.to, len(added), added)
+				t.Fatalf("Apply(%s -> %s) recorded %d events, want exactly 1: %#v",
+					tc.from, tc.action.Target(), len(added), added)
 			}
-			if added[0].Action != tc.wantAction {
-				t.Fatalf("ApplyUpdate(%s -> %s) action = %q, want %q",
-					tc.from, tc.to, added[0].Action, tc.wantAction)
+			if added[0].Action != string(tc.action.Name()) {
+				t.Fatalf("Apply(%s -> %s) action = %q, want %q",
+					tc.from, tc.action.Target(), added[0].Action, tc.action.Name())
 			}
 		})
 	}
 }
 
-// TestApplyUpdateSameTargetStateStillRecordsEvent asserts that a same-state
+// TestApplySameTargetStateStillRecordsEvent asserts that a same-state
 // ApplyUpdate that changes the assignee records an event. The Actor on
 // issue_events is the audit substrate for "list every agent that interacted
 // with this ticket" history queries; suppressing the reclaim event would
@@ -1545,7 +1460,7 @@ func TestApplyUpdateEveryTargetStateRecordsOneEvent(t *testing.T) {
 // with a new assignee on an already-in_progress issue is the canonical
 // agent-reclaim path — it records a start event carrying only the assignee
 // change (no from==to status row; history reflects actual mutations).
-func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
+func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{
@@ -1554,10 +1469,8 @@ func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID: issue.ID, Assignee: "agent-a", CreatedBy: "agent-a",
-	}); err != nil {
-		t.Fatalf("setup StartIssue error = %v", err)
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "agent-a"}, Actor: "agent-a"}); err != nil {
+		t.Fatalf("setup Apply(start) error = %v", err)
 	}
 	before, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {
@@ -1565,12 +1478,11 @@ func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
 	}
 	eventsBefore := len(before.Events)
 
-	if _, err := st.ApplyUpdate(ctx, issue.ID, ApplyUpdateInput{
-		TargetStatus:       "in_progress",
-		TransitionBy:       "agent-b",
-		TransitionAssignee: "agent-b",
+	if _, err := st.Apply(ctx, issue.ID, Change{
+		Action: model.Start{Assignee: "agent-b"},
+		Actor:  "agent-b",
 	}); err != nil {
-		t.Fatalf("ApplyUpdate(in_progress -> in_progress) error = %v", err)
+		t.Fatalf("Apply(in_progress -> in_progress) error = %v", err)
 	}
 
 	after, err := st.GetIssueDetail(ctx, issue.ID)
@@ -1579,14 +1491,14 @@ func TestApplyUpdateSameTargetStateStillRecordsEvent(t *testing.T) {
 	}
 	added := after.Events[eventsBefore:]
 	if len(added) != 1 {
-		t.Fatalf("same-state ApplyUpdate recorded %d events, want exactly 1: %#v", len(added), added)
+		t.Fatalf("same-state Apply recorded %d events, want exactly 1: %#v", len(added), added)
 	}
 	if added[0].Action != "start" {
-		t.Fatalf("same-state ApplyUpdate action = %q, want %q (claim must be recorded as start)",
+		t.Fatalf("same-state Apply action = %q, want %q (claim must be recorded as start)",
 			added[0].Action, "start")
 	}
 	if added[0].Actor != "agent-b" {
-		t.Fatalf("same-state ApplyUpdate actor = %q, want %q (audit substrate must capture caller)",
+		t.Fatalf("same-state Apply actor = %q, want %q (audit substrate must capture caller)",
 			added[0].Actor, "agent-b")
 	}
 	for _, change := range added[0].Changes {
@@ -1617,21 +1529,17 @@ func TestTransitionIssueSameStateSameAssigneeRecordsNothing(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID: issue.ID, Assignee: "agent-a", CreatedBy: "agent-a",
-	}); err != nil {
-		t.Fatalf("setup StartIssue error = %v", err)
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "agent-a"}, Actor: "agent-a"}); err != nil {
+		t.Fatalf("setup Apply(start) error = %v", err)
 	}
 	before, err := st.GetIssueDetail(ctx, issue.ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(before) error = %v", err)
 	}
 
-	result, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID: issue.ID, Assignee: "agent-a", CreatedBy: "agent-a",
-	})
+	result, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "agent-a"}, Actor: "agent-a"})
 	if err != nil {
-		t.Fatalf("StartIssue(same-state same-assignee) error = %v, want no-op success", err)
+		t.Fatalf("Apply(same-state same-assignee start) error = %v, want no-op success", err)
 	}
 	if result.State() != model.StateInProgress {
 		t.Fatalf("result.State() = %q, want in_progress", result.State())
@@ -1661,14 +1569,9 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("issue.State() = %q, want open", issue.State())
 	}
 
-	started, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID:   issue.ID,
-		Assignee:  "agent-a",
-		Reason:    "claim",
-		CreatedBy: "agent-a",
-	})
+	started, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "agent-a"}, Actor: "agent-a", Reason: "claim"})
 	if err != nil {
-		t.Fatalf("StartIssue(agent-a) error = %v", err)
+		t.Fatalf("Apply(start agent-a) error = %v", err)
 	}
 	if started.State() != model.StateInProgress {
 		t.Fatalf("started.State() = %q, want in_progress", started.State())
@@ -1679,15 +1582,10 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 	// start on an already-in-progress issue is therefore a same-state claim
 	// transfer (assignee column rewritten) rather than a verb-strict
 	// rejection. Persistence is the contract — reload from the store to
-	// assert the assignee column, since writeStatusTransition returns the
+	// assert the assignee column, since the transition plan returns the
 	// pre-Apply lifecycle snapshot.
-	if _, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID:   issue.ID,
-		Assignee:  "agent-b",
-		Reason:    "competing claim",
-		CreatedBy: "agent-b",
-	}); err != nil {
-		t.Fatalf("StartIssue(agent-b competing claim) error = %v, want same-state success", err)
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Start{Assignee: "agent-b"}, Actor: "agent-b", Reason: "competing claim"}); err != nil {
+		t.Fatalf("Apply(start agent-b competing claim) error = %v, want same-state success", err)
 	}
 	reclaimed, err := st.GetIssue(ctx, issue.ID)
 	if err != nil {
@@ -1700,12 +1598,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 		t.Fatalf("reclaimed.AssigneeValue() = %q, want agent-b", reclaimed.AssigneeValue())
 	}
 
-	done, err := st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:   issue.ID,
-		Action:    "done",
-		Reason:    "implemented",
-		CreatedBy: "agent-a",
-	})
+	done, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "agent-a", Reason: "implemented"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(done) error = %v", err)
 	}
@@ -1924,7 +1817,7 @@ func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(leaf) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: leaf.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, leaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
 
@@ -1961,7 +1854,7 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(dependency leaf) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: dependencyLeaf.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, dependencyLeaf.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(close dependency leaf) error = %v", err)
 	}
 	related, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Related epic", Topic: "detail", IssueType: "epic", Priority: 1})
@@ -2022,7 +1915,7 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	if _, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
 	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: leaf.ID, DstID: epic.ID, Type: "blocks", CreatedBy: "tester"}); err != nil {
@@ -2184,7 +2077,7 @@ func TestSyncRoundTripIncludingEpic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	if _, err := source.TransitionIssue(ctx, TransitionIssueInput{IssueID: child.ID, Action: "close", CreatedBy: "tester"}); err != nil {
+	if _, err := source.Apply(ctx, child.ID, Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
 	before, err := source.GetIssue(ctx, epic.ID)
@@ -2223,12 +2116,22 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil, ""); err != nil {
-		t.Fatalf("writeStatusTransition(first) error = %v", err)
+	if _, err := st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Wontfix{}}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(first close) error = %v", err)
 	}
-	_, err = st.writeStatusTransition(ctx, issue, "tester", "", "close", "", nil, "")
+	// Plan a second close against the STALE pre-close snapshot: the guarded
+	// UPDATE must see the row has moved and surface the conflict instead of
+	// silently re-closing. (Apply itself re-reads, which would turn this into a
+	// same-state no-op — the contention window under test is plan-vs-write.)
+	w, err := st.planStatusTransition(ctx, issue, "tester", "", model.Close{Outcome: model.Wontfix{}})
+	if err != nil {
+		t.Fatalf("planStatusTransition(stale) error = %v", err)
+	}
+	err = st.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
+		return st.applyTransitionTx(ctx, tx, w)
+	})
 	if err == nil || err.Error() != `close conflict: issue status is "closed"` {
-		t.Fatalf("writeStatusTransition(second) error = %v, want close conflict", err)
+		t.Fatalf("applyTransitionTx(stale close) error = %v, want close conflict", err)
 	}
 }
 
@@ -2289,14 +2192,14 @@ func TestReopenClearsClosedAt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "close", CreatedBy: "tester"})
+	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Done{}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
 	if closed.ClosedAtValue() == nil {
 		t.Fatalf("ClosedAtValue() = nil after close")
 	}
-	reopened, err := st.TransitionIssue(ctx, TransitionIssueInput{IssueID: issue.ID, Action: "reopen", CreatedBy: "tester"})
+	reopened, err := st.Apply(ctx, issue.ID, Change{Action: model.Reopen{}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(reopen) error = %v", err)
 	}
@@ -2326,13 +2229,7 @@ func TestCloseAsDuplicateWritesRedirectEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(dup) error = %v", err)
 	}
-	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:        dup.ID,
-		Action:         "close",
-		CreatedBy:      "tester",
-		Resolution:     ptr(model.ResolutionDuplicate),
-		RedirectTarget: canonical.ID,
-	})
+	closed, err := st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(close duplicate) error = %v", err)
 	}
@@ -2373,12 +2270,7 @@ func TestCloseAsObsoleteWritesNoRedirectEdge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	closed, err := st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:    issue.ID,
-		Action:     "close",
-		CreatedBy:  "tester",
-		Resolution: ptr(model.ResolutionObsolete),
-	})
+	closed, err := st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Obsolete{}}, Actor: "tester"})
 	if err != nil {
 		t.Fatalf("TransitionIssue(close obsolete) error = %v", err)
 	}
@@ -2405,13 +2297,7 @@ func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:        dup.ID,
-		Action:         "close",
-		CreatedBy:      "tester",
-		Resolution:     ptr(model.ResolutionSuperseded),
-		RedirectTarget: "test-does-not-exist",
-	})
+	_, err = st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Superseded{By: "test-does-not-exist"}}, Actor: "tester"})
 	if err == nil {
 		t.Fatal("TransitionIssue(close to missing target) error = nil, want rejection")
 	}
@@ -2436,13 +2322,7 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:        issue.ID,
-		Action:         "close",
-		CreatedBy:      "tester",
-		Resolution:     ptr(model.ResolutionDuplicate),
-		RedirectTarget: issue.ID,
-	})
+	_, err = st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: issue.ID}}, Actor: "tester"})
 	if err == nil {
 		t.Fatal("TransitionIssue(close as duplicate of itself) error = nil, want rejection")
 	}
@@ -2455,29 +2335,21 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 	}
 }
 
-// TestCloseTerminalWithTargetRejected is the store's integrity floor: a terminal
-// resolution carrying a redirect target is incoherent and rejected rather than
-// silently dropping the target. [LAW:no-silent-failure]
-func TestCloseTerminalWithTargetRejected(t *testing.T) {
+// TestCloseRedirectingWithoutTargetRejected is the store's integrity floor for
+// programmatic callers that bypass the CLI gate: a redirecting outcome minted
+// with an empty target is incoherent and rejected rather than persisted as a
+// "duplicate of nothing". A target on a terminal outcome needs no runtime
+// twin — Obsolete/Wontfix have no field to carry one. [LAW:types-are-the-program]
+func TestCloseRedirectingWithoutTargetRejected(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "term", IssueType: "task", Priority: 0})
-	if err != nil {
-		t.Fatalf("CreateIssue(canonical) error = %v", err)
-	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Wontfix", Topic: "term", IssueType: "task", Priority: 0})
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dup", Topic: "term", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	_, err = st.TransitionIssue(ctx, TransitionIssueInput{
-		IssueID:        issue.ID,
-		Action:         "close",
-		CreatedBy:      "tester",
-		Resolution:     ptr(model.ResolutionWontfix),
-		RedirectTarget: canonical.ID,
-	})
+	_, err = st.Apply(ctx, issue.ID, Change{Action: model.Close{Outcome: model.Duplicate{}}, Actor: "tester"})
 	if err == nil {
-		t.Fatal("TransitionIssue(wontfix with target) error = nil, want rejection")
+		t.Fatal("Apply(duplicate close with empty target) error = nil, want rejection")
 	}
 }
 

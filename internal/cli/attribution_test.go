@@ -83,8 +83,8 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		ap := newTestCLIApp(t)
 		id := newAttributionIssue(t, ap, "bulk close target")
 		var out bytes.Buffer
-		if err := runBulkTransition(model.ActionClose)(ctx, &out, ap, []string{"--ids", id, "--reason", "done"}); err != nil {
-			t.Fatalf("runBulkTransition(close) error = %v", err)
+		if err := runBulkClose(ctx, &out, ap, []string{"--ids", id, "--resolution", "obsolete", "--reason", "done"}); err != nil {
+			t.Fatalf("runBulkClose error = %v", err)
 		}
 		assertCloseEventActor(t, ap, id, want)
 	})

@@ -389,11 +389,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if _, err := st.StartIssue(ctx, StartIssueInput{
-		IssueID:   issueA.ID,
-		Assignee:  "alice",
-		CreatedBy: "alice",
-	}); err != nil {
+	if _, err := st.Apply(ctx, issueA.ID, Change{Action: model.Start{Assignee: "alice"}, Actor: "alice"}); err != nil {
 		t.Fatalf("StartIssue(A) error = %v", err)
 	}
 
