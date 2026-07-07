@@ -206,7 +206,7 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if len(report.DependencyCycle) > 0 {
 		dependencyCycle = strings.Join(report.DependencyCycle, "->")
 	}
-	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d update_dryrun_failures=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, report.UpdateDryRunFailures, dependencyCycle); err != nil {
+	if _, err := fmt.Fprintf(stdout, "integrity_check=%s foreign_key_issues=%d invalid_related_rows=%d orphan_history_rows=%d rank_inversions=%d dependency_cycle=%s\n", report.IntegrityCheck, report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows, report.RankInversions, dependencyCycle); err != nil {
 		return err
 	}
 	if err := printSyncFreshness(stdout, syncReport); err != nil {

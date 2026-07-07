@@ -95,12 +95,7 @@ func (h readyTestHarness) createIssue(input store.CreateIssueInput) model.Issue 
 
 func (h readyTestHarness) closeIssue(issueID, reason string) {
 	h.t.Helper()
-	if _, err := h.ap.Store.TransitionIssue(h.ctx, store.TransitionIssueInput{
-		IssueID:   issueID,
-		Action:    "close",
-		Reason:    reason,
-		CreatedBy: "tester",
-	}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issueID, store.Change{Action: model.Done{}, Actor: "tester", Reason: reason}); err != nil {
 		h.t.Fatalf("TransitionIssue(close) error = %v", err)
 	}
 }
@@ -339,12 +334,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
-		IssueID:   issue.ID,
-		Assignee:  "agent",
-		Reason:    "claim",
-		CreatedBy: "agent",
-	}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, store.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 
@@ -369,12 +359,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
-		IssueID:   issue.ID,
-		Assignee:  "agent",
-		Reason:    "claim",
-		CreatedBy: "agent",
-	}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, store.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 	h.backdateUpdatedAt(issue.ID, 25*time.Hour)
@@ -398,12 +383,7 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 		IssueType: "task",
 		Priority:  1,
 	})
-	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{
-		IssueID:   issue.ID,
-		Assignee:  "agent",
-		Reason:    "claim",
-		CreatedBy: "agent",
-	}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, issue.ID, store.Change{Action: model.Start{Assignee: "agent"}, Actor: "agent", Reason: "claim"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 

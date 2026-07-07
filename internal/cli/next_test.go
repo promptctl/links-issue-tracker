@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -55,7 +56,7 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
 	inProgress := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{IssueID: inProgress.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, inProgress.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 	openLeaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
@@ -114,7 +115,7 @@ func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
 	b1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	// Start B.1 so epicB derives to in_progress; epicA stays open.
-	if _, err := h.ap.Store.StartIssue(h.ctx, store.StartIssueInput{IssueID: b1.ID, Assignee: "tester", CreatedBy: "tester"}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, b1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue(B.1) error = %v", err)
 	}
 

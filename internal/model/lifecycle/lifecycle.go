@@ -34,24 +34,6 @@ func (s State) Display() string {
 	}
 }
 
-// ActionTargetState returns the state that successfully applying action would
-// produce. The second return reports whether action is a known status action.
-// [LAW:one-source-of-truth] Action→target mapping lives in one table consulted
-// by both transition and idempotent-call diagnostics, instead of being inferred
-// independently at each callsite.
-func ActionTargetState(action ActionName) (State, bool) {
-	switch action {
-	case ActionStart:
-		return InProgress, true
-	case ActionDone, ActionClose:
-		return Closed, true
-	case ActionReopen:
-		return Open, true
-	default:
-		return "", false
-	}
-}
-
 type Progress struct {
 	Open       int `json:"open"`
 	InProgress int `json:"in_progress"`
@@ -87,9 +69,14 @@ type Container interface {
 	Children() []Lifecycle
 }
 
+// Actionable marks lifecycle expressions a status action can be applied to.
+// Apply is total: StatusAction's Target names a real state, a same-state call
+// returns the receiver, so there is no error to return. The actor/reason of a
+// transition are event provenance owned by the store's write boundary — the
+// machine computes the next state and nothing else. [LAW:effects-at-boundaries]
 type Actionable interface {
 	Lifecycle
-	Apply(name ActionName, actor string, reason string) (Lifecycle, error)
+	Apply(action StatusAction) Lifecycle
 }
 
 // Walk visits the lifecycle tree depth-first. Recursion is the substrate;

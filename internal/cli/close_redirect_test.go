@@ -28,7 +28,7 @@ func TestCloseAsDuplicateRequiresTarget(t *testing.T) {
 	id := seedOpenIssueRaw(t, ctx, ap, "Duplicate without target")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "duplicate"}, "close")
+	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "duplicate"}, closeSpec)
 	if err == nil {
 		t.Fatal("close --resolution duplicate without --of = nil error, want rejection")
 	}
@@ -46,7 +46,7 @@ func TestCloseAsObsoleteRejectsTarget(t *testing.T) {
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "obsolete", "--of", canonical}, "close")
+	err := runTransition(ctx, &out, ap, []string{id, "--resolution", "obsolete", "--of", canonical}, closeSpec)
 	if err == nil {
 		t.Fatal("close --resolution obsolete --of X = nil error, want rejection")
 	}
@@ -55,19 +55,21 @@ func TestCloseAsObsoleteRejectsTarget(t *testing.T) {
 	}
 }
 
-// TestRedirectTargetRejectedOnNonClose pins that --of applies only to close.
+// TestRedirectTargetRejectedOnNonClose pins that --of exists only on close:
+// no other transition registers the flag, so misuse is the parser's
+// unknown-flag error rather than a runtime carve-out. [LAW:types-are-the-program]
 func TestRedirectTargetRejectedOnNonClose(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 	id := seedOpenIssueRaw(t, ctx, ap, "Reopen with stray target")
 
 	var out bytes.Buffer
-	err := runTransition(ctx, &out, ap, []string{id, "--of", "test-x"}, "reopen")
+	err := runTransition(ctx, &out, ap, []string{id, "--of", "test-x"}, openSpec)
 	if err == nil {
 		t.Fatal("reopen --of X = nil error, want rejection")
 	}
-	if !strings.Contains(err.Error(), "--of applies only to close") {
-		t.Fatalf("error = %v, want '--of applies only to close'", err)
+	if !strings.Contains(err.Error(), "unknown flag: --of") {
+		t.Fatalf("error = %v, want unknown-flag parse rejection", err)
 	}
 }
 
@@ -81,7 +83,7 @@ func TestCloseAsDuplicateRecordsRedirectEdge(t *testing.T) {
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, dup)
@@ -106,7 +108,7 @@ func TestShowRendersRedirectDistinctFromRelated(t *testing.T) {
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 
@@ -163,7 +165,7 @@ func TestShowRedirectAmbiguousWhenManualEdgePresent(t *testing.T) {
 	}
 
 	var sink bytes.Buffer
-	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+	if err := runTransition(ctx, &sink, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 
@@ -197,7 +199,7 @@ func TestCloseAsDuplicateRendersRedirectAdjacency(t *testing.T) {
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
 
 	var out bytes.Buffer
-	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, "close"); err != nil {
+	if err := runTransition(ctx, &out, ap, []string{dup, "--resolution", "duplicate", "--of", canonical}, closeSpec); err != nil {
 		t.Fatalf("runTransition(close duplicate) error = %v", err)
 	}
 	if !strings.Contains(out.String(), "redirect:\n- "+canonical) {

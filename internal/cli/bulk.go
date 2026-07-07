@@ -17,7 +17,7 @@ var bulkFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit bulk <label|close|archive|import> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
-		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.ActionClose)}},
+		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkClose}},
 		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.ActionArchive)}},
 		{name: "import", payload: appSubcommand{access: app.AccessWrite, run: runBulkImport}},
 	},
@@ -122,7 +122,40 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	})
 }
 
-// runBulkTransition builds the handler for a bulk lifecycle action. The
+// runBulkClose closes every listed issue with one shared outcome. The outcome
+// flags parse through the same gate `lit close` uses, so a bulk close can no
+// longer record the resolution-less close that the close command itself
+// forbids — the two boundaries agree about what a close requires by sharing
+// the enforcer. [LAW:single-enforcer]
+func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("bulk close")
+	ids := fs.String("ids", "", "Comma-separated issue IDs")
+	reason := fs.String("reason", "", "Lifecycle reason")
+	resolution, target := registerCloseOutcomeFlags(fs)
+	resolveActor := registerActor(fs)
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	issueIDs := splitCSV(*ids)
+	if len(issueIDs) == 0 {
+		return ValidationError{Message: "--ids is required"}
+	}
+	outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit bulk close --ids <id,id,...> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
+	if err != nil {
+		return err
+	}
+	actor := resolveActor()
+	return runBulkOver(stdout, issueIDs, func(issueID string) error {
+		_, err := ap.Store.Apply(ctx, issueID, store.Change{
+			Action: model.Close{Outcome: outcome},
+			Actor:  actor,
+			Reason: *reason,
+		})
+		return err
+	})
+}
+
+// runBulkTransition builds the handler for a bulk retention action. The
 // action is fixed by the family row, so the body never re-reads argv to
 // learn which subcommand it is serving. [LAW:dataflow-not-control-flow]
 func runBulkTransition(action model.ActionName) appRunFn {

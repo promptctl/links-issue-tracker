@@ -23,9 +23,9 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 	if err != nil {
 		t.Fatalf("HydrateAllOf() error = %v", err)
 	}
-	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen} {
-		if _, err := container.Apply(action, "tester", ""); err == nil {
-			t.Fatalf("Apply(%s on epic) error = nil, want container rejection", action)
+	for _, action := range []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}} {
+		if _, err := container.Apply(action); err == nil {
+			t.Fatalf("Apply(%s on epic) error = nil, want container rejection", action.Name())
 		}
 	}
 }
@@ -35,29 +35,44 @@ func TestApplyRefusesContainerForEveryAction(t *testing.T) {
 // contract: action determines the post-state regardless of from-state, and
 // same-state pairs succeed as no-ops.
 func TestApplyTargetStateOnLeafProducesTargetState(t *testing.T) {
-	type targetCase struct {
-		action ActionName
-		target State
-	}
-	matrix := []targetCase{
-		{ActionStart, StateInProgress},
-		{ActionDone, StateClosed},
-		{ActionClose, StateClosed},
-		{ActionReopen, StateOpen},
-	}
+	matrix := []StatusAction{Start{}, Done{}, Close{Outcome: Wontfix{}}, Reopen{}}
 	for _, from := range []State{StateOpen, StateInProgress, StateClosed} {
-		for _, tc := range matrix {
-			t.Run(string(from)+"_"+string(tc.action), func(t *testing.T) {
+		for _, action := range matrix {
+			t.Run(string(from)+"_"+string(action.Name()), func(t *testing.T) {
 				leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, from)
-				next, err := leaf.Apply(tc.action, "tester", "")
+				next, err := leaf.Apply(action)
 				if err != nil {
-					t.Fatalf("Apply(%s on %s) error = %v, want success", tc.action, from, err)
+					t.Fatalf("Apply(%s on %s) error = %v, want success", action.Name(), from, err)
 				}
-				if next.State() != tc.target {
-					t.Fatalf("Apply(%s on %s).State() = %q, want %q", tc.action, from, next.State(), tc.target)
+				if next.State() != action.Target() {
+					t.Fatalf("Apply(%s on %s).State() = %q, want %q", action.Name(), from, next.State(), action.Target())
 				}
 			})
 		}
+	}
+}
+
+// TestApplyCloseOutcomeSurfacesThroughResolutionValue pins the issue-level
+// accessor chain for the payload threading: a Close's outcome, having traveled
+// through the state machine into the closed leaf, must surface through
+// Issue.ResolutionValue(); the neutral Done records none.
+func TestApplyCloseOutcomeSurfacesThroughResolutionValue(t *testing.T) {
+	leaf := hydratedIssue(t, Issue{ID: "leaf", IssueType: "task"}, StateOpen)
+	closed, err := leaf.Apply(Close{Outcome: Duplicate{Of: "links-abc1"}})
+	if err != nil {
+		t.Fatalf("Apply(close duplicate) error = %v", err)
+	}
+	got := closed.ResolutionValue()
+	if got == nil || *got != ResolutionDuplicate {
+		t.Fatalf("ResolutionValue() after duplicate close = %v, want %q", got, ResolutionDuplicate)
+	}
+
+	done, err := hydratedIssue(t, Issue{ID: "leaf2", IssueType: "task"}, StateInProgress).Apply(Done{})
+	if err != nil {
+		t.Fatalf("Apply(done) error = %v", err)
+	}
+	if got := done.ResolutionValue(); got != nil {
+		t.Fatalf("ResolutionValue() after done = %v, want nil — done records no resolution", got)
 	}
 }
 

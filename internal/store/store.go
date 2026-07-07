@@ -111,89 +111,44 @@ func (u UpdateIssueInput) IsEmpty() bool {
 		u.Status == nil && u.Priority == nil && u.Assignee == nil && u.Lane == nil && u.Labels == nil
 }
 
-// ApplyUpdateInput is the single input for the unified update path.
-// TargetStatus == "" means no transition; empty Fields means no field mutations.
-type ApplyUpdateInput struct {
-	Fields             UpdateIssueInput
-	TargetStatus       string // empty = no status change
-	TransitionReason   string
-	TransitionBy       string
-	TransitionAssignee string // optional; stamped when TargetStatus resolves to "start"
+// Change is THE issue-record mutation input: an optional status action paired
+// with a field patch and the transition's provenance. nil Action means no
+// transition; empty Fields means no field mutations. The action variant
+// carries exactly its payload (Start the assignee, Close the outcome), so the
+// loose per-action parameters this seam used to thread are unrepresentable.
+// [LAW:types-are-the-program]
+//
+// Actor/Reason are the transition event's provenance; Fields carries its own
+// By/Reason because a combined change records two events (one transition, one
+// field edit), each with its own reason — `lit update` deliberately synthesizes
+// a transition reason while leaving the field reason as typed.
+type Change struct {
+	// Action is typed StatusAction, not Action: retention transitions still
+	// travel TransitionIssue, and widening this seam to the full sum is the
+	// retention-fold recut's move. Until then a retention action here cannot
+	// be expressed, rather than being runtime-rejected.
+	Action model.StatusAction
+	Fields UpdateIssueInput
+	Actor  string
+	Reason string
 }
 
-func (a ApplyUpdateInput) IsEmpty() bool {
-	return a.TargetStatus == "" && a.Fields.IsEmpty()
-}
-
-// canonicalActionForTargetState returns the lifecycle action that lit update
-// records when transitioning to target. lit update is the neutral path and
-// records "close" for Closed; done's capture-deposit guidance belongs to
-// lit done, not to a target-state update. The fallthrough is unreachable in
-// practice — DefaultOpen at the call site narrows arbitrary input to one of
-// the three known states — and is left empty so a future bypass surfaces
-// loudly via TransitionIssue's action-rejection rather than silently picking
-// a default. [LAW:one-source-of-truth] Reverse companion to
-// lifecycle.ActionTargetState; both describe the same action↔state map.
-func canonicalActionForTargetState(target model.State) model.ActionName {
-	switch target {
-	case model.StateOpen:
-		return model.ActionReopen
-	case model.StateInProgress:
-		return model.ActionStart
-	case model.StateClosed:
-		return model.ActionClose
-	}
-	return ""
-}
-
-// transitionFor resolves the lifecycle action an ApplyUpdate performs for a
-// target status, and whether any transition occurs at all. A blank target is
-// the "no --status flag" signal and must never be normalized into a real "open"
-// target — doing so attempted a transition on every container and was the
-// container-update bug this package now guards against. [LAW:single-enforcer]
-// ApplyUpdate (which executes the transition) and validateNoopUpdate (which only
-// validates it) resolve the action through this one function, so neither can
-// drift from the other about when a transition happens.
-func transitionFor(targetStatus string) (model.ActionName, bool) {
-	if strings.TrimSpace(targetStatus) == "" {
-		return "", false
-	}
-	return canonicalActionForTargetState(model.DefaultOpen(targetStatus)), true
+func (c Change) IsEmpty() bool {
+	return c.Action == nil && c.Fields.IsEmpty()
 }
 
 // applyTransition runs every guard a status transition must pass before it
 // writes — the archived/deleted refusal and the lifecycle Apply (which rejects
 // every action on a container, whose state is derived from children) — and
 // returns the post-transition issue, or the error the write would surface. It
-// never mutates the store. [LAW:single-enforcer] writeStatusTransition consumes
-// the returned issue to perform the write; validateNoopUpdate consumes only the
-// error, so a transition a user could not perform is judged identically by the
-// mutating path and the read-only dry-run.
-func applyTransition(issue model.Issue, action model.ActionName, actor, reason string) (model.Issue, error) {
+// never mutates the store. [LAW:single-enforcer]
+func applyTransition(issue model.Issue, action model.StatusAction) (model.Issue, error) {
 	// [LAW:single-enforcer] What counts as out-of-the-flow is the typed Frozen
 	// predicate beside the Retention sum, not a variant match owned here.
 	if model.Frozen(issue.Retention()) {
-		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action)
+		return model.Issue{}, fmt.Errorf("cannot %s archived or deleted issue", action.Name())
 	}
-	return issue.Apply(action, actor, reason)
-}
-
-// validateNoopUpdate reports the error a no-op `lit update` (empty Fields, no
-// target status) would surface for issue, without mutating. Empty Fields make
-// UpdateIssue a structural no-op, so the only failure surface is the transition
-// the input resolves to — none, for a true no-op. The value is as a regression
-// tripwire: should a change make an empty target resolve to a real transition,
-// transitionFor returns one here too and applyTransition surfaces the rejection
-// that transition would hit (every container, for the original bug). [LAW:dataflow-not-control-flow]
-// transitions is the discriminator the no-op carries; the match on it is the
-// whole logic, not a guard skipping work that should run.
-func validateNoopUpdate(issue model.Issue) error {
-	action, transitions := transitionFor("")
-	if !transitions {
-		return nil
-	}
-	_, err := applyTransition(issue, action, "", "")
-	return err
+	return issue.Apply(action)
 }
 
 type SortSpec struct {
@@ -225,36 +180,14 @@ type AddCommentInput struct {
 	CreatedBy string
 }
 
-// TransitionIssueInput covers all lifecycle transitions except start.
-// For start (which stamps the assignee column), use StartIssueInput and StartIssue.
-// [LAW:types-are-the-program] Assignee is absent from this type by design — the
-// constraint "assignee only travels with start" is structural, not a runtime check.
+// TransitionIssueInput is the retention transition input (archive, unarchive,
+// delete, restore). Status transitions travel Apply with a typed StatusAction;
+// folding retention into that seam — and deleting this type — is the
+// retention-fold recut's move. Retain rejects every non-retention action, so
+// this seam cannot be used to smuggle a status change.
 type TransitionIssueInput struct {
 	IssueID   string
 	Action    model.ActionName
-	Reason    string
-	CreatedBy string
-	// Resolution is the sealed close reason. It travels only with a `close`
-	// transition; nil for every other action (and a nil close is the "no recorded
-	// resolution" close that `done`, legacy rows, and merges also produce). The
-	// `lit close` command is the boundary that requires it; this seam carries it.
-	Resolution *model.Resolution
-	// RedirectTarget is the canonical ticket a duplicate/superseded close
-	// redirects to — the issue this one is a duplicate of, or was superseded by.
-	// Empty for terminal resolutions (obsolete, wontfix) and every non-close
-	// action. writeStatusTransition writes a related-to edge to it inside the
-	// close transaction exactly when Resolution.RedirectsToCanonical(), so the
-	// edge and the close commit or roll back together.
-	RedirectTarget string
-}
-
-// StartIssueInput is the input for the start (claim) transition. It is the only
-// transition that stamps the assignee column, and is separated from the generic
-// TransitionIssueInput to make that constraint unrepresentable to violate.
-// [LAW:types-are-the-program]
-type StartIssueInput struct {
-	IssueID   string
-	Assignee  string
 	Reason    string
 	CreatedBy string
 }
@@ -954,7 +887,7 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 // fieldWrite is a fully-planned field mutation, ready to execute against a tx.
 // planFieldUpdate computes it (pure: validation + in-memory mutation + the
 // change-row diff); applyFieldsTx performs the writes. The plan/apply split is
-// what lets ApplyUpdate run a field write inside the same transaction as a
+// what lets Apply run a field write inside the same transaction as a
 // status transition, so a combined update lands as one Dolt commit instead of
 // two. [LAW:decomposition] [LAW:effects-at-boundaries]
 type fieldWrite struct {
@@ -969,7 +902,7 @@ type fieldWrite struct {
 // planFieldUpdate validates in against baseline and computes the post-write
 // issue plus its field-change rows, without touching the store. baseline is the
 // row the write starts from: GetIssue for a standalone UpdateIssue, or the
-// post-transition issue when ApplyUpdate composes a transition and a field edit
+// post-transition issue when Apply composes a transition and a field edit
 // — so the field UPDATE's lifecycle columns restate the transition's values
 // rather than clobber them. [LAW:effects-at-boundaries] A pure function of
 // (baseline, in): no clock, no IO. The UpdatedAt stamp and every write are
@@ -1121,17 +1054,16 @@ func (s *Store) UpdateIssue(ctx context.Context, id string, in UpdateIssueInput)
 	return s.GetIssue(ctx, issue.ID)
 }
 
-// [LAW:dataflow-not-control-flow] ApplyUpdate is the single execution path for all lit update mutations.
-// Variability lives in the input values: empty TargetStatus = no transitions (see transitionFor);
-// empty Fields = no field write.
-// [LAW:types-are-the-program] Every target state is reachable by exactly one canonical action;
+// [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
+// Variability lives in the Change value: nil Action = no transition; empty Fields = no field write.
+// [LAW:types-are-the-program] Every target state is reachable by exactly one action variant;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
 // Same-state transitions flow through planStatusTransition unconditionally; the leaf decides what they
 // mean. A pure no-op (same state, same resulting assignee) records nothing — history reflects actual
 // mutations. A same-state start with a new assignee is the canonical agent-reclaim path and records
 // the assignee change with the calling Actor, which is the audit substrate for "who interacted with
 // this ticket" history queries.
-func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput) (model.Issue, error) {
+func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return model.Issue{}, err
@@ -1144,22 +1076,12 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 	// status-moved-but-fields-unwritten row — the torn state is unrepresentable.
 	baseline := current
 	var tw transitionWrite
-	action, transitions := transitionFor(in.TargetStatus)
-	if transitions {
-		actor := strings.TrimSpace(in.TransitionBy)
+	if c.Action != nil {
+		actor := strings.TrimSpace(c.Actor)
 		if actor == "" {
 			actor = "unknown"
 		}
-		reason := strings.TrimSpace(in.TransitionReason)
-		if reason == "" {
-			reason = fmt.Sprintf("status update via lit update: %s -> %s", current.StatusValue(), model.DefaultOpen(in.TargetStatus))
-		}
-		// [LAW:types-are-the-program] planStatusTransition consumes the typed
-		// action and applies the assignee only for start; the same plan drives
-		// the standalone lifecycle methods, so the transition decision cannot
-		// drift between `lit update --status` and `lit start`/`lit close`. The
-		// field-level assignee flows through in.Fields.Assignee below.
-		tw, err = s.planStatusTransition(ctx, current, actor, reason, action, strings.TrimSpace(in.TransitionAssignee), nil, "")
+		tw, err = s.planStatusTransition(ctx, current, actor, strings.TrimSpace(c.Reason), c.Action)
 		if err != nil {
 			return model.Issue{}, err
 		}
@@ -1169,14 +1091,14 @@ func (s *Store) ApplyUpdate(ctx context.Context, id string, in ApplyUpdateInput)
 		baseline = tw.post
 	}
 	var fw fieldWrite
-	hasFields := !in.Fields.IsEmpty()
+	hasFields := !c.Fields.IsEmpty()
 	if hasFields {
-		fw, err = planFieldUpdate(baseline, in.Fields)
+		fw, err = planFieldUpdate(baseline, c.Fields)
 		if err != nil {
 			return model.Issue{}, err
 		}
 	}
-	needsTransitionWrite := transitions && !tw.noop
+	needsTransitionWrite := c.Action != nil && !tw.noop
 	if needsTransitionWrite || hasFields {
 		if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
 			if needsTransitionWrite {
@@ -1255,6 +1177,10 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 	return deleted, nil
 }
 
+// TransitionIssue applies a retention transition (archive/unarchive/delete/
+// restore). Status transitions travel Apply; Retain rejects their action names
+// here, so the two seams cannot overlap. Folding retention into Apply — and
+// deleting this method — is the retention-fold recut's move.
 func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (model.Issue, error) {
 	issue, err := s.GetIssue(ctx, in.IssueID)
 	if err != nil {
@@ -1264,13 +1190,6 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	actor := strings.TrimSpace(in.CreatedBy)
 	if actor == "" {
 		actor = "unknown"
-	}
-	// [LAW:types-are-the-program] Action is already the sealed ActionName type;
-	// dispatch is a direct switch on typed constants — no string re-parsing needed.
-	// ActionStart is absent: start carries an assignee and routes through StartIssue.
-	switch in.Action {
-	case model.ActionDone, model.ActionClose, model.ActionReopen:
-		return s.writeStatusTransition(ctx, issue, actor, reason, in.Action, "", in.Resolution, in.RedirectTarget)
 	}
 	now := time.Now().UTC()
 	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
@@ -1317,21 +1236,6 @@ func (s *Store) TransitionIssue(ctx context.Context, in TransitionIssueInput) (m
 	return reloaded, nil
 }
 
-// StartIssue transitions an issue to in_progress and stamps the assignee column.
-// It is the only lifecycle path that carries an assignee; all other transitions
-// route through TransitionIssue, which has no assignee field. [LAW:types-are-the-program]
-func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue, error) {
-	issue, err := s.GetIssue(ctx, in.IssueID)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	actor := strings.TrimSpace(in.CreatedBy)
-	if actor == "" {
-		actor = "unknown"
-	}
-	return s.writeStatusTransition(ctx, issue, actor, strings.TrimSpace(in.Reason), model.ActionStart, strings.TrimSpace(in.Assignee), nil, "")
-}
-
 // transitionWrite is a fully-planned status transition, ready to execute
 // against a tx. planStatusTransition is the read+validate+compute half — it runs
 // the applyTransition guards, the assignee rule, the redirect-edge validation
@@ -1340,10 +1244,9 @@ func (s *Store) StartIssue(ctx context.Context, in StartIssueInput) (model.Issue
 // guarded UPDATE plus the redirect edge and event. The split is read/compute vs
 // write, not pure vs impure — planStatusTransition does read the clock and the
 // store; what it defers is every mutation. The plan also carries `post` — the
-// rehydrated post-transition issue — which writeStatusTransition returns and
-// ApplyUpdate uses as the baseline for a following field write. A noop plan
-// records that the target state and assignee already hold, so no write is owed.
-// [LAW:decomposition]
+// post-transition issue — which Apply uses as the baseline for a following
+// field write. A noop plan records that the target state and assignee already
+// hold, so no write is owed. [LAW:decomposition]
 type transitionWrite struct {
 	issueID       string
 	fromStatus    string
@@ -1361,18 +1264,20 @@ type transitionWrite struct {
 	noop          bool
 }
 
-func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (transitionWrite, error) {
-	updated, err := applyTransition(issue, action, actor, reason)
+func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.StatusAction) (transitionWrite, error) {
+	updated, err := applyTransition(issue, action)
 	if err != nil {
 		return transitionWrite{}, err
 	}
 	priorAssignee := issue.AssigneeValue()
-	// Only `start` rewrites the assignee — it carries the new owner. Every other
-	// transition preserves ownership: assignee is an issue-level field orthogonal
-	// to the status state machine, untouched by changing state.
+	// Only Start rewrites the assignee — it is the variant that carries the new
+	// owner. Every other transition preserves ownership: assignee is an
+	// issue-level field orthogonal to the status state machine, untouched by
+	// changing state. [LAW:types-are-the-program] The payload comes from the
+	// variant, not a loose parameter every other action had to ignore.
 	postAssignee := priorAssignee
-	if string(action) == "start" {
-		postAssignee = newAssignee
+	if start, ok := action.(model.Start); ok {
+		postAssignee = strings.TrimSpace(start.Assignee)
 	}
 	updated.Assignee = postAssignee
 	fromStatus := issue.StatusValue()
@@ -1390,26 +1295,26 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if value := updated.ClosedAtValue(); value != nil {
 		closedAtArg = value.Format(time.RFC3339Nano)
 	}
-	// Resolution lives only on the closed state: a transition whose target is not
-	// closed (reopen, start) drops it to NULL, so a resolution can never linger on
-	// a non-closed row — the same guarantee the type gives in memory.
-	// [LAW:types-are-the-program] The post-transition resolution is a function of
-	// the resolved state, not of which caller supplied the param.
-	var postResolution *model.Resolution
-	if model.DefaultOpen(toStatus) == model.StateClosed {
-		postResolution = resolution
-	}
+	// The close outcome traveled through the state machine into the closed leaf,
+	// so the post-transition resolution is read back off the updated issue — no
+	// re-attachment, and a non-closed target structurally carries none, so a
+	// resolution can never linger on a non-closed row. [LAW:types-are-the-program]
+	postResolution := updated.ResolutionValue()
 	var resolutionArg any
 	if postResolution != nil {
 		resolutionArg = string(*postResolution)
 	}
-	// The redirect edge is a function of the resolved resolution, not of which
-	// caller passed a target: it exists iff the post-transition resolution
-	// redirects to a canonical ticket. Building (and validating) it before the
-	// transaction mirrors AddRelation, which checks endpoint existence outside
-	// its mutation. The result is 0 or 1 edges; the tx writes them by iteration,
-	// so the close path stays branch-free. [LAW:dataflow-not-control-flow]
-	redirectEdges, err := s.buildRedirectEdges(ctx, issue.ID, postResolution, redirectTarget, actor, now)
+	// The redirect edge is a structural fact of the close outcome: only the
+	// redirecting variants carry a canonical target. Building (and validating)
+	// it before the transaction mirrors AddRelation, which checks endpoint
+	// existence outside its mutation. The result is 0 or 1 edges; the tx writes
+	// them by iteration, so the close path stays branch-free.
+	// [LAW:dataflow-not-control-flow]
+	var outcome model.Outcome
+	if c, ok := action.(model.Close); ok {
+		outcome = c.Outcome
+	}
+	redirectEdges, err := s.buildRedirectEdges(ctx, issue.ID, outcome, actor, now)
 	if err != nil {
 		return transitionWrite{}, err
 	}
@@ -1433,18 +1338,9 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
 	}
 	updated.UpdatedAt = now
-	// [LAW:one-source-of-truth] Re-hydrate the leaf lifecycle from the values the
-	// write will persist so callers (and a following field write) see the same
-	// status the next read would yield. The post-write assignee already lives on
-	// updated.Assignee (set above), so it is not part of this lifecycle projection.
-	post := updated
-	if rehydrated, rerr := model.UpdateStatusCapability(updated, model.StatusView{
-		Value:      model.DefaultOpen(toStatus),
-		ClosedAt:   updated.ClosedAtValue(),
-		Resolution: postResolution,
-	}); rerr == nil {
-		post = rehydrated
-	}
+	// updated already carries the leaf the write will persist — the outcome
+	// traveled through the machine, so there is no post-hoc rehydration to
+	// re-attach a resolution. [LAW:one-source-of-truth]
 	return transitionWrite{
 		issueID:       issue.ID,
 		fromStatus:    fromStatus,
@@ -1453,19 +1349,19 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		now:           now,
 		closedAtArg:   closedAtArg,
 		resolutionArg: resolutionArg,
-		action:        action,
+		action:        action.Name(),
 		reason:        reason,
 		actor:         actor,
 		redirectEdges: redirectEdges,
 		changes:       changes,
-		post:          post,
+		post:          updated,
 	}, nil
 }
 
 // applyTransitionTx writes a planned status transition against tx: the guarded
 // status UPDATE, the redirect edge (when the close carries one), and the change
 // event. It owns only writes, so it composes into any transaction a caller
-// already holds — which is how ApplyUpdate folds a transition and a field write
+// already holds — which is how Apply folds a transition and a field write
 // into one commit. [LAW:single-enforcer]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
@@ -1497,47 +1393,34 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
 
-func (s *Store) writeStatusTransition(ctx context.Context, issue model.Issue, actor string, reason string, action model.ActionName, newAssignee string, resolution *model.Resolution, redirectTarget string) (model.Issue, error) {
-	w, err := s.planStatusTransition(ctx, issue, actor, reason, action, newAssignee, resolution, redirectTarget)
-	if err != nil {
-		return model.Issue{}, err
-	}
-	if w.noop {
-		return issue, nil
-	}
-	if err := s.withMutation(ctx, "transition issue", func(ctx context.Context, tx *sql.Tx) error {
-		return s.applyTransitionTx(ctx, tx, w)
-	}); err != nil {
-		return model.Issue{}, err
-	}
-	return w.post, nil
-}
-
 // buildRedirectEdges produces the related-to edge a duplicate/superseded close
 // records — at most one, to the canonical ticket the closing issue redirects
-// to. It returns no edge for terminal resolutions (obsolete, wontfix) and for
-// transitions that resolve to no resolution, and validates the target the way
-// AddRelation does: it must exist and cannot be the issue itself, so the
-// redirect points at a real, distinct ticket. Endpoints are normalized to
-// related-to's canonical (sorted) orientation, since the edge is undirected.
-// [LAW:single-enforcer] Whether an edge is written keys on
-// Resolution.RedirectsToCanonical — the same predicate `lit close` uses to
-// require the target — so the two boundaries cannot disagree about which closes
-// carry a redirect.
-func (s *Store) buildRedirectEdges(ctx context.Context, closingID string, resolution *model.Resolution, target, actor string, now time.Time) ([]model.Relation, error) {
-	trimmedTarget := strings.TrimSpace(target)
-	if resolution == nil || !resolution.RedirectsToCanonical() {
-		// [LAW:no-silent-failure] A close that does not redirect carrying a target
-		// is incoherent input — reject it rather than silently dropping the target
-		// the caller supplied. `lit close` rejects this at its boundary; this is
-		// the store's integrity floor for any other caller.
-		if trimmedTarget != "" {
-			return nil, errors.New("redirect target given for a resolution that does not redirect to a canonical ticket")
-		}
+// to. Which outcomes carry a target is structural: only the redirecting
+// variants have the field, so "a redirect target on a terminal outcome" is
+// unrepresentable rather than rejected here. A nil outcome (no close, or a
+// close that records no resolution) and the terminal outcomes produce no edge.
+// The target is validated the way AddRelation validates endpoints: it must
+// exist and cannot be the issue itself, so the redirect points at a real,
+// distinct ticket. Endpoints are normalized to related-to's canonical (sorted)
+// orientation, since the edge is undirected. [LAW:single-enforcer] This is the
+// single edge writer; the read side infers redirects from the persisted
+// resolution via Resolution.RedirectsToCanonical, and the outcome sum's shape
+// is pinned to that predicate by test so the two projections cannot drift.
+func (s *Store) buildRedirectEdges(ctx context.Context, closingID string, outcome model.Outcome, actor string, now time.Time) ([]model.Relation, error) {
+	var target string
+	switch o := outcome.(type) {
+	case model.Duplicate:
+		target = o.Of
+	case model.Superseded:
+		target = o.By
+	default:
 		return nil, nil
 	}
+	trimmedTarget := strings.TrimSpace(target)
 	if trimmedTarget == "" {
-		return nil, fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
+		// [LAW:no-silent-failure] The CLI requires --of for redirecting closes;
+		// this is the store's integrity floor for any other caller.
+		return nil, fmt.Errorf("closing as %s requires a canonical target issue to redirect to", outcome.Resolution())
 	}
 	if trimmedTarget == closingID {
 		return nil, fmt.Errorf("cannot redirect %s to itself", closingID)

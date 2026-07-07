@@ -32,7 +32,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 
 	for i := range goroutines {
 		eg.Go(func() error {
-			issue, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test", 
+			issue, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test",
 				Title:     fmt.Sprintf("Concurrent issue %d", i),
 				Topic:     "concurrent",
 				IssueType: "task",
@@ -103,7 +103,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	const preCreateCount = 10
 	issues := make([]string, preCreateCount)
 	for i := range issues {
-		issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", 
+		issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
 			Title:     fmt.Sprintf("Pre-create %d", i),
 			Topic:     "mixed",
 			IssueType: "task",
@@ -133,7 +133,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	for i := range newCount {
 		eg.Go(func() error {
-			_, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test", 
+			_, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test",
 				Title:     fmt.Sprintf("New issue %d", i),
 				Topic:     "mixed",
 				IssueType: "task",
@@ -172,33 +172,18 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	}
 
 	// Plan: transition pre-created issues. start -> in_progress, close -> closed.
-	transitionStatus := map[model.ActionName]string{
-		model.ActionStart: "in_progress",
-		model.ActionClose: "closed",
-	}
 	for i, id := range issues[:3] {
-		action := model.ActionStart
+		var action model.StatusAction = model.Start{Assignee: "concurrent-tester"}
 		if i%2 == 0 {
-			action = model.ActionClose
+			action = model.Close{Outcome: model.Obsolete{}}
 		}
-		transitionPlan[id] = transitionStatus[action]
+		transitionPlan[id] = string(action.Target())
 		eg.Go(func() error {
-			var err error
-			if action == model.ActionStart {
-				_, err = st.StartIssue(egCtx, StartIssueInput{
-					IssueID:   id,
-					Assignee:  "concurrent-tester",
-					Reason:    "concurrent test",
-					CreatedBy: "concurrent-tester",
-				})
-			} else {
-				_, err = st.TransitionIssue(egCtx, TransitionIssueInput{
-					IssueID:   id,
-					Action:    action,
-					Reason:    "concurrent test",
-					CreatedBy: "concurrent-tester",
-				})
-			}
+			_, err := st.Apply(egCtx, id, Change{
+				Action: action,
+				Reason: "concurrent test",
+				Actor:  "concurrent-tester",
+			})
 			return err
 		})
 	}
