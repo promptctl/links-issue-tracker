@@ -206,7 +206,9 @@ lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
 
 Field-level edit of an existing issue. `--status` performs a lifecycle transition inline
 (with `--reason` recorded); prefer the dedicated transition commands, which carry
-guidance. `--labels` replaces the full label set — use `lit label add`/`rm` for
+guidance. `--status closed` records the neutral success close — a `done` event —
+never a resolution-carrying `close`; recording an outcome (wontfix, duplicate, …) is
+`lit close`'s job. `--labels` replaces the full label set — use `lit label add`/`rm` for
 incremental changes. `--assignee` is taken verbatim (no session-identity substitution);
 `--assignee ""` clears the field, returning the issue to unassigned.
 
