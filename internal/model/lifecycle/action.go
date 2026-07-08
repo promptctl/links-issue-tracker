@@ -30,6 +30,17 @@ type StatusAction interface {
 	Target() State
 }
 
+// RetentionAction is the subset of actions that drive the retention state
+// machine — the whole input domain of the Retain transition table. Together
+// with StatusAction it partitions the sealed sum, so which axis an action
+// belongs to is the sum's own structure: an activity action reaching the
+// retention machine is unrepresentable rather than a runtime-rejected table
+// row. [LAW:types-are-the-program]
+type RetentionAction interface {
+	Action
+	isRetentionAction()
+}
+
 // Start claims the issue: it is the only action that rewrites the assignee,
 // so it is the only variant that carries one.
 type Start struct{ Assignee string }
@@ -61,23 +72,27 @@ func (Reopen) isAction()        {}
 
 type Archive struct{}
 
-func (Archive) Name() ActionName { return ActionArchive }
-func (Archive) isAction()        {}
+func (Archive) Name() ActionName   { return ActionArchive }
+func (Archive) isAction()          {}
+func (Archive) isRetentionAction() {}
 
 type Unarchive struct{}
 
-func (Unarchive) Name() ActionName { return ActionUnarchive }
-func (Unarchive) isAction()        {}
+func (Unarchive) Name() ActionName   { return ActionUnarchive }
+func (Unarchive) isAction()          {}
+func (Unarchive) isRetentionAction() {}
 
 type Delete struct{}
 
-func (Delete) Name() ActionName { return ActionDelete }
-func (Delete) isAction()        {}
+func (Delete) Name() ActionName   { return ActionDelete }
+func (Delete) isAction()          {}
+func (Delete) isRetentionAction() {}
 
 type Restore struct{}
 
-func (Restore) Name() ActionName { return ActionRestore }
-func (Restore) isAction()        {}
+func (Restore) Name() ActionName   { return ActionRestore }
+func (Restore) isAction()          {}
+func (Restore) isRetentionAction() {}
 
 // Outcome is the sealed close reason a Close action carries. The redirecting
 // outcomes (Duplicate, Superseded) each carry the canonical ticket they

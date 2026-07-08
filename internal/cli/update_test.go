@@ -308,6 +308,40 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 	}
 }
 
+// Pins the --status boundary policy to the machine it feeds: each requested
+// state must land the issue in exactly that state, so the switch's constructed
+// action and the variant's Target() cannot drift apart. [LAW:one-source-of-truth]
+func TestRunUpdateStatusLandsOnRequestedState(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+		Title:     "Status round trip",
+		Topic:     "status",
+		IssueType: "task",
+		Priority:  0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+
+	// The order walks every arm through a real transition:
+	// open→in_progress, in_progress→closed, closed→open.
+	for _, status := range []string{"in_progress", "closed", "open"} {
+		var stdout bytes.Buffer
+		if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", status}); err != nil {
+			t.Fatalf("runUpdate(--status %s) error = %v", status, err)
+		}
+		got, err := ap.Store.GetIssue(ctx, created.ID)
+		if err != nil {
+			t.Fatalf("GetIssue() error = %v", err)
+		}
+		if string(got.State()) != status {
+			t.Fatalf("after --status %s, State() = %q — the boundary's constructed action disagrees with its Target()", status, got.State())
+		}
+	}
+}
+
 func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()

@@ -54,9 +54,10 @@ func TestRetentionTimestampsRefusesImpostors(t *testing.T) {
 }
 
 // TestRetainTransitionTable pins every cell of the retention state machine:
-// three variants by four retention actions, plus the non-retention rejection
-// row. The completeness check below fails the test if a (variant, action)
-// pair is missing, so "total" is asserted, not assumed.
+// three variants by four retention actions. The completeness check below fails
+// the test if a (variant, action) pair is missing, so "total" is asserted, not
+// assumed. There is no non-retention row to pin: an activity action is not a
+// RetentionAction, so feeding one to Retain does not compile.
 func TestRetainTransitionTable(t *testing.T) {
 	prior := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
 	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
@@ -66,53 +67,53 @@ func TestRetainTransitionTable(t *testing.T) {
 
 	cases := []struct {
 		cur     Retention
-		action  ActionName
+		action  RetentionAction
 		want    Retention // nil means the transition is illegal
 		wantErr string
 	}{
-		{live, ActionArchive, Archived{At: at}, ""},
-		{archived, ActionArchive, nil, "issue is already archived"},
-		{deleted, ActionArchive, nil, "cannot archive deleted issue"},
+		{live, Archive{}, Archived{At: at}, ""},
+		{archived, Archive{}, nil, "issue is already archived"},
+		{deleted, Archive{}, nil, "cannot archive deleted issue"},
 
-		{live, ActionUnarchive, nil, "issue is not archived"},
-		{archived, ActionUnarchive, Live{}, ""},
-		{deleted, ActionUnarchive, nil, "cannot unarchive deleted issue"},
+		{live, Unarchive{}, nil, "issue is not archived"},
+		{archived, Unarchive{}, Live{}, ""},
+		{deleted, Unarchive{}, nil, "cannot unarchive deleted issue"},
 
-		{live, ActionDelete, Deleted{At: at}, ""},
+		{live, Delete{}, Deleted{At: at}, ""},
 		// The decided delete-on-archived behavior: Deleted carries no
 		// prior-archived bit, so the archive stamp is gone at the type level.
-		{archived, ActionDelete, Deleted{At: at}, ""},
-		{deleted, ActionDelete, nil, "issue is already deleted"},
+		{archived, Delete{}, Deleted{At: at}, ""},
+		{deleted, Delete{}, nil, "issue is already deleted"},
 
-		{live, ActionRestore, nil, "issue is not deleted"},
-		{archived, ActionRestore, nil, "issue is not deleted"},
-		{deleted, ActionRestore, Live{}, ""},
+		{live, Restore{}, nil, "issue is not deleted"},
+		{archived, Restore{}, nil, "issue is not deleted"},
+		{deleted, Restore{}, Live{}, ""},
 	}
 
 	covered := map[string]bool{}
 	for _, tc := range cases {
-		covered[fmt.Sprintf("%T/%s", tc.cur, tc.action)] = true
+		covered[fmt.Sprintf("%T/%T", tc.cur, tc.action)] = true
 		got, err := Retain(tc.cur, tc.action, at)
 		if tc.wantErr != "" {
 			if err == nil || err.Error() != tc.wantErr {
-				t.Fatalf("Retain(%#v, %s) error = %v, want %q", tc.cur, tc.action, err, tc.wantErr)
+				t.Fatalf("Retain(%#v, %T) error = %v, want %q", tc.cur, tc.action, err, tc.wantErr)
 			}
 			if got != nil {
-				t.Fatalf("Retain(%#v, %s) returned %#v alongside an error", tc.cur, tc.action, got)
+				t.Fatalf("Retain(%#v, %T) returned %#v alongside an error", tc.cur, tc.action, got)
 			}
 			continue
 		}
 		if err != nil {
-			t.Fatalf("Retain(%#v, %s) error = %v, want %#v", tc.cur, tc.action, err, tc.want)
+			t.Fatalf("Retain(%#v, %T) error = %v, want %#v", tc.cur, tc.action, err, tc.want)
 		}
 		if got != tc.want {
-			t.Fatalf("Retain(%#v, %s) = %#v, want %#v", tc.cur, tc.action, got, tc.want)
+			t.Fatalf("Retain(%#v, %T) = %#v, want %#v", tc.cur, tc.action, got, tc.want)
 		}
 	}
 	for _, cur := range []Retention{live, archived, deleted} {
-		for _, action := range []ActionName{ActionArchive, ActionUnarchive, ActionDelete, ActionRestore} {
-			if !covered[fmt.Sprintf("%T/%s", cur, action)] {
-				t.Fatalf("transition table has no row for (%T, %s)", cur, action)
+		for _, action := range []RetentionAction{Archive{}, Unarchive{}, Delete{}, Restore{}} {
+			if !covered[fmt.Sprintf("%T/%T", cur, action)] {
+				t.Fatalf("transition table has no row for (%T, %T)", cur, action)
 			}
 		}
 	}
@@ -123,26 +124,15 @@ func TestRetainTransitionTable(t *testing.T) {
 func TestRetainArchiveDeleteRestoreLandsLive(t *testing.T) {
 	at := time.Date(2026, 6, 7, 8, 9, 10, 0, time.UTC)
 	var cur Retention = Live{}
-	for _, action := range []ActionName{ActionArchive, ActionDelete, ActionRestore} {
+	for _, action := range []RetentionAction{Archive{}, Delete{}, Restore{}} {
 		next, err := Retain(cur, action, at)
 		if err != nil {
-			t.Fatalf("Retain(%#v, %s) error = %v", cur, action, err)
+			t.Fatalf("Retain(%#v, %T) error = %v", cur, action, err)
 		}
 		cur = next
 	}
 	if cur != (Live{}) {
 		t.Fatalf("archive→delete→restore ended at %#v, want Live", cur)
-	}
-}
-
-// Retain is total over ActionName, which admits activity actions and arbitrary
-// strings; those are rejected as a table row, not passed through or panicked.
-func TestRetainRejectsNonRetentionActions(t *testing.T) {
-	for _, action := range []ActionName{ActionStart, ActionDone, ActionClose, ActionReopen, ActionName("bogus")} {
-		want := fmt.Sprintf("unsupported lifecycle action %q", action)
-		if _, err := Retain(Live{}, action, time.Now()); err == nil || err.Error() != want {
-			t.Fatalf("Retain(Live, %s) error = %v, want %q", action, err, want)
-		}
 	}
 }
 
@@ -152,7 +142,19 @@ func TestRetainRefusesImpostors(t *testing.T) {
 			t.Fatalf("Retain((*Deleted)(nil), archive) did not panic")
 		}
 	}()
-	_, _ = Retain((*Deleted)(nil), ActionArchive, time.Now())
+	_, _ = Retain((*Deleted)(nil), Archive{}, time.Now())
+}
+
+// A typed-nil pointer variant satisfies RetentionAction without being one of
+// the four sealed value variants; the machine must refuse it loudly rather
+// than silently skipping the transition.
+func TestRetainRefusesImpostorActions(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("Retain(Live, (*Archive)(nil)) did not panic")
+		}
+	}()
+	_, _ = Retain(Live{}, (*Archive)(nil), time.Now())
 }
 
 func TestFrozen(t *testing.T) {

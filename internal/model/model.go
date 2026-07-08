@@ -24,6 +24,7 @@ type Deleted = lifecycle.Deleted
 
 type Action = lifecycle.Action
 type StatusAction = lifecycle.StatusAction
+type RetentionAction = lifecycle.RetentionAction
 type Start = lifecycle.Start
 type Done = lifecycle.Done
 type Close = lifecycle.Close
