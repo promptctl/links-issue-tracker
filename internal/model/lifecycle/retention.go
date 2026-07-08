@@ -57,15 +57,13 @@ func Frozen(r Retention) bool {
 // Pure — no clock, no store; the caller supplies the stamp time.
 // [LAW:types-are-the-program] The whole retention state machine lives in this
 // one table. Every (variant, action) cell is written out, so a rejection is an
-// exhaustive match arm here, never an imperative guard at a callsite.
-// [LAW:one-source-of-truth] action stays ActionName rather than a sealed
-// retention-only sum: the four retention actions are already named by the
-// ActionName constants, and the sealed action sum that will carry payloads is
-// the mutation recut's charter (links-recut-mutation-0fqw). Non-retention
-// actions are rejected as a table row, keeping Retain total over its inputs.
-func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
-	switch action {
-	case ActionArchive:
+// exhaustive match arm here, never an imperative guard at a callsite. The
+// action arrives as the sealed RetentionAction subset, so an activity action
+// or arbitrary verb in this machine is unconstructible — there is no
+// unsupported-action row because its input cannot be expressed.
+func Retain(cur Retention, action RetentionAction, at time.Time) (Retention, error) {
+	switch action.(type) {
+	case Archive:
 		switch cur.(type) {
 		case Live:
 			return Archived{At: at}, nil
@@ -74,7 +72,7 @@ func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
 		case Deleted:
 			return nil, errors.New("cannot archive deleted issue")
 		}
-	case ActionUnarchive:
+	case Unarchive:
 		switch cur.(type) {
 		case Live:
 			return nil, errors.New("issue is not archived")
@@ -83,7 +81,7 @@ func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
 		case Deleted:
 			return nil, errors.New("cannot unarchive deleted issue")
 		}
-	case ActionDelete:
+	case Delete:
 		switch cur.(type) {
 		case Live, Archived:
 			// Deleted carries no prior-archived bit — deleting an archived
@@ -94,7 +92,7 @@ func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
 		case Deleted:
 			return nil, errors.New("issue is already deleted")
 		}
-	case ActionRestore:
+	case Restore:
 		switch cur.(type) {
 		case Live, Archived:
 			return nil, errors.New("issue is not deleted")
@@ -102,7 +100,10 @@ func Retain(cur Retention, action ActionName, at time.Time) (Retention, error) {
 			return Live{}, nil
 		}
 	default:
-		return nil, fmt.Errorf("unsupported lifecycle action %q", action)
+		// [LAW:no-silent-failure] Only the four sealed value variants are legal;
+		// an impostor (typed-nil pointer variant) must refuse loudly rather than
+		// silently skip the transition.
+		panic(fmt.Sprintf("illegal RetentionAction value %T", action))
 	}
 	// [LAW:no-silent-failure] Every sealed value variant returned above; only
 	// an impostor Retention (typed-nil pointer variant, raw nil) reaches here.

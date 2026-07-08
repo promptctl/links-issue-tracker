@@ -126,7 +126,8 @@ func (u UpdateIssueInput) IsEmpty() bool {
 // carries exactly its payload (Start the assignee, Close the outcome), so the
 // loose per-action parameters this seam used to thread are unrepresentable.
 // Which axis the action drives — status machine or retention — is the sum's
-// own structure (StatusAction vs not), never a caller-side mode.
+// own structure (the StatusAction/RetentionAction partition), never a
+// caller-side mode.
 // [LAW:types-are-the-program]
 //
 // Actor is THE actor for the whole change — one call, one author, recorded on
@@ -1157,23 +1158,29 @@ type lifecycleWrite interface {
 }
 
 // planLifecycleAction plans any lifecycle action by its axis: StatusActions
-// travel the status state machine, everything else in the sealed sum is a
-// retention action and travels the Retain transition table. The dispatch is
-// the sum's own structure — a retention action reaching the status machine, or
-// vice versa, is unrepresentable. [LAW:types-are-the-program]
+// travel the status state machine, RetentionActions travel the Retain
+// transition table. The two subsets partition the sealed sum, so the dispatch
+// is the sum's own structure — a retention action reaching the status machine,
+// or vice versa, is unrepresentable. [LAW:types-are-the-program]
 func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, actor string, reason string, action model.Action) (lifecycleWrite, error) {
-	if statusAction, ok := action.(model.StatusAction); ok {
-		w, err := s.planStatusTransition(ctx, issue, actor, reason, statusAction)
+	switch a := action.(type) {
+	case model.StatusAction:
+		w, err := s.planStatusTransition(ctx, issue, actor, reason, a)
 		if err != nil {
 			return nil, err
 		}
 		return w, nil
+	case model.RetentionAction:
+		w, err := planRetentionTransition(issue, actor, reason, a)
+		if err != nil {
+			return nil, err
+		}
+		return w, nil
+	default:
+		// [LAW:no-silent-failure] The sealed sum has no third axis; only an
+		// impostor Action reaches here.
+		panic(fmt.Sprintf("illegal Action value %T", action))
 	}
-	w, err := planRetentionTransition(issue, actor, reason, action)
-	if err != nil {
-		return nil, err
-	}
-	return w, nil
 }
 
 // transitionWrite is a fully-planned status transition, ready to execute
@@ -1374,15 +1381,12 @@ func (w retentionWrite) isNoop() bool { return false }
 // retention state machine — legal moves, rejection reasons, the
 // delete-on-archived stamp drop — is the pure Retain transition table; this
 // plan supplies the clock and projects the result into column values.
-// [LAW:single-enforcer] The action arrives as the sealed sum's variant and
-// adapts to Retain via its Name(); the four non-StatusAction variants are
-// exactly the four retention actions, so Retain's unsupported-action row is
-// unreachable from this seam.
-func planRetentionTransition(issue model.Issue, actor string, reason string, action model.Action) (retentionWrite, error) {
+// [LAW:single-enforcer]
+func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction) (retentionWrite, error) {
 	now := time.Now().UTC()
 	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
 	priorArchived, priorDeleted := retentionColumns(issue)
-	next, err := model.Retain(issue.Retention(), action.Name(), now)
+	next, err := model.Retain(issue.Retention(), action, now)
 	if err != nil {
 		return retentionWrite{}, err
 	}
