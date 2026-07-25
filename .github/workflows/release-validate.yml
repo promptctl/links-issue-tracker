@@ -112,19 +112,58 @@ jobs:
             lit-release-builder:local \
             check
 
+      # Seed the SAME Go build cache release-smoke.yml restores on PRs. This is
+      # the master-side half of a two-workflow contract: smoke runs only on
+      # pull_request and restores `smoke-gocache-<go.sum>-<sha>` with a
+      # `smoke-gocache-<go.sum>-` prefix fallback, but GHA cache scoping lets a
+      # PR read only default-branch (master) and base caches — never a sibling
+      # PR's. So a brand-new PR's first smoke run finds nothing to restore and
+      # compiles the whole cgo/ICU/Dolt tree cold unless master has written into
+      # that namespace. This step is master writing into it: the release build's
+      # linux/amd64 compile objects (a superset — this build spans all five
+      # targets) are exactly what smoke's `--single-target` linux/amd64 build
+      # reuses, since both invoke goreleaser in this same image against the same
+      # .goreleaser.yml, so the content-addressed GOCACHE entries match.
+      # [LAW:one-type-per-behavior] identical key + restore-keys as smoke: one
+      # GOCACHE contract, seeded here and consumed there — not a parallel scheme.
+      # Size vs the 10GB repo LRU budget is self-managing: the key's per-sha
+      # suffix writes one immutable entry per master build, and GHA evicts oldest
+      # first, so the freshest seed (the one PRs want) always outlives the rest.
+      - name: Seed the smoke Go build cache from master
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/smoke-gocache
+          key: smoke-gocache-${{ hashFiles('go.sum') }}-${{ github.sha }}
+          restore-keys: |
+            smoke-gocache-${{ hashFiles('go.sum') }}-
+            smoke-gocache-
+
       # Full snapshot build inside the image; produces archives + checksums
       # for every target in .goreleaser.yml.
       # GOMODCACHE is populated by the `go mod download` step above; mount it
       # read-only so goreleaser reuses the cached modules and the container
       # (running as root) cannot mutate the host cache.
+      # GOCACHE is bind-mounted from the cache dir above and set via -e so the
+      # --rm container's compile outputs survive the run to seed smoke.
+      # [LAW:one-source-of-truth] that dir is the container's GOCACHE; the
+      # bind-mount consumes it and actions/cache's post-step saves it.
       - name: Build snapshot artifacts
         run: |
           set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/smoke-gocache"
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
             -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
+            -v "$RUNNER_TEMP/smoke-gocache":/gocache \
+            -e GOCACHE=/gocache \
             lit-release-builder:local \
             release --snapshot --clean
+          # The container ran as root, so /gocache is root-owned on the host
+          # bind-mount; chown it back so actions/cache's post-step (running as
+          # the runner user) can read and save it — same reason the manifest step
+          # below chowns dist/. [LAW:no-silent-failure] do it explicitly, not by
+          # hoping the save tolerates root-owned files.
+          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/smoke-gocache"
 
       # mkmanifest runs OUTSIDE the container (only needs Go, which the runner
       # already has). The docker run that produced dist/ ran as root inside
