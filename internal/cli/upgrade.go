@@ -87,15 +87,23 @@ type workspaceSchemaReader struct {
 	ws workspace.Info
 }
 
-func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (int64, error) {
+func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (version int64, err error) {
 	st, err := store.OpenForRead(ctx, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
-		if version, ok := appliedVersionFromOpenErr(err); ok {
-			return version, nil
+		if v, ok := appliedVersionFromOpenErr(err); ok {
+			return v, nil
 		}
 		return 0, err
 	}
-	defer st.Close()
+	// [LAW:no-silent-failure] Store.Close releases the workspace shared lock; a
+	// discarded close error could leave the workspace pinned against a later
+	// snapshot restore. Surface it into the return, but never let it mask a real
+	// read error — the primary failure wins, close only fills a clean return.
+	defer func() {
+		if cerr := st.Close(); cerr != nil && err == nil {
+			err = cerr
+		}
+	}()
 	return st.AppliedSchemaVersion(ctx)
 }
 
