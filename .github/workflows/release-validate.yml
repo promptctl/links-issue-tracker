@@ -54,6 +54,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      # One definition of the seeded GOCACHE dir. Everything downstream — the
+      # cache step's `path:`, the mkdir, the docker mount, the chown — reads this
+      # single value, so the path exists in exactly one place. It lives here (not
+      # a job-level `env:`) because the `runner` context is unavailable at job
+      # scope: the runner isn't assigned until the job starts.
+      # [LAW:one-source-of-truth]
+      - name: Resolve the smoke GOCACHE path
+        run: echo "SMOKE_GOCACHE=$RUNNER_TEMP/smoke-gocache" >> "$GITHUB_ENV"
+
       # setup-go RESTORES a module cache keyed on go.sum; it does not run any
       # `go` command, so on a cold cache (first build of a new go.sum) GOMODCACHE
       # is empty. The snapshot build mounts it :ro into the container, where
@@ -132,7 +141,7 @@ jobs:
       - name: Seed the smoke Go build cache from master
         uses: actions/cache@v4
         with:
-          path: ${{ runner.temp }}/smoke-gocache
+          path: ${{ env.SMOKE_GOCACHE }}
           key: smoke-gocache-${{ hashFiles('go.sum') }}-${{ github.sha }}
           restore-keys: |
             smoke-gocache-${{ hashFiles('go.sum') }}-
@@ -150,11 +159,11 @@ jobs:
       - name: Build snapshot artifacts
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/smoke-gocache"
+          mkdir -p "$SMOKE_GOCACHE"
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
             -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
-            -v "$RUNNER_TEMP/smoke-gocache":/gocache \
+            -v "$SMOKE_GOCACHE":/gocache \
             -e GOCACHE=/gocache \
             lit-release-builder:local \
             release --snapshot --clean
@@ -163,7 +172,7 @@ jobs:
           # the runner user) can read and save it — same reason the manifest step
           # below chowns dist/. [LAW:no-silent-failure] do it explicitly, not by
           # hoping the save tolerates root-owned files.
-          sudo chown -R "$(id -u):$(id -g)" "$RUNNER_TEMP/smoke-gocache"
+          sudo chown -R "$(id -u):$(id -g)" "$SMOKE_GOCACHE"
 
       # mkmanifest runs OUTSIDE the container (only needs Go, which the runner
       # already has). The docker run that produced dist/ ran as root inside
