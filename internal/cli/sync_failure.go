@@ -143,8 +143,15 @@ func (f SyncFailure) whatLine() string {
 			"the field-aware merge with %s settled every code-owned field, but %s diverged on both sides — a semantic conflict only you can merge (the engine will not pick a side, so this will NOT clear on its own).",
 			ref, describeHeldFields(f.Fields))
 	case syncFailureDivergedUnresolved:
+		// "has not been reconciled automatically" is true for both producers of this
+		// class — an inline reconcile that ran and hit a backend error (Cause set),
+		// and doctor observing a divergence with no reconcile attempted (Cause empty,
+		// e.g. auto-sync disabled). Phrasing it as "the automatic reconcile has not
+		// converged it" would imply an attempt that the doctor path never made.
+		// [FRAMING:representation] the trailing cause line still names the backend
+		// error when a reconcile did fail.
 		return fmt.Sprintf(
-			"the local backlog is diverged from %s — %d local commit(s) not yet sent and %d remote commit(s) not yet merged — and the automatic reconcile has not converged it.",
+			"the local backlog is diverged from %s — %d local commit(s) not yet sent and %d remote commit(s) not yet merged — and it has not been reconciled automatically.",
 			ref, f.Ahead, f.Behind)
 	default:
 		// A class this renderer does not know must not render as a bland,

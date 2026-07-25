@@ -16,8 +16,14 @@ import (
 // captureStderr swaps os.Stderr for a pipe across fn and returns what was written.
 // The inline auto-sync writes its surface to os.Stderr directly (its stdout is
 // already produced), so an end-to-end assertion on that surface must capture the
-// process stderr rather than the command's writer. The inline receive runs
-// synchronously inside the command, so a straight-line capture suffices.
+// process stderr rather than the command's writer.
+//
+// A reader goroutine drains the pipe concurrently with fn. fn runs a full CLI
+// command, and reading the pipe only *after* fn returns would deadlock the moment
+// that command's stderr exceeded the OS pipe buffer (~64KB) — nothing would drain
+// the read end while the write blocked. Concurrent draining makes the capture
+// independent of how much fn writes, rather than betting the output stays small.
+// [LAW:no-ambient-temporal-coupling]
 func captureStderr(t *testing.T, fn func()) string {
 	t.Helper()
 	old := os.Stderr
@@ -26,19 +32,36 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe() error = %v", err)
 	}
 	os.Stderr = w
-	// Restore via defer so a t.Fatal inside fn (runtime.Goexit) cannot leave
-	// os.Stderr pointing at a closed pipe for every later test in the process.
-	// runtime.Goexit runs deferred funcs, so the restore always happens.
+	// Restore os.Stderr and close the write end even when fn calls t.Fatal
+	// (runtime.Goexit runs deferred funcs): the restore keeps every later test in
+	// the process off a dangling pipe, and this close is the ONLY thing that
+	// unblocks the reader below on the Goexit path — without it that goroutine
+	// would block on ReadAll forever. Both are idempotent with the normal-path
+	// close, which then double-closes harmlessly.
 	defer func() { os.Stderr = old }()
+	defer func() { _ = w.Close() }()
+
+	type readResult struct {
+		data []byte
+		err  error
+	}
+	// Buffered so the reader can hand back its bytes even on the Goexit path, where
+	// nothing is left to receive.
+	drained := make(chan readResult, 1)
+	go func() {
+		data, err := io.ReadAll(r)
+		drained <- readResult{data, err}
+	}()
+
 	fn()
-	if err := w.Close(); err != nil {
+	if err := w.Close(); err != nil { // EOF for the reader on the normal path
 		t.Fatalf("close stderr pipe error = %v", err)
 	}
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("read stderr pipe error = %v", err)
+	res := <-drained
+	if res.err != nil {
+		t.Fatalf("read stderr pipe error = %v", res.err)
 	}
-	return string(data)
+	return string(res.data)
 }
 
 // assertSyncFailureBlock pins that a captured surface carries every element of the
