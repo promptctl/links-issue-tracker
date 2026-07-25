@@ -339,10 +339,14 @@ COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
 # the darwin wrappers here at runtime. Copied from darwin-toolchain (not inherited
 # via smoke) so the smoke path stays SDK-free. [LAW:single-enforcer] darwin-toolchain
 # is the one place these are produced; final consumes, never re-derives.
-# The real SDK dir is copied first, then the /opt/macos-sdk symlink that points at
-# it (the darwin wrappers reference the symlink path).
+# Copy the real SDK dir, then RE-CREATE the /opt/macos-sdk symlink the darwin
+# wrappers reference. We recreate rather than `COPY --from` the symlink because
+# COPY's handling of a directory symlink is implementation-defined — BuildKit may
+# dereference it and duplicate the ~500MB SDK. `ln -s` is deterministic and
+# single-copy. [LAW:one-source-of-truth] the symlink target is defined here, once,
+# not left to undefined tool behavior.
 COPY --from=darwin-toolchain /opt/MacOSX${MACOS_SDK_VERSION}.sdk /opt/MacOSX${MACOS_SDK_VERSION}.sdk
-COPY --from=darwin-toolchain /opt/macos-sdk /opt/macos-sdk
+RUN ln -s "/opt/MacOSX${MACOS_SDK_VERSION}.sdk" /opt/macos-sdk
 COPY --from=darwin-toolchain /usr/local/include/zig-macos-stubs /usr/local/include/zig-macos-stubs
 COPY --from=darwin-toolchain \
     /usr/local/bin/zig-cc-aarch64-apple-darwin \
