@@ -5,6 +5,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -62,19 +63,41 @@ func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPullPayloadProsePendingDirectsToReconcile(t *testing.T) {
-	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{
-		State:   store.SyncPullProsePending,
-		Pending: make([]merge.ProsePending, 2),
-	})
-	if payload["status"] != "prose_pending" {
-		t.Fatalf("status = %v, want prose_pending", payload["status"])
+// A held free-text conflict no longer renders as a benign stdout payload — it
+// routes through the one sync-failure contract as a returned error, so `lit sync
+// pull` exits ExitConflict like `lit sync reconcile` does for the identical state.
+// syncFailureFromPull is the pure mapping the command uses; this pins that a
+// prose-pending pull yields the proseHeld contract and every non-held state does not.
+func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
+		State:              store.SyncPullProsePending,
+		Ahead:              2,
+		Behind:             3,
+		OldestDivergedUnix: now.Add(-3 * time.Hour).Unix(),
+		Pending:            make([]merge.ProsePending, 2),
+	}, now)
+	if !held {
+		t.Fatal("syncFailureFromPull did not classify a prose-pending pull as held")
 	}
-	if payload["resolve_command"] != "lit sync reconcile" {
-		t.Fatalf("resolve_command = %v, want `lit sync reconcile`", payload["resolve_command"])
+	// This test's job is the MAPPING (held, class, age). The pull→held→ExitConflict
+	// exit contract is pinned end-to-end by TestExplicitPullSurfacesContractOnProseHeld
+	// and at the type level by TestSyncFailureErrorExitAndRemediation, so it is not
+	// re-asserted here.
+	if failure.Failure.Class != syncFailureProseHeld {
+		t.Fatalf("class = %q, want %q", failure.Failure.Class, syncFailureProseHeld)
 	}
-	if payload["pending"] != 2 {
-		t.Fatalf("pending = %v, want 2", payload["pending"])
+	if failure.Failure.Age != 3*time.Hour {
+		t.Fatalf("age = %v, want 3h (derived from OldestDivergedUnix)", failure.Failure.Age)
+	}
+	// Every non-held state stays a printable payload, not a contract error.
+	for _, state := range []store.SyncPullState{
+		store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized,
+		store.SyncPullAhead, store.SyncPullNeverSynced,
+	} {
+		if _, held := syncFailureFromPull("origin", "master", store.SyncPullResult{State: state}, now); held {
+			t.Fatalf("state %q wrongly classified as a held conflict", state)
+		}
 	}
 }
 
@@ -184,27 +207,22 @@ func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
 	}
 }
 
-func TestPrintSyncPullPayloadProsePendingText(t *testing.T) {
-	payload := map[string]any{
-		"status":          "prose_pending",
-		"remote":          "origin",
-		"branch":          "master",
-		"pending":         1,
-		"resolve_command": "lit sync reconcile",
-	}
+// printSyncPullPayload no longer renders a prose_pending case: a held conflict is
+// a returned SyncFailureError (see TestSyncFailureFromPullHoldsProseConflict and
+// the contract-shape tests in sync_failure_test.go), never a status payload. This
+// pins the second layer of the guard: buildSyncPullPayload maps any unrecognized
+// pull state to status "unknown" carrying the raw state, and the printer renders
+// "unknown" as a reported bug, not a bland "pulled". prose_pending is the concrete
+// state used here because a prose_pending reaching the builder at all would be a
+// routing bug (runSyncPull intercepts it first) — exactly what must surface loudly.
+func TestPrintSyncPullPayloadSurfacesUnknownStateAsBug(t *testing.T) {
+	payload := map[string]any{"status": "unknown", "state": "prose_pending", "remote": "origin", "branch": "master"}
 	var out bytes.Buffer
 	if err := printSyncPullPayload(&out, payload, false); err != nil {
 		t.Fatalf("printSyncPullPayload() error = %v", err)
 	}
-	text := out.String()
-	if !strings.Contains(text, "origin/master") {
-		t.Fatalf("prose_pending text missing remote/branch: %q", text)
-	}
-	if !strings.Contains(text, "lit sync reconcile") {
-		t.Fatalf("prose_pending text missing resolve command: %q", text)
-	}
-	if !strings.Contains(text, "text conflict") {
-		t.Fatalf("prose_pending text does not name the held text conflict: %q", text)
+	if text := out.String(); !strings.Contains(text, "prose_pending") || !strings.Contains(text, "bug") {
+		t.Fatalf("stray prose_pending not surfaced as a bug: %q", text)
 	}
 }
 

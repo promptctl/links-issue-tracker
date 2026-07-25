@@ -34,6 +34,10 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &mergeConflict) {
 		return "merge_conflict"
 	}
+	var syncFailure SyncFailureError
+	if errors.As(err, &syncFailure) {
+		return "sync_divergence"
+	}
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
 		return "corruption_detected"
@@ -79,6 +83,11 @@ func commandErrorRemediation(reason string) string {
 		return "Verify the target ID exists with `lit ls` or `lit show <id>`."
 	case "merge_conflict":
 		return "Sync and retry after resolving conflicts."
+	case "sync_divergence":
+		// The SyncFailureError message IS the full remediation (directive + steps +
+		// escalation), so a second remediation line here would be a drifting copy of
+		// it. Emit none. [LAW:one-source-of-truth]
+		return ""
 	case "corruption_detected":
 		return "Run `lit doctor --fix integrity` and retry. <agent-instructions>Run it yourself, do NOT ask the user — it is idempotent and safe.</agent-instructions>"
 	case "transient_gc_contention":

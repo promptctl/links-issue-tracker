@@ -349,6 +349,14 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		if got.State() != wantState || got.Ahead != wantAhead || got.Behind != wantBehind {
 			t.Fatalf("%s: freshness = %+v state=%q, want state=%q ahead=%d behind=%d", label, got, got.State(), wantState, wantAhead, wantBehind)
 		}
+		// The divergence timestamp dates the fork: it is populated exactly when the
+		// branch is DIVERGED (commits on both sides), and absent otherwise — an
+		// ahead-only or behind-only branch is not diverged, so the field a divergence
+		// names stays 0. This exercises the real UNIX_TIMESTAMP(MIN(date)) query.
+		wantHasAge := wantAhead > 0 && wantBehind > 0
+		if hasAge := got.OldestDivergedUnix > 0; hasAge != wantHasAge {
+			t.Fatalf("%s: OldestDivergedUnix=%d, want populated=%v (ahead=%d behind=%d)", label, got.OldestDivergedUnix, wantHasAge, wantAhead, wantBehind)
+		}
 	}
 
 	commit("c1")
