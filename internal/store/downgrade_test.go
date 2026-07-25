@@ -46,6 +46,29 @@ func snapshotCount(t *testing.T, doltRoot string) int {
 	return len(entries)
 }
 
+// TestAppliedSchemaVersionMatchesRecorded pins the exported reader `lit upgrade`
+// consults for its backward-move refusal: on a goose-managed workspace it
+// returns the same recorded version DowngradeTargetAheadError compares against.
+func TestAppliedSchemaVersionMatchesRecorded(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openWorkspaceForDowngrade(t)
+
+	recorded, err := st.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() = %v", err)
+	}
+	if recorded <= 0 {
+		t.Fatalf("recordedMigrationVersion() = %d; want a managed workspace at a real version", recorded)
+	}
+	applied, err := st.AppliedSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("AppliedSchemaVersion() = %v", err)
+	}
+	if applied != recorded {
+		t.Errorf("AppliedSchemaVersion() = %d; want %d (must equal the recorded/applied version)", applied, recorded)
+	}
+}
+
 // TestDowngradeTargetEqualIsNoOp pins the no-op branch: target == current
 // returns nil without taking a snapshot.
 func TestDowngradeTargetEqualIsNoOp(t *testing.T) {

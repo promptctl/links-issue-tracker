@@ -121,9 +121,10 @@ type UnsupportedSchemaVersionError struct {
 	// encoded by which optional field is populated, not by a flag.
 	SnapshotName string
 	// ProducerBinaryVersion is the lit version that last advanced this
-	// workspace's schema (recorded in meta.producer_binary_version). It names
-	// the binary the user should reinstall to perform a lossless `lit
-	// downgrade` instead of the lossy snapshot-restore path.
+	// workspace's schema (recorded in meta.producer_binary_version). The
+	// workspace is AHEAD of this binary, so the lossless fix is to install that
+	// newer binary — `lit upgrade --to <it>` — not to reverse the schema; it
+	// names the concrete upgrade target instead of the lossy snapshot restore.
 	ProducerBinaryVersion string
 }
 
@@ -150,9 +151,15 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	} else {
 		b.WriteString("\n\nno pre-upgrade snapshot available; lossy rollback is not possible from this workspace.")
 	}
+	// [LAW:no-silent-failure] The workspace is ahead of this binary, so the
+	// direct fix is a NEWER binary, not a schema reverse: name `lit upgrade`
+	// with the concrete producer version. (The lossy snapshot-restore above
+	// stays as the escape hatch when the user wants to match this old binary
+	// instead.) This is the .3 counterpart to the sync-failure contract's
+	// "run: lit upgrade" resolution step — one remediation for "schema ahead."
 	if e.ProducerBinaryVersion != "" {
 		fmt.Fprintf(&b,
-			"\n\nto preserve that data, install the newer binary again and run:\n  lit downgrade --to %s     # the version that wrote this workspace\n\n(this is the supported path. snapshot-restore is the unsupported escape hatch.)",
+			"\n\nto operate this workspace, upgrade this binary to the version that wrote it:\n  lit upgrade --to %s\n\n(this is the supported path — `lit upgrade` runs even from this too-old binary and installs the newer one, which can then operate this workspace. snapshot-restore above is the unsupported, lossy escape hatch.)",
 			e.ProducerBinaryVersion)
 	}
 	return b.String()
@@ -748,6 +755,26 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		return migrationState{phase: phaseFresh, registryMaxVers: registryMax}, nil
 	}
 	return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
+}
+
+// AppliedSchemaVersion reports the schema version currently recorded for this
+// workspace — the goose-managed applied version, or 0 for a fresh/pre-goose
+// (adopt) workspace that has not been stamped yet. It is the same value
+// DowngradeTargetAheadError compares a downgrade target against, exported so the
+// `lit upgrade` composer can make the symmetric refusal ("target binary's schema
+// is behind this workspace — use lit downgrade") without duplicating the
+// classification.
+//
+// [LAW:one-source-of-truth] classifyMigrationState is the sole authority on
+// applied version; this is a typed read over it, not a second derivation.
+// [LAW:effects-at-boundaries] a pure read — no snapshot, no mutation — so the
+// upgrade command can consult it before deciding whether to install anything.
+func (s *Store) AppliedSchemaVersion(ctx context.Context) (int64, error) {
+	state, err := s.classifyMigrationState(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return state.appliedVersion, nil
 }
 
 // adoptPreGooseWorkspace records the baseline version for a workspace already

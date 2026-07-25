@@ -132,7 +132,7 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 	}
 }
 
-func TestNormalizeDowngradeTag(t *testing.T) {
+func TestNormalizeReleaseTag(t *testing.T) {
 	cases := []struct {
 		in      string
 		want    string
@@ -147,19 +147,19 @@ func TestNormalizeDowngradeTag(t *testing.T) {
 		{"v0 .4.1", "", "not a valid"},
 	}
 	for _, c := range cases {
-		got, err := normalizeDowngradeTag(c.in)
+		got, err := normalizeReleaseTag(c.in, "downgrade")
 		if c.wantErr != "" {
 			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Errorf("normalizeDowngradeTag(%q) err = %v; want contains %q", c.in, err, c.wantErr)
+				t.Errorf("normalizeReleaseTag(%q) err = %v; want contains %q", c.in, err, c.wantErr)
 			}
 			continue
 		}
 		if err != nil {
-			t.Errorf("normalizeDowngradeTag(%q) err = %v; want nil", c.in, err)
+			t.Errorf("normalizeReleaseTag(%q) err = %v; want nil", c.in, err)
 			continue
 		}
 		if got != c.want {
-			t.Errorf("normalizeDowngradeTag(%q) = %q; want %q", c.in, got, c.want)
+			t.Errorf("normalizeReleaseTag(%q) = %q; want %q", c.in, got, c.want)
 		}
 	}
 }
