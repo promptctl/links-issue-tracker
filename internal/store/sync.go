@@ -278,6 +278,16 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 			switch rec.State {
 			case SyncReconcileLinearized:
 				result.State = SyncPullLinearized
+				// rec's ahead/behind describe the divergence that was just healed,
+				// not the outcome. Re-read so the reported counts match the linear
+				// result (the merge commit sits on the remote head: 1 ahead, 0
+				// behind). Consistent under the single lock — freshness cannot move.
+				// [LAW:no-silent-failure] the state and its counts agree.
+				fresh, err := s.SyncFreshness(ctx, remote, branch)
+				if err != nil {
+					return err
+				}
+				result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 			case SyncReconcileProsePending:
 				result.State = SyncPullProsePending
 				result.Pending = rec.Pending

@@ -212,6 +212,12 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 	if res.State != SyncPullLinearized {
 		t.Fatalf("pull state = %q, want %q", res.State, SyncPullLinearized)
 	}
+	// The reported counts describe the OUTCOME, not the healed divergence: the
+	// merge commit sits on the remote head, so the branch is 1 ahead / 0 behind.
+	// A stale "linearized, behind>0" would falsely read as "did not converge".
+	if res.Behind != 0 || res.Ahead != 1 {
+		t.Fatalf("post-linearize counts = ahead %d / behind %d, want 1 / 0 (stale pre-reconcile counts)", res.Ahead, res.Behind)
+	}
 
 	merged := getIssueOrFatal(t, ctx, syncB, id)
 	if merged.Lane != "from-remote" {

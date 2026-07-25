@@ -426,14 +426,21 @@ func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
 		return fmt.Errorf("construct schema-lift provider: %w", err)
 	}
 	for {
-		// The applied migration's identity is discarded: this lift makes no
-		// per-migration Dolt commit (the throwaway branch is read then reset
-		// away), unlike the durable startup path that names each commit.
-		if _, err := s.upByOne(ctx, provider); err != nil {
-			if errors.Is(err, goose.ErrNoNextVersion) {
-				return nil
-			}
+		result, err := s.upByOne(ctx, provider)
+		if errors.Is(err, goose.ErrNoNextVersion) {
+			return nil
+		}
+		if err != nil {
 			return fmt.Errorf("lift working set to registry schema: %w", err)
+		}
+		// goose's contract ends the sequence with ErrNoNextVersion, never a
+		// (nil, nil) result. If it ever did, this loop — which makes no
+		// per-migration Dolt commit to terminate on — would spin forever with no
+		// progress and no error. Fail loud instead of hanging silently.
+		// [LAW:no-silent-failure] (The applied migration's identity is otherwise
+		// discarded: this lift is a read-only schema bump on a throwaway branch.)
+		if result == nil {
+			return fmt.Errorf("lift working set to registry schema: goose returned no result and no error")
 		}
 	}
 }
