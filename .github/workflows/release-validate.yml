@@ -32,8 +32,10 @@ on:
   workflow_dispatch: {}    # on-demand: run the full proof against any branch
 
 permissions:
-  contents: read    # least privilege: image is golang:bookworm + direct
-                    # downloads (no GHCR pull), so no packages scope is needed
+  contents: read    # image is golang:bookworm + direct downloads (no GHCR pull)
+  packages: write   # publish the release-builder `smoke` image to GHCR so PR
+                    # gates (release-smoke.yml) pull it instead of rebuilding the
+                    # ICU cross-toolchain from source
 
 concurrency:
   group: release-validate-${{ github.ref }}
@@ -74,6 +76,21 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+
+      # The git tree hash of build/ is the toolchain image's identity — it changes
+      # iff a build/ input changes. release-smoke.yml derives the SAME tag from the
+      # same git content to decide pull-vs-build, so the two never drift.
+      # [LAW:one-source-of-truth]
+      - name: Compute toolchain image tag
+        id: imgtag
+        run: echo "tree=$(git rev-parse HEAD:build)" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build release-builder image
         uses: docker/build-push-action@v6
@@ -218,6 +235,26 @@ jobs:
           done
           echo "--- execute on glibc host (ubuntu runner, amd64)"
           "${bin[amd64]}" version
+
+      # Publish the `smoke` stage to GHCR for release-smoke.yml to pull, tagged by
+      # the build/ tree hash. This runs ONLY after every assertion above passed, so
+      # a broken image is never published — that is what "publish only on a
+      # successful build" means here. The smoke stage's layers were already built
+      # as part of `final` above (final FROM smoke), so buildx reuses the cache and
+      # this step just assembles and pushes. The tag is content-addressed, so
+      # pushing the same build/ tree twice is idempotent and pushing from any
+      # branch is safe. [LAW:single-enforcer] the master image build is the one
+      # place the toolchain image is produced; PR gates consume, never rebuild.
+      - name: Publish release-builder smoke image to GHCR
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: build/Dockerfile.release
+          target: smoke
+          tags: ghcr.io/${{ github.repository_owner }}/lit-release-builder:smoke-${{ steps.imgtag.outputs.tree }}
+          push: true
+          cache-from: type=gha,scope=release-builder
+          cache-to: type=gha,scope=release-builder,mode=max
 
       - name: Upload snapshot dist/ for inspection
         if: always()
