@@ -133,6 +133,30 @@ func TestPrintSyncPullPayloadSkippedTextWithoutVerboseOmitsRemoteDetails(t *test
 	}
 }
 
+func TestPrintSyncPullPayloadProsePendingText(t *testing.T) {
+	payload := map[string]any{
+		"status":          "prose_pending",
+		"remote":          "origin",
+		"branch":          "master",
+		"pending":         1,
+		"resolve_command": "lit sync reconcile",
+	}
+	var out bytes.Buffer
+	if err := printSyncPullPayload(&out, payload, false); err != nil {
+		t.Fatalf("printSyncPullPayload() error = %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "origin/master") {
+		t.Fatalf("prose_pending text missing remote/branch: %q", text)
+	}
+	if !strings.Contains(text, "lit sync reconcile") {
+		t.Fatalf("prose_pending text missing resolve command: %q", text)
+	}
+	if !strings.Contains(text, "text conflict") {
+		t.Fatalf("prose_pending text does not name the held text conflict: %q", text)
+	}
+}
+
 func TestPrintSyncPullPayloadNoRemoteSkippedText(t *testing.T) {
 	payload := map[string]any{
 		"status": "skipped",

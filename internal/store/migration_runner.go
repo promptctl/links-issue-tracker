@@ -29,9 +29,18 @@ const producerBinaryVersionMetaKey = "producer_binary_version"
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
-// migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) in
-// applyPendingMigrations. Tests use this to inject migration failures without
-// needing real failing migrations in the embedded registry.
+// migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) inside
+// the shared upByOne stepper. Tests use this to inject migration failures
+// without needing real failing migrations in the embedded registry.
+//
+// WARNING: upByOne is called by BOTH goose forward-drivers, so setting this
+// hook poisons both — applyPendingMigrations (the durable startup path, with
+// checkpoint/quarantine recovery) AND liftWorkingSetToRegistry (the transient
+// reconcile schema-lift, which has no checkpoint and simply aborts the reconcile
+// with a plain error). A test that exercises one path while the other also runs
+// must account for both, or gate the hook so it only fires for the intended
+// version. [LAW:comments-carry-meaning] the comment names every call site the
+// hook reaches, not just the one it was first written for.
 var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
 
 // CheckpointResetError is returned when a migration body failure triggers an

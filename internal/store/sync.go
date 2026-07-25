@@ -272,7 +272,16 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 			// A push race resolved the divergence between the receive and the
 			// reconcile; there is nothing left to merge.
 			result.State = SyncPullUpToDate
+		default:
+			// A reconcile state this mapping does not know would otherwise fall
+			// through as the zero-value "" and be rendered downstream as a bland
+			// "ok" — masking the gap. Fail at the source instead. [LAW:no-silent-failure]
+			return SyncPullResult{}, fmt.Errorf("sync pull: unhandled reconcile state %q", rec.State)
 		}
+	default:
+		// Same guard for the receive enum: an unmapped receive state must not
+		// silently become an empty pull state. [LAW:no-silent-failure]
+		return SyncPullResult{}, fmt.Errorf("sync pull: unhandled receive state %q", recv.State)
 	}
 	return result, nil
 }
