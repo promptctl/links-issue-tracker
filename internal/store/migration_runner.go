@@ -29,9 +29,13 @@ const producerBinaryVersionMetaKey = "producer_binary_version"
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
-// migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) in
-// applyPendingMigrations. Tests use this to inject migration failures without
-// needing real failing migrations in the embedded registry.
+// migrationUpByOneForTest, if non-nil, replaces the goose step inside
+// applyPendingMigrations ONLY — the durable startup path. Tests use it to inject
+// migration failures without needing real failing migrations in the embedded
+// registry. The transient reconcile schema-lift (liftWorkingSetToRegistry) steps
+// through the bare upByOne and does NOT consult this hook, so a startup-failure
+// test can never poison the reconcile lift. [LAW:composability] the hook couples
+// only to the caller that needs it, not to every consumer of the shared stepper.
 var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
 
 // CheckpointResetError is returned when a migration body failure triggers an
@@ -382,6 +386,65 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	return s.commitWorkingSet(ctx, "migrate: record producer binary version")
 }
 
+// upByOne applies the single next pending migration via goose. It is the ONE
+// goose forward-step both drivers share: the durable startup path
+// (applyPendingMigrations, which wraps each step in a Dolt commit +
+// checkpoint/quarantine recovery) and the transient schema-lift
+// (liftWorkingSetToRegistry, which commits nothing and only lifts a throwaway
+// branch so it can be read). It is PURE — the startup path layers its
+// test-failure injection ON TOP of this (see applyPendingMigrations), so the
+// lift, which steps through here bare, is never affected by that hook.
+// [LAW:single-enforcer] one goose stepper; [LAW:one-source-of-truth] both
+// consume the same embedded registry via newGooseProvider, so neither mints a
+// second schema-adaptation path.
+func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
+	return provider.UpByOne(ctx)
+}
+
+// liftWorkingSetToRegistry advances the live working set to the registry's max
+// schema version by applying every pending migration's DDL through goose — the
+// same registry, the same stepper (upByOne) the durable startup path uses. It
+// commits nothing to Dolt, takes no checkpoint, and takes no snapshot: its sole
+// caller is the reconcile, which runs it on a THROWAWAY scratch branch that is
+// hard-reset away or discarded immediately after the working set is read. It
+// exists because reconcile must read/write a remote or base commit written by
+// an older binary (a schema behind this binary's registry); before the lift the
+// working set at that commit lacks columns this binary's SQL names, so reads
+// (Export) and writes (replaceFromExport) fail with a raw backend "no such
+// column" error. Lifting reuses the migration chain rather than reimplementing
+// schema adaptation in the merge engine. [LAW:one-source-of-truth] migrations
+// are the single owned representation of schema change. [LAW:no-silent-failure]
+// a migration failure here aborts the reconcile loudly; there is nothing to
+// quarantine because nothing durable was written.
+// [LAW:dataflow-not-control-flow] the loop runs every call; the recorded
+// version at the reset commit decides how many migrations goose has to apply
+// (zero when the commit is already at registry max — the common case, since the
+// local head is always current).
+func (s *Store) liftWorkingSetToRegistry(ctx context.Context) error {
+	provider, err := newGooseProvider(s.db)
+	if err != nil {
+		return fmt.Errorf("construct schema-lift provider: %w", err)
+	}
+	for {
+		result, err := s.upByOne(ctx, provider)
+		if errors.Is(err, goose.ErrNoNextVersion) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("lift working set to registry schema: %w", err)
+		}
+		// goose's contract ends the sequence with ErrNoNextVersion, never a
+		// (nil, nil) result. If it ever did, this loop — which makes no
+		// per-migration Dolt commit to terminate on — would spin forever with no
+		// progress and no error. Fail loud instead of hanging silently.
+		// [LAW:no-silent-failure] (The applied migration's identity is otherwise
+		// discarded: this lift is a read-only schema bump on a throwaway branch.)
+		if result == nil {
+			return fmt.Errorf("lift working set to registry schema: goose returned no result and no error")
+		}
+	}
+}
+
 // applyPendingMigrations runs each pending migration through goose and records
 // one Dolt commit per applied migration. Before the first migration runs it
 // creates a Dolt checkpoint so a failure can reset the working set. On
@@ -389,9 +452,11 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 // returns a CheckpointResetError naming both recovery layers.
 //
 // [LAW:single-enforcer] The checkpoint and per-migration commit boundary live
-// here; no other code drives goose.Up or touches Dolt branches for migration
-// purposes. The quarantine check lives in quarantineFastFail (called before
-// the snapshot guard in runMigration) so the gate fires without a snapshot.
+// here; goose is stepped only through upByOne (shared with the transient
+// reconcile lift), and no other code checkpoints/commits/quarantines for
+// migration purposes. The quarantine check lives in quarantineFastFail (called
+// before the snapshot guard in runMigration) so the gate fires without a
+// snapshot.
 // [LAW:dataflow-not-control-flow] The same sequence (checkpoint → goose loop
 // → prune) runs on every call; variability lives in the applied-vs-registry
 // set, not in whether stages execute.
@@ -410,15 +475,20 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("create migration checkpoint: %w", err)
 	}
-	upByOne := func(ctx context.Context) (*goose.MigrationResult, error) {
+
+	// The startup path is the only one that injects synthetic goose failures
+	// (for the checkpoint/quarantine recovery tests); the hook is applied here,
+	// wrapping the shared pure stepper, so the transient reconcile lift never
+	// sees it. [LAW:composability]
+	step := func() (*goose.MigrationResult, error) {
 		if hook := migrationUpByOneForTest; hook != nil {
 			return hook(ctx, provider)
 		}
-		return provider.UpByOne(ctx)
+		return s.upByOne(ctx, provider)
 	}
 
 	for {
-		result, gooseErr := upByOne(ctx)
+		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
 			// Success: prune old checkpoints to the retention count.
 			if err := s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention); err != nil {

@@ -54,20 +54,31 @@ const migrationSnapshotLabel = "pre-migrate"
 // migration system stamps; "matches by accident" is impossible without a
 // user deliberately mimicking the format.
 func IsMigrationSnapshotName(name string) bool {
+	return isStampedSnapshotName(name, migrationSnapshotLabel)
+}
+
+// isStampedSnapshotName reports whether name has the exact shape a system-stamped
+// snapshot carries for the given label: dbsnapshot's <unix-ns> head, then the
+// label, then an all-digit timestamp suffix — i.e. "<unix-ns>-<label>-<unix-ns>".
+// The migration, downgrade, and reconcile systems each stamp a distinct label,
+// so their disjoint predicates (IsMigrationSnapshotName / IsDowngradeSnapshotName
+// / IsReconcileSnapshotName) share this one shape check and cannot collect each
+// other's snapshots. [LAW:one-source-of-truth] the stamped-shape rule lives once;
+// [LAW:one-type-per-behavior] three labels, one predicate.
+func isStampedSnapshotName(name, label string) bool {
 	idx := strings.IndexByte(name, '-')
 	if idx < 0 {
 		return false
 	}
-	head, label := name[:idx], name[idx+1:]
+	head, rest := name[:idx], name[idx+1:]
 	if !isAllDigits(head) {
 		return false
 	}
-	const prefix = migrationSnapshotLabel + "-"
-	if !strings.HasPrefix(label, prefix) {
+	prefix := label + "-"
+	if !strings.HasPrefix(rest, prefix) {
 		return false
 	}
-	suffix := label[len(prefix):]
-	return isAllDigits(suffix)
+	return isAllDigits(rest[len(prefix):])
 }
 
 // isAllDigits returns true iff s is a non-empty string of ASCII digits. The

@@ -2,11 +2,11 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -42,12 +42,11 @@ func TestMapGitRemotesByName(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
-	runErr := errors.New(`branch "feature/local-only" not found on remote`)
-	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)
-	if err != nil {
-		t.Fatalf("buildSyncPullPayload() error = %v", err)
-	}
+func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
+	// A branch the remote has never seen is the typed never_synced state, not a
+	// parsed backend error string — the payload directs the caller to set the
+	// upstream with a deterministic command.
+	payload := buildSyncPullPayload("origin", "feature/local-only", store.SyncPullResult{State: store.SyncPullNeverSynced})
 	if payload["status"] != "skipped" {
 		t.Fatalf("status = %v, want skipped", payload["status"])
 	}
@@ -63,14 +62,50 @@ func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) 
 	}
 }
 
-func TestBuildSyncPullPayloadReturnsErrorForNonMatchingFailure(t *testing.T) {
-	runErr := errors.New("dolt pull origin master: fatal: network unavailable")
-	_, err := buildSyncPullPayload("origin", "master", "", runErr)
-	if err == nil {
-		t.Fatal("expected error for non-matching pull failure")
+func TestBuildSyncPullPayloadProsePendingDirectsToReconcile(t *testing.T) {
+	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{
+		State:   store.SyncPullProsePending,
+		Pending: make([]merge.ProsePending, 2),
+	})
+	if payload["status"] != "prose_pending" {
+		t.Fatalf("status = %v, want prose_pending", payload["status"])
 	}
-	if err.Error() != runErr.Error() {
-		t.Fatalf("error = %v, want %v", err, runErr)
+	if payload["resolve_command"] != "lit sync reconcile" {
+		t.Fatalf("resolve_command = %v, want `lit sync reconcile`", payload["resolve_command"])
+	}
+	if payload["pending"] != 2 {
+		t.Fatalf("pending = %v, want 2", payload["pending"])
+	}
+}
+
+func TestBuildSyncPullPayloadOKStates(t *testing.T) {
+	for _, tc := range []struct {
+		state store.SyncPullState
+		want  string
+	}{
+		{store.SyncPullUpToDate, "up_to_date"},
+		{store.SyncPullFastForwarded, "fast_forwarded"},
+		{store.SyncPullLinearized, "linearized"},
+		{store.SyncPullAhead, "ahead"},
+	} {
+		payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: tc.state})
+		if payload["status"] != "ok" {
+			t.Fatalf("state %q: status = %v, want ok", tc.state, payload["status"])
+		}
+		if payload["state"] != tc.want {
+			t.Fatalf("state %q: payload state = %v, want %q", tc.state, payload["state"], tc.want)
+		}
+	}
+}
+
+func TestBuildSyncPullPayloadUnknownStateSurfaces(t *testing.T) {
+	// A SyncPullState the renderer does not enumerate must not masquerade as ok.
+	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: store.SyncPullState("weird_new_state")})
+	if payload["status"] != "unknown" {
+		t.Fatalf("status = %v, want unknown (unmapped state must surface, not render ok)", payload["status"])
+	}
+	if payload["state"] != "weird_new_state" {
+		t.Fatalf("state = %v, want weird_new_state", payload["state"])
 	}
 }
 
@@ -116,6 +151,60 @@ func TestPrintSyncPullPayloadSkippedTextWithoutVerboseOmitsRemoteDetails(t *test
 	}
 	if !strings.Contains(text, "sync pull skipped; run") {
 		t.Fatalf("printSyncPullPayload() missing terse skipped guidance: %q", text)
+	}
+}
+
+func TestPrintSyncPullPayloadVerboseOKShowsState(t *testing.T) {
+	for _, state := range []string{"up_to_date", "fast_forwarded", "linearized", "ahead"} {
+		payload := map[string]any{"status": "ok", "state": state, "remote": "origin", "branch": "master"}
+		var out bytes.Buffer
+		if err := printSyncPullPayload(&out, payload, true); err != nil {
+			t.Fatalf("printSyncPullPayload(%q) error = %v", state, err)
+		}
+		text := out.String()
+		if !strings.Contains(text, "origin/master") {
+			t.Fatalf("verbose ok text missing remote/branch for %q: %q", state, text)
+		}
+		if !strings.Contains(text, "("+state+")") {
+			t.Fatalf("verbose ok text missing (%s) suffix: %q", state, text)
+		}
+	}
+}
+
+func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
+	payload := map[string]any{"status": "unknown", "state": "weird_new_state", "remote": "origin", "branch": "master"}
+	// Must surface even in non-verbose mode — a bug must never hide behind "pulled".
+	var out bytes.Buffer
+	if err := printSyncPullPayload(&out, payload, false); err != nil {
+		t.Fatalf("printSyncPullPayload error = %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "weird_new_state") || !strings.Contains(text, "bug") {
+		t.Fatalf("unknown-state text does not surface the state and flag it as a bug: %q", text)
+	}
+}
+
+func TestPrintSyncPullPayloadProsePendingText(t *testing.T) {
+	payload := map[string]any{
+		"status":          "prose_pending",
+		"remote":          "origin",
+		"branch":          "master",
+		"pending":         1,
+		"resolve_command": "lit sync reconcile",
+	}
+	var out bytes.Buffer
+	if err := printSyncPullPayload(&out, payload, false); err != nil {
+		t.Fatalf("printSyncPullPayload() error = %v", err)
+	}
+	text := out.String()
+	if !strings.Contains(text, "origin/master") {
+		t.Fatalf("prose_pending text missing remote/branch: %q", text)
+	}
+	if !strings.Contains(text, "lit sync reconcile") {
+		t.Fatalf("prose_pending text missing resolve command: %q", text)
+	}
+	if !strings.Contains(text, "text conflict") {
+		t.Fatalf("prose_pending text does not name the held text conflict: %q", text)
 	}
 }
 
