@@ -439,9 +439,21 @@ func buildSyncPullPayload(remote string, branch string, result store.SyncPullRes
 			"pending":         len(result.Pending),
 			"resolve_command": "lit sync reconcile",
 		}
-	default:
+	case store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized, store.SyncPullAhead:
 		return map[string]any{
 			"status": "ok",
+			"state":  string(result.State),
+			"remote": remote,
+			"branch": branch,
+		}
+	default:
+		// A SyncPullState this renderer does not enumerate must not masquerade as
+		// "ok" — that would hide a new state behind a bland success, the same gap
+		// SyncPull's loud store-side default guards against. Surface it. The states
+		// are enumerated, not lumped into a default, so adding one here is a
+		// deliberate act. [LAW:no-silent-failure]
+		return map[string]any{
+			"status": "unknown",
 			"state":  string(result.State),
 			"remote": remote,
 			"branch": branch,
@@ -500,6 +512,13 @@ func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) err
 			branch,
 			resolveCommand,
 		)
+		return err
+	case "unknown":
+		// buildSyncPullPayload emits this only for a SyncPullState it does not
+		// enumerate — a real gap, surfaced always (never suppressed by non-verbose)
+		// so a new state cannot slip out as a bland "pulled". [LAW:no-silent-failure]
+		state := strings.TrimSpace(fmt.Sprintf("%v", payload["state"]))
+		_, err := fmt.Fprintf(w, "sync pull produced an unrecognized state %q on %s/%s; this is a bug — please report it\n", state, remote, branch)
 		return err
 	default:
 		if !verbose {

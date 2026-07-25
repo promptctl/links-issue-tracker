@@ -138,6 +138,23 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 		t.Fatalf("merged resolution = %q, want nil (lifted rows default NULL)", *r)
 	}
 
+	// Event correctness across the replay: replaceFromExport clears issues, whose
+	// ON DELETE CASCADE clears issue_events/issue_event_changes, so the merged
+	// export's events are re-inserted onto a clean base — every event survives with
+	// no duplicate id (a collision would mean the cascade was not clearing them).
+	var totalEvents, distinctEvents int
+	if err := syncB.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), COUNT(DISTINCT id) FROM issue_events WHERE issue_id = ?`, id,
+	).Scan(&totalEvents, &distinctEvents); err != nil {
+		t.Fatalf("count issue_events: %v", err)
+	}
+	if totalEvents == 0 {
+		t.Fatalf("reconcile dropped every event for %s", id)
+	}
+	if totalEvents != distinctEvents {
+		t.Fatalf("reconcile left duplicate events: %d rows but %d distinct ids", totalEvents, distinctEvents)
+	}
+
 	// Linear history that fast-forward pushes, and no scratch residue.
 	assertSingleParentHead(t, ctx, syncB, res.RemoteHead)
 	assertScratchBranchCleanedUp(t, ctx, syncB)

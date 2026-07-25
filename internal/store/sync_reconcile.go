@@ -238,8 +238,14 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 		s.sweepStaleReconcileScratch(ctx)
 		scratchBranch := reconcileScratchName()
 
+		// One snapshot guard for the whole reconcile, created here so it survives
+		// across GC-contention retries: guard.ensure() takes the snapshot on first
+		// call and caches it, so a retried attempt reuses the single recovery point
+		// of localHead instead of copying the same state again.
+		// [LAW:effects-at-boundaries] one owner of the snapshot effect.
+		guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			return s.reconcileFromAnchors(ctx, &result, settle, dataBranch, scratchBranch, localHead, remoteHead, baseCommit)
+			return s.reconcileFromAnchors(ctx, &result, settle, guard, dataBranch, scratchBranch, localHead, remoteHead, baseCommit)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 	if err != nil {
@@ -259,7 +265,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) (err error) {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) (err error) {
 	// Force-create this run's unique scratch branch at the local head and switch to
 	// it; -B recreates it if a prior retry of this same run left it behind.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", scratchBranch, localHead); err != nil {
@@ -336,7 +342,8 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	// preserves exactly the clone's pre-reconcile local truth. [LAW:no-silent-failure]
 	// a failed snapshot aborts the reconcile BEFORE the data branch moves, rather
 	// than performing an irreversible automatic mutation with no recovery point.
-	guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
+	// The guard is owned by reconcile() and shared across GC-contention retries, so
+	// ensure() takes exactly one snapshot no matter how many attempts run.
 	if _, err := guard.ensure(); err != nil {
 		return fmt.Errorf("snapshot before reconcile: %w", err)
 	}
