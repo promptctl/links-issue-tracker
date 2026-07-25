@@ -35,13 +35,17 @@
 # [LAW:one-type-per-behavior] one universal linux artifact per arch, no
 # glibc/musl asset split for consumers to select between.
 #
-# STRUCTURE: multi-stage build. The five cross-* stages each depend only on
-# `native-icu` and run IN PARALLEL during `docker buildx build`. The `smoke`
-# stage carries base + the linux/amd64 ICU prefix only — it is the PR gate's
-# build environment (release-smoke.yml), kept small so a Dockerfile-editing PR
-# pays for one ICU cross-build, not five. `final` builds ON `smoke` and COPYs
-# the remaining /opt/icu/<target>/ prefixes into the one image the release
-# workflows run goreleaser in.
+# STRUCTURE: multi-stage build. The three non-darwin cross-* stages depend on
+# `native-icu`; the two darwin cross-* stages depend on `darwin-toolchain`
+# (native-icu PLUS the macOS SDK + darwin wrappers). All five run IN PARALLEL
+# during `docker buildx build`. The split exists so the darwin-only macOS SDK
+# stays off `base`: the `smoke` stage carries base + the linux/amd64 ICU prefix
+# only — it is the PR gate's build environment (release-smoke.yml), and because
+# nothing on its path reaches darwin-toolchain, `--target smoke` never downloads
+# the SDK. `final` builds ON `smoke`, COPYs the remaining /opt/icu/<target>/
+# prefixes, and COPYs the darwin link inputs from darwin-toolchain (goreleaser
+# links darwin inside `final`), producing the one image the release workflows run
+# goreleaser in.
 #
 # [LAW:single-enforcer] release-validate.yml builds this image once per
 # Dockerfile change (GHA layer cache reuses unchanged stages); release.yml
@@ -83,8 +87,9 @@ ARG ZIG_SHA256
 ARG ICU_MAJOR
 ARG ICU_MINOR
 ARG ICU_SHA256
-ARG MACOS_SDK_VERSION
-ARG MACOS_SDK_SHA256
+# NOTE: MACOS_SDK_* are intentionally NOT declared here — the macOS SDK is a
+# darwin-only link input and lives in the darwin-toolchain stage, so the smoke
+# path built on `base` never pulls it. [LAW:one-way-deps]
 
 RUN apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
         autoconf \
@@ -115,22 +120,9 @@ RUN curl -fsSL \
     && rm /tmp/zig.tar.xz \
     && ln -s "/opt/zig-linux-x86_64-${ZIG_VERSION}/zig" /usr/local/bin/zig
 
-# Vendor the macOS SDK that supplies the Apple frameworks zig omits (see header
-# comment). Extracts to /opt/MacOSX<ver>.sdk; /opt/macos-sdk is the stable path
-# the darwin wrappers reference, so a version bump touches only the build arg.
-# The post-extract tests fail the image build loudly if the download did not
-# produce the frameworks the darwin link depends on — a missing framework here
-# is far cheaper to diagnose than a 14-minute link failure downstream.
-RUN curl -fsSL \
-      "https://github.com/joseluisq/macosx-sdks/releases/download/${MACOS_SDK_VERSION}/MacOSX${MACOS_SDK_VERSION}.sdk.tar.xz" \
-      -o /tmp/macos-sdk.tar.xz \
-    && echo "${MACOS_SDK_SHA256}  /tmp/macos-sdk.tar.xz" | sha256sum -c - \
-    && tar -xJ -C /opt -f /tmp/macos-sdk.tar.xz \
-    && rm /tmp/macos-sdk.tar.xz \
-    && ln -s "/opt/MacOSX${MACOS_SDK_VERSION}.sdk" /opt/macos-sdk \
-    && test -d /opt/macos-sdk/System/Library/Frameworks/CoreFoundation.framework \
-    && test -d /opt/macos-sdk/System/Library/Frameworks/Security.framework \
-    && test -d /opt/macos-sdk/usr/lib
+# (The macOS SDK vendoring moved to the darwin-toolchain stage below — it is a
+# darwin-only link input, and keeping it out of `base` is what keeps the smoke
+# path SDK-free.)
 
 # Create zig ar/ranlib wrappers. ICU's Makefiles expand $(AR) and $(RANLIB) as
 # bare tokens, so the command must be a single executable with no embedded
@@ -139,37 +131,20 @@ RUN printf '#!/bin/sh\nexec zig ar "$@"\n' > /usr/local/bin/zig-ar \
     && printf '#!/bin/sh\nexec zig ranlib "$@"\n' > /usr/local/bin/zig-ranlib \
     && chmod +x /usr/local/bin/zig-ar /usr/local/bin/zig-ranlib
 
-# zig macOS cross-compile header stub. [LAW:one-source-of-truth] it lives in
-# build/zig-macos-stubs/; the darwin wrappers below inject it via -isystem so
-# every darwin compile sees it without per-callsite coordination.
-#
-# tzfile.h: ICU 75.1 putil.cpp includes it unconditionally under __APPLE__, but
-#   it is a private header absent from both zig's bundled headers and the
-#   vendored macOS SDK. Provides the TZDIR + TZDEFAULT defines ICU reads from it.
-#   (-lresolv needs no stub — the vendored SDK ships libresolv.tbd in usr/lib.)
-COPY build/zig-macos-stubs/tzfile.h    /usr/local/include/zig-macos-stubs/tzfile.h
-
-# Create zig cc/c++ wrappers for each cross-compile target.
-# Names match the CC/CXX env entries in .goreleaser.yml.
-# [LAW:one-source-of-truth] target triples here are the single definition;
-# .goreleaser.yml references the wrapper names, not the triples directly.
-# Darwin wrappers inject, for every darwin compile+link: -isystem (the tzfile.h
-# header stub) for the compile, plus -F/-L into the vendored macOS SDK so the
-# final cgo link resolves -framework CoreFoundation / Security (and -lresolv)
-# against the real SDK. The SDK paths are link-only; headers still come from
-# zig + the tzfile.h stub, so the working ICU compile is unchanged. Non-darwin
-# targets get plain wrappers.
-RUN SDK_FLAGS="-F/opt/macos-sdk/System/Library/Frameworks -L/opt/macos-sdk/usr/lib"; \
-    for pair in \
-        "x86_64-linux-musl:x86_64-linux-musl:" \
-        "aarch64-linux-musl:aarch64-linux-musl:" \
-        "x86_64-windows-gnu:x86_64-windows-gnu:" \
-        "aarch64-apple-darwin:aarch64-macos.11.0-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}" \
-        "x86_64-apple-darwin:x86_64-macos.10.15-none:-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}"; do \
-        name="${pair%%:*}"; rest="${pair#*:}"; target="${rest%%:*}"; extra="${rest##*:}"; \
-        printf '#!/bin/sh\nexec zig cc -target %s %s "$@"\n' "$target" "$extra" \
+# Create zig cc/c++ wrappers for the NON-darwin cross targets. Names match the
+# CC/CXX env entries in .goreleaser.yml. [LAW:one-source-of-truth] target triples
+# here are the single definition; .goreleaser.yml references the wrapper names,
+# not the triples directly. The darwin wrappers — which need the vendored macOS
+# SDK and the tzfile.h stub — live in the darwin-toolchain stage, so this base
+# (and the linux/amd64 smoke path built on it) stays SDK-free. [LAW:one-way-deps]
+RUN for pair in \
+        "x86_64-linux-musl:x86_64-linux-musl" \
+        "aarch64-linux-musl:aarch64-linux-musl" \
+        "x86_64-windows-gnu:x86_64-windows-gnu"; do \
+        name="${pair%%:*}"; target="${pair##*:}"; \
+        printf '#!/bin/sh\nexec zig cc -target %s "$@"\n' "$target" \
             > "/usr/local/bin/zig-cc-${name}" && \
-        printf '#!/bin/sh\nexec zig c++ -target %s %s "$@"\n' "$target" "$extra" \
+        printf '#!/bin/sh\nexec zig c++ -target %s "$@"\n' "$target" \
             > "/usr/local/bin/zig-cxx-${name}" && \
         chmod +x "/usr/local/bin/zig-cc-${name}" "/usr/local/bin/zig-cxx-${name}"; \
     done
@@ -228,9 +203,68 @@ RUN icu-cross-build windows amd64 \
     zig-ar zig-ranlib
 
 # -----------------------------------------------------------------------------
+# Stage: darwin-toolchain
+# native-icu PLUS the darwin-only link inputs: the vendored macOS SDK (the Apple
+# frameworks zig omits), the tzfile.h header stub, and the darwin zig cc/c++
+# wrappers. Only the cross-darwin-* stages and `final` reach this stage; keeping
+# these off `base` is precisely why `--target smoke` (the PR gate's linux/amd64
+# path) never downloads the SDK. [LAW:decomposition] darwin is its own concern,
+# cut here; [LAW:one-way-deps] nothing on the smoke path depends on this stage.
+# -----------------------------------------------------------------------------
+FROM native-icu AS darwin-toolchain
+ARG MACOS_SDK_VERSION
+ARG MACOS_SDK_SHA256
+
+# Vendor the macOS SDK that supplies the Apple frameworks zig omits (see header
+# comment). Extracts to /opt/MacOSX<ver>.sdk; /opt/macos-sdk is the stable path
+# the darwin wrappers reference, so a version bump touches only the build arg.
+# The post-extract tests fail the image build loudly if the download did not
+# produce the frameworks the darwin link depends on — a missing framework here
+# is far cheaper to diagnose than a 14-minute link failure downstream.
+RUN curl -fsSL \
+      "https://github.com/joseluisq/macosx-sdks/releases/download/${MACOS_SDK_VERSION}/MacOSX${MACOS_SDK_VERSION}.sdk.tar.xz" \
+      -o /tmp/macos-sdk.tar.xz \
+    && echo "${MACOS_SDK_SHA256}  /tmp/macos-sdk.tar.xz" | sha256sum -c - \
+    && tar -xJ -C /opt -f /tmp/macos-sdk.tar.xz \
+    && rm /tmp/macos-sdk.tar.xz \
+    && ln -s "/opt/MacOSX${MACOS_SDK_VERSION}.sdk" /opt/macos-sdk \
+    && test -d /opt/macos-sdk/System/Library/Frameworks/CoreFoundation.framework \
+    && test -d /opt/macos-sdk/System/Library/Frameworks/Security.framework \
+    && test -d /opt/macos-sdk/usr/lib
+
+# zig macOS cross-compile header stub. [LAW:one-source-of-truth] it lives in
+# build/zig-macos-stubs/; the darwin wrappers below inject it via -isystem so
+# every darwin compile sees it without per-callsite coordination.
+#
+# tzfile.h: ICU 75.1 putil.cpp includes it unconditionally under __APPLE__, but
+#   it is a private header absent from both zig's bundled headers and the
+#   vendored macOS SDK. Provides the TZDIR + TZDEFAULT defines ICU reads from it.
+#   (-lresolv needs no stub — the vendored SDK ships libresolv.tbd in usr/lib.)
+COPY build/zig-macos-stubs/tzfile.h    /usr/local/include/zig-macos-stubs/tzfile.h
+
+# Darwin zig cc/c++ wrappers. Each injects, for every darwin compile+link:
+# -isystem (the tzfile.h stub) for the compile, plus -F/-L into the vendored
+# macOS SDK so the cgo link resolves -framework CoreFoundation / Security (and
+# -lresolv). The SDK paths are link-only; headers still come from zig + the
+# tzfile.h stub, so the ICU compile is unchanged. [LAW:one-source-of-truth] the
+# darwin triples are defined here, once.
+RUN SDK_FLAGS="-F/opt/macos-sdk/System/Library/Frameworks -L/opt/macos-sdk/usr/lib"; \
+    extra="-isystem /usr/local/include/zig-macos-stubs ${SDK_FLAGS}"; \
+    for pair in \
+        "aarch64-apple-darwin:aarch64-macos.11.0-none" \
+        "x86_64-apple-darwin:x86_64-macos.10.15-none"; do \
+        name="${pair%%:*}"; target="${pair##*:}"; \
+        printf '#!/bin/sh\nexec zig cc -target %s %s "$@"\n' "$target" "$extra" \
+            > "/usr/local/bin/zig-cc-${name}" && \
+        printf '#!/bin/sh\nexec zig c++ -target %s %s "$@"\n' "$target" "$extra" \
+            > "/usr/local/bin/zig-cxx-${name}" && \
+        chmod +x "/usr/local/bin/zig-cc-${name}" "/usr/local/bin/zig-cxx-${name}"; \
+    done
+
+# -----------------------------------------------------------------------------
 # Stage: cross-darwin-arm64
 # -----------------------------------------------------------------------------
-FROM native-icu AS cross-darwin-arm64
+FROM darwin-toolchain AS cross-darwin-arm64
 RUN icu-cross-build darwin arm64 \
     aarch64-apple-darwin \
     zig-cc-aarch64-apple-darwin zig-cxx-aarch64-apple-darwin \
@@ -239,7 +273,7 @@ RUN icu-cross-build darwin arm64 \
 # -----------------------------------------------------------------------------
 # Stage: cross-darwin-amd64
 # -----------------------------------------------------------------------------
-FROM native-icu AS cross-darwin-amd64
+FROM darwin-toolchain AS cross-darwin-amd64
 RUN icu-cross-build darwin amd64 \
     x86_64-apple-darwin \
     zig-cc-x86_64-apple-darwin zig-cxx-x86_64-apple-darwin \
@@ -294,10 +328,28 @@ ENTRYPOINT ["/usr/local/bin/goreleaser"]
 # release run goreleaser against.
 # -----------------------------------------------------------------------------
 FROM smoke AS final
+ARG MACOS_SDK_VERSION
 COPY --from=cross-linux-arm64    /opt/icu/linux_arm64    /opt/icu/linux_arm64
 COPY --from=cross-windows-amd64  /opt/icu/windows_amd64  /opt/icu/windows_amd64
 COPY --from=cross-darwin-arm64   /opt/icu/darwin_arm64   /opt/icu/darwin_arm64
 COPY --from=cross-darwin-amd64   /opt/icu/darwin_amd64   /opt/icu/darwin_amd64
+
+# The darwin link inputs `base`/`smoke` deliberately omit. goreleaser links the
+# darwin targets INSIDE this image, so it needs the SDK, the tzfile.h stub, and
+# the darwin wrappers here at runtime. Copied from darwin-toolchain (not inherited
+# via smoke) so the smoke path stays SDK-free. [LAW:single-enforcer] darwin-toolchain
+# is the one place these are produced; final consumes, never re-derives.
+# The real SDK dir is copied first, then the /opt/macos-sdk symlink that points at
+# it (the darwin wrappers reference the symlink path).
+COPY --from=darwin-toolchain /opt/MacOSX${MACOS_SDK_VERSION}.sdk /opt/MacOSX${MACOS_SDK_VERSION}.sdk
+COPY --from=darwin-toolchain /opt/macos-sdk /opt/macos-sdk
+COPY --from=darwin-toolchain /usr/local/include/zig-macos-stubs /usr/local/include/zig-macos-stubs
+COPY --from=darwin-toolchain \
+    /usr/local/bin/zig-cc-aarch64-apple-darwin \
+    /usr/local/bin/zig-cxx-aarch64-apple-darwin \
+    /usr/local/bin/zig-cc-x86_64-apple-darwin \
+    /usr/local/bin/zig-cxx-x86_64-apple-darwin \
+    /usr/local/bin/
 
 # Sanity check at image-build time for the prefixes this stage adds (`smoke`
 # already verified linux_amd64). [LAW:verifiable-goals]
@@ -309,3 +361,19 @@ RUN set -euo pipefail; \
             || { echo "MISSING: ICU libraries in /opt/icu/${target}/lib/" >&2; exit 1; }; \
     done; \
     echo "ICU prefixes verified for all targets."
+
+# Sanity check the darwin link inputs COPYed from darwin-toolchain resolved
+# correctly — a broken COPY or dangling /opt/macos-sdk symlink here would surface
+# downstream as an opaque darwin link failure inside goreleaser. [LAW:verifiable-goals]
+# [LAW:no-silent-failure] fail at image-build time, where the cause is obvious.
+RUN set -euo pipefail; \
+    test -d /opt/macos-sdk/System/Library/Frameworks/CoreFoundation.framework \
+        || { echo "MISSING: /opt/macos-sdk frameworks (SDK COPY or symlink broken)" >&2; exit 1; }; \
+    for w in zig-cc-aarch64-apple-darwin zig-cxx-aarch64-apple-darwin \
+             zig-cc-x86_64-apple-darwin zig-cxx-x86_64-apple-darwin; do \
+        test -x "/usr/local/bin/${w}" \
+            || { echo "MISSING or non-executable: /usr/local/bin/${w}" >&2; exit 1; }; \
+    done; \
+    test -f /usr/local/include/zig-macos-stubs/tzfile.h \
+        || { echo "MISSING: /usr/local/include/zig-macos-stubs/tzfile.h" >&2; exit 1; }; \
+    echo "darwin toolchain (SDK + wrappers + stub) verified in final."
