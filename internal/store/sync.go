@@ -751,9 +751,13 @@ func earlierValidUnix(a, b sql.NullInt64) int64 {
 // Unix time of the OLDEST one (NULL/invalid when the range is empty).
 // [LAW:single-enforcer] Ahead and behind are the same query in opposite
 // directions, so they share one path, and the oldest-commit date rides along
-// rather than costing a second query. UNIX_TIMESTAMP(MIN(date)) returns an
-// integer, so no DATETIME value crosses the driver boundary to be marshaled.
-// The range is a bound parameter, not interpolated, so ref names cannot inject SQL.
+// rather than costing a second query. UNIX_TIMESTAMP(MIN(date)) yields a numeric
+// scalar, not the DATETIME itself — so no time.Time crosses the driver boundary;
+// the driver renders that scalar as a fractional decimal STRING (the `date` column
+// is Datetime3, millisecond precision), which is why it is scanned as a NullString
+// and parsed to whole seconds by parseUnixSeconds rather than into a NullInt64
+// directly. The range is a bound parameter, not interpolated, so ref names cannot
+// inject SQL.
 func (s *Store) commitRangeStats(ctx context.Context, from string, to string) (int64, sql.NullInt64, error) {
 	var count int64
 	var oldestRaw sql.NullString

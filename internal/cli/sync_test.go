@@ -209,10 +209,13 @@ func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
 
 // printSyncPullPayload no longer renders a prose_pending case: a held conflict is
 // a returned SyncFailureError (see TestSyncFailureFromPullHoldsProseConflict and
-// the contract-shape tests in sync_failure_test.go), never a status payload. A
-// prose_pending map reaching the printer would be a routing bug, so the printer's
-// unknown-state guard surfaces it loudly rather than as a bland "pulled".
-func TestPrintSyncPullPayloadRejectsStrayProsePending(t *testing.T) {
+// the contract-shape tests in sync_failure_test.go), never a status payload. This
+// pins the second layer of the guard: buildSyncPullPayload maps any unrecognized
+// pull state to status "unknown" carrying the raw state, and the printer renders
+// "unknown" as a reported bug, not a bland "pulled". prose_pending is the concrete
+// state used here because a prose_pending reaching the builder at all would be a
+// routing bug (runSyncPull intercepts it first) — exactly what must surface loudly.
+func TestPrintSyncPullPayloadSurfacesUnknownStateAsBug(t *testing.T) {
 	payload := map[string]any{"status": "unknown", "state": "prose_pending", "remote": "origin", "branch": "master"}
 	var out bytes.Buffer
 	if err := printSyncPullPayload(&out, payload, false); err != nil {
