@@ -10,6 +10,8 @@ import (
 
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"golang.org/x/mod/semver"
+
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 )
 
 type SyncRemote struct {
@@ -35,10 +37,43 @@ type SyncStatusReport struct {
 	Remotes     []SyncRemote    `json:"remotes"`
 }
 
+// SyncPullState classifies what a single `lit sync pull` did, derived from the
+// receive (fetch + fast-forward) and, when the branch diverged, the field-aware
+// reconcile. [LAW:one-source-of-truth] one mapping from the underlying
+// receive/reconcile outcomes to a pull label; the CLI renders this, it never
+// re-derives it.
+type SyncPullState string
+
+const (
+	// SyncPullUpToDate: local already at the remote head; nothing to pull.
+	SyncPullUpToDate SyncPullState = "up_to_date"
+	// SyncPullFastForwarded: local was strictly behind and advanced to the
+	// remote head with no merge commit.
+	SyncPullFastForwarded SyncPullState = "fast_forwarded"
+	// SyncPullLinearized: local diverged and the field-aware reconcile merged
+	// the divergence into linear history — the same outcome the automatic
+	// receive produces, reached explicitly here.
+	SyncPullLinearized SyncPullState = "linearized"
+	// SyncPullProsePending: local diverged and every code-owned field settled,
+	// but a free-text field diverged on both sides. Nothing is committed; the
+	// prose conflicts are held for the agent surface. [LAW:no-silent-failure]
+	SyncPullProsePending SyncPullState = "prose_pending"
+	// SyncPullAhead: local has unpushed commits and the remote has nothing new;
+	// there is nothing to pull (push delivers local commits).
+	SyncPullAhead SyncPullState = "ahead"
+	// SyncPullNeverSynced: the remote has no ref for this branch even after a
+	// fetch — the branch has never been pushed, so there is nothing to pull.
+	SyncPullNeverSynced SyncPullState = "never_synced"
+)
+
+// SyncPullResult reports the pull outcome, the ahead/behind counts it was
+// decided from, and — for SyncPullProsePending only — the free-text conflicts
+// held for the agent surface.
 type SyncPullResult struct {
-	FastForward int64  `json:"fast_forward"`
-	Conflicts   int64  `json:"conflicts"`
-	Message     string `json:"message"`
+	State   SyncPullState        `json:"state"`
+	Ahead   int64                `json:"ahead"`
+	Behind  int64                `json:"behind"`
+	Pending []merge.ProsePending `json:"pending,omitempty"`
 }
 
 type SyncPushResult struct {
@@ -188,26 +223,90 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 	})
 }
 
+// SyncPull brings the local branch up to date with the remote by fetching and
+// then converging: a strictly-behind branch fast-forwards, and a DIVERGED branch
+// is healed by the field-aware reconcile engine — the SAME engine the automatic
+// receive uses, so pull and auto-sync share one merge policy. [LAW:single-enforcer]
+//
+// It deliberately does NOT drive Dolt's native DOLT_PULL. Native pull performs a
+// three-way merge in the working set, which requires autocommit disabled to hold
+// conflicts — under the driver's default autocommit=on it aborts a conflicting
+// pull with "@autocommit must be disabled so that merge conflicts can be
+// resolved", leaving the divergence unresolved. The reconcile engine merges
+// three exports in Go and replays one linear commit, so it never holds a Dolt
+// conflict and never needs autocommit off — the autocommit failure is
+// unrepresentable on this path. [LAW:types-are-the-program]
+//
+// It composes SyncReceive (fetch + fast-forward + freshness) and SyncReconcile
+// rather than reimplementing either; the divergence branch is the only one that
+// reconciles, and every other freshness state carries straight through.
+// [LAW:dataflow-not-control-flow]
+//
+// The whole converge runs under ONE commit lock: acquireCommitLock is
+// context-reentrant, so SyncReceive's and SyncReconcile's own acquisitions
+// short-circuit and the two steps are atomic against every other writer. That
+// closes the TOCTOU window in which a concurrent push, landing between an
+// independently-locked receive and reconcile, would make the local strictly
+// behind — the reconcile would then read NotDiverged and the pull would report
+// the contradictory "up to date, N behind". Freshness is computed from local
+// refs that cannot move under the held lock, so the diverged state the receive
+// saw is the state the reconcile heals. [LAW:no-ambient-temporal-coupling] one
+// owner of the converge's atomicity.
 func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error) {
-	trimmedRemote, err := requireSyncArg("remote", remote)
-	if err != nil {
-		return SyncPullResult{}, err
-	}
-	trimmedBranch := strings.TrimSpace(branch)
-	args := []string{trimmedRemote}
-	if trimmedBranch != "" {
-		args = append(args, trimmedBranch)
-	}
-
 	var result SyncPullResult
-	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
-		query := buildProcedureCall("DOLT_PULL", len(args))
-		var message sql.NullString
-		err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.FastForward, &result.Conflicts, &message)
+	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		recv, err := s.SyncReceive(ctx, remote, branch)
 		if err != nil {
-			return fmt.Errorf("pull remote %q: %w", trimmedRemote, err)
+			return err
 		}
-		result.Message = nullStringValue(message)
+		result.Ahead, result.Behind = recv.Ahead, recv.Behind
+		switch recv.State {
+		case SyncReceiveUpToDate:
+			result.State = SyncPullUpToDate
+		case SyncReceiveFastForwarded:
+			result.State = SyncPullFastForwarded
+		case SyncReceiveAhead:
+			result.State = SyncPullAhead
+		case SyncReceiveNeverSynced:
+			result.State = SyncPullNeverSynced
+		case SyncReceiveDiverged:
+			rec, err := s.SyncReconcile(ctx, remote, branch)
+			if err != nil {
+				return err
+			}
+			result.Ahead, result.Behind = rec.Ahead, rec.Behind
+			switch rec.State {
+			case SyncReconcileLinearized:
+				result.State = SyncPullLinearized
+				// rec's ahead/behind describe the divergence that was just healed,
+				// not the outcome. Re-read so the reported counts match the linear
+				// result (the merge commit sits on the remote head: 1 ahead, 0
+				// behind). Consistent under the single lock — freshness cannot move.
+				// [LAW:no-silent-failure] the state and its counts agree.
+				fresh, err := s.SyncFreshness(ctx, remote, branch)
+				if err != nil {
+					return err
+				}
+				result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
+			case SyncReconcileProsePending:
+				result.State = SyncPullProsePending
+				result.Pending = rec.Pending
+			case SyncReconcileNotDiverged:
+				// Under the single lock a push race cannot resolve the divergence
+				// between the receive and the reconcile, so this is the benign
+				// idempotent case (the divergence was already gone). Nothing to merge.
+				result.State = SyncPullUpToDate
+			default:
+				// A reconcile state this mapping does not know would otherwise fall
+				// through as the zero-value "" and be rendered downstream as a bland
+				// "ok" — masking the gap. Fail at the source instead. [LAW:no-silent-failure]
+				return fmt.Errorf("sync pull: unhandled reconcile state %q", rec.State)
+			}
+		default:
+			// Same guard for the receive enum: an unmapped receive state must not
+			// silently become an empty pull state. [LAW:no-silent-failure]
+			return fmt.Errorf("sync pull: unhandled receive state %q", recv.State)
+		}
 		return nil
 	})
 	if err != nil {

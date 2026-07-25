@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -50,19 +49,7 @@ const downgradeSnapshotRetention = 10
 // stamps; "matches by accident" is impossible without a user deliberately
 // mimicking the format.
 func IsDowngradeSnapshotName(name string) bool {
-	idx := strings.IndexByte(name, '-')
-	if idx < 0 {
-		return false
-	}
-	head, label := name[:idx], name[idx+1:]
-	if !isAllDigits(head) {
-		return false
-	}
-	const prefix = downgradeSnapshotLabel + "-"
-	if !strings.HasPrefix(label, prefix) {
-		return false
-	}
-	return isAllDigits(label[len(prefix):])
+	return isStampedSnapshotName(name, downgradeSnapshotLabel)
 }
 
 // downgradeMigrationFailedError carries the underlying goose error from a Down

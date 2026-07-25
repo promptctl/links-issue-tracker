@@ -56,6 +56,9 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	// behind, so the push fast-forwards.
 	assertSingleParentHead(t, ctx, syncB, res.RemoteHead)
 	assertScratchBranchCleanedUp(t, ctx, syncB)
+	// Property: the linearized outcome — the one that DOES mutate the data branch —
+	// leaves a clean working set (no staged/unstaged residue, no held conflicts).
+	assertWorkingSetClean(t, ctx, syncB)
 	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
@@ -125,6 +128,9 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 		t.Fatalf("data branch moved during prose-pending reconcile: head %s -> %s (scratch reads leaked onto the live branch)", headBefore, got)
 	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
+	// Property: a prose-pending reconcile (the non-mutating outcome) also leaves a
+	// clean working set — the scratch reads never leak staged/unstaged residue.
+	assertWorkingSetClean(t, ctx, syncB)
 	if len(res.Pending) != 1 {
 		t.Fatalf("pending prose count = %d, want 1: %+v", len(res.Pending), res.Pending)
 	}
