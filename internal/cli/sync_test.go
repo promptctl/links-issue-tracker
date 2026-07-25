@@ -80,9 +80,10 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 	if !held {
 		t.Fatal("syncFailureFromPull did not classify a prose-pending pull as held")
 	}
-	if code := ExitCode(failure); code != ExitConflict {
-		t.Fatalf("held pull exit code = %d, want %d (ExitConflict)", code, ExitConflict)
-	}
+	// This test's job is the MAPPING (held, class, age). The pull→held→ExitConflict
+	// exit contract is pinned end-to-end by TestExplicitPullSurfacesContractOnProseHeld
+	// and at the type level by TestSyncFailureErrorExitAndRemediation, so it is not
+	// re-asserted here.
 	if failure.Failure.Class != syncFailureProseHeld {
 		t.Fatalf("class = %q, want %q", failure.Failure.Class, syncFailureProseHeld)
 	}

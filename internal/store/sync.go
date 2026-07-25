@@ -715,11 +715,16 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 	}
 	freshness.Ahead = ahead
 	freshness.Behind = behind
-	// The divergence began with whichever side's oldest divergent commit is
-	// earlier; the two ranges partition the post-merge-base commits, so the min
-	// over both dates the fork. [LAW:single-enforcer] one rule for "when did this
-	// diverge", not a per-caller guess.
-	freshness.OldestDivergedUnix = earlierValidUnix(aheadOldest, behindOldest)
+	// OldestDivergedUnix dates a DIVERGENCE, so it is populated only when the
+	// branch is actually diverged — commits on BOTH sides. An ahead-only or
+	// behind-only branch is not diverged, so it stays 0 rather than carrying a
+	// timestamp its state contradicts (the field name would otherwise lie on the
+	// wire). When diverged, the two ranges partition the post-merge-base commits,
+	// so the earlier of their oldest commits dates the fork. [LAW:types-are-the-program]
+	// the field is populated iff the state it names holds.
+	if ahead > 0 && behind > 0 {
+		freshness.OldestDivergedUnix = earlierValidUnix(aheadOldest, behindOldest)
+	}
 	return freshness, nil
 }
 
