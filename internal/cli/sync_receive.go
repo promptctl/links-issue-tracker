@@ -69,14 +69,47 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
-	// A prose-pending reconcile is the one outcome that needs the agent: surface a
-	// compact nudge to stderr (the command's stdout is already produced and clean,
-	// so local reads still serve). It is not a failure — the clone keeps working
-	// diverged — so it never affects the command's exit. [LAW:no-silent-failure]
-	if outcome.reconcile != nil && outcome.reconcile.state == store.SyncReconcileProsePending {
-		if nudgeErr := renderProsePendingNudge(os.Stderr, outcome.reconcile.pending); nudgeErr != nil {
-			fmt.Fprintf(os.Stderr, "lit: automatic reconcile nudge not rendered: %v\n", nudgeErr)
-		}
+	// An inline reconcile that could not converge — a held free-text conflict, or a
+	// hard backend failure — is surfaced NOW through the one sync-failure contract,
+	// to stderr: the command's stdout is already produced and its local reads still
+	// serve, so this neither corrupts output nor fails the command, but it can no
+	// longer read as an ignorable line the way the raw "will retry" error once did.
+	// [LAW:no-silent-failure] [LAW:single-enforcer] one contract, whether the failure
+	// flows out as a returned error or is printed inline here.
+	if failure, ok := outcome.inlineSyncFailure(time.Now()); ok {
+		fmt.Fprintln(os.Stderr, failure.blockString())
+	}
+}
+
+// inlineSyncFailure derives the sync-failure contract for an inline reconcile
+// that could not converge, or reports ok=false when the receive/reconcile settled
+// cleanly. A held free-text conflict and a hard reconcile error are the two
+// non-converging outcomes; both route through the one contract, with the reconcile
+// error carried as the block's trailing cause rather than as an ignorable
+// headline. The divergence age is computed here, at the boundary that holds the
+// clock, from the timestamp the receive recorded. [LAW:dataflow-not-control-flow]
+func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool) {
+	if o.reconcile == nil {
+		return SyncFailure{}, false
+	}
+	base := SyncFailure{
+		Remote: o.remote,
+		Branch: o.branch,
+		Ahead:  o.ahead,
+		Behind: o.behind,
+		Age:    ageFromOldestDivergedUnix(o.oldestDivergedUnix, now),
+	}
+	switch {
+	case o.reconcile.err != nil:
+		base.Class = syncFailureDivergedUnresolved
+		base.Cause = o.reconcile.err
+		return base, true
+	case o.reconcile.state == store.SyncReconcileProsePending:
+		base.Class = syncFailureProseHeld
+		base.Fields = o.reconcile.pending
+		return base, true
+	default:
+		return SyncFailure{}, false
 	}
 }
 
@@ -84,15 +117,16 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 // was triggered. [LAW:decomposition] Resolving remotes, fetching, and fast-
 // forwarding are one part; the inline scheduling that invokes it is another.
 type syncReceiveOutcome struct {
-	status     string // "ok" | "skipped"
-	reason     string // set when status == "skipped"
-	remote     string
-	branch     string
-	state      store.SyncReceiveState
-	ahead      int64
-	behind     int64
-	traceErr   error
-	receiveErr error // the receive failure; the trace is already recorded when set
+	status             string // "ok" | "skipped"
+	reason             string // set when status == "skipped"
+	remote             string
+	branch             string
+	state              store.SyncReceiveState
+	ahead              int64
+	behind             int64
+	oldestDivergedUnix int64 // Unix time the divergence began; 0 unless diverged
+	traceErr           error
+	receiveErr         error // the receive failure; the trace is already recorded when set
 	// reconcile carries the inline reconcile that runs when the receive found a
 	// divergence the fast-forward could not absorb. Zero-valued unless state was
 	// SyncReceiveDiverged. [LAW:decomposition] Receiving and reconciling are
@@ -173,14 +207,15 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		traceMetadata,
 	)
 	outcome := syncReceiveOutcome{
-		status:     "ok",
-		remote:     remoteName,
-		branch:     syncBranch,
-		state:      result.State,
-		ahead:      result.Ahead,
-		behind:     result.Behind,
-		traceErr:   traceRecordErr,
-		receiveErr: receiveErr,
+		status:             "ok",
+		remote:             remoteName,
+		branch:             syncBranch,
+		state:              result.State,
+		ahead:              result.Ahead,
+		behind:             result.Behind,
+		oldestDivergedUnix: result.OldestDivergedUnix,
+		traceErr:           traceRecordErr,
+		receiveErr:         receiveErr,
 	}
 	// The reconcile runs INLINE on this same engine because embedded Dolt permits
 	// only one read-write engine per path — a worker would collide with the next
@@ -223,17 +258,12 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 	); traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
-	// A reconcile FAILURE leaves the clone unable to converge with the remote — a
-	// more consequential state than a routine receive hiccup — so it is surfaced to
-	// stderr now, in addition to the trace, rather than discovered only by reading
-	// traces later. It still does not fail the command: this runs after the
-	// command's output is already produced, on the one engine embedded Dolt permits,
-	// and the next interval retries. [LAW:no-silent-failure] A prose-pending result
-	// is NOT a failure — it is the intended outcome for a concurrent free-text
-	// rewrite, held for the agent surface — so it is not surfaced as an error here.
-	if reconcileErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: automatic reconcile of the diverged clone failed; it remains diverged and will retry: %v\n", reconcileErr)
-	}
+	// The trace above records the attempt out-of-band; the caller (receiveInline)
+	// surfaces a non-converging reconcile — hard failure OR held free-text — to
+	// stderr through the one sync-failure contract, so both classes read as the
+	// unmissable block rather than a raw "will retry" line. This function stays the
+	// run-and-record step; the surfacing decision lives with the caller that holds
+	// the divergence's counts and age. [LAW:decomposition]
 	return &reconcileOutcome{state: result.State, pending: result.Pending, err: reconcileErr}
 }
 

@@ -1,0 +1,244 @@
+package cli
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/merge"
+)
+
+// syncFailureClass is the closed set of non-transient sync failures that reach an
+// agent after the field-aware engine has tried and could not converge on its own.
+// Each class fixes its own remediation, so the "how to resolve" lines are chosen
+// by the class value, never by the call site. [LAW:dataflow-not-control-flow]
+type syncFailureClass string
+
+const (
+	// syncFailureProseHeld: the merge settled every code-owned field, but one or
+	// more free-text fields diverged on both sides. Only a semantic merge resolves
+	// it; the engine deliberately holds rather than pick a side. Remedy: the
+	// reconcile surface, which shows base/ours/theirs.
+	syncFailureProseHeld syncFailureClass = "prose_held"
+	// syncFailureDivergedUnresolved: the local backlog is diverged and a
+	// reconcile has not converged it — either the automatic reconcile hit a
+	// backend error (Cause populated) or the divergence has simply sat unresolved
+	// (doctor's view, Cause empty). Remedy: a foreground pull.
+	syncFailureDivergedUnresolved syncFailureClass = "diverged_unresolved"
+)
+
+// persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
+// which a divergence stops reading as "reconcile in progress" and becomes an
+// incident an agent must resolve now. Either signal alone trips it: a slow drip
+// of a few commits over days is as much an incident as a burst of many in an
+// hour. The 2026-07-08 incident was BOTH (≈5 days, 41+5 commits), and age is the
+// signal a commit-count threshold alone would miss.
+const (
+	persistentDivergenceAge     = 24 * time.Hour
+	persistentDivergenceCommits = 10
+)
+
+// syncFailureMustNotIgnore is the constant directive every block opens with. The
+// severity below varies with the divergence's values; the standing instruction
+// not to route around a sync failure does not. It is phrased in the imperative
+// register agents act on, because in the 2026-07-08 incident an agent read a
+// softer "will retry" line for two days and classified it as ambient noise.
+const syncFailureMustNotIgnore = "MUST NOT IGNORE: this is not ambient noise. Do NOT classify it as a known quirk, retry past it, or route around it. Resolve it now — or explicitly surface it to the user as blocking — before continuing ticket work."
+
+// SyncFailure is the domain state of one non-transient sync failure, independent
+// of where it surfaced. It is the single input to the one contract renderer, so
+// every reporter — the inline auto-reconcile, `lit sync pull`, `lit doctor` —
+// produces the identical machine-stable block from the same fields. It mirrors
+// store.UnsupportedSchemaVersionError: the value carries the state, and which
+// lines appear is decided by which fields are populated, not by the caller.
+// [LAW:single-enforcer] [LAW:types-are-the-program]
+type SyncFailure struct {
+	Class  syncFailureClass
+	Remote string
+	Branch string
+	Ahead  int64
+	Behind int64
+	// Age is the divergence's age, computed at the surfacing boundary from the
+	// store's oldest-divergent-commit timestamp. Zero means unknown, and the
+	// escalation then leans on the commit counts alone.
+	Age time.Duration
+	// Fields carries the held free-text conflicts, populated only for
+	// syncFailureProseHeld — it names WHICH fields need the agent's merge.
+	Fields []merge.ProsePending
+	// Cause is the backend error that prevented convergence, populated only for a
+	// syncFailureDivergedUnresolved that arose from a reconcile hard-failure. It
+	// renders as a trailing cause line, never as the headline. [LAW:no-silent-failure]
+	// the backend detail is preserved; it is just demoted below the directive so
+	// it can no longer read as the whole (ignorable) message.
+	Cause error
+}
+
+// persistent reports whether the divergence has crossed from "reconcile still in
+// progress" into "incident". Severity is a function of the divergence's VALUES —
+// its age and its commit span — not of which surface observed it, so every
+// surface agrees on when the same divergence became an incident.
+// [LAW:dataflow-not-control-flow]
+func (f SyncFailure) persistent() bool {
+	agedOut := f.Age >= persistentDivergenceAge
+	spanOut := f.Ahead+f.Behind > persistentDivergenceCommits
+	return agedOut || spanOut
+}
+
+// SyncFailureError makes a SyncFailure returnable from a command: its Error() is
+// the full contract block, so the top-level error sink prints the same block a
+// passive surface prints inline, and ExitCode maps it to the conflict exit. One
+// value, one rendering, whether it flows out as an error or is printed directly.
+// [LAW:single-enforcer]
+type SyncFailureError struct {
+	Failure SyncFailure
+}
+
+func (e SyncFailureError) Error() string {
+	return e.Failure.blockString()
+}
+
+// blockString renders the one authoritative sync-failure block: an
+// <agent-instructions> envelope carrying the four contract elements — the
+// directive, what happened, how to resolve, and the value-driven escalation —
+// with the backend cause, when present, as a trailing line and never the
+// headline. The same operations run every call; the class and the populated
+// fields decide the content. [LAW:dataflow-not-control-flow]
+func (f SyncFailure) blockString() string {
+	var b strings.Builder
+	b.WriteString("<agent-instructions>\n")
+	b.WriteString("lit sync could not resolve a backlog divergence automatically and needs you.\n\n")
+
+	// (1) Directive — constant, unmissable, class-independent.
+	b.WriteString(syncFailureMustNotIgnore)
+	b.WriteString("\n\n")
+
+	// (2) What is wrong, in domain terms — the backend string is not the headline.
+	fmt.Fprintf(&b, "WHAT HAPPENED: %s\n\n", f.whatLine())
+
+	// (3) How to resolve — the exact commands, in order, for this class.
+	b.WriteString("HOW TO RESOLVE (run in order):\n")
+	for _, step := range f.resolutionSteps() {
+		fmt.Fprintf(&b, "  %s\n", step)
+	}
+	b.WriteString("\n")
+
+	// (4) Escalation — selected by the divergence's age and span.
+	fmt.Fprintf(&b, "%s\n", f.escalationLine())
+
+	if f.Cause != nil {
+		fmt.Fprintf(&b, "\ncause (backend detail, for diagnosis only — the steps above are the fix): %v\n", f.Cause)
+	}
+	b.WriteString("</agent-instructions>")
+	return b.String()
+}
+
+// whatLine states the failure in domain terms — schema/commit reality, not the
+// raw backend error. [FRAMING:representation] the message is the representation
+// of the failure; a domain sentence is a truer map than a driver string.
+func (f SyncFailure) whatLine() string {
+	ref := f.Remote + "/" + f.Branch
+	switch f.Class {
+	case syncFailureProseHeld:
+		return fmt.Sprintf(
+			"the field-aware merge with %s settled every code-owned field, but %s diverged on both sides — a semantic conflict only you can merge (the engine will not pick a side, so this will NOT clear on its own).",
+			ref, describeHeldFields(f.Fields))
+	case syncFailureDivergedUnresolved:
+		return fmt.Sprintf(
+			"the local backlog is diverged from %s — %d local commit(s) not yet sent and %d remote commit(s) not yet merged — and the automatic reconcile has not converged it.",
+			ref, f.Ahead, f.Behind)
+	default:
+		// A class this renderer does not know must not render as a bland,
+		// authoritative-looking line. Name it as a bug the way the pull payload
+		// renderer surfaces an unknown state. [LAW:no-silent-failure]
+		return fmt.Sprintf("an unrecognized sync-failure class %q on %s — this is a bug; please report it.", f.Class, ref)
+	}
+}
+
+// resolutionSteps is the ordered command list for the class, each with a short
+// gloss of what it does. The remedy lives in the tool's output, not in an agent's
+// memory: in the incident the repair knowledge existed only in a session note,
+// which drifts. [LAW:one-source-of-truth] the tool that detects the state names
+// the fix for that state.
+func (f SyncFailure) resolutionSteps() []string {
+	switch f.Class {
+	case syncFailureProseHeld:
+		return []string{
+			"lit sync reconcile        # shows base/ours/theirs for each held field and how to merge them inline",
+		}
+	case syncFailureDivergedUnresolved:
+		return []string{
+			"lit sync pull             # runs the field-aware reconcile in the foreground and reports what it settled",
+			"lit sync reconcile        # only if the pull reports a held text conflict — then merge it inline",
+		}
+	default:
+		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
+	}
+}
+
+// escalationLine selects the severity sentence from the divergence's values. The
+// operations are identical every call; only the branch taken varies, and it
+// varies on data (persistent), not on the surface that called in.
+// [LAW:dataflow-not-control-flow]
+func (f SyncFailure) escalationLine() string {
+	span := f.Ahead + f.Behind
+	if f.persistent() {
+		return fmt.Sprintf(
+			"ESCALATION — INCIDENT: this divergence has persisted for %s across %d commit(s) — far past a transient hiccup. Treat the workspace as blocked on it: resolve it now or surface it to the user as blocking. Do NOT keep doing ticket work around it.",
+			f.agePhrase(), span)
+	}
+	return fmt.Sprintf(
+		"ESCALATION — recent (%s, %d commit(s)): still within the window where a divergence is routine. Resolve it with the steps above; if it is still here on your next command it is no longer routine — escalate then.",
+		f.agePhrase(), span)
+}
+
+// agePhrase humanizes the divergence age for the escalation sentence. Zero age
+// (the store had no timestamp) reads as an explicit unknown rather than a
+// misleading "0 seconds". [LAW:no-silent-failure]
+func (f SyncFailure) agePhrase() string {
+	switch {
+	case f.Age <= 0:
+		return "an unknown duration"
+	case f.Age >= 48*time.Hour:
+		return fmt.Sprintf("%d days", int(f.Age/(24*time.Hour)))
+	case f.Age >= 2*time.Hour:
+		return fmt.Sprintf("%d hours", int(f.Age/time.Hour))
+	case f.Age >= 2*time.Minute:
+		return fmt.Sprintf("%d minutes", int(f.Age/time.Minute))
+	default:
+		return "under a minute"
+	}
+}
+
+// describeHeldFields names the held free-text fields for the WHAT line, so the
+// agent sees exactly which fields it owns before it opens the reconcile surface.
+func describeHeldFields(pending []merge.ProsePending) string {
+	ordered := merge.SortPending(pending)
+	names := make([]string, 0, len(ordered))
+	for _, p := range ordered {
+		names = append(names, fmt.Sprintf("%s·%s", p.IssueID, p.Field))
+	}
+	switch len(names) {
+	case 0:
+		return "one or more free-text fields"
+	case 1:
+		return "the free-text field " + names[0]
+	default:
+		return fmt.Sprintf("%d free-text fields (%s)", len(names), strings.Join(names, ", "))
+	}
+}
+
+// ageFromOldestDivergedUnix turns the store's oldest-divergent-commit timestamp
+// into a divergence age against now. This is the one place the clock meets the
+// stored fact — the store returns a timestamp, the boundary makes it an age — so
+// the age can never be stored stale. [LAW:effects-at-boundaries] A zero or future
+// timestamp yields zero (unknown), which the renderer states honestly.
+func ageFromOldestDivergedUnix(oldestUnix int64, now time.Time) time.Duration {
+	if oldestUnix <= 0 {
+		return 0
+	}
+	age := now.Sub(time.Unix(oldestUnix, 0))
+	if age < 0 {
+		return 0
+	}
+	return age
+}

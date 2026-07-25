@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime/debug"
+	"strconv"
 	"strings"
 
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
@@ -74,6 +75,10 @@ type SyncPullResult struct {
 	Ahead   int64                `json:"ahead"`
 	Behind  int64                `json:"behind"`
 	Pending []merge.ProsePending `json:"pending,omitempty"`
+	// OldestDivergedUnix dates the divergence this pull observed (Unix seconds),
+	// so a held-conflict surface can escalate by age. Zero unless the pull met a
+	// divergence. Carried from the receive that classified the freshness.
+	OldestDivergedUnix int64 `json:"oldest_diverged_unix,omitempty"`
 }
 
 type SyncPushResult struct {
@@ -260,6 +265,7 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 			return err
 		}
 		result.Ahead, result.Behind = recv.Ahead, recv.Behind
+		result.OldestDivergedUnix = recv.OldestDivergedUnix
 		switch recv.State {
 		case SyncReceiveUpToDate:
 			result.State = SyncPullUpToDate
@@ -393,11 +399,14 @@ const (
 )
 
 // SyncReceiveResult reports the receive outcome and the ahead/behind counts it
-// was decided from.
+// was decided from, plus — when diverged — the Unix time the divergence began,
+// so the inline reconcile that follows a SyncReceiveDiverged can date the fork
+// it is about to heal without a second freshness read. Zero unless diverged.
 type SyncReceiveResult struct {
-	State  SyncReceiveState
-	Ahead  int64
-	Behind int64
+	State              SyncReceiveState
+	Ahead              int64
+	Behind             int64
+	OldestDivergedUnix int64
 }
 
 // SyncReceive fetches the remote and, only when the local branch is strictly
@@ -431,6 +440,7 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 			return err
 		}
 		result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
+		result.OldestDivergedUnix = fresh.OldestDivergedUnix
 		switch fresh.State() {
 		case SyncBehind:
 			trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
@@ -612,6 +622,16 @@ type SyncFreshness struct {
 	Synced bool   `json:"synced"`
 	Ahead  int64  `json:"ahead"`
 	Behind int64  `json:"behind"`
+	// OldestDivergedUnix is the Unix time (seconds) of the OLDEST commit in the
+	// union of the two divergent ranges — i.e. when this fork first happened. It
+	// dates the divergence itself, so an escalation surface can distinguish a
+	// fresh divergence from one that has festered for days. Zero when nothing has
+	// diverged (both counts are 0) or the branch never synced. It is a raw
+	// timestamp, not an age: the clock that turns it into "N hours ago" lives at
+	// the rendering boundary, keeping this read a pure function of local refs.
+	// [LAW:effects-at-boundaries] [LAW:types-are-the-program] a stored age would
+	// let the value contradict "now"; a timestamp cannot.
+	OldestDivergedUnix int64 `json:"oldest_diverged_unix"`
 }
 
 // State derives the classification from the raw observations. Keeping it a
@@ -672,30 +692,81 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 		return SyncFreshness{}, fmt.Errorf("read active branch: %w", err)
 	}
 
-	ahead, err := s.countCommitRange(ctx, trackingRef, localBranch)
+	ahead, aheadOldest, err := s.commitRangeStats(ctx, trackingRef, localBranch)
 	if err != nil {
-		return SyncFreshness{}, fmt.Errorf("count commits ahead of %q: %w", trackingRef, err)
+		return SyncFreshness{}, fmt.Errorf("summarize commits ahead of %q: %w", trackingRef, err)
 	}
-	behind, err := s.countCommitRange(ctx, localBranch, trackingRef)
+	behind, behindOldest, err := s.commitRangeStats(ctx, localBranch, trackingRef)
 	if err != nil {
-		return SyncFreshness{}, fmt.Errorf("count commits behind %q: %w", trackingRef, err)
+		return SyncFreshness{}, fmt.Errorf("summarize commits behind %q: %w", trackingRef, err)
 	}
 	freshness.Ahead = ahead
 	freshness.Behind = behind
+	// The divergence began with whichever side's oldest divergent commit is
+	// earlier; the two ranges partition the post-merge-base commits, so the min
+	// over both dates the fork. [LAW:single-enforcer] one rule for "when did this
+	// diverge", not a per-caller guess.
+	freshness.OldestDivergedUnix = earlierValidUnix(aheadOldest, behindOldest)
 	return freshness, nil
 }
 
-// countCommitRange counts commits reachable from `to` but not from `from` — the
-// dolt_log two-dot range `from..to`. [LAW:single-enforcer] Ahead and behind are
-// the same query in opposite directions, so they share one path. The range is a
-// bound parameter, not interpolated, so ref names cannot inject SQL.
-func (s *Store) countCommitRange(ctx context.Context, from string, to string) (int64, error) {
-	var count int64
-	rangeExpr := fmt.Sprintf("%s..%s", from, to)
-	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, rangeExpr).Scan(&count); err != nil {
-		return 0, err
+// earlierValidUnix returns the smaller of two optional Unix timestamps, treating
+// an invalid (NULL, i.e. empty range) value as absent. Zero when neither is set.
+func earlierValidUnix(a, b sql.NullInt64) int64 {
+	switch {
+	case a.Valid && b.Valid:
+		if a.Int64 < b.Int64 {
+			return a.Int64
+		}
+		return b.Int64
+	case a.Valid:
+		return a.Int64
+	case b.Valid:
+		return b.Int64
+	default:
+		return 0
 	}
-	return count, nil
+}
+
+// commitRangeStats summarizes the commits reachable from `to` but not from
+// `from` — the dolt_log two-dot range `from..to`: how many there are, and the
+// Unix time of the OLDEST one (NULL/invalid when the range is empty).
+// [LAW:single-enforcer] Ahead and behind are the same query in opposite
+// directions, so they share one path, and the oldest-commit date rides along
+// rather than costing a second query. UNIX_TIMESTAMP(MIN(date)) returns an
+// integer, so no DATETIME value crosses the driver boundary to be marshaled.
+// The range is a bound parameter, not interpolated, so ref names cannot inject SQL.
+func (s *Store) commitRangeStats(ctx context.Context, from string, to string) (int64, sql.NullInt64, error) {
+	var count int64
+	var oldestRaw sql.NullString
+	rangeExpr := fmt.Sprintf("%s..%s", from, to)
+	if err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(*), UNIX_TIMESTAMP(MIN(date)) FROM dolt_log(?)`, rangeExpr,
+	).Scan(&count, &oldestRaw); err != nil {
+		return 0, sql.NullInt64{}, err
+	}
+	oldest, err := parseUnixSeconds(oldestRaw)
+	if err != nil {
+		return 0, sql.NullInt64{}, fmt.Errorf("parse oldest commit time %q: %w", oldestRaw.String, err)
+	}
+	return count, oldest, nil
+}
+
+// parseUnixSeconds converts the driver's UNIX_TIMESTAMP rendering into whole Unix
+// seconds. The `date` column is Datetime3 (millisecond precision), so the driver
+// returns UNIX_TIMESTAMP(date) as a fractional decimal STRING, e.g.
+// "1784998962.153", and NULL for an empty range. The sub-second part is dropped:
+// divergence age is reasoned about in hours and days, so milliseconds are noise.
+// [LAW:no-silent-failure] a malformed value is an error, not a silent zero.
+func parseUnixSeconds(raw sql.NullString) (sql.NullInt64, error) {
+	if !raw.Valid || strings.TrimSpace(raw.String) == "" {
+		return sql.NullInt64{}, nil
+	}
+	secs, err := strconv.ParseFloat(strings.TrimSpace(raw.String), 64)
+	if err != nil {
+		return sql.NullInt64{}, err
+	}
+	return sql.NullInt64{Int64: int64(secs), Valid: true}, nil
 }
 
 func (s *Store) runSyncMutation(ctx context.Context, operation retryOperation) error {
