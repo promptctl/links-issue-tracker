@@ -238,50 +238,69 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 // unrepresentable on this path. [LAW:types-are-the-program]
 //
 // It composes SyncReceive (fetch + fast-forward + freshness) and SyncReconcile
-// as two sequentially-locked steps rather than reimplementing either; the
-// divergence branch is the only one that reconciles, and every other freshness
-// state carries straight through. [LAW:dataflow-not-control-flow]
+// rather than reimplementing either; the divergence branch is the only one that
+// reconciles, and every other freshness state carries straight through.
+// [LAW:dataflow-not-control-flow]
+//
+// The whole converge runs under ONE commit lock: acquireCommitLock is
+// context-reentrant, so SyncReceive's and SyncReconcile's own acquisitions
+// short-circuit and the two steps are atomic against every other writer. That
+// closes the TOCTOU window in which a concurrent push, landing between an
+// independently-locked receive and reconcile, would make the local strictly
+// behind — the reconcile would then read NotDiverged and the pull would report
+// the contradictory "up to date, N behind". Freshness is computed from local
+// refs that cannot move under the held lock, so the diverged state the receive
+// saw is the state the reconcile heals. [LAW:no-ambient-temporal-coupling] one
+// owner of the converge's atomicity.
 func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error) {
-	recv, err := s.SyncReceive(ctx, remote, branch)
+	var result SyncPullResult
+	err := s.withCommitLock(ctx, func(ctx context.Context) error {
+		recv, err := s.SyncReceive(ctx, remote, branch)
+		if err != nil {
+			return err
+		}
+		result.Ahead, result.Behind = recv.Ahead, recv.Behind
+		switch recv.State {
+		case SyncReceiveUpToDate:
+			result.State = SyncPullUpToDate
+		case SyncReceiveFastForwarded:
+			result.State = SyncPullFastForwarded
+		case SyncReceiveAhead:
+			result.State = SyncPullAhead
+		case SyncReceiveNeverSynced:
+			result.State = SyncPullNeverSynced
+		case SyncReceiveDiverged:
+			rec, err := s.SyncReconcile(ctx, remote, branch)
+			if err != nil {
+				return err
+			}
+			result.Ahead, result.Behind = rec.Ahead, rec.Behind
+			switch rec.State {
+			case SyncReconcileLinearized:
+				result.State = SyncPullLinearized
+			case SyncReconcileProsePending:
+				result.State = SyncPullProsePending
+				result.Pending = rec.Pending
+			case SyncReconcileNotDiverged:
+				// Under the single lock a push race cannot resolve the divergence
+				// between the receive and the reconcile, so this is the benign
+				// idempotent case (the divergence was already gone). Nothing to merge.
+				result.State = SyncPullUpToDate
+			default:
+				// A reconcile state this mapping does not know would otherwise fall
+				// through as the zero-value "" and be rendered downstream as a bland
+				// "ok" — masking the gap. Fail at the source instead. [LAW:no-silent-failure]
+				return fmt.Errorf("sync pull: unhandled reconcile state %q", rec.State)
+			}
+		default:
+			// Same guard for the receive enum: an unmapped receive state must not
+			// silently become an empty pull state. [LAW:no-silent-failure]
+			return fmt.Errorf("sync pull: unhandled receive state %q", recv.State)
+		}
+		return nil
+	})
 	if err != nil {
 		return SyncPullResult{}, err
-	}
-	result := SyncPullResult{Ahead: recv.Ahead, Behind: recv.Behind}
-	switch recv.State {
-	case SyncReceiveUpToDate:
-		result.State = SyncPullUpToDate
-	case SyncReceiveFastForwarded:
-		result.State = SyncPullFastForwarded
-	case SyncReceiveAhead:
-		result.State = SyncPullAhead
-	case SyncReceiveNeverSynced:
-		result.State = SyncPullNeverSynced
-	case SyncReceiveDiverged:
-		rec, err := s.SyncReconcile(ctx, remote, branch)
-		if err != nil {
-			return SyncPullResult{}, err
-		}
-		result.Ahead, result.Behind = rec.Ahead, rec.Behind
-		switch rec.State {
-		case SyncReconcileLinearized:
-			result.State = SyncPullLinearized
-		case SyncReconcileProsePending:
-			result.State = SyncPullProsePending
-			result.Pending = rec.Pending
-		case SyncReconcileNotDiverged:
-			// A push race resolved the divergence between the receive and the
-			// reconcile; there is nothing left to merge.
-			result.State = SyncPullUpToDate
-		default:
-			// A reconcile state this mapping does not know would otherwise fall
-			// through as the zero-value "" and be rendered downstream as a bland
-			// "ok" — masking the gap. Fail at the source instead. [LAW:no-silent-failure]
-			return SyncPullResult{}, fmt.Errorf("sync pull: unhandled reconcile state %q", rec.State)
-		}
-	default:
-		// Same guard for the receive enum: an unmapped receive state must not
-		// silently become an empty pull state. [LAW:no-silent-failure]
-		return SyncPullResult{}, fmt.Errorf("sync pull: unhandled receive state %q", recv.State)
 	}
 	return result, nil
 }

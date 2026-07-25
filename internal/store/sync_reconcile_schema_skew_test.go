@@ -209,6 +209,92 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 	assertWorkingSetClean(t, ctx, syncB)
 }
 
+// TestSyncPullStateTransitions proves the non-diverged SyncReceive→SyncPull
+// state mapping for every path the schema-skew/divergence tests don't reach:
+// up-to-date, fast-forward, ahead, and a branch the remote has never seen. The
+// diverged→linearized and diverged→prose-pending arms are covered by
+// TestSyncPullHealsSchemaSkewDivergence and the reconcile suite.
+func TestSyncPullStateTransitions(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("up_to_date", func(t *testing.T) {
+		base := t.TempDir()
+		remoteURL := "file://" + filepath.Join(base, "remote")
+		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
+		rootB := filepath.Join(base, "b")
+		adoptRemote(t, ctx, rootB, remoteURL) // B == remote head
+		syncB := openSyncOrFatal(t, ctx, rootB)
+		defer syncB.Close()
+		res, err := syncB.SyncPull(ctx, "origin", "master")
+		if err != nil {
+			t.Fatalf("SyncPull: %v", err)
+		}
+		if res.State != SyncPullUpToDate {
+			t.Fatalf("state = %q, want %q", res.State, SyncPullUpToDate)
+		}
+	})
+
+	t.Run("fast_forwarded", func(t *testing.T) {
+		base := t.TempDir()
+		remoteURL := "file://" + filepath.Join(base, "remote")
+		rootA := filepath.Join(base, "a")
+		id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+		rootB := filepath.Join(base, "b")
+		adoptRemote(t, ctx, rootB, remoteURL)
+		// A advances the remote; B is now strictly behind and must fast-forward.
+		updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("ahead")})
+		syncB := openSyncOrFatal(t, ctx, rootB)
+		defer syncB.Close()
+		res, err := syncB.SyncPull(ctx, "origin", "master")
+		if err != nil {
+			t.Fatalf("SyncPull: %v", err)
+		}
+		if res.State != SyncPullFastForwarded {
+			t.Fatalf("state = %q, want %q", res.State, SyncPullFastForwarded)
+		}
+		if got := getIssueOrFatal(t, ctx, syncB, id); got.Lane != "ahead" {
+			t.Fatalf("fast-forward did not adopt remote edit: lane = %q", got.Lane)
+		}
+	})
+
+	t.Run("ahead", func(t *testing.T) {
+		base := t.TempDir()
+		remoteURL := "file://" + filepath.Join(base, "remote")
+		id := seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
+		rootB := filepath.Join(base, "b")
+		adoptRemote(t, ctx, rootB, remoteURL)
+		// B commits locally and does not push; the remote has nothing new.
+		updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("local")})
+		syncB := openSyncOrFatal(t, ctx, rootB)
+		defer syncB.Close()
+		res, err := syncB.SyncPull(ctx, "origin", "master")
+		if err != nil {
+			t.Fatalf("SyncPull: %v", err)
+		}
+		if res.State != SyncPullAhead {
+			t.Fatalf("state = %q, want %q", res.State, SyncPullAhead)
+		}
+	})
+
+	t.Run("never_synced", func(t *testing.T) {
+		base := t.TempDir()
+		remoteURL := "file://" + filepath.Join(base, "remote")
+		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
+		rootB := filepath.Join(base, "b")
+		adoptRemote(t, ctx, rootB, remoteURL)
+		syncB := openSyncOrFatal(t, ctx, rootB)
+		defer syncB.Close()
+		// The remote has refs (master) but never this branch.
+		res, err := syncB.SyncPull(ctx, "origin", "no-such-branch")
+		if err != nil {
+			t.Fatalf("SyncPull: %v", err)
+		}
+		if res.State != SyncPullNeverSynced {
+			t.Fatalf("state = %q, want %q", res.State, SyncPullNeverSynced)
+		}
+	})
+}
+
 // assertWorkingSetClean fails if the store's Dolt working set has any staged or
 // unstaged change or any held merge conflict. A clean working set after every
 // reconcile outcome is the ticket's stated property: the incident's manual

@@ -357,8 +357,16 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	// snapshots off to the retention budget. IsReconcileSnapshotName is disjoint
 	// from the migration/downgrade classifiers, so this only collects reconcile
 	// snapshots. [LAW:single-enforcer] reconcile owns its own snapshot budget.
+	//
+	// The prune runs AFTER the durable data-branch advance, so a prune failure
+	// must NOT be promoted to fail the reconcile — the merge already committed,
+	// and returning an error here would report a successful reconcile as failed
+	// (and a retry would find it already resolved). A leftover un-pruned snapshot
+	// is inert, exactly like the leftover scratch branch cleanupReconcileScratch
+	// tolerates, so the failure is surfaced to stderr but not promoted.
+	// [LAW:no-silent-failure] loud, but not a false failure over a durable success.
 	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
-		return fmt.Errorf("prune reconcile snapshots: %w", err)
+		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (merge already committed): %v\n", err)
 	}
 	result.State = SyncReconcileLinearized
 	result.Pending = nil
