@@ -247,6 +247,15 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 // reconciles, and every other freshness state carries straight through.
 // [LAW:dataflow-not-control-flow]
 //
+// NOTE: the inline auto-sync path (cli.performSyncReceive → performInlineReconcile)
+// replicates this same receive-then-reconcile-on-divergence GATE rather than calling
+// SyncPull, because it must record a separate automation trace per step and run the
+// diverged-only reconcile on the one RW engine embedded Dolt permits. The merge
+// POLICY is not duplicated — both paths call this package's SyncReconcile — but the
+// gating is, so a change to which freshness states reconcile here must be mirrored
+// there. [LAW:single-enforcer] the enforced invariant (the merge) has one home; the
+// gate is a deliberate two-altitude replica, cross-referenced so neither drifts unseen.
+//
 // The whole converge runs under ONE commit lock: acquireCommitLock is
 // context-reentrant, so SyncReceive's and SyncReconcile's own acquisitions
 // short-circuit and the two steps are atomic against every other writer. That
@@ -288,12 +297,16 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 				// not the outcome. Re-read so the reported counts match the linear
 				// result (the merge commit sits on the remote head: 1 ahead, 0
 				// behind). Consistent under the single lock — freshness cannot move.
-				// [LAW:no-silent-failure] the state and its counts agree.
+				// The divergence timestamp is re-read from the SAME freshness for the
+				// same reason: leaving it at the pre-merge value would date a
+				// divergence that no longer exists, a field contradicting its state.
+				// [LAW:one-source-of-truth] the counts, the timestamp, and the state all agree.
 				fresh, err := s.SyncFreshness(ctx, remote, branch)
 				if err != nil {
 					return err
 				}
 				result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
+				result.OldestDivergedUnix = fresh.OldestDivergedUnix
 			case SyncReconcileProsePending:
 				result.State = SyncPullProsePending
 				result.Pending = rec.Pending

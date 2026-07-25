@@ -125,6 +125,9 @@ func TestSyncFailureEscalationByValue(t *testing.T) {
 		{"persistent by age alone", 25 * time.Hour, 1, 0, true, "25 hours"},
 		{"persistent by many days", 5 * 24 * time.Hour, 2, 1, true, "5 days"},
 		{"persistent by commit span alone", time.Minute, 6, 6, true, "under a minute"},
+		// The commit-span threshold is strict >10: exactly 10 stays recent, 11 trips.
+		{"span at threshold (10) stays recent", time.Minute, 5, 5, false, "under a minute"},
+		{"span just over threshold (11) trips", time.Minute, 6, 5, true, "under a minute"},
 		{"unknown age, small span, stays recent", 0, 1, 1, false, "an unknown duration"},
 	}
 	for _, tc := range cases {

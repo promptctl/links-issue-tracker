@@ -26,11 +26,14 @@ func captureStderr(t *testing.T, fn func()) string {
 		t.Fatalf("os.Pipe() error = %v", err)
 	}
 	os.Stderr = w
+	// Restore via defer so a t.Fatal inside fn (runtime.Goexit) cannot leave
+	// os.Stderr pointing at a closed pipe for every later test in the process.
+	// runtime.Goexit runs deferred funcs, so the restore always happens.
+	defer func() { os.Stderr = old }()
 	fn()
 	if err := w.Close(); err != nil {
 		t.Fatalf("close stderr pipe error = %v", err)
 	}
-	os.Stderr = old
 	data, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("read stderr pipe error = %v", err)
