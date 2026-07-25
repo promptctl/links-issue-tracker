@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
@@ -52,6 +53,42 @@ type doctorSyncReport struct {
 	Kind      doctorSyncKind
 	Freshness store.SyncFreshness
 	Detail    string
+	// Age is the divergence's age, computed at the resolve boundary from the
+	// freshness's oldest-divergent-commit timestamp. Zero unless diverged; it is
+	// what lets doctor tell a fresh divergence (in-progress reconcile) from one
+	// that has festered into an incident.
+	Age time.Duration
+}
+
+// divergenceFailure returns the sync-failure contract for a diverged workspace,
+// or ok=false for any non-diverged freshness. The age rides on the report
+// (computed at the resolve boundary), so this is a pure derivation and the same
+// value drives both the rendered escalation and the exit decision.
+// [LAW:dataflow-not-control-flow]
+func (r doctorSyncReport) divergenceFailure() (SyncFailure, bool) {
+	if r.Kind != doctorSyncResolved || r.Freshness.State() != store.SyncDiverged {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:  syncFailureDivergedUnresolved,
+		Remote: r.Freshness.Remote,
+		Branch: r.Freshness.Branch,
+		Ahead:  r.Freshness.Ahead,
+		Behind: r.Freshness.Behind,
+		Age:    r.Age,
+	}, true
+}
+
+// doctorDivergenceExit is the one place doctor turns a persistent divergence into
+// a nonzero exit: a divergence past the persistence threshold is an incident, not
+// a diagnostic note, so a health check must not pass while the workspace is
+// silently stuck. Kept pure over the already-resolved report so the exit contract
+// is unit-testable without a store aged for real. [LAW:no-silent-failure]
+func doctorDivergenceExit(report doctorSyncReport) error {
+	if failure, diverged := report.divergenceFailure(); diverged && failure.persistent() {
+		return SyncFailureError{Failure: failure}
+	}
+	return nil
 }
 
 // resolveDoctorSyncFreshness computes the sync freshness view. It performs the
@@ -82,7 +119,14 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *stor
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	return doctorSyncReport{Kind: doctorSyncResolved, Freshness: freshness}
+	// The clock meets the stored timestamp here, at the effect boundary, so the
+	// printed line and the exit decision below both read one already-computed age.
+	// [LAW:effects-at-boundaries]
+	return doctorSyncReport{
+		Kind:      doctorSyncResolved,
+		Freshness: freshness,
+		Age:       ageFromOldestDivergedUnix(freshness.OldestDivergedUnix, time.Now()),
+	}
 }
 
 // printSyncFreshness renders the freshness line. Every resolved state names the
@@ -216,5 +260,9 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if len(report.Errors) > 0 {
 		return CorruptionError{Message: strings.Join(report.Errors, "; ")}
 	}
-	return nil
+	// A divergence that has festered past the persistence threshold surfaces the
+	// sync-failure contract on stderr and exits nonzero — the stdout freshness line
+	// above stays the routine diagnostic; this is the escalation. Corruption (a
+	// harder failure) already returned above, so it wins when both hold.
+	return doctorDivergenceExit(syncReport)
 }

@@ -66,31 +66,12 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error
 // proseResolveCommand so both halves of the surface name the same family.
 const proseReconcileAbortHint = "lit sync reconcile abort"
 
-// renderProsePendingNudge prints the compact, after-the-fact surface the inline
-// auto-reconcile emits: it names exactly which fields diverged and points at the
-// full guidance, WITHOUT dumping every base/ours/theirs body over a routine
-// command's output. The clone keeps working on local truth; this is a transient
-// state the agent resolves when ready, so the nudge never fails the command that
-// triggered it. [LAW:no-silent-failure] the divergence is surfaced, not buried in
-// a trace. The full base/ours/theirs and the resolve command live behind `lit
-// sync reconcile`, rendered by renderProsePendingGuidance — one source of truth.
-func renderProsePendingNudge(w io.Writer, pending []merge.ProsePending) error {
-	ordered := merge.SortPending(pending)
-	var b strings.Builder
-	b.WriteString("<agent-instructions>\n")
-	fmt.Fprintf(&b, "lit: a clone diverged from the remote on %d free-text field(s) rewritten on both sides — settled everything else, held these for your semantic merge:\n", len(ordered))
-	for _, p := range ordered {
-		fmt.Fprintf(&b, "  - %s · %s\n", p.IssueID, p.Field)
-	}
-	fmt.Fprintf(&b, "Run `%s` to see base/ours/theirs and merge them inline (it stays diverged and usable until you do).\n", proseReconcileShowCommand)
-	b.WriteString("</agent-instructions>\n")
-	_, err := io.WriteString(w, b.String())
-	return err
-}
-
-// proseReconcileShowCommand is the command that renders the full prose-pending
-// guidance. Named once so the nudge and any help text point at the same surface.
-const proseReconcileShowCommand = "lit sync reconcile"
+// The compact after-the-fact surface the inline auto-reconcile once emitted now
+// routes through the one sync-failure contract (SyncFailure/blockString) instead
+// of a bespoke nudge, so the held-conflict surface carries the same MUST-NOT-IGNORE
+// directive and escalation as every other sync failure. [LAW:single-enforcer] This
+// file keeps only renderProsePendingGuidance — the deep base/ours/theirs workbench
+// the compact contract points at.
 
 // writeProseSection prints one labeled version, making an empty value explicit
 // rather than rendering a blank the agent might misread as "missing". [LAW:no-silent-failure]

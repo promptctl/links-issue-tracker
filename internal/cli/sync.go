@@ -7,6 +7,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -170,7 +171,36 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		// receive tolerates a transient hiccup. [LAW:no-silent-failure]
 		return err
 	}
+	// A held free-text conflict is a non-transient divergence the agent must
+	// resolve: it routes through the one sync-failure contract and is RETURNED, so
+	// the command exits ExitConflict — the same exit `lit sync reconcile` gives for
+	// the identical state, rather than a stdout line under a success exit. Every
+	// other pull outcome is a payload the printer renders. [LAW:single-enforcer]
+	if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
+		return failure
+	}
 	return printSyncPullPayload(stdout, buildSyncPullPayload(remoteName, resolvedBranch, result), *verbose)
+}
+
+// syncFailureFromPull builds the sync-failure contract for a pull outcome the
+// agent must resolve, or held=false for an outcome the payload printer renders.
+// Today only a held free-text conflict is agent-actionable this way; a hard pull
+// error is already surfaced as a returned error upstream. It is a pure mapping —
+// the clock is supplied as an argument — so the contract shape is unit-testable
+// without a live store. [LAW:dataflow-not-control-flow]
+func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now time.Time) (SyncFailureError, bool) {
+	if result.State != store.SyncPullProsePending {
+		return SyncFailureError{}, false
+	}
+	return SyncFailureError{Failure: SyncFailure{
+		Class:  syncFailureProseHeld,
+		Remote: remote,
+		Branch: branch,
+		Ahead:  result.Ahead,
+		Behind: result.Behind,
+		Age:    ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
+		Fields: result.Pending,
+	}}, true
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
@@ -416,8 +446,10 @@ func resolveSyncBranch(rootDir string, remote string) (string, error) {
 // buildSyncPullPayload renders a completed pull into the structured payload the
 // printer consumes. The outcome variance lives entirely in the result STATE, not
 // in error-string parsing: a branch the remote has never seen is the typed
-// never_synced state (not a raw "not found on remote" backend string), and a
-// divergence that held free text is the typed prose_pending state.
+// never_synced state (not a raw "not found on remote" backend string). The one
+// agent-actionable outcome — a held free-text conflict — never reaches here: the
+// caller intercepts it into the sync-failure contract (syncFailureFromPull) before
+// building a payload, so this builder renders only the non-blocking outcomes.
 // [LAW:types-are-the-program] the state is the discriminator; [LAW:dataflow-not-control-flow]
 // one builder, the state selects the fields.
 func buildSyncPullPayload(remote string, branch string, result store.SyncPullResult) map[string]any {
@@ -430,14 +462,6 @@ func buildSyncPullPayload(remote string, branch string, result store.SyncPullRes
 			"branch":        branch,
 			"next_command":  fmt.Sprintf("lit sync push --remote %s --set-upstream", remote),
 			"retry_command": fmt.Sprintf("lit sync pull --remote %s", remote),
-		}
-	case store.SyncPullProsePending:
-		return map[string]any{
-			"status":          "prose_pending",
-			"remote":          remote,
-			"branch":          branch,
-			"pending":         len(result.Pending),
-			"resolve_command": "lit sync reconcile",
 		}
 	case store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized, store.SyncPullAhead:
 		return map[string]any{
@@ -498,19 +522,6 @@ func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) err
 			branch,
 			nextCommand,
 			retryCommand,
-		)
-		return err
-	case "prose_pending":
-		// A divergence settled every code-owned field but a free-text field
-		// diverged on both sides; the reconcile held it rather than pick a side.
-		// Direct the caller to the agent-resolve surface. [LAW:no-silent-failure]
-		resolveCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["resolve_command"]))
-		_, err := fmt.Fprintf(
-			w,
-			"pull held a text conflict on %s/%s; resolve it with `%s`\n",
-			remote,
-			branch,
-			resolveCommand,
 		)
 		return err
 	case "unknown":

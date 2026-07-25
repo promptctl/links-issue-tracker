@@ -31,6 +31,14 @@ func ExitCode(err error) int {
 	if errors.As(err, &mergeConflict) {
 		return ExitConflict
 	}
+	// A non-transient sync divergence the agent must resolve is a conflict-class
+	// exit — the same code an unresolved reconcile already uses, so the held-conflict
+	// exit contract is one value across `lit sync pull` and `lit sync reconcile`.
+	// [LAW:one-source-of-truth]
+	var syncFailure SyncFailureError
+	if errors.As(err, &syncFailure) {
+		return ExitConflict
+	}
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
 		return ExitCorruption
