@@ -29,18 +29,13 @@ const producerBinaryVersionMetaKey = "producer_binary_version"
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
-// migrationUpByOneForTest, if non-nil, replaces provider.UpByOne(ctx) inside
-// the shared upByOne stepper. Tests use this to inject migration failures
-// without needing real failing migrations in the embedded registry.
-//
-// WARNING: upByOne is called by BOTH goose forward-drivers, so setting this
-// hook poisons both — applyPendingMigrations (the durable startup path, with
-// checkpoint/quarantine recovery) AND liftWorkingSetToRegistry (the transient
-// reconcile schema-lift, which has no checkpoint and simply aborts the reconcile
-// with a plain error). A test that exercises one path while the other also runs
-// must account for both, or gate the hook so it only fires for the intended
-// version. [LAW:comments-carry-meaning] the comment names every call site the
-// hook reaches, not just the one it was first written for.
+// migrationUpByOneForTest, if non-nil, replaces the goose step inside
+// applyPendingMigrations ONLY — the durable startup path. Tests use it to inject
+// migration failures without needing real failing migrations in the embedded
+// registry. The transient reconcile schema-lift (liftWorkingSetToRegistry) steps
+// through the bare upByOne and does NOT consult this hook, so a startup-failure
+// test can never poison the reconcile lift. [LAW:composability] the hook couples
+// only to the caller that needs it, not to every consumer of the shared stepper.
 var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error)
 
 // CheckpointResetError is returned when a migration body failure triggers an
@@ -391,19 +386,18 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	return s.commitWorkingSet(ctx, "migrate: record producer binary version")
 }
 
-// upByOne applies the single next pending migration via goose, honoring the
-// migrationUpByOneForTest injection point. It is the ONE goose forward-step:
-// both the durable startup path (applyPendingMigrations, which wraps each step
-// in a Dolt commit + checkpoint/quarantine recovery) and the transient
-// schema-lift (liftWorkingSetToRegistry, which commits nothing and only lifts a
-// throwaway branch so it can be read) advance the schema exclusively through
-// here. [LAW:single-enforcer] one goose stepper; [LAW:one-source-of-truth] both
+// upByOne applies the single next pending migration via goose. It is the ONE
+// goose forward-step both drivers share: the durable startup path
+// (applyPendingMigrations, which wraps each step in a Dolt commit +
+// checkpoint/quarantine recovery) and the transient schema-lift
+// (liftWorkingSetToRegistry, which commits nothing and only lifts a throwaway
+// branch so it can be read). It is PURE — the startup path layers its
+// test-failure injection ON TOP of this (see applyPendingMigrations), so the
+// lift, which steps through here bare, is never affected by that hook.
+// [LAW:single-enforcer] one goose stepper; [LAW:one-source-of-truth] both
 // consume the same embedded registry via newGooseProvider, so neither mints a
 // second schema-adaptation path.
 func (s *Store) upByOne(ctx context.Context, provider *goose.Provider) (*goose.MigrationResult, error) {
-	if hook := migrationUpByOneForTest; hook != nil {
-		return hook(ctx, provider)
-	}
 	return provider.UpByOne(ctx)
 }
 
@@ -475,8 +469,19 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 		return fmt.Errorf("create migration checkpoint: %w", err)
 	}
 
+	// The startup path is the only one that injects synthetic goose failures
+	// (for the checkpoint/quarantine recovery tests); the hook is applied here,
+	// wrapping the shared pure stepper, so the transient reconcile lift never
+	// sees it. [LAW:composability]
+	step := func() (*goose.MigrationResult, error) {
+		if hook := migrationUpByOneForTest; hook != nil {
+			return hook(ctx, provider)
+		}
+		return s.upByOne(ctx, provider)
+	}
+
 	for {
-		result, gooseErr := s.upByOne(ctx, provider)
+		result, gooseErr := step()
 		if errors.Is(gooseErr, goose.ErrNoNextVersion) {
 			// Success: prune old checkpoints to the retention count.
 			if err := s.PruneCheckpoints(ctx, migrationCheckpointPrefix, migrationCheckpointRetention); err != nil {

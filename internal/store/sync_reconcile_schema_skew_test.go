@@ -312,6 +312,35 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	})
 }
 
+// TestIsReconcileSnapshotNameDisjoint proves the reconcile snapshot classifier
+// is disjoint from the migration and downgrade classifiers — each producer owns
+// its own retention budget, so a prune for one kind must never collect another's
+// snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the third
+// classifier this PR adds.
+func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
+	const ns = "1700000000000000000"
+	recName := ns + "-" + reconcileSnapshotLabel + "-1700000000000000001"
+	migName := ns + "-" + migrationSnapshotLabel + "-1700000000000000001"
+	dgName := ns + "-" + downgradeSnapshotLabel + "-1700000000000000001"
+
+	if !IsReconcileSnapshotName(recName) {
+		t.Fatalf("IsReconcileSnapshotName(%q) = false, want true", recName)
+	}
+	if IsReconcileSnapshotName(migName) {
+		t.Fatalf("IsReconcileSnapshotName(%q) = true, want false (overlap with migration kind)", migName)
+	}
+	if IsReconcileSnapshotName(dgName) {
+		t.Fatalf("IsReconcileSnapshotName(%q) = true, want false (overlap with downgrade kind)", dgName)
+	}
+	// And the reconcile name is claimed by neither of the other two.
+	if IsMigrationSnapshotName(recName) {
+		t.Fatalf("IsMigrationSnapshotName(%q) = true, want false (overlap with reconcile kind)", recName)
+	}
+	if IsDowngradeSnapshotName(recName) {
+		t.Fatalf("IsDowngradeSnapshotName(%q) = true, want false (overlap with reconcile kind)", recName)
+	}
+}
+
 // assertWorkingSetClean fails if the store's Dolt working set has any staged or
 // unstaged change or any held merge conflict. A clean working set after every
 // reconcile outcome is the ticket's stated property: the incident's manual

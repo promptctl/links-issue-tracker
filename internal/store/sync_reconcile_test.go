@@ -56,6 +56,9 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	// behind, so the push fast-forwards.
 	assertSingleParentHead(t, ctx, syncB, res.RemoteHead)
 	assertScratchBranchCleanedUp(t, ctx, syncB)
+	// Property: the linearized outcome — the one that DOES mutate the data branch —
+	// leaves a clean working set (no staged/unstaged residue, no held conflicts).
+	assertWorkingSetClean(t, ctx, syncB)
 	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
