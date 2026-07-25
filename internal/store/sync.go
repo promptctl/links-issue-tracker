@@ -315,6 +315,10 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 				// between the receive and the reconcile, so this is the benign
 				// idempotent case (the divergence was already gone). Nothing to merge.
 				result.State = SyncPullUpToDate
+				// Up-to-date has no divergence, so the timestamp the receive recorded
+				// must not ride along — it would date a fork that is gone, a field
+				// contradicting its state. [LAW:one-source-of-truth]
+				result.OldestDivergedUnix = 0
 			default:
 				// A reconcile state this mapping does not know would otherwise fall
 				// through as the zero-value "" and be rendered downstream as a bland
