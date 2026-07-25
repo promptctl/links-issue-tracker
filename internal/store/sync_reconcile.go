@@ -7,6 +7,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -31,6 +32,34 @@ const reconcileScratchPrefix = "links-reconcile-scratch"
 // through the pure merge.
 func reconcileScratchName() string {
 	return fmt.Sprintf("%s-%d-%d", reconcileScratchPrefix, os.Getpid(), time.Now().UnixNano())
+}
+
+// reconcileSnapshotLabel is the label prefix every reconcile-recovery snapshot
+// carries, disjoint from the migration and downgrade labels so the three
+// producers' snapshots roll off under independent retention budgets and never
+// collect each other. [LAW:one-source-of-truth]
+const reconcileSnapshotLabel = "pre-reconcile"
+
+// reconcileSnapshotRetention bounds how many reconcile-recovery snapshots are
+// kept on disk; older ones roll off via PruneMatching after a successful
+// reconcile. It matches the migration/downgrade budgets — a reconcile is a rare,
+// divergence-only event, so a small history of recovery points is ample.
+const reconcileSnapshotRetention = 10
+
+// IsReconcileSnapshotName reports whether name was stamped by a reconcile (vs.
+// migrate(), Downgrade, `lit snapshots new`, or any other producer). It shares
+// the exact stamped-shape rule with the migration and downgrade classifiers.
+// [LAW:types-are-the-program] the predicate is the exact shape reconcile stamps;
+// a match by accident is impossible without a user mimicking the format.
+func IsReconcileSnapshotName(name string) bool {
+	return isStampedSnapshotName(name, reconcileSnapshotLabel)
+}
+
+// formatReconcileSnapshotLabel returns the label a reconcile-recovery snapshot
+// carries: the trailing timestamp is cosmetic (dbsnapshot.Take already encodes
+// the take-time) but makes the snapshot readable in operator listings.
+func formatReconcileSnapshotLabel(t time.Time) string {
+	return fmt.Sprintf("%s-%d", reconcileSnapshotLabel, t.UTC().UnixNano())
 }
 
 // SyncReconcileState classifies what a single foreground reconcile did with a
@@ -277,9 +306,17 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	}
 
 	// Build the merged commit on the scratch branch: adopt the remote head as its
-	// base and replay the merged result as one forward commit. The data branch is
-	// untouched throughout.
-	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", remoteHead); err != nil {
+	// base, LIFT it to this binary's schema, then replay the merged result as one
+	// forward commit. The lift is required when the remote head is older-schema:
+	// replaceFromExport writes this binary's columns, which the remote commit's
+	// table does not yet have. Lifting first (reusing the migration chain) means
+	// the schema DDL and the merged data land in the SAME replay commit — so the
+	// migration lift, the merge, and the conflict resolution are one committed
+	// unit or nothing, never a half-migrated intermediate. The data branch is
+	// untouched throughout. [LAW:no-ambient-temporal-coupling] no observer sees a
+	// half-merged/half-migrated state — it lives only on the scratch branch until
+	// the single atomic data-branch reset below.
+	if err := s.resetAndLift(ctx, remoteHead); err != nil {
 		return fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
 	if err := s.replaceFromExport(ctx, export, reconcileCommitMessage); err != nil {
@@ -288,6 +325,20 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	mergedCommit, err := readDoltHead(ctx, s.db)
 	if err != nil {
 		return fmt.Errorf("read merged commit: %w", err)
+	}
+
+	// Snapshot-first: capture the pre-mutation filesystem state so this automatic
+	// data-branch advance is reversible via `lit snapshots restore`. Only the
+	// linearized (mutating) outcome reaches here — prose-pending and not-diverged
+	// mutate nothing and take no snapshot ([LAW:dataflow-not-control-flow] the
+	// outcome is the value that gates the snapshot). The data branch is still at
+	// localHead at this point (only the scratch branch moved), so the snapshot
+	// preserves exactly the clone's pre-reconcile local truth. [LAW:no-silent-failure]
+	// a failed snapshot aborts the reconcile BEFORE the data branch moves, rather
+	// than performing an irreversible automatic mutation with no recovery point.
+	guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
+	if _, err := guard.ensure(); err != nil {
+		return fmt.Errorf("snapshot before reconcile: %w", err)
 	}
 
 	// Advance the data branch to the finished merged commit with one atomic reset.
@@ -301,6 +352,13 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 	}
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", mergedCommit); err != nil {
 		return fmt.Errorf("advance %q to merged commit: %w", dataBranch, err)
+	}
+	// The data branch now durably holds the merged result; roll the recovery
+	// snapshots off to the retention budget. IsReconcileSnapshotName is disjoint
+	// from the migration/downgrade classifiers, so this only collects reconcile
+	// snapshots. [LAW:single-enforcer] reconcile owns its own snapshot budget.
+	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
+		return fmt.Errorf("prune reconcile snapshots: %w", err)
 	}
 	result.State = SyncReconcileLinearized
 	result.Pending = nil
@@ -374,12 +432,35 @@ func (s *Store) sweepStaleReconcileScratch(ctx context.Context) {
 	}
 }
 
-// exportAtCommit hard-resets the (scratch) branch to a commit and exports it.
-// Reading at a revision this way reuses the one canonical export path; it is safe
-// because the caller runs it only on the scratch branch, never the data branch.
-// [LAW:single-enforcer]
-func (s *Store) exportAtCommit(ctx context.Context, commit string) (model.Export, error) {
+// resetAndLift hard-resets the (scratch) branch to a commit and then lifts the
+// working set to this binary's registry schema. The reset adopts that commit's
+// schema — which may be OLDER than the binary's when the commit was written by a
+// prior lit version (the multi-machine schema-skew the reconcile must be total
+// over) — so the lift replays the missing migrations' DDL, filling new columns
+// with their NULL/default, before any read or write against the working set. On
+// a commit already at registry max (the common case — the local head is always
+// current) the lift is a no-op. It is safe because the caller runs it only on
+// the throwaway scratch branch, never the data branch.
+// [LAW:types-are-the-program] the reconcile's input domain includes "an anchor
+// at an older schema version"; resetAndLift is what makes that state legal to
+// read and write instead of a raw backend error. [LAW:one-source-of-truth] the
+// lift reuses the migration chain, not a second schema-adaptation path.
+func (s *Store) resetAndLift(ctx context.Context, commit string) error {
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", commit); err != nil {
+		return fmt.Errorf("reset scratch to %q: %w", commit, err)
+	}
+	if err := s.liftWorkingSetToRegistry(ctx); err != nil {
+		return fmt.Errorf("lift %q to current schema: %w", commit, err)
+	}
+	return nil
+}
+
+// exportAtCommit resets the (scratch) branch to a commit, lifts it to the
+// current schema, and exports it. Reading at a revision this way reuses the one
+// canonical export path; it is safe because the caller runs it only on the
+// scratch branch, never the data branch. [LAW:single-enforcer]
+func (s *Store) exportAtCommit(ctx context.Context, commit string) (model.Export, error) {
+	if err := s.resetAndLift(ctx, commit); err != nil {
 		return model.Export{}, fmt.Errorf("read export at %q: %w", commit, err)
 	}
 	return s.Export(ctx)

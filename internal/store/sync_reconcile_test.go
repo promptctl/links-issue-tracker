@@ -125,6 +125,9 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 		t.Fatalf("data branch moved during prose-pending reconcile: head %s -> %s (scratch reads leaked onto the live branch)", headBefore, got)
 	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
+	// Property: a prose-pending reconcile (the non-mutating outcome) also leaves a
+	// clean working set — the scratch reads never leak staged/unstaged residue.
+	assertWorkingSetClean(t, ctx, syncB)
 	if len(res.Pending) != 1 {
 		t.Fatalf("pending prose count = %d, want 1: %+v", len(res.Pending), res.Pending)
 	}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"regexp"
 	"sort"
 	"strings"
 
@@ -13,8 +12,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
-
-var missingRemoteBranchPattern = regexp.MustCompile(`branch "([^"]+)" not found on remote`)
 
 const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 
@@ -167,11 +164,13 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	}
 	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 	result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
-	payload, handledErr := buildSyncPullPayload(remoteName, resolvedBranch, result.Message, err)
-	if handledErr != nil {
-		return handledErr
+	if err != nil {
+		// An explicit pull is not best-effort: a fetch or reconcile failure is
+		// surfaced as a command error, not swallowed the way the background
+		// receive tolerates a transient hiccup. [LAW:no-silent-failure]
+		return err
 	}
-	return printSyncPullPayload(stdout, payload, *verbose)
+	return printSyncPullPayload(stdout, buildSyncPullPayload(remoteName, resolvedBranch, result), *verbose)
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
@@ -414,49 +413,40 @@ func resolveSyncBranch(rootDir string, remote string) (string, error) {
 	return resolvedBranch, nil
 }
 
-func buildSyncPullPayload(remote string, requestedBranch string, output string, runErr error) (map[string]any, error) {
-	if runErr == nil {
+// buildSyncPullPayload renders a completed pull into the structured payload the
+// printer consumes. The outcome variance lives entirely in the result STATE, not
+// in error-string parsing: a branch the remote has never seen is the typed
+// never_synced state (not a raw "not found on remote" backend string), and a
+// divergence that held free text is the typed prose_pending state.
+// [LAW:types-are-the-program] the state is the discriminator; [LAW:dataflow-not-control-flow]
+// one builder, the state selects the fields.
+func buildSyncPullPayload(remote string, branch string, result store.SyncPullResult) map[string]any {
+	switch result.State {
+	case store.SyncPullNeverSynced:
+		return map[string]any{
+			"status":        "skipped",
+			"reason":        "remote_branch_missing",
+			"remote":        remote,
+			"branch":        branch,
+			"next_command":  fmt.Sprintf("lit sync push --remote %s --set-upstream", remote),
+			"retry_command": fmt.Sprintf("lit sync pull --remote %s", remote),
+		}
+	case store.SyncPullProsePending:
+		return map[string]any{
+			"status":          "prose_pending",
+			"remote":          remote,
+			"branch":          branch,
+			"pending":         len(result.Pending),
+			"resolve_command": "lit sync reconcile",
+		}
+	default:
 		return map[string]any{
 			"status": "ok",
+			"state":  string(result.State),
 			"remote": remote,
-			"branch": requestedBranch,
-			"raw":    output,
-		}, nil
+			"branch": branch,
+		}
 	}
-	message := strings.TrimSpace(runErr.Error())
-	missingBranch, matchesMissingBranch := detectMissingRemoteBranch(message, requestedBranch)
-	if !matchesMissingBranch {
-		return nil, runErr
-	}
-	nextCommand := fmt.Sprintf("lit sync push --remote %s --set-upstream", remote)
-	retryCommand := fmt.Sprintf("lit sync pull --remote %s", remote)
-	// [LAW:dataflow-not-control-flow] Sync pull always returns structured payload; outcome variance lives in status/reason fields.
-	return map[string]any{
-		"status":        "skipped",
-		"reason":        "remote_branch_missing",
-		"remote":        remote,
-		"branch":        missingBranch,
-		"next_command":  nextCommand,
-		"retry_command": retryCommand,
-		"raw":           message,
-	}, nil
-}
-
-func detectMissingRemoteBranch(message string, requestedBranch string) (string, bool) {
-	// [LAW:single-enforcer] Remote-branch-missing classification is centralized here to avoid drift across callsites.
-	normalized := strings.ToLower(strings.TrimSpace(message))
-	if !strings.Contains(normalized, "not found on remote") {
-		return "", false
-	}
-	matches := missingRemoteBranchPattern.FindStringSubmatch(message)
-	branch := strings.TrimSpace(requestedBranch)
-	if len(matches) == 2 && strings.TrimSpace(matches[1]) != "" {
-		branch = strings.TrimSpace(matches[1])
-	}
-	if branch == "" {
-		return "", false
-	}
-	return branch, true
 }
 
 func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) error {
@@ -498,21 +488,30 @@ func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) err
 			retryCommand,
 		)
 		return err
+	case "prose_pending":
+		// A divergence settled every code-owned field but a free-text field
+		// diverged on both sides; the reconcile held it rather than pick a side.
+		// Direct the caller to the agent-resolve surface. [LAW:no-silent-failure]
+		resolveCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["resolve_command"]))
+		_, err := fmt.Fprintf(
+			w,
+			"pull held a text conflict on %s/%s; resolve it with `%s`\n",
+			remote,
+			branch,
+			resolveCommand,
+		)
+		return err
 	default:
-		raw, hasRaw := payload["raw"].(string)
 		if !verbose {
 			_, err := fmt.Fprintln(w, "pulled")
 			return err
 		}
-		if hasRaw && strings.TrimSpace(raw) != "" {
-			_, err := fmt.Fprintln(w, raw)
-			return err
-		}
+		state := strings.TrimSpace(fmt.Sprintf("%v", payload["state"]))
 		if branch != "" {
-			_, err := fmt.Fprintf(w, "pulled %s/%s\n", remote, branch)
+			_, err := fmt.Fprintf(w, "pulled %s/%s (%s)\n", remote, branch, state)
 			return err
 		}
-		_, err := fmt.Fprintf(w, "pulled %s\n", remote)
+		_, err := fmt.Fprintf(w, "pulled %s (%s)\n", remote, state)
 		return err
 	}
 }

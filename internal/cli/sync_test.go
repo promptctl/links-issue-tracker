@@ -2,11 +2,11 @@ package cli
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -42,12 +42,11 @@ func TestMapGitRemotesByName(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) {
-	runErr := errors.New(`branch "feature/local-only" not found on remote`)
-	payload, err := buildSyncPullPayload("origin", "feature/local-only", "", runErr)
-	if err != nil {
-		t.Fatalf("buildSyncPullPayload() error = %v", err)
-	}
+func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
+	// A branch the remote has never seen is the typed never_synced state, not a
+	// parsed backend error string — the payload directs the caller to set the
+	// upstream with a deterministic command.
+	payload := buildSyncPullPayload("origin", "feature/local-only", store.SyncPullResult{State: store.SyncPullNeverSynced})
 	if payload["status"] != "skipped" {
 		t.Fatalf("status = %v, want skipped", payload["status"])
 	}
@@ -63,14 +62,29 @@ func TestBuildSyncPullPayloadReturnsSkippedForMissingRemoteBranch(t *testing.T) 
 	}
 }
 
-func TestBuildSyncPullPayloadReturnsErrorForNonMatchingFailure(t *testing.T) {
-	runErr := errors.New("dolt pull origin master: fatal: network unavailable")
-	_, err := buildSyncPullPayload("origin", "master", "", runErr)
-	if err == nil {
-		t.Fatal("expected error for non-matching pull failure")
+func TestBuildSyncPullPayloadProsePendingDirectsToReconcile(t *testing.T) {
+	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{
+		State:   store.SyncPullProsePending,
+		Pending: make([]merge.ProsePending, 2),
+	})
+	if payload["status"] != "prose_pending" {
+		t.Fatalf("status = %v, want prose_pending", payload["status"])
 	}
-	if err.Error() != runErr.Error() {
-		t.Fatalf("error = %v, want %v", err, runErr)
+	if payload["resolve_command"] != "lit sync reconcile" {
+		t.Fatalf("resolve_command = %v, want `lit sync reconcile`", payload["resolve_command"])
+	}
+	if payload["pending"] != 2 {
+		t.Fatalf("pending = %v, want 2", payload["pending"])
+	}
+}
+
+func TestBuildSyncPullPayloadLinearizedIsOK(t *testing.T) {
+	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: store.SyncPullLinearized})
+	if payload["status"] != "ok" {
+		t.Fatalf("status = %v, want ok", payload["status"])
+	}
+	if payload["state"] != "linearized" {
+		t.Fatalf("state = %v, want linearized", payload["state"])
 	}
 }
 
