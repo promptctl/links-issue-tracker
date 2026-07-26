@@ -35,6 +35,16 @@ type Store struct {
 	commitLockPath       string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
+
+	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
+	// change is fully planned and before withMutation acquires the commit lock.
+	// Production callers leave it nil; the concurrency regression test sets it to
+	// commit a foreign-row delete in exactly the window a pre-lock validation
+	// read used to trust, proving the relocated in-tx validation observes it.
+	// [LAW:no-shared-mutable-globals] The seam is per-Store instance state with
+	// an explicit owner, not an ambient package global — so tests holding their
+	// own Store can never race on it (and t.Parallel() stays safe).
+	applyPreMutationHookForTest func()
 }
 
 type NotFoundError struct {
@@ -1018,16 +1028,6 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	return nil
 }
 
-// applyPreMutationHookForTest, if non-nil, fires inside Apply after the change
-// is fully planned and before withMutation acquires the commit lock. Production
-// callers leave it nil; the concurrency regression test reassigns it to commit
-// a foreign-row delete in exactly the window a pre-lock validation read used to
-// trust, proving the relocated in-tx validation observes it. Modeled on
-// migrate_snapshot.go's migrationPostSnapshotHookForTest swap-in pattern.
-// [LAW:no-shared-mutable-globals] exception: test-only injection seam — package
-// private, nil in production, single-owner (the test sets it and clears it).
-var applyPreMutationHookForTest func()
-
 // [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
 // Variability lives in the Change value: nil Action = no transition; empty Fields = no field write.
 // [LAW:types-are-the-program] Every target state is reachable by exactly one action variant;
@@ -1075,7 +1075,7 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 	}
 	needsActionWrite := lw != nil && !lw.isNoop()
 	// Test-only injection point for the plan→apply window; nil in production.
-	if hook := applyPreMutationHookForTest; hook != nil {
+	if hook := s.applyPreMutationHookForTest; hook != nil {
 		hook()
 	}
 	if needsActionWrite || hasFields {
