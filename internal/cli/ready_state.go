@@ -50,6 +50,18 @@ const orphanedThreshold = 6 * time.Hour
 // newFieldAnnotator validates requiredFields against model.Issue JSON fields,
 // then returns an annotator that checks those fields on each issue.
 func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
+	// [LAW:effects-at-boundaries] With no required fields there is nothing to
+	// check, so skip the per-issue JSON marshal (issueFieldValues) entirely and
+	// return a no-op annotator. Output is identical — the general closure below
+	// returns nil for an empty policy anyway — so this is a pure efficiency
+	// short-circuit for the common case (no required_fields configured, and every
+	// store the cross-project rollup opens with a nil policy), and it drops the
+	// speculative marshal error path that could turn a clean read into an error.
+	if len(requiredFields) == 0 {
+		return func(context.Context, model.Issue) ([]annotation.Annotation, error) {
+			return nil, nil
+		}, nil
+	}
 	validFields := issueJSONFieldNames()
 	for _, field := range requiredFields {
 		if _, ok := validFields[field]; !ok {
@@ -626,13 +638,15 @@ func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	return m
 }
 
-// printReadyOutput partitions annotated issues into in-progress, ready, and blocked
-// sections. Ready issues are shown with a preamble and inline dependency context,
-// followed by in-progress work, then a count-by-reason summary for blocked issues.
-func printReadyOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
-	resolved := resolveColumns(columns)
-	var inProgress, ready []annotation.AnnotatedIssue
-	var blocked []IssueReadiness
+// partitionWorkable splits the workable rows into the three buckets `lit ready`
+// presents and the cross-project rollup counts: in-progress work, ready leaves
+// (open and unblocked), and blocked leaves (carried as their readiness so a
+// caller can summarize by reason). An in-progress leaf is in-progress even if it
+// also has blockers, matching the presentation order below.
+// [LAW:one-source-of-truth] The ready/in-flight/blocked partition is defined
+// here once; `lit ready`'s sections and the cross-project counts are the same
+// classification, so a per-project count can never disagree with `lit ready`.
+func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []annotation.AnnotatedIssue, blocked []IssueReadiness) {
 	for i := range issues {
 		readiness := ClassifyReadiness(issues[i].Annotations)
 		switch {
@@ -644,6 +658,15 @@ func printReadyOutput(w io.Writer, columns []string, issues []annotation.Annotat
 			ready = append(ready, issues[i])
 		}
 	}
+	return inProgress, ready, blocked
+}
+
+// printReadyOutput partitions annotated issues into in-progress, ready, and blocked
+// sections. Ready issues are shown with a preamble and inline dependency context,
+// followed by in-progress work, then a count-by-reason summary for blocked issues.
+func printReadyOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
+	resolved := resolveColumns(columns)
+	inProgress, ready, blocked := partitionWorkable(issues)
 
 	unblocksMap := buildUnblocksMap(issues)
 
