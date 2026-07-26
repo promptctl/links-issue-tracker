@@ -173,9 +173,16 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror trace not recorded: %v\n", outcome.traceErr)
 	}
-	// outcome.pushErr (e.g. offline) is already captured in that trace; the
-	// mutation is durable locally and the next push retries, so the mirror stops
-	// cleanly either way.
+	// A remote schema ahead of this binary is NOT the "next push retries" case: it
+	// will never succeed until the binary is upgraded, so surface the one
+	// sync-failure contract to stderr instead of letting it read as a transient
+	// hiccup — the exact "will retry" shrug the sync-skew epic kills.
+	// [LAW:single-enforcer] one adapter, one contract. Other pushErr (e.g. offline)
+	// is already captured in the trace; the mutation is durable locally and the next
+	// push retries, so the mirror stops cleanly either way.
+	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
+		fmt.Fprintln(os.Stderr, failure.blockString())
+	}
 	return nil
 }
 
