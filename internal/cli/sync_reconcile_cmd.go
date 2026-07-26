@@ -148,11 +148,12 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 		// with a held prose conflict on `lit sync pull`). Age is unknown at this surface,
 		// which the unrelated escalation does not use (its severity is fixed, not aged).
 		return SyncFailureError{Failure: SyncFailure{
-			Class:  syncFailureUnrelatedHistories,
-			Remote: remote,
-			Branch: branch,
-			Ahead:  result.Ahead,
-			Behind: result.Behind,
+			Class:     syncFailureUnrelatedHistories,
+			Remote:    remote,
+			Branch:    branch,
+			Ahead:     result.Ahead,
+			Behind:    result.Behind,
+			Inventory: result.Unrelated,
 		}}
 	case store.SyncReconcileProsePending:
 		if resolved {

@@ -110,6 +110,13 @@ type SyncReconcileResult struct {
 	// base/ours/theirs, so the agent surface can merge intent instead of picking a
 	// side. Empty unless State is SyncReconcileProsePending.
 	Pending []merge.ProsePending
+	// Unrelated carries the both-sides issue-id partition (only-local, only-remote,
+	// on-both) so the operator can see what each side holds before choosing a
+	// wholesale/union resolution. Non-nil only for SyncReconcileUnrelated; there is
+	// no base to diff against, so it is read directly off the LocalHead/RemoteHead
+	// anchors. [LAW:types-are-the-program] the field present names the state that
+	// produced it.
+	Unrelated *UnrelatedInventory
 }
 
 // settleFn turns the three-way merge of a divergence into the export to replay as
@@ -254,7 +261,18 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			// surfaced as its own state, never crashed through an absent merge-base.
 			// [LAW:dataflow-not-control-flow] the merge-base's shared discriminant selects
 			// the outcome; the epic's later resolutions flow through this same boundary.
+			//
+			// Read the both-sides inventory off the two anchors while still under the
+			// commit lock — pure AS OF reads that move no branch, so the no-write
+			// invariant above holds — so the surface can enumerate what each side holds
+			// without a second, unlocked query where the heads could shift.
+			// [LAW:no-ambient-temporal-coupling]
+			inventory, err := s.unrelatedInventory(ctx, localHead, remoteHead)
+			if err != nil {
+				return err
+			}
 			result.State = SyncReconcileUnrelated
+			result.Unrelated = inventory
 			return nil
 		}
 
