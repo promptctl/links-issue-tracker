@@ -16,11 +16,12 @@ import (
 // [LAW:decomposition] Running/surfacing, finalizing, and deferring are three
 // distinct acts, each its own handler.
 var reconcileFamily = commandFamily[syncRunFn]{
-	usage: "usage: lit sync reconcile [resolve --resolve ID:FIELD:FINGERPRINT=TEXT ... | abort | take local|remote]",
+	usage: "usage: lit sync reconcile [resolve --resolve ID:FIELD:FINGERPRINT=TEXT ... | abort | take local|remote | combine]",
 	subcommands: []subcommandRow[syncRunFn]{
 		{name: "resolve", payload: runSyncReconcileResolve},
 		{name: "abort", payload: runSyncReconcileAbort},
 		{name: "take", payload: runSyncReconcileTake},
+		{name: "combine", payload: runSyncReconcileCombine},
 	},
 }
 
@@ -165,6 +166,34 @@ func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.In
 	return reportTakeOutcome(stdout, remote, branch, result)
 }
 
+// runSyncReconcileCombine resolves an unrelated-history divergence by COMBINING both
+// sides: the union of every issue, with ids present on both field-merged against no base.
+// It surfaces an on-both prose conflict for inline resolution exactly as the three-way
+// reconcile does (the SAME `lit sync reconcile resolve` finalizes it), so no shared-id
+// free-text is ever auto-picked and no unique issue is dropped. [LAW:no-silent-failure]
+func runSyncReconcileCombine(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync reconcile combine")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if err := guardReconcileInput(fs, "sync reconcile combine"); err != nil {
+		return err
+	}
+	remote, branch, ok, err := freshReconcileTarget(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+		return writeErr
+	}
+	result, err := syncStore.SyncReconcileCombine(ctx, remote, branch)
+	if err != nil {
+		return asSyncFailure(err)
+	}
+	return reportReconcileResult(stdout, remote, branch, result, false)
+}
+
 // parseUnrelatedSide maps the take command's positional to the store resolution
 // value. The accepted words match the inventory the operator just read (`only on
 // local` / `only on remote`), so the choice names the same side the visibility does.
@@ -258,6 +287,25 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case store.SyncReconcileLinearized:
 		_, err := fmt.Fprintln(stdout, "reconciled: the divergence merged into linear history; the next push fast-forwards")
+		return err
+	case store.SyncReconcileCombined:
+		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
+		// asserted: the both-sides partition names the kept-local, kept-remote, and
+		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
+		// describeIDSet renders as explicit "(0)". [LAW:no-silent-failure] [FRAMING:representation]
+		inv := result.Unrelated
+		if inv == nil {
+			inv = &store.UnrelatedInventory{}
+		}
+		_, err := fmt.Fprintf(stdout,
+			"combined: unioned both backlogs onto %s as one forward commit; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\n"+
+				"  kept local-only:  %s\n"+
+				"  kept remote-only: %s\n"+
+				"  field-merged on both: %s\n",
+			remote+"/"+branch,
+			describeIDSet(inv.OnlyLocal),
+			describeIDSet(inv.OnlyRemote),
+			describeIDSet(inv.OnBoth))
 		return err
 	case store.SyncReconcileNotDiverged:
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
