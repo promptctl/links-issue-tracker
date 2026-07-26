@@ -750,6 +750,27 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	return writeEpicContext(ctx, ap.Store, stdout, detail)
 }
 
+// runHistory renders a ticket's state-transition trail — the per-field
+// "from → to" events that `lit show` embeds in its history block — as a
+// dedicated read-only surface. It reads the same GetIssueDetail as `lit show`
+// and renders only the event trail, so the two views share one data source
+// and one formatter (printHistoryEvents). [LAW:one-source-of-truth]
+func runHistory(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	positional, flagArgs := splitArgs(args, 1)
+	fs := newCobraFlagSet("history")
+	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+		return err
+	}
+	if len(positional) != 1 || fs.NArg() != 0 {
+		return UsageError{Message: "usage: lit history <id>"}
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
+	if err != nil {
+		return err
+	}
+	return printIssueHistory(stdout, detail)
+}
+
 func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("update")
