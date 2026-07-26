@@ -57,11 +57,11 @@ func TestWatchGraceEscalates(t *testing.T) {
 	}
 }
 
-// TestWatchNoEscalateWhenDoneRacesGrace pins the escalation guard: a signal
-// arrives (so the timer is armed), but the clean path completes (done closes)
-// before grace elapses — escalation must NOT fire, because main() is already
-// exiting with the correct code. Without the select-on-done guard the timer
-// callback would hard-exit over a cleanly finished shutdown.
+// TestWatchNoEscalateWhenDoneRacesGrace pins the escalation guarantee's other
+// edge: a signal arrives (so the grace timer is running), but the clean path
+// completes (done closes) before grace elapses — escalation must NOT fire,
+// because main() is already exiting with the correct code. watch decides this in
+// one select, so a done closed before the timer deterministically wins.
 func TestWatchNoEscalateWhenDoneRacesGrace(t *testing.T) {
 	sigs := make(chan os.Signal, 1)
 	done := make(chan struct{})

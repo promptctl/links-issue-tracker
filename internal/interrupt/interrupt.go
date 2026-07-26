@@ -107,20 +107,20 @@ func watch(
 	// wedge is hard-exited once grace elapses. This is the guarantee; the cancel
 	// above is only best-effort.
 	//
-	// The callback is guarded against a clean path that finishes right at grace:
-	// once done is closed, main() is already exiting with the correct code, so a
-	// timer that fires in the narrow window before `defer timer.Stop()` runs must
-	// not hard-exit over it. Escalation therefore fires only while the clean path
-	// is still demonstrably outstanding — precisely its contract.
-	timer := time.AfterFunc(grace, func() {
-		select {
-		case <-done:
-		default:
-			escalate(sig)
-		}
-	})
+	// Clean-exit vs. hard-exit is decided in THIS goroutine's single select, not a
+	// timer callback that races done: escalation and the clean-path signal are two
+	// cases of one atomic choice, so a clean path that finishes before grace closes
+	// done first and the select provably takes it — no check-then-act window in
+	// which escalation could fire over a completed shutdown.
+	// [LAW:dataflow-not-control-flow]
+	timer := time.NewTimer(grace)
 	defer timer.Stop()
-	<-done
+	select {
+	case <-done:
+		// Clean path completed within grace; let main() exit with its own code.
+	case <-timer.C:
+		escalate(sig)
+	}
 }
 
 // exitCode maps an interrupt signal to the conventional 128+signum shell exit
