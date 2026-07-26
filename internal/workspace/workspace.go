@@ -130,7 +130,7 @@ func DefaultRemoteBranch(cwd string, remote string) string {
 func Resolve(cwd string) (Info, error) {
 	rootDir, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
-		return Info{}, ErrNotGitRepo
+		return Info{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel in %q", cwd), err)
 	}
 	loc, err := deriveLocation(cwd)
 	if err != nil {
@@ -171,18 +171,7 @@ func deriveLocation(cwd string) (Location, error) {
 	// "not a git repo" error).
 	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
-		// [LAW:no-silent-failure] git exiting non-zero means git ran and judged
-		// cwd not a repository — the legitimate "skip this directory" case that
-		// Discover relies on. But git failing to RUN at all (not installed, not
-		// on PATH, not executable) is infrastructure breakage; collapsing it into
-		// ErrNotGitRepo would let a scan silently report "no stores found" when it
-		// never actually inspected anything. Only the former is the sentinel; the
-		// latter surfaces with context.
-		var exitErr *exec.ExitError
-		if errors.As(err, &exitErr) {
-			return Location{}, ErrNotGitRepo
-		}
-		return Location{}, fmt.Errorf("git rev-parse --git-common-dir in %q: %w", cwd, err)
+		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
 	}
 	if !filepath.IsAbs(gitCommonDir) {
 		absCwd, err := filepath.Abs(cwd)
@@ -225,6 +214,28 @@ func gitOutput(cwd string, args ...string) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// classifyGitError decides whether a failed git invocation means "this directory
+// is not a git repository" (the ErrNotGitRepo sentinel every repo gate skips on)
+// or a real failure that must surface. git of its own accord exiting non-zero —
+// an *exec.ExitError carrying a genuine exit code (>= 0), e.g. 128 for "not a
+// repository" — is the legitimate sentinel case. Everything else is
+// infrastructure breakage that would otherwise masquerade as "no repo here":
+// git failing to run at all (not installed / not on PATH: not an ExitError), or
+// git killed by a signal (ExitCode() == -1: OOM killer, forced kill). Those are
+// wrapped with context so a scan reports the real problem instead of silently
+// returning "no stores found". [LAW:no-silent-failure]
+//
+// [LAW:single-enforcer] Both git repo gates — Resolve's --show-toplevel and
+// deriveLocation's --git-common-dir — route through here, so they cannot drift
+// into classifying the same git failure two different ways.
+func classifyGitError(context string, err error) error {
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+		return ErrNotGitRepo
+	}
+	return fmt.Errorf("%s: %w", context, err)
 }
 
 func normalizeRemoteName(remote string) string {
