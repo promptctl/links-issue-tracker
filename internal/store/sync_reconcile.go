@@ -232,6 +232,19 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 		}
 		result.LocalHead, result.RemoteHead, result.BaseCommit = localHead, remoteHead, baseCommit
 
+		// [LAW:single-enforcer] Refuse BEFORE any scratch branch, snapshot, or write
+		// when the remote head is at a schema this binary cannot produce. Adopting an
+		// ahead remote head here would lift to a no-op (goose sees nothing pending)
+		// and replaceFromExport would then write only this binary's older columns —
+		// authoring a replay commit BELOW the remote head's schema and dropping every
+		// field the newer schema added. That regression IS the 2026-07-08 incident;
+		// the guard reads the remote head's version as data and blocks it. Reusing the
+		// remoteHead anchor already captured means no second read and no window for a
+		// concurrent fetch to shift the decision. [LAW:no-ambient-temporal-coupling]
+		if err := s.guardCommitSchemaAhead(ctx, trimmedRemote, trimmedBranch, remoteHead); err != nil {
+			return err
+		}
+
 		// Sweep any scratch branches a previously-killed reconcile abandoned, then
 		// derive this run's own unique scratch name. The commit lock guarantees no
 		// other reconcile is live, so every existing scratch branch is an orphan.

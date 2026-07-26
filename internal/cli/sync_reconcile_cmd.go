@@ -74,7 +74,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 	}
 	result, err := syncStore.SyncReconcile(ctx, remote, branch)
 	if err != nil {
-		return err
+		return asSyncFailure(err)
 	}
 	return reportReconcileResult(stdout, result, false)
 }
@@ -109,7 +109,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 	}
 	result, err := syncStore.SyncReconcileResolved(ctx, remote, branch, resolutions)
 	if err != nil {
-		return err
+		return asSyncFailure(err)
 	}
 	return reportReconcileResult(stdout, result, true)
 }

@@ -550,6 +550,18 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		return SyncPushResult{}, err
 	}
 	trimmedBranch := strings.TrimSpace(branch)
+	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote whose
+	// head is at a schema this binary cannot produce — otherwise a plain push is
+	// rejected with a raw non-fast-forward string (the exact ignorable line the
+	// sync-skew epic kills) and a --force push would REGRESS the shared remote to
+	// this binary's older schema. The guard needs the resolved tracking ref, so it
+	// runs once the branch is known; an empty branch (push HEAD with no explicit
+	// branch) has no tracking ref to compare against and is left to Dolt.
+	if trimmedBranch != "" {
+		if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
+			return SyncPushResult{}, err
+		}
+	}
 	args := []string{}
 	if setUpstream {
 		args = append(args, "--set-upstream")
