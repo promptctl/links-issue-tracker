@@ -272,6 +272,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessRead, runList)},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runShow)},
+		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
+			Run: r.appCmd(app.AccessRead, runHistory)},
 		{Name: "update", Summary: "Update issue fields", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runUpdate)},
 		{Name: "rank", Summary: "Reorder an issue's rank", GroupID: "operations",
