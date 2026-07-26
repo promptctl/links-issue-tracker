@@ -35,6 +35,21 @@ type Info struct {
 	IssuePrefix  PrefixSpec
 }
 
+// Location is the on-disk geometry of a lit store — every path derived from a
+// git repository's git-common-dir, and nothing that requires reading or writing
+// the store. It is what a filesystem scan can know about a store WITHOUT opening
+// or creating it: Resolve layers store creation, config, and identity on top;
+// Discover uses it to detect a store in place. [LAW:one-source-of-truth] The
+// paths are minted only by deriveLocation, so a discovered Location and the
+// Info Resolve opens for the same repository are the same store by construction.
+type Location struct {
+	GitCommonDir string
+	StorageDir   string
+	ConfigPath   string
+	DatabasePath string
+	DoltRepoPath string
+}
+
 // PrefixSpec is a resolved issue prefix together with its provenance. The
 // value is normalized and non-empty by construction; the only ways to obtain
 // one are ConfiguredPrefix and resolveIssuePrefix, so no consumer ever needs
@@ -116,6 +131,39 @@ func Resolve(cwd string) (Info, error) {
 	if err != nil {
 		return Info{}, ErrNotGitRepo
 	}
+	loc, err := deriveLocation(cwd)
+	if err != nil {
+		return Info{}, err
+	}
+	// [LAW:effects-at-boundaries] deriveLocation is pure geometry; store
+	// creation is the one mutation, gathered here where the write is intended.
+	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
+		return Info{}, fmt.Errorf("create storage dir: %w", err)
+	}
+	cfg, prefix, err := loadOrCreateConfig(rootDir, loc.ConfigPath)
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{
+		RootDir:      rootDir,
+		GitCommonDir: loc.GitCommonDir,
+		StorageDir:   loc.StorageDir,
+		ConfigPath:   loc.ConfigPath,
+		DatabasePath: loc.DatabasePath,
+		DoltRepoPath: loc.DoltRepoPath,
+		WorkspaceID:  cfg.WorkspaceID,
+		IssuePrefix:  prefix,
+	}, nil
+}
+
+// deriveLocation computes the lit store geometry for the git repository
+// containing cwd, purely — the only effects are the git queries that read
+// repository geometry and the symlink canonicalization that reads the
+// filesystem; nothing is created or written. [LAW:effects-at-boundaries]
+// [LAW:single-enforcer] This is the one place cwd becomes a set of store paths,
+// so Resolve (which then creates the store) and Discover (which then only
+// detects it) can never derive different paths for the same repository.
+func deriveLocation(cwd string) (Location, error) {
 	// [LAW:one-source-of-truth] Git owns repository geometry. --git-common-dir is
 	// emitted relative to the invocation cwd (e.g. "../.git" from a subdirectory),
 	// so a relative result must be anchored to the cwd. The original defect
@@ -126,12 +174,12 @@ func Resolve(cwd string) (Info, error) {
 	// "not a git repo" error).
 	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
-		return Info{}, ErrNotGitRepo
+		return Location{}, ErrNotGitRepo
 	}
 	if !filepath.IsAbs(gitCommonDir) {
 		absCwd, err := filepath.Abs(cwd)
 		if err != nil {
-			return Info{}, fmt.Errorf("resolve absolute cwd: %w", err)
+			return Location{}, fmt.Errorf("resolve absolute cwd: %w", err)
 		}
 		gitCommonDir = filepath.Join(absCwd, gitCommonDir)
 	}
@@ -142,32 +190,22 @@ func Resolve(cwd string) (Info, error) {
 	// dolt driver caches its environment per path string and serves the second
 	// spelling a read-only handle, so two spellings of one store become a
 	// read-only conflict. Canonicalizing here collapses every spelling to the
-	// physical path before any storage path is derived from it.
+	// physical path before any storage path is derived from it. It also makes
+	// worktree deduplication exact: every worktree of one repository shares this
+	// canonical common dir, so all of them derive one identical StorageDir.
 	canonicalCommonDir, err := filepath.EvalSymlinks(gitCommonDir)
 	if err != nil {
-		return Info{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
+		return Location{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
 	}
-	gitCommonDir = canonicalCommonDir
-	storageDir := filepath.Join(filepath.Clean(gitCommonDir), "links")
-	configPath := filepath.Join(storageDir, "config.json")
+	gitCommonDir = filepath.Clean(canonicalCommonDir)
+	storageDir := filepath.Join(gitCommonDir, "links")
 	databasePath := filepath.Join(storageDir, "dolt")
-	doltRepoPath := filepath.Join(databasePath, "links")
-	if err := os.MkdirAll(storageDir, 0o755); err != nil {
-		return Info{}, fmt.Errorf("create storage dir: %w", err)
-	}
-	cfg, prefix, err := loadOrCreateConfig(rootDir, configPath)
-	if err != nil {
-		return Info{}, err
-	}
-	return Info{
-		RootDir:      rootDir,
-		GitCommonDir: filepath.Clean(gitCommonDir),
+	return Location{
+		GitCommonDir: gitCommonDir,
 		StorageDir:   storageDir,
-		ConfigPath:   configPath,
+		ConfigPath:   filepath.Join(storageDir, "config.json"),
 		DatabasePath: databasePath,
-		DoltRepoPath: doltRepoPath,
-		WorkspaceID:  cfg.WorkspaceID,
-		IssuePrefix:  prefix,
+		DoltRepoPath: filepath.Join(databasePath, "links"),
 	}, nil
 }
 
