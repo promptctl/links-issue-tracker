@@ -15,13 +15,15 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// disableAutoSyncEnvVar is the process-level kill switch for all automatic sync
+// DisableAutoSyncEnvVar is the process-level kill switch for all automatic sync
 // (the on-change push mirror and the receive). When set to a truthy value, no
 // command schedules a mirror or runs a receive. It exists for environments that
 // must never trigger sync as a side effect of a lit command — CI, sandboxes, and
 // lit's own test suite — and is distinct from `sync.receive = false` (which
-// disables only receive, via config).
-const disableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
+// disables only receive, via config). Exported so out-of-package callers (the
+// cmd/lit signal acceptance test) target the one canonical env-var name rather
+// than a drift-prone literal. [LAW:one-source-of-truth]
+const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
 // burst (an agent running many commands in seconds) triggers at most one fetch
@@ -51,7 +53,7 @@ func shouldSyncAfterMutation(accessMode app.AccessMode, cadence config.SyncCaden
 // read-write engine per path, so the receive must never overlap the command's.
 // [LAW:no-ambient-temporal-coupling]
 func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
-	if isTruthyEnv(os.Getenv(disableAutoSyncEnvVar)) {
+	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
 		return
 	}
 	cfg, err := config.Load(pathspec.New(ws.RootDir))

@@ -13,8 +13,8 @@ import (
 // by TestAutomaticReceiveFastForwardsEstablishedClone, which clears this switch
 // for its own workspace, so disabling it package-wide loses no coverage.
 func TestMain(m *testing.M) {
-	if err := os.Setenv(disableAutoSyncEnvVar, "1"); err != nil {
-		panic("set " + disableAutoSyncEnvVar + ": " + err.Error())
+	if err := os.Setenv(DisableAutoSyncEnvVar, "1"); err != nil {
+		panic("set " + DisableAutoSyncEnvVar + ": " + err.Error())
 	}
 	os.Exit(m.Run())
 }
