@@ -81,15 +81,15 @@ type CreateIssueInput struct {
 	// [LAW:types-are-the-program]
 	IssueType model.IssueType
 	Topic     string
-	ParentID string
+	ParentID  string
 	// Priority is already-parsed domain vocabulary, never a raw flag int —
 	// trust boundaries route through model.ParsePriority (or the
 	// model.CanonicalPriority salvage coercion) before constructing the input.
 	// [LAW:types-are-the-program]
 	Priority model.Priority
 	Assignee string
-	Lane        string
-	Labels      []string
+	Lane     string
+	Labels   []string
 	// Placement decides where the new issue lands in the rank order. Zero value
 	// (RankTop) surfaces fresh work at the top; callers that author an ordered
 	// batch (e.g. preserving creation order) pass RankBottom.
@@ -1018,6 +1018,16 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	return nil
 }
 
+// applyPreMutationHookForTest, if non-nil, fires inside Apply after the change
+// is fully planned and before withMutation acquires the commit lock. Production
+// callers leave it nil; the concurrency regression test reassigns it to commit
+// a foreign-row delete in exactly the window a pre-lock validation read used to
+// trust, proving the relocated in-tx validation observes it. Modeled on
+// migrate_snapshot.go's migrationPostSnapshotHookForTest swap-in pattern.
+// [LAW:no-shared-mutable-globals] exception: test-only injection seam — package
+// private, nil in production, single-owner (the test sets it and clears it).
+var applyPreMutationHookForTest func()
+
 // [LAW:dataflow-not-control-flow] Apply is the single execution path for issue-record changes.
 // Variability lives in the Change value: nil Action = no transition; empty Fields = no field write.
 // [LAW:types-are-the-program] Every target state is reachable by exactly one action variant;
@@ -1064,6 +1074,10 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 		}
 	}
 	needsActionWrite := lw != nil && !lw.isNoop()
+	// Test-only injection point for the plan→apply window; nil in production.
+	if hook := applyPreMutationHookForTest; hook != nil {
+		hook()
+	}
 	if needsActionWrite || hasFields {
 		if err := s.withMutation(ctx, "apply update", func(ctx context.Context, tx *sql.Tx) error {
 			if needsActionWrite {
@@ -1260,15 +1274,15 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// The redirect target traveled through the state machine into the closed
 	// leaf exactly like the resolution — only the redirecting outcomes carry
 	// one, structurally — so the plan reads it back off the post-transition
-	// issue and validates it the way AddRelation validates endpoints: it must
-	// exist and cannot be the issue itself. Validating before the transaction
-	// mirrors the target-existence read AddRelation does outside its mutation.
-	// [LAW:one-source-of-truth] The leaf is the single carrier; there is no
-	// separate outcome re-extraction to drift from it.
+	// issue. Its integrity (target exists, is not the issue itself, is not a
+	// deleted canonical) is validated at APPLY time inside the mutation tx, not
+	// here: validateRedirectTarget reads a FOREIGN row whose retention a
+	// concurrent delete can flip, so the check must run under the same commit
+	// lock as the write it guards, never in this pre-lock plan phase.
+	// [LAW:no-ambient-temporal-coupling] [LAW:one-source-of-truth] The leaf is
+	// the single carrier; there is no separate outcome re-extraction to drift
+	// from it.
 	postRedirect := updated.RedirectTargetValue()
-	if err := s.validateRedirectTarget(ctx, issue.ID, postResolution, postRedirect); err != nil {
-		return transitionWrite{}, err
-	}
 	var redirectTargetArg any
 	if postRedirect != nil {
 		redirectTargetArg = *postRedirect
@@ -1317,14 +1331,26 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	}, nil
 }
 
-// applyTransitionTx writes a planned status transition against tx: the guarded
-// status UPDATE and the change event. It owns only writes, so it composes into
-// any transaction a caller already holds — which is how Apply folds a
-// transition and a field write into one commit. [LAW:single-enforcer]
+// applyTransitionTx writes a planned status transition against tx: it validates
+// the redirect target, then performs the guarded status UPDATE and the change
+// event. The redirect validation lives here rather than in planStatusTransition
+// so the FOREIGN row it reads (the redirect canonical) is read on the same tx,
+// under the same held commit lock, as the write it guards — closing the window a
+// pre-lock plan-phase read left open. [LAW:no-ambient-temporal-coupling]
+// Everything else it does is a write, so it still composes into any transaction
+// a caller already holds — which is how Apply folds a transition and a field
+// write into one commit. [LAW:single-enforcer]
 // The redirect target rides the same UPDATE as status/closed_at/resolution, so
 // a reopen clears the whole close payload atomically — a stale redirect on a
 // live issue is unwritable, not guarded against. [LAW:one-source-of-truth]
 func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionWrite) error {
+	// [LAW:single-enforcer] The redirect target is validated through the one
+	// validation site, reading existence+retention of the canonical on this tx
+	// so a delete of it cannot slip between the check and the write. A
+	// non-redirecting transition carries no target, so this is a no-op there.
+	if err := s.validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
+		return err
+	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
 	result, err := tx.ExecContext(ctx, `UPDATE issues SET status = ?, assignee = ?, updated_at = ?, closed_at = ?, resolution = ?, redirect_target = ? WHERE id = ? AND status = ?`,
 		w.toStatus, w.postAssignee, w.now.Format(time.RFC3339Nano), w.closedAtArg, w.resolutionArg, w.redirectTargetArg, w.issueID, w.fromStatus)
@@ -1448,17 +1474,25 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 // target the post-transition leaf carries. A NEW redirecting close must carry
 // its target (the CLI requires --of; this is the store's integrity floor for
 // any other caller — the leaf type alone admits a target-less redirecting
-// close because legacy rows genuinely occupy that state). A present target is
-// validated the way AddRelation validates endpoints: it must exist and cannot
-// be the issue itself, so the redirect points at a real, distinct ticket.
-// It must also not be trash-bound: a redirect to a Deleted canonical is a
-// dangling pointer by design, while Archived stays legal — "duplicate of
-// something already done" is the most common real redirect (decision on
-// links-recut-relations-61nv.1). Deleted is matched as the specific variant,
-// not a broader frozen notion, so Archived falls into the accept set by the
-// same match. [LAW:single-enforcer] The one validation site for every close
-// path.
-func (s *Store) validateRedirectTarget(ctx context.Context, closingID string, resolution *model.Resolution, target *string) error {
+// close because legacy rows genuinely occupy that state). A present target
+// must exist and cannot be the issue itself, so the redirect points at a real,
+// distinct ticket. It must also not be trash-bound: a redirect to a Deleted
+// canonical is a dangling pointer by design, while Archived stays legal —
+// "duplicate of something already done" is the most common real redirect
+// (decision on links-recut-relations-61nv.1). Deleted is matched as the
+// specific variant, not a broader frozen notion, so Archived falls into the
+// accept set by the same match.
+//
+// [LAW:single-enforcer] The one validation site for every close path.
+// [LAW:no-ambient-temporal-coupling] The canonical's existence and retention
+// are read on the SAME tx that persists the redirect — under the held commit
+// lock — so a concurrent delete of the canonical is either fully before this
+// read (rejected here) or fully after the commit, never in a torn window
+// between an earlier read and the write. currentRetentionTx returns
+// NotFoundError when the row is absent (the existence half) and its retention
+// otherwise (the Deleted half), both decoded through the one
+// RetentionFromTimestamps boundary.
+func (s *Store) validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, resolution *model.Resolution, target *string) error {
 	if target == nil {
 		if resolution != nil && resolution.RedirectsToCanonical() {
 			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
@@ -1468,11 +1502,11 @@ func (s *Store) validateRedirectTarget(ctx context.Context, closingID string, re
 	if *target == closingID {
 		return fmt.Errorf("cannot redirect %s to itself", closingID)
 	}
-	canonical, err := s.GetIssue(ctx, *target)
+	retention, err := currentRetentionTx(ctx, tx, *target)
 	if err != nil {
 		return err
 	}
-	if _, gone := canonical.Retention().(model.Deleted); gone {
+	if _, gone := retention.(model.Deleted); gone {
 		return fmt.Errorf("cannot redirect %s to %s: the canonical issue is deleted", closingID, *target)
 	}
 	return nil
@@ -1511,6 +1545,26 @@ func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.
 		return nil, err
 	}
 	return model.RetentionFromTimestamps(archived, deleted), nil
+}
+
+// requireIssueExistsTx verifies issueID names an issue row on tx, returning
+// NotFoundError when absent. It is the in-tx endpoint existence check relation
+// writes use so the endpoint proven present is the endpoint the edge is written
+// against — the read and the insert share one tx under the held commit lock,
+// closing the window a pre-lock GetIssue left open.
+// [LAW:no-ambient-temporal-coupling] Existence is read where the write happens,
+// not earlier. It accepts retained (archived/deleted) rows exactly as the prior
+// GetIssue did — no deleted_at filter — so relation policy is unchanged; only
+// the read moves under the lock.
+func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID string) error {
+	var one int
+	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM issues WHERE id = ?`, issueID).Scan(&one); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return NotFoundError{Entity: "issue", ID: issueID}
+		}
+		return fmt.Errorf("check issue exists: %w", err)
+	}
+	return nil
 }
 
 // retentionWord renders a Retention state for human-facing conflict messages.

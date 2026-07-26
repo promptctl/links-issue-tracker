@@ -254,12 +254,6 @@ type SetParentInput struct {
 }
 
 func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Relation, error) {
-	if _, err := s.GetIssue(ctx, in.SrcID); err != nil {
-		return model.Relation{}, err
-	}
-	if _, err := s.GetIssue(ctx, in.DstID); err != nil {
-		return model.Relation{}, err
-	}
 	// [LAW:types-are-the-program] in.Type is sealed at the trust boundary by
 	// ParseRelationType; no string re-validation here.
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
@@ -272,6 +266,15 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "add relation", func(ctx context.Context, tx *sql.Tx) error {
+		// [LAW:no-ambient-temporal-coupling] Both endpoints are proven to exist on
+		// this tx, under the held commit lock, so the edge cannot be written
+		// against an endpoint a concurrent delete removed between check and write.
+		if err := requireIssueExistsTx(ctx, tx, in.SrcID); err != nil {
+			return err
+		}
+		if err := requireIssueExistsTx(ctx, tx, in.DstID); err != nil {
+			return err
+		}
 		// [LAW:types-are-the-program] The blocks subgraph must stay acyclic: a
 		// rank order is a total order, and one that honors every blocks edge
 		// exists iff there is no cycle. Rejecting a cycle-closing edge at this
@@ -402,12 +405,6 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 	if in.ChildID == in.ParentID {
 		return model.Relation{}, errors.New("child and parent cannot be the same issue")
 	}
-	if _, err := s.GetIssue(ctx, in.ChildID); err != nil {
-		return model.Relation{}, err
-	}
-	if _, err := s.GetIssue(ctx, in.ParentID); err != nil {
-		return model.Relation{}, err
-	}
 	rel := model.Relation{
 		SrcID:     in.ChildID,
 		DstID:     in.ParentID,
@@ -419,6 +416,15 @@ func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relatio
 		rel.CreatedBy = "unknown"
 	}
 	if err := s.withMutation(ctx, "set parent", func(ctx context.Context, tx *sql.Tx) error {
+		// [LAW:no-ambient-temporal-coupling] Both endpoints are proven to exist on
+		// this tx, under the held commit lock, so the parent edge cannot be written
+		// against an endpoint a concurrent delete removed between check and write.
+		if err := requireIssueExistsTx(ctx, tx, in.ChildID); err != nil {
+			return err
+		}
+		if err := requireIssueExistsTx(ctx, tx, in.ParentID); err != nil {
+			return err
+		}
 		// [LAW:single-enforcer] The single-parent clear-then-insert is owned by
 		// setSingleValuedEdgeTx; SetParent is one validated caller of it, not a
 		// second copy of the cardinality rule.
