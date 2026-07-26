@@ -185,24 +185,32 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 }
 
 // syncFailureFromPull builds the sync-failure contract for a pull outcome the
-// agent must resolve, or held=false for an outcome the payload printer renders.
-// Today only a held free-text conflict is agent-actionable this way; a hard pull
+// agent must resolve, or held=false for an outcome the payload printer renders. Two
+// pull outcomes are agent-actionable this way: a held free-text conflict and a
+// no-common-ancestor divergence — both non-transient, both routed through the one
+// contract so the exit code and the block match `lit sync reconcile`. A hard pull
 // error is already surfaced as a returned error upstream. It is a pure mapping —
 // the clock is supplied as an argument — so the contract shape is unit-testable
 // without a live store. [LAW:dataflow-not-control-flow]
 func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now time.Time) (SyncFailureError, bool) {
-	if result.State != store.SyncPullProsePending {
-		return SyncFailureError{}, false
-	}
-	return SyncFailureError{Failure: SyncFailure{
-		Class:  syncFailureProseHeld,
+	base := SyncFailure{
 		Remote: remote,
 		Branch: branch,
 		Ahead:  result.Ahead,
 		Behind: result.Behind,
 		Age:    ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
-		Fields: result.Pending,
-	}}, true
+	}
+	switch result.State {
+	case store.SyncPullProsePending:
+		base.Class = syncFailureProseHeld
+		base.Fields = result.Pending
+		return SyncFailureError{Failure: base}, true
+	case store.SyncPullUnrelated:
+		base.Class = syncFailureUnrelatedHistories
+		return SyncFailureError{Failure: base}, true
+	default:
+		return SyncFailureError{}, false
+	}
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
