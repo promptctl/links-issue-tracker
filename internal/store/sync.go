@@ -403,11 +403,21 @@ func (s *Store) SyncResetToRemoteHead(ctx context.Context, remote string, branch
 	}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", trackingRef); err != nil {
-			return fmt.Errorf("reset to remote head %q: %w", trackingRef, err)
-		}
-		return nil
+		return resetHardToRef(ctx, s.db, trackingRef)
 	})
+}
+
+// resetHardToRef hard-resets the active branch to a ref, adopting its history
+// wholesale — the embedded equivalent of `git reset --hard <ref>`. It is the one
+// reset primitive shared by SyncResetToRemoteHead (the `lit init` adopt) and the
+// unrelated-histories take-remote resolution, so the two cannot drift on how the
+// wholesale adopt is spelled. [LAW:single-enforcer] The ref is bound by the caller
+// to a real tracking ref; this owns only the reset.
+func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
+	if _, err := callIntProcedure(ctx, db, "DOLT_RESET", "--hard", ref); err != nil {
+		return fmt.Errorf("reset to remote head %q: %w", ref, err)
+	}
+	return nil
 }
 
 // SyncReceiveState classifies what a single background receive did, derived

@@ -16,10 +16,11 @@ import (
 // [LAW:decomposition] Running/surfacing, finalizing, and deferring are three
 // distinct acts, each its own handler.
 var reconcileFamily = commandFamily[syncRunFn]{
-	usage: "usage: lit sync reconcile [resolve --resolve ID:FIELD:FINGERPRINT=TEXT ... | abort]",
+	usage: "usage: lit sync reconcile [resolve --resolve ID:FIELD:FINGERPRINT=TEXT ... | abort | take local|remote]",
 	subcommands: []subcommandRow[syncRunFn]{
 		{name: "resolve", payload: runSyncReconcileResolve},
 		{name: "abort", payload: runSyncReconcileAbort},
+		{name: "take", payload: runSyncReconcileTake},
 	},
 }
 
@@ -130,6 +131,96 @@ func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.I
 	}
 	_, err := fmt.Fprintln(stdout, "reconcile deferred: the clone remains diverged and usable; a later command re-surfaces the divergence, or run `lit sync reconcile` when ready")
 	return err
+}
+
+// runSyncReconcileTake resolves an unrelated-history divergence by taking one side
+// wholesale. The side is a required positional — `local` or `remote` — mapped to the
+// store resolution value; anything else is a usage error. The chosen side survives and
+// the OTHER side's unique issues are discarded BY DESIGN, which the outcome names
+// explicitly rather than dropping silently. [LAW:no-silent-failure]
+func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+	fs := newCobraFlagSet("sync reconcile take")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if fs.NArg() != 1 {
+		return UsageError{Message: "sync reconcile take needs exactly one side: 'local' (keep your backlog) or 'remote' (adopt theirs)"}
+	}
+	choice, err := parseUnrelatedSide(fs.Arg(0))
+	if err != nil {
+		return err
+	}
+	remote, branch, ok, err := freshReconcileTarget(ctx, syncStore, ws)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
+		return writeErr
+	}
+	result, err := syncStore.SyncResolveUnrelated(ctx, remote, branch, choice)
+	if err != nil {
+		return asSyncFailure(err)
+	}
+	return reportTakeOutcome(stdout, remote, branch, result)
+}
+
+// parseUnrelatedSide maps the take command's positional to the store resolution
+// value. The accepted words match the inventory the operator just read (`only on
+// local` / `only on remote`), so the choice names the same side the visibility does.
+// [LAW:no-silent-failure] an unrecognized side is a usage error, never a silent default.
+func parseUnrelatedSide(arg string) (store.UnrelatedResolution, error) {
+	switch strings.ToLower(strings.TrimSpace(arg)) {
+	case "local":
+		return store.TakeLocal, nil
+	case "remote":
+		return store.TakeRemote, nil
+	default:
+		return "", UsageError{Message: fmt.Sprintf("sync reconcile take: unknown side %q; want 'local' or 'remote'", arg)}
+	}
+}
+
+// reportTakeOutcome renders a take-one resolution. Each successful take names the
+// discarded side's unique issues from the both-sides inventory, so the operator sees
+// exactly what was dropped — the discard is reported, never silent. A not-diverged
+// result is the benign no-op (the divergence already cleared); any other state from a
+// take is a bug, surfaced rather than rendered as a bland success. [LAW:no-silent-failure]
+func reportTakeOutcome(stdout io.Writer, remote, branch string, result store.SyncReconcileResult) error {
+	ref := remote + "/" + branch
+	switch result.State {
+	case store.SyncReconcileTookRemote:
+		_, err := fmt.Fprintf(stdout,
+			"took remote: the local backlog now equals %s and sync is clean (no push needed).\nDISCARDED the local-only issue(s), by design: %s\n",
+			ref, describeIDSet(discardedIDs(result.Unrelated, store.TakeRemote)))
+		return err
+	case store.SyncReconcileTookLocal:
+		_, err := fmt.Fprintf(stdout,
+			"took local: your backlog now sits on top of %s as one forward commit; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
+			ref, describeIDSet(discardedIDs(result.Unrelated, store.TakeLocal)))
+		return err
+	case store.SyncReconcileNotDiverged:
+		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
+		return err
+	default:
+		return fmt.Errorf("sync reconcile take: unexpected result state %q — this is a bug; please report it", result.State)
+	}
+}
+
+// discardedIDs is the side the take drops: taking remote discards the local-only
+// issues, taking local discards the remote-only issues. A nil inventory (defensively)
+// yields no ids, which describeIDSet renders as an explicit "(0)".
+func discardedIDs(inv *store.UnrelatedInventory, choice store.UnrelatedResolution) []string {
+	if inv == nil {
+		return nil
+	}
+	switch choice {
+	case store.TakeRemote:
+		return inv.OnlyLocal
+	case store.TakeLocal:
+		return inv.OnlyRemote
+	default:
+		return nil
+	}
 }
 
 // reportReconcileResult renders a reconcile outcome. A prose-pending result prints
