@@ -17,10 +17,9 @@ import (
 func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 	var out bytes.Buffer
 	ws := workspace.Info{
-		StorageDir:   "/tmp/store",
-		WorkspaceID:  "ws-id",
-		IssuePrefix:  testIssuePrefix(t, "test"),
-		GitCommonDir: "/tmp/repo/.git",
+		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
+		WorkspaceID: "ws-id",
+		IssuePrefix: testIssuePrefix(t, "test"),
 	}
 	if err := printWorkspaceIdentity(&out, ws); err != nil {
 		t.Fatalf("printWorkspaceIdentity() error = %v", err)

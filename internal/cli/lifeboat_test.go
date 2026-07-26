@@ -27,10 +27,10 @@ func seedWorkspace(t *testing.T) workspace.Info {
 		t.Fatalf("close seed workspace: %v", err)
 	}
 	return workspace.Info{
-		RootDir:      root,
-		DatabasePath: canonical,
-		WorkspaceID:  "test-workspace-id",
-		IssuePrefix:  testIssuePrefix(t, "test"),
+		Location:    workspace.Location{DatabasePath: canonical},
+		RootDir:     root,
+		WorkspaceID: "test-workspace-id",
+		IssuePrefix: testIssuePrefix(t, "test"),
 	}
 }
 

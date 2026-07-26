@@ -133,6 +133,39 @@ func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
 	}
 }
 
+// TestClassifyGitError pins the git-error classification the repo gates share:
+// git exiting non-zero of its own accord is the ErrNotGitRepo sentinel, while a
+// binary that cannot run or a process killed by a signal is surfaced, not
+// silently treated as "not a repository". The three cases are produced by real
+// exec failures rather than fabricated errors, so the test exercises the exact
+// error shapes production sees.
+func TestClassifyGitError(t *testing.T) {
+	// git's fatal exit code (128) — what rev-parse returns for "not a
+	// repository" / "not a work tree": the legitimate sentinel case.
+	fatalExit := exec.Command("sh", "-c", "exit 128").Run()
+	if got := classifyGitError("probe", fatalExit); got != ErrNotGitRepo {
+		t.Fatalf("classifyGitError(exit 128) = %v, want ErrNotGitRepo sentinel", got)
+	}
+
+	// A non-128 exit is NOT "not a repository" — it must surface, not be skipped.
+	otherExit := exec.Command("sh", "-c", "exit 3").Run()
+	if got := classifyGitError("probe", otherExit); got == nil || got == ErrNotGitRepo {
+		t.Fatalf("classifyGitError(exit 3) = %v, want a surfaced error", got)
+	}
+
+	// Binary not found — infrastructure failure, must surface (not the sentinel).
+	notFound := exec.Command("lit-no-such-binary-xyzzy").Run()
+	if got := classifyGitError("probe", notFound); got == nil || got == ErrNotGitRepo {
+		t.Fatalf("classifyGitError(not found) = %v, want a surfaced error", got)
+	}
+
+	// Killed by a signal — ExitCode() is -1, must surface, not skip as "no repo".
+	signaled := exec.Command("sh", "-c", "kill -TERM $$").Run()
+	if got := classifyGitError("probe", signaled); got == nil || got == ErrNotGitRepo {
+		t.Fatalf("classifyGitError(signal) = %v, want a surfaced error", got)
+	}
+}
+
 func TestResolveFailsOutsideGit(t *testing.T) {
 	_, err := Resolve(t.TempDir())
 	if err == nil {

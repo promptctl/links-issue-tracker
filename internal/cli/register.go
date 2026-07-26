@@ -314,6 +314,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runWorkspace(stdout, ws, args)
 			})},
+		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory)", GroupID: "maintenance",
+			Run: func(args []string) error { return runStores(stdout, args) }},
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runPrefix(stdout, ws, args)
