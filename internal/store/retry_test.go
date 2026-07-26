@@ -87,9 +87,12 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 // WorkspaceWriteBlockedError — not the raw transient — while still preserving the
 // backend cause for diagnosis. [FRAMING:representation]
 func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.T) {
+	// Shape the input the way production does — through wrapCommitWorkingSetError,
+	// the real entry a Dolt commit error flows through — so the test is a true map
+	// of the production error, not a bare-string approximation.
 	results := make([]error, 0, transientRetryMaxAttempts)
 	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
-		results = append(results, errors.New("Error 1105: cannot update manifest: database is read only"))
+		results = append(results, wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only")))
 	}
 	op := &fakeRetryOperation{results: results}
 

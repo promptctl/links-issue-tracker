@@ -69,7 +69,11 @@ func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 	err := store.WorkspaceWriteBlockedError{
 		Cause: errors.New("dolt commit working set: Error 1105: cannot update manifest: database is read only"),
 	}
-	WriteCommandError(&stderr, err)
+	// A write blocked by another holder is a retryable resource-busy condition, not
+	// a merge conflict — it exits ExitGeneric, the same family as "workspace busy".
+	if code := WriteCommandError(&stderr, err); code != ExitGeneric {
+		t.Fatalf("exitCode = %d, want %d (ExitGeneric)", code, ExitGeneric)
+	}
 	out := stderr.String()
 	if !strings.Contains(out, "another lit process is holding this workspace open for writing") {
 		t.Fatalf("missing holder-aware headline: %q", out)
