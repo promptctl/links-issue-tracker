@@ -366,7 +366,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	assertForbiddenAbsent(t, withGaps)
 
 	// Snapshot only: lossy-rollback line surfaces the verbatim snapshot
-	// name; the proactive lit-downgrade line is suppressed because no
+	// name; the proactive lit-upgrade line is suppressed because no
 	// producer version is recorded.
 	snapOnly := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion: 7,
@@ -382,21 +382,28 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	if !strings.Contains(snapOnly, "LOSSY") {
 		t.Errorf("snapshot-only message did not flag the rollback as lossy: %q", snapOnly)
 	}
-	if strings.Contains(snapOnly, "lit downgrade --to") {
-		t.Errorf("snapshot-only message included downgrade line without producer version: %q", snapOnly)
+	if strings.Contains(snapOnly, "lit upgrade --to") {
+		t.Errorf("snapshot-only message included upgrade line without producer version: %q", snapOnly)
 	}
 	assertForbiddenAbsent(t, snapOnly)
 
-	// Producer version only: lit-downgrade line surfaces the verbatim
-	// version; the lossy-rollback path is named as unavailable so the user
-	// knows reinstall is their only path.
+	// Producer version only: the workspace is ahead of this binary, so the
+	// remediation is a NEWER binary — `lit upgrade --to <producer>` — not a
+	// schema reverse. The lossy-rollback path is named as unavailable so the
+	// user knows upgrading is their lossless path.
 	verOnly := (&UnsupportedSchemaVersionError{
 		WorkspaceVersion:      7,
 		MaxSupported:          3,
 		ProducerBinaryVersion: "v0.4.2",
 	}).Error()
-	if !strings.Contains(verOnly, "lit downgrade --to v0.4.2") {
-		t.Errorf("producer-only message did not surface the version verbatim: %q", verOnly)
+	if !strings.Contains(verOnly, "lit upgrade --to v0.4.2") {
+		t.Errorf("producer-only message did not surface the upgrade target verbatim: %q", verOnly)
+	}
+	// The workspace-ahead refusal must NOT tell the user to downgrade the
+	// schema: this old binary lacks the down-migrations, so `lit downgrade`
+	// here is a footgun the .3 remediation retires.
+	if strings.Contains(verOnly, "lit downgrade") {
+		t.Errorf("workspace-ahead refusal wrongly suggested lit downgrade: %q", verOnly)
 	}
 	if !strings.Contains(verOnly, "no pre-upgrade snapshot available") {
 		t.Errorf("producer-only message did not declare the snapshot path unavailable: %q", verOnly)
@@ -413,8 +420,8 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 	if !strings.Contains(both, "lit snapshots restore 1700000000-pre-migrate-1700000000") {
 		t.Errorf("both-populated message missing snapshot line: %q", both)
 	}
-	if !strings.Contains(both, "lit downgrade --to v0.4.2") {
-		t.Errorf("both-populated message missing downgrade line: %q", both)
+	if !strings.Contains(both, "lit upgrade --to v0.4.2") {
+		t.Errorf("both-populated message missing upgrade line: %q", both)
 	}
 	assertForbiddenAbsent(t, both)
 }
@@ -473,7 +480,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 		t.Errorf("SnapshotName %q does not match the migration-stamped shape", refusal.SnapshotName)
 	}
 	msg := refusal.Error()
-	if !strings.Contains(msg, "lit downgrade --to "+sentinel) {
+	if !strings.Contains(msg, "lit upgrade --to "+sentinel) {
 		t.Errorf("Error() did not surface the producer version verbatim: %q", msg)
 	}
 	if !strings.Contains(msg, "lit snapshots restore "+refusal.SnapshotName) {

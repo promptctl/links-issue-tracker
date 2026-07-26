@@ -67,12 +67,15 @@ func (e *downgradeMigrationFailedError) Error() string {
 func (e *downgradeMigrationFailedError) Unwrap() error { return e.Cause }
 
 // DowngradeTargetAheadError reports that the requested target sits strictly
-// above the workspace's current applied version. The forward upgrade path
-// lives on Open; downgrade refuses to impersonate it. (target == current is
+// above the workspace's current applied version — a request to move the schema
+// FORWARD, which is `lit upgrade`'s job, not downgrade's. (target == current is
 // a no-op handled in Downgrade itself, not this error type.)
 //
 // [LAW:types-are-the-program] Distinct refusal causes are distinct types, not
-// a kind field on a generic DowngradeError.
+// a kind field on a generic DowngradeError. This is the mirror of
+// UpgradeTargetBehindError (cli): each direction refuses the other's job and
+// names the sibling command, so version traversal has exactly two entry points
+// and neither impersonates the other [LAW:one-type-per-behavior].
 type DowngradeTargetAheadError struct {
 	Current int64
 	Target  int64
@@ -80,7 +83,7 @@ type DowngradeTargetAheadError struct {
 
 func (e *DowngradeTargetAheadError) Error() string {
 	return fmt.Sprintf(
-		"cannot downgrade to v%d: workspace is already at v%d (use the normal forward upgrade path)",
+		"cannot downgrade to v%d: workspace is already at v%d — that is a forward move; use `lit upgrade` instead",
 		e.Target, e.Current,
 	)
 }

@@ -69,7 +69,7 @@ func runDowngradeWith(
 	if fs.NArg() != 0 {
 		return UsageError{Message: "usage: lit downgrade --to <version>"}
 	}
-	tag, err := normalizeDowngradeTag(*to)
+	tag, err := normalizeReleaseTag(*to, "downgrade")
 	if err != nil {
 		return err
 	}
@@ -111,20 +111,34 @@ func runDowngradeWith(
 	return err
 }
 
-// normalizeDowngradeTag accepts either "v0.4.1" or "0.4.1" and returns the
-// v-prefixed form the resolver requires. Mirrors mkmanifest's tag/version
-// distinction: the v-prefixed tag is the URL path segment.
-func normalizeDowngradeTag(in string) (string, error) {
+// normalizeReleaseTag is the shared --to normalizer for both version-traversal
+// commands (downgrade and upgrade): it accepts either "v0.4.1" or "0.4.1" and
+// returns the v-prefixed form the resolver requires. verb ("downgrade" /
+// "upgrade") only colours the error text — the accept shape is identical because
+// the target is one thing (a release tag), whichever direction the traversal
+// runs. Mirrors mkmanifest's tag/version distinction: the v-prefixed tag is the
+// URL path segment.
+// [LAW:one-source-of-truth] one tag grammar, not a per-command copy that could
+// drift on what a legal tag is; both callsites invoke it directly, so there is
+// no per-direction wrapper to echo this rule.
+func normalizeReleaseTag(in string, verb string) (string, error) {
 	t := strings.TrimSpace(in)
 	if t == "" {
-		return "", ValidationError{Message: "downgrade: --to <version> is required"}
+		// One message covers both an omitted flag (default "") and a
+		// whitespace-only value — both TrimSpace to "" — without a branch
+		// [LAW:dataflow-not-control-flow]. "requires a non-empty version" is true
+		// for either, where "is required" wrongly implied the flag was absent.
+		return "", ValidationError{Message: verb + ": --to requires a non-empty version"}
 	}
 	if !strings.HasPrefix(t, "v") {
 		t = "v" + t
 	}
 	// Reject obvious URL-path foot-guns; resolver re-validates the v-prefix.
+	// [LAW:one-type-per-behavior] An invalid tag is the same class of failure as a
+	// missing one — bad --to input — so both return ValidationError (exit 3), not
+	// a plain error that would dispatch to the generic exit 1.
 	if strings.ContainsAny(t, "/\\") || strings.Contains(t, "..") || strings.ContainsAny(t, " \t\r\n") {
-		return "", fmt.Errorf("downgrade: --to %q is not a valid release tag", in)
+		return "", ValidationError{Message: fmt.Sprintf("%s: --to %q is not a valid release tag", verb, in)}
 	}
 	return t, nil
 }

@@ -132,7 +132,7 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 	}
 }
 
-func TestNormalizeDowngradeTag(t *testing.T) {
+func TestNormalizeReleaseTag(t *testing.T) {
 	cases := []struct {
 		in      string
 		want    string
@@ -141,25 +141,43 @@ func TestNormalizeDowngradeTag(t *testing.T) {
 		{"v0.4.1", "v0.4.1", ""},
 		{"0.4.1", "v0.4.1", ""},
 		{" v0.4.1 ", "v0.4.1", ""},
-		{"", "", "required"},
+		{"", "", "non-empty version"},
+		{"   ", "", "non-empty version"}, // whitespace-only trims to empty, same class as missing
 		{"v0.4.1/etc", "", "not a valid"},
 		{"v0.4..1", "", "not a valid"},
 		{"v0 .4.1", "", "not a valid"},
 	}
-	for _, c := range cases {
-		got, err := normalizeDowngradeTag(c.in)
-		if c.wantErr != "" {
-			if err == nil || !strings.Contains(err.Error(), c.wantErr) {
-				t.Errorf("normalizeDowngradeTag(%q) err = %v; want contains %q", c.in, err, c.wantErr)
+	// Exercise BOTH verbs: the accept/reject shape is verb-independent, but verb
+	// colours the error text, so a regression in either direction's message must
+	// be caught. [LAW:one-source-of-truth] one grammar, two error surfaces.
+	for _, verb := range []string{"downgrade", "upgrade"} {
+		for _, c := range cases {
+			got, err := normalizeReleaseTag(c.in, verb)
+			if c.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), c.wantErr) {
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %v; want contains %q", c.in, verb, err, c.wantErr)
+				}
+				// The verb prefixes every error, so a rename of the command's
+				// error framing surfaces here rather than silently.
+				if err != nil && !strings.HasPrefix(err.Error(), verb+":") {
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %q; want %q-prefixed", c.in, verb, err, verb)
+				}
+				// Both flavors of bad --to input are the same failure class and
+				// must exit alike: ValidationError (exit 3), never a plain error
+				// (exit 1). [LAW:one-type-per-behavior]
+				var ve ValidationError
+				if !errors.As(err, &ve) {
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %v (%T); want ValidationError", c.in, verb, err, err)
+				}
+				continue
 			}
-			continue
-		}
-		if err != nil {
-			t.Errorf("normalizeDowngradeTag(%q) err = %v; want nil", c.in, err)
-			continue
-		}
-		if got != c.want {
-			t.Errorf("normalizeDowngradeTag(%q) = %q; want %q", c.in, got, c.want)
+			if err != nil {
+				t.Errorf("normalizeReleaseTag(%q, %q) err = %v; want nil", c.in, verb, err)
+				continue
+			}
+			if got != c.want {
+				t.Errorf("normalizeReleaseTag(%q, %q) = %q; want %q", c.in, verb, got, c.want)
+			}
 		}
 	}
 }

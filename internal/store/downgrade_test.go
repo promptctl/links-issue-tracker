@@ -9,11 +9,11 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/pressly/goose/v3"
+	"github.com/pressly/goose/v3/database"
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/pressly/goose/v3"
-	"github.com/pressly/goose/v3/database"
 )
 
 // openWorkspaceForDowngrade opens a fresh workspace at registry-max — every
@@ -44,6 +44,64 @@ func snapshotCount(t *testing.T, doltRoot string) int {
 		t.Fatalf("readdir snapshots: %v", err)
 	}
 	return len(entries)
+}
+
+// TestAppliedSchemaVersionMatchesRecorded pins the exported reader `lit upgrade`
+// consults for its backward-move refusal: on a goose-managed workspace it
+// returns the same recorded version DowngradeTargetAheadError compares against.
+func TestAppliedSchemaVersionMatchesRecorded(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openWorkspaceForDowngrade(t)
+
+	recorded, err := st.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() = %v", err)
+	}
+	if recorded <= 0 {
+		t.Fatalf("recordedMigrationVersion() = %d; want a managed workspace at a real version", recorded)
+	}
+	applied, err := st.AppliedSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("AppliedSchemaVersion() = %v", err)
+	}
+	if applied != recorded {
+		t.Errorf("AppliedSchemaVersion() = %d; want %d (must equal the recorded/applied version)", applied, recorded)
+	}
+}
+
+// TestAppliedSchemaVersionZeroForNonManaged pins the other half of the reader's
+// contract: a workspace that is NOT goose-managed reports applied version 0. This
+// is the fact the `lit upgrade` backward-move check leans on — if
+// classifyMigrationState ever populated appliedVersion on a non-managed path, the
+// guard would compare against a bogus version. Dropping goose_db_version after a
+// normal open reclassifies the workspace as phaseAdopt (canonical tables present,
+// no goose table, no issue_history), the realistic non-managed state; phaseFresh
+// (no tables at all) is unreachable here because the reader's caller opens through
+// OpenForRead, which requires an initialized database.
+func TestAppliedSchemaVersionZeroForNonManaged(t *testing.T) {
+	ctx := context.Background()
+	st, _ := openWorkspaceForDowngrade(t)
+
+	// Sanity: managed workspace reports a real version before we perturb it.
+	managed, err := st.AppliedSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("AppliedSchemaVersion() (managed) = %v", err)
+	}
+	if managed <= 0 {
+		t.Fatalf("AppliedSchemaVersion() (managed) = %d; want > 0", managed)
+	}
+
+	// Drop the goose bookkeeping so the next classify sees a pre-goose (adopt)
+	// workspace: canonical tables remain, but there is no applied-version record.
+	mustExec(t, ctx, st, `DROP TABLE goose_db_version`)
+
+	adopt, err := st.AppliedSchemaVersion(ctx)
+	if err != nil {
+		t.Fatalf("AppliedSchemaVersion() (adopt) = %v", err)
+	}
+	if adopt != 0 {
+		t.Errorf("AppliedSchemaVersion() on a non-managed workspace = %d; want 0", adopt)
+	}
 }
 
 // TestDowngradeTargetEqualIsNoOp pins the no-op branch: target == current
@@ -390,8 +448,8 @@ func stampGooseVersion(t *testing.T, ctx context.Context, st *Store, version int
 
 // Compile-time guards: the typed errors satisfy `error` and unwrap cleanly.
 var (
-	_ error          = (*DowngradeTargetAheadError)(nil)
-	_ error          = (*DowngradeBelowBaselineError)(nil)
-	_ error          = (*DowngradeRollbackError)(nil)
+	_ error = (*DowngradeTargetAheadError)(nil)
+	_ error = (*DowngradeBelowBaselineError)(nil)
+	_ error = (*DowngradeRollbackError)(nil)
 	_ dbsnapshot.Snapshot
 )

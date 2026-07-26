@@ -326,6 +326,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
 		{Name: "downgrade", Summary: "Reverse schema migrations and atomically install a prior lit binary", GroupID: "maintenance",
 			Run: r.appCmd(app.AccessWrite, runDowngrade)},
+		{Name: "upgrade", Summary: "Atomically install a newer lit binary to operate a workspace whose schema is ahead of this one", GroupID: "maintenance",
+			Run: r.wsCmd(runUpgrade)},
 		{Name: "bulk", Summary: "Bulk issue operations", GroupID: "operations",
 			Run: r.familyCmd(bulkFamily), Subcommands: bulkSubcommands},
 	}
