@@ -200,6 +200,37 @@ func TestPrintCrossProjectRollupAllErroredSkipsTable(t *testing.T) {
 	}
 }
 
+// TestPrintCrossProjectRollupCloseWarningKeepsCounts pins the intermediate
+// state: a store that read cleanly but whose read-only close warned still shows
+// its counts in the table AND a distinct `~` close-warning note — the warning
+// never suppresses the valid data the way a read error does.
+func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
+	rows := []projectRollup{
+		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, InFlight: 1, Blocked: 0,
+			CloseErr: errors.New("engine failed to release lock")},
+	}
+	var out bytes.Buffer
+	if err := printCrossProjectRollup(&out, rows); err != nil {
+		t.Fatalf("printCrossProjectRollup() error = %v", err)
+	}
+	got := out.String()
+	// Counts still render in the table (the read succeeded)...
+	countLine := lineContaining(t, got, "alpha")
+	for _, want := range []string{"3", "1", "0"} {
+		if !strings.Contains(countLine, want) {
+			t.Fatalf("count line %q missing count %q — a close warning must not suppress counts", countLine, want)
+		}
+	}
+	// ...and the close warning appears as a distinct `~` note, not a `!` error row.
+	warnLine := lineContaining(t, got, "close warning")
+	if !strings.HasPrefix(strings.TrimSpace(warnLine), "~") {
+		t.Fatalf("close-warning line %q is not marked with a leading '~'", warnLine)
+	}
+	if strings.Contains(got, "! /repos/alpha") {
+		t.Fatalf("a close warning must not render as a '!' error row:\n%s", got)
+	}
+}
+
 // TestGatherCrossProjectRollupUnreadableStoreIsErrorRow drives the gather path:
 // a tree of two discovered-but-unopenable stores yields two error rows rather
 // than a fatal error, so one broken store never aborts the whole overview.

@@ -89,19 +89,26 @@ func runLsAt(ctx context.Context, stdout io.Writer, args []string) error {
 	return printIssueLines(stdout, issues, nil, nil)
 }
 
-// projectRollup is one project's row in the cross-project overview: either its
-// workable counts (the store read cleanly) or the error that made it unreadable.
-// A non-nil Err discriminates an error row; StorageDir identifies the project in
-// both cases, and Label is its friendlier issue-prefix name when config was read.
-// [LAW:types-are-the-program] The presence of Err IS the row kind — the renderer
-// dispatches on it once rather than every caller re-asking "did this store work".
+// projectRollup is one project's row in the cross-project overview. It carries
+// three outcomes, discriminated by its two error fields:
+//   - Err != nil            → the store could not be read; the counts are unset.
+//   - Err == nil, CloseErr == nil → read cleanly; the counts are valid.
+//   - Err == nil, CloseErr != nil → read cleanly (counts valid) but the read-only
+//     close warned afterward.
+//
+// [LAW:types-are-the-program] Splitting Err from CloseErr keeps "couldn't read the
+// store" distinct from "read fine, cleanup warned" so a close fault never
+// suppresses already-computed counts. rollupLocation sets CloseErr only when Err
+// is nil, so the illegal Err+CloseErr combination is never constructed. StorageDir
+// identifies the project in every outcome; Label is its issue-prefix name.
 type projectRollup struct {
 	Label      string // issue prefix from config; falls back to StorageDir
 	StorageDir string
 	Ready      int
 	InFlight   int
 	Blocked    int
-	Err        error
+	Err        error // store unreadable — counts unset
+	CloseErr   error // read succeeded (counts valid) but read-only close warned
 }
 
 // runOverview renders a holistic cross-project view: it discovers every lit store
@@ -175,12 +182,12 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 		return row
 	}
 	// [LAW:no-silent-failure] A read-only close failure (e.g. the embedded Dolt
-	// engine failing to release its locks) surfaces rather than being discarded —
-	// but only when no substantive error already occurred, so an open/classify
-	// failure always takes priority over a mere cleanup fault.
+	// engine failing to release its locks) surfaces as CloseErr rather than being
+	// discarded — and only when no substantive error already occurred, so it never
+	// displaces an open/classify failure nor suppresses already-computed counts.
 	defer func() {
 		if cerr := st.Close(); cerr != nil && row.Err == nil {
-			row.Err = cerr
+			row.CloseErr = cerr
 		}
 	}()
 	// nil required-fields opts out of ONLY the per-repo required_fields policy (the
@@ -254,6 +261,16 @@ func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 	for _, row := range errored {
 		if _, err := fmt.Fprintf(w, "! %s: %v\n", row.StorageDir, row.Err); err != nil {
 			return err
+		}
+	}
+	// A close warning rides after the counts, marked distinctly from a read error
+	// (`~` vs `!`): the store WAS read and its counts above are valid — only the
+	// read-only cleanup warned. [LAW:no-silent-failure]
+	for _, row := range readable {
+		if row.CloseErr != nil {
+			if _, err := fmt.Fprintf(w, "~ %s: close warning: %v\n", row.StorageDir, row.CloseErr); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

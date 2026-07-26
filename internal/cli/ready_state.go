@@ -50,6 +50,18 @@ const orphanedThreshold = 6 * time.Hour
 // newFieldAnnotator validates requiredFields against model.Issue JSON fields,
 // then returns an annotator that checks those fields on each issue.
 func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
+	// [LAW:effects-at-boundaries] With no required fields there is nothing to
+	// check, so skip the per-issue JSON marshal (issueFieldValues) entirely and
+	// return a no-op annotator. Output is identical — the general closure below
+	// returns nil for an empty policy anyway — so this is a pure efficiency
+	// short-circuit for the common case (no required_fields configured, and every
+	// store the cross-project rollup opens with a nil policy), and it drops the
+	// speculative marshal error path that could turn a clean read into an error.
+	if len(requiredFields) == 0 {
+		return func(context.Context, model.Issue) ([]annotation.Annotation, error) {
+			return nil, nil
+		}, nil
+	}
 	validFields := issueJSONFieldNames()
 	for _, field := range requiredFields {
 		if _, ok := validFields[field]; !ok {
