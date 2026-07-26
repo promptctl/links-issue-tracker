@@ -150,7 +150,15 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	if refsErr == nil && !hasRefs {
+	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface it so
+	// an explicit pull reports the real ls-remote cause (a cancelled ctx yields
+	// context.Canceled here) rather than falling through to the misleading "default
+	// branch unavailable" that DefaultRemoteBranch's swallowed error would produce.
+	// This matches the receive path, so receive/pull/push treat refsErr identically.
+	if refsErr != nil {
+		return fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
 		payload := map[string]any{
 			"status": "skipped",
 			"reason": "remote_empty",
@@ -319,7 +327,14 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
 	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	if refsErr == nil && !hasRefs {
+	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface the
+	// original ls-remote cause (a cancelled ctx yields context.Canceled here) rather
+	// than dropping it and letting a later Dolt-store push error mask it. Mirrors the
+	// receive path so receive/pull/push treat refsErr identically.
+	if refsErr != nil {
+		return syncPushOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
 		return syncPushOutcome{
 			status:  "skipped",
 			reason:  "remote_empty",
