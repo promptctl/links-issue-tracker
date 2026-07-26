@@ -204,6 +204,25 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 	}
 }
 
+func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
+	res := &stubResolver{target: newFakeTarget()}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, res, inst, fixedBinPath("/p/lit", nil))
+	var usage UsageError
+	if !errors.As(err, &usage) {
+		t.Fatalf("err = %v (%T); want UsageError for an extra positional arg", err, err)
+	}
+	if !strings.Contains(usage.Error(), "usage: lit upgrade --to <version>") {
+		t.Errorf("usage error text = %q; want the upgrade usage line", usage.Error())
+	}
+	// The NArg guard runs before resolve/read/install — none must fire.
+	if res.called || sr.called || inst.called {
+		t.Errorf("extra-arg guard leaked: resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
+	}
+}
+
 func TestRunUpgradeMissingTagIsRequired(t *testing.T) {
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2}
