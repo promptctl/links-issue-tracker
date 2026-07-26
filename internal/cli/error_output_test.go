@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 
@@ -18,6 +19,13 @@ func TestCommandErrorReason(t *testing.T) {
 		{"not found", store.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		{"unsupported output flag", UnsupportedError{Feature: "--output"}, "unsupported_output_flag"},
 		{"generic", UsageError{Message: "bad"}, "usage_error"},
+		// A write blocked by another store holder is its own reason, and wins over
+		// the transient-contention fallthrough it unwraps to. links-sync-s3r6 #3.
+		{
+			"workspace write blocked",
+			store.WorkspaceWriteBlockedError{Cause: errors.New("Error 1105: cannot update manifest: database is read only")},
+			"workspace_write_blocked",
+		},
 	}
 	for _, tc := range tests {
 		tc := tc
@@ -44,5 +52,29 @@ func TestWriteCommandError(t *testing.T) {
 	}
 	if !strings.Contains(out, "remediation: Run `lit --help`") {
 		t.Fatalf("missing remediation line: %q", out)
+	}
+}
+
+// TestWriteCommandErrorWorkspaceWriteBlocked pins defect #3 of links-sync-s3r6:
+// a write refused because another process holds the store surfaces the holder-
+// aware headline and its resolution steps — never the raw "database is read only"
+// line as the whole message. [FRAMING:representation]
+func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
+	var stderr bytes.Buffer
+	err := store.WorkspaceWriteBlockedError{
+		Cause: errors.New("dolt commit working set: Error 1105: cannot update manifest: database is read only"),
+	}
+	WriteCommandError(&stderr, err)
+	out := stderr.String()
+	if !strings.Contains(out, "another lit process is holding this workspace open for writing") {
+		t.Fatalf("missing holder-aware headline: %q", out)
+	}
+	if !strings.Contains(out, "remediation:") || !strings.Contains(out, "ps aux | grep") {
+		t.Fatalf("missing holder remediation steps: %q", out)
+	}
+	// The backend detail is preserved for diagnosis, but demoted behind the holder
+	// sentence — it is present as a parenthetical, not the headline.
+	if !strings.Contains(out, "backend detail:") {
+		t.Fatalf("backend cause not preserved for diagnosis: %q", out)
 	}
 }

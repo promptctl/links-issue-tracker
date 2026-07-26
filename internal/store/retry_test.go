@@ -81,6 +81,69 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 	}
 }
 
+// TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly pins defect #3
+// of links-sync-s3r6: a manifest-read-only that survives the entire retry budget
+// is a foreign writer holding the store, so it surfaces as the terminal
+// WorkspaceWriteBlockedError — not the raw transient — while still preserving the
+// backend cause for diagnosis. [FRAMING:representation]
+func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.T) {
+	results := make([]error, 0, transientRetryMaxAttempts)
+	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
+		results = append(results, errors.New("Error 1105: cannot update manifest: database is read only"))
+	}
+	op := &fakeRetryOperation{results: results}
+
+	err := retryTransientGCContention(
+		context.Background(),
+		op.run,
+		noRotate,
+		func(int) time.Duration { return 0 },
+		func(context.Context, time.Duration) error { return nil },
+	)
+	var blocked WorkspaceWriteBlockedError
+	if !errors.As(err, &blocked) {
+		t.Fatalf("error = %v (%T), want WorkspaceWriteBlockedError", err, err)
+	}
+	if !strings.Contains(blocked.Error(), "another lit process") {
+		t.Fatalf("blocked message = %q, want it to name the holder", blocked.Error())
+	}
+	// The backend cause chain is preserved so diagnosis still sees the transient
+	// classification underneath the terminal holder error. [LAW:no-silent-failure]
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("write-blocked error dropped its transient cause chain: %v", err)
+	}
+	if op.calls != transientRetryMaxAttempts {
+		t.Fatalf("op.calls = %d, want %d", op.calls, transientRetryMaxAttempts)
+	}
+}
+
+// TestRetryTransientGCContentionKeepsExhaustedGCResetTransient guards the
+// discriminator: only manifest-read-only (a foreign holder) promotes; a persistent
+// online-GC reset is an intra-process condition and must stay the plain transient
+// error, never the holder message.
+func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) {
+	results := make([]error, 0, transientRetryMaxAttempts)
+	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
+		results = append(results, errors.New("this connection was established when this server performed an online garbage collection. please reconnect."))
+	}
+	op := &fakeRetryOperation{results: results}
+
+	err := retryTransientGCContention(
+		context.Background(),
+		op.run,
+		noRotate,
+		func(int) time.Duration { return 0 },
+		func(context.Context, time.Duration) error { return nil },
+	)
+	var blocked WorkspaceWriteBlockedError
+	if errors.As(err, &blocked) {
+		t.Fatalf("GC-reset exhaustion wrongly promoted to WorkspaceWriteBlockedError: %v", err)
+	}
+	if !errors.Is(err, ErrTransientGCContention) {
+		t.Fatalf("error = %v, want ErrTransientGCContention", err)
+	}
+}
+
 func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 	op := &fakeRetryOperation{
 		results: []error{
