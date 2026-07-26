@@ -216,23 +216,30 @@ func gitOutput(cwd string, args ...string) (string, error) {
 	return strings.TrimSpace(string(out)), nil
 }
 
+// gitFatalExitCode is git's universal exit code for a fatal condition — the code
+// `rev-parse` returns both for "not a git repository" and "this operation must
+// be run in a work tree", the two ways a directory legitimately fails to be a
+// lit-usable repository.
+const gitFatalExitCode = 128
+
 // classifyGitError decides whether a failed git invocation means "this directory
-// is not a git repository" (the ErrNotGitRepo sentinel every repo gate skips on)
-// or a real failure that must surface. git of its own accord exiting non-zero —
-// an *exec.ExitError carrying a genuine exit code (>= 0), e.g. 128 for "not a
-// repository" — is the legitimate sentinel case. Everything else is
-// infrastructure breakage that would otherwise masquerade as "no repo here":
-// git failing to run at all (not installed / not on PATH: not an ExitError), or
-// git killed by a signal (ExitCode() == -1: OOM killer, forced kill). Those are
-// wrapped with context so a scan reports the real problem instead of silently
-// returning "no stores found". [LAW:no-silent-failure]
+// is not a lit-usable git repository" (the ErrNotGitRepo sentinel every repo
+// gate skips on) or a real failure that must surface. Only git exiting with its
+// fatal code (128) is the sentinel — that is exactly what rev-parse returns for
+// a non-repository or a work-tree-less repo. Everything else would otherwise
+// masquerade as "no repo here": git failing to run at all (not installed / not
+// on PATH: not an ExitError), git killed by a signal (ExitCode() == -1: OOM
+// killer, forced kill), or any other non-128 exit. Those are wrapped with
+// context so a scan reports the real problem instead of silently returning "no
+// stores found". Keying on the numeric code — not on git's human stderr text —
+// keeps the classification locale-independent. [LAW:no-silent-failure]
 //
 // [LAW:single-enforcer] Both git repo gates — Resolve's --show-toplevel and
 // deriveLocation's --git-common-dir — route through here, so they cannot drift
 // into classifying the same git failure two different ways.
 func classifyGitError(context string, err error) error {
 	var exitErr *exec.ExitError
-	if errors.As(err, &exitErr) && exitErr.ExitCode() >= 0 {
+	if errors.As(err, &exitErr) && exitErr.ExitCode() == gitFatalExitCode {
 		return ErrNotGitRepo
 	}
 	return fmt.Errorf("%s: %w", context, err)

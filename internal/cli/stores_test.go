@@ -69,22 +69,19 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 }
 
 // TestRunStoresPropagatesDiscoverError pins the error contract: when Discover
-// fails (here, git cannot resolve because PATH is empty), runStores returns the
-// error rather than printing an empty success. [LAW:behavior-not-structure]
+// fails, runStores returns the error rather than printing an empty success. A
+// non-existent root makes the filesystem walk fail deterministically, without
+// coupling the test to git-resolution mechanics. [LAW:behavior-not-structure]
 func TestRunStoresPropagatesDiscoverError(t *testing.T) {
-	root := t.TempDir()
-	repo := filepath.Join(root, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
-		t.Fatalf("mkdir repo: %v", err)
-	}
-	gitInit(t, repo)
-	addLitStore(t, repo)
-
-	t.Setenv("PATH", "")
+	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
-	if err := runStores(&out, []string{root}); err == nil {
+	err := runStores(&out, []string{missing})
+	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("runStores() emitted %q before failing; want no output on the error path", out.String())
 	}
 }
 

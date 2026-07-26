@@ -140,10 +140,17 @@ func TestResolveYieldsOnePhysicalStorePerSpelling(t *testing.T) {
 // exec failures rather than fabricated errors, so the test exercises the exact
 // error shapes production sees.
 func TestClassifyGitError(t *testing.T) {
-	// git ran and exited non-zero — the legitimate "not a repository" case.
-	plainExit := exec.Command("sh", "-c", "exit 3").Run()
-	if got := classifyGitError("probe", plainExit); got != ErrNotGitRepo {
-		t.Fatalf("classifyGitError(exit 3) = %v, want ErrNotGitRepo sentinel", got)
+	// git's fatal exit code (128) — what rev-parse returns for "not a
+	// repository" / "not a work tree": the legitimate sentinel case.
+	fatalExit := exec.Command("sh", "-c", "exit 128").Run()
+	if got := classifyGitError("probe", fatalExit); got != ErrNotGitRepo {
+		t.Fatalf("classifyGitError(exit 128) = %v, want ErrNotGitRepo sentinel", got)
+	}
+
+	// A non-128 exit is NOT "not a repository" — it must surface, not be skipped.
+	otherExit := exec.Command("sh", "-c", "exit 3").Run()
+	if got := classifyGitError("probe", otherExit); got == nil || got == ErrNotGitRepo {
+		t.Fatalf("classifyGitError(exit 3) = %v, want a surfaced error", got)
 	}
 
 	// Binary not found — infrastructure failure, must surface (not the sentinel).
