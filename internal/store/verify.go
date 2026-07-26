@@ -355,3 +355,17 @@ func setDifference(a, b map[string]bool) []string {
 	sort.Strings(out)
 	return out
 }
+
+// setIntersection returns the sorted members present in both a and b. It is the
+// sibling of setDifference: together the two differences and this intersection
+// partition the union of two id sets into three disjoint, sorted slices.
+func setIntersection(a, b map[string]bool) []string {
+	var out []string
+	for k := range a {
+		if b[k] {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}

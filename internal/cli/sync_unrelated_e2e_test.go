@@ -35,7 +35,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, producer, "commit", "-m", "seed")
 	runGit(t, producer, "push", "origin", "HEAD")
 	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task")
+	producerID := firstIssueID(t, runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task"))
 
 	// Consumer initializes its OWN backlog while the remote still has no lit data —
 	// so it keeps its own bootstrap root instead of adopting the producer's. The two
@@ -45,7 +45,7 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	runGit(t, consumer, "config", "user.email", "b@b.co")
 	runGit(t, consumer, "config", "user.name", "bravo")
 	runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
-	runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task")
+	consumerID := firstIssueID(t, runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task"))
 
 	// Producer publishes its history to the shared branch.
 	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
@@ -66,6 +66,20 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	}
 	if strings.Contains(msg, "no rows in result set") || strings.Contains(msg, `read export at ""`) {
 		t.Fatalf("reconcile leaked the pre-fix obscure base-shaped error:\n%s", msg)
+	}
+
+	// The block enumerates the both-sides partition of the two known issue sets: the
+	// consumer's ticket is only-local, the producer's is only-remote, and — since the
+	// two stores generated ids independently — nothing is on both.
+	for _, want := range []string{
+		"WHAT EACH SIDE HOLDS",
+		"only on local:  (1): " + consumerID,
+		"only on remote: (1): " + producerID,
+		"on both:        (0)",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("reconcile block missing partition line %q:\n%s", want, msg)
+		}
 	}
 
 	// No partial write: the consumer still holds its own ticket and is still diverged

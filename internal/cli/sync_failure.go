@@ -95,6 +95,12 @@ type SyncFailure struct {
 	RemoteSchemaVersion int64
 	LocalSupportedMax   int64
 	RemoteProducer      string
+	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
+	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
+	// take one side wholesale or union the two, the operator must see what each side
+	// holds; this is that visibility, rendered as its own section of the block.
+	// [LAW:types-are-the-program] the field present names the class that produced it.
+	Inventory *store.UnrelatedInventory
 }
 
 // remoteSchemaAheadFailure builds the sync-failure contract for a store
@@ -172,6 +178,13 @@ func (f SyncFailure) blockString() string {
 
 	// (2) What is wrong, in domain terms — the backend string is not the headline.
 	fmt.Fprintf(&b, "WHAT HAPPENED: %s\n\n", f.whatLine())
+
+	// (2b) What each side holds — the both-sides partition, present only for the
+	// unrelated-histories class. The loop runs every call; inventoryLines yields
+	// nothing for the other classes, so this adds no branch. [LAW:dataflow-not-control-flow]
+	for _, line := range f.inventoryLines() {
+		fmt.Fprintf(&b, "%s\n", line)
+	}
 
 	// (3) How to resolve — the exact commands, in order, for this class.
 	b.WriteString("HOW TO RESOLVE (run in order):\n")
@@ -318,6 +331,36 @@ func (f SyncFailure) agePhrase() string {
 	default:
 		return "under a minute"
 	}
+}
+
+// inventoryLines renders the both-sides issue-id partition as its own labeled
+// section — what only local holds, what only the remote holds, and what both carry
+// — so the operator sees the concrete inventory before choosing take-one or union.
+// It returns nil for every class but unrelated-histories (and for a defensively
+// absent inventory), so the renderer emits nothing for them; the trailing blank
+// element separates the section from the resolution steps below.
+// [FRAMING:representation] the partition is the map of what each side holds.
+func (f SyncFailure) inventoryLines() []string {
+	if f.Inventory == nil {
+		return nil
+	}
+	return []string{
+		"WHAT EACH SIDE HOLDS (issue ids):",
+		"  only on local:  " + describeIDSet(f.Inventory.OnlyLocal),
+		"  only on remote: " + describeIDSet(f.Inventory.OnlyRemote),
+		"  on both:        " + describeIDSet(f.Inventory.OnBoth),
+		"",
+	}
+}
+
+// describeIDSet renders one partition slice as its count and members, so an empty
+// side reads as an explicit "(0)" rather than a blank the reader must interpret.
+// [LAW:no-silent-failure] the absence of ids on a side is stated, not left blank.
+func describeIDSet(ids []string) string {
+	if len(ids) == 0 {
+		return "(0)"
+	}
+	return fmt.Sprintf("(%d): %s", len(ids), strings.Join(ids, ", "))
 }
 
 // describeHeldFields names the held free-text fields for the WHAT line, so the

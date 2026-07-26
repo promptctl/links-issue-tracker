@@ -47,6 +47,110 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	}
 }
 
+// TestSyncFailureBlockUnrelatedInventory pins the both-sides partition rendering:
+// when the failure carries an inventory, the block enumerates each side's issue ids
+// under its own labeled cell, an empty side reads as an explicit "(0)", and a
+// non-empty side names its count and members. This is the ticket's visibility — see
+// what each side holds before choosing take-one or union.
+func TestSyncFailureBlockUnrelatedInventory(t *testing.T) {
+	failure := SyncFailure{
+		Class:  syncFailureUnrelatedHistories,
+		Remote: "origin",
+		Branch: "master",
+		Ahead:  3,
+		Behind: 2,
+		Inventory: &store.UnrelatedInventory{
+			OnlyLocal:  []string{"proj-local1", "proj-local2"},
+			OnlyRemote: []string{"proj-remote1"},
+			OnBoth:     []string{"proj-shared1"},
+		},
+	}
+	block := failure.blockString()
+
+	if !strings.Contains(block, "WHAT EACH SIDE HOLDS") {
+		t.Fatalf("block missing the both-sides inventory section:\n%s", block)
+	}
+	for _, want := range []string{
+		"only on local:  (2): proj-local1, proj-local2",
+		"only on remote: (1): proj-remote1",
+		"on both:        (1): proj-shared1",
+	} {
+		if !strings.Contains(block, want) {
+			t.Errorf("inventory section missing %q:\n%s", want, block)
+		}
+	}
+}
+
+// TestSyncFailureBlockUnrelatedInventoryEmptySide proves a side with no issues
+// renders as an explicit "(0)" rather than a blank the reader must interpret, and
+// that a nil inventory (any other class) emits no inventory section at all.
+func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
+	withEmpty := SyncFailure{
+		Class:  syncFailureUnrelatedHistories,
+		Remote: "origin",
+		Branch: "master",
+		Inventory: &store.UnrelatedInventory{
+			OnlyLocal:  []string{"proj-local1"},
+			OnlyRemote: nil,
+			OnBoth:     nil,
+		},
+	}
+	block := withEmpty.blockString()
+	if !strings.Contains(block, "only on remote: (0)") {
+		t.Errorf("empty remote side did not render as (0):\n%s", block)
+	}
+	if !strings.Contains(block, "on both:        (0)") {
+		t.Errorf("empty on-both did not render as (0):\n%s", block)
+	}
+
+	// A class with no inventory emits no inventory section — the loop yields nothing.
+	noInventory := SyncFailure{Class: syncFailureUnrelatedHistories, Remote: "origin", Branch: "master"}
+	if strings.Contains(noInventory.blockString(), "WHAT EACH SIDE HOLDS") {
+		t.Errorf("a failure with no inventory still rendered the section:\n%s", noInventory.blockString())
+	}
+}
+
+// TestReportReconcileResultUnrelatedCarriesInventory proves the reconcile surface
+// forwards the store's both-sides partition into the rendered contract, so the
+// operator sees what each side holds on `lit sync reconcile`.
+func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
+	var sink strings.Builder
+	err := reportReconcileResult(&sink, "origin", "master", store.SyncReconcileResult{
+		State:  store.SyncReconcileUnrelated,
+		Ahead:  1,
+		Behind: 1,
+		Unrelated: &store.UnrelatedInventory{
+			OnlyLocal:  []string{"proj-onlylocal"},
+			OnlyRemote: []string{"proj-onlyremote"},
+		},
+	}, false)
+	if err == nil {
+		t.Fatalf("reportReconcileResult returned nil for an unrelated result")
+	}
+	for _, want := range []string{"proj-onlylocal", "proj-onlyremote", "WHAT EACH SIDE HOLDS"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("reconcile contract missing %q:\n%s", want, err.Error())
+		}
+	}
+}
+
+// TestSyncFailureFromPullUnrelatedCarriesInventory proves `lit sync pull` forwards
+// the same partition through the same contract, so pull and reconcile show the
+// identical both-sides view of one divergence.
+func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
+	inv := &store.UnrelatedInventory{OnlyLocal: []string{"proj-l"}, OnBoth: []string{"proj-b"}}
+	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
+		State:     store.SyncPullUnrelated,
+		Unrelated: inv,
+	}, time.Now())
+	if !held {
+		t.Fatalf("syncFailureFromPull returned held=false for an unrelated pull")
+	}
+	if failure.Failure.Inventory != inv {
+		t.Fatalf("pull failure did not carry the store's inventory: got %v, want %v", failure.Failure.Inventory, inv)
+	}
+}
+
 // TestReportReconcileResultUnrelatedExitsConflict proves the reconcile surface maps
 // an unrelated-histories result to the one sync-failure contract at ExitConflict —
 // the same exit a held prose conflict gives — rather than a bland success line.

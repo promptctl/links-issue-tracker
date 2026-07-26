@@ -84,6 +84,11 @@ type SyncPullResult struct {
 	// so a held-conflict surface can escalate by age. Zero unless the pull met a
 	// divergence. Carried from the receive that classified the freshness.
 	OldestDivergedUnix int64 `json:"oldest_diverged_unix,omitempty"`
+	// Unrelated carries the both-sides issue-id partition, non-nil only for
+	// SyncPullUnrelated. Carried straight off the reconcile that detected the
+	// no-common-ancestor divergence, so the pull surface enumerates the same
+	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
+	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
 }
 
 type SyncPushResult struct {
@@ -319,8 +324,11 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 				// No common ancestor: nothing merged, nothing committed. The divergence
 				// is real and still present, so the ahead/behind counts and the fork
 				// timestamp the receive recorded ride along unchanged — the fork the
-				// receive saw is the fork this reports. [LAW:one-source-of-truth]
+				// receive saw is the fork this reports. [LAW:one-source-of-truth] The
+				// both-sides inventory the reconcile read off the two anchors rides along
+				// too, so the pull surface shows what each side holds.
 				result.State = SyncPullUnrelated
+				result.Unrelated = rec.Unrelated
 			case SyncReconcileNotDiverged:
 				// Under the single lock a push race cannot resolve the divergence
 				// between the receive and the reconcile, so this is the benign
