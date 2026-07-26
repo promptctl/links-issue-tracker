@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"sort"
@@ -342,6 +343,59 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 		t.Fatalf("data branch moved during a refused take: %s -> %s", headBefore, got)
 	}
 	assertWorkingSetClean(t, ctx, syncB)
+}
+
+// TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote proves take-local shares
+// the three-way path's schema-ahead refusal: because it authors a replay commit ON the
+// remote head, a remote at a schema this binary cannot produce would make it author a
+// commit BELOW that schema (dropping newer fields) and regress the shared remote on
+// push. It must refuse and mutate nothing — while take-remote, which adopts the remote
+// head wholesale and authors no replay commit, is exempt and proceeds. [LAW:single-enforcer]
+func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	// A seeds the remote at the current schema, then advances its head to a future
+	// schema and pushes; B forks an UNRELATED clone (own root, own issue) and fetches,
+	// so B is unrelated-diverged from a schema-ahead remote head.
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, "v9.9.0", UpdateIssueInput{Lane: strptr("from-a")})
+	forkUnrelatedClone(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+
+	// take-local: refused with the schema-ahead contract, no write.
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal)
+	var ahead *RemoteSchemaAheadError
+	if !errors.As(err, &ahead) {
+		t.Fatalf("take-local onto schema-ahead remote = %v, want *RemoteSchemaAheadError", err)
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("refused take-local still moved the local head: %s -> %s", headBefore, got)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+
+	// take-remote: exempt — it adopts the schema-ahead head wholesale (the recovery that
+	// gets a stale binary the newer data), so it proceeds rather than refusing.
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	if err != nil {
+		t.Fatalf("take-remote onto schema-ahead remote errored, want it exempt: %v", err)
+	}
+	if res.State != SyncReconcileTookRemote {
+		t.Fatalf("take-remote state = %q, want %q", res.State, SyncReconcileTookRemote)
+	}
+	if got := headCommit(t, ctx, syncB); got == headBefore {
+		t.Fatalf("take-remote did not adopt the remote head (local head unchanged at %s)", got)
+	}
 }
 
 // TestUnrelatedResolutionValid pins the boundary guard: only the two real sides are

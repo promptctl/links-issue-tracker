@@ -54,10 +54,13 @@ func (r UnrelatedResolution) valid() bool {
 // carried on the result so the surface can report exactly what was dropped, never
 // silently. [FRAMING:representation] the result names the discard.
 //
-// It is snapshot-guarded and GC-retry-wrapped exactly like the three-way reconcile —
-// the take is destructive, so a pre-mutation recovery point matters even more here.
-// CONSTRAINT (embedded Dolt one-RW-engine-per-path): runs INLINE/foreground on the
-// caller's own engine, never a background worker.
+// It is snapshot-guarded and GC-retry-wrapped like the three-way reconcile — the take
+// is destructive, so a pre-mutation recovery point matters even more here. take-local,
+// which authors a replay commit on the remote head, also shares the three-way path's
+// schema-ahead refusal (guardCommitSchemaAhead); take-remote, which adopts the remote
+// head wholesale, authors no replay commit and is exempt. CONSTRAINT (embedded Dolt
+// one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
+// background worker.
 func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice UnrelatedResolution) (SyncReconcileResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
@@ -127,6 +130,18 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	case TakeLocal:
+		// [LAW:single-enforcer] Refuse a schema-ahead remote BEFORE any mutation, exactly
+		// as the three-way reconcile does: take-local authors a replay commit ON the
+		// remote head (commitReplayAndAdvance → resetAndLift + replaceFromExport), so if
+		// the remote head is at a schema this binary cannot produce, that replay would
+		// author a commit BELOW it — dropping every field the newer schema added and, on
+		// push, regressing the shared remote. That is the 2026-07-08 incident shape; the
+		// guard reads the remote head's version as data and blocks it. take-REMOTE is
+		// exempt: it adopts the remote head wholesale (resetHardToRef), authoring no
+		// replay commit, so a schema-ahead remote is a safe adopt, not a regression.
+		if err := s.guardCommitSchemaAhead(ctx, remote, branch, plan.remoteHead); err != nil {
+			return err
+		}
 		// Sweep any scratch branch a previously-killed run abandoned, then derive this
 		// run's unique name; the commit lock guarantees any existing scratch is an orphan.
 		s.sweepStaleReconcileScratch(ctx)
