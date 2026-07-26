@@ -1348,7 +1348,7 @@ func (s *Store) applyTransitionTx(ctx context.Context, tx *sql.Tx, w transitionW
 	// validation site, reading existence+retention of the canonical on this tx
 	// so a delete of it cannot slip between the check and the write. A
 	// non-redirecting transition carries no target, so this is a no-op there.
-	if err := s.validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
+	if err := validateRedirectTarget(ctx, tx, w.post.ID, w.post.ResolutionValue(), w.post.RedirectTargetValue()); err != nil {
 		return err
 	}
 	// [LAW:dataflow-not-control-flow] Status transitions always execute one guarded write; contention is modeled by affected row count.
@@ -1492,7 +1492,11 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 // NotFoundError when the row is absent (the existence half) and its retention
 // otherwise (the Deleted half), both decoded through the one
 // RetentionFromTimestamps boundary.
-func (s *Store) validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, resolution *model.Resolution, target *string) error {
+//
+// [LAW:composability] A free function of (ctx, tx, values): it depends on no
+// Store state, so it carries no receiver — its signature advertises exactly
+// what it reads, matching its siblings currentRetentionTx / requireIssueExistsTx.
+func validateRedirectTarget(ctx context.Context, tx *sql.Tx, closingID string, resolution *model.Resolution, target *string) error {
 	if target == nil {
 		if resolution != nil && resolution.RedirectsToCanonical() {
 			return fmt.Errorf("closing as %s requires a canonical target issue to redirect to", *resolution)
