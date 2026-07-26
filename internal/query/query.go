@@ -59,10 +59,12 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	if incoming.Limit > 0 {
 		filter.Limit = incoming.Limit
 	}
-	// Sort keys concatenate: flag-supplied keys (base) first, then query-supplied
-	// keys, forming one multi-key ordering rather than either grammar clobbering
-	// the other.
-	filter.SortBy = append(filter.SortBy, incoming.SortBy...)
+	// [LAW:one-type-per-behavior] Sort keys merge like every other filter slice —
+	// flag-supplied keys (base) first, then query-supplied keys, with exact
+	// duplicates absorbed — rather than being the lone slice that bypasses the
+	// shared dedup-merge. Distinct keys (including same-field/different-direction)
+	// stay in order, forming one multi-key ordering.
+	filter.SortBy = mergeSlice(filter.SortBy, incoming.SortBy)
 	// [LAW:dataflow-not-control-flow] Visibility is monotonic — asking to include
 	// archived/deleted from EITHER the flags (base) or the query (incoming)
 	// includes them, so the merge is a plain OR with no conflict to detect.
@@ -134,6 +136,14 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 			// [LAW:no-silent-failure] A non-numeric limit is a typo, never a
 			// silent fallback to the uncapped default.
 			return fmt.Errorf("limit must be an integer, got %q", value)
+		}
+		if limit < 0 {
+			// [LAW:no-silent-failure] A negative limit is always a typo; without
+			// this, Merge's `> 0` guard (and the store's `capLimit`, which treats
+			// `<= 0` as uncapped) would swallow it and silently return everything.
+			// Zero stays legal — it IS the uncapped default, matching `--limit 0`,
+			// so rejecting it would break flag/query parity on a valid value.
+			return fmt.Errorf("limit must be non-negative, got %q", value)
 		}
 		filter.Limit = limit
 		return nil

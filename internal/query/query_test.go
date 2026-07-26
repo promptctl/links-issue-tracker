@@ -103,6 +103,49 @@ func TestQuerySortRejectsBadDirection(t *testing.T) {
 	}
 }
 
+// TestQueryLimitRejectsNegative pins that a negative limit is a loud error, not
+// a value silently swallowed by Merge's `> 0` guard or the store's `<= 0`
+// uncap. [LAW:no-silent-failure]
+func TestQueryLimitRejectsNegative(t *testing.T) {
+	if _, err := Parse(`limit:-5`); err == nil {
+		t.Fatal("expected error for negative limit")
+	}
+}
+
+// TestQueryLimitZeroIsUncappedNotRejected pins that limit:0 stays legal: it is
+// the uncapped default, matching `--limit 0`, so rejecting it would break the
+// flag/query parity this grammar exists to provide.
+func TestQueryLimitZeroIsUncappedNotRejected(t *testing.T) {
+	parsed, err := Parse(`limit:0`)
+	if err != nil {
+		t.Fatalf("Parse(limit:0) error = %v; zero must be accepted as uncapped", err)
+	}
+	if parsed.Filter.Limit != 0 {
+		t.Fatalf("Limit = %d, want 0 (uncapped)", parsed.Filter.Limit)
+	}
+}
+
+// TestMergeSortByDedupsExactDuplicates pins that a sort key arriving from both
+// grammars is absorbed once, like every other merged filter slice, rather than
+// emitted twice. [LAW:one-type-per-behavior]
+func TestMergeSortByDedupsExactDuplicates(t *testing.T) {
+	base, err := Parse(`sort:rank:asc`)
+	if err != nil {
+		t.Fatalf("Parse(base) error = %v", err)
+	}
+	incoming, err := Parse(`sort:rank:asc`)
+	if err != nil {
+		t.Fatalf("Parse(incoming) error = %v", err)
+	}
+	merged, err := Merge(base.Filter, incoming.Filter)
+	if err != nil {
+		t.Fatalf("Merge() error = %v", err)
+	}
+	if len(merged.SortBy) != 1 {
+		t.Fatalf("SortBy = %#v, want one entry (exact duplicate absorbed)", merged.SortBy)
+	}
+}
+
 func TestParseBuildsFilterFromQueryExpression(t *testing.T) {
 	result, err := Parse(`status:in_progress type:task assignee:bmf has:comments updated>=2026-03-07T10:00:00Z "render contract" id:issue-123 label:renderer`)
 	if err != nil {
