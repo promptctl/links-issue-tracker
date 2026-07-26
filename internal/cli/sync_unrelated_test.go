@@ -11,9 +11,10 @@ import (
 
 // TestSyncFailureBlockUnrelatedHistories pins the contract the unrelated-histories
 // class renders: the four standing elements plus a domain WHAT that names the
-// no-common-ancestor reality, resolution steps that name the now-built take-one
-// command (and NOT the still-unbuilt union), and a BLOCKED escalation — because
-// unrelated histories, like a schema-ahead remote, never merge on a retry.
+// no-common-ancestor reality, resolution steps that name ALL THREE now-built
+// resolutions (both wholesale takes AND the union `combine`), and a BLOCKED
+// escalation — because unrelated histories, like a schema-ahead remote, never merge
+// on a retry; only a deliberate choice resolves them.
 func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	failure := SyncFailure{
 		Class:  syncFailureUnrelatedHistories,
@@ -23,7 +24,7 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 		Behind: 7,
 	}
 	block := failure.blockString()
-	assertContractElements(t, block, "lit sync reconcile take")
+	assertContractElements(t, block, "lit sync reconcile take", "lit sync reconcile combine")
 
 	// WHAT names the no-common-ancestor reality in domain terms, not a backend string.
 	for _, want := range []string{"no common history", "no shared ancestor", "wholesale"} {
@@ -39,14 +40,16 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	if strings.Contains(block, "still within the window where a divergence is routine") {
 		t.Errorf("unrelated-histories used the routine/aged escalation, which invites an impossible retry:\n%s", block)
 	}
-	// The take-one command exists now (this ticket) and must be named so the agent can
-	// act; the union (`combine`) command does NOT yet (that is .4) and must not be
-	// promised. [LAW:no-silent-failure]
-	if !strings.Contains(block, "lit sync reconcile take") {
-		t.Errorf("block does not name the now-built take-one command:\n%s", block)
+	// All three resolutions exist now (take local/remote and combine) and each must be
+	// named so the agent can act; combine is the keep-everything option and must be
+	// present, no longer deferred as "not yet automated". [LAW:no-silent-failure]
+	for _, want := range []string{"lit sync reconcile take", "lit sync reconcile combine"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("block does not name the now-built resolution %q:\n%s", want, block)
+		}
 	}
-	if strings.Contains(block, "lit sync reconcile combine") {
-		t.Errorf("block names the still-unbuilt combine command:\n%s", block)
+	if strings.Contains(block, "not yet automated") {
+		t.Errorf("block still defers the union as not-yet-automated after combine shipped:\n%s", block)
 	}
 }
 

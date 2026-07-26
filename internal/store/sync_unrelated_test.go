@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -104,68 +105,7 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	rootB := filepath.Join(base, "b")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	// A (the remote side): a remote-only issue plus one it will share with B.
-	stA, err := Open(ctx, rootA, "ws")
-	if err != nil {
-		t.Fatalf("Open(A): %v", err)
-	}
-	remoteOnly, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task"})
-	if err != nil {
-		t.Fatalf("CreateIssue(A remote-only): %v", err)
-	}
-	shared, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task"})
-	if err != nil {
-		t.Fatalf("CreateIssue(A shared): %v", err)
-	}
-	exportA, err := stA.Export(ctx)
-	if err != nil {
-		t.Fatalf("Export(A): %v", err)
-	}
-	if err := stA.Close(); err != nil {
-		t.Fatalf("Close(A): %v", err)
-	}
-	syncA := openSyncOrFatal(t, ctx, rootA)
-	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
-		t.Fatalf("SyncAddRemote(A): %v", err)
-	}
-	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
-		t.Fatalf("SyncPush(A): %v", err)
-	}
-	if err := syncA.Close(); err != nil {
-		t.Fatalf("Close(A sync): %v", err)
-	}
-
-	// B (the local side, disjoint bootstrap root): a local-only issue, then plant A's
-	// shared issue verbatim so the same id lands on BOTH sides. replaceFromExport
-	// rewrites the whole issues table, so the combined export keeps B's local-only
-	// issue and adds A's shared one.
-	stB, err := Open(ctx, rootB, "ws")
-	if err != nil {
-		t.Fatalf("Open(B): %v", err)
-	}
-	localOnly, err := stB.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task"})
-	if err != nil {
-		t.Fatalf("CreateIssue(B local-only): %v", err)
-	}
-	exportB, err := stB.Export(ctx)
-	if err != nil {
-		t.Fatalf("Export(B): %v", err)
-	}
-	combined := exportB
-	combined.Issues = append(combined.Issues, issueByID(t, exportA, shared.ID))
-	if err := stB.replaceFromExport(ctx, combined, "plant shared issue"); err != nil {
-		t.Fatalf("replaceFromExport(B): %v", err)
-	}
-	if err := stB.Close(); err != nil {
-		t.Fatalf("Close(B): %v", err)
-	}
-	syncBSetup := openSyncOrFatal(t, ctx, rootB)
-	if err := syncBSetup.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
-		t.Fatalf("SyncAddRemote(B): %v", err)
-	}
-	if err := syncBSetup.Close(); err != nil {
-		t.Fatalf("Close(B setup): %v", err)
-	}
+	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -183,9 +123,9 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	if res.Unrelated == nil {
 		t.Fatalf("unrelated reconcile carried no both-sides inventory")
 	}
-	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localOnly.ID})
-	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly.ID})
-	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared.ID})
+	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localOnly})
+	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly})
+	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared})
 }
 
 // TestSyncResolveUnrelatedTakeRemote drives the ticket's criterion for the remote
@@ -307,6 +247,214 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+}
+
+// TestSyncReconcileCombineUnionsBothSides drives the ticket's core acceptance criterion:
+// two disjoint stores with some unique ids and one shared id, after combine, hold EVERY
+// unique issue plus the field-merged shared one — nothing dropped. The shared id is planted
+// verbatim on B so both sides carry identical content, so it merges cleanly (no prose held)
+// and combine settles as SyncReconcileCombined. The union then fast-forward-pushes and the
+// remote side converges onto it, proving no side's issues were lost. [LAW:no-silent-failure]
+func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "")
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+
+	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcileCombine(B): %v", err)
+	}
+	if res.State != SyncReconcileCombined {
+		t.Fatalf("combine state = %q, want %q (pending=%+v)", res.State, SyncReconcileCombined, res.Pending)
+	}
+	// The union reports what it kept from each side — the partition read off the two anchors.
+	if res.Unrelated == nil {
+		t.Fatalf("combine carried no both-sides inventory to report the union")
+	}
+	assertIDSet(t, "kept only-local", res.Unrelated.OnlyLocal, []string{localOnly})
+	assertIDSet(t, "kept only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly})
+	assertIDSet(t, "field-merged on-both", res.Unrelated.OnBoth, []string{shared})
+
+	// Nothing dropped: local now holds the UNION of all three ids.
+	assertLocalIssueIDs(t, ctx, syncB, []string{localOnly, remoteOnly, shared})
+
+	// The union is a fast-forwardable descendant of the remote head, so the push converges
+	// the remote onto it (the mirror of take-local, but keeping BOTH sides).
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(B) after combine: %v", err)
+	}
+	if fresh.State() != SyncAhead {
+		t.Fatalf("post-combine freshness = %q ahead=%d behind=%d, want ahead", fresh.State(), fresh.Ahead, fresh.Behind)
+	}
+	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("fast-forward SyncPush(B) after combine: %v", err)
+	}
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B): %v", err)
+	}
+	syncA := openSyncOrFatal(t, ctx, rootA)
+	defer func() { _ = syncA.Close() }()
+	recv, err := syncA.SyncReceive(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(A): %v", err)
+	}
+	if recv.State != SyncReceiveFastForwarded {
+		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
+	}
+	assertLocalIssueIDs(t, ctx, syncA, []string{localOnly, remoteOnly, shared})
+}
+
+// TestSyncReconcileCombineHoldsAndFinalizesProse drives the ticket's per-issue-overlap
+// criterion: when the shared id's free text diverged on both sides, combine holds it as
+// prose-pending (never auto-picking a side) rather than dropping or guessing, and the SAME
+// `lit sync reconcile resolve` finalize path splices the agent's merged text and commits the
+// union. It proves the two-way (no base) resolution surfaces prose exactly as the shared-history
+// three-way does. [LAW:no-silent-failure]
+func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	// Plant the shared id on B with a DIFFERENT title than A's, so its free text diverges
+	// with no base — the one field the engine must hold for the agent.
+	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "shared-on-B")
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+
+	held, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcileCombine(B): %v", err)
+	}
+	if held.State != SyncReconcileProsePending {
+		t.Fatalf("combine state = %q, want %q", held.State, SyncReconcileProsePending)
+	}
+	if len(held.Pending) != 1 {
+		t.Fatalf("pending count = %d, want 1 (the shared id's title): %+v", len(held.Pending), held.Pending)
+	}
+	p := held.Pending[0]
+	if p.IssueID != shared || p.Field != "title" {
+		t.Fatalf("pending = %+v, want issue=%s field=title", p, shared)
+	}
+	// No base, so the held conflict's Base is empty; ours is B's planted title, theirs is A's.
+	if p.Base != "" || p.Ours != "shared-on-B" || p.Theirs != "shared" {
+		t.Fatalf("pending base=%q ours=%q theirs=%q, want empty/shared-on-B/shared", p.Base, p.Ours, p.Theirs)
+	}
+	// Nothing committed while prose is held: the data branch never moved.
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("data branch moved during a prose-held combine: %s -> %s", headBefore, got)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+
+	// Finalize through the SAME resolve path the three-way reconcile uses: the divergence is
+	// re-derived (no base), the merged text spliced, and the union committed as one commit.
+	res, err := syncB.SyncReconcileResolved(ctx, "origin", "master", []merge.ProseResolution{
+		{IssueID: shared, Field: merge.ProseTitle, Fingerprint: p.Fingerprint(), Text: "merged A and B shared title"},
+	})
+	if err != nil {
+		t.Fatalf("SyncReconcileResolved(B) finalizing combine: %v", err)
+	}
+	if res.State != SyncReconcileCombined {
+		t.Fatalf("finalized combine state = %q, want %q", res.State, SyncReconcileCombined)
+	}
+	// The union is present AND the shared id carries the agent's merged title — nothing dropped.
+	assertLocalIssueIDs(t, ctx, syncB, []string{localOnly, remoteOnly, shared})
+	got := getIssueOrFatal(t, ctx, syncB, shared)
+	if got.Title != "merged A and B shared title" {
+		t.Fatalf("shared title after combine finalize = %q, want the agent's merged text", got.Title)
+	}
+}
+
+// seedUnrelatedPairWithShared builds two disjoint stores that share a remote and hold one
+// common issue id: A (the remote side) gets a remote-only issue plus a shared one it pushes;
+// B (the local side, its own bootstrap root) gets a local-only issue, then A's shared issue
+// is planted verbatim — the one way independently-generated ids can genuinely collide (the
+// same logical ticket filed in both). sharedTitleOnB, when non-empty, overrides the planted
+// title so the shared id's free text diverges with no base. Returns (onlyLocalID,
+// onlyRemoteID, sharedID).
+func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB, remoteURL, sharedTitleOnB string) (string, string, string) {
+	t.Helper()
+	stA, err := Open(ctx, rootA, "wsA")
+	if err != nil {
+		t.Fatalf("Open(A): %v", err)
+	}
+	remoteOnly, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(A remote-only): %v", err)
+	}
+	shared, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(A shared): %v", err)
+	}
+	exportA, err := stA.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(A): %v", err)
+	}
+	if err := stA.Close(); err != nil {
+		t.Fatalf("Close(A): %v", err)
+	}
+	syncA := openSyncOrFatal(t, ctx, rootA)
+	if err := syncA.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(A): %v", err)
+	}
+	if _, err := syncA.SyncPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncPush(A): %v", err)
+	}
+	if err := syncA.Close(); err != nil {
+		t.Fatalf("Close(A sync): %v", err)
+	}
+
+	stB, err := Open(ctx, rootB, "wsB")
+	if err != nil {
+		t.Fatalf("Open(B): %v", err)
+	}
+	localOnly, err := stB.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task"})
+	if err != nil {
+		t.Fatalf("CreateIssue(B local-only): %v", err)
+	}
+	exportB, err := stB.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(B): %v", err)
+	}
+	sharedIssue := issueByID(t, exportA, shared.ID)
+	if sharedTitleOnB != "" {
+		sharedIssue.Title = sharedTitleOnB
+	}
+	combined := exportB
+	combined.Issues = append(combined.Issues, sharedIssue)
+	if err := stB.replaceFromExport(ctx, combined, "plant shared issue"); err != nil {
+		t.Fatalf("replaceFromExport(B): %v", err)
+	}
+	if err := stB.Close(); err != nil {
+		t.Fatalf("Close(B): %v", err)
+	}
+	syncBSetup := openSyncOrFatal(t, ctx, rootB)
+	if err := syncBSetup.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote(B): %v", err)
+	}
+	if err := syncBSetup.Close(); err != nil {
+		t.Fatalf("Close(B setup): %v", err)
+	}
+	return localOnly.ID, remoteOnly.ID, shared.ID
 }
 
 // TestSyncResolveUnrelatedRefusesSharedHistory proves take-one is scoped to unrelated
