@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/cli"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -27,10 +28,10 @@ import (
 // shipped binary's behavior, not a test-only reimplementation of it.
 const reexecEnvVar = "LIT_TEST_REEXEC"
 
-// disableAutoSyncEnvVar mirrors the (unexported) constant of the same name in
-// internal/cli. Duplicated here only because a cross-package test cannot import
-// an unexported identifier; the value is the process-level auto-sync kill switch.
-const disableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
+// disableAutoSyncEnvVar is the process-level auto-sync kill switch, read from the
+// one canonical definition in internal/cli so this test cannot drift from the
+// CLI's env contract if that name ever changes. [LAW:one-source-of-truth]
+const disableAutoSyncEnvVar = cli.DisableAutoSyncEnvVar
 
 func TestMain(m *testing.M) {
 	if os.Getenv(reexecEnvVar) == "1" {

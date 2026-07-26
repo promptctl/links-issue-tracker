@@ -133,7 +133,7 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 
 	// Auto-sync ON: the first ordinary command triggers the inline receive, which
 	// reconciles, finds the held free-text conflict, and surfaces the contract.
-	t.Setenv(disableAutoSyncEnvVar, "0")
+	t.Setenv(DisableAutoSyncEnvVar, "0")
 	surface := captureStderr(t, func() {
 		runCLIInDir(t, consumer, "ready")
 	})
@@ -150,7 +150,7 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 // reconcile` gives for the identical state — instead of the pre-change exit-0
 // stdout one-liner. [LAW:single-enforcer]
 func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
-	t.Setenv(disableAutoSyncEnvVar, "1") // drive sync explicitly; no inline race
+	t.Setenv(DisableAutoSyncEnvVar, "1") // drive sync explicitly; no inline race
 	consumer, ticketID := proseDivergedClones(t)
 
 	out, err := runCLIInDirErr(t, consumer, "sync", "pull")

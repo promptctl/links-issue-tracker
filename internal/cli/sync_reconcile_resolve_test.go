@@ -132,7 +132,7 @@ func runCLIInDirErr(t *testing.T, dir string, args ...string) (string, error) {
 func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 	// This test drives sync explicitly; the inline auto-sync must not reconcile the
 	// divergence out from under the assertions.
-	t.Setenv(disableAutoSyncEnvVar, "1")
+	t.Setenv(DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -200,7 +200,7 @@ func TestProseReconcileSurfacesAndResolves(t *testing.T) {
 // TestProseReconcileAbortLeavesCloneDiverged proves the escape: abort exits zero,
 // leaves the clone diverged and usable, and a later reconcile still surfaces.
 func TestProseReconcileAbortLeavesCloneDiverged(t *testing.T) {
-	t.Setenv(disableAutoSyncEnvVar, "1")
+	t.Setenv(DisableAutoSyncEnvVar, "1")
 
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")

@@ -57,6 +57,38 @@ func TestWatchGraceEscalates(t *testing.T) {
 	}
 }
 
+// TestWatchNoEscalateWhenDoneRacesGrace pins the escalation guard: a signal
+// arrives (so the timer is armed), but the clean path completes (done closes)
+// before grace elapses — escalation must NOT fire, because main() is already
+// exiting with the correct code. Without the select-on-done guard the timer
+// callback would hard-exit over a cleanly finished shutdown.
+func TestWatchNoEscalateWhenDoneRacesGrace(t *testing.T) {
+	sigs := make(chan os.Signal, 1)
+	done := make(chan struct{})
+
+	escalated := make(chan os.Signal, 1)
+	returned := make(chan struct{})
+	go func() {
+		watch(sigs, done, func() {}, func() {}, 30*time.Millisecond, func(s os.Signal) { escalated <- s })
+		close(returned)
+	}()
+
+	sigs <- syscall.SIGTERM
+	close(done) // clean path completes well before the 30ms grace
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("watch did not return after done closed")
+	}
+	// Past grace: the guarded callback must have been a no-op.
+	time.Sleep(60 * time.Millisecond)
+	select {
+	case s := <-escalated:
+		t.Fatalf("escalated %v after the clean path completed before grace", s)
+	default:
+	}
+}
+
 // TestWatchRestoresDefaultDisposition pins that the OS default disposition is
 // restored on the first interrupt, so a SECOND interrupt is not swallowed but
 // terminates the process. This is the specific gap that makes plain

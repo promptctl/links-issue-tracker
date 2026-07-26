@@ -106,7 +106,19 @@ func watch(
 	// Guarantee termination even if no second interrupt ever comes: a ctx-ignoring
 	// wedge is hard-exited once grace elapses. This is the guarantee; the cancel
 	// above is only best-effort.
-	timer := time.AfterFunc(grace, func() { escalate(sig) })
+	//
+	// The callback is guarded against a clean path that finishes right at grace:
+	// once done is closed, main() is already exiting with the correct code, so a
+	// timer that fires in the narrow window before `defer timer.Stop()` runs must
+	// not hard-exit over it. Escalation therefore fires only while the clean path
+	// is still demonstrably outstanding — precisely its contract.
+	timer := time.AfterFunc(grace, func() {
+		select {
+		case <-done:
+		default:
+			escalate(sig)
+		}
+	})
 	defer timer.Stop()
 	<-done
 }
