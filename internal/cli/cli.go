@@ -494,9 +494,15 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		}
 	}
 	// [LAW:dataflow-not-control-flow] Default status filter is data, not a branch
-	// around ListIssues. When the user hasn't narrowed by status (via --status or
-	// --query status:...), exclude closed issues so `lit ls` shows active work.
-	if len(filter.Statuses) == 0 {
+	// around ListIssues. Apply the active-work default (exclude closed) only when
+	// the user has expressed no intent implying closed issues. Two filter fields
+	// carry that intent: an explicit status selection (--status / --query
+	// status:..., which also covers status:closed), and a resolution filter —
+	// resolutions exist ONLY on closed issues, so `--query resolution:wontfix` is a
+	// request to see closed work.
+	// [LAW:no-silent-failure] Without the resolution guard a closed-only filter
+	// clamps to open+in_progress and returns silently empty.
+	if len(filter.Statuses) == 0 && len(filter.Resolutions) == 0 {
 		filter.Statuses = []model.State{model.StateOpen, model.StateInProgress}
 	}
 	issues, err := ap.Store.ListIssues(ctx, filter)
