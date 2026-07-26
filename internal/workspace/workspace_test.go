@@ -1,12 +1,16 @@
 package workspace
 
 import (
+	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestResolveCreatesSharedConfigInGitCommonDir(t *testing.T) {
@@ -278,7 +282,7 @@ func TestGitRemotesReturnsFetchURLsSortedByName(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", "https://github.com/acme/origin.git")
 	run(t, repo, "git", "remote", "set-url", "--push", "origin", "git@github.com:acme/origin.git")
 
-	remotes, err := GitRemotes(repo)
+	remotes, err := GitRemotes(context.Background(), repo)
 	if err != nil {
 		t.Fatalf("GitRemotes() error = %v", err)
 	}
@@ -328,7 +332,7 @@ func TestDefaultRemoteBranchUsesRemoteHeadAdvertisement(t *testing.T) {
 	run(t, repo, "git", "push", "-u", "origin", "master")
 	run(t, repo, "git", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/master")
 
-	got := DefaultRemoteBranch(repo, "origin")
+	got := DefaultRemoteBranch(context.Background(), repo, "origin")
 	if got != "master" {
 		t.Fatalf("DefaultRemoteBranch() = %q, want master", got)
 	}
@@ -341,7 +345,7 @@ func TestRemoteHasRefsReturnsFalseForEmptyBareRemote(t *testing.T) {
 	run(t, repo, "git", "init", "--bare", remote)
 	run(t, repo, "git", "remote", "add", "origin", remote)
 
-	hasRefs, err := RemoteHasRefs(repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasRefs() error = %v, want nil for empty bare remote", err)
 	}
@@ -364,7 +368,7 @@ func TestRemoteHasRefsReturnsTrueForPopulatedRemote(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "push", "-u", "origin", "master")
 
-	hasRefs, err := RemoteHasRefs(repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasRefs() error = %v, want nil for populated remote", err)
 	}
@@ -377,12 +381,71 @@ func TestRemoteHasRefsReturnsErrorForUnknownRemoteName(t *testing.T) {
 	repo := t.TempDir()
 	run(t, repo, "git", "init")
 
-	hasRefs, err := RemoteHasRefs(repo, "does-not-exist")
+	hasRefs, err := RemoteHasRefs(context.Background(), repo, "does-not-exist")
 	if err == nil {
 		t.Fatalf("RemoteHasRefs() error = nil, want error for unknown remote (got hasRefs=%v)", hasRefs)
 	}
 	if hasRefs {
 		t.Fatalf("RemoteHasRefs() = true, want false alongside error")
+	}
+}
+
+// TestGitOutputCancellationKillsSubprocess pins gitOutput's load-bearing contract:
+// a cancelled context kills the git subprocess promptly instead of letting a
+// network-wedged call hang. It is the unit-level counterpart to cmd/lit's
+// end-to-end SIGTERM acceptance test — the mechanism (exec.CommandContext) lives
+// here, so it is verified here directly. [LAW:verifiable-goals]
+//
+// The remote is a black-hole TCP listener: it accepts git's connection and never
+// answers the ref advertisement, so `git ls-remote` blocks in git itself — no
+// transport subprocess, so cancelling the context kills git and unblocks its
+// stdout read at once (an ext-transport hang would leave a grandchild holding the
+// pipe and hide the very behavior under test).
+func TestGitOutputCancellationKillsSubprocess(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("listen for black-hole remote: %v", err)
+	}
+	defer ln.Close()
+	go func() {
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return // listener closed
+			}
+			// Hold the connection open and never write the git ref advertisement.
+			t.Cleanup(func() { _ = conn.Close() })
+		}
+	}()
+	url := "git://127.0.0.1:" + strconv.Itoa(ln.Addr().(*net.TCPAddr).Port) + "/wedge.git"
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		_, gitErr := gitOutput(ctx, t.TempDir(), "ls-remote", url)
+		done <- gitErr
+	}()
+
+	// It must actually hang: still running after a settle window. If it returned
+	// already, the wedge never engaged and the cancellation assertion is meaningless.
+	select {
+	case err := <-done:
+		t.Fatalf("gitOutput returned before cancellation (%v) — the black-hole remote did not wedge git", err)
+	case <-time.After(1 * time.Second):
+	}
+
+	cancel()
+	select {
+	case err := <-done:
+		// A killed subprocess must surface as an error, never a silent empty success.
+		if err == nil {
+			t.Fatalf("gitOutput returned nil error after cancellation; want a non-nil error")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("gitOutput did not return within 3s of cancellation — exec.CommandContext did not kill the wedged git")
 	}
 }
 
@@ -405,11 +468,11 @@ func TestRemoteHasDoltDataFalseForCodeOnlyRemote(t *testing.T) {
 	run(t, repo, "git", "remote", "add", "origin", remote)
 	run(t, repo, "git", "push", "-u", "origin", "master")
 
-	hasRefs, err := RemoteHasRefs(repo, "origin")
+	hasRefs, err := RemoteHasRefs(context.Background(), repo, "origin")
 	if err != nil || !hasRefs {
 		t.Fatalf("precondition: RemoteHasRefs() = %v, err = %v; want true,nil", hasRefs, err)
 	}
-	hasData, err := RemoteHasDoltData(repo, "origin")
+	hasData, err := RemoteHasDoltData(context.Background(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
 	}
@@ -435,7 +498,7 @@ func TestRemoteHasDoltDataTrueWhenDoltRefPresent(t *testing.T) {
 	// Mirror how lit's sync lands data: a ref under the refs/dolt/* namespace.
 	run(t, repo, "git", "push", "origin", "HEAD:refs/dolt/data")
 
-	hasData, err := RemoteHasDoltData(repo, "origin")
+	hasData, err := RemoteHasDoltData(context.Background(), repo, "origin")
 	if err != nil {
 		t.Fatalf("RemoteHasDoltData() error = %v, want nil", err)
 	}

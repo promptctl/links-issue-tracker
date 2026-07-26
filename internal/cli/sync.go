@@ -133,7 +133,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	}
 	remoteName, remoteErr := resolveSyncRemote(
 		strings.TrimSpace(*remote),
-		workspace.UpstreamRemote(ws.RootDir),
+		workspace.UpstreamRemote(ctx, ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
@@ -149,8 +149,16 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
-	if refsErr == nil && !hasRefs {
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
+	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface it so
+	// an explicit pull reports the real ls-remote cause (a cancelled ctx yields
+	// context.Canceled here) rather than falling through to the misleading "default
+	// branch unavailable" that DefaultRemoteBranch's swallowed error would produce.
+	// This matches the receive path, so receive/pull/push treat refsErr identically.
+	if refsErr != nil {
+		return fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
 		payload := map[string]any{
 			"status": "skipped",
 			"reason": "remote_empty",
@@ -159,7 +167,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		}
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
-	resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	resolvedBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return err
 	}
@@ -303,7 +311,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	}
 	remoteName, remoteErr := resolveSyncRemote(
 		strings.TrimSpace(remote),
-		workspace.UpstreamRemote(ws.RootDir),
+		workspace.UpstreamRemote(ctx, ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
@@ -318,8 +326,15 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		}, nil
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
-	if refsErr == nil && !hasRefs {
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
+	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface the
+	// original ls-remote cause (a cancelled ctx yields context.Canceled here) rather
+	// than dropping it and letting a later Dolt-store push error mask it. Mirrors the
+	// receive path so receive/pull/push treat refsErr identically.
+	if refsErr != nil {
+		return syncPushOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
 		return syncPushOutcome{
 			status:  "skipped",
 			reason:  "remote_empty",
@@ -327,7 +342,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 			message: firstPushSkipMessage,
 		}, nil
 	}
-	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	syncBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
@@ -442,12 +457,26 @@ func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
 	return false
 }
 
-func resolveSyncBranch(rootDir string, remote string) (string, error) {
+func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (string, error) {
 	debugOverride := strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar))
-	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(rootDir, remote))
+	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(ctx, rootDir, remote))
 	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
 	resolvedBranch := precedence.First(debugOverride, defaultBranch)
 	if resolvedBranch == "" {
+		// [LAW:no-silent-failure] DefaultRemoteBranch swallows its git errors — an
+		// empty branch is a legitimate "remote advertises no default" result, not an
+		// error — so a cancelled ctx that kills its network ls-remote is
+		// indistinguishable here from a genuine absence. This is the single point
+		// that turns an empty branch into a diagnostic, so it is where the two are
+		// told apart: surface the cancellation as its true cause rather than the
+		// misleading "default branch unavailable". This holds for every caller and
+		// does not lean on the receive/pull/push RemoteHasRefs check to have caught
+		// the cancellation first — closing the window where a cancel arriving
+		// between that check and DefaultRemoteBranch's fallback ls-remote would
+		// otherwise lie about the reason.
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("resolve sync branch for remote %q: %w", strings.TrimSpace(remote), err)
+		}
 		return "", fmt.Errorf(
 			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
 			strings.TrimSpace(remote),
@@ -607,7 +636,7 @@ type remoteSyncState struct {
 }
 
 func readSyncRemoteState(ctx context.Context, syncStore *store.Store, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}

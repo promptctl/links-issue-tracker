@@ -38,7 +38,7 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if err := markReceiveAttempt(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive debounce marker not written: %v\n", err)
 	}
-	hasRemote, err := workspaceHasGitRemote(ws)
+	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
 		// Couldn't read remotes — unexpected; surface it loudly rather than treat
 		// it as "no remote". [LAW:no-silent-failure]
@@ -181,7 +181,7 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 	}
 	remoteName, remoteErr := resolveSyncRemote(
 		"",
-		workspace.UpstreamRemote(ws.RootDir),
+		workspace.UpstreamRemote(ctx, ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
@@ -193,14 +193,17 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 	// First-push detection: an empty remote has nothing to receive. A read error
 	// here is unexpected and must not be misread as "empty" — surface it as a
 	// could-not-attempt failure so the caller records a trace. [LAW:no-silent-failure]
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	// This ls-remote is the wedge point a SIGTERM must be able to abandon: ctx flows
+	// to the subprocess so a network-hung fetch cancels here rather than outliving the
+	// interrupt until the grace-timer hard-exit. [LAW:no-ambient-temporal-coupling]
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
 	if refsErr != nil {
 		return syncReceiveOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
 	if !hasRefs {
 		return syncReceiveOutcome{status: "skipped", reason: "remote_empty", remote: remoteName}, nil
 	}
-	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	syncBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
