@@ -423,7 +423,7 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	includeDeleted := fs.Bool("include-deleted", false, "Include deleted issues")
 	updatedAfter := fs.String("updated-after", "", "Only include issues updated at or after RFC3339 timestamp")
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
-	queryExpr := fs.String("query", "", "Query language: status:in_progress resolution:wontfix type:task has:comments text")
+	queryExpr := fs.String("query", "", "Query language: status:in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
 	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
 	format := fs.String("format", "lines", "Output format: lines|table")
@@ -450,7 +450,9 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		Limit:           *limit,
 	}
 	if strings.TrimSpace(*sortExpr) != "" {
-		sortSpecs, err := parseSortSpecs(*sortExpr)
+		// [LAW:one-source-of-truth] Reuse the one store sort parser; the
+		// --query sort: token routes through the same function.
+		sortSpecs, err := store.ParseSortSpecs(*sortExpr)
 		if err != nil {
 			return err
 		}
@@ -1670,34 +1672,6 @@ func splitCSV(input string) []string {
 		}
 	}
 	return out
-}
-
-func parseSortSpecs(input string) ([]store.SortSpec, error) {
-	parts := splitCSV(input)
-	if len(parts) == 0 {
-		return nil, nil
-	}
-	out := make([]store.SortSpec, 0, len(parts))
-	for _, part := range parts {
-		spec := strings.TrimSpace(part)
-		field := spec
-		desc := false
-		if strings.Contains(spec, ":") {
-			chunks := strings.SplitN(spec, ":", 2)
-			field = strings.TrimSpace(chunks[0])
-			direction := strings.ToLower(strings.TrimSpace(chunks[1]))
-			switch direction {
-			case "asc":
-				desc = false
-			case "desc":
-				desc = true
-			default:
-				return nil, UnsupportedError{Message: fmt.Sprintf("unsupported sort direction %q", direction), Feature: "sort-direction"}
-			}
-		}
-		out = append(out, store.SortSpec{Field: field, Desc: desc})
-	}
-	return out, nil
 }
 
 type MergeConflictError struct {

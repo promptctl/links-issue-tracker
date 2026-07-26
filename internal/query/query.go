@@ -2,6 +2,7 @@ package query
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -58,6 +59,15 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	if incoming.Limit > 0 {
 		filter.Limit = incoming.Limit
 	}
+	// Sort keys concatenate: flag-supplied keys (base) first, then query-supplied
+	// keys, forming one multi-key ordering rather than either grammar clobbering
+	// the other.
+	filter.SortBy = append(filter.SortBy, incoming.SortBy...)
+	// [LAW:dataflow-not-control-flow] Visibility is monotonic — asking to include
+	// archived/deleted from EITHER the flags (base) or the query (incoming)
+	// includes them, so the merge is a plain OR with no conflict to detect.
+	filter.IncludeArchived = filter.IncludeArchived || incoming.IncludeArchived
+	filter.IncludeDeleted = filter.IncludeDeleted || incoming.IncludeDeleted
 	return filter, validateFilter(filter)
 }
 
@@ -107,6 +117,34 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 		default:
 			return fmt.Errorf("unsupported has: filter %q", term)
 		}
+	case strings.HasPrefix(term, "sort:"):
+		// [LAW:one-source-of-truth] The sort: token and the --sort flag both
+		// route through the one store.ParseSortSpecs; the query grammar owns no
+		// second copy of the direction syntax.
+		specs, err := store.ParseSortSpecs(strings.TrimPrefix(term, "sort:"))
+		if err != nil {
+			return err
+		}
+		filter.SortBy = append(filter.SortBy, specs...)
+		return nil
+	case strings.HasPrefix(term, "limit:"):
+		value := strings.TrimSpace(strings.TrimPrefix(term, "limit:"))
+		limit, err := strconv.Atoi(value)
+		if err != nil {
+			// [LAW:no-silent-failure] A non-numeric limit is a typo, never a
+			// silent fallback to the uncapped default.
+			return fmt.Errorf("limit must be an integer, got %q", value)
+		}
+		filter.Limit = limit
+		return nil
+	case term == "archived":
+		// Bare visibility keywords mirror the --include-archived/--include-deleted
+		// flags: presence flips the bool. [LAW:one-type-per-behavior]
+		filter.IncludeArchived = true
+		return nil
+	case term == "deleted":
+		filter.IncludeDeleted = true
+		return nil
 	case strings.HasPrefix(term, "updated"):
 		return applyTimeTerm(filter, strings.TrimPrefix(term, "updated"))
 	default:
@@ -116,6 +154,12 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 }
 
 func normalizeQueryStatuses(statuses []model.State) ([]model.State, error) {
+	// [LAW:one-source-of-truth] Preserve nil for "no status filter" so the merged
+	// filter matches the flag path's nil rather than diverging as an empty slice —
+	// the two grammars must produce byte-identical filters.
+	if len(statuses) == 0 {
+		return nil, nil
+	}
 	result := make([]model.State, 0, len(statuses))
 	for _, s := range statuses {
 		parsed, err := model.ParseState(string(s))
