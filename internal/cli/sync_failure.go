@@ -270,14 +270,18 @@ func (f SyncFailure) resolutionSteps() []string {
 			fmt.Sprintf("lit upgrade               # install a newer lit that supports schema v%d, then retry (the remote head names no producer version to target)", f.RemoteSchemaVersion),
 		}
 	case syncFailureUnrelatedHistories:
-		// No take-one/union command exists yet — those are the rest of this epic — so
-		// naming one here would send the agent at a command that isn't there. The one
-		// honest step is to confirm the state and escalate the wholesale/union choice.
-		// [LAW:no-silent-failure] the remedy is a real, present command plus an explicit
-		// decision, never an invented one.
+		// Take-one now exists (this ticket); union (`combine`) does not yet — that is the
+		// rest of this epic — so the steps name only the real commands and defer the
+		// union to an explicit decision. The take is destructive of the OTHER side's
+		// unique issues, so it is a deliberate choice, never something to run blindly:
+		// the WHAT EACH SIDE HOLDS section above shows exactly what each side loses.
+		// [LAW:no-silent-failure] every named command is real and present; the missing
+		// union is an honest decision, not an invented command.
 		return []string{
-			"lit doctor                # confirms the unrelated-histories divergence and its commit counts",
-			"# then decide WITH THE USER: take one side's backlog wholesale, or union the two — lit cannot merge unrelated histories automatically.",
+			"lit sync reconcile        # re-shows what each side holds (only-local, only-remote, on-both)",
+			"lit sync reconcile take remote   # adopt their backlog wholesale (discards your local-only issues)",
+			"lit sync reconcile take local    # keep your backlog wholesale (discards their remote-only issues), then push",
+			"# to KEEP BOTH sides' unique issues, decide WITH THE USER — unioning unrelated histories is not yet automated.",
 		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
