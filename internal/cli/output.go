@@ -166,24 +166,20 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			}
 		}
 	}
-	if len(detail.Events) > 0 {
-		if _, err := fmt.Fprintln(w, "\nhistory:"); err != nil {
-			return err
-		}
-		if err := printHistoryEvents(w, detail.Events); err != nil {
-			return err
-		}
-	}
+	// [LAW:one-source-of-truth] `lit show` renders only current state; the
+	// field-level transition trail lives behind `lit history` (printIssueHistory)
+	// so a cold reader never mistakes a superseded before→after line for a
+	// current fact. The shared printHistoryEvents renderer keeps its home there.
 	return nil
 }
 
 // printHistoryEvents renders the field-level transition trail: one
 // "- [actor @ time] action reason" line per event, followed by that event's
 // indented "field: from → to" change lines. This is the single definition of
-// how the transition trail is formatted, shared by the `history:` block of
-// `lit show` (above) and the dedicated `lit history` command
-// (printIssueHistory). [LAW:one-source-of-truth] one renderer, so the two
-// surfaces can never drift; [LAW:decomposition] carved at the event/detail joint.
+// how the transition trail is formatted; the dedicated `lit history` command
+// (printIssueHistory) is its only caller. [LAW:one-source-of-truth] one renderer,
+// so the trail can never render two ways; [LAW:decomposition] carved at the
+// event/detail joint, ready for any future surface that needs the same trail.
 func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
 	for _, event := range events {
 		// Plain field updates carry no Action; "update" is their display label.

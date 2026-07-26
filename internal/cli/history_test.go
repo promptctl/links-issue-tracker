@@ -11,8 +11,8 @@ import (
 
 // TestRunHistoryPrintsMultiEditTransitionTrail exercises `lit history` on a
 // ticket edited several times through the real CLI update path. The trail must
-// carry every field-level `from → to` transition those edits produced, in the
-// same shape `lit show` embeds in its history block. This is a behavioral test
+// carry every field-level `from → to` transition those edits produced — the
+// full history `lit show` deliberately no longer renders. This is a behavioral test
 // [LAW:behavior-not-structure]: it drives genuine edits and asserts on the
 // transitions a reader sees, not on how the events are stored.
 func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
