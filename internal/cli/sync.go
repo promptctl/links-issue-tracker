@@ -133,7 +133,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	}
 	remoteName, remoteErr := resolveSyncRemote(
 		strings.TrimSpace(*remote),
-		workspace.UpstreamRemote(ws.RootDir),
+		workspace.UpstreamRemote(ctx, ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
@@ -149,7 +149,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
 	if refsErr == nil && !hasRefs {
 		payload := map[string]any{
 			"status": "skipped",
@@ -159,7 +159,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		}
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
-	resolvedBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	resolvedBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return err
 	}
@@ -303,7 +303,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	}
 	remoteName, remoteErr := resolveSyncRemote(
 		strings.TrimSpace(remote),
-		workspace.UpstreamRemote(ws.RootDir),
+		workspace.UpstreamRemote(ctx, ws.RootDir),
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
@@ -318,7 +318,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		}, nil
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
 	if refsErr == nil && !hasRefs {
 		return syncPushOutcome{
 			status:  "skipped",
@@ -327,7 +327,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 			message: firstPushSkipMessage,
 		}, nil
 	}
-	syncBranch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	syncBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
@@ -442,9 +442,9 @@ func syncRemoteExists(name string, gitRemotes []workspace.GitRemote) bool {
 	return false
 }
 
-func resolveSyncBranch(rootDir string, remote string) (string, error) {
+func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (string, error) {
 	debugOverride := strings.TrimSpace(os.Getenv(debugSyncBranchEnvVar))
-	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(rootDir, remote))
+	defaultBranch := strings.TrimSpace(workspace.DefaultRemoteBranch(ctx, rootDir, remote))
 	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
 	resolvedBranch := precedence.First(debugOverride, defaultBranch)
 	if resolvedBranch == "" {
@@ -607,7 +607,7 @@ type remoteSyncState struct {
 }
 
 func readSyncRemoteState(ctx context.Context, syncStore *store.Store, ws workspace.Info) (remoteSyncState, error) {
-	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}

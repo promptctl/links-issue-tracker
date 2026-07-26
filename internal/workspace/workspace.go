@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -85,14 +86,14 @@ type GitRemote struct {
 	URL  string `json:"url"`
 }
 
-func UpstreamRemote(cwd string) string {
-	upstreamRef, _ := gitOutput(cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
+func UpstreamRemote(ctx context.Context, cwd string) string {
+	upstreamRef, _ := gitOutput(ctx, cwd, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}")
 	return upstreamRemoteFromRef(upstreamRef)
 }
 
-func RemoteHasRefs(cwd string, remote string) (bool, error) {
+func RemoteHasRefs(ctx context.Context, cwd string, remote string) (bool, error) {
 	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(cwd, "ls-remote", remoteName)
+	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName)
 	if err != nil {
 		return false, err
 	}
@@ -106,29 +107,35 @@ func RemoteHasRefs(cwd string, remote string) (bool, error) {
 // "remote has tickets to adopt" apart from "remote is just a code repo". The
 // adopt step keys its loud-vs-silent decision on this so an empty store that
 // hides a real remote backlog is unrepresentable. [LAW:one-source-of-truth]
-func RemoteHasDoltData(cwd string, remote string) (bool, error) {
+func RemoteHasDoltData(ctx context.Context, cwd string, remote string) (bool, error) {
 	remoteName := normalizeRemoteName(remote)
-	output, err := gitOutput(cwd, "ls-remote", remoteName, "refs/dolt/*")
+	output, err := gitOutput(ctx, cwd, "ls-remote", remoteName, "refs/dolt/*")
 	if err != nil {
 		return false, err
 	}
 	return strings.TrimSpace(output) != "", nil
 }
 
-func DefaultRemoteBranch(cwd string, remote string) string {
+func DefaultRemoteBranch(ctx context.Context, cwd string, remote string) string {
 	remoteName := normalizeRemoteName(remote)
-	symbolicRefOutput, _ := gitOutput(cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
+	symbolicRefOutput, _ := gitOutput(ctx, cwd, "symbolic-ref", "--quiet", "--short", "refs/remotes/"+remoteName+"/HEAD")
 	symbolicBranch := strings.TrimSpace(defaultRemoteBranchFromSymbolicRef(remoteName, symbolicRefOutput))
 	if symbolicBranch != "" {
 		return symbolicBranch
 	}
-	lsRemoteOutput, _ := gitOutput(cwd, "ls-remote", "--symref", remoteName, "HEAD")
+	lsRemoteOutput, _ := gitOutput(ctx, cwd, "ls-remote", "--symref", remoteName, "HEAD")
 	// [LAW:one-source-of-truth] Branch resolution follows one deterministic candidate chain: local remote HEAD, then remote HEAD advertisement.
 	return strings.TrimSpace(defaultRemoteBranchFromLSRemote(lsRemoteOutput))
 }
 
 func Resolve(cwd string) (Info, error) {
-	rootDir, err := gitOutput(cwd, "rev-parse", "--show-toplevel")
+	// [LAW:dataflow-not-control-flow] Store-geometry git calls are local rev-parse
+	// queries that cannot hang on a network, so cancellation buys nothing here;
+	// context.Background() is the honest "never cancels" value, and it keeps Resolve's
+	// many callers free of a ctx they would only forward to a subprocess that never
+	// blocks. Cancellation is threaded only through the receive/sync path's network
+	// git calls, where a wedge is reachable.
+	rootDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return Info{}, classifyGitError(fmt.Sprintf("git rev-parse --show-toplevel in %q", cwd), err)
 	}
@@ -169,7 +176,10 @@ func deriveLocation(cwd string) (Location, error) {
 	// to the cwd is correct on every Git version (no dependency on the newer
 	// --path-format=absolute flag, which would break older Git with a misleading
 	// "not a git repo" error).
-	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
+	// [LAW:dataflow-not-control-flow] Local geometry query; never blocks on a
+	// network, so context.Background() (never cancels) is the correct value — see
+	// Resolve for why the receive/sync path threads a real ctx and this does not.
+	gitCommonDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
 	}
@@ -218,8 +228,17 @@ func LocationFromStorageDir(storageDir string) Location {
 	}
 }
 
-func gitOutput(cwd string, args ...string) (string, error) {
-	cmd := exec.Command("git", args...)
+// gitOutput runs one git subprocess and returns its trimmed stdout. It spawns
+// through exec.CommandContext so a cancelled ctx kills the subprocess promptly:
+// a network-wedged call (ls-remote/fetch to an unreachable remote) abandons on
+// cancellation instead of outliving it. Cancellation is a value crossing this one
+// seam, not a second code path — a caller whose git call cannot hang on the network
+// (local rev-parse geometry) passes context.Background(), which never cancels and so
+// reproduces the pre-ctx behavior exactly. [LAW:dataflow-not-control-flow]
+// [LAW:no-ambient-temporal-coupling] the subprocess lifecycle is owned by ctx, not
+// left to outlive a cancelled command until a grace-timer hard-exit reaps it.
+func gitOutput(ctx context.Context, cwd string, args ...string) (string, error) {
+	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = cwd
 	out, err := cmd.Output()
 	if err != nil {
@@ -296,8 +315,8 @@ func upstreamRemoteFromRef(ref string) string {
 	return strings.TrimSpace(parts[0])
 }
 
-func GitRemotes(cwd string) ([]GitRemote, error) {
-	output, err := gitOutput(cwd, "remote", "-v")
+func GitRemotes(ctx context.Context, cwd string) ([]GitRemote, error) {
+	output, err := gitOutput(ctx, cwd, "remote", "-v")
 	if err != nil {
 		return nil, err
 	}

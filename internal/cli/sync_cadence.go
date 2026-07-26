@@ -109,8 +109,8 @@ func markReceiveAttempt(ws workspace.Info) error {
 // the caller must surface, not silently treat as absence. [LAW:no-silent-failure]
 // [LAW:no-defensive-null-guards] The two conditions are distinct values, not one
 // folded bool.
-func workspaceHasGitRemote(ws workspace.Info) (bool, error) {
-	remotes, err := workspace.GitRemotes(ws.RootDir)
+func workspaceHasGitRemote(ctx context.Context, ws workspace.Info) (bool, error) {
+	remotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return false, err
 	}

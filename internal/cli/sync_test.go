@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"reflect"
 	"strings"
 	"testing"
@@ -442,7 +443,7 @@ func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
-	got, err := resolveSyncBranch(t.TempDir(), "origin")
+	got, err := resolveSyncBranch(context.Background(), t.TempDir(), "origin")
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -453,7 +454,7 @@ func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 
 func TestResolveSyncBranchErrorsWhenDefaultBranchUnavailable(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
-	_, err := resolveSyncBranch(t.TempDir(), "origin")
+	_, err := resolveSyncBranch(context.Background(), t.TempDir(), "origin")
 	if err == nil {
 		t.Fatal("expected error when default branch is unavailable")
 	}
