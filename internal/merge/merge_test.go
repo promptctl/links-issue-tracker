@@ -50,6 +50,41 @@ func TestThreeWayEmitsProsePendingForConcurrentTitleRewrite(t *testing.T) {
 	}
 }
 
+// TestThreeWayEmptyBaseUnionsUnrelatedSides pins the load-bearing insight combine relies
+// on: with an EMPTY base (no common ancestor), ThreeWay degrades to a two-way union — every
+// id on only one side is taken from it, and an id on BOTH is field-resolved with no base. It
+// is the whole mechanism of `lit sync reconcile combine`, proven here at the pure boundary.
+func TestThreeWayEmptyBaseUnionsUnrelatedSides(t *testing.T) {
+	now := time.Now().UTC()
+	mk := func(id, title string) model.Issue {
+		return issueWithStatus(t, model.Issue{ID: id, Title: title, IssueType: "task", CreatedAt: now, UpdatedAt: now}, model.StateOpen)
+	}
+	local := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{mk("only-local", "L"), mk("shared", "from-B")}}
+	remote := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{mk("only-remote", "R"), mk("shared", "from-A")}}
+
+	result := ThreeWay(model.Export{}, local, remote)
+	settled := result.Provisional()
+
+	// The union carries every unique id AND the shared id — nothing dropped.
+	got := map[string]bool{}
+	for _, issue := range settled.Issues {
+		got[issue.ID] = true
+	}
+	for _, want := range []string{"only-local", "only-remote", "shared"} {
+		if !got[want] {
+			t.Errorf("union missing %q: %+v", want, settled.Issues)
+		}
+	}
+	// The shared id's title diverged with no base, so it is held for the agent — never picked.
+	if len(result.Pending) != 1 {
+		t.Fatalf("pending = %#v, want exactly the shared title held", result.Pending)
+	}
+	p := result.Pending[0]
+	if p.IssueID != "shared" || p.Field != ProseTitle || p.Base != "" || p.Ours != "from-B" || p.Theirs != "from-A" {
+		t.Fatalf("held prose = %#v, want shared/title with empty base and both sides' text", p)
+	}
+}
+
 func TestThreeWayComparesJSONUnmarshaledEpicData(t *testing.T) {
 	now := time.Now().UTC()
 	hydratedEpic, err := model.HydrateAllOf(model.Issue{

@@ -122,37 +122,32 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 // commit on the remote head. [LAW:dataflow-not-control-flow] the choice is a value
 // selecting the domain operation, not a mode threaded through duplicated plumbing.
 func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileResult, plan reconcilePlan, remote, branch string, choice UnrelatedResolution) error {
-	guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 	switch choice {
 	case TakeRemote:
+		// take-remote adopts the remote head wholesale (resetHardToRef) — no scratch, no
+		// replay commit — so it takes only its own snapshot guard, NOT the full scratch
+		// envelope, and is exempt from the schema-ahead refusal: adopting an ahead head is a
+		// safe recovery (the stale binary gets the newer data), not a regression.
+		guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 		trackingRef := fmt.Sprintf("remotes/%s/%s", remote, branch)
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	case TakeLocal:
-		// [LAW:single-enforcer] Refuse a schema-ahead remote BEFORE any mutation, exactly
-		// as the three-way reconcile does: take-local authors a replay commit ON the
-		// remote head (commitReplayAndAdvance → resetAndLift + replaceFromExport), so if
-		// the remote head is at a schema this binary cannot produce, that replay would
-		// author a commit BELOW it — dropping every field the newer schema added and, on
-		// push, regressing the shared remote. That is the 2026-07-08 incident shape; the
-		// guard reads the remote head's version as data and blocks it. take-REMOTE is
-		// exempt: it adopts the remote head wholesale (resetHardToRef), authoring no
-		// replay commit, so a schema-ahead remote is a safe adopt, not a regression.
-		if err := s.guardCommitSchemaAhead(ctx, remote, branch, plan.remoteHead); err != nil {
-			return err
-		}
-		// Sweep any scratch branch a previously-killed run abandoned, then derive this
-		// run's unique name; the commit lock guarantees any existing scratch is an orphan.
-		s.sweepStaleReconcileScratch(ctx)
-		scratchBranch := reconcileScratchName()
-		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+		// take-local authors a replay commit ON the remote head (commitReplayAndAdvance),
+		// so it shares the three-way path's full safe-replay envelope — schema-ahead refusal
+		// included: a replay below an ahead remote's schema would drop the newer fields and
+		// regress the shared remote on push (the 2026-07-08 incident shape).
+		// [LAW:single-enforcer] the same replayUnderGuard that wraps the three-way reconcile.
+		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratchBranch string) error {
 			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratchBranch, plan.localHead, plan.remoteHead)
-		}, s.reconnect, transientRetryDelay, waitWithContext)
+		})
 	default:
 		// SyncResolveUnrelated already rejected an invalid value at its boundary, so this
-		// is unreachable — but a future third resolution (combine) reaching here unhandled
-		// must fail loudly, never silently no-op. [LAW:no-silent-failure]
+		// is unreachable. The union (combine) resolution is NOT a wholesale take — it merges
+		// rather than picks a side — so it lives on the reconcile boundary (SyncReconcileCombine)
+		// and never reaches this dispatch; any unhandled value here still fails loudly rather
+		// than silently no-op. [LAW:no-silent-failure]
 		return fmt.Errorf("resolve unrelated histories: unhandled side %q", choice)
 	}
 }
