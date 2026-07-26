@@ -31,24 +31,29 @@ func TestAppliedVersionFromOpenErr(t *testing.T) {
 	}
 }
 
-// stubSchemaReader returns a fixed applied schema version — no Dolt. The upgrade
-// pipeline reads it once to decide the backward-move refusal.
+// stubSchemaReader returns a fixed workspace schema — no Dolt. The upgrade
+// pipeline reads it once to decide the backward-move refusal and which
+// remediation the refusal names.
 type stubSchemaReader struct {
-	version int64
-	err     error
-	called  bool
+	version  int64
+	openable bool
+	err      error
+	called   bool
 }
 
-func (s *stubSchemaReader) AppliedSchemaVersion(_ context.Context) (int64, error) {
+func (s *stubSchemaReader) ReadWorkspaceSchema(_ context.Context) (workspaceSchema, error) {
 	s.called = true
-	return s.version, s.err
+	if s.err != nil {
+		return workspaceSchema{}, s.err
+	}
+	return workspaceSchema{AppliedVersion: s.version, Openable: s.openable}, nil
 }
 
 // newFakeTarget (downgrade_test.go) reports Schema{Min:1, Max:3}. A workspace at
 // v2 is BEHIND that target, so upgrading to it is the forward move upgrade owns.
 func TestRunUpgradeWithHappyPath(t *testing.T) {
 	res := &stubResolver{target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2}
+	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/usr/local/bin/lit", nil))
@@ -75,11 +80,12 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 	}
 }
 
-// A target whose schema support ends BELOW the workspace's applied version is a
-// backward move: refuse before installing, and name lit downgrade.
-func TestRunUpgradeWithTargetBehindSkipsInstall(t *testing.T) {
-	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
-	sr := &stubSchemaReader{version: 5}           // workspace ahead of the target
+// A target below the workspace, when this binary CAN open the workspace, is a
+// plain backward move: refuse before installing, and name lit downgrade (which
+// can run here — it reverses the schema, then installs the older binary).
+func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
+	res := &stubResolver{target: newFakeTarget()}       // Schema.Max == 3
+	sr := &stubSchemaReader{version: 5, openable: true} // workspace ahead of the target, but openable
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
@@ -87,11 +93,41 @@ func TestRunUpgradeWithTargetBehindSkipsInstall(t *testing.T) {
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
 	}
-	if behind.Current != 5 || behind.Target != 3 {
-		t.Errorf("err fields = {Current:%d Target:%d}; want {5 3}", behind.Current, behind.Target)
+	if behind.Current != 5 || behind.Target != 3 || !behind.WorkspaceOpenable {
+		t.Errorf("err fields = {Current:%d Target:%d Openable:%v}; want {5 3 true}", behind.Current, behind.Target, behind.WorkspaceOpenable)
 	}
 	if !strings.Contains(behind.Error(), "lit downgrade --to v0.9.0") {
-		t.Errorf("backward-move error must name lit downgrade: %q", behind.Error())
+		t.Errorf("openable backward-move error must name lit downgrade: %q", behind.Error())
+	}
+	if inst.called {
+		t.Error("installer must not run when the target is behind the workspace")
+	}
+}
+
+// A target below the workspace, when this binary CANNOT open the workspace (the
+// version was recovered from a schema-ahead refusal), must NOT name lit downgrade
+// — downgrade would hit the same refusal on open. The remedy is a newer target.
+// This is the misleading-remediation trap the PR set out to kill, at the seam
+// between the two features.
+func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
+	res := &stubResolver{target: newFakeTarget()}        // Schema.Max == 3
+	sr := &stubSchemaReader{version: 7, openable: false} // workspace ahead; this binary can't open it
+	inst := &stubInstaller{}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	var behind *UpgradeTargetBehindError
+	if !errors.As(err, &behind) {
+		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
+	}
+	if behind.WorkspaceOpenable {
+		t.Errorf("WorkspaceOpenable = true; want false (version came from the schema-ahead refusal)")
+	}
+	msg := behind.Error()
+	if strings.Contains(msg, "lit downgrade") {
+		t.Errorf("not-openable refusal must NOT suggest lit downgrade (dead here): %q", msg)
+	}
+	if !strings.Contains(msg, "pick an upgrade target") || !strings.Contains(msg, "cannot open") {
+		t.Errorf("not-openable refusal must point at a newer target: %q", msg)
 	}
 	if inst.called {
 		t.Error("installer must not run when the target is behind the workspace")
@@ -103,7 +139,7 @@ func TestRunUpgradeWithTargetBehindSkipsInstall(t *testing.T) {
 // an old one). Equality is not a backward move — install proceeds.
 func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
-	sr := &stubSchemaReader{version: 3}
+	sr := &stubSchemaReader{version: 3, openable: true}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	if err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
@@ -116,7 +152,7 @@ func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 
 func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 	res := &stubResolver{target: newFakeTarget()}
-	sr := &stubSchemaReader{version: 2}
+	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{err: errors.New("network down")}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))

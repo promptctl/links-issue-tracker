@@ -13,24 +13,45 @@ import (
 
 // UpgradeTargetBehindError reports that the requested upgrade target's schema
 // support ends BELOW the workspace's current applied schema — installing it
-// would leave a binary that cannot even open this workspace. That is a backward
-// move, which is `lit downgrade`'s job (it reverses the schema first, then
-// installs the older binary), so upgrade refuses rather than stranding the user.
+// would leave a binary that cannot even open this workspace. Upgrade refuses
+// rather than stranding the user; the remedy depends on whether THIS binary can
+// open the workspace, carried by WorkspaceOpenable:
 //
-// [LAW:types-are-the-program] The exact mirror of store.DowngradeTargetAheadError:
-// each direction refuses the other's job and names the sibling command, so
-// version traversal has exactly two entry points and neither impersonates the
-// other [LAW:one-type-per-behavior].
+//   - openable: the workspace opened cleanly, so this is a plain backward move —
+//     `lit downgrade` CAN run (it reverses the schema, then installs the older
+//     binary). Point at it.
+//   - not openable: the applied version was recovered from a schema-ahead refusal
+//     (the workspace is ahead of this binary), so `lit downgrade` cannot run here
+//     either — it would hit the same refusal on open. The remedy is a NEWER
+//     target, never a reverse.
+//
+// [LAW:types-are-the-program] The message is a discriminated rendering of the
+// domain fact (openable), not a guess — the same misleading-remediation trap this
+// PR set out to kill would return if it unconditionally named downgrade. It is
+// the mirror of store.DowngradeTargetAheadError: each direction refuses the
+// other's job, so version traversal has exactly two entry points and neither
+// impersonates the other [LAW:one-type-per-behavior].
 type UpgradeTargetBehindError struct {
 	Current int64
 	Target  int64
 	Tag     string
+	// WorkspaceOpenable is true when this binary opened the workspace to read
+	// Current, false when Current was recovered from the schema-ahead refusal.
+	WorkspaceOpenable bool
 }
 
 func (e *UpgradeTargetBehindError) Error() string {
+	// [LAW:dataflow-not-control-flow] one field selects the remediation text; the
+	// refusal itself (target below workspace) is the same fact either way.
+	if e.WorkspaceOpenable {
+		return fmt.Sprintf(
+			"cannot upgrade to %s: its schema support ends at v%d but this workspace is already at v%d — that is a backward move; use `lit downgrade --to %s` instead (it reverses the schema before installing the older binary)",
+			e.Tag, e.Target, e.Current, e.Tag,
+		)
+	}
 	return fmt.Sprintf(
-		"cannot upgrade to %s: its schema support ends at v%d but this workspace is already at v%d — that is a backward move; use `lit downgrade --to %s` instead (it reverses the schema before installing the older binary)",
-		e.Tag, e.Target, e.Current, e.Tag,
+		"cannot upgrade to %s: it supports only through schema v%d but this workspace is at v%d, which this binary cannot open — pick an upgrade target whose schema support reaches v%d or newer (this binary is too old to reverse the schema here, so an older target is not an option)",
+		e.Tag, e.Target, e.Current, e.Current,
 	)
 }
 
@@ -62,24 +83,37 @@ func runUpgrade(ctx context.Context, stdout io.Writer, ws workspace.Info, args [
 	return runUpgradeWith(ctx, stdout, workspaceSchemaReader{ws: ws}, args, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
 }
 
+// workspaceSchema is what upgrade learns about the target workspace before it
+// decides: the applied schema version, and whether THIS binary could open the
+// workspace to read it. Openable is the discriminator the backward-move
+// remediation turns on — false means the version was recovered from a
+// schema-ahead refusal, so a reverse (`lit downgrade`) cannot run here.
+// [LAW:types-are-the-program] the two facts travel together so no consumer can
+// hold a version without also knowing whether it came from a clean open.
+type workspaceSchema struct {
+	AppliedVersion int64
+	Openable       bool
+}
+
 // schemaReader is the schema-side dependency runUpgradeWith reads to make the
 // symmetric backward-move refusal. The production implementation is
 // workspaceSchemaReader; tests substitute a fake.
 //
-// [LAW:types-are-the-program] Upgrade needs exactly one fact — the workspace's
-// applied schema version — so it depends on that one verb, not on a whole opened
-// store. This keeps the pipeline testable without a real Dolt workspace.
+// [LAW:types-are-the-program] Upgrade needs exactly the applied version and
+// whether the workspace opened — so it depends on that one verb, not on a whole
+// opened store. This keeps the pipeline testable without a real Dolt workspace.
 type schemaReader interface {
-	AppliedSchemaVersion(ctx context.Context) (int64, error)
+	ReadWorkspaceSchema(ctx context.Context) (workspaceSchema, error)
 }
 
-// workspaceSchemaReader reads the workspace's applied schema version by opening
-// the store best-effort. It tolerates the ONE open failure upgrade exists to fix
-// — a workspace whose schema is ahead of this binary — because that refusal
+// workspaceSchemaReader reads the workspace schema by opening the store
+// best-effort. It tolerates the ONE open failure upgrade exists to fix — a
+// workspace whose schema is ahead of this binary — because that refusal
 // (UnsupportedSchemaVersionError) is the very message that sent the user here and
 // it carries the workspace version as data. Reading the version off the refusal
-// and proceeding is what stops `lit upgrade` from dead-ending on the store it
-// cannot open. Any OTHER open failure propagates. [LAW:no-silent-failure]
+// (and marking the workspace not-Openable) is what stops `lit upgrade` from
+// dead-ending on the store it cannot open. Any OTHER open failure propagates.
+// [LAW:no-silent-failure]
 // [LAW:dataflow-not-control-flow] the applied version is handshake DATA taken
 // from a clean open's value OR the typed refusal — never inferred from a query
 // happening to succeed.
@@ -87,13 +121,13 @@ type workspaceSchemaReader struct {
 	ws workspace.Info
 }
 
-func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (version int64, err error) {
+func (r workspaceSchemaReader) ReadWorkspaceSchema(ctx context.Context) (schema workspaceSchema, err error) {
 	st, err := store.OpenForRead(ctx, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
 		if v, ok := appliedVersionFromOpenErr(err); ok {
-			return v, nil
+			return workspaceSchema{AppliedVersion: v, Openable: false}, nil
 		}
-		return 0, err
+		return workspaceSchema{}, err
 	}
 	// [LAW:no-silent-failure] Store.Close releases the workspace shared lock; a
 	// discarded close error could leave the workspace pinned against a later
@@ -104,7 +138,11 @@ func (r workspaceSchemaReader) AppliedSchemaVersion(ctx context.Context) (versio
 			err = cerr
 		}
 	}()
-	return st.AppliedSchemaVersion(ctx)
+	version, err := st.AppliedSchemaVersion(ctx)
+	if err != nil {
+		return workspaceSchema{}, err
+	}
+	return workspaceSchema{AppliedVersion: version, Openable: true}, nil
 }
 
 // appliedVersionFromOpenErr recovers the workspace's applied schema version from
@@ -130,8 +168,9 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 //
 // Sequence (each stage runs unconditionally; failure stops the pipeline):
 //  1. Resolve --to <tag> through the release manifest → typed Target.
-//  2. Read the workspace's applied schema; refuse a target whose schema support
-//     ends below it (a backward move — UpgradeTargetBehindError names downgrade).
+//  2. Read the workspace schema; refuse a target whose schema support ends below
+//     it (a backward move — UpgradeTargetBehindError names the right remedy from
+//     whether this binary can open the workspace: a reverse, or a newer target).
 //  3. Resolve the running binary's real path and atomically install the target.
 //  4. Print the result. The next lit invocation runs the installed binary, whose
 //     Open() forward-migrates the workspace if it trails the new registry.
@@ -141,7 +180,7 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 func runUpgradeWith(
 	ctx context.Context,
 	stdout io.Writer,
-	store schemaReader,
+	schema schemaReader,
 	args []string,
 	resolver release.Resolver,
 	installer release.Installer,
@@ -166,17 +205,22 @@ func runUpgradeWith(
 		return err
 	}
 
-	// [LAW:no-silent-failure] Read the applied schema BEFORE installing so a
+	// [LAW:no-silent-failure] Read the workspace schema BEFORE installing so a
 	// backward-move request is refused without having overwritten the binary.
 	// A target whose schema support ends below the workspace could not open it,
-	// so installing it would strand the user; that is downgrade's job, which
-	// reverses the schema first.
-	current, err := store.AppliedSchemaVersion(ctx)
+	// so installing it would strand the user; the refusal names the right remedy
+	// (downgrade vs. a newer target) from whether this binary can open it.
+	ws, err := schema.ReadWorkspaceSchema(ctx)
 	if err != nil {
 		return fmt.Errorf("upgrade: read workspace schema version: %w", err)
 	}
-	if target.Manifest.Schema.Max < current {
-		return &UpgradeTargetBehindError{Current: current, Target: target.Manifest.Schema.Max, Tag: tag}
+	if target.Manifest.Schema.Max < ws.AppliedVersion {
+		return &UpgradeTargetBehindError{
+			Current:           ws.AppliedVersion,
+			Target:            target.Manifest.Schema.Max,
+			Tag:               tag,
+			WorkspaceOpenable: ws.Openable,
+		}
 	}
 
 	binPath, err := binPathFn()
