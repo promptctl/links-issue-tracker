@@ -103,7 +103,51 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 			return rotateErr
 		}
 	}
-	return lastErr
+	return exhaustedContentionError(lastErr)
+}
+
+// WorkspaceWriteBlockedError is the terminal, cross-process refusal a mutation
+// hits when another process holds the embedded Dolt store open for writing: the
+// manifest stayed read-only across the entire transient-retry budget, which no
+// amount of in-process reconnecting can clear — only the foreign holder releasing
+// does. It is the exhausted counterpart to the recoverable ErrTransientGCContention
+// (intra-process, clears on retry). [FRAMING:representation] "database is read
+// only" maps a lock-holder situation onto a permission one; this type carries the
+// holder truth so the CLI renders "another lit process holds this workspace"
+// instead of the raw backend line. The backend error is preserved as the cause
+// for diagnosis, never dropped. [LAW:no-silent-failure]
+type WorkspaceWriteBlockedError struct {
+	Cause error
+}
+
+func (e WorkspaceWriteBlockedError) Error() string {
+	// The holder sentence is the headline; the backend string is demoted to a
+	// parenthetical for diagnosis, mirroring the sync-failure contract so the raw
+	// "read only" line can never read as the whole (misleading) message.
+	return fmt.Sprintf(
+		"another lit process is holding this workspace open for writing; the store stayed read-only across every retry, so this write could not proceed (backend detail: %v)",
+		e.Cause)
+}
+
+// Unwrap preserves the backend cause chain so errors.Is/As still see the
+// underlying transient classification for diagnosis, while errors.As at the
+// surface recognizes this terminal type first.
+func (e WorkspaceWriteBlockedError) Unwrap() error { return e.Cause }
+
+// exhaustedContentionError promotes a manifest-read-only that survived the full
+// retry budget into the terminal WorkspaceWriteBlockedError. The discriminator is
+// exhaustion: an intra-process online-GC hiccup clears within the budget (each
+// attempt rotates the poisoned connection), so a manifest STILL read-only after
+// every rotation is a foreign writer holding the store — not a transient this
+// process can clear. A persistent GC-reset or any non-manifest error passes
+// through unchanged, so only the genuinely cross-process case is reclassified.
+// [LAW:types-are-the-program] the accept/reject decision lives in the type the
+// surface dispatches on, not in message-string matching at the CLI.
+func exhaustedContentionError(err error) error {
+	if err != nil && isManifestReadOnlyError(err) {
+		return WorkspaceWriteBlockedError{Cause: err}
+	}
+	return err
 }
 
 func transientRetryDelay(attempt int) time.Duration {
