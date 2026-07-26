@@ -68,6 +68,26 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	}
 }
 
+// TestRunStoresPropagatesDiscoverError pins the error contract: when Discover
+// fails (here, git cannot resolve because PATH is empty), runStores returns the
+// error rather than printing an empty success. [LAW:behavior-not-structure]
+func TestRunStoresPropagatesDiscoverError(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir repo: %v", err)
+	}
+	gitInit(t, repo)
+	addLitStore(t, repo)
+
+	t.Setenv("PATH", "")
+
+	var out bytes.Buffer
+	if err := runStores(&out, []string{root}); err == nil {
+		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
+	}
+}
+
 // TestRunStoresEmptyWhenNoStores confirms a store-less root exits cleanly with
 // no output rather than erroring.
 func TestRunStoresEmptyWhenNoStores(t *testing.T) {

@@ -129,6 +129,29 @@ func TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess(t *testing.T) {
 	}
 }
 
+// TestDiscoverSkipsFileShapedStoreDatabase guards the openability contract: a
+// regular file where the store database directory should be (a leftover from a
+// failed operation) exists but is not openable, so it must not be reported as a
+// store. [LAW:types-are-the-program]
+func TestDiscoverSkipsFileShapedStoreDatabase(t *testing.T) {
+	root := t.TempDir()
+	repo := mkdir(t, filepath.Join(root, "repo"))
+	run(t, repo, "git", "init")
+	// Plant links/ but make dolt a regular file rather than the store directory.
+	mkdir(t, filepath.Join(repo, ".git", "links"))
+	if err := os.WriteFile(filepath.Join(repo, ".git", "links", "dolt"), []byte("not a store\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(dolt file) error = %v", err)
+	}
+
+	locations, err := Discover([]string{root})
+	if err != nil {
+		t.Fatalf("Discover() error = %v", err)
+	}
+	if len(locations) != 0 {
+		t.Fatalf("Discover() = %v, want no stores (dolt is a file, not a directory)", locations)
+	}
+}
+
 // TestDiscoverMatchesResolveDerivation locks the discovery/resolve seam: the
 // location Discover reports for a repo is byte-identical to the store Resolve
 // opens there. If the two derivations ever drift, discovery would list a store

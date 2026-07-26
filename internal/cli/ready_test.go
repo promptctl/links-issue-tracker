@@ -34,10 +34,10 @@ func newTestCLIApp(t *testing.T) *app.App {
 	})
 	return &app.App{
 		Workspace: workspace.Info{
-			RootDir:      workspaceRoot,
-			DatabasePath: filepath.Join(workspaceRoot, "dolt"),
-			WorkspaceID:  "test-workspace-id",
-			IssuePrefix:  testIssuePrefix(t, "test"),
+			Location:    workspace.Location{DatabasePath: filepath.Join(workspaceRoot, "dolt")},
+			RootDir:     workspaceRoot,
+			WorkspaceID: "test-workspace-id",
+			IssuePrefix: testIssuePrefix(t, "test"),
 		},
 		Store: st,
 	}

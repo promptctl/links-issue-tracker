@@ -88,7 +88,8 @@ func discoverUnder(root string, byStore map[string]Location) error {
 			}
 			return derr
 		}
-		if _, statErr := os.Stat(loc.DatabasePath); statErr != nil {
+		info, statErr := os.Stat(loc.DatabasePath)
+		if statErr != nil {
 			// [LAW:single-enforcer] "Is there a lit store here" is answered by the
 			// same existence check OpenForRead uses — the store database dir — so
 			// every discovered Location is openable and no lit-less git repo slips
@@ -98,6 +99,14 @@ func discoverUnder(root string, byStore map[string]Location) error {
 				return nil
 			}
 			return fmt.Errorf("stat store database %q: %w", loc.DatabasePath, statErr)
+		}
+		// [LAW:types-are-the-program] A dolt store is a directory; a regular file
+		// at that path (a leftover from a failed operation) exists but is not
+		// openable, so counting it would break this function's contract that every
+		// returned Location opens read-only. The predicate is "a store database
+		// directory is here", not merely "a path exists here".
+		if !info.IsDir() {
+			return nil
 		}
 		byStore[loc.StorageDir] = loc
 		return nil

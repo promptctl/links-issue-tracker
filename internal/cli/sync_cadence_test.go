@@ -40,7 +40,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // allows; a marker inside the interval blocks. The single-flight engine lock
 // makes an over-eager allow a harmless no-op, so the boundary errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
-	ws := workspace.Info{StorageDir: t.TempDir()}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	now := time.Now()
 	interval := 10 * time.Second
 

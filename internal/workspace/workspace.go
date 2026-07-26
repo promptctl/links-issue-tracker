@@ -25,14 +25,15 @@ type Config struct {
 }
 
 type Info struct {
-	RootDir      string
-	GitCommonDir string
-	StorageDir   string
-	ConfigPath   string
-	DatabasePath string
-	DoltRepoPath string
-	WorkspaceID  string
-	IssuePrefix  PrefixSpec
+	// Location holds the store's path geometry. Embedding it — rather than
+	// re-listing StorageDir/DatabasePath/… as Info's own fields and copying each
+	// across in Resolve — keeps those paths in exactly one place, so a new
+	// Location field cannot silently fail to appear on Info. [LAW:one-source-of-truth]
+	// Field access (ws.StorageDir, ws.DatabasePath) is unchanged via promotion.
+	Location
+	RootDir     string
+	WorkspaceID string
+	IssuePrefix PrefixSpec
 }
 
 // Location is the on-disk geometry of a lit store — every path derived from a
@@ -145,14 +146,10 @@ func Resolve(cwd string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{
-		RootDir:      rootDir,
-		GitCommonDir: loc.GitCommonDir,
-		StorageDir:   loc.StorageDir,
-		ConfigPath:   loc.ConfigPath,
-		DatabasePath: loc.DatabasePath,
-		DoltRepoPath: loc.DoltRepoPath,
-		WorkspaceID:  cfg.WorkspaceID,
-		IssuePrefix:  prefix,
+		Location:    loc,
+		RootDir:     rootDir,
+		WorkspaceID: cfg.WorkspaceID,
+		IssuePrefix: prefix,
 	}, nil
 }
 
