@@ -176,6 +176,30 @@ func TestPrintCrossProjectRollupEmptyIsExplicit(t *testing.T) {
 	}
 }
 
+// TestPrintCrossProjectRollupAllErroredSkipsTable pins the all-error contract:
+// when every row carries an error, the count table (header + zero TOTAL) is
+// omitted — a reader sees only the self-labeled error lines, never a misleading
+// "all projects empty" summary above them.
+func TestPrintCrossProjectRollupAllErroredSkipsTable(t *testing.T) {
+	rows := []projectRollup{
+		{StorageDir: "/repos/a/.git/links", Err: errors.New("open store: locked")},
+		{StorageDir: "/repos/b/.git/links", Err: errors.New("read config: missing")},
+	}
+	var out bytes.Buffer
+	if err := printCrossProjectRollup(&out, rows); err != nil {
+		t.Fatalf("printCrossProjectRollup() error = %v", err)
+	}
+	got := out.String()
+	for _, unwanted := range []string{"PROJECT", "TOTAL"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("all-error output %q should not render the %q table", got, unwanted)
+		}
+	}
+	if strings.Count(got, "!") != 2 {
+		t.Fatalf("all-error output %q should carry exactly two marked error lines", got)
+	}
+}
+
 // TestGatherCrossProjectRollupUnreadableStoreIsErrorRow drives the gather path:
 // a tree of two discovered-but-unopenable stores yields two error rows rather
 // than a fatal error, so one broken store never aborts the whole overview.

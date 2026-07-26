@@ -164,8 +164,8 @@ func gatherCrossProjectRollup(ctx context.Context, roots []string) ([]projectRol
 // here re-reads config that OpenLocationForRead also reads for the workspace_id —
 // cheap read-only JSON with no drift risk, and it keeps the cross-project open on
 // the single OpenLocationForRead path rather than opening the store by hand.
-func rollupLocation(ctx context.Context, loc workspace.Location) projectRollup {
-	row := projectRollup{Label: loc.StorageDir, StorageDir: loc.StorageDir}
+func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRollup) {
+	row = projectRollup{Label: loc.StorageDir, StorageDir: loc.StorageDir}
 	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil && cfg.IssuePrefix != "" {
 		row.Label = cfg.IssuePrefix
 	}
@@ -174,9 +174,20 @@ func rollupLocation(ctx context.Context, loc workspace.Location) projectRollup {
 		row.Err = err
 		return row
 	}
-	defer func() { _ = st.Close() }()
-	// nil required-fields: the repo-local needs-design gate is not a store fact and
-	// does not cross the store boundary; see runOverview's [LAW:one-source-of-truth].
+	// [LAW:no-silent-failure] A read-only close failure (e.g. the embedded Dolt
+	// engine failing to release its locks) surfaces rather than being discarded —
+	// but only when no substantive error already occurred, so an open/classify
+	// failure always takes priority over a mere cleanup fault.
+	defer func() {
+		if cerr := st.Close(); cerr != nil && row.Err == nil {
+			row.Err = cerr
+		}
+	}()
+	// nil required-fields opts out of ONLY the per-repo required_fields policy (the
+	// field-presence gate driven by that config). Every store-intrinsic annotation
+	// — blockers, the lane gate, needs-design — still runs, so those DO cross the
+	// boundary; the required_fields policy is repo config, not a store fact, and a
+	// Location carries no repo root. See runOverview's [LAW:one-source-of-truth].
 	annotated, _, err := classifyWorkable(ctx, st, nil, workableFilter{})
 	if err != nil {
 		row.Err = err
@@ -203,30 +214,43 @@ func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 		_, err := fmt.Fprintln(w, "(no stores discovered)")
 		return err
 	}
-	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, "PROJECT\tREADY\tIN-FLIGHT\tBLOCKED"); err != nil {
-		return err
-	}
-	var totalReady, totalInFlight, totalBlocked int
-	var errored []projectRollup
+
+	var readable, errored []projectRollup
 	for _, row := range rows {
 		if row.Err != nil {
 			errored = append(errored, row)
 			continue
 		}
-		totalReady += row.Ready
-		totalInFlight += row.InFlight
-		totalBlocked += row.Blocked
-		if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\n", row.Label, row.Ready, row.InFlight, row.Blocked); err != nil {
+		readable = append(readable, row)
+	}
+
+	// The count table describes the readable projects and its TOTAL sums exactly
+	// the rows it shows. When every store errored there are no such rows, so the
+	// header and a zero TOTAL are omitted rather than printed as a misleading
+	// "all projects empty" picture — the self-labeled error lines stand alone.
+	// [LAW:no-silent-failure]
+	if len(readable) > 0 {
+		tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
+		if _, err := fmt.Fprintln(tw, "PROJECT\tREADY\tIN-FLIGHT\tBLOCKED"); err != nil {
+			return err
+		}
+		var totalReady, totalInFlight, totalBlocked int
+		for _, row := range readable {
+			totalReady += row.Ready
+			totalInFlight += row.InFlight
+			totalBlocked += row.Blocked
+			if _, err := fmt.Fprintf(tw, "%s\t%d\t%d\t%d\n", row.Label, row.Ready, row.InFlight, row.Blocked); err != nil {
+				return err
+			}
+		}
+		if _, err := fmt.Fprintf(tw, "TOTAL\t%d\t%d\t%d\n", totalReady, totalInFlight, totalBlocked); err != nil {
+			return err
+		}
+		if err := tw.Flush(); err != nil {
 			return err
 		}
 	}
-	if _, err := fmt.Fprintf(tw, "TOTAL\t%d\t%d\t%d\n", totalReady, totalInFlight, totalBlocked); err != nil {
-		return err
-	}
-	if err := tw.Flush(); err != nil {
-		return err
-	}
+
 	for _, row := range errored {
 		if _, err := fmt.Fprintf(w, "! %s: %v\n", row.StorageDir, row.Err); err != nil {
 			return err
