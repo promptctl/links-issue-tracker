@@ -141,7 +141,8 @@ func TestNormalizeReleaseTag(t *testing.T) {
 		{"v0.4.1", "v0.4.1", ""},
 		{"0.4.1", "v0.4.1", ""},
 		{" v0.4.1 ", "v0.4.1", ""},
-		{"", "", "required"},
+		{"", "", "non-empty version"},
+		{"   ", "", "non-empty version"}, // whitespace-only trims to empty, same class as missing
 		{"v0.4.1/etc", "", "not a valid"},
 		{"v0.4..1", "", "not a valid"},
 		{"v0 .4.1", "", "not a valid"},

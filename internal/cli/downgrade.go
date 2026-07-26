@@ -124,7 +124,11 @@ func runDowngradeWith(
 func normalizeReleaseTag(in string, verb string) (string, error) {
 	t := strings.TrimSpace(in)
 	if t == "" {
-		return "", ValidationError{Message: verb + ": --to <version> is required"}
+		// One message covers both an omitted flag (default "") and a
+		// whitespace-only value — both TrimSpace to "" — without a branch
+		// [LAW:dataflow-not-control-flow]. "requires a non-empty version" is true
+		// for either, where "is required" wrongly implied the flag was absent.
+		return "", ValidationError{Message: verb + ": --to requires a non-empty version"}
 	}
 	if !strings.HasPrefix(t, "v") {
 		t = "v" + t

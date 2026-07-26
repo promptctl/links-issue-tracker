@@ -229,10 +229,11 @@ func TestRunUpgradeMissingTagIsRequired(t *testing.T) {
 	inst := &stubInstaller{}
 	var out bytes.Buffer
 	err := runUpgradeWith(context.Background(), &out, sr, []string{}, res, inst, fixedBinPath("/p/lit", nil))
-	if err == nil || !strings.Contains(err.Error(), "required") {
-		t.Fatalf("expected missing --to to be rejected as required, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "non-empty version") {
+		t.Fatalf("expected missing --to to be rejected as a non-empty-version error, got %v", err)
 	}
-	if res.called || inst.called {
-		t.Error("no resolve/install should run when --to is missing")
+	// The tag check precedes resolve AND the schema read, so none must fire.
+	if res.called || sr.called || inst.called {
+		t.Errorf("missing-tag guard leaked: resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
 	}
 }
