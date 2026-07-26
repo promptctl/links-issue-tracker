@@ -170,22 +170,50 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 		if _, err := fmt.Fprintln(w, "\nhistory:"); err != nil {
 			return err
 		}
-		for _, event := range detail.Events {
-			action := event.Action
-			if action == "" {
-				action = "update"
-			}
-			if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, formatHistoryTimestamp(event.CreatedAt), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
+		if err := printHistoryEvents(w, detail.Events); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// printHistoryEvents renders the field-level transition trail: one
+// "- [actor @ time] action reason" line per event, followed by that event's
+// indented "field: from → to" change lines. This is the single definition of
+// how the transition trail is formatted, shared by the `history:` block of
+// `lit show` (above) and the dedicated `lit history` command
+// (printIssueHistory). [LAW:one-source-of-truth] one renderer, so the two
+// surfaces can never drift; [LAW:decomposition] carved at the event/detail joint.
+func printHistoryEvents(w io.Writer, events []model.IssueEvent) error {
+	for _, event := range events {
+		// Plain field updates carry no Action; "update" is their display label.
+		// [LAW:dataflow-not-control-flow] absence of intent is data, not a mode.
+		action := event.Action
+		if action == "" {
+			action = "update"
+		}
+		if _, err := fmt.Fprintf(w, "- [%s @ %s] %s %s\n", event.Actor, formatHistoryTimestamp(event.CreatedAt), action, strings.ReplaceAll(event.Reason, "\n", "\\n")); err != nil {
+			return err
+		}
+		for _, change := range event.Changes {
+			if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, emptyDash(change.From), emptyDash(change.To)); err != nil {
 				return err
-			}
-			for _, change := range event.Changes {
-				if _, err := fmt.Fprintf(w, "    %s: %s → %s\n", change.Field, emptyDash(change.From), emptyDash(change.To)); err != nil {
-					return err
-				}
 			}
 		}
 	}
 	return nil
+}
+
+// printIssueHistory renders the standalone `lit history` view: an identifying
+// header (id + title) so the output stands alone, then the field-level
+// transition trail via the shared printHistoryEvents. Every issue carries at
+// least its "created" event, so the trail is never empty in practice; an empty
+// Events slice honestly prints just the header rather than fabricating a line.
+func printIssueHistory(w io.Writer, detail model.IssueDetail) error {
+	if _, err := fmt.Fprintf(w, "%s\n%s\n\nhistory:\n", detail.Issue.ID, detail.Issue.Title); err != nil {
+		return err
+	}
+	return printHistoryEvents(w, detail.Events)
 }
 
 // redirectGroup adapts the single optional redirect target to the slice
