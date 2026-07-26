@@ -122,6 +122,14 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		base.Class = syncFailureProseHeld
 		base.Fields = o.reconcile.pending
 		return base, true
+	case o.reconcile.state == store.SyncReconcileUnrelated:
+		// A no-common-ancestor divergence is non-transient like a held prose conflict —
+		// it will NOT clear on the next receive — so it routes through the same contract
+		// rather than falling to the ok=false "settled cleanly" default, which would
+		// silently report the auto-sync as fine while the store stayed unmergeably
+		// diverged. [LAW:no-silent-failure]
+		base.Class = syncFailureUnrelatedHistories
+		return base, true
 	default:
 		return SyncFailure{}, false
 	}
@@ -289,6 +297,8 @@ func reconcileReasonForState(state store.SyncReconcileState) string {
 		return "automatic reconcile merged the divergence into linear history"
 	case store.SyncReconcileProsePending:
 		return "automatic reconcile resolved every field but free-text diverged on both sides; held for the agent surface"
+	case store.SyncReconcileUnrelated:
+		return "automatic reconcile found unrelated histories (no common ancestor); held for wholesale/union resolution"
 	case store.SyncReconcileNotDiverged:
 		return "automatic reconcile found the branch no longer diverged; nothing to do"
 	default:
