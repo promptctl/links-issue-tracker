@@ -1,11 +1,13 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // syncFailureClass is the closed set of non-transient sync failures that reach an
@@ -25,6 +27,11 @@ const (
 	// backend error (Cause populated) or the divergence has simply sat unresolved
 	// (doctor's view, Cause empty). Remedy: a foreground pull.
 	syncFailureDivergedUnresolved syncFailureClass = "diverged_unresolved"
+	// syncFailureRemoteSchemaAhead: the remote head is at a schema version this
+	// binary cannot produce, so no sync write may author a commit below it. Unlike
+	// a divergence, this never clears by retrying — it clears only by upgrading the
+	// binary. Remedy: `lit upgrade` to the producer that advanced the remote.
+	syncFailureRemoteSchemaAhead syncFailureClass = "remote_schema_ahead"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -71,6 +78,49 @@ type SyncFailure struct {
 	// the backend detail is preserved; it is just demoted below the directive so
 	// it can no longer read as the whole (ignorable) message.
 	Cause error
+	// RemoteSchemaVersion, LocalSupportedMax, and RemoteProducer are populated only
+	// for syncFailureRemoteSchemaAhead: the remote head's applied schema version,
+	// this binary's registry max, and the producer binary version to upgrade to
+	// (empty when the remote head names none). [LAW:types-are-the-program] the
+	// fields present name which class rendered, so a consumer cannot read a
+	// remote-schema-ahead block without the versions that make it actionable.
+	RemoteSchemaVersion int64
+	LocalSupportedMax   int64
+	RemoteProducer      string
+}
+
+// remoteSchemaAheadFailure builds the sync-failure contract for a store
+// *RemoteSchemaAheadError, or ok=false when err is not one. It is the ONE adapter
+// from the store's typed remote-ahead refusal to the CLI's one contract renderer,
+// so every surface that can hit it — an explicit push/pull/reconcile, the inline
+// auto-reconcile, the on-change mirror push — produces the identical block.
+// [LAW:single-enforcer] [LAW:one-source-of-truth] the version fields come straight
+// off the typed error; no message text is parsed.
+func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
+	var ahead *store.RemoteSchemaAheadError
+	if !errors.As(err, &ahead) {
+		return SyncFailure{}, false
+	}
+	return SyncFailure{
+		Class:               syncFailureRemoteSchemaAhead,
+		Remote:              ahead.Remote,
+		Branch:              ahead.Branch,
+		RemoteSchemaVersion: ahead.RemoteVersion,
+		LocalSupportedMax:   ahead.BinarySupportedMax,
+		RemoteProducer:      ahead.RemoteProducerVersion,
+	}, true
+}
+
+// asSyncFailure converts a store *RemoteSchemaAheadError into the returnable
+// sync-failure contract (so the command exits ExitConflict and prints the block),
+// or returns err unchanged. The explicit sync commands route their store error
+// through this one adapter so none of them renders the raw refusal instead of the
+// contract. [LAW:single-enforcer]
+func asSyncFailure(err error) error {
+	if failure, ok := remoteSchemaAheadFailure(err); ok {
+		return SyncFailureError{Failure: failure}
+	}
+	return err
 }
 
 // persistent reports whether the divergence has crossed from "reconcile still in
@@ -153,6 +203,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the local backlog is diverged from %s — %d local commit(s) not yet sent and %d remote commit(s) not yet merged — and it has not been reconciled automatically.",
 			ref, f.Ahead, f.Behind)
+	case syncFailureRemoteSchemaAhead:
+		return fmt.Sprintf(
+			"%s has advanced to schema version %d, but this lit binary supports only through version %d. Pushing or reconciling from here would author a commit BELOW the remote's schema — regressing the shared backlog and dropping every field the newer schema added — so this binary will not write to %s until it is upgraded.",
+			ref, f.RemoteSchemaVersion, f.LocalSupportedMax, ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -177,6 +231,19 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit sync pull             # runs the field-aware reconcile in the foreground and reports what it settled",
 			"lit sync reconcile        # only if the pull reports a held text conflict — then merge it inline",
 		}
+	case syncFailureRemoteSchemaAhead:
+		// [LAW:dataflow-not-control-flow] the producer field selects whether the step
+		// names a concrete `--to` target or the generic upgrade; the remedy — install
+		// a newer binary — is the same either way. This is the REMOTE counterpart to
+		// the `lit upgrade --to <producer>` line the schema-ahead LOCAL refusal emits.
+		if f.RemoteProducer != "" {
+			return []string{
+				fmt.Sprintf("lit upgrade --to %s   # install the binary that advanced the remote to schema v%d, then retry", f.RemoteProducer, f.RemoteSchemaVersion),
+			}
+		}
+		return []string{
+			fmt.Sprintf("lit upgrade               # install a newer lit that supports schema v%d, then retry (the remote head names no producer version to target)", f.RemoteSchemaVersion),
+		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -187,6 +254,14 @@ func (f SyncFailure) resolutionSteps() []string {
 // varies on data (persistent), not on the surface that called in.
 // [LAW:dataflow-not-control-flow]
 func (f SyncFailure) escalationLine() string {
+	// A remote-schema-ahead block is not a divergence that ages toward incident —
+	// it will NOT clear on the next command or with time, only with an upgrade. So
+	// its escalation is fixed by the class, not derived from age/span, which would
+	// otherwise read as "recent, still routine" and invite the very wait-and-retry
+	// the epic kills. [LAW:dataflow-not-control-flow] the class selects the line.
+	if f.Class == syncFailureRemoteSchemaAhead {
+		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; the binary must be upgraded first. Treat the workspace as blocked for writes to the remote until you run the upgrade above, or surface it to the user as blocking."
+	}
 	span := f.Ahead + f.Behind
 	if f.persistent() {
 		return fmt.Sprintf(

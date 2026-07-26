@@ -108,6 +108,13 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 	}
 	switch {
 	case o.reconcile.err != nil:
+		// A remote schema ahead of this binary is its own class — it will NOT clear
+		// by retrying, so it must not read as a generic "diverged, will reconcile"
+		// cause. Route it to the remote-schema-ahead contract naming `lit upgrade`.
+		// [LAW:single-enforcer] one adapter, every surface.
+		if failure, ok := remoteSchemaAheadFailure(o.reconcile.err); ok {
+			return failure, true
+		}
 		base.Class = syncFailureDivergedUnresolved
 		base.Cause = o.reconcile.err
 		return base, true

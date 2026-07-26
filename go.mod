@@ -5,6 +5,7 @@ go 1.25.7
 require (
 	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
+	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/uuid v1.6.0
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.1
@@ -88,7 +89,6 @@ require (
 	github.com/go-jose/go-jose/v4 v4.1.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
-	github.com/go-sql-driver/mysql v1.9.3 // indirect
 	github.com/go-viper/mapstructure/v2 v2.4.0 // indirect
 	github.com/goccy/go-json v0.10.2 // indirect
 	github.com/gocraft/dbr/v2 v2.7.6 // indirect

@@ -165,6 +165,77 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 	}
 }
 
+// A remote-schema-ahead block routes to `lit upgrade` and — unlike a divergence —
+// frames the state as BLOCKED-until-upgrade, never an age-based "still routine"
+// line that would invite the wait-and-retry the epic kills.
+func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
+	t.Run("producer named", func(t *testing.T) {
+		block := SyncFailure{
+			Class:               syncFailureRemoteSchemaAhead,
+			Remote:              "origin",
+			Branch:              "master",
+			RemoteSchemaVersion: 7,
+			LocalSupportedMax:   4,
+			RemoteProducer:      "v9.9.0",
+		}.blockString()
+		assertContractElements(t, block, "lit upgrade --to v9.9.0")
+		for _, want := range []string{"origin/master", "schema version 7", "version 4", "BLOCKED"} {
+			if !strings.Contains(block, want) {
+				t.Errorf("remote-schema-ahead block missing %q:\n%s", want, block)
+			}
+		}
+		// It must not read as a transient, age-decaying divergence.
+		if strings.Contains(block, "INCIDENT") || strings.Contains(block, "still within the window") {
+			t.Errorf("remote-schema-ahead block used the divergence-age escalation:\n%s", block)
+		}
+	})
+	t.Run("no producer stamp falls back to generic upgrade", func(t *testing.T) {
+		block := SyncFailure{
+			Class:               syncFailureRemoteSchemaAhead,
+			Remote:              "origin",
+			Branch:              "master",
+			RemoteSchemaVersion: 7,
+			LocalSupportedMax:   4,
+		}.blockString()
+		assertContractElements(t, block, "lit upgrade")
+		if strings.Contains(block, "--to ") {
+			t.Errorf("no-producer block should not name a --to target:\n%s", block)
+		}
+	})
+}
+
+// remoteSchemaAheadFailure/asSyncFailure adapt the store's typed remote-ahead
+// refusal into the one contract error, exiting ExitConflict — so every surface
+// renders the identical block from the same store error. A non-matching error
+// passes through asSyncFailure untouched. [LAW:single-enforcer]
+func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
+	storeErr := &store.RemoteSchemaAheadError{
+		Remote: "origin", Branch: "master",
+		RemoteVersion: 7, BinarySupportedMax: 4, RemoteProducerVersion: "v9.9.0",
+	}
+	failure, ok := remoteSchemaAheadFailure(storeErr)
+	if !ok {
+		t.Fatal("remoteSchemaAheadFailure did not recognize the store error")
+	}
+	if failure.Class != syncFailureRemoteSchemaAhead || failure.RemoteSchemaVersion != 7 ||
+		failure.LocalSupportedMax != 4 || failure.RemoteProducer != "v9.9.0" {
+		t.Fatalf("mapped failure = %+v", failure)
+	}
+	converted := asSyncFailure(storeErr)
+	var syncFailure SyncFailureError
+	if !errors.As(converted, &syncFailure) {
+		t.Fatalf("asSyncFailure did not return a SyncFailureError: %T", converted)
+	}
+	if code := ExitCode(converted); code != ExitConflict {
+		t.Fatalf("ExitCode = %d, want %d (ExitConflict)", code, ExitConflict)
+	}
+	// A plain error is returned unchanged.
+	plain := errors.New("some other failure")
+	if asSyncFailure(plain) != plain {
+		t.Fatal("asSyncFailure altered a non-remote-schema-ahead error")
+	}
+}
+
 func TestAgeFromOldestDivergedUnix(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	if got := ageFromOldestDivergedUnix(0, now); got != 0 {

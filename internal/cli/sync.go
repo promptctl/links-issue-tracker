@@ -168,8 +168,10 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err != nil {
 		// An explicit pull is not best-effort: a fetch or reconcile failure is
 		// surfaced as a command error, not swallowed the way the background
-		// receive tolerates a transient hiccup. [LAW:no-silent-failure]
-		return err
+		// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
+		// schema ahead of this binary surfaces as the one sync-failure contract
+		// (exit ExitConflict, naming `lit upgrade`), not the raw store refusal.
+		return asSyncFailure(err)
 	}
 	// A held free-text conflict is a non-transient divergence the agent must
 	// resolve: it routes through the one sync-failure contract and is RETURNED, so
@@ -224,7 +226,10 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// status only after its trace has been recorded inside performSyncPush —
 	// the skipped/ok payload is never printed over a failed push.
 	if outcome.pushErr != nil {
-		return outcome.pushErr
+		// A remote schema ahead of this binary surfaces as the one sync-failure
+		// contract (exit ExitConflict, naming `lit upgrade`) rather than the raw
+		// non-fast-forward/refusal string. [LAW:single-enforcer]
+		return asSyncFailure(outcome.pushErr)
 	}
 	return printSyncPushPayload(stdout, outcome.payload(), *verbose)
 }
