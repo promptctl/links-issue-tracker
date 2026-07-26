@@ -161,6 +161,13 @@ func TestNormalizeReleaseTag(t *testing.T) {
 				if err != nil && !strings.HasPrefix(err.Error(), verb+":") {
 					t.Errorf("normalizeReleaseTag(%q, %q) err = %q; want %q-prefixed", c.in, verb, err, verb)
 				}
+				// Both flavors of bad --to input are the same failure class and
+				// must exit alike: ValidationError (exit 3), never a plain error
+				// (exit 1). [LAW:one-type-per-behavior]
+				var ve ValidationError
+				if !errors.As(err, &ve) {
+					t.Errorf("normalizeReleaseTag(%q, %q) err = %v (%T); want ValidationError", c.in, verb, err, err)
+				}
 				continue
 			}
 			if err != nil {

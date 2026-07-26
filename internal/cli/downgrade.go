@@ -130,8 +130,11 @@ func normalizeReleaseTag(in string, verb string) (string, error) {
 		t = "v" + t
 	}
 	// Reject obvious URL-path foot-guns; resolver re-validates the v-prefix.
+	// [LAW:one-type-per-behavior] An invalid tag is the same class of failure as a
+	// missing one — bad --to input — so both return ValidationError (exit 3), not
+	// a plain error that would dispatch to the generic exit 1.
 	if strings.ContainsAny(t, "/\\") || strings.Contains(t, "..") || strings.ContainsAny(t, " \t\r\n") {
-		return "", fmt.Errorf("%s: --to %q is not a valid release tag", verb, in)
+		return "", ValidationError{Message: fmt.Sprintf("%s: --to %q is not a valid release tag", verb, in)}
 	}
 	return t, nil
 }
