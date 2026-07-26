@@ -3,8 +3,10 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
@@ -83,6 +85,15 @@ const (
 	// the engine cannot resolve alone is surfaced, never auto-committed by picking
 	// a side.
 	SyncReconcileProsePending SyncReconcileState = "prose_pending"
+	// SyncReconcileUnrelated: the local branch and the remote-tracking ref share no
+	// common ancestor — independently-created stores, or one that was re-inited — so
+	// there is no base for a three-way merge. The reconcile DETECTS this before any
+	// write and commits nothing: the three-way path assumes a base, and driving an
+	// absent one into it fails obscurely (an empty/no-row merge-base, not a clear
+	// diagnosis). The divergence is real but unmergeable by the base-assuming engine;
+	// it is surfaced for the wholesale/union resolution the rest of this epic builds,
+	// never crashed through an empty merge-base. [LAW:no-silent-failure]
+	SyncReconcileUnrelated SyncReconcileState = "unrelated_histories"
 )
 
 // SyncReconcileResult reports the reconcile outcome, the ahead/behind counts it
@@ -226,11 +237,26 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 		if err != nil {
 			return err
 		}
-		baseCommit, err := mergeBase(ctx, s.db, localHead, trackingRef)
+		baseResult, err := mergeBase(ctx, s.db, localHead, trackingRef)
 		if err != nil {
 			return err
 		}
+		baseCommit, shared := baseResult.shared()
 		result.LocalHead, result.RemoteHead, result.BaseCommit = localHead, remoteHead, baseCommit
+
+		if !shared {
+			// Unrelated histories: the local branch and the remote-tracking ref share no
+			// commit, so there is no base for a three-way merge. Classify it as a
+			// first-class state and stop HERE — before the schema guard, the scratch
+			// sweep, the snapshot, and every reset — so the base-assuming export path is
+			// unreachable. Only read-only queries have run, so both stores are untouched:
+			// no partial write. [LAW:no-silent-failure] an unmergeable divergence is
+			// surfaced as its own state, never crashed through an absent merge-base.
+			// [LAW:dataflow-not-control-flow] the merge-base's shared discriminant selects
+			// the outcome; the epic's later resolutions flow through this same boundary.
+			result.State = SyncReconcileUnrelated
+			return nil
+		}
 
 		// [LAW:single-enforcer] Refuse BEFORE any scratch branch, snapshot, or write
 		// when the remote head is at a schema this binary cannot produce. Adopting an
@@ -515,13 +541,48 @@ func commitHashOfRef(ctx context.Context, db *sql.DB, ref string) (string, error
 	return head, nil
 }
 
-// mergeBase returns the merge-base commit of two refs — the most recent commit
-// reachable from both, i.e. the three-way merge's base. The refs are bound, not
-// interpolated.
-func mergeBase(ctx context.Context, db *sql.DB, ref1, ref2 string) (string, error) {
-	var base string
-	if err := db.QueryRowContext(ctx, `SELECT DOLT_MERGE_BASE(?, ?)`, ref1, ref2).Scan(&base); err != nil {
-		return "", fmt.Errorf("merge-base of %q and %q: %w", ref1, ref2, err)
+// mergeBaseResult is the outcome of a merge-base query: either the two refs share
+// history — commit is their most-recent common ancestor — or they do not, and
+// there is no base for a three-way merge. DOLT_MERGE_BASE reports the no-ancestor
+// case as an empty result set (and some backends as an empty/NULL scalar); this
+// type lifts that absence into an explicit discriminator so "no common ancestor"
+// can never be mistaken for a commit hash and driven into the base-assuming export
+// path, which resets to it and fails obscurely. [LAW:types-are-the-program] the
+// absent base is unrepresentable as a commit; a caller reaches the hash only
+// through shared(), which reports its absence.
+type mergeBaseResult struct {
+	commit  string
+	hasBase bool
+}
+
+// shared reports the common-ancestor commit and whether one exists. When ok is
+// false the two refs have unrelated histories and commit is meaningless.
+func (r mergeBaseResult) shared() (commit string, ok bool) {
+	return r.commit, r.hasBase
+}
+
+// mergeBase returns the merge-base of two refs — the most recent commit reachable
+// from both, i.e. the three-way merge's base — or the unrelated-histories state
+// when they share none. The refs are bound, not interpolated.
+func mergeBase(ctx context.Context, db *sql.DB, ref1, ref2 string) (mergeBaseResult, error) {
+	var base sql.NullString
+	err := db.QueryRowContext(ctx, `SELECT DOLT_MERGE_BASE(?, ?)`, ref1, ref2).Scan(&base)
+	if errors.Is(err, sql.ErrNoRows) {
+		// DOLT_MERGE_BASE returns NO ROWS for refs with no common ancestor. That
+		// absence is a real domain state — unrelated histories — not a query failure,
+		// so it is carried as shared=false rather than surfaced as an obscure
+		// "sql: no rows in result set". [LAW:no-defensive-null-guards] the absence is
+		// matched as a value at this backend boundary, not papered over downstream.
+		return mergeBaseResult{}, nil
 	}
-	return base, nil
+	if err != nil {
+		return mergeBaseResult{}, fmt.Errorf("merge-base of %q and %q: %w", ref1, ref2, err)
+	}
+	// Belt-and-suspenders across backend versions: a NULL or empty scalar spells the
+	// same "no ancestor" as an empty result set. [LAW:no-defensive-null-guards] the
+	// absence is a real value at the boundary, handled identically to the no-row form.
+	if trimmed := strings.TrimSpace(base.String); base.Valid && trimmed != "" {
+		return mergeBaseResult{commit: trimmed, hasBase: true}, nil
+	}
+	return mergeBaseResult{}, nil
 }

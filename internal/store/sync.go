@@ -59,6 +59,11 @@ const (
 	// but a free-text field diverged on both sides. Nothing is committed; the
 	// prose conflicts are held for the agent surface. [LAW:no-silent-failure]
 	SyncPullProsePending SyncPullState = "prose_pending"
+	// SyncPullUnrelated: local diverged from a remote it shares no history with, so
+	// the reconcile found no common ancestor and merged nothing. Nothing is
+	// committed; the divergence is surfaced for wholesale/union resolution rather
+	// than merged through an absent base. [LAW:no-silent-failure]
+	SyncPullUnrelated SyncPullState = "unrelated_histories"
 	// SyncPullAhead: local has unpushed commits and the remote has nothing new;
 	// there is nothing to pull (push delivers local commits).
 	SyncPullAhead SyncPullState = "ahead"
@@ -310,6 +315,12 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 			case SyncReconcileProsePending:
 				result.State = SyncPullProsePending
 				result.Pending = rec.Pending
+			case SyncReconcileUnrelated:
+				// No common ancestor: nothing merged, nothing committed. The divergence
+				// is real and still present, so the ahead/behind counts and the fork
+				// timestamp the receive recorded ride along unchanged — the fork the
+				// receive saw is the fork this reports. [LAW:one-source-of-truth]
+				result.State = SyncPullUnrelated
 			case SyncReconcileNotDiverged:
 				// Under the single lock a push race cannot resolve the divergence
 				// between the receive and the reconcile, so this is the benign

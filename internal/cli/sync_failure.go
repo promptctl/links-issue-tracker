@@ -32,6 +32,14 @@ const (
 	// a divergence, this never clears by retrying — it clears only by upgrading the
 	// binary. Remedy: `lit upgrade` to the producer that advanced the remote.
 	syncFailureRemoteSchemaAhead syncFailureClass = "remote_schema_ahead"
+	// syncFailureUnrelatedHistories: the local backlog and the remote share no
+	// common ancestor (independently-created or re-inited stores), so there is no
+	// base for a three-way merge and the field-aware reconcile cannot combine them.
+	// Like a schema-ahead block and unlike an ordinary divergence, this never clears
+	// by retrying — only a deliberate choice resolves it: take one side's backlog
+	// wholesale or union the two. Remedy: escalate the choice (the wholesale/union
+	// resolution surface is not yet built).
+	syncFailureUnrelatedHistories syncFailureClass = "unrelated_histories"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -207,6 +215,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"%s has advanced to schema version %d, but this lit binary supports only through version %d. Pushing or reconciling from here would author a commit BELOW the remote's schema — regressing the shared backlog and dropping every field the newer schema added — so this binary will not write to %s until it is upgraded.",
 			ref, f.RemoteSchemaVersion, f.LocalSupportedMax, ref)
+	case syncFailureUnrelatedHistories:
+		return fmt.Sprintf(
+			"the local backlog and %s share no common history — they were created independently, or one was re-initialized — so there is no shared ancestor to merge against. The field-aware reconcile combines a divergence relative to a common base; with no base it cannot merge these automatically, and it committed nothing rather than pick a side. Keeping both backlogs requires taking one side wholesale or unioning them.",
+			ref)
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -244,6 +256,16 @@ func (f SyncFailure) resolutionSteps() []string {
 		return []string{
 			fmt.Sprintf("lit upgrade               # install a newer lit that supports schema v%d, then retry (the remote head names no producer version to target)", f.RemoteSchemaVersion),
 		}
+	case syncFailureUnrelatedHistories:
+		// No take-one/union command exists yet — those are the rest of this epic — so
+		// naming one here would send the agent at a command that isn't there. The one
+		// honest step is to confirm the state and escalate the wholesale/union choice.
+		// [LAW:no-silent-failure] the remedy is a real, present command plus an explicit
+		// decision, never an invented one.
+		return []string{
+			"lit doctor                # confirms the unrelated-histories divergence and its commit counts",
+			"# then decide WITH THE USER: take one side's backlog wholesale, or union the two — lit cannot merge unrelated histories automatically.",
+		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -261,6 +283,13 @@ func (f SyncFailure) escalationLine() string {
 	// the epic kills. [LAW:dataflow-not-control-flow] the class selects the line.
 	if f.Class == syncFailureRemoteSchemaAhead {
 		return "ESCALATION — BLOCKED: this will not clear by waiting or retrying; the binary must be upgraded first. Treat the workspace as blocked for writes to the remote until you run the upgrade above, or surface it to the user as blocking."
+	}
+	// Unrelated histories, like a schema-ahead remote, never merge on a retry — there
+	// is no base and never will be one for this pair. So its escalation is fixed by
+	// the class, not derived from age/span, which would otherwise read as "recent,
+	// still routine" and invite the retry that can never work. [LAW:dataflow-not-control-flow]
+	if f.Class == syncFailureUnrelatedHistories {
+		return "ESCALATION — BLOCKED: unrelated histories never merge automatically and will not clear by retrying. Resolving requires a deliberate choice — take one side's backlog wholesale, or union the two — which lit cannot make for you. Surface it to the user as blocking before continuing ticket work."
 	}
 	span := f.Ahead + f.Behind
 	if f.persistent() {

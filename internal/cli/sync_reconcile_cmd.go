@@ -76,7 +76,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 	if err != nil {
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(stdout, result, false)
+	return reportReconcileResult(stdout, remote, branch, result, false)
 }
 
 // runSyncReconcileResolve finalizes a prose-pending reconcile with the agent's
@@ -111,7 +111,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 	if err != nil {
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(stdout, result, true)
+	return reportReconcileResult(stdout, remote, branch, result, true)
 }
 
 // runSyncReconcileAbort defers the reconcile: the clone stays diverged and usable.
@@ -134,11 +134,26 @@ func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.I
 
 // reportReconcileResult renders a reconcile outcome. A prose-pending result prints
 // the guidance and returns a MergeConflictError so the command exits ExitConflict;
-// every other state is a one-line success. resolved=true distinguishes a finalize
-// whose resolutions missed the live divergence (re-surfaced) from a first-time
-// surface, so the agent knows to re-merge the CURRENT conflicts shown.
-func reportReconcileResult(stdout io.Writer, result store.SyncReconcileResult, resolved bool) error {
+// an unrelated-histories result returns the one sync-failure contract (also exit
+// ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the inline receive
+// all surface no-common-ancestor identically; every other state is a one-line
+// success. resolved=true distinguishes a finalize whose resolutions missed the live
+// divergence (re-surfaced) from a first-time surface, so the agent knows to re-merge
+// the CURRENT conflicts shown.
+func reportReconcileResult(stdout io.Writer, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
 	switch result.State {
+	case store.SyncReconcileUnrelated:
+		// [LAW:single-enforcer] one contract, every surface — the block is the error's
+		// message, printed by the top-level sink, so no separate stdout write here (as
+		// with a held prose conflict on `lit sync pull`). Age is unknown at this surface,
+		// which the unrelated escalation does not use (its severity is fixed, not aged).
+		return SyncFailureError{Failure: SyncFailure{
+			Class:  syncFailureUnrelatedHistories,
+			Remote: remote,
+			Branch: branch,
+			Ahead:  result.Ahead,
+			Behind: result.Behind,
+		}}
 	case store.SyncReconcileProsePending:
 		if resolved {
 			if _, err := fmt.Fprintln(stdout, "the divergence changed since you read it; your resolutions were not applied. Re-merge the CURRENT conflicts below:"); err != nil {
