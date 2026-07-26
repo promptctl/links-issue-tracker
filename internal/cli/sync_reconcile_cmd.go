@@ -327,21 +327,21 @@ func freshReconcileTarget(ctx context.Context, syncStore *store.Store, ws worksp
 	if err != nil {
 		return "", "", false, err
 	}
-	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), syncState.gitRemotes)
+	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
 	if err != nil {
 		return "", "", false, err
 	}
 	if remoteName == "" {
 		return "", "", false, nil
 	}
-	hasRefs, err := workspace.RemoteHasRefs(ws.RootDir, remoteName)
+	hasRefs, err := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return "", "", false, fmt.Errorf("check remote refs %q: %w", remoteName, err)
 	}
 	if !hasRefs {
 		return "", "", false, nil
 	}
-	branchName, err := resolveSyncBranch(ws.RootDir, remoteName)
+	branchName, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return "", "", false, err
 	}

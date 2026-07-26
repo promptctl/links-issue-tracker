@@ -2,6 +2,8 @@ package cli
 
 import (
 	"bytes"
+	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -442,7 +444,7 @@ func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
 
 func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "debug-branch")
-	got, err := resolveSyncBranch(t.TempDir(), "origin")
+	got, err := resolveSyncBranch(context.Background(), t.TempDir(), "origin")
 	if err != nil {
 		t.Fatalf("resolveSyncBranch() error = %v", err)
 	}
@@ -453,11 +455,33 @@ func TestResolveSyncBranchUsesDebugOverrideWhenPresent(t *testing.T) {
 
 func TestResolveSyncBranchErrorsWhenDefaultBranchUnavailable(t *testing.T) {
 	t.Setenv(debugSyncBranchEnvVar, "")
-	_, err := resolveSyncBranch(t.TempDir(), "origin")
+	_, err := resolveSyncBranch(context.Background(), t.TempDir(), "origin")
 	if err == nil {
 		t.Fatal("expected error when default branch is unavailable")
 	}
 	if !strings.Contains(err.Error(), debugSyncBranchEnvVar) {
 		t.Fatalf("error = %q, want mention of %s", err.Error(), debugSyncBranchEnvVar)
+	}
+}
+
+// A cancelled context must surface as the branch resolution's true cause, not the
+// misleading "default branch unavailable" that DefaultRemoteBranch's swallowed git
+// error would otherwise produce. An already-cancelled ctx makes the underlying
+// exec.CommandContext return context.Canceled before running git, so DefaultRemoteBranch
+// yields "" — the same empty result a genuine no-default gives — and resolveSyncBranch
+// is the single point that tells the two apart. [LAW:no-silent-failure]
+func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testing.T) {
+	t.Setenv(debugSyncBranchEnvVar, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := resolveSyncBranch(ctx, t.TempDir(), "origin")
+	if err == nil {
+		t.Fatal("expected error when context is cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled in the chain", err)
+	}
+	if strings.Contains(err.Error(), "default branch unavailable") {
+		t.Fatalf("cancelled ctx must not surface the misleading unavailable message: %q", err.Error())
 	}
 }

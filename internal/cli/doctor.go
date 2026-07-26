@@ -98,20 +98,20 @@ func doctorDivergenceExit(report doctorSyncReport) error {
 // rather than aborting doctor, because sync freshness is a best-effort
 // diagnostic distinct from the integrity health check it sits beside.
 func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *store.Store) doctorSyncReport {
-	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: fmt.Sprintf("read git remotes: %v", err)}
 	}
 	// [LAW:one-source-of-truth] Resolve the same remote+branch `lit sync` uses,
 	// so doctor's freshness reflects exactly what `lit sync push/pull` act on.
-	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), gitRemotes)
+	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
 	if remoteName == "" {
 		return doctorSyncReport{Kind: doctorSyncNoRemote}
 	}
-	branch, err := resolveSyncBranch(ws.RootDir, remoteName)
+	branch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}

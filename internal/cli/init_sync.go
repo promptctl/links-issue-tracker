@@ -178,11 +178,11 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 
 	// The whole adopt decision is made from git signals alone — no Dolt store is
 	// opened — so a fresh store's first on-disk state is the clone itself.
-	gitRemotes, err := workspace.GitRemotes(ws.RootDir)
+	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
-	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ws.RootDir), gitRemotes)
+	remote, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), gitRemotes)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
@@ -191,14 +191,14 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ws.RootDir, remote)
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remote)
 	if refsErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: refsErr.Error()}
 	}
 	if !hasRefs {
 		return nil, initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote}
 	}
-	branch, err := resolveSyncBranch(ws.RootDir, remote)
+	branch, err := resolveSyncBranch(ctx, ws.RootDir, remote)
 	if err != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: err.Error()}
 	}
@@ -209,7 +209,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 	// by clone. The old silent-empty-despite-data bug is now unrepresentable:
 	// hasData==true always leads to a clone, never to a silent empty store.
 	// [LAW:no-silent-failure] [LAW:types-are-the-program]
-	hasData, dataErr := workspace.RemoteHasDoltData(ws.RootDir, remote)
+	hasData, dataErr := workspace.RemoteHasDoltData(ctx, ws.RootDir, remote)
 	if dataErr != nil {
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
 	}
