@@ -174,7 +174,18 @@ func deriveLocation(cwd string) (Location, error) {
 	// "not a git repo" error).
 	gitCommonDir, err := gitOutput(cwd, "rev-parse", "--git-common-dir")
 	if err != nil {
-		return Location{}, ErrNotGitRepo
+		// [LAW:no-silent-failure] git exiting non-zero means git ran and judged
+		// cwd not a repository — the legitimate "skip this directory" case that
+		// Discover relies on. But git failing to RUN at all (not installed, not
+		// on PATH, not executable) is infrastructure breakage; collapsing it into
+		// ErrNotGitRepo would let a scan silently report "no stores found" when it
+		// never actually inspected anything. Only the former is the sentinel; the
+		// latter surfaces with context.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			return Location{}, ErrNotGitRepo
+		}
+		return Location{}, fmt.Errorf("git rev-parse --git-common-dir in %q: %w", cwd, err)
 	}
 	if !filepath.IsAbs(gitCommonDir) {
 		absCwd, err := filepath.Abs(cwd)

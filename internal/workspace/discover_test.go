@@ -108,6 +108,27 @@ func TestDiscoverReturnsNoStoresWhenNoneExist(t *testing.T) {
 	}
 }
 
+// TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess is the [LAW:no-silent-failure]
+// guard: when git cannot run at all (here, an empty PATH), a directory that has a
+// .git entry must not be silently skipped as "not a repo". Discovery must return
+// a loud error rather than a false "no stores found" — the empty result that
+// would send an operator down the wrong path.
+func TestDiscoverSurfacesBrokenGitInsteadOfEmptySuccess(t *testing.T) {
+	root := t.TempDir()
+	repo := mkdir(t, filepath.Join(root, "repo"))
+	run(t, repo, "git", "init")
+	addLitStore(t, repo)
+
+	// Emptying PATH makes exec.Command("git") fail to resolve the binary — an
+	// *exec.Error, not an *exec.ExitError — the infrastructure failure class.
+	t.Setenv("PATH", "")
+
+	locations, err := Discover([]string{root})
+	if err == nil {
+		t.Fatalf("Discover() returned nil error with %d locations; want a surfaced git failure", len(locations))
+	}
+}
+
 // TestDiscoverMatchesResolveDerivation locks the discovery/resolve seam: the
 // location Discover reports for a repo is byte-identical to the store Resolve
 // opens there. If the two derivations ever drift, discovery would list a store
