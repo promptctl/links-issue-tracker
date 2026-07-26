@@ -318,6 +318,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: func(args []string) error { return runStores(stdout, args) }},
 		{Name: "ls-at", Summary: "List a discovered store's active issues read-only by its storage directory (from `lit stores`)", GroupID: "maintenance",
 			Run: func(args []string) error { return runLsAt(ctx, stdout, args) }},
+		{Name: "overview", Summary: "Cross-project view: ready / in-flight / blocked counts across every discovered store under the given roots (default: current directory)", GroupID: "maintenance",
+			Run: func(args []string) error { return runOverview(ctx, stdout, args) }},
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runPrefix(stdout, ws, args)

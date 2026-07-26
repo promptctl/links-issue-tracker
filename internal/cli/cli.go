@@ -601,6 +601,23 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	if err != nil {
 		return nil, nil, err
 	}
+	// [LAW:locality-or-seam] The pipeline's real inputs are a store surface and
+	// the ready required-fields policy; the *app.App only supplied those two.
+	// Splitting the config read (a repo-rooted effect) from the classification
+	// lets the cross-project rollup run the SAME pipeline over a read-only
+	// foreign store — which has no repo root and so no per-repo config — by
+	// passing the policy as a value. [LAW:single-enforcer]
+	return classifyWorkable(ctx, ap.Store, cfg.Ready.RequiredFields, rf)
+}
+
+// classifyWorkable is the store-facing core of the workable pipeline: list
+// workable leaves, fetch details, annotate against the given required-fields
+// policy, sort into canonical order, enrich with parent epics. It takes the
+// store and the policy directly — not an *app.App — so any opened store drives
+// it, including a read-only foreign store the process is not cd'd into.
+// [LAW:one-source-of-truth] `lit ready`/`next`/`backlog` and the cross-project
+// rollup share this one definition of "what is workable, annotated how".
+func classifyWorkable(ctx context.Context, st *store.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
 	if rf.Status != "" {
 		statuses = []model.State{rf.Status}
@@ -616,23 +633,23 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 		IncludeDeleted:  false,
 		Limit:           0,
 	}
-	issues, err := ap.Store.ListIssues(ctx, listFilter)
+	issues, err := st.ListIssues(ctx, listFilter)
 	if err != nil {
 		return nil, nil, err
 	}
 	issues = filterWorkableIssues(issues)
-	fieldAnnotator, err := newFieldAnnotator(cfg.Ready.RequiredFields)
+	fieldAnnotator, err := newFieldAnnotator(requiredFields)
 	if err != nil {
 		return nil, nil, err
 	}
-	details, err := fetchIssueRelations(ctx, ap.Store, issues)
+	details, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
 		return nil, nil, err
 	}
 	// The lane gate reads the parent epics' FULL child sets (unfiltered by the
 	// CLI assignee/type/label narrowing) so an earlier sibling hidden by those
 	// filters still gates its later same-lane mates.
-	siblingRelations, err := ap.Store.GetRelationsByIDs(ctx, parentEpicIDs(details))
+	siblingRelations, err := st.GetRelationsByIDs(ctx, parentEpicIDs(details))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -645,7 +662,7 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 	// (details) and their parent epics (siblingRelations) rather than re-querying
 	// the same subjects; both are GetRelationsByIDs results, so a seeded hit is
 	// byte-identical to a refetch. (links-query-efficiency-988d.2)
-	focusPaths, err := fetchFocusPathGoals(ctx, ap.Store, details, siblingRelations)
+	focusPaths, err := fetchFocusPathGoals(ctx, st, details, siblingRelations)
 	if err != nil {
 		return nil, nil, err
 	}
