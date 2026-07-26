@@ -64,8 +64,17 @@ func discoverUnder(root string, byStore map[string]Location) error {
 		// A `.git` entry — directory for a main worktree, file for a linked one —
 		// marks a working-tree root and nowhere else, so git runs only at real
 		// repository roots. [LAW:effects-at-boundaries]
-		if _, statErr := os.Lstat(filepath.Join(path, ".git")); statErr != nil {
-			return nil
+		gitEntry := filepath.Join(path, ".git")
+		if _, statErr := os.Lstat(gitEntry); statErr != nil {
+			// [LAW:no-silent-failure] os.ErrNotExist is the ordinary "not a
+			// repository root" case for nearly every directory; any other stat
+			// error (EACCES, EIO, stale handle) would otherwise make a real
+			// repository silently invisible, so it surfaces with context —
+			// matching the store-database stat below.
+			if errors.Is(statErr, os.ErrNotExist) {
+				return nil
+			}
+			return fmt.Errorf("stat %q: %w", gitEntry, statErr)
 		}
 		loc, derr := deriveLocation(path)
 		if derr != nil {

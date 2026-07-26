@@ -55,8 +55,14 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	if len(lines) != 2 {
 		t.Fatalf("runStores() printed %d lines, want 2:\n%s", len(lines), out.String())
 	}
-	wantA, _ := filepath.EvalSymlinks(filepath.Join(repoA, ".git"))
-	wantB, _ := filepath.EvalSymlinks(filepath.Join(repoB, ".git"))
+	wantA, err := filepath.EvalSymlinks(filepath.Join(repoA, ".git"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(repoA/.git) error = %v", err)
+	}
+	wantB, err := filepath.EvalSymlinks(filepath.Join(repoB, ".git"))
+	if err != nil {
+		t.Fatalf("EvalSymlinks(repoB/.git) error = %v", err)
+	}
 	if lines[0] != filepath.Join(wantA, "links") || lines[1] != filepath.Join(wantB, "links") {
 		t.Fatalf("runStores() output = %q, want repoA then repoB store dirs", lines)
 	}
