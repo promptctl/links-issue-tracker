@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
@@ -460,5 +461,27 @@ func TestResolveSyncBranchErrorsWhenDefaultBranchUnavailable(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), debugSyncBranchEnvVar) {
 		t.Fatalf("error = %q, want mention of %s", err.Error(), debugSyncBranchEnvVar)
+	}
+}
+
+// A cancelled context must surface as the branch resolution's true cause, not the
+// misleading "default branch unavailable" that DefaultRemoteBranch's swallowed git
+// error would otherwise produce. An already-cancelled ctx makes the underlying
+// exec.CommandContext return context.Canceled before running git, so DefaultRemoteBranch
+// yields "" — the same empty result a genuine no-default gives — and resolveSyncBranch
+// is the single point that tells the two apart. [LAW:no-silent-failure]
+func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testing.T) {
+	t.Setenv(debugSyncBranchEnvVar, "")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := resolveSyncBranch(ctx, t.TempDir(), "origin")
+	if err == nil {
+		t.Fatal("expected error when context is cancelled")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("error = %v, want context.Canceled in the chain", err)
+	}
+	if strings.Contains(err.Error(), "default branch unavailable") {
+		t.Fatalf("cancelled ctx must not surface the misleading unavailable message: %q", err.Error())
 	}
 }

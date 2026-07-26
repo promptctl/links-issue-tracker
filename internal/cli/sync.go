@@ -463,6 +463,20 @@ func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (stri
 	// [LAW:single-enforcer] Sync branch selection is centralized so pull/push/hooks consume one canonical branch decision.
 	resolvedBranch := precedence.First(debugOverride, defaultBranch)
 	if resolvedBranch == "" {
+		// [LAW:no-silent-failure] DefaultRemoteBranch swallows its git errors — an
+		// empty branch is a legitimate "remote advertises no default" result, not an
+		// error — so a cancelled ctx that kills its network ls-remote is
+		// indistinguishable here from a genuine absence. This is the single point
+		// that turns an empty branch into a diagnostic, so it is where the two are
+		// told apart: surface the cancellation as its true cause rather than the
+		// misleading "default branch unavailable". This holds for every caller and
+		// does not lean on the receive/pull/push RemoteHasRefs check to have caught
+		// the cancellation first — closing the window where a cancel arriving
+		// between that check and DefaultRemoteBranch's fallback ls-remote would
+		// otherwise lie about the reason.
+		if err := ctx.Err(); err != nil {
+			return "", fmt.Errorf("resolve sync branch for remote %q: %w", strings.TrimSpace(remote), err)
+		}
 		return "", fmt.Errorf(
 			"resolve sync branch for remote %q: default branch unavailable; configure %s to override",
 			strings.TrimSpace(remote),
