@@ -195,15 +195,27 @@ func deriveLocation(cwd string) (Location, error) {
 		return Location{}, fmt.Errorf("canonicalize git-common-dir %q: %w", gitCommonDir, err)
 	}
 	gitCommonDir = filepath.Clean(canonicalCommonDir)
-	storageDir := filepath.Join(gitCommonDir, "links")
+	return LocationFromStorageDir(filepath.Join(gitCommonDir, "links")), nil
+}
+
+// LocationFromStorageDir mints the store geometry rooted at an already-resolved
+// StorageDir — the "dolt", "config.json", and links-repo suffixes and nothing
+// else. [LAW:single-enforcer] These suffixes live here only; deriveLocation
+// resolves a git-common-dir to a StorageDir and then hands off here, and a caller
+// holding a StorageDir string (a `lit stores` line) reconstructs its Location the
+// same way. So a Location rebuilt from a path and one derived from its repository
+// are identical by construction, never two spellings of one store's geometry.
+func LocationFromStorageDir(storageDir string) Location {
 	databasePath := filepath.Join(storageDir, "dolt")
 	return Location{
-		GitCommonDir: gitCommonDir,
+		// StorageDir is <git-common-dir>/links, so the common dir is its parent —
+		// recovered rather than stored separately so the two cannot disagree.
+		GitCommonDir: filepath.Dir(storageDir),
 		StorageDir:   storageDir,
 		ConfigPath:   filepath.Join(storageDir, "config.json"),
 		DatabasePath: databasePath,
 		DoltRepoPath: filepath.Join(databasePath, "links"),
-	}, nil
+	}
 }
 
 func gitOutput(cwd string, args ...string) (string, error) {
@@ -336,16 +348,35 @@ func resolveIssuePrefix(rootDir string, configured string) (PrefixSpec, error) {
 	return spec, nil
 }
 
-func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error) {
+// ReadConfig reads and validates a workspace config.json WITHOUT creating,
+// deriving, or writing anything — the read-only counterpart to
+// loadOrCreateConfig. It is how a foreign store is identified when opening it
+// read-only across projects: the workspace_id OpenForRead needs lives here, and
+// this store is one we must never mutate, so the create/derive/persist path is
+// not an option. [LAW:effects-at-boundaries] Exactly one file read, no writes.
+// [LAW:single-enforcer] The read+parse+workspace_id-present check is defined
+// here; loadOrCreateConfig reuses it so the two cannot validate a config two
+// different ways. The read error is wrapped preserving os.ErrNotExist via %w, so
+// loadOrCreateConfig can still tell "no config yet, create one" from a real
+// failure.
+func ReadConfig(path string) (Config, error) {
 	payload, err := os.ReadFile(path)
+	if err != nil {
+		return Config{}, fmt.Errorf("read workspace config: %w", err)
+	}
+	var cfg Config
+	if err := json.Unmarshal(payload, &cfg); err != nil {
+		return Config{}, fmt.Errorf("parse workspace config: %w", err)
+	}
+	if cfg.WorkspaceID == "" {
+		return Config{}, errors.New("workspace config missing workspace_id")
+	}
+	return cfg, nil
+}
+
+func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error) {
+	cfg, err := ReadConfig(path)
 	if err == nil {
-		var cfg Config
-		if err := json.Unmarshal(payload, &cfg); err != nil {
-			return Config{}, PrefixSpec{}, fmt.Errorf("parse workspace config: %w", err)
-		}
-		if cfg.WorkspaceID == "" {
-			return Config{}, PrefixSpec{}, errors.New("workspace config missing workspace_id")
-		}
 		prefix, err := resolveIssuePrefix(rootDir, cfg.IssuePrefix)
 		if err != nil {
 			return Config{}, PrefixSpec{}, err
@@ -361,14 +392,18 @@ func loadOrCreateConfig(rootDir string, path string) (Config, PrefixSpec, error)
 		}
 		return cfg, prefix, nil
 	}
+	// [LAW:no-silent-failure] A missing config is the ordinary "not yet
+	// initialized" case that this create path handles; a parse error, an empty
+	// workspace_id, or any other read failure is already fully described by
+	// ReadConfig and must surface as-is rather than be mistaken for "create one".
 	if !errors.Is(err, os.ErrNotExist) {
-		return Config{}, PrefixSpec{}, fmt.Errorf("read workspace config: %w", err)
+		return Config{}, PrefixSpec{}, err
 	}
 	prefix, err := resolveIssuePrefix(rootDir, "")
 	if err != nil {
 		return Config{}, PrefixSpec{}, err
 	}
-	cfg := Config{
+	cfg = Config{
 		WorkspaceID: uuid.NewString(),
 		IssuePrefix: prefix.Value(),
 		CreatedAt:   time.Now().UTC(),

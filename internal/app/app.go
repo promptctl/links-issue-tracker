@@ -54,4 +54,28 @@ func (m AccessMode) openStore(ctx context.Context, databasePath, workspaceID str
 	return nil, fmt.Errorf("invalid access mode %q", string(m))
 }
 
+// OpenLocationForRead opens the store at an already-derived Location strictly
+// read-only, bypassing the current working directory's git resolution entirely:
+// the caller supplies the store's geometry as a value (from workspace.Discover or
+// workspace.LocationFromStorageDir), so this opens a store the process is not
+// cd'd into. It is the cross-project open primitive — aggregation over many
+// stores opens each one through here.
+//
+// [LAW:single-enforcer] Store opening still routes through store.OpenForRead, the
+// one read path, so a foreign store gets exactly the shared lock and read
+// contract a local read gets — never a second read-write engine that the embedded
+// Dolt driver would reject as "database is read only" and that would contend with
+// the project's own writer.
+//
+// The workspace_id OpenForRead requires is not part of a Location — discovery
+// reads no config — so it is read here from the store's own config.json via
+// ReadConfig, a pure read that never writes the foreign store.
+func OpenLocationForRead(ctx context.Context, loc workspace.Location) (*store.Store, error) {
+	cfg, err := workspace.ReadConfig(loc.ConfigPath)
+	if err != nil {
+		return nil, err
+	}
+	return store.OpenForRead(ctx, loc.DatabasePath, cfg.WorkspaceID)
+}
+
 func (a *App) Close() error { return a.Store.Close() }
