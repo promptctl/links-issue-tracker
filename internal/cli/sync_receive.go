@@ -129,6 +129,7 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		// silently report the auto-sync as fine while the store stayed unmergeably
 		// diverged. [LAW:no-silent-failure]
 		base.Class = syncFailureUnrelatedHistories
+		base.Inventory = o.reconcile.unrelated
 		return base, true
 	default:
 		return SyncFailure{}, false
@@ -159,9 +160,10 @@ type syncReceiveOutcome struct {
 
 // reconcileOutcome is the inline reconcile result the diverged receive triggers.
 type reconcileOutcome struct {
-	state   store.SyncReconcileState
-	pending []merge.ProsePending
-	err     error // the reconcile failure; its trace is already recorded when set
+	state     store.SyncReconcileState
+	pending   []merge.ProsePending
+	unrelated *store.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
+	err       error                     // the reconcile failure; its trace is already recorded when set
 }
 
 // performSyncReceive reconciles Dolt remotes from git, resolves the remote and
@@ -286,7 +288,7 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 	// unmissable block rather than a raw "will retry" line. This function stays the
 	// run-and-record step; the surfacing decision lives with the caller that holds
 	// the divergence's counts and age. [LAW:decomposition]
-	return &reconcileOutcome{state: result.State, pending: result.Pending, err: reconcileErr}
+	return &reconcileOutcome{state: result.State, pending: result.Pending, unrelated: result.Unrelated, err: reconcileErr}
 }
 
 // reconcileReasonForState maps a reconcile outcome to its automation-trace

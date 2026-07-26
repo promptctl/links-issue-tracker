@@ -207,6 +207,7 @@ func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now
 		return SyncFailureError{Failure: base}, true
 	case store.SyncPullUnrelated:
 		base.Class = syncFailureUnrelatedHistories
+		base.Inventory = result.Unrelated
 		return SyncFailureError{Failure: base}, true
 	default:
 		return SyncFailureError{}, false
