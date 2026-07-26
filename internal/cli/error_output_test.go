@@ -20,10 +20,15 @@ func TestCommandErrorReason(t *testing.T) {
 		{"unsupported output flag", UnsupportedError{Feature: "--output"}, "unsupported_output_flag"},
 		{"generic", UsageError{Message: "bad"}, "usage_error"},
 		// A write blocked by another store holder is its own reason, and wins over
-		// the transient-contention fallthrough it unwraps to. links-sync-s3r6 #3.
+		// the transient-contention fallthrough it unwraps to. The Cause is the real
+		// ErrTransientGCContention sentinel (as production's is), so errors.Is(err,
+		// ErrTransientGCContention) is true here too: reversing the errors.As and
+		// errors.Is checks in commandErrorReason would flip this to
+		// transient_gc_contention and fail — the ordering is actually guarded.
+		// links-sync-s3r6 #3.
 		{
 			"workspace write blocked",
-			store.WorkspaceWriteBlockedError{Cause: errors.New("Error 1105: cannot update manifest: database is read only")},
+			store.WorkspaceWriteBlockedError{Cause: store.ErrTransientGCContention},
 			"workspace_write_blocked",
 		},
 	}
