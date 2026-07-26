@@ -80,7 +80,10 @@ func runLsAt(ctx context.Context, stdout io.Writer, args []string) error {
 		Statuses: []model.State{model.StateOpen, model.StateInProgress},
 	})
 	if err != nil {
-		return err
+		// [LAW:no-silent-failure] Name the target path — as the open error above
+		// does — so a read failure over many stores (lit stores | xargs lit ls-at)
+		// says which store's read broke, not a bare store-layer error.
+		return fmt.Errorf("list issues at %q: %w", args[0], err)
 	}
 	return printIssueLines(stdout, issues, nil, nil)
 }
