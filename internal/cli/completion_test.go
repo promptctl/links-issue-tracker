@@ -82,7 +82,7 @@ func TestCompletionSubcommandsDerivedFromFamilies(t *testing.T) {
 		`remote)
       COMPREPLY=( $(compgen -W "ls"`,
 		`reconcile)
-      COMPREPLY=( $(compgen -W "resolve abort"`,
+      COMPREPLY=( $(compgen -W "resolve abort take"`,
 	}
 	for _, want := range wants {
 		if !strings.Contains(bash, want) {

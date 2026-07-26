@@ -11,10 +11,9 @@ import (
 
 // TestSyncFailureBlockUnrelatedHistories pins the contract the unrelated-histories
 // class renders: the four standing elements plus a domain WHAT that names the
-// no-common-ancestor reality, resolution steps that name only REAL commands (no
-// invented take-one/union command that does not exist yet), and a BLOCKED
-// escalation — because unrelated histories, like a schema-ahead remote, never merge
-// on a retry.
+// no-common-ancestor reality, resolution steps that name the now-built take-one
+// command (and NOT the still-unbuilt union), and a BLOCKED escalation — because
+// unrelated histories, like a schema-ahead remote, never merge on a retry.
 func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	failure := SyncFailure{
 		Class:  syncFailureUnrelatedHistories,
@@ -24,7 +23,7 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 		Behind: 7,
 	}
 	block := failure.blockString()
-	assertContractElements(t, block, "lit doctor")
+	assertContractElements(t, block, "lit sync reconcile take")
 
 	// WHAT names the no-common-ancestor reality in domain terms, not a backend string.
 	for _, want := range []string{"no common history", "no shared ancestor", "wholesale"} {
@@ -40,10 +39,14 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 	if strings.Contains(block, "still within the window where a divergence is routine") {
 		t.Errorf("unrelated-histories used the routine/aged escalation, which invites an impossible retry:\n%s", block)
 	}
-	// The resolution steps must not promise a command that does not exist yet (the
-	// take-one/union surface is the rest of the epic). [LAW:no-silent-failure]
-	if strings.Contains(block, "lit sync reconcile take") || strings.Contains(block, "lit sync reconcile combine") {
-		t.Errorf("block names an unbuilt resolution command:\n%s", block)
+	// The take-one command exists now (this ticket) and must be named so the agent can
+	// act; the union (`combine`) command does NOT yet (that is .4) and must not be
+	// promised. [LAW:no-silent-failure]
+	if !strings.Contains(block, "lit sync reconcile take") {
+		t.Errorf("block does not name the now-built take-one command:\n%s", block)
+	}
+	if strings.Contains(block, "lit sync reconcile combine") {
+		t.Errorf("block names the still-unbuilt combine command:\n%s", block)
 	}
 }
 
@@ -173,6 +176,92 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "no common history") {
 		t.Fatalf("contract does not name unrelated histories:\n%s", err.Error())
+	}
+}
+
+// TestReportTakeOutcomeReportsDiscard proves the take-one surface names the discarded
+// side's unique issues explicitly — take-remote reports the local-only issues it drops,
+// take-local the remote-only ones — so the discard is reported, never silent, which is
+// the ticket's core guarantee. [LAW:no-silent-failure]
+func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
+	inv := &store.UnrelatedInventory{
+		OnlyLocal:  []string{"proj-localA", "proj-localB"},
+		OnlyRemote: []string{"proj-remoteA"},
+		OnBoth:     []string{"proj-shared"},
+	}
+
+	var remote strings.Builder
+	if err := reportTakeOutcome(&remote, "origin", "master", store.SyncReconcileResult{
+		State:     store.SyncReconcileTookRemote,
+		Unrelated: inv,
+	}); err != nil {
+		t.Fatalf("reportTakeOutcome(TookRemote): %v", err)
+	}
+	remoteOut := remote.String()
+	if !strings.Contains(remoteOut, "DISCARDED") {
+		t.Errorf("take-remote output does not report a discard:\n%s", remoteOut)
+	}
+	// It names the LOCAL-only issues (the ones take-remote drops), not the remote-only ones.
+	for _, want := range []string{"proj-localA", "proj-localB"} {
+		if !strings.Contains(remoteOut, want) {
+			t.Errorf("take-remote discard did not name %q:\n%s", want, remoteOut)
+		}
+	}
+	if strings.Contains(remoteOut, "proj-remoteA") {
+		t.Errorf("take-remote reported a remote-only id as discarded (kept side):\n%s", remoteOut)
+	}
+
+	var local strings.Builder
+	if err := reportTakeOutcome(&local, "origin", "master", store.SyncReconcileResult{
+		State:     store.SyncReconcileTookLocal,
+		Unrelated: inv,
+	}); err != nil {
+		t.Fatalf("reportTakeOutcome(TookLocal): %v", err)
+	}
+	localOut := local.String()
+	if !strings.Contains(localOut, "proj-remoteA") {
+		t.Errorf("take-local discard did not name the remote-only id proj-remoteA:\n%s", localOut)
+	}
+	if strings.Contains(localOut, "proj-localA") {
+		t.Errorf("take-local reported a local-only id as discarded (kept side):\n%s", localOut)
+	}
+}
+
+// TestReportTakeOutcomeEmptyDiscard proves that when the chosen side drops nothing, the
+// output states an explicit "(0)" rather than a blank the reader must interpret.
+func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
+	var out strings.Builder
+	if err := reportTakeOutcome(&out, "origin", "master", store.SyncReconcileResult{
+		State:     store.SyncReconcileTookRemote,
+		Unrelated: &store.UnrelatedInventory{OnlyRemote: []string{"proj-remoteA"}},
+	}); err != nil {
+		t.Fatalf("reportTakeOutcome: %v", err)
+	}
+	if !strings.Contains(out.String(), "(0)") {
+		t.Errorf("an empty discard did not render as (0):\n%s", out.String())
+	}
+}
+
+// TestParseUnrelatedSide pins the take command's side mapping: the two real sides map
+// to their store resolution, and an unknown word is a usage error, never a silent
+// default. [LAW:no-silent-failure]
+func TestParseUnrelatedSide(t *testing.T) {
+	for word, want := range map[string]store.UnrelatedResolution{
+		"local": store.TakeLocal, "remote": store.TakeRemote,
+		"LOCAL": store.TakeLocal, " remote ": store.TakeRemote,
+	} {
+		got, err := parseUnrelatedSide(word)
+		if err != nil {
+			t.Errorf("parseUnrelatedSide(%q) errored: %v", word, err)
+		}
+		if got != want {
+			t.Errorf("parseUnrelatedSide(%q) = %q, want %q", word, got, want)
+		}
+	}
+	for _, bad := range []string{"", "mine", "theirs", "combine", "both"} {
+		if _, err := parseUnrelatedSide(bad); err == nil {
+			t.Errorf("parseUnrelatedSide(%q) returned nil error, want a usage error", bad)
+		}
 	}
 }
 

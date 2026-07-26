@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -184,6 +186,248 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	assertIDSet(t, "only-local", res.Unrelated.OnlyLocal, []string{localOnly.ID})
 	assertIDSet(t, "only-remote", res.Unrelated.OnlyRemote, []string{remoteOnly.ID})
 	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared.ID})
+}
+
+// TestSyncResolveUnrelatedTakeRemote drives the ticket's criterion for the remote
+// side: from the unrelated-histories state, choosing remote makes local content equal
+// the remote and sync report clean, and the discard of the local-only issue is
+// reported (not silent) via the result's inventory.
+func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	if err != nil {
+		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
+	}
+	if res.State != SyncReconcileTookRemote {
+		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookRemote)
+	}
+	// The discard is reported: the both-sides partition names the local-only issue that
+	// take-remote drops. [LAW:no-silent-failure]
+	if res.Unrelated == nil {
+		t.Fatalf("take-remote carried no inventory to report the discard")
+	}
+	assertIDSet(t, "only-local (discarded)", res.Unrelated.OnlyLocal, []string{localIssueID})
+	assertIDSet(t, "only-remote (kept)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
+
+	// Local content now equals the remote: the remote issue is present, the local-only
+	// issue is gone.
+	assertLocalIssueIDs(t, ctx, syncB, []string{remoteIssueID})
+
+	// Sync is clean: local head equals the remote head, so freshness is up-to-date, not
+	// diverged, and no push is needed.
+	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(B) after take-remote: %v", err)
+	}
+	if fresh.State() != SyncUpToDate {
+		t.Fatalf("post-take-remote freshness = %q ahead=%d behind=%d, want up_to_date", fresh.State(), fresh.Ahead, fresh.Behind)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+}
+
+// TestSyncResolveUnrelatedTakeLocal drives the ticket's criterion for the local side:
+// choosing local makes the remote-tracking side converge to local (local becomes a
+// fast-forwardable descendant carrying its own backlog; a push then converges the
+// remote), and the discard of the remote-only issue is reported, not silent.
+func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal)
+	if err != nil {
+		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
+	}
+	if res.State != SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	}
+	if res.Unrelated == nil {
+		t.Fatalf("take-local carried no inventory to report the discard")
+	}
+	assertIDSet(t, "only-remote (discarded)", res.Unrelated.OnlyRemote, []string{remoteIssueID})
+	assertIDSet(t, "only-local (kept)", res.Unrelated.OnlyLocal, []string{localIssueID})
+
+	// Local content is the local backlog wholesale: the local issue survives, the
+	// remote-only issue is dropped.
+	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID})
+
+	// Local is now a fast-forwardable descendant of the remote head: not diverged,
+	// strictly ahead, so the push fast-forwards. [LAW:one-source-of-truth] the head is
+	// the durable state; freshness reads it, not a stored flag.
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+	fresh, err := syncB.SyncFreshness(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncFreshness(B) after take-local: %v", err)
+	}
+	if fresh.State() != SyncAhead {
+		t.Fatalf("post-take-local freshness = %q ahead=%d behind=%d, want ahead", fresh.State(), fresh.Ahead, fresh.Behind)
+	}
+
+	// The remote-tracking side converges to local: push fast-forwards, and A receiving
+	// it sees exactly the local backlog (the remote-only issue discarded on both ends).
+	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("fast-forward SyncPush(B) after take-local: %v", err)
+	}
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B): %v", err)
+	}
+	syncA := openSyncOrFatal(t, ctx, rootA)
+	defer func() { _ = syncA.Close() }()
+	recv, err := syncA.SyncReceive(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(A): %v", err)
+	}
+	if recv.State != SyncReceiveFastForwarded {
+		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
+	}
+	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+}
+
+// TestSyncResolveUnrelatedRefusesSharedHistory proves take-one is scoped to unrelated
+// histories: a divergence WITH a common base is mergeable, so taking one side
+// wholesale would silently drop the other side's non-conflicting work. The resolver
+// refuses loudly and mutates nothing. [LAW:no-silent-failure]
+func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("alpha")})
+	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	if err == nil {
+		t.Fatalf("SyncResolveUnrelated on a shared-history divergence returned nil, want a refusal")
+	}
+	if !strings.Contains(err.Error(), "shares history") {
+		t.Fatalf("refusal error = %q, want it to name the shared history", err.Error())
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("data branch moved during a refused take: %s -> %s", headBefore, got)
+	}
+	assertWorkingSetClean(t, ctx, syncB)
+}
+
+// TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote proves take-local shares
+// the three-way path's schema-ahead refusal: because it authors a replay commit ON the
+// remote head, a remote at a schema this binary cannot produce would make it author a
+// commit BELOW that schema (dropping newer fields) and regress the shared remote on
+// push. It must refuse and mutate nothing — while take-remote, which adopts the remote
+// head wholesale and authors no replay commit, is exempt and proceeds. [LAW:single-enforcer]
+func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	// A seeds the remote at the current schema, then advances its head to a future
+	// schema and pushes; B forks an UNRELATED clone (own root, own issue) and fetches,
+	// so B is unrelated-diverged from a schema-ahead remote head.
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, "v9.9.0", UpdateIssueInput{Lane: strptr("from-a")})
+	forkUnrelatedClone(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+
+	// take-local: refused with the schema-ahead contract, no write.
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal)
+	var ahead *RemoteSchemaAheadError
+	if !errors.As(err, &ahead) {
+		t.Fatalf("take-local onto schema-ahead remote = %v, want *RemoteSchemaAheadError", err)
+	}
+	if got := headCommit(t, ctx, syncB); got != headBefore {
+		t.Fatalf("refused take-local still moved the local head: %s -> %s", headBefore, got)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
+	assertWorkingSetClean(t, ctx, syncB)
+
+	// take-remote: exempt — it adopts the schema-ahead head wholesale (the recovery that
+	// gets a stale binary the newer data), so it proceeds rather than refusing.
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	if err != nil {
+		t.Fatalf("take-remote onto schema-ahead remote errored, want it exempt: %v", err)
+	}
+	if res.State != SyncReconcileTookRemote {
+		t.Fatalf("take-remote state = %q, want %q", res.State, SyncReconcileTookRemote)
+	}
+	if got := headCommit(t, ctx, syncB); got == headBefore {
+		t.Fatalf("take-remote did not adopt the remote head (local head unchanged at %s)", got)
+	}
+}
+
+// TestUnrelatedResolutionValid pins the boundary guard: only the two real sides are
+// valid, so an unknown value is rejected at SyncResolveUnrelated's door rather than
+// reaching the dispatch and silently no-op'ing. [LAW:no-silent-failure]
+func TestUnrelatedResolutionValid(t *testing.T) {
+	for _, valid := range []UnrelatedResolution{TakeLocal, TakeRemote} {
+		if !valid.valid() {
+			t.Errorf("%q reported invalid, want valid", valid)
+		}
+	}
+	for _, invalid := range []UnrelatedResolution{"", "combine", "mine", "REMOTE"} {
+		if UnrelatedResolution(invalid).valid() {
+			t.Errorf("%q reported valid, want invalid", invalid)
+		}
+	}
+}
+
+// assertLocalIssueIDs fails unless the store's data branch holds exactly want issue
+// ids — the wholesale-take assertion that the chosen side survived and the other's
+// unique issues were dropped.
+func assertLocalIssueIDs(t *testing.T, ctx context.Context, st *Store, want []string) {
+	t.Helper()
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export for local issue ids: %v", err)
+	}
+	got := make([]string, 0, len(export.Issues))
+	for _, issue := range export.Issues {
+		got = append(got, issue.ID)
+	}
+	assertIDSet(t, "local issue ids", got, want)
 }
 
 // issueByID returns the issue with id from an export, failing the test if absent —
