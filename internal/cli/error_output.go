@@ -65,6 +65,15 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &bulkFailure) {
 		return "bulk_partial_failure"
 	}
+	// A write blocked by another process holding the store is checked BEFORE the
+	// transient-contention catch-all: WorkspaceWriteBlockedError unwraps to the
+	// transient cause (so errors.Is(err, ErrTransientGCContention) is still true),
+	// but the terminal holder situation has its own reason and remediation. Order
+	// makes errors.As win over the errors.Is fallthrough. [LAW:types-are-the-program]
+	var writeBlocked store.WorkspaceWriteBlockedError
+	if errors.As(err, &writeBlocked) {
+		return "workspace_write_blocked"
+	}
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return "transient_gc_contention"
 	}
@@ -92,6 +101,11 @@ func commandErrorRemediation(reason string) string {
 		return "Run `lit doctor --fix integrity` and retry. <agent-instructions>Run it yourself, do NOT ask the user — it is idempotent and safe.</agent-instructions>"
 	case "transient_gc_contention":
 		return "Retry once. If the error persists, run `lit doctor --fix`. <agent-instructions>Run it yourself, do NOT ask the user — it is idempotent and safe.</agent-instructions>"
+	case "workspace_write_blocked":
+		// Action-only: the error line above already states the diagnosis (another
+		// process holds the store), so the remediation jumps straight to the steps,
+		// like every other case here. [LAW:one-source-of-truth]
+		return "Wait a moment and retry — a normal command releases the store in well under a second. If it persists, a lit process is stuck: find it with `ps aux | grep '[l]it'` and terminate it, then retry; if none is running the hold is stale, so run `lit doctor --fix`. <agent-instructions>Investigate and resolve this yourself, do NOT ask the user.</agent-instructions>"
 	case "outside_git_workspace":
 		return "Run the command inside a git repository/worktree with links initialized."
 	case "bulk_partial_failure":
