@@ -2469,6 +2469,108 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 	}
 }
 
+// TestCloseRedirectRaceWithDeleteRejected is the concurrency regression for the
+// family-wide TOCTOU: the redirect canonical is now validated inside the
+// mutation tx, so a delete of the canonical that lands AFTER the close is
+// planned but BEFORE it commits is still observed, and the close is rejected
+// with nothing persisted. applyPreMutationHookForTest injects the delete in
+// exactly that window. Before the fix — when validateRedirectTarget ran in the
+// pre-lock plan phase — this close saw a live canonical, succeeded, and
+// persisted a redirect to a deleted canonical, the exact state the validation
+// exists to reject. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
+func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(canonical) error = %v", err)
+	}
+	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(dup) error = %v", err)
+	}
+	// The hook fires once, in the window between planning dup's close and
+	// committing it. It clears itself first so the nested delete Apply does not
+	// re-enter it, then deletes the canonical — the concurrent mutation. A
+	// failed prerequisite delete is fatal, not merely logged: it must fail at its
+	// cause, not let the close proceed and masquerade as a "want rejection" miss.
+	st.applyPreMutationHookForTest = func() {
+		st.applyPreMutationHookForTest = nil
+		if _, delErr := st.Apply(ctx, canonical.ID, Change{Action: model.Delete{}, Reason: "trash", Actor: "racer"}); delErr != nil {
+			t.Fatalf("hook: Apply(delete canonical) error = %v", delErr)
+		}
+	}
+
+	_, err = st.Apply(ctx, dup.ID, Change{Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "tester"})
+	if err == nil {
+		t.Fatal("Apply(close duplicate-of canonical deleted mid-flight) error = nil, want rejection")
+	}
+	if !strings.Contains(err.Error(), canonical.ID) || !strings.Contains(err.Error(), "deleted") {
+		t.Fatalf("error = %v, want the target and its retention state named", err)
+	}
+	loaded, err := st.GetIssue(ctx, dup.ID)
+	if err != nil {
+		t.Fatalf("GetIssue(dup) error = %v", err)
+	}
+	if loaded.StatusValue() != string(model.StateOpen) {
+		t.Fatalf("status = %q, want open — the rejected close must not persist", loaded.StatusValue())
+	}
+	if loaded.ResolutionValue() != nil || loaded.RedirectTargetValue() != nil || loaded.ClosedAtValue() != nil {
+		t.Fatalf("resolution/redirect/closed_at = %v/%v/%v, want all nil — the rejected close must not persist",
+			loaded.ResolutionValue(), loaded.RedirectTargetValue(), loaded.ClosedAtValue())
+	}
+}
+
+// TestRelationEndpointVanishedRejected locks the reject half of the in-tx
+// endpoint guard: requireIssueExistsTx reads endpoint existence on the mutation
+// tx, so an endpoint absent when the write runs is rejected with NotFound and no
+// edge is written — for both AddRelation and SetParent. Production delete is soft
+// (the row survives, and the guard accepts retained rows), so the endpoint is
+// removed here with a raw hard delete standing in for any future hard-delete or
+// purge path; using a row that genuinely existed proves the check reads current
+// DB state at write time, not a stale pre-read. [LAW:no-ambient-temporal-coupling]
+func TestRelationEndpointVanishedRejected(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	src, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Src", Topic: "rel", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(src) error = %v", err)
+	}
+	dst, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dst", Topic: "rel", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(dst) error = %v", err)
+	}
+	// The dst row vanishes before either relation write runs.
+	if err := st.ExecRawForTest(ctx, `DELETE FROM issues WHERE id = ?`, dst.ID); err != nil {
+		t.Fatalf("ExecRawForTest(delete dst) error = %v", err)
+	}
+
+	assertNotFound := func(what string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s: error = nil, want NotFound for the vanished endpoint", what)
+		}
+		var nf NotFoundError
+		if !errors.As(err, &nf) || nf.ID != dst.ID {
+			t.Fatalf("%s: error = %v, want NotFoundError naming %s", what, err, dst.ID)
+		}
+	}
+
+	_, addErr := st.AddRelation(ctx, AddRelationInput{SrcID: src.ID, DstID: dst.ID, Type: "blocks", CreatedBy: "tester"})
+	assertNotFound("AddRelation", addErr)
+	_, parentErr := st.SetParent(ctx, SetParentInput{ChildID: src.ID, ParentID: dst.ID, CreatedBy: "tester"})
+	assertNotFound("SetParent", parentErr)
+
+	// Neither rejected call wrote an edge.
+	rels, err := st.listRelations(ctx, src.ID)
+	if err != nil {
+		t.Fatalf("listRelations(src) error = %v", err)
+	}
+	if len(rels) != 0 {
+		t.Fatalf("relations = %v, want none — a rejected endpoint write must persist nothing", rels)
+	}
+}
+
 // TestCloseRedirectingWithoutTargetRejected is the store's integrity floor for
 // programmatic callers that bypass the CLI gate: a redirecting outcome minted
 // with an empty target is incoherent and rejected rather than persisted as a
