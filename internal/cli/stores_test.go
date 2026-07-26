@@ -157,6 +157,25 @@ func TestPrintCrossProjectRollupTableAndErrors(t *testing.T) {
 	}
 }
 
+// TestPrintCrossProjectRollupEmptyIsExplicit pins the empty-input contract: no
+// discovered stores prints a plain sentinel, not a header and an all-zeros TOTAL
+// that a reader could not tell apart from "every project is empty".
+func TestPrintCrossProjectRollupEmptyIsExplicit(t *testing.T) {
+	var out bytes.Buffer
+	if err := printCrossProjectRollup(&out, nil); err != nil {
+		t.Fatalf("printCrossProjectRollup(nil) error = %v", err)
+	}
+	got := out.String()
+	if !strings.Contains(got, "no stores discovered") {
+		t.Fatalf("empty output %q lacks the '(no stores discovered)' sentinel", got)
+	}
+	for _, unwanted := range []string{"PROJECT", "TOTAL"} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("empty output %q should not render the %q table", got, unwanted)
+		}
+	}
+}
+
 // TestGatherCrossProjectRollupUnreadableStoreIsErrorRow drives the gather path:
 // a tree of two discovered-but-unopenable stores yields two error rows rather
 // than a fatal error, so one broken store never aborts the whole overview.

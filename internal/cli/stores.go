@@ -196,6 +196,13 @@ func rollupLocation(ctx context.Context, loc workspace.Location) projectRollup {
 // the writes. [LAW:no-silent-failure] Error rows print after the table, loud and
 // unmissable, never folded into counts they have none of.
 func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
+	// "No stores discovered" is a distinct state from "stores found, all empty":
+	// an all-zeros TOTAL cannot tell the two apart, so say it plainly and return,
+	// the way `lit ready` prints "(none ready)". [LAW:no-silent-failure]
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "(no stores discovered)")
+		return err
+	}
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
 	if _, err := fmt.Fprintln(tw, "PROJECT\tREADY\tIN-FLIGHT\tBLOCKED"); err != nil {
 		return err
