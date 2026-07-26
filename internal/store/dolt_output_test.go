@@ -10,17 +10,19 @@ import (
 )
 
 // captureStdout runs fn with the process stdout file descriptor redirected to a
-// pipe and returns everything written to it. Dolt's EphemeralPrinter reads the
-// os.Stdout package var at call time, so swapping the descriptor is the only way
-// to observe what it emits — an in-process io.Writer swap would not catch it.
+// pipe and returns everything written to it. It captures at the fd level, not by
+// injecting an io.Writer, because that is the regression-proof guard: dolt's
+// EphemeralPrinter writes to whichever sink cli.CliOut resolves to — io.Discard
+// under this package's suppression, but the raw os.Stdout fd on dolt's default
+// (colorOutput) branch, which is what a regression resetting CliOut would restore.
+// Reading the fd catches the bytes on either path, so the zero-byte assertion
+// holds no matter which branch dolt takes.
 func captureStdout(t *testing.T, fn func() error) []byte {
 	t.Helper()
 	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatalf("os.Pipe: %v", err)
 	}
-	orig := os.Stdout
-	os.Stdout = w
 	done := make(chan []byte, 1)
 	go func() {
 		var buf bytes.Buffer
@@ -28,10 +30,23 @@ func captureStdout(t *testing.T, fn func() error) []byte {
 		done <- buf.Bytes()
 	}()
 
-	fnErr := fn()
+	orig := os.Stdout
+	os.Stdout = w
 
-	os.Stdout = orig
-	_ = w.Close()
+	// Restore os.Stdout and close the pipe's write end even if fn panics.
+	// Otherwise os.Stdout stays wired to the pipe (corrupting every later test's
+	// output) and io.Copy never sees EOF (the write end delivers it), leaking the
+	// reader goroutine forever. A defer makes both survive a panic; the panic then
+	// propagates and fails the test as it should.
+	var fnErr error
+	func() {
+		defer func() {
+			os.Stdout = orig
+			_ = w.Close()
+		}()
+		fnErr = fn()
+	}()
+
 	captured := <-done
 	_ = r.Close()
 
