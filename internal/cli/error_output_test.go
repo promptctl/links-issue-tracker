@@ -77,9 +77,11 @@ func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
 	if !strings.Contains(out, "remediation:") || !strings.Contains(out, "ps aux | grep") {
 		t.Fatalf("missing holder remediation steps: %q", out)
 	}
-	// The backend detail is preserved for diagnosis, but demoted behind the holder
-	// sentence — it is present as a parenthetical, not the headline.
-	if !strings.Contains(out, "backend detail:") {
+	// The backend cause is preserved for diagnosis (demoted behind the holder
+	// sentence, not the headline). Assert the concrete cause text, not the store's
+	// wrapping format, so a rename of that parenthetical can't break this contract.
+	// [LAW:behavior-not-structure]
+	if !strings.Contains(out, "cannot update manifest: database is read only") {
 		t.Fatalf("backend cause not preserved for diagnosis: %q", out)
 	}
 }
