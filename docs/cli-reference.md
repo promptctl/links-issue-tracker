@@ -161,8 +161,16 @@ lit ls [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|
 
 General-purpose listing, ranked by default. `--search` matches title and description
 text; `--query` is a compact query language combining filters and text (e.g.
-`status:in_progress type:task has:comments login`). Archived and deleted issues are
-hidden unless explicitly included.
+`status:in_progress type:task has:comments login`). It is a strict superset of the
+discrete filter and list-shaping flags: every flag above has an equivalent token, so
+`--query` alone can express any filter. The token spellings are `status:`,
+`resolution:`, `type:`, `assignee:`, `id:`, `label:`, `has:comments`,
+`updated>=`/`updated<=`, `sort:` (e.g. `sort:rank:asc`, comma-separate multiple keys),
+`limit:` (e.g. `limit:5`), and the bare keywords `archived` and `deleted` (the
+`--include-archived` / `--include-deleted` equivalents). Any bare word that is not a
+recognized token is a search term. Archived and deleted issues are hidden unless
+explicitly included. Output-shaping flags (`--columns`, `--format`) have no token —
+they are not filter concerns.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
 issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `title`, `assignee`,
