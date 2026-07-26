@@ -3,11 +3,16 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func gitInit(t *testing.T, dir string) {
@@ -178,6 +183,104 @@ func TestGatherCrossProjectRollupUnreadableStoreIsErrorRow(t *testing.T) {
 		if row.Err == nil {
 			t.Fatalf("row %q has nil Err; an empty store dir must not open cleanly", row.StorageDir)
 		}
+	}
+}
+
+// seedDiscoverableStore builds a real, Discover-able lit store under repoDir's
+// git-common-dir (`.git/links`) with a known backlog: two ready leaves, one
+// in-progress leaf, and one leaf blocked by an unfinished dependency. It opens
+// the store read-write only to seed, then CLOSES it — so a later read-only open
+// (as the rollup does) is not a concurrent second engine on the same path. It
+// returns the storage directory and the issue prefix it stamped into config.json,
+// the label the rollup should surface for this project.
+func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (storageDir, wantPrefix string) {
+	t.Helper()
+	ctx := context.Background()
+	storageDir = filepath.Join(repoDir, ".git", "links")
+	dbPath := filepath.Join(storageDir, "dolt")
+
+	st, err := store.Open(ctx, dbPath, workspaceID)
+	if err != nil {
+		t.Fatalf("store.Open(%q) error = %v", dbPath, err)
+	}
+	newLeaf := func(title string) model.Issue {
+		issue, err := st.CreateIssue(ctx, store.CreateIssueInput{
+			Title: title, Topic: "work", Prefix: prefix, Placement: store.RankBottom,
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(%q) error = %v", title, err)
+		}
+		return issue
+	}
+	newLeaf("ready one") // ready
+	newLeaf("ready two") // ready
+	wip := newLeaf("in flight")
+	if _, err := st.Apply(ctx, wip.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+		t.Fatalf("Apply(start) error = %v", err)
+	}
+	blocked := newLeaf("blocked")
+	// blocked depends on the still-unfinished in-progress leaf, so it is blocked
+	// without adding a second ready leaf that would perturb the asserted counts.
+	if _, err := st.AddRelation(ctx, store.AddRelationInput{
+		SrcID: blocked.ID, DstID: wip.ID, Type: "blocks", CreatedBy: "tester",
+	}); err != nil {
+		t.Fatalf("AddRelation(blocks) error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("store.Close() error = %v", err)
+	}
+
+	payload, err := json.Marshal(workspace.Config{WorkspaceID: workspaceID, IssuePrefix: prefix})
+	if err != nil {
+		t.Fatalf("marshal config: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(storageDir, "config.json"), payload, 0o644); err != nil {
+		t.Fatalf("write config.json: %v", err)
+	}
+	return storageDir, prefix
+}
+
+// TestGatherCrossProjectRollupCountsWorkable is the happy-path guard for the core
+// new data path: discovery through classification to counts. A real Discover-able
+// store with a known backlog must roll up to Err==nil with the exact
+// ready / in-flight / blocked counts and the config-derived prefix label — so a
+// regression in classification, store integration, or count assignment is caught.
+// [LAW:behavior-not-structure] Asserts the counts the feature promises, not how
+// they are computed.
+func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
+	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+
+	// EvalSymlinks up front so the seed path, the config path, and the path
+	// Discover derives from git are one spelling of the store, never two.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(root) error = %v", err)
+	}
+	repo := filepath.Join(root, "repoReal")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir repoReal: %v", err)
+	}
+	gitInit(t, repo)
+	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
+
+	rows, err := gatherCrossProjectRollup(context.Background(), []string{root})
+	if err != nil {
+		t.Fatalf("gatherCrossProjectRollup() error = %v", err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("gatherCrossProjectRollup() returned %d rows, want 1:\n%+v", len(rows), rows)
+	}
+	row := rows[0]
+	if row.Err != nil {
+		t.Fatalf("row.Err = %v; want a clean read of the seeded store", row.Err)
+	}
+	if row.Ready != 2 || row.InFlight != 1 || row.Blocked != 1 {
+		t.Fatalf("row counts = ready %d / in-flight %d / blocked %d; want 2 / 1 / 1", row.Ready, row.InFlight, row.Blocked)
+	}
+	if row.Label != wantPrefix {
+		t.Fatalf("row.Label = %q; want the config issue prefix %q", row.Label, wantPrefix)
 	}
 }
 
