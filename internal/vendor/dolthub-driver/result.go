@@ -52,14 +52,20 @@ func newResult(gmsCtx *gms.Context, sch gms.Schema, rowItr gms.RowIter) *doltRes
 		}
 	}
 
-	if err := rowItr.Close(gmsCtx); err != nil {
-		return &doltResult{err: err}
+	// The iteration error is what the caller cares about (a table-not-found or constraint
+	// violation); a Close failure is a secondary resource-cleanup error, so it never masks
+	// a real iteration error that's already in hand.
+	closeErr := rowItr.Close(gmsCtx)
+	if resultErr != nil {
+		return &doltResult{err: resultErr}
+	}
+	if closeErr != nil {
+		return &doltResult{err: closeErr}
 	}
 
 	return &doltResult{
 		affected: affected,
 		last:     last,
-		err:      resultErr,
 	}
 }
 
