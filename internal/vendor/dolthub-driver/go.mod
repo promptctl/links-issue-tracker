@@ -4,6 +4,10 @@ go 1.25.6
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
+	// [LAW:locality-or-seam] This pin is what this module was vendored from and is
+	// what applies if it's ever built standalone. Inside lit's actual build, the
+	// top-level go.mod's replace directive (see its own comment) overrides every
+	// dolt/go reference — including this one — to the brandon-fryslie fork instead.
 	github.com/dolthub/dolt/go v0.40.5-0.20260313234613-4069302e7692
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe
 	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab
