@@ -60,7 +60,7 @@ func newResult(gmsCtx *gms.Context, sch gms.Schema, rowItr gms.RowIter) *doltRes
 		return &doltResult{err: resultErr}
 	}
 	if closeErr != nil {
-		return &doltResult{err: closeErr}
+		return &doltResult{err: translateError(closeErr)}
 	}
 
 	return &doltResult{
