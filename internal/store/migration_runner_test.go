@@ -544,58 +544,75 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 	defer second.Close()
 }
 
-// TestOpenDetectsVersionSlotReuseContentMismatch pins the go-template-js
-// failure shape from the epic: goose_db_version marks versions up to 3
-// applied, but the issues table is missing the lane and resolution columns
-// the CURRENT registry's version 2 and 3 migrations add — as if those
+// TestOpenRepairsVersionSlotReuseContentMismatch pins the go-template-js
+// failure shape from the epic, upgraded from mere detection (links-migrate-drift-hh1t.2)
+// to transparent repair (links-migrate-drift-hh1t.3): goose_db_version
+// reports the workspace FULLY migrated (applied == registry max, nothing
+// pending — the "reported as fully migrated" case verifyAppliedVersionsMatchRegistry
+// exists to catch), but the issues table is missing the lane and resolution
+// columns the CURRENT registry's version 2 and 3 migrations add, as if those
 // version numbers were reused for different historical content after a
-// baseline rewrite. Open must report this as a version-content mismatch,
-// not silently treat the workspace as fully migrated.
-func TestOpenDetectsVersionSlotReuseContentMismatch(t *testing.T) {
+// baseline rewrite. goose_db_version is deliberately left untouched — the
+// drift is entirely in the live schema, not in the recorded version — so
+// repair must never attempt to re-run migrations goose considers already
+// applied (that would collide with v4's redirect_target, which this setup
+// leaves intact). Open must self-heal both gaps in one call — not just the
+// earliest one verifyAppliedVersionsMatchRegistry reports — and must not
+// surface an error: detecting the drift is no longer where lit stops,
+// applying it is.
+func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		// Strip the v2/v3 registered content (and the v4 CHECK that
-		// references resolution) so the live schema looks like versions 2
-		// and 3 never actually added their columns here, while leaving
-		// goose_db_version claiming they did.
+		// Strip only the v2/v3 registered content — both CHECK constraints
+		// that reference resolution (v4's redirect_target_check included,
+		// since it must be dropped before resolution can be) plus the lane
+		// and resolution columns themselves — so the live schema looks like
+		// versions 2 and 3 never actually added their columns here.
+		// redirect_target and goose_db_version are left exactly as the fresh
+		// Open produced them (applied through registry max): the bookkeeping
+		// was never wrong about "how far"; only the live schema disagrees
+		// about "what actually landed" for v2/v3.
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check`)
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN lane`)
 		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN resolution`)
-		mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id > 3`)
-		mustCommit(t, ctx, st, "test: simulate version-slot reuse (goose applied through v3, v2/v3 content missing)")
+		mustCommit(t, ctx, st, "test: simulate version-slot reuse (goose fully applied, v2/v3 content missing)")
 	})
 
-	_, err := Open(ctx, doltRoot, "test-workspace-id")
-	if err == nil {
-		t.Fatal("Open() of version-slot-reuse workspace returned nil; want *VersionContentMismatchError")
+	repaired, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() of version-slot-reuse workspace error = %v; want a transparent repair, not a refusal", err)
 	}
-	var mismatch *VersionContentMismatchError
-	if !errors.As(err, &mismatch) {
-		t.Fatalf("Open() error = %v (%T); want *VersionContentMismatchError", err, err)
+	defer repaired.Close()
+
+	cols, err := repaired.tableColumns(ctx, "issues")
+	if err != nil {
+		t.Fatalf("tableColumns(issues) error = %v", err)
 	}
-	// Earliest-mismatched-version-first, mirroring checkPendingQuarantine.
-	if mismatch.Version != 2 {
-		t.Errorf("Version = %d, want 2 (earliest mismatched version)", mismatch.Version)
+	if !cols["lane"] {
+		t.Error("issues.lane still missing after Open; repair did not restore the earliest mismatched version")
 	}
-	if mismatch.Name != "00002_add_lane.sql" {
-		t.Errorf("Name = %q, want %q", mismatch.Name, "00002_add_lane.sql")
+	if !cols["resolution"] {
+		t.Error("issues.resolution still missing after Open; repair did not restore the SECOND mismatched version in the same pass")
 	}
-	found := false
-	for _, m := range mismatch.Missing {
-		if m == "issues.lane" {
-			found = true
-		}
+
+	applied, err := repaired.recordedMigrationVersion(ctx)
+	if err != nil {
+		t.Fatalf("recordedMigrationVersion() error = %v", err)
 	}
-	if !found {
-		t.Errorf("Missing = %v, want an entry naming issues.lane", mismatch.Missing)
+	if applied != headVersion(t) {
+		t.Errorf("recordedMigrationVersion() = %d after repair, want registry max %d — repair must not touch goose_db_version bookkeeping, only the schema it already claims", applied, headVersion(t))
 	}
-	msg := mismatch.Error()
-	if !strings.Contains(msg, "v2") || !strings.Contains(msg, "00002_add_lane.sql") || !strings.Contains(msg, "issues.lane") {
-		t.Errorf("Error() = %q; want it to name the version, file, and missing column", msg)
+
+	// A second Open must be a clean no-op: the drift is gone, so
+	// verifyAppliedVersionsMatchRegistry finds nothing to repair.
+	reopened, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("second Open() after repair error = %v; want clean open", err)
 	}
+	reopened.Close()
 }
 
 // TestParseAddColumnTargetsRecognizesPlainForm pins the happy path: the
@@ -609,6 +626,31 @@ func TestParseAddColumnTargetsRecognizesPlainForm(t *testing.T) {
 	}
 	if len(adds) != 1 || adds[0].table != "issues" || adds[0].column != "lane" {
 		t.Fatalf("adds = %+v, want [{issues lane}]", adds)
+	}
+	if adds[0].stmt != up {
+		t.Errorf("stmt = %q, want the full statement %q for repair to re-execute verbatim", adds[0].stmt, up)
+	}
+}
+
+// TestParseAddColumnTargetsCapturesEachStatementSeparately pins the repair
+// path's prerequisite: when a migration's Up section has more than one
+// statement (a later ADD COLUMN after some earlier SQL), each target's stmt
+// is its OWN standalone statement — not a slice starting from byte 0 of the
+// whole Up section — so repairVersionContentDrift can execute it alone
+// without re-running unrelated preceding SQL.
+func TestParseAddColumnTargetsCapturesEachStatementSeparately(t *testing.T) {
+	up := "ALTER TABLE issues ADD COLUMN resolution VARCHAR(32) NULL;\n" +
+		"ALTER TABLE issues ADD CONSTRAINT issues_resolution_check CHECK (resolution IS NULL OR resolution IN ('duplicate','superseded','obsolete','wontfix'));"
+	adds, err := parseAddColumnTargets("00003_add_resolution.sql", up)
+	if err != nil {
+		t.Fatalf("parseAddColumnTargets() error = %v", err)
+	}
+	if len(adds) != 1 {
+		t.Fatalf("adds = %+v, want exactly one ADD COLUMN target", adds)
+	}
+	want := "ALTER TABLE issues ADD COLUMN resolution VARCHAR(32) NULL;"
+	if adds[0].stmt != want {
+		t.Errorf("stmt = %q, want %q (the ADD COLUMN statement alone, not including the following ADD CONSTRAINT)", adds[0].stmt, want)
 	}
 }
 

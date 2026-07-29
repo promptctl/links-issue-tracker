@@ -166,19 +166,28 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	return b.String()
 }
 
-// VersionContentMismatchError is returned when Open finds a goose-applied
-// migration version whose CURRENT registry content did not land on this
-// workspace's live schema. goose_db_version records only a version number and
-// an applied bit — never the migration's content — so it cannot itself tell
-// "version N ran and its effect is on disk" from "version N is marked
-// applied, but the registry's current migration N is unrelated content that
-// never actually ran here" (e.g. after a baseline rewrite reused version
-// slots for different migrations). Without this check that second case reads
-// as "fully migrated" and the missing effect never surfaces.
+// VersionContentMismatchError is returned by verifyAppliedVersionsMatchRegistry
+// when it finds a goose-applied migration version whose CURRENT registry
+// content did not land on this workspace's live schema. goose_db_version
+// records only a version number and an applied bit — never the migration's
+// content — so it cannot itself tell "version N ran and its effect is on
+// disk" from "version N is marked applied, but the registry's current
+// migration N is unrelated content that never actually ran here" (e.g. after
+// a baseline rewrite reused version slots for different migrations). Without
+// this check that second case reads as "fully migrated" and the missing
+// effect never surfaces.
+//
+// runMigration treats this as a self-heal trigger, not a terminal refusal:
+// on sight it calls repairVersionContentDrift and, on a clean repair, Open
+// proceeds with no error ever reaching the caller. This type — and its
+// named version/file/gap — only escapes to the caller when the REPAIR itself
+// fails, wrapped with repair context, or from direct callers of
+// verifyAppliedVersionsMatchRegistry that want the pure detection signal.
 //
 // [LAW:no-silent-failure] The workspace is not corrupt — every column it
-// actually has is intact — so this refuses loudly with the specific version
-// and gap named rather than silently reporting up to date.
+// actually has is intact — so detection is loud and specific about the
+// version and gap even though the common-path outcome is a silent repair,
+// not a surfaced error.
 type VersionContentMismatchError struct {
 	Version int64
 	Name    string
@@ -317,9 +326,29 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// none yet and phaseAdopt's pre-goose shape is verified by
 	// verifyIssuesReconcilable/reconcileToBaseline instead — the same
 	// discriminated-phase branching those two already use.
+	//
+	// A detected mismatch is no longer a terminal refusal: it is the signal to
+	// self-heal, mirroring ensureQuarantineTable's detect-then-recreate
+	// precedent above. repairVersionContentDrift re-applies the registry's own
+	// ADD COLUMN statements for every gap through appliedVersion (not just the
+	// earliest one this check reports) and the repair is committed immediately,
+	// so the workspace converges to the registry's exact shape purely by
+	// running lit — no operator SQL, ever. [LAW:no-silent-failure] A failure
+	// repairing (as opposed to detecting) still aborts Open loudly; only a
+	// clean repair is swallowed into a routine commit.
 	if state.phase == phaseManaged {
 		if err := s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion); err != nil {
-			return err
+			var mismatch *VersionContentMismatchError
+			if !errors.As(err, &mismatch) {
+				return err
+			}
+			repaired, err := s.repairVersionContentDrift(ctx, state.appliedVersion)
+			if err != nil {
+				return fmt.Errorf("repair version-content drift (detected at v%d %q): %w", mismatch.Version, mismatch.Name, err)
+			}
+			if err := s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired)); err != nil {
+				return fmt.Errorf("commit version-content drift repair: %w", err)
+			}
 		}
 	}
 	if !state.willMutate() {
@@ -911,6 +940,11 @@ type migrationColumnAdds struct {
 type tableColumnTarget struct {
 	table  string
 	column string
+	// stmt is the exact ALTER TABLE ... ADD COLUMN ... statement text this
+	// target was parsed from, terminated at its closing ';'. repairVersionContentDrift
+	// re-executes it verbatim, so a repaired column is byte-identical to what
+	// applying the registry's own migration would have produced.
+	stmt string
 }
 
 // parseAddColumnTargets extracts every ALTER TABLE ... ADD COLUMN target
@@ -924,15 +958,25 @@ type tableColumnTarget struct {
 // register zero (or, for the IF case, one WRONG) target for that version,
 // which is indistinguishable from a migration that legitimately adds no
 // column (e.g. an index- or backfill-only migration) and would let a real
-// content mismatch on that version go undetected.
+// content mismatch on that version go undetected. The same loud-failure gate
+// also protects the repair path: a target whose statement text cannot be
+// isolated is never silently skipped either.
 func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 	var adds []tableColumnTarget
-	for _, m := range alterAddColumnRe.FindAllStringSubmatch(up, -1) {
-		column := strings.ToLower(m[2])
+	for _, m := range alterAddColumnRe.FindAllStringSubmatchIndex(up, -1) {
+		column := strings.ToLower(up[m[4]:m[5]])
 		if sqlKeywordAfterAddColumn[column] {
 			continue
 		}
-		adds = append(adds, tableColumnTarget{table: strings.ToLower(m[1]), column: column})
+		stmt, ok := terminatedStatement(up, m[0])
+		if !ok {
+			return nil, fmt.Errorf(
+				"migration %q: ADD COLUMN statement starting at byte %d has no terminating ';' — "+
+					"cannot isolate it for repair",
+				name, m[0],
+			)
+		}
+		adds = append(adds, tableColumnTarget{table: strings.ToLower(up[m[2]:m[3]]), column: column, stmt: stmt})
 	}
 	if literal := strings.Count(strings.ToUpper(up), "ADD COLUMN"); literal > len(adds) {
 		return nil, fmt.Errorf(
@@ -945,6 +989,16 @@ func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 		)
 	}
 	return adds, nil
+}
+
+// terminatedStatement returns the text from start to (and including) the next
+// ';' in s, trimmed, or ok=false if s[start:] contains no ';'.
+func terminatedStatement(s string, start int) (stmt string, ok bool) {
+	end := strings.IndexByte(s[start:], ';')
+	if end < 0 {
+		return "", false
+	}
+	return strings.TrimSpace(s[start : start+end+1]), true
 }
 
 // registryColumnAddsThroughVersion returns, in ascending version order, the
@@ -1022,6 +1076,64 @@ func (s *Store) verifyAppliedVersionsMatchRegistry(ctx context.Context, appliedV
 		}
 	}
 	return nil
+}
+
+// repairVersionContentDrift applies every ADD COLUMN statement the current
+// registry defines for versions 1..appliedVersion whose target column is
+// still missing from the live schema, and returns a "table.column (vN name)"
+// description of each one repaired, for the Dolt commit message. It sweeps
+// every version through appliedVersion in one pass rather than stopping at
+// the first mismatch (verifyAppliedVersionsMatchRegistry's earliest-first
+// report is a detection gate, not the repair set) — a workspace with drift
+// at multiple version slots (the go-template-js shape: v2 and v3 both
+// missing their column) converges to the registry's exact shape in one
+// Open, not one repair per invocation.
+//
+// [LAW:one-source-of-truth] Re-executes the registry's own statement text
+// verbatim (captured by parseAddColumnTargets), so a repaired column is
+// byte-identical to what a fresh apply of that migration would have
+// produced — there is no second, hand-maintained repair-DDL to drift from
+// the registry.
+// [LAW:no-silent-failure] An ALTER failure here — anything beyond "column
+// already exists", which the missing-column probe already excludes —
+// aborts loudly with the statement and cause named; it is never swallowed.
+func (s *Store) repairVersionContentDrift(ctx context.Context, appliedVersion int64) ([]string, error) {
+	adds, err := registryColumnAddsThroughVersion(appliedVersion)
+	if err != nil {
+		return nil, err
+	}
+	tableCols := map[string]map[string]bool{}
+	var repaired []string
+	for _, m := range adds {
+		for _, target := range m.adds {
+			cols, ok := tableCols[target.table]
+			if !ok {
+				cols, err = s.tableColumns(ctx, target.table)
+				if err != nil {
+					return nil, err
+				}
+				tableCols[target.table] = cols
+			}
+			if cols[target.column] {
+				continue
+			}
+			if _, err := s.db.ExecContext(ctx, target.stmt); err != nil {
+				return nil, fmt.Errorf("repair v%d %q: apply %q: %w", m.version, m.name, target.stmt, err)
+			}
+			cols[target.column] = true
+			repaired = append(repaired, fmt.Sprintf("%s.%s (v%d %s)", target.table, target.column, m.version, m.name))
+		}
+	}
+	return repaired, nil
+}
+
+// migrationDriftRepairCommitMessage is the Dolt commit message for a
+// version-content drift repair. It names every table.column repaired so the
+// Dolt log still carries the audit trail an operator would previously have
+// seen only in a refused VersionContentMismatchError — even though the
+// repair now happens transparently and no error reaches them.
+func migrationDriftRepairCommitMessage(repaired []string) string {
+	return fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))
 }
 
 // AppliedSchemaVersion reports the schema version currently recorded for this
