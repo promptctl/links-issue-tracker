@@ -30,6 +30,12 @@ const producerBinaryVersionMetaKey = "producer_binary_version"
 const migrationCheckpointPrefix = "pre-migrate"
 const migrationCheckpointRetention = 5
 
+// migrationDriftRepairCheckpointPrefix names the Dolt checkpoint branch taken
+// immediately before a version-content drift repair (repairVersionContentDriftWithRollback).
+// Distinct from migrationCheckpointPrefix's ordinary per-migration checkpoints
+// so pruning the two independently retained sets never collides.
+const migrationDriftRepairCheckpointPrefix = "pre-drift-repair"
+
 // migrationUpByOneForTest, if non-nil, replaces the goose step inside
 // applyPendingMigrations ONLY — the durable startup path. Tests use it to inject
 // migration failures without needing real failing migrations in the embedded
@@ -166,19 +172,28 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	return b.String()
 }
 
-// VersionContentMismatchError is returned when Open finds a goose-applied
-// migration version whose CURRENT registry content did not land on this
-// workspace's live schema. goose_db_version records only a version number and
-// an applied bit — never the migration's content — so it cannot itself tell
-// "version N ran and its effect is on disk" from "version N is marked
-// applied, but the registry's current migration N is unrelated content that
-// never actually ran here" (e.g. after a baseline rewrite reused version
-// slots for different migrations). Without this check that second case reads
-// as "fully migrated" and the missing effect never surfaces.
+// VersionContentMismatchError is returned by verifyAppliedVersionsMatchRegistry
+// when it finds a goose-applied migration version whose CURRENT registry
+// content did not land on this workspace's live schema. goose_db_version
+// records only a version number and an applied bit — never the migration's
+// content — so it cannot itself tell "version N ran and its effect is on
+// disk" from "version N is marked applied, but the registry's current
+// migration N is unrelated content that never actually ran here" (e.g. after
+// a baseline rewrite reused version slots for different migrations). Without
+// this check that second case reads as "fully migrated" and the missing
+// effect never surfaces.
+//
+// runMigration treats this as a self-heal trigger, not a terminal refusal:
+// on sight it calls repairVersionContentDrift and, on a clean repair, Open
+// proceeds with no error ever reaching the caller. This type — and its
+// named version/file/gap — only escapes to the caller when the REPAIR itself
+// fails, wrapped with repair context, or from direct callers of
+// verifyAppliedVersionsMatchRegistry that want the pure detection signal.
 //
 // [LAW:no-silent-failure] The workspace is not corrupt — every column it
-// actually has is intact — so this refuses loudly with the specific version
-// and gap named rather than silently reporting up to date.
+// actually has is intact — so detection is loud and specific about the
+// version and gap even though the common-path outcome is a silent repair,
+// not a surfaced error.
 type VersionContentMismatchError struct {
 	Version int64
 	Name    string
@@ -317,9 +332,28 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// none yet and phaseAdopt's pre-goose shape is verified by
 	// verifyIssuesReconcilable/reconcileToBaseline instead — the same
 	// discriminated-phase branching those two already use.
+	//
+	// A detected mismatch is no longer a terminal refusal: it is the signal to
+	// self-heal. Unlike ensureQuarantineTable's detect-then-recreate precedent
+	// (which only ever touches lit's own bookkeeping table, bounded to
+	// empty-or-refuse), this repair runs ALTER TABLE against user-owned tables
+	// (e.g. issues) automatically and unprompted — the same risk class
+	// applyPendingMigrations exists to protect against — so
+	// repairVersionContentDriftWithRollback gives it that same
+	// checkpoint-and-reset discipline rather than the bookkeeping-table
+	// precedent. The workspace converges to the registry's exact shape purely
+	// by running lit — no operator SQL, ever. [LAW:no-silent-failure] A failure
+	// repairing (as opposed to detecting) still aborts Open loudly; only a
+	// clean repair is swallowed into a routine commit.
 	if state.phase == phaseManaged {
 		if err := s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion); err != nil {
-			return err
+			var mismatch *VersionContentMismatchError
+			if !errors.As(err, &mismatch) {
+				return err
+			}
+			if err := s.repairVersionContentDriftWithRollback(ctx, state.appliedVersion, mismatch); err != nil {
+				return err
+			}
 		}
 	}
 	if !state.willMutate() {
@@ -911,6 +945,11 @@ type migrationColumnAdds struct {
 type tableColumnTarget struct {
 	table  string
 	column string
+	// stmt is the exact ALTER TABLE ... ADD COLUMN ... statement text this
+	// target was parsed from, terminated at its closing ';'. repairVersionContentDrift
+	// re-executes it verbatim, so a repaired column is byte-identical to what
+	// applying the registry's own migration would have produced.
+	stmt string
 }
 
 // parseAddColumnTargets extracts every ALTER TABLE ... ADD COLUMN target
@@ -924,15 +963,25 @@ type tableColumnTarget struct {
 // register zero (or, for the IF case, one WRONG) target for that version,
 // which is indistinguishable from a migration that legitimately adds no
 // column (e.g. an index- or backfill-only migration) and would let a real
-// content mismatch on that version go undetected.
+// content mismatch on that version go undetected. The same loud-failure gate
+// also protects the repair path: a target whose statement text cannot be
+// isolated is never silently skipped either.
 func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 	var adds []tableColumnTarget
-	for _, m := range alterAddColumnRe.FindAllStringSubmatch(up, -1) {
-		column := strings.ToLower(m[2])
+	for _, m := range alterAddColumnRe.FindAllStringSubmatchIndex(up, -1) {
+		column := strings.ToLower(up[m[4]:m[5]])
 		if sqlKeywordAfterAddColumn[column] {
 			continue
 		}
-		adds = append(adds, tableColumnTarget{table: strings.ToLower(m[1]), column: column})
+		stmt, ok := terminatedStatement(up, m[0])
+		if !ok {
+			return nil, fmt.Errorf(
+				"migration %q: ADD COLUMN statement starting at byte %d has no terminating ';' — "+
+					"cannot isolate it for repair",
+				name, m[0],
+			)
+		}
+		adds = append(adds, tableColumnTarget{table: strings.ToLower(up[m[2]:m[3]]), column: column, stmt: stmt})
 	}
 	if literal := strings.Count(strings.ToUpper(up), "ADD COLUMN"); literal > len(adds) {
 		return nil, fmt.Errorf(
@@ -945,6 +994,35 @@ func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 		)
 	}
 	return adds, nil
+}
+
+// terminatedStatement returns the text from start to (and including) the
+// next UNQUOTED ';' in s, trimmed, or ok=false if none exists. Quote-aware
+// like parenBlock/splitTopLevel below, so a semicolon inside a string
+// literal (e.g. a future migration's `DEFAULT ';'`) cannot truncate the
+// statement mid-value and hand repairVersionContentDrift invalid SQL.
+//
+// Like parenBlock/splitTopLevel, this recognizes only doubled-quote ('')
+// escaping, not backslash escapes (\') — the only form any migration in
+// this registry uses. A migration whose ADD COLUMN default contains a
+// backslash-escaped quote would toggle out of the string early and this
+// would overshoot the real statement boundary; widen all three quote
+// scanners together if that shape is ever needed, not just this one.
+func terminatedStatement(s string, start int) (stmt string, ok bool) {
+	inQuote := false
+	for i := start; i < len(s); i++ {
+		switch {
+		case inQuote:
+			if s[i] == '\'' {
+				inQuote = false
+			}
+		case s[i] == '\'':
+			inQuote = true
+		case s[i] == ';':
+			return strings.TrimSpace(s[start : i+1]), true
+		}
+	}
+	return "", false
 }
 
 // registryColumnAddsThroughVersion returns, in ascending version order, the
@@ -985,41 +1063,168 @@ func registryColumnAddsThroughVersion(maxVersion int64) ([]migrationColumnAdds, 
 	return out, nil
 }
 
-// verifyAppliedVersionsMatchRegistry checks that every migration version this
-// workspace's goose log claims as applied (1..appliedVersion) actually
-// produced its registered ADD COLUMN content on the live schema. It reports
-// the earliest mismatched version, mirroring checkPendingQuarantine's
-// earliest-first ordering — fixing drift in version order is also the
-// natural repair order for a future remediation step.
+// missingContentTarget names one ADD COLUMN target the registry defines for
+// a specific version that the live schema is missing.
+type missingContentTarget struct {
+	version int64
+	name    string
+	table   string
+	column  string
+	stmt    string
+}
+
+// missingVersionContent probes the live schema against every ADD COLUMN
+// target the registry defines for versions 1..appliedVersion, in ascending
+// version order, and returns every target whose column is absent. It is the
+// single probe verifyAppliedVersionsMatchRegistry (which reports only the
+// earliest version's gaps) and repairVersionContentDrift (which repairs
+// every gap) both build on — one place to define what "missing" means, so
+// the two cannot silently disagree about it.
 //
 // [LAW:one-source-of-truth] The registry (migrations.FS), read via the same
 // gooseUpSection parsing baselineSchema uses, is the sole definition of what
 // each version should have produced; there is no second hand-maintained list
 // of per-version effects to drift from it.
-func (s *Store) verifyAppliedVersionsMatchRegistry(ctx context.Context, appliedVersion int64) error {
+func (s *Store) missingVersionContent(ctx context.Context, appliedVersion int64) ([]missingContentTarget, error) {
 	adds, err := registryColumnAddsThroughVersion(appliedVersion)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	tableCols := map[string]map[string]bool{}
+	var missing []missingContentTarget
 	for _, m := range adds {
-		var missing []string
 		for _, target := range m.adds {
 			cols, ok := tableCols[target.table]
 			if !ok {
 				cols, err = s.tableColumns(ctx, target.table)
 				if err != nil {
-					return err
+					return nil, err
 				}
 				tableCols[target.table] = cols
 			}
-			if !cols[target.column] {
-				missing = append(missing, target.table+"."+target.column)
+			if cols[target.column] {
+				continue
 			}
+			missing = append(missing, missingContentTarget{
+				version: m.version, name: m.name, table: target.table, column: target.column, stmt: target.stmt,
+			})
 		}
-		if len(missing) > 0 {
-			return &VersionContentMismatchError{Version: m.version, Name: m.name, Missing: missing}
+	}
+	return missing, nil
+}
+
+// verifyAppliedVersionsMatchRegistry checks that every migration version this
+// workspace's goose log claims as applied (1..appliedVersion) actually
+// produced its registered ADD COLUMN content on the live schema. It reports
+// the earliest mismatched version, mirroring checkPendingQuarantine's
+// earliest-first ordering. missingVersionContent returns gaps in ascending
+// version order with each version's targets contiguous, so the first run of
+// matching versions in the slice is exactly that earliest version's gaps.
+func (s *Store) verifyAppliedVersionsMatchRegistry(ctx context.Context, appliedVersion int64) error {
+	missing, err := s.missingVersionContent(ctx, appliedVersion)
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return nil
+	}
+	earliest := missing[0]
+	var names []string
+	for _, m := range missing {
+		if m.version != earliest.version {
+			break
 		}
+		names = append(names, m.table+"."+m.column)
+	}
+	return &VersionContentMismatchError{Version: earliest.version, Name: earliest.name, Missing: names}
+}
+
+// repairVersionContentDrift applies every ADD COLUMN statement the current
+// registry defines for versions 1..appliedVersion whose target column is
+// still missing from the live schema, and returns a "table.column (vN name)"
+// description of each one repaired, for the Dolt commit message. It repairs
+// every gap missingVersionContent reports — not just the earliest one
+// verifyAppliedVersionsMatchRegistry surfaces — so a workspace with drift at
+// multiple version slots (the go-template-js shape: v2 and v3 both missing
+// their column) converges to the registry's exact shape in one Open, not one
+// repair per invocation.
+//
+// [LAW:one-source-of-truth] Re-executes the registry's own statement text
+// verbatim (captured by parseAddColumnTargets), so a repaired column is
+// byte-identical to what a fresh apply of that migration would have
+// produced — there is no second, hand-maintained repair-DDL to drift from
+// the registry.
+// [LAW:no-silent-failure] An ALTER failure here — anything beyond "column
+// already exists", which missingVersionContent's probe already excludes —
+// aborts loudly with the statement and cause named; it is never swallowed.
+//
+// Scope matches detection exactly, not migration parity: parseAddColumnTargets
+// (and therefore missingVersionContent) only ever registers ADD COLUMN
+// targets, so a version's ADD CONSTRAINT / data-backfill statements (e.g.
+// 00003_add_resolution.sql's issues_resolution_check, or 00004's
+// redirect_target backfill) are never re-applied here even when the column
+// they depend on was just repaired. This mirrors the same documented,
+// intentional gap on verifyAppliedVersionsMatchRegistry/registryColumnAddsThroughVersion
+// (CREATE TABLE, ADD CONSTRAINT-only, DROP/RENAME COLUMN, and data-only
+// migrations are not tracked as content to verify or repair yet) — widening
+// it is a job for whatever ticket widens detection, not this repair.
+func (s *Store) repairVersionContentDrift(ctx context.Context, appliedVersion int64) ([]string, error) {
+	missing, err := s.missingVersionContent(ctx, appliedVersion)
+	if err != nil {
+		return nil, err
+	}
+	var repaired []string
+	for _, target := range missing {
+		if _, err := s.db.ExecContext(ctx, target.stmt); err != nil {
+			return nil, fmt.Errorf("repair v%d %q: apply %q: %w", target.version, target.name, target.stmt, err)
+		}
+		repaired = append(repaired, fmt.Sprintf("%s.%s (v%d %s)", target.table, target.column, target.version, target.name))
+	}
+	return repaired, nil
+}
+
+// migrationDriftRepairCommitMessage is the Dolt commit message for a
+// version-content drift repair. It names every table.column repaired so the
+// Dolt log still carries the audit trail an operator would previously have
+// seen only in a refused VersionContentMismatchError — even though the
+// repair now happens transparently and no error reaches them.
+func migrationDriftRepairCommitMessage(repaired []string) string {
+	return fmt.Sprintf("migrate: repair version-content drift (%s)", strings.Join(repaired, ", "))
+}
+
+// repairVersionContentDriftWithRollback wraps repairVersionContentDrift with
+// the same checkpoint-then-reset-on-failure discipline applyPendingMigrations
+// gives ordinary migrations: a repair that applies one target's ALTER and
+// then fails on the next must not leave the working set half-repaired with no
+// way back. mismatch names the version/file that triggered the repair, for
+// the error message only — the repair itself sweeps every gap through
+// appliedVersion, not just mismatch's earliest one.
+//
+// [LAW:no-silent-failure] A reset failure is itself surfaced, never silently
+// dropped, mirroring handleMigrationFailure's ordering below.
+func (s *Store) repairVersionContentDriftWithRollback(ctx context.Context, appliedVersion int64, mismatch *VersionContentMismatchError) error {
+	checkpoint, err := s.CreateCheckpoint(ctx, migrationDriftRepairCheckpointPrefix)
+	if err != nil {
+		return fmt.Errorf("create version-content drift repair checkpoint: %w", err)
+	}
+	repaired, repairErr := s.repairVersionContentDrift(ctx, appliedVersion)
+	if repairErr != nil {
+		if resetErr := s.ResetToCheckpoint(ctx, checkpoint.Name); resetErr != nil {
+			return fmt.Errorf(
+				"repair version-content drift (detected at v%d %q) failed (%v) and reset to checkpoint %q failed (%v); restore from dbsnapshot",
+				mismatch.Version, mismatch.Name, repairErr, checkpoint.Name, resetErr,
+			)
+		}
+		return fmt.Errorf(
+			"repair version-content drift (detected at v%d %q) failed: %w (working set reset to checkpoint %q)",
+			mismatch.Version, mismatch.Name, repairErr, checkpoint.Name,
+		)
+	}
+	if err := s.commitWorkingSet(ctx, migrationDriftRepairCommitMessage(repaired)); err != nil {
+		return fmt.Errorf("commit version-content drift repair: %w", err)
+	}
+	if err := s.PruneCheckpoints(ctx, migrationDriftRepairCheckpointPrefix, migrationCheckpointRetention); err != nil {
+		return fmt.Errorf("prune version-content drift repair checkpoints: %w", err)
 	}
 	return nil
 }
