@@ -30,11 +30,11 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 		t.Fatalf("CreateIssue(child2) error = %v", err)
 	}
 
-	// Add per-child blocks using named flags (--blocker/--blocked).
+	// Add per-child blocks using named flags (--from/--to).
 	for _, childID := range []string{child1.ID, child2.ID} {
 		var stdout bytes.Buffer
-		if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", childID}); err != nil {
-			t.Fatalf("dep add --blocker %s --blocked %s error = %v", epicA.ID, childID, err)
+		if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--from", epicA.ID, "--to", childID}); err != nil {
+			t.Fatalf("dep add --from %s --to %s error = %v", epicA.ID, childID, err)
 		}
 		if !strings.Contains(stdout.String(), "--blocks-->") {
 			t.Fatalf("dep add output = %q, want blocks arrow", stdout.String())
@@ -43,7 +43,7 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 
 	// Add epic-level block.
 	var stdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--blocker", epicA.ID, "--blocked", epicB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "blocks", "--from", epicA.ID, "--to", epicB.ID}); err != nil {
 		t.Fatalf("dep add epic-level block error = %v", err)
 	}
 
@@ -52,11 +52,11 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 		t.Fatalf("RankAbove error = %v", err)
 	}
 
-	// Remove per-child blocks using positional args.
+	// Remove per-child blocks using named flags.
 	for _, childID := range []string{child1.ID, child2.ID} {
 		var rmStdout bytes.Buffer
-		if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, childID}); err != nil {
-			t.Fatalf("dep rm %s %s error = %v", epicA.ID, childID, err)
+		if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", "--from", epicA.ID, "--to", childID}); err != nil {
+			t.Fatalf("dep rm --from %s --to %s error = %v", epicA.ID, childID, err)
 		}
 		if !strings.Contains(rmStdout.String(), "ok") {
 			t.Fatalf("dep rm output = %q, want ok", rmStdout.String())
@@ -65,12 +65,12 @@ func TestDepAddRmRoundTripWithNamedFlags(t *testing.T) {
 
 	// Remove epic-level block.
 	var rmEpicStdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &rmEpicStdout, ap, []string{"rm", "--type", "blocks", epicA.ID, epicB.ID}); err != nil {
+	if err := runAppFamily(depFamily, ctx, &rmEpicStdout, ap, []string{"rm", "--type", "blocks", "--from", epicA.ID, "--to", epicB.ID}); err != nil {
 		t.Fatalf("dep rm epic-level block error = %v", err)
 	}
 }
 
-func TestDepAddRmWithPositionalArgs(t *testing.T) {
+func TestDepAddRmRejectsBarePositionalArgs(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
@@ -83,19 +83,73 @@ func TestDepAddRmWithPositionalArgs(t *testing.T) {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
 
-	// Add using positional args (from to).
 	var addStdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &addStdout, ap, []string{"add", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
-		t.Fatalf("dep add positional error = %v", err)
+	err = runAppFamily(depFamily, ctx, &addStdout, ap, []string{"add", "--type", "blocks", issueA.ID, issueB.ID})
+	if _, ok := err.(UsageError); !ok {
+		t.Fatalf("dep add bare positional error = %v (%T), want UsageError", err, err)
+	}
+	if !strings.Contains(err.Error(), "--from") || !strings.Contains(err.Error(), "--to") {
+		t.Fatalf("dep add bare positional error = %q, want it to name --from/--to", err.Error())
+	}
+
+	var rmStdout bytes.Buffer
+	err = runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID})
+	if _, ok := err.(UsageError); !ok {
+		t.Fatalf("dep rm bare positional error = %v (%T), want UsageError", err, err)
+	}
+	if !strings.Contains(err.Error(), "--from") || !strings.Contains(err.Error(), "--to") {
+		t.Fatalf("dep rm bare positional error = %q, want it to name --from/--to", err.Error())
+	}
+}
+
+func TestDepAddRmWithNamedFlags(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	issueA, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Blocker A", Topic: "dep", IssueType: "task", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(A) error = %v", err)
+	}
+	issueB, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Blocked B", Topic: "dep", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(B) error = %v", err)
+	}
+
+	// Add using named flags.
+	var addStdout bytes.Buffer
+	if err := runAppFamily(depFamily, ctx, &addStdout, ap, []string{"add", "--type", "blocks", "--from", issueA.ID, "--to", issueB.ID}); err != nil {
+		t.Fatalf("dep add --from/--to error = %v", err)
 	}
 	if !strings.Contains(addStdout.String(), issueA.ID) || !strings.Contains(addStdout.String(), issueB.ID) {
 		t.Fatalf("dep add output = %q, want both IDs", addStdout.String())
 	}
 
-	// Remove using same positional args.
+	// Remove using the same named flags.
 	var rmStdout bytes.Buffer
-	if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID}); err != nil {
-		t.Fatalf("dep rm positional error = %v", err)
+	if err := runAppFamily(depFamily, ctx, &rmStdout, ap, []string{"rm", "--type", "blocks", "--from", issueA.ID, "--to", issueB.ID}); err != nil {
+		t.Fatalf("dep rm --from/--to error = %v", err)
+	}
+}
+
+func TestDepAddParentChildWithNamedFlags(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+
+	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "dep", IssueType: "epic", Priority: 1})
+	if err != nil {
+		t.Fatalf("CreateIssue(parent) error = %v", err)
+	}
+	child, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "dep", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue(child) error = %v", err)
+	}
+
+	var stdout bytes.Buffer
+	if err := runAppFamily(depFamily, ctx, &stdout, ap, []string{"add", "--type", "parent-child", "--from", child.ID, "--to", parent.ID}); err != nil {
+		t.Fatalf("dep add parent-child error = %v", err)
+	}
+	if !strings.Contains(stdout.String(), "--child-of-->") {
+		t.Fatalf("dep add output = %q, want child-of arrow", stdout.String())
 	}
 }
 
@@ -120,10 +174,9 @@ func TestDepAddRejectsSameEpicBlocks(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "sibling positional", args: []string{"add", "--type", "blocks", siblingA.ID, siblingB.ID}},
-		{name: "sibling named flags", args: []string{"add", "--type", "blocks", "--blocker", siblingA.ID, "--blocked", siblingB.ID}},
-		{name: "epic blocks its own child", args: []string{"add", "--type", "blocks", epic.ID, siblingA.ID}},
-		{name: "epic blocked by its own child", args: []string{"add", "--type", "blocks", siblingA.ID, epic.ID}},
+		{name: "sibling named flags", args: []string{"add", "--type", "blocks", "--from", siblingA.ID, "--to", siblingB.ID}},
+		{name: "epic blocks its own child", args: []string{"add", "--type", "blocks", "--from", epic.ID, "--to", siblingA.ID}},
+		{name: "epic blocked by its own child", args: []string{"add", "--type", "blocks", "--from", siblingA.ID, "--to", epic.ID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -175,11 +228,11 @@ func TestDepAddAllowsCrossEpicAndFloatingBlocks(t *testing.T) {
 		name string
 		args []string
 	}{
-		{name: "child of A blocks child of B", args: []string{"add", "--type", "blocks", childOfA.ID, childOfB.ID}},
-		{name: "epic A blocks child of B", args: []string{"add", "--type", "blocks", epicA.ID, childOfB.ID}},
-		{name: "epic A blocks epic B", args: []string{"add", "--type", "blocks", epicA.ID, epicB.ID}},
-		{name: "floating blocks floating", args: []string{"add", "--type", "blocks", floatA.ID, floatB.ID}},
-		{name: "floating blocks child of B", args: []string{"add", "--type", "blocks", floatA.ID, childOfB.ID}},
+		{name: "child of A blocks child of B", args: []string{"add", "--type", "blocks", "--from", childOfA.ID, "--to", childOfB.ID}},
+		{name: "epic A blocks child of B", args: []string{"add", "--type", "blocks", "--from", epicA.ID, "--to", childOfB.ID}},
+		{name: "epic A blocks epic B", args: []string{"add", "--type", "blocks", "--from", epicA.ID, "--to", epicB.ID}},
+		{name: "floating blocks floating", args: []string{"add", "--type", "blocks", "--from", floatA.ID, "--to", floatB.ID}},
+		{name: "floating blocks child of B", args: []string{"add", "--type", "blocks", "--from", floatA.ID, "--to", childOfB.ID}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -205,7 +258,7 @@ func TestDepRmReportsDiagnosticIDsOnNotFound(t *testing.T) {
 	}
 
 	var stderr bytes.Buffer
-	err = runAppFamily(depFamily, ctx, &stderr, ap, []string{"rm", "--type", "blocks", issueA.ID, issueB.ID})
+	err = runAppFamily(depFamily, ctx, &stderr, ap, []string{"rm", "--type", "blocks", "--from", issueA.ID, "--to", issueB.ID})
 	if err == nil {
 		t.Fatal("dep rm nonexistent relation should error")
 	}
@@ -236,8 +289,8 @@ func TestDepRejectsUnknownRelationType(t *testing.T) {
 
 	wantMsg := "relation type must be blocks, parent-child, or related-to"
 	cases := [][]string{
-		{"add", "--type", "depends-on", issueA.ID, issueB.ID},
-		{"rm", "--type", "depends-on", issueA.ID, issueB.ID},
+		{"add", "--type", "depends-on", "--from", issueA.ID, "--to", issueB.ID},
+		{"rm", "--type", "depends-on", "--from", issueA.ID, "--to", issueB.ID},
 		{"ls", "--type", "depends-on", issueA.ID},
 	}
 	for _, args := range cases {

@@ -21,14 +21,16 @@ var depFamily = commandFamily[appSubcommand]{
 }
 
 func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("dep add")
 	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
-	blocker := fs.String("blocker", "", "Issue that blocks (only with --type blocks)")
-	blocked := fs.String("blocked", "", "Issue that is blocked (only with --type blocks)")
+	from := fs.String("from", "", "Source issue ID (required)")
+	to := fs.String("to", "", "Target issue ID (required)")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
+	}
+	if *from == "" || *to == "" || fs.NArg() != 0 {
+		return UsageError{Message: "usage: lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]"}
 	}
 	// [LAW:single-enforcer] The CLI flag is the trust boundary; everything
 	// downstream receives the sealed RelationType.
@@ -36,10 +38,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	fromID, toID, err := resolveDepAddEndpoints(positional, rt, *blocker, *blocked, fs.NArg())
-	if err != nil {
-		return err
-	}
+	fromID, toID := *from, *to
 	// Self-loop check: a relation from an issue to itself is meaningless and
 	// would otherwise corrupt downstream blocker traversals. Cheap to catch
 	// here; transitive cycle detection is a follow-up.
@@ -67,23 +66,21 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 }
 
 func runDepRm(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("dep rm")
-	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to (blocks uses <blocker-id> <blocked-id>)")
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	relType := fs.String("type", "blocks", "Relation type: blocks|parent-child|related-to")
+	from := fs.String("from", "", "Source issue ID (required)")
+	to := fs.String("to", "", "Target issue ID (required)")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if len(positional) != 2 {
-		return UsageError{Message: "usage: lit dep rm <from-id> <to-id> [--type ...]"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit dep rm <from-id> <to-id> [--type ...]"}
+	if *from == "" || *to == "" || fs.NArg() != 0 {
+		return UsageError{Message: "usage: lit dep rm --from <id> --to <id> [--type blocks|parent-child|related-to]"}
 	}
 	rt, err := model.ParseRelationType(*relType)
 	if err != nil {
 		return err
 	}
-	srcID, dstID := rt.StoreEndpoints(positional[0], positional[1])
+	srcID, dstID := rt.StoreEndpoints(*from, *to)
 	if err := ap.Store.RemoveRelation(ctx, srcID, dstID, rt); err != nil {
 		return err
 	}
@@ -131,33 +128,6 @@ func runDepLs(ctx context.Context, stdout io.Writer, ap *app.App, args []string)
 		}
 	}
 	return nil
-}
-
-// resolveDepAddEndpoints chooses between positional and named-flag input for
-// 'lit dep add'. Named flags (--blocker/--blocked) only apply to --type blocks.
-// Mixing positional and named flags is an error: the user would have to know
-// the orientation rule to mix them safely, which defeats the purpose.
-// [LAW:single-enforcer] One place decides which input form was used.
-func resolveDepAddEndpoints(positional []string, relType model.RelationType, blocker, blocked string, extraArgs int) (string, string, error) {
-	usage := "usage: lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]\n  or:  lit dep add --blocker <id> --blocked <id> (only with --type blocks)"
-	hasNamed := blocker != "" || blocked != ""
-	if hasNamed {
-		if relType != model.RelBlocks {
-			return "", "", fmt.Errorf("--blocker/--blocked only apply with --type blocks; got --type %s", relType)
-		}
-		if blocker == "" || blocked == "" {
-			return "", "", ValidationError{Message: "--blocker and --blocked must both be provided"}
-		}
-		if len(positional) > 0 || extraArgs > 0 {
-			return "", "", ValidationError{Message: "provide either positional <from> <to> or --blocker/--blocked, not both"}
-		}
-		// "from" in CLI convention = blocker; "to" = blocked.
-		return blocker, blocked, nil
-	}
-	if len(positional) != 2 || extraArgs != 0 {
-		return "", "", UsageError{Message: usage}
-	}
-	return positional[0], positional[1], nil
 }
 
 // depRelationForCLI flips a store-oriented relation back into the CLI's human
