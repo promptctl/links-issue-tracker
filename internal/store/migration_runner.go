@@ -1001,6 +1001,13 @@ func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 // like parenBlock/splitTopLevel below, so a semicolon inside a string
 // literal (e.g. a future migration's `DEFAULT ';'`) cannot truncate the
 // statement mid-value and hand repairVersionContentDrift invalid SQL.
+//
+// Like parenBlock/splitTopLevel, this recognizes only doubled-quote ('')
+// escaping, not backslash escapes (\') — the only form any migration in
+// this registry uses. A migration whose ADD COLUMN default contains a
+// backslash-escaped quote would toggle out of the string early and this
+// would overshoot the real statement boundary; widen all three quote
+// scanners together if that shape is ever needed, not just this one.
 func terminatedStatement(s string, start int) (stmt string, ok bool) {
 	inQuote := false
 	for i := start; i < len(s); i++ {
