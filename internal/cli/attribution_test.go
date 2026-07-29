@@ -63,7 +63,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		blocked := newAttributionIssue(t, ap, "blocked")
 		blocker := newAttributionIssue(t, ap, "blocker")
 		var out bytes.Buffer
-		if err := runDepAdd(ctx, &out, ap, []string{blocker, blocked}); err != nil {
+		if err := runDepAdd(ctx, &out, ap, []string{"--from", blocker, "--to", blocked}); err != nil {
 			t.Fatalf("runDepAdd error = %v", err)
 		}
 		assertRelationActor(t, ap, blocked, model.RelBlocks, want)
