@@ -61,6 +61,18 @@ jobs:
       - name: Populate module cache
         run: go mod download
 
+      # Runs on the plain runner toolchain, not inside the cross-build
+      # container: this tool is pure Go (no cgo, no zig), and only needs to
+      # run once for content that's identical across every platform archive.
+      # Writes THIRD_PARTY_LICENSES + LICENSE-REPORT.md to the repo root
+      # BEFORE the docker run below, so they exist when goreleaser's
+      # archives.files (.goreleaser.yml) picks them up — the same
+      # generate-on-the-runner-first pattern mkmanifest uses for the release
+      # manifest, since goreleaser v2 has no hook point between "files exist"
+      # and "archive is built". [LAW:single-enforcer]
+      - name: Generate third-party license bundle + report
+        run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
