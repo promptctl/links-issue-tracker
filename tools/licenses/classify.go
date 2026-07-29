@@ -72,7 +72,12 @@ func FindLicenseFile(dir string) (string, error) {
 	sort.Strings(matches)
 
 	for _, m := range matches {
-		if strings.EqualFold(m, "LICENSE") {
+		// licenseFilePattern's LICEN[SC]E accepts both spellings; the bare-name
+		// preference has to match that same acceptance, or a module shipping
+		// the British LICENCE spelling alongside a second candidate would
+		// incorrectly fall into the ambiguous-error branch below despite
+		// having an unambiguous bare license file.
+		if strings.EqualFold(m, "LICENSE") || strings.EqualFold(m, "LICENCE") {
 			return filepath.Join(dir, m), nil
 		}
 	}

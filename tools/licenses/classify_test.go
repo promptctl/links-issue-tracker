@@ -300,6 +300,21 @@ func TestFindLicenseFileAcceptReject(t *testing.T) {
 		}
 	})
 
+	t.Run("prefers bare LICENCE (British spelling) over a second license-shaped file", func(t *testing.T) {
+		// Regression case: licenseFilePattern's LICEN[SC]E accepts both
+		// spellings, so the bare-name preference must too — a module
+		// shipping LICENCE + LICENCE.libyaml has an unambiguous license file
+		// and must not fall into the ambiguous-error branch.
+		dir := writeFiles(t, "LICENCE", "LICENCE.libyaml")
+		got, err := FindLicenseFile(dir)
+		if err != nil {
+			t.Fatalf("FindLicenseFile: %v", err)
+		}
+		if filepath.Base(got) != "LICENCE" {
+			t.Errorf("got %q, want LICENCE preferred over LICENCE.libyaml", got)
+		}
+	})
+
 	t.Run("prefers bare LICENSE over a second license-shaped file", func(t *testing.T) {
 		// The real shape: gopkg.in/yaml.v2 ships both LICENSE and
 		// LICENSE.libyaml (the latter for a vendored C dependency).
