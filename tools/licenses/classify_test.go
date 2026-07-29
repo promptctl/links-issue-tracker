@@ -300,31 +300,25 @@ func TestFindLicenseFileAcceptReject(t *testing.T) {
 		}
 	})
 
-	t.Run("prefers bare LICENCE (British spelling) over a second license-shaped file", func(t *testing.T) {
-		// Regression case: licenseFilePattern's LICEN[SC]E accepts both
-		// spellings, so the bare-name preference must too — a module
-		// shipping LICENCE + LICENCE.libyaml has an unambiguous license file
-		// and must not fall into the ambiguous-error branch.
-		dir := writeFiles(t, "LICENCE", "LICENCE.libyaml")
-		got, err := FindLicenseFile(dir)
-		if err != nil {
-			t.Fatalf("FindLicenseFile: %v", err)
-		}
-		if filepath.Base(got) != "LICENCE" {
-			t.Errorf("got %q, want LICENCE preferred over LICENCE.libyaml", got)
-		}
-	})
-
-	t.Run("prefers bare LICENSE over a second license-shaped file", func(t *testing.T) {
-		// The real shape: gopkg.in/yaml.v2 ships both LICENSE and
-		// LICENSE.libyaml (the latter for a vendored C dependency).
-		dir := writeFiles(t, "LICENSE", "LICENSE.libyaml")
-		got, err := FindLicenseFile(dir)
-		if err != nil {
-			t.Fatalf("FindLicenseFile: %v", err)
-		}
-		if filepath.Base(got) != "LICENSE" {
-			t.Errorf("got %q, want LICENSE preferred over LICENSE.libyaml", got)
+	t.Run("prefers every canonical bare root name over a second license-shaped file", func(t *testing.T) {
+		// Regression table, not a one-off case: bareLicenseNamePattern and
+		// licenseFilePattern both derive from licenseRootNames precisely so
+		// every name recognized by one is bare-preferred by the other. This
+		// table pins that property for the full current set rather than
+		// re-adding one hand-picked subtest per name every time a gap is
+		// found (LICENCE, then COPYING/UNLICENSE, were each missed that way
+		// before the two checks were unified). The real shape this mirrors:
+		// gopkg.in/yaml.v2 ships both LICENSE and LICENSE.libyaml (the latter
+		// for a vendored C dependency) and LICENSE unambiguously wins.
+		for _, name := range []string{"LICENSE", "LICENCE", "COPYING", "UNLICENSE"} {
+			dir := writeFiles(t, name, name+".libyaml")
+			got, err := FindLicenseFile(dir)
+			if err != nil {
+				t.Fatalf("FindLicenseFile(%s + %s.libyaml): %v", name, name, err)
+			}
+			if filepath.Base(got) != name {
+				t.Errorf("got %q, want %s preferred over %s.libyaml", got, name, name)
+			}
 		}
 	})
 

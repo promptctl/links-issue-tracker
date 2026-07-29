@@ -19,30 +19,50 @@ import (
 // license text couldn't be matched.
 const unclassifiedLicense = "Unknown"
 
+// licenseRootNames is the one set of canonical license-grant filenames this
+// tool recognizes — LICENSE, its British spelling LICENCE, COPYING (the
+// GPL-ecosystem convention), and UNLICENSE (public-domain dedication).
+// [LAW:one-source-of-truth] licenseFilePattern (any of these, with an
+// optional suffix) and bareLicenseNamePattern (exactly one of these, no
+// suffix) both derive from this single alternation, specifically so they
+// cannot drift apart the way they did twice already: round 2 added LICENCE to
+// licenseFilePattern without updating the bare-name preference check, and
+// round 3 caught that COPYING/UNLICENSE had the same gap. A third name added
+// here in the future is automatically bare-preferred too — there is no
+// second list left to forget to update.
+const licenseRootNames = `LICEN[SC]E|COPYING|UNLICENSE`
+
 // licenseFilePattern matches the file names Go modules conventionally use for
-// their license grant: LICENSE/LICENCE, COPYING, UNLICENSE, with or without a
-// suffix separated by `.`, `-`, or `_` (LICENSE.txt, LICENSE-APACHE,
-// LICENSE_MIT, ...) — all three separators are real conventions in the wild,
-// most visibly dual-license repos that ship LICENSE-APACHE and LICENSE-MIT
-// side by side. None of the 167 modules currently linked into ./cmd/lit need
-// the `-`/`_` forms, but a linked module with only a hyphenated variant would
-// otherwise hit FindLicenseFile's "no license file found" error, which is a
-// hard build-abort (die in main.go) rather than a soft warning — worth
-// accepting the wider real-world shape now. It deliberately excludes
-// README/NOTICE — those carry attribution or usage notes, not the license
-// grant itself, and don't belong in a bundle whose contents are "the text
-// required to accompany the binary for compliance."
-var licenseFilePattern = regexp.MustCompile(`(?i)^(LICEN[SC]E|COPYING|UNLICENSE)([._-][a-zA-Z0-9]+)*$`)
+// their license grant, with or without a suffix separated by `.`, `-`, or `_`
+// (LICENSE.txt, LICENSE-APACHE, LICENSE_MIT, ...) — all three separators are
+// real conventions in the wild, most visibly dual-license repos that ship
+// LICENSE-APACHE and LICENSE-MIT side by side. None of the 167 modules
+// currently linked into ./cmd/lit need the `-`/`_` forms, but a linked module
+// with only a hyphenated variant would otherwise hit FindLicenseFile's "no
+// license file found" error, which is a hard build-abort (die in main.go)
+// rather than a soft warning — worth accepting the wider real-world shape
+// now. It deliberately excludes README/NOTICE — those carry attribution or
+// usage notes, not the license grant itself, and don't belong in a bundle
+// whose contents are "the text required to accompany the binary for
+// compliance."
+var licenseFilePattern = regexp.MustCompile(`(?i)^(` + licenseRootNames + `)([._-][a-zA-Z0-9]+)*$`)
+
+// bareLicenseNamePattern matches a license file whose name is EXACTLY one of
+// licenseRootNames, with no suffix at all — the "this module has its own
+// canonical license file, full stop" shape FindLicenseFile always prefers
+// over any other license-shaped file sharing its directory.
+var bareLicenseNamePattern = regexp.MustCompile(`(?i)^(` + licenseRootNames + `)$`)
 
 // FindLicenseFile returns the module-root license file for dir, per
 // licenseFilePattern. A module occasionally ships more than one match with no
 // real ambiguity — e.g. gopkg.in/yaml.v2 carries both LICENSE and
-// LICENSE.libyaml (the latter for a vendored C dependency) — and the bare
-// "LICENSE" always wins in that case, because a module with its own canonical
-// LICENSE file is not asking the reader to choose between options.
+// LICENSE.libyaml (the latter for a vendored C dependency) — and a bare match
+// (bareLicenseNamePattern) always wins in that case, because a module with
+// its own canonical license file is not asking the reader to choose between
+// options.
 //
 // But with the `-`/`_` separators licenseFilePattern accepts (LICENSE-APACHE,
-// LICENSE-MIT), multiple matches AND no bare LICENSE is a genuinely different
+// LICENSE-MIT), multiple matches AND no bare match is a genuinely different
 // situation: a real dual-license convention where a downstream user picks
 // ONE of the offered licenses. Silently picking the lexicographically-first
 // file there would drop a real license option from the bundle without any
@@ -72,17 +92,12 @@ func FindLicenseFile(dir string) (string, error) {
 	sort.Strings(matches)
 
 	for _, m := range matches {
-		// licenseFilePattern's LICEN[SC]E accepts both spellings; the bare-name
-		// preference has to match that same acceptance, or a module shipping
-		// the British LICENCE spelling alongside a second candidate would
-		// incorrectly fall into the ambiguous-error branch below despite
-		// having an unambiguous bare license file.
-		if strings.EqualFold(m, "LICENSE") || strings.EqualFold(m, "LICENCE") {
+		if bareLicenseNamePattern.MatchString(m) {
 			return filepath.Join(dir, m), nil
 		}
 	}
 	if len(matches) > 1 {
-		return "", fmt.Errorf("ambiguous license files in %s (%s) and no bare LICENSE to prefer — a human must pick which text to vendor", dir, strings.Join(matches, ", "))
+		return "", fmt.Errorf("ambiguous license files in %s (%s) and no bare license name to prefer — a human must pick which text to vendor", dir, strings.Join(matches, ", "))
 	}
 	return filepath.Join(dir, matches[0]), nil
 }
