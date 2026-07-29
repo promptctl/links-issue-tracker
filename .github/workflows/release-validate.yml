@@ -73,6 +73,13 @@ jobs:
       - name: Populate module cache
         run: go mod download
 
+      # Same step release.yml runs, proven here on every master push so a
+      # broken generator is caught before any tag is cut — see that
+      # workflow's identical step for the full rationale.
+      # [LAW:single-enforcer] release.yml publishes using this IDENTICAL step.
+      - name: Generate third-party license bundle + report
+        run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md
+
       # Build the custom release-builder image. GHA layer cache makes
       # subsequent runs reuse the (slow) ICU cross-build layers — only
       # Dockerfile edits or ARG bumps invalidate them.
@@ -252,6 +259,21 @@ jobs:
           fi
 
           echo "release-manifest.json shape OK; platforms: $GOT"
+
+      # links-supply-chain-w6m9.1's acceptance criterion, checked against a
+      # REAL archive rather than the repo-root files the generator step wrote
+      # directly: this proves goreleaser's archives.files (.goreleaser.yml)
+      # actually picked them up, not just that tools/licenses ran.
+      # [LAW:verifiable-goals]
+      - name: Assert release archive carries the license bundle + report
+        run: |
+          set -euo pipefail
+          workdir=$(mktemp -d)
+          tar -xzf dist/lit_*_linux_amd64.tar.gz -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md
+          grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q 'Apache License' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
+          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, both covering github.com/dolthub/dolt/go"
 
       # The linux artifacts must be fully static musl binaries: no PT_INTERP,
       # no NEEDED, and they must EXECUTE on both a glibc host (this runner) and
