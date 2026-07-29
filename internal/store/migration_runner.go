@@ -278,9 +278,24 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	if !state.willMutate() {
 		return nil
 	}
+	// Ensure the quarantine table exists — and self-heal it to the canonical
+	// shape if a prior lit build left it in an older one — BEFORE
+	// quarantineFastFail reads it. Reading a stale-shaped table would fail
+	// with a raw column-not-found SQL error instead of proceeding; ordering
+	// the self-heal first means the fast-fail below always sees a table it
+	// can query. Committed immediately, ahead of guard.ensure(), so it also
+	// survives a checkpoint reset should one fire later in this Open.
+	//
+	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
+	// migrations so a goose rollback cannot erase the table it depends on.
+	if err := s.ensureQuarantineTable(ctx); err != nil {
+		return err
+	}
+	if err := s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"); err != nil {
+		return fmt.Errorf("commit quarantine table: %w", err)
+	}
 	// Fast-fail before the snapshot guard so a permanently-quarantined workspace
-	// does not accumulate recovery snapshots on every Open. The check is a no-op
-	// when the table does not exist (phaseFresh — the table is created later).
+	// does not accumulate recovery snapshots on every Open.
 	//
 	// [LAW:single-enforcer] The quarantine gate lives here and nowhere else; this
 	// is the only site that calls checkPendingQuarantine.
@@ -359,20 +374,6 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 		if err := s.commitWorkingSet(ctx, fmt.Sprintf("migrate: adopt pre-goose workspace at v%d", baselineVersion)); err != nil {
 			return fmt.Errorf("commit adoption stamp: %w", err)
 		}
-	}
-	// Ensure the quarantine table exists and is committed before the Dolt
-	// checkpoint is taken inside applyPendingMigrations. This ordering
-	// guarantees the table survives a checkpoint reset: after reset the
-	// working set reverts to the checkpoint state, which already includes
-	// the committed quarantine table.
-	//
-	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
-	// migrations so a goose rollback cannot erase the table it depends on.
-	if err := s.ensureQuarantineTable(ctx); err != nil {
-		return err
-	}
-	if err := s.commitWorkingSet(ctx, "migrate: ensure migration_quarantine table"); err != nil {
-		return fmt.Errorf("commit quarantine table: %w", err)
 	}
 	if err := s.applyPendingMigrations(ctx); err != nil {
 		return err
@@ -568,30 +569,105 @@ func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.Migrat
 	}
 }
 
+// quarantineTableStmt is the canonical migration_quarantine shape. Shared by
+// the fresh-create and self-heal-recreate paths in ensureQuarantineTable so
+// they cannot diverge.
+const quarantineTableStmt = `CREATE TABLE migration_quarantine (
+	version    BIGINT NOT NULL,
+	name       TEXT NOT NULL,
+	error_text TEXT NOT NULL,
+	created_at VARCHAR(64) NOT NULL,
+	PRIMARY KEY (version)
+)`
+
+// canonicalQuarantineColumns is the migration_quarantine column set this
+// binary understands. A table whose columns don't match exactly (e.g. an
+// older lit build's version_id/reason/quarantined_at layout, from before the
+// table was restructured) is a stale shape ensureQuarantineTable self-heals.
+var canonicalQuarantineColumns = []string{"version", "name", "error_text", "created_at"}
+
 // ensureQuarantineTable creates migration_quarantine if it does not already
-// exist. The table is created outside the goose migration batch so a goose
-// rollback cannot erase it.
+// exist, and self-heals it in place if a prior lit build left it in a shape
+// this binary no longer recognizes. The table is created outside the goose
+// migration batch so a goose rollback cannot erase it.
 //
 // [LAW:one-source-of-truth] migration_quarantine is the sole authority on
 // "failed and not to be retried"; it is owned by workspace bootstrap, not
-// by the goose migration log.
+// by the goose migration log. A stale-shaped copy of it is a second,
+// unreadable version of that authority, so Open corrects it in place rather
+// than trusting CREATE TABLE IF NOT EXISTS to have produced the real one.
 func (s *Store) ensureQuarantineTable(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx, `CREATE TABLE IF NOT EXISTS migration_quarantine (
-		version    BIGINT NOT NULL,
-		name       TEXT NOT NULL,
-		error_text TEXT NOT NULL,
-		created_at VARCHAR(64) NOT NULL,
-		PRIMARY KEY (version)
-	)`)
+	cols, err := s.tableColumns(ctx, "migration_quarantine")
 	if err != nil {
 		return fmt.Errorf("ensure migration_quarantine table: %w", err)
+	}
+	if len(cols) == 0 {
+		if _, err := s.db.ExecContext(ctx, quarantineTableStmt); err != nil {
+			return fmt.Errorf("ensure migration_quarantine table: %w", err)
+		}
+		return nil
+	}
+	if quarantineShapeMatches(cols) {
+		return nil
+	}
+	return s.recreateQuarantineTable(ctx, cols)
+}
+
+// quarantineShapeMatches reports whether cols is exactly the canonical
+// migration_quarantine column set — not a subset or superset, since either
+// means a shape this binary did not produce and should not assume it
+// understands.
+func quarantineShapeMatches(cols map[string]bool) bool {
+	if len(cols) != len(canonicalQuarantineColumns) {
+		return false
+	}
+	for _, c := range canonicalQuarantineColumns {
+		if !cols[c] {
+			return false
+		}
+	}
+	return true
+}
+
+// recreateQuarantineTable drops and rebuilds a migration_quarantine table
+// left in a non-canonical shape by an older lit build. The table is
+// bootstrap/meta state that lit alone writes to, so replacing an empty one is
+// safe. A non-empty mismatched table might hold genuine quarantine history
+// under unrecognized column names, which is beyond what an automatic
+// self-heal should guess at.
+//
+// [LAW:no-silent-failure] A row-bearing shape mismatch refuses loudly with
+// the columns and row count named, rather than silently discarding data.
+func (s *Store) recreateQuarantineTable(ctx context.Context, cols map[string]bool) error {
+	var count int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM migration_quarantine`).Scan(&count); err != nil {
+		return fmt.Errorf("ensure migration_quarantine table: count rows in stale-shape table: %w", err)
+	}
+	if count > 0 {
+		names := make([]string, 0, len(cols))
+		for c := range cols {
+			names = append(names, c)
+		}
+		sort.Strings(names)
+		return fmt.Errorf(
+			"migration_quarantine has a non-canonical shape (columns: %s) and %d row(s) of history; "+
+				"refusing to recreate automatically — this needs manual triage, not self-heal",
+			strings.Join(names, ", "), count,
+		)
+	}
+	if _, err := s.db.ExecContext(ctx, `DROP TABLE migration_quarantine`); err != nil {
+		return fmt.Errorf("ensure migration_quarantine table: drop stale-shape table: %w", err)
+	}
+	if _, err := s.db.ExecContext(ctx, quarantineTableStmt); err != nil {
+		return fmt.Errorf("ensure migration_quarantine table: recreate: %w", err)
 	}
 	return nil
 }
 
 // quarantineFastFail checks for blocking quarantine rows before the snapshot
-// guard fires. It is a no-op when migration_quarantine does not yet exist
-// (phaseFresh — the table is created later inside runMigration).
+// guard fires. runMigration always calls ensureQuarantineTable immediately
+// before this, so migration_quarantine exists in the canonical shape by the
+// time this reads it.
 //
 // For phaseAdopt, adoptPreGooseWorkspace will stamp baselineVersion before any
 // migration runs, so the effective applied version is baselineVersion — a
@@ -599,16 +675,7 @@ func (s *Store) ensureQuarantineTable(ctx context.Context) error {
 // the schema is present.
 //
 // [LAW:single-enforcer] This is the only call site for checkPendingQuarantine.
-// [LAW:dataflow-not-control-flow] The table-exists result is the data that
-// decides behavior; the check always runs when the table is present.
 func (s *Store) quarantineFastFail(ctx context.Context, state migrationState) error {
-	exists, err := s.tableExists(ctx, "migration_quarantine")
-	if err != nil {
-		return fmt.Errorf("migrate: probe quarantine table: %w", err)
-	}
-	if !exists {
-		return nil
-	}
 	effectiveApplied := state.appliedVersion
 	if state.phase == phaseAdopt {
 		effectiveApplied = baselineVersion
