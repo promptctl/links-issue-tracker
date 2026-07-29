@@ -269,7 +269,20 @@ jobs:
         run: |
           set -euo pipefail
           workdir=$(mktemp -d)
-          tar -xzf dist/lit_*_linux_amd64.tar.gz -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md
+          # An unquoted-glob `tar -xzf dist/lit_*_linux_amd64.tar.gz` would,
+          # on more than one match, bind only the first as the archive and
+          # silently treat the rest as extraction member names — GNU tar
+          # exits 0 on a missing member (stderr warning only), so a stale
+          # second archive could make this step read the WRONG file with no
+          # error. --clean (the snapshot build above) guarantees exactly one
+          # match today, but assert it explicitly rather than depending on
+          # that being true forever. [LAW:no-silent-failure]
+          archives=(dist/lit_*_linux_amd64.tar.gz)
+          if [ "${#archives[@]}" -ne 1 ]; then
+            echo "expected exactly one linux/amd64 archive, found ${#archives[@]}: ${archives[*]}" >&2
+            exit 1
+          fi
+          tar -xzf "${archives[0]}" -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md
           grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
           grep -q 'Apache License' "$workdir/THIRD_PARTY_LICENSES"
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
