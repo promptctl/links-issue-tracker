@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -165,6 +166,36 @@ func (e *UnsupportedSchemaVersionError) Error() string {
 	return b.String()
 }
 
+// VersionContentMismatchError is returned when Open finds a goose-applied
+// migration version whose CURRENT registry content did not land on this
+// workspace's live schema. goose_db_version records only a version number and
+// an applied bit — never the migration's content — so it cannot itself tell
+// "version N ran and its effect is on disk" from "version N is marked
+// applied, but the registry's current migration N is unrelated content that
+// never actually ran here" (e.g. after a baseline rewrite reused version
+// slots for different migrations). Without this check that second case reads
+// as "fully migrated" and the missing effect never surfaces.
+//
+// [LAW:no-silent-failure] The workspace is not corrupt — every column it
+// actually has is intact — so this refuses loudly with the specific version
+// and gap named rather than silently reporting up to date.
+type VersionContentMismatchError struct {
+	Version int64
+	Name    string
+	// Missing names every table.column this version's registered content
+	// should have produced but the live schema lacks.
+	Missing []string
+}
+
+func (e *VersionContentMismatchError) Error() string {
+	return fmt.Sprintf(
+		"migration v%d %q is recorded as applied, but its registered content is missing from this workspace's live schema: %s\n\n"+
+			"this usually means the version number was reused for different historical content after this workspace last migrated — "+
+			"the recorded applied version does not reflect what actually ran here",
+		e.Version, e.Name, strings.Join(e.Missing, ", "),
+	)
+}
+
 // gooseVersionTable is goose's history table; its presence is the discriminator
 // between a goose-managed workspace and a pre-goose / fresh one.
 const gooseVersionTable = "goose_db_version"
@@ -274,6 +305,22 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// ahead of a reset log, the landmine a later registry catch-up detonates.
 	if state.appliedVersion > state.registryMaxVers {
 		return s.refuseIfBaselineMissing(ctx, state)
+	}
+	// [LAW:no-silent-failure] Runs for every phaseManaged Open, independent of
+	// willMutate — a version-content mismatch on an already-applied version is
+	// invisible to goose bookkeeping whether or not later migrations are
+	// pending, so a workspace with nothing pending must still be checked (that
+	// is exactly the "reported as fully migrated" failure this guards
+	// against). [LAW:single-enforcer] This is the only call site for
+	// verifyAppliedVersionsMatchRegistry. Only phaseManaged carries
+	// goose-recorded applied versions to check content for; phaseFresh has
+	// none yet and phaseAdopt's pre-goose shape is verified by
+	// verifyIssuesReconcilable/reconcileToBaseline instead — the same
+	// discriminated-phase branching those two already use.
+	if state.phase == phaseManaged {
+		if err := s.verifyAppliedVersionsMatchRegistry(ctx, state.appliedVersion); err != nil {
+			return err
+		}
 	}
 	if !state.willMutate() {
 		return nil
@@ -822,6 +869,106 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 		return migrationState{phase: phaseFresh, registryMaxVers: registryMax}, nil
 	}
 	return migrationState{phase: phaseAdopt, registryMaxVers: registryMax}, nil
+}
+
+// alterAddColumnRe matches an `ALTER TABLE <table> ADD COLUMN <column>`
+// statement's target table and column, tolerating optional backtick
+// quoting. It recognizes only ADD COLUMN — the one DDL shape numbered
+// migrations (00002+) have used to grow the schema beyond the baseline's
+// CREATE TABLEs to date. A future migration that grows the schema a
+// different way (a new CREATE TABLE, an ADD CONSTRAINT with no column)
+// needs a matching case added alongside this, or its content is invisible
+// to verifyAppliedVersionsMatchRegistry.
+var alterAddColumnRe = regexp.MustCompile("(?is)ALTER\\s+TABLE\\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\\s+ADD\\s+COLUMN\\s+`?([A-Za-z_][A-Za-z0-9_]*)`?")
+
+// migrationColumnAdds is one registry migration's version/name plus the
+// table.column targets its Up section's ADD COLUMN statements register.
+type migrationColumnAdds struct {
+	version int64
+	name    string
+	adds    []tableColumnTarget
+}
+
+type tableColumnTarget struct {
+	table  string
+	column string
+}
+
+// registryColumnAddsThroughVersion returns, in ascending version order, the
+// ADD COLUMN targets every registry migration strictly above the baseline and
+// at or below maxVersion registers. It reads CURRENT registry content — the
+// content a version number carries in this binary's embedded registry now,
+// not necessarily what an older binary actually ran under that same version
+// number. That gap between "recorded applied" and "current registered
+// content" is exactly what verifyAppliedVersionsMatchRegistry checks for.
+func registryColumnAddsThroughVersion(maxVersion int64) ([]migrationColumnAdds, error) {
+	entries, err := migrations.FS.ReadDir(".")
+	if err != nil {
+		return nil, fmt.Errorf("read migration registry: %w", err)
+	}
+	var out []migrationColumnAdds
+	for _, entry := range entries {
+		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".sql") {
+			continue
+		}
+		v, ok := migrations.ParseVersion(entry.Name())
+		if !ok {
+			return nil, fmt.Errorf("migration file %q does not begin with a numeric version", entry.Name())
+		}
+		if v <= baselineVersion || v > maxVersion {
+			continue
+		}
+		data, err := migrations.FS.ReadFile(entry.Name())
+		if err != nil {
+			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
+		}
+		var adds []tableColumnTarget
+		for _, m := range alterAddColumnRe.FindAllStringSubmatch(gooseUpSection(string(data)), -1) {
+			adds = append(adds, tableColumnTarget{table: strings.ToLower(m[1]), column: strings.ToLower(m[2])})
+		}
+		out = append(out, migrationColumnAdds{version: v, name: entry.Name(), adds: adds})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].version < out[j].version })
+	return out, nil
+}
+
+// verifyAppliedVersionsMatchRegistry checks that every migration version this
+// workspace's goose log claims as applied (1..appliedVersion) actually
+// produced its registered ADD COLUMN content on the live schema. It reports
+// the earliest mismatched version, mirroring checkPendingQuarantine's
+// earliest-first ordering — fixing drift in version order is also the
+// natural repair order for a future remediation step.
+//
+// [LAW:one-source-of-truth] The registry (migrations.FS), read via the same
+// gooseUpSection parsing baselineSchema uses, is the sole definition of what
+// each version should have produced; there is no second hand-maintained list
+// of per-version effects to drift from it.
+func (s *Store) verifyAppliedVersionsMatchRegistry(ctx context.Context, appliedVersion int64) error {
+	adds, err := registryColumnAddsThroughVersion(appliedVersion)
+	if err != nil {
+		return err
+	}
+	tableCols := map[string]map[string]bool{}
+	for _, m := range adds {
+		var missing []string
+		for _, target := range m.adds {
+			cols, ok := tableCols[target.table]
+			if !ok {
+				cols, err = s.tableColumns(ctx, target.table)
+				if err != nil {
+					return err
+				}
+				tableCols[target.table] = cols
+			}
+			if !cols[target.column] {
+				missing = append(missing, target.table+"."+target.column)
+			}
+		}
+		if len(missing) > 0 {
+			return &VersionContentMismatchError{Version: m.version, Name: m.name, Missing: missing}
+		}
+	}
+	return nil
 }
 
 // AppliedSchemaVersion reports the schema version currently recorded for this

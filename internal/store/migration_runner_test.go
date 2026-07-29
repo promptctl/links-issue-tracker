@@ -543,3 +543,75 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 	}
 	defer second.Close()
 }
+
+// TestOpenDetectsVersionSlotReuseContentMismatch pins the go-template-js
+// failure shape from the epic: goose_db_version marks versions up to 3
+// applied, but the issues table is missing the lane and resolution columns
+// the CURRENT registry's version 2 and 3 migrations add — as if those
+// version numbers were reused for different historical content after a
+// baseline rewrite. Open must report this as a version-content mismatch,
+// not silently treat the workspace as fully migrated.
+func TestOpenDetectsVersionSlotReuseContentMismatch(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		// Strip the v2/v3 registered content (and the v4 CHECK that
+		// references resolution) so the live schema looks like versions 2
+		// and 3 never actually added their columns here, while leaving
+		// goose_db_version claiming they did.
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN lane`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN resolution`)
+		mustExec(t, ctx, st, `DELETE FROM goose_db_version WHERE version_id > 3`)
+		mustCommit(t, ctx, st, "test: simulate version-slot reuse (goose applied through v3, v2/v3 content missing)")
+	})
+
+	_, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		t.Fatal("Open() of version-slot-reuse workspace returned nil; want *VersionContentMismatchError")
+	}
+	var mismatch *VersionContentMismatchError
+	if !errors.As(err, &mismatch) {
+		t.Fatalf("Open() error = %v (%T); want *VersionContentMismatchError", err, err)
+	}
+	// Earliest-mismatched-version-first, mirroring checkPendingQuarantine.
+	if mismatch.Version != 2 {
+		t.Errorf("Version = %d, want 2 (earliest mismatched version)", mismatch.Version)
+	}
+	if mismatch.Name != "00002_add_lane.sql" {
+		t.Errorf("Name = %q, want %q", mismatch.Name, "00002_add_lane.sql")
+	}
+	found := false
+	for _, m := range mismatch.Missing {
+		if m == "issues.lane" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("Missing = %v, want an entry naming issues.lane", mismatch.Missing)
+	}
+	msg := mismatch.Error()
+	if !strings.Contains(msg, "v2") || !strings.Contains(msg, "00002_add_lane.sql") || !strings.Contains(msg, "issues.lane") {
+		t.Errorf("Error() = %q; want it to name the version, file, and missing column", msg)
+	}
+}
+
+// TestOpenToleratesHealthyManagedWorkspace pins the non-regression side of
+// the version-content check: a workspace whose goose log and live schema
+// agree (the common case) must open cleanly with no false positive, whether
+// or not there are pending migrations.
+func TestOpenToleratesHealthyManagedWorkspace(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		assertIssuesQueryable(t, ctx, st)
+	})
+	// Re-open: fully migrated, nothing pending — exactly the shape the
+	// ticket's "reported as fully migrated" bug would have mis-served.
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		assertIssuesQueryable(t, ctx, st)
+	})
+}
