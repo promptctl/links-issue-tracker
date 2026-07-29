@@ -873,13 +873,32 @@ func (s *Store) classifyMigrationState(ctx context.Context) (migrationState, err
 
 // alterAddColumnRe matches an `ALTER TABLE <table> ADD COLUMN <column>`
 // statement's target table and column, tolerating optional backtick
-// quoting. It recognizes only ADD COLUMN — the one DDL shape numbered
-// migrations (00002+) have used to grow the schema beyond the baseline's
-// CREATE TABLEs to date. A future migration that grows the schema a
-// different way (a new CREATE TABLE, an ADD CONSTRAINT with no column)
-// needs a matching case added alongside this, or its content is invisible
-// to verifyAppliedVersionsMatchRegistry.
+// quoting. It recognizes only the plain ADD COLUMN <name> <type> shape —
+// the one every migration in this registry, and the README's own migration
+// skeleton, uses. parseAddColumnTargets below asserts that every literal
+// "ADD COLUMN" occurrence in a Up section was actually parsed by this
+// pattern, so a shape it cannot parse (IF NOT EXISTS, a parenthesized
+// multi-column list) fails loudly rather than silently registering as "no
+// content to verify" for that version.
+//
+// One shape is a deliberate, non-silent gap rather than a parsed one:
+// MySQL's `ADD <col> <type>` with no COLUMN keyword contains no "ADD
+// COLUMN" text for the literal-count assertion to catch, and is ambiguous
+// with `ADD CONSTRAINT` / `ADD INDEX` / `ADD KEY` / `ADD UNIQUE` without a
+// fuller statement parser to disambiguate. No migration here uses it; a
+// future one that does needs a matching case added to this parser, or its
+// content is invisible to verifyAppliedVersionsMatchRegistry.
 var alterAddColumnRe = regexp.MustCompile("(?is)ALTER\\s+TABLE\\s+`?([A-Za-z_][A-Za-z0-9_]*)`?\\s+ADD\\s+COLUMN\\s+`?([A-Za-z_][A-Za-z0-9_]*)`?")
+
+// sqlKeywordAfterAddColumn holds identifier-shaped tokens that can
+// immediately follow "ADD COLUMN" in a clause shape alterAddColumnRe does
+// not intend to parse, but whose leading word is itself a valid identifier
+// and so would otherwise be greedily captured as a bogus column name — right
+// now, just the "IF" of "ADD COLUMN IF NOT EXISTS". parseAddColumnTargets
+// discards a match landing on one of these so its literal-count assertion
+// sees the occurrence as unparsed (and fails loudly) rather than accepting
+// a nonsense target like "issues.if".
+var sqlKeywordAfterAddColumn = map[string]bool{"if": true}
 
 // migrationColumnAdds is one registry migration's version/name plus the
 // table.column targets its Up section's ADD COLUMN statements register.
@@ -892,6 +911,40 @@ type migrationColumnAdds struct {
 type tableColumnTarget struct {
 	table  string
 	column string
+}
+
+// parseAddColumnTargets extracts every ALTER TABLE ... ADD COLUMN target
+// from a migration's Up section text.
+//
+// [LAW:no-silent-failure] It fails loudly, naming the file, when the Up
+// section contains more literal (case-insensitive) "ADD COLUMN" occurrences
+// than alterAddColumnRe actually parsed (after sqlKeywordAfterAddColumn
+// discards keyword-shaped false captures) — a shape like "ADD COLUMN IF NOT
+// EXISTS" or a parenthesized multi-column list would otherwise silently
+// register zero (or, for the IF case, one WRONG) target for that version,
+// which is indistinguishable from a migration that legitimately adds no
+// column (e.g. an index- or backfill-only migration) and would let a real
+// content mismatch on that version go undetected.
+func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
+	var adds []tableColumnTarget
+	for _, m := range alterAddColumnRe.FindAllStringSubmatch(up, -1) {
+		column := strings.ToLower(m[2])
+		if sqlKeywordAfterAddColumn[column] {
+			continue
+		}
+		adds = append(adds, tableColumnTarget{table: strings.ToLower(m[1]), column: column})
+	}
+	if literal := strings.Count(strings.ToUpper(up), "ADD COLUMN"); literal > len(adds) {
+		return nil, fmt.Errorf(
+			"migration %q: found %d \"ADD COLUMN\" occurrence(s) in its Up section but "+
+				"alterAddColumnRe recognized only %d — a form such as \"ADD COLUMN IF NOT "+
+				"EXISTS\" or a parenthesized multi-column list is not parsed; widen "+
+				"alterAddColumnRe or rewrite the migration to the plain ADD COLUMN <name> "+
+				"<type> shape",
+			name, literal, len(adds),
+		)
+	}
+	return adds, nil
 }
 
 // registryColumnAddsThroughVersion returns, in ascending version order, the
@@ -922,9 +975,9 @@ func registryColumnAddsThroughVersion(maxVersion int64) ([]migrationColumnAdds, 
 		if err != nil {
 			return nil, fmt.Errorf("read migration %q: %w", entry.Name(), err)
 		}
-		var adds []tableColumnTarget
-		for _, m := range alterAddColumnRe.FindAllStringSubmatch(gooseUpSection(string(data)), -1) {
-			adds = append(adds, tableColumnTarget{table: strings.ToLower(m[1]), column: strings.ToLower(m[2])})
+		adds, err := parseAddColumnTargets(entry.Name(), gooseUpSection(string(data)))
+		if err != nil {
+			return nil, err
 		}
 		out = append(out, migrationColumnAdds{version: v, name: entry.Name(), adds: adds})
 	}

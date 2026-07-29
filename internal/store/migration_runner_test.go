@@ -598,6 +598,45 @@ func TestOpenDetectsVersionSlotReuseContentMismatch(t *testing.T) {
 	}
 }
 
+// TestParseAddColumnTargetsRecognizesPlainForm pins the happy path: the
+// plain `ADD COLUMN <name> <type>` shape every migration in this registry
+// uses parses to exactly the targets present, with no error.
+func TestParseAddColumnTargetsRecognizesPlainForm(t *testing.T) {
+	up := "ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';"
+	adds, err := parseAddColumnTargets("00002_add_lane.sql", up)
+	if err != nil {
+		t.Fatalf("parseAddColumnTargets() error = %v", err)
+	}
+	if len(adds) != 1 || adds[0].table != "issues" || adds[0].column != "lane" {
+		t.Fatalf("adds = %+v, want [{issues lane}]", adds)
+	}
+}
+
+// TestParseAddColumnTargetsRejectsUnrecognizedForm pins the loud-failure
+// side raised in PR review: an "ADD COLUMN" occurrence in a shape
+// alterAddColumnRe cannot parse (here, IF NOT EXISTS) must fail loudly by
+// name, not silently register zero targets for the migration.
+func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
+	up := "ALTER TABLE issues ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';"
+	_, err := parseAddColumnTargets("00099_unsupported.sql", up)
+	if err == nil {
+		t.Fatal("parseAddColumnTargets() error = nil; want a loud failure naming the unrecognized ADD COLUMN form")
+	}
+	if !strings.Contains(err.Error(), "00099_unsupported.sql") {
+		t.Errorf("error = %q; want it to name the migration file", err.Error())
+	}
+}
+
+// TestParseAddColumnTargetsRejectsMultiColumnForm covers the second shape
+// named in review: a parenthesized multi-column ADD COLUMN list.
+func TestParseAddColumnTargetsRejectsMultiColumnForm(t *testing.T) {
+	up := "ALTER TABLE issues ADD COLUMN (lane text NOT NULL DEFAULT '', resolution VARCHAR(32) NULL);"
+	_, err := parseAddColumnTargets("00099_unsupported.sql", up)
+	if err == nil {
+		t.Fatal("parseAddColumnTargets() error = nil; want a loud failure naming the unrecognized multi-column ADD COLUMN form")
+	}
+}
+
 // TestOpenToleratesHealthyManagedWorkspace pins the non-regression side of
 // the version-content check: a workspace whose goose log and live schema
 // agree (the common case) must open cleanly with no false positive, whether
