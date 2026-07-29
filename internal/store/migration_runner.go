@@ -1150,6 +1150,17 @@ func (s *Store) verifyAppliedVersionsMatchRegistry(ctx context.Context, appliedV
 // [LAW:no-silent-failure] An ALTER failure here — anything beyond "column
 // already exists", which missingVersionContent's probe already excludes —
 // aborts loudly with the statement and cause named; it is never swallowed.
+//
+// Scope matches detection exactly, not migration parity: parseAddColumnTargets
+// (and therefore missingVersionContent) only ever registers ADD COLUMN
+// targets, so a version's ADD CONSTRAINT / data-backfill statements (e.g.
+// 00003_add_resolution.sql's issues_resolution_check, or 00004's
+// redirect_target backfill) are never re-applied here even when the column
+// they depend on was just repaired. This mirrors the same documented,
+// intentional gap on verifyAppliedVersionsMatchRegistry/registryColumnAddsThroughVersion
+// (CREATE TABLE, ADD CONSTRAINT-only, DROP/RENAME COLUMN, and data-only
+// migrations are not tracked as content to verify or repair yet) — widening
+// it is a job for whatever ticket widens detection, not this repair.
 func (s *Store) repairVersionContentDrift(ctx context.Context, appliedVersion int64) ([]string, error) {
 	missing, err := s.missingVersionContent(ctx, appliedVersion)
 	if err != nil {

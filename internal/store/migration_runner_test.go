@@ -615,6 +615,54 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	reopened.Close()
 }
 
+// TestRepairVersionContentDriftWithRollbackResetsOnFailure pins the safety
+// net a version-content drift repair needs that ensureQuarantineTable's
+// bookkeeping-table self-heal does not: repair mutates a user-owned table
+// (issues), so a failure partway through must reset the working set to the
+// pre-repair checkpoint and surface loudly, not leave a half-applied schema
+// change live with no way back. The failure is forced by renaming the
+// target table out from under the repair AFTER the missing-column probe
+// would already see it as target-eligible — a genuine ALTER error distinct
+// from the "column already exists" case the probe itself excludes.
+func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	withStore(t, ctx, doltRoot, func(st *Store) {
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_redirect_target_check`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP CONSTRAINT issues_resolution_check`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN lane`)
+		mustExec(t, ctx, st, `ALTER TABLE issues DROP COLUMN resolution`)
+		mustExec(t, ctx, st, `RENAME TABLE issues TO issues_renamed`)
+		mustCommit(t, ctx, st, "test: force a genuine repair failure (target table renamed out from under it)")
+
+		applied, err := st.recordedMigrationVersion(ctx)
+		if err != nil {
+			t.Fatalf("recordedMigrationVersion() error = %v", err)
+		}
+		mismatch := &VersionContentMismatchError{Version: 2, Name: "00002_add_lane.sql", Missing: []string{"issues.lane"}}
+
+		err = st.repairVersionContentDriftWithRollback(ctx, applied, mismatch)
+		if err == nil {
+			t.Fatal("repairVersionContentDriftWithRollback() error = nil; want a loud failure, not a silent no-op")
+		}
+		if !strings.Contains(err.Error(), "v2") || !strings.Contains(err.Error(), "00002_add_lane.sql") {
+			t.Errorf("error = %q; want it to name the triggering version and migration file", err.Error())
+		}
+		if !strings.Contains(err.Error(), "checkpoint") {
+			t.Errorf("error = %q; want it to name the checkpoint reset outcome", err.Error())
+		}
+
+		cps, err := st.ListCheckpoints(ctx, migrationDriftRepairCheckpointPrefix)
+		if err != nil {
+			t.Fatalf("ListCheckpoints() error = %v", err)
+		}
+		if len(cps) == 0 {
+			t.Error("no drift-repair checkpoint recorded; want one created before the failed repair attempt")
+		}
+	})
+}
+
 // TestParseAddColumnTargetsRecognizesPlainForm pins the happy path: the
 // plain `ADD COLUMN <name> <type>` shape every migration in this registry
 // uses parses to exactly the targets present, with no error.
