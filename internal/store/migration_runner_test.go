@@ -654,6 +654,33 @@ func TestParseAddColumnTargetsCapturesEachStatementSeparately(t *testing.T) {
 	}
 }
 
+// TestParseAddColumnTargetsToleratesSemicolonInStringLiteral pins
+// terminatedStatement's quote-awareness: a DEFAULT value containing a
+// semicolon must not truncate the captured repair statement early — the
+// same quote-tracking discipline parenBlock/splitTopLevel already use
+// elsewhere in this file.
+func TestParseAddColumnTargetsToleratesSemicolonInStringLiteral(t *testing.T) {
+	up := "ALTER TABLE issues ADD COLUMN note TEXT NOT NULL DEFAULT 'a;b';\n" +
+		"ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';"
+	adds, err := parseAddColumnTargets("00099_semicolon.sql", up)
+	if err != nil {
+		t.Fatalf("parseAddColumnTargets() error = %v", err)
+	}
+	if len(adds) != 2 {
+		t.Fatalf("adds = %+v, want exactly two ADD COLUMN targets", adds)
+	}
+	want := "ALTER TABLE issues ADD COLUMN note TEXT NOT NULL DEFAULT 'a;b';"
+	if adds[0].stmt != want {
+		t.Errorf("stmt = %q, want %q (the semicolon inside the string literal must not terminate the statement)", adds[0].stmt, want)
+	}
+	if adds[0].column != "note" {
+		t.Errorf("column = %q, want %q", adds[0].column, "note")
+	}
+	if adds[1].column != "lane" {
+		t.Errorf("second target column = %q, want %q (the following statement must still parse independently)", adds[1].column, "lane")
+	}
+}
+
 // TestParseAddColumnTargetsRejectsUnrecognizedForm pins the loud-failure
 // side raised in PR review: an "ADD COLUMN" occurrence in a shape
 // alterAddColumnRe cannot parse (here, IF NOT EXISTS) must fail loudly by
