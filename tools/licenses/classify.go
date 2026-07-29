@@ -35,12 +35,22 @@ const unclassifiedLicense = "Unknown"
 var licenseFilePattern = regexp.MustCompile(`(?i)^(LICEN[SC]E|COPYING|UNLICENSE)([._-][a-zA-Z0-9]+)*$`)
 
 // FindLicenseFile returns the module-root license file for dir, per
-// licenseFilePattern. A module occasionally ships more than one match — e.g.
-// gopkg.in/yaml.v2 carries both LICENSE and LICENSE.libyaml (the latter for a
-// vendored C dependency) — so the bare "LICENSE" wins when present, otherwise
-// the lexicographically first match. [LAW:one-source-of-truth] exactly one
-// file is ever treated as "the" license for a module; the tiebreak is fixed
-// data (sorted names), not filesystem read order.
+// licenseFilePattern. A module occasionally ships more than one match with no
+// real ambiguity — e.g. gopkg.in/yaml.v2 carries both LICENSE and
+// LICENSE.libyaml (the latter for a vendored C dependency) — and the bare
+// "LICENSE" always wins in that case, because a module with its own canonical
+// LICENSE file is not asking the reader to choose between options.
+//
+// But with the `-`/`_` separators licenseFilePattern accepts (LICENSE-APACHE,
+// LICENSE-MIT), multiple matches AND no bare LICENSE is a genuinely different
+// situation: a real dual-license convention where a downstream user picks
+// ONE of the offered licenses. Silently picking the lexicographically-first
+// file there would drop a real license option from the bundle without any
+// record that a choice was ever made — the kind of silent, undetectable
+// attribution gap this generator exists to prevent. So that case errors,
+// naming every candidate, exactly like the zero-candidate case already does:
+// a human decides which text to vendor, the tool doesn't guess.
+// [LAW:no-silent-failure]
 func FindLicenseFile(dir string) (string, error) {
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -65,6 +75,9 @@ func FindLicenseFile(dir string) (string, error) {
 		if strings.EqualFold(m, "LICENSE") {
 			return filepath.Join(dir, m), nil
 		}
+	}
+	if len(matches) > 1 {
+		return "", fmt.Errorf("ambiguous license files in %s (%s) and no bare LICENSE to prefer — a human must pick which text to vendor", dir, strings.Join(matches, ", "))
 	}
 	return filepath.Join(dir, matches[0]), nil
 }

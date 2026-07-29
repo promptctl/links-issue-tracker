@@ -28,6 +28,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"io"
 	"os"
 
 	lc "github.com/google/licenseclassifier"
@@ -52,9 +53,23 @@ func main() {
 	)
 	flag.Parse()
 
-	mods, err := LinkedModules(*pkg)
+	if err := run(*pkg, *bundlePath, *reportPath, os.Stdout); err != nil {
+		fmt.Fprintf(os.Stderr, "licenses: %v\n", err)
+		os.Exit(1)
+	}
+}
+
+// run performs the full generate-and-write pipeline: resolve linked modules,
+// classify each one's license, and write the bundle + report. Factored out of
+// main so the orchestration — including its error paths (no linked modules,
+// classifier construction failing, an unwritable output path) — is directly
+// testable without spawning a subprocess or parsing flags in the test.
+// [LAW:effects-at-boundaries] main() itself is left holding only flag parsing
+// and the process-exit boundary.
+func run(pkg, bundlePath, reportPath string, stdout io.Writer) error {
+	mods, err := LinkedModules(pkg)
 	if err != nil {
-		die("resolve linked modules: %v", err)
+		return fmt.Errorf("resolve linked modules: %w", err)
 	}
 	// An empty result almost certainly means the package argument or module
 	// resolution is broken, not that the binary genuinely has zero
@@ -62,27 +77,28 @@ func main() {
 	// [LAW:no-silent-failure] refuse to write empty-but-successful-looking
 	// artifacts.
 	if len(mods) == 0 {
-		die("no linked modules found for %s; refusing to write an empty bundle/report", *pkg)
+		return fmt.Errorf("no linked modules found for %s; refusing to write an empty bundle/report", pkg)
 	}
 
 	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
 	if err != nil {
-		die("build license classifier: %v", err)
+		return fmt.Errorf("build license classifier: %w", err)
 	}
 
 	entries := make([]Entry, 0, len(mods))
 	for _, m := range mods {
 		licensePath, err := FindLicenseFile(m.Dir)
 		if err != nil {
-			// [LAW:no-silent-failure] a linked module with no discoverable
-			// license file is an attribution gap, not a warning: fail the
-			// build so a human resolves it (vendor an override, replace the
-			// dependency) rather than shipping an incomplete bundle.
-			die("%s@%s: %v", m.Path, m.Version, err)
+			// [LAW:no-silent-failure] a linked module with no discoverable or
+			// unambiguous license file is an attribution gap, not a warning:
+			// fail the build so a human resolves it (vendor an override,
+			// replace the dependency) rather than shipping an incomplete or
+			// silently-guessed bundle.
+			return fmt.Errorf("%s@%s: %w", m.Path, m.Version, err)
 		}
 		text, err := os.ReadFile(licensePath)
 		if err != nil {
-			die("read %s: %v", licensePath, err)
+			return fmt.Errorf("read %s: %w", licensePath, err)
 		}
 		name, confidence := Classify(classifier, string(text))
 		entries = append(entries, Entry{
@@ -94,20 +110,26 @@ func main() {
 		})
 	}
 
-	if err := writeFile(*bundlePath, func(f *os.File) error { return WriteBundle(f, entries) }); err != nil {
-		die("%v", err)
+	if err := writeFile(bundlePath, func(f *os.File) error { return WriteBundle(f, entries) }); err != nil {
+		return err
 	}
-	if err := writeFile(*reportPath, func(f *os.File) error { return WriteReport(f, entries) }); err != nil {
-		die("%v", err)
+	if err := writeFile(reportPath, func(f *os.File) error { return WriteReport(f, entries) }); err != nil {
+		return err
 	}
 
-	fmt.Printf("licenses: wrote %s and %s for %d linked modules\n", *bundlePath, *reportPath, len(entries))
+	fmt.Fprintf(stdout, "licenses: wrote %s and %s for %d linked modules\n", bundlePath, reportPath, len(entries))
+	return nil
 }
 
-// writeFile creates path, runs write against it, and closes it — checking the
-// Close error on the success path. A deferred Close would swallow a delayed
-// write/fsync failure while the tool exits 0, leaving a truncated attribution
-// bundle silently reported as generated. [LAW:no-silent-failure]
+// writeFile creates path, runs write against it, syncs it to durable storage,
+// and closes it — checking every step's error on the success path. A
+// deferred Close alone would swallow a failing Close; and Close (close(2))
+// does not by itself guarantee previously buffered writes reached disk — only
+// fsync(2) does, which is why Sync runs explicitly before Close rather than
+// being folded into a "Close catches it" claim. This file IS the compliance
+// artifact the tool exists to produce correctly, so a truncated or corrupted
+// write must be a loud error, not a silently short-written attribution
+// bundle. [LAW:no-silent-failure]
 func writeFile(path string, write func(*os.File) error) error {
 	f, err := os.Create(path)
 	if err != nil {
@@ -117,13 +139,12 @@ func writeFile(path string, write func(*os.File) error) error {
 		_ = f.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}
+	if err := f.Sync(); err != nil {
+		_ = f.Close()
+		return fmt.Errorf("sync %s: %w", path, err)
+	}
 	if err := f.Close(); err != nil {
 		return fmt.Errorf("close %s: %w", path, err)
 	}
 	return nil
-}
-
-func die(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, "licenses: "+format+"\n", args...)
-	os.Exit(1)
 }

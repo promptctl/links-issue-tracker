@@ -24,7 +24,7 @@ func WriteReport(w io.Writer, entries []Entry) error {
 	}
 	counts := make(map[string]int, len(entries))
 	for _, e := range entries {
-		if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n", e.Module.Path, e.Module.Version, e.LicenseName); err != nil {
+		if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n", e.Module.Path, versionCell(e.Module.Version), e.LicenseName); err != nil {
 			return fmt.Errorf("write report row for %s: %w", e.Module.Path, err)
 		}
 		counts[e.LicenseName]++
@@ -44,4 +44,16 @@ func WriteReport(w io.Writer, entries []Entry) error {
 		}
 	}
 	return nil
+}
+
+// versionCell renders a module version for a markdown table cell. An empty
+// version — parseModuleList (modules.go) deliberately accepts one, for a
+// local `replace` directive with no version — would otherwise leave the cell
+// invisibly empty in rendered markdown, silently breaking the table's visual
+// column alignment. [LAW:no-silent-failure] the gap is rendered, not hidden.
+func versionCell(v string) string {
+	if v == "" {
+		return "-"
+	}
+	return v
 }

@@ -32,6 +32,22 @@ func TestWriteReport(t *testing.T) {
 	}
 }
 
+func TestWriteReportEmptyVersionRendersPlaceholder(t *testing.T) {
+	// parseModuleList (modules.go) deliberately accepts an empty version for
+	// a local `replace` directive; the report must render it as a visible
+	// cell, not an invisible one that breaks the table's column alignment.
+	entries := []Entry{
+		{Module: Module{Path: "github.com/a/a", Version: ""}, LicenseName: "MIT"},
+	}
+	var buf strings.Builder
+	if err := WriteReport(&buf, entries); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	if want := "| github.com/a/a | - | MIT |"; !strings.Contains(buf.String(), want) {
+		t.Errorf("output missing %q\n%s", want, buf.String())
+	}
+}
+
 func TestWriteReportSummaryOrderIsSorted(t *testing.T) {
 	entries := []Entry{
 		{Module: Module{Path: "github.com/z/z", Version: "v1"}, LicenseName: "Zlib"},

@@ -124,14 +124,32 @@ func TestFindLicenseFileAcceptReject(t *testing.T) {
 		}
 	})
 
-	t.Run("falls back to the lexicographically first match when no bare LICENSE exists", func(t *testing.T) {
-		dir := writeFiles(t, "LICENSE.txt", "LICENSE.md")
+	t.Run("resolves a single match with no bare LICENSE present", func(t *testing.T) {
+		dir := writeFiles(t, "LICENSE.txt")
 		got, err := FindLicenseFile(dir)
 		if err != nil {
 			t.Fatalf("FindLicenseFile: %v", err)
 		}
-		if filepath.Base(got) != "LICENSE.md" {
-			t.Errorf("got %q, want LICENSE.md (sorts before LICENSE.txt)", got)
+		if filepath.Base(got) != "LICENSE.txt" {
+			t.Errorf("got %q, want LICENSE.txt", got)
+		}
+	})
+
+	t.Run("errors on multiple candidates with no bare LICENSE to prefer", func(t *testing.T) {
+		// The real shape this guards: a dual-license repo shipping
+		// LICENSE-APACHE and LICENSE-MIT with no bare LICENSE — picking one
+		// silently would drop a real license option from the bundle with no
+		// record a choice was ever made. Naming both candidates in the error
+		// forces a human decision instead.
+		dir := writeFiles(t, "LICENSE-APACHE", "LICENSE-MIT")
+		_, err := FindLicenseFile(dir)
+		if err == nil {
+			t.Fatal("want error: ambiguous — two license files, neither is the bare LICENSE")
+		}
+		for _, want := range []string{"LICENSE-APACHE", "LICENSE-MIT"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Errorf("error %q doesn't name candidate %q", err, want)
+			}
 		}
 	})
 

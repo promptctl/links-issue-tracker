@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -70,6 +71,67 @@ func TestEndToEndAgainstLitCoversDolt(t *testing.T) {
 	}
 	if !strings.Contains(report.String(), "| github.com/dolthub/dolt/go | ") {
 		t.Error("report doesn't list github.com/dolthub/dolt/go")
+	}
+}
+
+// TestRunHappyPath exercises main()'s orchestration directly (not just the
+// helpers it calls) against the real release package, writing both output
+// files and checking the stdout summary line.
+func TestRunHappyPath(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+
+	var stdout strings.Builder
+	if err := run(litPkg, bundlePath, reportPath, &stdout); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, path := range []string{bundlePath, reportPath} {
+		info, err := os.Stat(path)
+		if err != nil {
+			t.Fatalf("stat %s: %v", path, err)
+		}
+		if info.Size() == 0 {
+			t.Errorf("%s is empty", path)
+		}
+	}
+	if !strings.Contains(stdout.String(), "wrote") {
+		t.Errorf("stdout summary missing, got: %q", stdout.String())
+	}
+}
+
+// TestRunEmptyModulesGuard pins the "no linked modules found" error path.
+// "fmt" is a real, valid `go list -deps` target that pulls in zero external
+// modules (stdlib only) — a deterministic way to hit the guard without a
+// fake LinkedModules implementation.
+func TestRunEmptyModulesGuard(t *testing.T) {
+	dir := t.TempDir()
+	err := run("fmt", filepath.Join(dir, "bundle"), filepath.Join(dir, "report"), &strings.Builder{})
+	if err == nil {
+		t.Fatal("want error for a package with zero linked modules")
+	}
+	if !strings.Contains(err.Error(), "no linked modules found") {
+		t.Errorf("error = %v, want it to name the empty-modules guard", err)
+	}
+}
+
+// TestRunUnwritableBundlePath pins writeFile's create-error path as surfaced
+// through run(): a bundle path inside a directory that doesn't exist.
+func TestRunUnwritableBundlePath(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "no-such-subdir", "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+
+	err := run(litPkg, bundlePath, reportPath, &strings.Builder{})
+	if err == nil {
+		t.Fatal("want error: bundle path's parent directory doesn't exist")
+	}
+	if !strings.Contains(err.Error(), "create") {
+		t.Errorf("error = %v, want it to name the failing create", err)
+	}
+	if _, statErr := os.Stat(reportPath); statErr == nil {
+		t.Error("report should not have been written when the bundle write failed first")
 	}
 }
 
