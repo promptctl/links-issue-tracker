@@ -519,3 +519,116 @@ func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
 		t.Errorf("QuarantineBlockError must not be wrapped in MigrationRollbackError; quarantine fast-fail must fire before guard.ensure()")
 	}
 }
+
+// withStaleShapeQuarantineTable replaces a workspace's migration_quarantine
+// table with the older version_id/reason/quarantined_at shape a pre-restructure
+// lit build produced, optionally seeding one row of "history" under that shape.
+// The workspace must already be open with no other pending mutation, since this
+// commits directly rather than going through migrate().
+func withStaleShapeQuarantineTable(t *testing.T, ctx context.Context, doltRoot string, seedRow bool) {
+	t.Helper()
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("withStaleShapeQuarantineTable Open error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `DROP TABLE migration_quarantine`); err != nil {
+		_ = st.Close()
+		t.Fatalf("drop canonical migration_quarantine error = %v", err)
+	}
+	if err := st.ExecRawForTest(ctx, `CREATE TABLE migration_quarantine (
+		version_id     BIGINT NOT NULL,
+		reason         TEXT NOT NULL,
+		quarantined_at VARCHAR(64) NOT NULL,
+		PRIMARY KEY (version_id)
+	)`); err != nil {
+		_ = st.Close()
+		t.Fatalf("create stale-shape migration_quarantine error = %v", err)
+	}
+	if seedRow {
+		if err := st.ExecRawForTest(ctx,
+			`INSERT INTO migration_quarantine (version_id, reason, quarantined_at) VALUES (2, 'old-build failure', '2025-01-01T00:00:00Z')`,
+		); err != nil {
+			_ = st.Close()
+			t.Fatalf("seed stale-shape quarantine row error = %v", err)
+		}
+	}
+	if err := st.commitWorkingSet(ctx, "simulate stale-shape migration_quarantine table"); err != nil {
+		_ = st.Close()
+		t.Fatalf("commitWorkingSet error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("withStaleShapeQuarantineTable Close error = %v", err)
+	}
+}
+
+// TestQuarantineTableSelfHealsStaleShapeWhenEmpty pins the ticket's checkable
+// criterion: a migration_quarantine table left in an older lit build's shape
+// (version_id/reason/quarantined_at) with zero rows is corrected in place by
+// an ordinary lit Open, with no manual SQL — instead of ensureQuarantineTable's
+// CREATE TABLE IF NOT EXISTS silently trusting the wrong shape forever.
+func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	withStaleShapeQuarantineTable(t, ctx, doltRoot, false)
+
+	// Drop goose history so this Open is a mutating adoption pass — the phase
+	// that reaches ensureQuarantineTable. A non-mutating managed Open never
+	// touches the table at all, so it would prove nothing about self-heal.
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	second, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() over a stale-shape empty migration_quarantine failed: %v — self-heal must succeed via ordinary Open", err)
+	}
+	defer second.Close()
+
+	cols, err := second.tableColumns(ctx, "migration_quarantine")
+	if err != nil {
+		t.Fatalf("tableColumns error = %v", err)
+	}
+	if !quarantineShapeMatches(cols) {
+		t.Fatalf("migration_quarantine columns = %v, want exactly %v (self-heal did not correct the shape)", cols, canonicalQuarantineColumns)
+	}
+}
+
+// TestQuarantineTableRefusesToDiscardStaleShapeHistory pins the boundary of
+// self-heal: a stale-shape migration_quarantine table that still holds rows
+// is NOT silently dropped and recreated — that would discard quarantine
+// history under column names this binary can't translate. Open must refuse
+// loudly instead, naming the shape and row count.
+func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open(first) error = %v", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatalf("Close(first) error = %v", err)
+	}
+
+	withStaleShapeQuarantineTable(t, ctx, doltRoot, true)
+	withGooseHistoryDropped(t, ctx, doltRoot)
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if st != nil {
+		_ = st.Close()
+	}
+	if err == nil {
+		t.Fatal("Open() over a stale-shape migration_quarantine WITH rows returned nil error; expected a refusal naming the shape/row count")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, "non-canonical shape") || !strings.Contains(msg, "1 row") {
+		t.Errorf("error message = %q; want it to name the non-canonical shape and the row count", msg)
+	}
+}
