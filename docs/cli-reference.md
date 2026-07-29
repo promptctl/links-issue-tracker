@@ -336,16 +336,16 @@ lit <verb> <id> [--reason <text>]
 ### `lit dep add` / `lit dep rm` / `lit dep ls`
 
 ```text
-lit dep add <from-id> <to-id> [--type blocks|parent-child|related-to]
-lit dep add --blocker <id> --blocked <id>          # blocks-only alternative spelling
-lit dep rm <from-id> <to-id> [--type <t>]
+lit dep add --from <id> --to <id> [--type blocks|parent-child|related-to]
+lit dep rm --from <id> --to <id> [--type <t>]
 lit dep ls <issue-id> [--type <t>]
 ```
 
-Manages relationship edges. The default type is `blocks` (first ID blocks the second);
-the `--blocker`/`--blocked` spelling makes direction explicit. `blocks` edges are not
-allowed between two issues in the same epic — within an epic, rank is the ordering
-signal. `related-to` is symmetric annotation with no scheduling effect.
+Manages relationship edges. `--from`/`--to` are required for `add` and `rm`; there is
+no positional form. The default type is `blocks`, where `--from` is the blocker and
+`--to` is the blocked issue. `blocks` edges are not allowed between two issues in the
+same epic — within an epic, rank is the ordering signal. `related-to` is symmetric
+annotation with no scheduling effect.
 
 ### `lit parent set` / `lit parent clear`
 
