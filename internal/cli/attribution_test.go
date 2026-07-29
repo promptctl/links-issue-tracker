@@ -52,7 +52,7 @@ func TestRelationLabelBulkVerbsResolveActingIdentity(t *testing.T) {
 		child := newAttributionIssue(t, ap, "child")
 		parent := newAttributionIssue(t, ap, "parent")
 		var out bytes.Buffer
-		if err := runParentSet(ctx, &out, ap, []string{child, parent}); err != nil {
+		if err := runParentSet(ctx, &out, ap, []string{"--child", child, "--parent", parent}); err != nil {
 			t.Fatalf("runParentSet error = %v", err)
 		}
 		assertRelationActor(t, ap, child, model.RelParentChild, want)
