@@ -148,6 +148,24 @@ func TestFindLicenseFileAcceptReject(t *testing.T) {
 		}
 	})
 
+	t.Run("accepts hyphen and underscore separators, not just dot", func(t *testing.T) {
+		// Real-world dual-license convention: LICENSE-APACHE / LICENSE-MIT
+		// side by side, or LICENSE_MIT alone. filepath.Base equality (not
+		// FindLicenseFile's "no bare LICENSE, fall back" branch) confirms
+		// each is recognized as a license file at all — bare-LICENSE
+		// preference is already covered above.
+		for _, name := range []string{"LICENSE-APACHE", "LICENSE_MIT", "LICENSE-Apache-2.0"} {
+			dir := writeFiles(t, name)
+			got, err := FindLicenseFile(dir)
+			if err != nil {
+				t.Fatalf("FindLicenseFile(%s): %v", name, err)
+			}
+			if filepath.Base(got) != name {
+				t.Errorf("got %q, want %q", got, name)
+			}
+		}
+	})
+
 	t.Run("does not match README or NOTICE alone", func(t *testing.T) {
 		dir := writeFiles(t, "README.md", "NOTICE")
 		if _, err := FindLicenseFile(dir); err == nil {

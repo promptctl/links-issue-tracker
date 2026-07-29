@@ -20,12 +20,19 @@ import (
 const unclassifiedLicense = "Unknown"
 
 // licenseFilePattern matches the file names Go modules conventionally use for
-// their license grant: LICENSE/LICENCE, COPYING, UNLICENSE, with or without an
-// extension (.txt, .md, ...). It deliberately excludes README/NOTICE — those
-// carry attribution or usage notes, not the license grant itself, and don't
-// belong in a bundle whose contents are "the text required to accompany the
-// binary for compliance."
-var licenseFilePattern = regexp.MustCompile(`(?i)^(LICEN[SC]E|COPYING|UNLICENSE)(\.[a-zA-Z0-9]+)?$`)
+// their license grant: LICENSE/LICENCE, COPYING, UNLICENSE, with or without a
+// suffix separated by `.`, `-`, or `_` (LICENSE.txt, LICENSE-APACHE,
+// LICENSE_MIT, ...) — all three separators are real conventions in the wild,
+// most visibly dual-license repos that ship LICENSE-APACHE and LICENSE-MIT
+// side by side. None of the 167 modules currently linked into ./cmd/lit need
+// the `-`/`_` forms, but a linked module with only a hyphenated variant would
+// otherwise hit FindLicenseFile's "no license file found" error, which is a
+// hard build-abort (die in main.go) rather than a soft warning — worth
+// accepting the wider real-world shape now. It deliberately excludes
+// README/NOTICE — those carry attribution or usage notes, not the license
+// grant itself, and don't belong in a bundle whose contents are "the text
+// required to accompany the binary for compliance."
+var licenseFilePattern = regexp.MustCompile(`(?i)^(LICEN[SC]E|COPYING|UNLICENSE)([._-][a-zA-Z0-9]+)*$`)
 
 // FindLicenseFile returns the module-root license file for dir, per
 // licenseFilePattern. A module occasionally ships more than one match — e.g.
