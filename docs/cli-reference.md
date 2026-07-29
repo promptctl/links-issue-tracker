@@ -350,11 +350,12 @@ annotation with no scheduling effect.
 ### `lit parent set` / `lit parent clear`
 
 ```text
-lit parent set <child-id> <parent-id>
+lit parent set --child <id> --parent <id>
 lit parent clear <child-id>
 ```
 
-Manages epic membership. Epics contain children; an epic's completion is derived from
+Manages epic membership. `--child`/`--parent` are required for `set`; there is no
+positional form. Epics contain children; an epic's completion is derived from
 its children rather than tracked as its own status.
 
 ### `lit children`

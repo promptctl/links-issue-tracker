@@ -71,18 +71,19 @@ func runLabelRm(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 }
 
 func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 2)
 	fs := newCobraFlagSet("parent set")
+	child := fs.String("child", "", "Child issue ID (required)")
+	parent := fs.String("parent", "", "Parent issue ID (required)")
 	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
+	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if len(positional) != 2 {
-		return UsageError{Message: "usage: lit parent set <child-id> <parent-id>"}
+	if *child == "" || *parent == "" || fs.NArg() != 0 {
+		return UsageError{Message: "usage: lit parent set --child <id> --parent <id>"}
 	}
 	rel, err := ap.Store.SetParent(ctx, store.SetParentInput{
-		ChildID:   positional[0],
-		ParentID:  positional[1],
+		ChildID:   *child,
+		ParentID:  *parent,
 		CreatedBy: resolveActor(),
 	})
 	if err != nil {
