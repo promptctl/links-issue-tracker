@@ -92,29 +92,40 @@ jobs:
       # from (CHANGELOG × tags) and carried to the build + upload steps; the same
       # steps run either way. [LAW:one-source-of-truth] the CHANGELOG's newest
       # version is the sole source of the release version — the same string the
-      # tag carries and release.sh greps for; nothing here invents one.
+      # release tag carries; nothing here invents one.
       - name: Resolve build kind (pending release vs snapshot)
         id: kind
         run: |
           set -euo pipefail
-          VER=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md \
-            | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
-          if [ -z "$VER" ]; then
+          # The newest release section is the first '## [...]' heading that is not
+          # [Unreleased]. Three cases, kept distinct so a typo can't silently skip
+          # a release: none (only [Unreleased]) -> snapshot; a well-formed
+          # '## [X.Y.Z]' -> release or snapshot by whether its tag exists; a
+          # version-ish heading that is MALFORMED -> loud error, never a silent
+          # fall-through to snapshot. [LAW:no-silent-failure]
+          CAND=$(grep -E '^## \[' CHANGELOG.md | grep -vE '^## \[Unreleased\]' | head -1 || true)
+          if [ -z "$CAND" ]; then
             echo "CHANGELOG has no released version yet (only [Unreleased]); snapshot gate."
             echo "release=false" >> "$GITHUB_OUTPUT"
-          elif git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null 2>&1; then
-            echo "v$VER is already tagged; ordinary master push; snapshot gate."
-            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif ! echo "$CAND" | grep -qE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]( - .*)?$'; then
+            echo "::error::newest CHANGELOG release heading is malformed: '$CAND' (expected '## [X.Y.Z] - <date>')"
+            exit 1
           else
-            echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
-            echo "release=true" >> "$GITHUB_OUTPUT"
-            echo "version=$VER" >> "$GITHUB_OUTPUT"
+            VER=$(echo "$CAND" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
+            if git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null 2>&1; then
+              echo "v$VER is already tagged; ordinary master push; snapshot gate."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "version=$VER" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
-      # Same step release.yml runs, proven here on every master push so a
-      # broken generator is caught before any tag is cut — see that
-      # workflow's identical step for the full rationale.
-      # [LAW:single-enforcer] release.yml publishes using this IDENTICAL step.
+      # Proven here on every master push so a broken license generator is caught
+      # before a tag is cut, and re-used verbatim by the release build below.
+      # [LAW:single-enforcer] this workflow is the sole owner of the release build
+      # — the same step feeds both the snapshot proof and the publish path.
       - name: Generate third-party license bundle + report
         run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md
 
@@ -203,8 +214,8 @@ jobs:
       # bind-mount consumes it and actions/cache's post-step saves it.
       # For a pending release, materialize the version's tag LOCALLY at HEAD
       # (never pushed) so goreleaser stamps the real vX.Y.Z through its normal,
-      # already-proven tag path — the IDENTICAL `release --clean` invocation
-      # release.yml used to run, just triggered here on master. The tree is clean
+      # proven tag path — the same `release --clean` invocation a tag build would
+      # run, driven here on master by the ephemeral tag. The tree is clean
       # for this (the generated THIRD_PARTY_LICENSES / LICENSE-REPORT.md are
       # gitignored), so non-snapshot goreleaser's clean-tree check passes. For an
       # ordinary push, `--snapshot` keeps the gate build clearly non-releasable.
@@ -372,13 +383,13 @@ jobs:
           echo "--- execute on glibc host (ubuntu runner, amd64)"
           "${bin[amd64]}" version
 
-      # Retain the artifact that just passed every assertion above so the tag's
-      # publish step consumes exactly THESE bytes instead of rebuilding. Keyed by
-      # commit SHA — release.yml looks it up by the tag's target commit. Only for
-      # a pending release; a snapshot gate produces nothing publishable, so the
-      # step is skipped (not a partial upload). [LAW:one-source-of-truth] this is
-      # the single build of the release; release.yml publishes it verbatim, never
-      # a second build. [LAW:no-silent-failure] `if-no-files-found: error` turns a
+      # Retain the artifact that just passed every assertion above so the publish
+      # job consumes exactly THESE bytes instead of rebuilding. Keyed by commit
+      # SHA — the publish job below downloads it by the same SHA within this run.
+      # Only for a pending release; a snapshot gate produces nothing publishable,
+      # so the step is skipped (not a partial upload). [LAW:one-source-of-truth]
+      # this is the single build of the release; the publish job publishes it
+      # verbatim, never a second build. [LAW:no-silent-failure] `if-no-files-found: error` turns a
       # goreleaser output-shape drift into a loud failure here, not a silent
       # empty artifact that fails mysteriously at publish time.
       - name: Upload validated release artifact
