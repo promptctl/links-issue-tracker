@@ -264,9 +264,10 @@ case "$mode" in
         release_tag="v${release_tag#v}"
 
         # Validate the normalized tag against the actual producer shape.
-        # release.yml's job-guard rejects tags containing `-`, so the only
-        # tags goreleaser ever publishes are exactly `vX.Y.Z` (numeric
-        # semver). Reject anything else BEFORE the value flows into
+        # release-validate.yml derives the release version from the CHANGELOG's
+        # newest `## [X.Y.Z]` heading (numeric semver only), so the only tags
+        # ever published are exactly `vX.Y.Z`. Reject anything else BEFORE the
+        # value flows into
         # filepath / curl / mv — a `--from-release ../x` or an API response
         # tainted with path separators would otherwise interpolate into
         # `"$tmp/$archive"` and write outside the temp directory.

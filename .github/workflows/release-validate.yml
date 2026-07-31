@@ -9,14 +9,17 @@ name: Release validate
 # This runs OUT-OF-BAND, never on pull_request — the full cross-build takes ~35
 # minutes, which must never sit on the PR feedback loop. PRs get the fast native
 # smoke (release-smoke.yml) instead. The full proof runs post-merge on master
-# (so a broken pipeline is caught before any tag is cut) and on demand via
-# workflow_dispatch. If this is green on master, the next `v*.*.*` tag push will
-# produce a working GitHub Release.
+# and on demand via workflow_dispatch.
+#
+# It is ALSO the release pipeline. When the newest CHANGELOG version has no tag
+# yet — a release is pending on this commit — the `validate` job builds the REAL
+# version (not a snapshot) and the `publish` job below cuts the tag and publishes
+# the validated artifact. Build once, tag + publish from CI: no local tag push,
+# no second build. An ordinary master push just runs the snapshot proof.
 #
 # [LAW:single-enforcer] this workflow owns the *release-level* invariant (do all
-# five cross-targets + the manifest assemble?); release-smoke.yml owns the fast
-# *code-level* invariant on PRs. release.yml publishes using the IDENTICAL build
-# path (same Dockerfile, same goreleaser invocation, same mkmanifest call).
+# five cross-targets + the manifest assemble?) AND is the single place a release
+# is cut; release-smoke.yml owns the fast *code-level* invariant on PRs.
 #
 # [LAW:verifiable-goals] The acceptance check is a concrete artifact list +
 # manifest shape, not "did goreleaser exit 0" — a silent build skip cannot
@@ -44,6 +47,12 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
+    # Surfaced to the publish job: whether this commit is a pending release and,
+    # if so, which version. [LAW:dataflow-not-control-flow] the publish job's
+    # existence is a value this job computed, not a branch it guesses at.
+    outputs:
+      release: ${{ steps.kind.outputs.release }}
+      version: ${{ steps.kind.outputs.version }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -72,6 +81,35 @@ jobs:
       # GOMODCACHE; the :ro mount consumes it.
       - name: Populate module cache
         run: go mod download
+
+      # What IS this build — a pending release, or a pipeline-gate snapshot? The
+      # discriminator is data, not a flag: the newest released CHANGELOG version
+      # that has NO git tag yet is a release pending on THIS commit (the
+      # chore(release) promotion just landed; the tag is seconds away). Once its
+      # tag exists — or the top section is still [Unreleased] — this is an
+      # ordinary master push and we build a snapshot purely to prove the pipeline.
+      # [LAW:dataflow-not-control-flow] release-vs-snapshot is a value derived
+      # from (CHANGELOG × tags) and carried to the build + upload steps; the same
+      # steps run either way. [LAW:one-source-of-truth] the CHANGELOG's newest
+      # version is the sole source of the release version — the same string the
+      # tag carries and release.sh greps for; nothing here invents one.
+      - name: Resolve build kind (pending release vs snapshot)
+        id: kind
+        run: |
+          set -euo pipefail
+          VER=$(grep -oE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]' CHANGELOG.md \
+            | head -1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' || true)
+          if [ -z "$VER" ]; then
+            echo "CHANGELOG has no released version yet (only [Unreleased]); snapshot gate."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          elif git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null 2>&1; then
+            echo "v$VER is already tagged; ordinary master push; snapshot gate."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            echo "version=$VER" >> "$GITHUB_OUTPUT"
+          fi
 
       # Same step release.yml runs, proven here on every master push so a
       # broken generator is caught before any tag is cut — see that
@@ -163,17 +201,32 @@ jobs:
       # --rm container's compile outputs survive the run to seed smoke.
       # [LAW:one-source-of-truth] that dir is the container's GOCACHE; the
       # bind-mount consumes it and actions/cache's post-step saves it.
-      - name: Build snapshot artifacts
+      # For a pending release, materialize the version's tag LOCALLY at HEAD
+      # (never pushed) so goreleaser stamps the real vX.Y.Z through its normal,
+      # already-proven tag path — the IDENTICAL `release --clean` invocation
+      # release.yml used to run, just triggered here on master. The tree is clean
+      # for this (the generated THIRD_PARTY_LICENSES / LICENSE-REPORT.md are
+      # gitignored), so non-snapshot goreleaser's clean-tree check passes. For an
+      # ordinary push, `--snapshot` keeps the gate build clearly non-releasable.
+      # [LAW:single-enforcer] one goreleaser invocation shape produces the release
+      # artifact; the ephemeral tag is what makes this master-side build
+      # bit-for-bit what a tag-side build would have produced.
+      - name: Build artifacts
         run: |
           set -euo pipefail
           mkdir -p "$SMOKE_GOCACHE"
+          ARGS="release --snapshot --clean"
+          if [ "${{ steps.kind.outputs.release }}" = "true" ]; then
+            git tag "v${{ steps.kind.outputs.version }}"
+            ARGS="release --clean"
+          fi
           docker run --rm \
             -v "$PWD":/go/src/app -w /go/src/app \
             -v "$(go env GOMODCACHE)":/go/pkg/mod:ro \
             -v "$SMOKE_GOCACHE":/gocache \
             -e GOCACHE=/gocache \
             lit-release-builder:local \
-            release --snapshot --clean
+            $ARGS
           # The container ran as root, so /gocache is root-owned on the host
           # bind-mount; chown it back so actions/cache's post-step (running as
           # the runner user) can read and save it — same reason the manifest step
@@ -319,6 +372,29 @@ jobs:
           echo "--- execute on glibc host (ubuntu runner, amd64)"
           "${bin[amd64]}" version
 
+      # Retain the artifact that just passed every assertion above so the tag's
+      # publish step consumes exactly THESE bytes instead of rebuilding. Keyed by
+      # commit SHA — release.yml looks it up by the tag's target commit. Only for
+      # a pending release; a snapshot gate produces nothing publishable, so the
+      # step is skipped (not a partial upload). [LAW:one-source-of-truth] this is
+      # the single build of the release; release.yml publishes it verbatim, never
+      # a second build. [LAW:no-silent-failure] `if-no-files-found: error` turns a
+      # goreleaser output-shape drift into a loud failure here, not a silent
+      # empty artifact that fails mysteriously at publish time.
+      - name: Upload validated release artifact
+        if: steps.kind.outputs.release == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-dist-${{ github.sha }}
+          path: |
+            dist/lit_*_*_*.tar.gz
+            dist/lit_*_*_*.zip
+            dist/checksums.txt
+            dist/release-manifest.json
+            dist/metadata.json
+          retention-days: 14
+          if-no-files-found: error
+
       # Publish the `smoke` stage to GHCR for release-smoke.yml to pull, tagged by
       # the build/ tree hash. This runs ONLY after every assertion above passed, so
       # a broken image is never published — that is what "publish only on a
@@ -346,3 +422,62 @@ jobs:
           name: release-validate-dist-${{ github.sha }}
           path: dist/
           retention-days: 7
+
+  # Promote the validated build to a published release. Runs ONLY when validate
+  # flagged a pending release, and ONLY after it fully succeeded — so we publish
+  # exactly the bytes that passed every assertion, from the same run that built
+  # them (no rebuild, no cross-run handoff). The tag is created here too:
+  # `gh release create` cuts the tag at the validated commit and publishes
+  # atomically. [LAW:single-enforcer] one place cuts a release — this job — and
+  # it can only publish what validate built. The tag is cut BY CI; nothing pushes
+  # it from a local machine.
+  publish:
+    needs: validate
+    if: needs.validate.outputs.release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write    # create the tag + GitHub Release
+    steps:
+      # Same-run artifact from the validate job above — download by name, no
+      # run-id needed. [LAW:one-source-of-truth] this is the one build of the
+      # release; we publish it verbatim.
+      - name: Download the validated artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist-${{ github.sha }}
+          path: dist
+
+      # The artifact's stamped identity must match the commit + version this job
+      # is releasing. It does by construction (validate built it in this run), but
+      # verify rather than trust. [LAW:no-silent-failure]
+      - name: Verify the artifact matches this release
+        run: |
+          set -euo pipefail
+          MSHA=$(jq -r .commit dist/metadata.json)
+          MTAG=$(jq -r .tag dist/metadata.json)
+          if [ "$MSHA" != "${{ github.sha }}" ]; then
+            echo "::error::artifact commit ($MSHA) != release commit (${{ github.sha }})"; exit 1
+          fi
+          if [ "$MTAG" != "v${{ needs.validate.outputs.version }}" ]; then
+            echo "::error::artifact tag ($MTAG) != pending version (v${{ needs.validate.outputs.version }})"; exit 1
+          fi
+
+      # gh release create makes the tag at --target (the validated commit) AND
+      # publishes in one step. Asset globs mirror goreleaser's name_template
+      # (`lit_<version>_<goos>_<goarch>`); tar.gz covers linux/darwin, zip windows.
+      # Re-runs are safe: once this tag exists on origin, validate's kind resolver
+      # sees it and this job no longer runs. [LAW:no-silent-failure]
+      - name: Tag and publish the release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          TAG="v${{ needs.validate.outputs.version }}"
+          gh release create "$TAG" \
+            --repo "${{ github.repository }}" \
+            --target "${{ github.sha }}" \
+            --title "$TAG" \
+            --generate-notes \
+            dist/lit_*_*_*.tar.gz dist/lit_*_*_*.zip \
+            dist/checksums.txt dist/release-manifest.json
+          echo "published $TAG at ${{ github.sha }}"
