@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.2.0] - 2026-07-30
+
+### Added
+
 - In-repo issue tracking backed by an embedded [Dolt](https://www.dolthub.com/) database — the backlog ships with the code and every mutation is a versioned commit.
 - Agent-first core loop: `lit ready`, `lit start`, `lit done`, and `lit followup` return guidance alongside data so a coding agent can drive the workflow unattended.
 - `lit quickstart` prints the live command reference for agents.
