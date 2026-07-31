@@ -25,6 +25,7 @@ You MUST run `lit quickstart` immediately to get instructions for `lit`. This is
 ## Releases are cut on merge
 
 After merging a feature/fix PR, cut a release. In the PR, rename `## [Unreleased]`
-in `CHANGELOG.md` to the next version: `scripts/next-version.sh <minor|patch>`
-gives the tag `v0.2.0`; the heading drops the `v` (`## [0.2.0]`). After merge, from
-`master`: `./scripts/release.sh v0.2.0`. One merged PR, one release.
+in `CHANGELOG.md` to `## [0.2.0] - <date>` (`scripts/next-version.sh <minor|patch>`
+gives the tag `v0.2.0`; the heading drops the `v`), and add a fresh empty
+`## [Unreleased]` above it. After merge, from `master`: `./scripts/release.sh
+v0.2.0`. One merged feature/fix PR, one release.
