@@ -22,28 +22,29 @@ on disk and the type in code cannot drift. (`lit version` reports
 `version.Info` only — it does not currently embed the full manifest;
 embedding can be added later via `go:embed` without changing the schema.)
 
+## Versioning policy
+
+Semver, with two deviations: **major is frozen** (never bumped), **minor** = a
+feature or any presumed-breaking change, **patch** = a pure bugfix.
+`scripts/next-version.sh <minor|patch>` computes the next tag under this policy
+(`v0.1.0` → `v0.2.0` or `v0.1.1`).
+
 ## Cutting a release
 
-Prerequisites:
-- All work for the release is on `master` and CI is green.
-- You have `git tag` and `git push` rights to the repo.
+One merged feature/fix PR ships one release, split across the PR and the merge
+so it never fights branch protection (master takes no direct commits; a tag
+needs no PR):
 
-```bash
-# 1. Decide the version (semver — patch increment is fine for early shakeout).
-TAG=v0.1.0
+1. **In the PR:** rename `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
+   `## [<version>] - <YYYY-MM-DD>` (`<version>` = `scripts/next-version.sh
+   <minor|patch>` without the leading `v`) and add a fresh empty `## [Unreleased]`
+   above it. Commit it with the work.
+2. **After merge:** from `master`, `./scripts/release.sh v<version>`. It gates on
+   the changelog section existing + clean tree + green tests, then pushes the
+   tag, which triggers [`release.yml`](.github/workflows/release.yml) to build
+   and publish. Watch with `gh run watch`.
 
-# 2. Tag from master.
-git checkout master
-git pull --rebase
-git tag -a "$TAG" -m "lit $TAG"
-git push origin "$TAG"
-
-# 3. Watch .github/workflows/release.yml run.
-gh run watch
-```
-
-When the workflow finishes, the GitHub Release is published with all artifacts
-above. No manual steps.
+Docs/chore/refactor-only work cuts no release — leave `## [Unreleased]` as-is.
 
 ### How the pipeline is verified
 
