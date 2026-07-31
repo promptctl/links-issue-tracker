@@ -97,3 +97,17 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 - Open a PR against `master` — don't push directly to it.
 - Keep the suite green (`go test ./...`) and the linter clean
   (`golangci-lint run`) before requesting review.
+
+## Cutting a release
+
+Every merged feature/fix PR ships a release — one PR, one release, not on every
+commit. Two steps, both the merging agent's job:
+
+1. In the PR, bump `CHANGELOG.md`: rename `## [Unreleased]` to `## [<version>] -
+   <date>` (pick `<version>` with `scripts/next-version.sh <minor|patch>`) and
+   add a fresh empty `## [Unreleased]` above it.
+2. After merge, from `master`: `./scripts/release.sh <version>` pushes the tag,
+   which triggers the build.
+
+Policy: major is frozen, `minor` = feature/breaking, `patch` = pure bugfix.
+Docs/chore-only work cuts no release.
