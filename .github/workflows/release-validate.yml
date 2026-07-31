@@ -43,6 +43,20 @@ concurrency:
 
 jobs:
   validate:
+    # A release-promotion commit (`chore(release):` — a CHANGELOG bump and nothing
+    # else, per RELEASING.md) is tagged moments after it lands, and release.yml
+    # then runs this IDENTICAL cross-build to publish it. Validating it here too
+    # builds the same tree twice, simultaneously (observed cutting v0.2.0: a
+    # Release-validate run and a Release run on the same commit at once). Skip it:
+    # a changelog-only commit changes no build config, so the previous master
+    # push's validate run already proved the pipeline end-to-end, and release.yml
+    # is about to build+publish this exact tree. Every non-release push and every
+    # workflow_dispatch still runs the full proof — the guard is scoped to push
+    # events whose tip is a `chore(release):` commit.
+    # [LAW:single-enforcer] the publishing build in release.yml is the one full
+    # build of a release commit; this guard stops release-validate from standing
+    # up a second, redundant enforcer of the same invariant on the same tree.
+    if: github.event_name != 'push' || !startsWith(github.event.head_commit.message, 'chore(release):')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
