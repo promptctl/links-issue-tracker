@@ -68,7 +68,7 @@ Two gates make a version number's content immutable from release forward:
 | Gate                                       | Lives in                                                  | What it proves                                                                                   |
 | ------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
 | `TestBaselineFileIsFrozen`                 | `internal/store/migrations/baseline_frozen_test.go`       | v1 (`00001_baseline.sql`) bytes never change — pinned to one sha256.                              |
-| `TestReleasedMigrationsAreContentPinned`   | `internal/store/migrations/version_reuse_test.go`         | Every non-baseline released version's bytes match `pinnedVersionContent`, and none is deleted, duplicated, or left unpinned. |
+| `TestReleasedMigrationsAreContentPinned`   | `internal/store/migrations/version_reuse_test.go`         | Every non-baseline released version's bytes and filename match `pinnedVersionContent`, and none is deleted, renamed, duplicated, or left unpinned. |
 
 `[LAW:single-enforcer]` one content enforcer per version number: baseline_frozen owns
 v1, the pin manifest owns v2+. To change a released migration's effect, **never edit
