@@ -100,15 +100,16 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 
 ## Cutting a release
 
-Every merged feature/fix PR ships a release — one PR, one release, not on every
-commit. Two steps, both the merging agent's job:
+Every merged feature/fix PR ships a release — one PR, one release, cut by CI on
+merge. The only manual step is in the PR:
 
-1. In the PR, run `scripts/next-version.sh <minor|patch>` to get the tag (e.g.
-   `v0.2.0`). Rename `## [Unreleased]` in `CHANGELOG.md` to `## [0.2.0] - <date>`
-   — the version **without** the leading `v` — and add a fresh empty
-   `## [Unreleased]` above it.
-2. After merge, from `master`: `./scripts/release.sh v0.2.0` — the tag **with**
-   the `v` — pushes the tag, which triggers the build.
+1. Run `scripts/next-version.sh <minor|patch>` to get the tag (e.g. `v0.2.0`).
+   Rename `## [Unreleased]` in `CHANGELOG.md` to `## [0.2.0] - <date>` — the
+   version **without** the leading `v` — and add a fresh empty `## [Unreleased]`
+   above it. Commit it with the work.
+2. Merge. The master build (`release-validate.yml`) detects the pending version,
+   builds + validates the real cross-platform artifact, then cuts the tag and
+   publishes the release. No local tag push.
 
 Policy: major is frozen, `minor` = feature/breaking, `patch` = pure bugfix.
 Docs/chore-only work cuts no release.

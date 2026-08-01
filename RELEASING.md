@@ -31,18 +31,18 @@ feature or any presumed-breaking change, **patch** = a pure bugfix.
 
 ## Cutting a release
 
-One merged feature/fix PR ships one release, split across the PR and the merge
-so it never fights branch protection (master takes no direct commits; a tag
-needs no PR):
+A release is cut entirely by CI when a release-promotion merges to `master`. The
+only manual step is in the PR:
 
 1. **In the PR:** rename `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
    `## [<version>] - <YYYY-MM-DD>` (`<version>` = `scripts/next-version.sh
    <minor|patch>` without the leading `v`) and add a fresh empty `## [Unreleased]`
    above it. Commit it with the work.
-2. **After merge:** from `master`, `./scripts/release.sh v<version>`. It gates on
-   the changelog section existing + clean tree + green tests, then pushes the
-   tag, which triggers [`release.yml`](.github/workflows/release.yml) to build
-   and publish. Watch with `gh run watch`.
+2. **Merge.** The master build
+   ([`release-validate.yml`](.github/workflows/release-validate.yml)) sees the
+   newest `CHANGELOG` version has no tag yet, builds + validates the real
+   cross-platform artifact, then cuts the tag at that commit and publishes the
+   release — all in one run. Watch it with `gh run watch`. No local tag push.
 
 Docs/chore/refactor-only work cuts no release — leave `## [Unreleased]` as-is.
 
@@ -59,19 +59,26 @@ Two tiers, split by cost so the per-PR loop stays fast:
   musl (an Alpine container). The full ~35-minute 5-platform build is
   deliberately NOT on the PR path.
 - **Out-of-band (full):** `.github/workflows/release-validate.yml` builds the
-  release-builder image and runs the SAME goreleaser invocation release.yml uses,
-  producing a real cross-platform `dist/`, running `mkmanifest`, and asserting
-  the manifest has every expected platform with a valid SHA256 — then executing
-  both linux binaries (amd64 + arm64, the latter under qemu) on stock Alpine
-  containers and the glibc runner, proving the static-musl universality claim
-  by running, not just linking. It runs on every push to `master` (catching a
-  broken pipeline before any tag is cut) and on demand via `workflow_dispatch`
-  — never on `pull_request`.
+  release-builder image and runs the goreleaser cross-build, producing a real
+  cross-platform `dist/`, running `mkmanifest`, and asserting the manifest has
+  every expected platform with a valid SHA256 — then executing both linux
+  binaries (amd64 + arm64, the latter under qemu) on stock Alpine containers and
+  the glibc runner, proving the static-musl universality claim by running, not
+  just linking. It runs on every push to `master` and on demand via
+  `workflow_dispatch` — never on `pull_request`.
 
-If `release-validate` is green on `master`, the next `git push <tag>` will
-produce a working GitHub Release. That workflow also uploads `dist/` as a
-workflow artifact on every run, so you can inspect what would be published
-without re-running it.
+  **This run is also the one and only build of a release.** When the newest
+  `CHANGELOG` version has no tag yet — a release is pending on this commit — the
+  `validate` job stamps that real version (via an ephemeral local tag, not
+  `--snapshot`), and its downstream `publish` job, in the SAME run, cuts the tag
+  at that commit and publishes the validated `dist/`. Build once, tag + publish
+  from CI — what ships is exactly what was validated, and nothing rebuilds. An
+  ordinary master push just runs the snapshot proof and publishes nothing.
+
+If the run is red, no release is cut — fix forward, and the next master push (or
+a `workflow_dispatch` re-run) picks the pending version back up. A published tag
+also short-circuits it: once `v<version>` exists, the pending-release check is
+false, so re-runs never double-publish.
 
 ### Dry-run a release locally (optional)
 
@@ -97,7 +104,7 @@ podman run --rm -v "$PWD":/go/src/app -w /go/src/app \
 # Then run mkmanifest against dist/ to produce release-manifest.json.
 # `tag` (v-prefixed) and `version` (v-stripped) are BOTH required —
 # tag becomes the URL path segment, version goes into archive filenames.
-# Mirrors the release.yml step exactly so the dry-run matches CI.
+# Mirrors the CI manifest step exactly so the dry-run matches CI.
 VERSION=$(jq -r .version dist/metadata.json)
 TAG=$(jq -r .tag dist/metadata.json)
 COMMIT=$(jq -r .commit dist/metadata.json | cut -c1-7)
@@ -118,12 +125,15 @@ The first image build takes ~15 minutes (ICU is built from source per
 target). Subsequent builds reuse layer cache. CI uses GitHub Actions cache
 across runs for the same speedup.
 
-### Dry-run via the release workflow
+### Re-running the pipeline on demand
 
-The release workflow exposes `workflow_dispatch` for re-running the full
-pipeline against the current commit. Trigger it from the GitHub Actions UI;
-it runs the same cross-compile path in --snapshot mode and uploads `dist/`
-as a 7-day workflow artifact. No release is published.
+`release-validate.yml` exposes `workflow_dispatch` to re-run the full build +
+validation against the current commit. Note it is **not a dry-run**: if a release
+is pending on that commit (the newest `CHANGELOG` version has no tag yet), the
+dispatch run will cut the tag and publish, exactly as a master push would. It is
+the recovery path when an automatic run was cancelled or failed — not a way to
+rehearse without publishing. To inspect what a build produces without any
+publish, read the `release-validate-dist-<sha>` artifact any run uploads.
 
 ## What `lit version` reports
 

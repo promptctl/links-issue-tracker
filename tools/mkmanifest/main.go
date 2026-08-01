@@ -1,9 +1,8 @@
 // mkmanifest emits the per-release manifest published alongside the binary
-// artifacts. It is invoked by .github/workflows/release.yml and
-// .github/workflows/release-validate.yml AFTER goreleaser has built the
-// per-platform archives and written dist/checksums.txt. The workflow then
-// runs `gh release create ... ./dist/release-manifest.json` to upload it as
-// an asset.
+// artifacts. It is invoked by .github/workflows/release-validate.yml AFTER
+// goreleaser has built the per-platform archives and written
+// dist/checksums.txt. That workflow's publish job then runs
+// `gh release create ... ./dist/release-manifest.json` to upload it as an asset.
 //
 // (Earlier iterations had this as a goreleaser pre-release hook, but
 // goreleaser v2 has no valid hook point between "checksums exist" and
