@@ -19,6 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Sync reconciliation of branches with unrelated histories no longer depends on a silent error-swallowing bug in the embedded Dolt driver. The driver's first-row pre-read discarded any error, so a query that failed on its first row (such as `DOLT_MERGE_BASE` raising "no common ancestor" for refs that share no history) could surface as an empty result set instead of the real error. The driver now propagates that error, and merge-base resolution recognizes the "no common ancestor" backend error as the unrelated-histories state directly — the same domain outcome it already handled via an empty result set.
+
 ### Removed
 
 ### Security

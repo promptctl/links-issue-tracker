@@ -149,6 +149,14 @@ func (rows *doltRows) Close() error {
 // Next is called to populate the next row of data into the provided slice. The provided slice will be the same size as
 // the Columns() are wide. Next returns io.EOF when there are no more rows.
 func (rows *doltRows) Next(dest []driver.Value) error {
+	// A first-row error captured during Peek() (see doltStmt.Query) is surfaced here
+	// rather than by re-driving the iterator: the underlying Next() has already been
+	// called once and calling it again could return a different result (e.g. io.EOF),
+	// silently swallowing the real error. The error is already translated.
+	if rows.err != nil {
+		return rows.err
+	}
+
 	nextRow, err := rows.rowIter.Next(rows.gmsCtx)
 	if err != nil {
 		if err == io.EOF {
