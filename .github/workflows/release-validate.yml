@@ -170,6 +170,18 @@ jobs:
       - name: Generate third-party license bundle, report + SBOM
         run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md -sbom SBOM.cdx.json -app-version "${{ steps.kind.outputs.version }}"
 
+      # License-policy gate on the release path: fail the build (before the
+      # ~35-minute cross-build) if any linked module's license falls outside the
+      # committed allowlist/exceptions in tools/licenses/policy.json. The same
+      # gate runs on every PR via ci.yml's `go test ./...`
+      # (TestDependencyLicensesArePermitted); running it here too enforces the
+      # policy in the release pipeline itself, however this workflow is triggered
+      # (push or workflow_dispatch), not only when a PR happened to gate it.
+      # [LAW:single-enforcer] one predicate (CheckPolicy over policy.json); two
+      # invocations (this CLI and the PR test).
+      - name: Enforce the license-policy gate
+        run: go run ./tools/licenses -check -pkg ./cmd/lit
+
       # Build the custom release-builder image. GHA layer cache makes
       # subsequent runs reuse the (slow) ICU cross-build layers — only
       # Dockerfile edits or ARG bumps invalidate them.
