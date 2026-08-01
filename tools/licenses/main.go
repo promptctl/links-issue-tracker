@@ -1,10 +1,18 @@
-// licenses generates the two artifacts a distributed lit binary needs for
-// license-attribution compliance: THIRD_PARTY_LICENSES (the full license text
-// of every module compiled into the binary) and LICENSE-REPORT.md (a
-// human-readable module-to-license table with a summary). It is invoked by
-// .github/workflows/release.yml and .github/workflows/release-validate.yml
-// BEFORE goreleaser runs, so the generated files exist at the repo root for
-// .goreleaser.yml's archives.files to pick up — the same pattern mkmanifest
+// licenses generates the third-party-dependency compliance artifacts a
+// distributed lit binary ships: THIRD_PARTY_LICENSES (the full license text of
+// every module compiled into the binary), LICENSE-REPORT.md (a human-readable
+// module-to-license table with a summary), and — when -sbom is given — a
+// CycloneDX SBOM (a machine-readable bill of materials for vulnerability
+// scanners). All three are different renderings of ONE inventory: the modules
+// `go list -deps ./cmd/lit` resolves, classified once. Deriving them from the
+// same entries is the point — the SBOM provably describes the identical module
+// set the license report does, so the two release artifacts can never disagree
+// about what is in the binary. [LAW:one-source-of-truth]
+//
+// It is invoked by .github/workflows/release-validate.yml BEFORE goreleaser
+// runs, so the generated files exist at the repo root for .goreleaser.yml's
+// archives.files to pick up (bundle + report) or for a later workflow step to
+// stage as a standalone release asset (the SBOM) — the same pattern mkmanifest
 // uses for the release manifest, generated outside goreleaser because
 // goreleaser v2 has no hook point that fits.
 //
@@ -22,7 +30,9 @@
 //	go run ./tools/licenses \
 //	  -pkg ./cmd/lit \
 //	  -bundle THIRD_PARTY_LICENSES \
-//	  -report LICENSE-REPORT.md
+//	  -report LICENSE-REPORT.md \
+//	  -sbom SBOM.cdx.json \
+//	  -app-version 0.2.0
 package main
 
 import (
@@ -50,10 +60,12 @@ func main() {
 		pkg        = flag.String("pkg", "./cmd/lit", "package whose linked dependency set to scan, as passed to `go list -deps`")
 		bundlePath = flag.String("bundle", "THIRD_PARTY_LICENSES", "output path for the third-party attribution bundle")
 		reportPath = flag.String("report", "LICENSE-REPORT.md", "output path for the human-readable license report")
+		sbomPath   = flag.String("sbom", "", "output path for the CycloneDX SBOM (empty: skip SBOM generation)")
+		appVersion = flag.String("app-version", "", "lit version to record as the SBOM's subject component (empty: omit the version)")
 	)
 	flag.Parse()
 
-	if err := run(*pkg, *bundlePath, *reportPath, os.Stdout); err != nil {
+	if err := run(*pkg, *bundlePath, *reportPath, *sbomPath, *appVersion, os.Stdout); err != nil {
 		fmt.Fprintf(os.Stderr, "licenses: %v\n", err)
 		os.Exit(1)
 	}
@@ -66,7 +78,7 @@ func main() {
 // testable without spawning a subprocess or parsing flags in the test.
 // [LAW:effects-at-boundaries] main() itself is left holding only flag parsing
 // and the process-exit boundary.
-func run(pkg, bundlePath, reportPath string, stdout io.Writer) error {
+func run(pkg, bundlePath, reportPath, sbomPath, appVersion string, stdout io.Writer) error {
 	mods, err := LinkedModules(pkg)
 	if err != nil {
 		return fmt.Errorf("resolve linked modules: %w", err)
@@ -115,6 +127,19 @@ func run(pkg, bundlePath, reportPath string, stdout io.Writer) error {
 	}
 	if err := writeFile(reportPath, func(f *os.File) error { return WriteReport(f, entries) }); err != nil {
 		return err
+	}
+
+	// The SBOM is opt-in (empty path = skip) because it ships as a standalone
+	// release asset rather than inside every archive: only the release
+	// pipeline needs it, whereas the bundle + report always generate. When
+	// requested it renders from the very same entries — no second module
+	// resolution. [LAW:one-source-of-truth]
+	if sbomPath != "" {
+		if err := writeFile(sbomPath, func(f *os.File) error { return WriteSBOM(f, entries, appVersion) }); err != nil {
+			return err
+		}
+		fmt.Fprintf(stdout, "licenses: wrote %s, %s, and %s for %d linked modules\n", bundlePath, reportPath, sbomPath, len(entries))
+		return nil
 	}
 
 	fmt.Fprintf(stdout, "licenses: wrote %s and %s for %d linked modules\n", bundlePath, reportPath, len(entries))

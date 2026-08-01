@@ -9,6 +9,7 @@ __pycache__/
 /lit
 
 # tools/licenses output — regenerated at release build time
-# (links-supply-chain-w6m9.1); never hand-edited or committed.
+# (links-supply-chain-w6m9.1, .2); never hand-edited or committed.
 /THIRD_PARTY_LICENSES
 /LICENSE-REPORT.md
+/SBOM.cdx.json

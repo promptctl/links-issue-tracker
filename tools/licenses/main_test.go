@@ -81,13 +81,14 @@ func TestRunHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
 
 	var stdout strings.Builder
-	if err := run(litPkg, bundlePath, reportPath, &stdout); err != nil {
+	if err := run(litPkg, bundlePath, reportPath, sbomPath, "9.9.9", &stdout); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
-	for _, path := range []string{bundlePath, reportPath} {
+	for _, path := range []string{bundlePath, reportPath, sbomPath} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
@@ -107,7 +108,7 @@ func TestRunHappyPath(t *testing.T) {
 // fake LinkedModules implementation.
 func TestRunEmptyModulesGuard(t *testing.T) {
 	dir := t.TempDir()
-	err := run("fmt", filepath.Join(dir, "bundle"), filepath.Join(dir, "report"), &strings.Builder{})
+	err := run("fmt", filepath.Join(dir, "bundle"), filepath.Join(dir, "report"), "", "", &strings.Builder{})
 	if err == nil {
 		t.Fatal("want error for a package with zero linked modules")
 	}
@@ -123,7 +124,7 @@ func TestRunUnwritableBundlePath(t *testing.T) {
 	bundlePath := filepath.Join(dir, "no-such-subdir", "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
 
-	err := run(litPkg, bundlePath, reportPath, &strings.Builder{})
+	err := run(litPkg, bundlePath, reportPath, "", "", &strings.Builder{})
 	if err == nil {
 		t.Fatal("want error: bundle path's parent directory doesn't exist")
 	}
