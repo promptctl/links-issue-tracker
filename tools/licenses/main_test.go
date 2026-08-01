@@ -5,8 +5,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
-	lc "github.com/google/licenseclassifier"
 )
 
 // litPkg is the actual package the release binary builds, referenced by its
@@ -15,42 +13,27 @@ import (
 const litPkg = "github.com/promptctl/links-issue-tracker/cmd/lit"
 
 // TestEndToEndAgainstLitCoversDolt is this ticket's acceptance criterion
-// (links-supply-chain-w6m9.1) expressed as a test: run the real generator
-// against the real release package, and confirm the bundle carries the full
+// (links-supply-chain-w6m9.1) expressed as a test: build the real inventory
+// for the real release package, and confirm the bundle carries the full
 // license text of a known linked dependency (github.com/dolthub/dolt) and
-// the report classifies it correctly.
+// the report classifies it correctly. It goes through buildEntries — the same
+// pipeline run() uses — so it asserts against production's inventory, not a
+// copy. [LAW:single-enforcer]
 func TestEndToEndAgainstLitCoversDolt(t *testing.T) {
-	mods, err := LinkedModules(litPkg)
+	entries, err := buildEntries(litPkg)
 	if err != nil {
-		t.Fatalf("LinkedModules(%s): %v", litPkg, err)
+		t.Fatalf("buildEntries(%s): %v", litPkg, err)
 	}
 
-	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
-	if err != nil {
-		t.Fatalf("build classifier: %v", err)
-	}
-
-	var entries []Entry
 	var doltEntry *Entry
-	for _, m := range mods {
-		licensePath, err := FindLicenseFile(m.Dir)
-		if err != nil {
-			t.Fatalf("%s@%s: %v", m.Path, m.Version, err)
-		}
-		textBytes, err := os.ReadFile(licensePath)
-		if err != nil {
-			t.Fatalf("read %s: %v", licensePath, err)
-		}
-		name, confidence := Classify(classifier, string(textBytes))
-		e := Entry{Module: m, LicenseFile: licensePath, LicenseName: name, Confidence: confidence, Text: string(textBytes)}
-		entries = append(entries, e)
-		if m.Path == "github.com/dolthub/dolt/go" {
-			doltEntry = &entries[len(entries)-1]
+	for i := range entries {
+		if entries[i].Module.Path == "github.com/dolthub/dolt/go" {
+			doltEntry = &entries[i]
 		}
 	}
 
 	if doltEntry == nil {
-		t.Fatalf("github.com/dolthub/dolt/go not found among %d linked modules", len(mods))
+		t.Fatalf("github.com/dolthub/dolt/go not found among %d linked modules", len(entries))
 	}
 	if doltEntry.LicenseName != "Apache-2.0" {
 		t.Errorf("dolt classified as %q, want Apache-2.0", doltEntry.LicenseName)
@@ -81,13 +64,14 @@ func TestRunHappyPath(t *testing.T) {
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
 
 	var stdout strings.Builder
-	if err := run(litPkg, bundlePath, reportPath, &stdout); err != nil {
+	if err := run(litPkg, bundlePath, reportPath, sbomPath, "9.9.9", &stdout); err != nil {
 		t.Fatalf("run: %v", err)
 	}
 
-	for _, path := range []string{bundlePath, reportPath} {
+	for _, path := range []string{bundlePath, reportPath, sbomPath} {
 		info, err := os.Stat(path)
 		if err != nil {
 			t.Fatalf("stat %s: %v", path, err)
@@ -96,8 +80,37 @@ func TestRunHappyPath(t *testing.T) {
 			t.Errorf("%s is empty", path)
 		}
 	}
-	if !strings.Contains(stdout.String(), "wrote") {
-		t.Errorf("stdout summary missing, got: %q", stdout.String())
+	if want := "wrote " + bundlePath + ", " + reportPath + ", and " + sbomPath; !strings.Contains(stdout.String(), want) {
+		t.Errorf("want three-artifact summary %q, got: %q", want, stdout.String())
+	}
+}
+
+// TestRunWithoutSBOM covers the no-`-sbom` mode (main.go's SBOM-less branch):
+// an empty sbomPath writes only the bundle + report, produces no SBOM file, and
+// emits the two-artifact summary line. TestRunHappyPath exercises the
+// three-artifact path, so without this the return-and-log branch for this still
+// -supported CLI invocation would be uncovered. [LAW:verifiable-goals]
+func TestRunWithoutSBOM(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
+
+	var stdout strings.Builder
+	if err := run(litPkg, bundlePath, reportPath, "", "", &stdout); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, path := range []string{bundlePath, reportPath} {
+		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
+			t.Errorf("%s missing or empty: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(sbomPath); !os.IsNotExist(err) {
+		t.Errorf("no SBOM should be written for an empty sbomPath, but %s exists", sbomPath)
+	}
+	if want := "wrote " + bundlePath + " and " + reportPath; !strings.Contains(stdout.String(), want) {
+		t.Errorf("want two-artifact summary %q, got: %q", want, stdout.String())
 	}
 }
 
@@ -107,7 +120,7 @@ func TestRunHappyPath(t *testing.T) {
 // fake LinkedModules implementation.
 func TestRunEmptyModulesGuard(t *testing.T) {
 	dir := t.TempDir()
-	err := run("fmt", filepath.Join(dir, "bundle"), filepath.Join(dir, "report"), &strings.Builder{})
+	err := run("fmt", filepath.Join(dir, "bundle"), filepath.Join(dir, "report"), "", "", &strings.Builder{})
 	if err == nil {
 		t.Fatal("want error for a package with zero linked modules")
 	}
@@ -123,7 +136,7 @@ func TestRunUnwritableBundlePath(t *testing.T) {
 	bundlePath := filepath.Join(dir, "no-such-subdir", "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
 
-	err := run(litPkg, bundlePath, reportPath, &strings.Builder{})
+	err := run(litPkg, bundlePath, reportPath, "", "", &strings.Builder{})
 	if err == nil {
 		t.Fatal("want error: bundle path's parent directory doesn't exist")
 	}
