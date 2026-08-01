@@ -16,6 +16,7 @@ package embedded
 
 import (
 	"database/sql/driver"
+	"io"
 	"strconv"
 
 	"github.com/dolthub/vitess/go/vt/sqlparser"
@@ -179,14 +180,28 @@ func (stmt *doltStmt) Query(args []driver.Value) (driver.Rows, error) {
 	// and future statements in a multi-statement query that depend on those results would fail.
 	// If an error does occur, we want that error to be returned in the Next() codepath, not here.
 	peekIter := peekableRowIter{iter: rowIter}
-	row, _ := peekIter.Peek(stmt.gmsCtx)
+	row, peekErr := peekIter.Peek(stmt.gmsCtx)
 
 	return &doltRows{
 		sch:              sch,
 		rowIter:          &peekIter,
 		gmsCtx:           stmt.gmsCtx,
 		isQueryResultSet: isQueryResultSet(row),
+		err:              peekResultError(peekErr),
 	}, nil
+}
+
+// peekResultError maps the error returned by Query()'s first-row Peek() to the error
+// to carry on doltRows. A non-EOF error must not be dropped: Peek() does not buffer a
+// failed row, so a later Next() would re-invoke the underlying iterator and can observe
+// a different outcome (e.g. io.EOF), silently converting a real query error into an
+// empty result set. Such an error is translated and surfaced from Next(). io.EOF (and
+// no error) is a valid empty result set, not a failure, and yields a nil doltRows.err.
+func peekResultError(peekErr error) error {
+	if peekErr == nil || peekErr == io.EOF {
+		return nil
+	}
+	return translateError(peekErr)
 }
 
 // isQueryResultSet returns true if the specified |row| is a valid result set for a query. If row only contains
