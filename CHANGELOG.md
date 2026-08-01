@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CI license-policy gate: every linked module's license is checked against a committed allowlist (`tools/licenses/policy.json`) of permissive licenses plus documented per-module exceptions, and the build fails if a dependency bump pulls in a non-allowlisted license (GPL/AGPL/SSPL/BUSL, etc.). Runs on every pull request and master push via `go test` (and standalone via `go run ./tools/licenses -check`). Shares the classifier with the license report/SBOM, so the gate checks the exact licenses those artifacts document.
 - Every release now ships a CycloneDX SBOM (`lit_<version>_sbom.cdx.json`) as a standalone downloadable asset: a machine-readable bill of materials listing every Go module compiled into the binary, with its version, package URL, and resolved license. It is generated from the same linked-module inventory as `THIRD_PARTY_LICENSES`/`LICENSE-REPORT.md`, validated as CycloneDX 1.6 in CI, and lets vulnerability scanners audit a given `lit` version against CVE feeds.
 - CI gate (`TestReleasedMigrationsAreContentPinned`) that refuses any change reusing a released migration version number under different content — the mechanism that bricked workspaces in the migrate-drift epic. Every non-baseline migration's content is pinned by sha256; reusing, editing, deleting, or leaving a version number unpinned fails the build with a message naming the collision.
 
