@@ -4,10 +4,11 @@
 // module-to-license table with a summary), and — when -sbom is given — a
 // CycloneDX SBOM (a machine-readable bill of materials for vulnerability
 // scanners). All three are different renderings of ONE inventory: the modules
-// `go list -deps ./cmd/lit` resolves, classified once. Deriving them from the
-// same entries is the point — the SBOM provably describes the identical module
-// set the license report does, so the two release artifacts can never disagree
-// about what is in the binary. [LAW:one-source-of-truth]
+// `go list -deps ./cmd/lit` resolves (classified once), plus the curated native
+// C libraries cgo static-links but go.mod tooling can't see (see native.go).
+// Deriving them from the same entries is the point — the SBOM provably describes
+// the identical set the license report does, so the two release artifacts can
+// never disagree about what is in the binary. [LAW:one-source-of-truth]
 //
 // It is invoked by .github/workflows/release-validate.yml BEFORE goreleaser
 // runs, so the generated files exist at the repo root for .goreleaser.yml's
@@ -53,15 +54,20 @@ import (
 	lc "github.com/google/licenseclassifier"
 )
 
-// Entry pairs one linked module with its resolved license: the file it came
-// from, the classifier's verdict, and the raw text WriteBundle must ship
-// verbatim.
+// Entry is one third-party component compiled into the binary — a Go module or
+// a statically-linked native C library — paired with its resolved license: the
+// file it came from (Go modules only), the classifier's verdict, the raw text
+// WriteBundle must ship verbatim, and the package URL the SBOM records.
+// PackageURL is carried on the Entry (not recomputed in buildSBOM) so a Go
+// module gets a pkg:golang purl and a native lib a pkg:generic one without the
+// SBOM renderer branching on origin. [LAW:dataflow-not-control-flow]
 type Entry struct {
 	Module      Module
 	LicenseFile string
 	LicenseName string
 	Confidence  float64
 	Text        string
+	PackageURL  string
 }
 
 func main() {
@@ -120,11 +126,11 @@ func run(pkg, bundlePath, reportPath, sbomPath, appVersion string, stdout io.Wri
 		if err := writeFile(sbomPath, func(f *os.File) error { return WriteSBOM(f, entries, appVersion) }); err != nil {
 			return err
 		}
-		fmt.Fprintf(stdout, "licenses: wrote %s, %s, and %s for %d linked modules\n", bundlePath, reportPath, sbomPath, len(entries))
+		fmt.Fprintf(stdout, "licenses: wrote %s, %s, and %s for %d components\n", bundlePath, reportPath, sbomPath, len(entries))
 		return nil
 	}
 
-	fmt.Fprintf(stdout, "licenses: wrote %s and %s for %d linked modules\n", bundlePath, reportPath, len(entries))
+	fmt.Fprintf(stdout, "licenses: wrote %s and %s for %d components\n", bundlePath, reportPath, len(entries))
 	return nil
 }
 
@@ -180,9 +186,17 @@ func buildEntries(pkg string) ([]Entry, error) {
 			LicenseName: name,
 			Confidence:  confidence,
 			Text:        string(text),
+			PackageURL:  goModulePURL(m.Path, m.Version),
 		})
 	}
-	return entries, nil
+
+	// Native C libraries (ICU, zstd, musl, compiler-rt) are cgo-static-linked
+	// into release binaries but invisible to `go list -deps`. Append the curated
+	// inventory here so every consumer — bundle, report, SBOM, AND the policy
+	// gate — sees the complete set of what ships, from one function. Appending
+	// (rather than a separate list threaded through each renderer) is the
+	// single-enforcer choice: no consumer can forget them. [LAW:single-enforcer]
+	return append(entries, nativeEntries()...), nil
 }
 
 // writeFile creates path, runs write against it, syncs it to durable storage,

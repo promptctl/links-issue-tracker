@@ -15,7 +15,7 @@ func WriteReport(w io.Writer, entries []Entry) error {
 	if _, err := fmt.Fprintf(w, "# Third-Party License Report\n\n"); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "%d Go modules are compiled into this binary. Full license texts accompany this report in THIRD_PARTY_LICENSES.\n\n", len(entries)); err != nil {
+	if _, err := fmt.Fprintf(w, "%d third-party components (Go modules and statically-linked native libraries) are compiled into this binary. Full license texts accompany this report in THIRD_PARTY_LICENSES.\n\n", len(entries)); err != nil {
 		return err
 	}
 

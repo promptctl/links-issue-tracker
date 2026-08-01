@@ -391,7 +391,13 @@ jobs:
           grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
           grep -q 'Apache License' "$workdir/THIRD_PARTY_LICENSES"
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
-          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, both covering github.com/dolthub/dolt/go"
+          # links-supply-chain-w6m9.4: the statically-linked native C libraries
+          # must ride the SAME shipped bundle, with their notice text — not just
+          # the Go modules. Check musl by both its report row and its MIT notice.
+          grep -q '| musl | 1.2.5 | MIT |' "$workdir/LICENSE-REPORT.md"
+          grep -q 'musl as a whole is licensed under the following standard MIT license' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '| icu | 75.1 | Unicode-3.0 |' "$workdir/LICENSE-REPORT.md"
+          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and the native libs (musl, icu)"
 
       # Stage the CycloneDX SBOM as a standalone, versioned release asset —
       # modeled on release-manifest.json, NOT on the in-archive license bundle:

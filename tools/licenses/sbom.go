@@ -71,7 +71,7 @@ func buildSBOM(entries []Entry, appVersion, serialNumber string, timestamp time.
 			Type:       cdx.ComponentTypeLibrary,
 			Name:       e.Module.Path,
 			Version:    e.Module.Version,
-			PackageURL: goModulePURL(e.Module.Path, e.Module.Version),
+			PackageURL: e.PackageURL,
 			Licenses:   componentLicenses(e.LicenseName),
 		})
 	}

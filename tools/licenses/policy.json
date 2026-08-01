@@ -1,5 +1,5 @@
 {
-  "note": "License policy for the modules linked into ./cmd/lit. Every allowed_licenses entry is a permissive license with no copyleft obligation that conflicts with lit's MIT 'free for any purpose' guarantee. A linked module whose classified license (per tools/licenses' classifier, the same one that builds LICENSE-REPORT.md) is not in allowed_licenses must appear in module_exceptions with a reason, or the CI license-policy gate (`go run ./tools/licenses -check`, and TestDependencyLicensesArePermitted) fails. This is the single committed policy file; edit it to accept a new license class (allowed_licenses) or to record a per-module, human-verified exception (module_exceptions). See links-supply-chain-w6m9.3.",
+  "note": "License policy for the third-party components compiled into ./cmd/lit — Go modules AND the statically-linked native C libraries (ICU, zstd, musl, compiler-rt; see native.go). Every allowed_licenses entry is a permissive license with no copyleft obligation that conflicts with lit's MIT 'free for any purpose' guarantee. A component whose license (per tools/licenses' classifier for Go modules, or the curated license in native.go for native libs) is not in allowed_licenses must appear in module_exceptions with a reason, or the CI license-policy gate (`go run ./tools/licenses -check`, and TestDependencyLicensesArePermitted) fails. This is the single committed policy file; edit it to accept a new license class (allowed_licenses) or to record a per-module, human-verified exception (module_exceptions). See links-supply-chain-w6m9.3 and w6m9.4.",
   "allowed_licenses": [
     "Apache-2.0",
     "BSD-2-Clause",
@@ -9,6 +9,7 @@
     "MIT",
     "MPL-2.0",
     "UPL-1.0",
+    "Unicode-3.0",
     "Unlicense",
     "WTFPL"
   ],
