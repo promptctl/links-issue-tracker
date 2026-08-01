@@ -43,10 +43,12 @@ type wireBOM struct {
 // renderer must get right: a normal module, a `+incompatible` version whose
 // `+` must be percent-encoded in the purl, and an unclassified license that
 // must NOT become a fabricated license entry.
+// PackageURL is set exactly as buildEntries would set it (goModulePURL), since
+// buildSBOM now reads the precomputed field rather than recomputing it.
 var synthEntries = []Entry{
-	{Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5"}, LicenseName: "Apache-2.0"},
-	{Module: Module{Path: "github.com/aliyun/aliyun-oss-go-sdk", Version: "v3.0.2+incompatible"}, LicenseName: "MIT"},
-	{Module: Module{Path: "example.com/mystery", Version: "v1.0.0"}, LicenseName: unclassifiedLicense},
+	{Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5"}, LicenseName: "Apache-2.0", PackageURL: goModulePURL("github.com/dolthub/dolt/go", "v0.40.5")},
+	{Module: Module{Path: "github.com/aliyun/aliyun-oss-go-sdk", Version: "v3.0.2+incompatible"}, LicenseName: "MIT", PackageURL: goModulePURL("github.com/aliyun/aliyun-oss-go-sdk", "v3.0.2+incompatible")},
+	{Module: Module{Path: "example.com/mystery", Version: "v1.0.0"}, LicenseName: unclassifiedLicense, PackageURL: goModulePURL("example.com/mystery", "v1.0.0")},
 }
 
 func decodeSBOM(t *testing.T, entries []Entry, appVersion string) wireBOM {

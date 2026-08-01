@@ -121,6 +121,6 @@ func runCheck(pkg string, stdout io.Writer) error {
 		b.WriteString("Resolve by adding the license to allowed_licenses in tools/licenses/policy.json (if it is permissive) or recording a documented per-module exception there.")
 		return fmt.Errorf("%s", b.String())
 	}
-	fmt.Fprintf(stdout, "license policy OK: all %d linked modules are under an allowlisted or explicitly excepted license\n", len(entries))
+	fmt.Fprintf(stdout, "license policy OK: all %d components are under an allowlisted or explicitly excepted license\n", len(entries))
 	return nil
 }
