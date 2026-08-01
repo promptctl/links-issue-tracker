@@ -25,6 +25,13 @@
 // this tool supersedes it for the linked set with a re-runnable generator
 // rather than a static document that drifts from the dependency tree.
 //
+// A second mode, -check, is the CI license-policy gate: it builds the same
+// inventory and fails (non-zero exit) if any linked module's classified license
+// is outside the committed policy (policy.json) — the allowlist of permissive
+// licenses plus documented per-module exceptions. It writes no artifacts.
+// Because it shares buildEntries with generation, it checks the exact licenses
+// the report documents. [LAW:single-enforcer]
+//
 // Invocation:
 //
 //	go run ./tools/licenses \
@@ -33,6 +40,8 @@
 //	  -report LICENSE-REPORT.md \
 //	  -sbom SBOM.cdx.json \
 //	  -app-version 0.2.0
+//
+//	go run ./tools/licenses -check -pkg ./cmd/lit   # license-policy gate
 package main
 
 import (
@@ -62,10 +71,21 @@ func main() {
 		reportPath = flag.String("report", "LICENSE-REPORT.md", "output path for the human-readable license report")
 		sbomPath   = flag.String("sbom", "", "output path for the CycloneDX SBOM (empty: skip SBOM generation)")
 		appVersion = flag.String("app-version", "", "lit version to record as the SBOM's subject component (empty: omit the version)")
+		check      = flag.Bool("check", false, "license-policy gate mode: verify every linked module's license against policy.json and exit non-zero on any violation; writes no artifacts")
 	)
 	flag.Parse()
 
-	if err := run(*pkg, *bundlePath, *reportPath, *sbomPath, *appVersion, os.Stdout); err != nil {
+	// Two operations over one inventory: generate the compliance artifacts
+	// (default) or enforce the license policy (-check). The default stays
+	// canonical; -check is the CI gate and writes nothing. [LAW:no-mode-explosion]
+	// exactly two modes, dispatched here — not a flag threaded through one body.
+	var err error
+	if *check {
+		err = runCheck(*pkg, os.Stdout)
+	} else {
+		err = run(*pkg, *bundlePath, *reportPath, *sbomPath, *appVersion, os.Stdout)
+	}
+	if err != nil {
 		fmt.Fprintf(os.Stderr, "licenses: %v\n", err)
 		os.Exit(1)
 	}
