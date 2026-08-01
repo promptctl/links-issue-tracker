@@ -156,8 +156,19 @@ jobs:
       # before a tag is cut, and re-used verbatim by the release build below.
       # [LAW:single-enforcer] this workflow is the sole owner of the release build
       # — the same step feeds both the snapshot proof and the publish path.
-      - name: Generate third-party license bundle + report
-        run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md
+      #
+      # One invocation emits all three compliance artifacts from ONE linked-module
+      # inventory: the bundle + report land at the repo root for goreleaser's
+      # archives.files to pick up, and the SBOM lands at SBOM.cdx.json for the
+      # staging step below to publish as a standalone release asset (goreleaser's
+      # --clean wipes dist/ but not the repo root, so the file survives the build).
+      # -app-version records the release version as the SBOM's subject component;
+      # it is empty for a snapshot gate (steps.kind sets it only for a pending
+      # release), which the tool then omits. [LAW:one-source-of-truth] the SBOM
+      # describes the SAME module set the license report does — same function,
+      # same run — so the two release artifacts can never disagree.
+      - name: Generate third-party license bundle, report + SBOM
+        run: go run ./tools/licenses -pkg ./cmd/lit -bundle THIRD_PARTY_LICENSES -report LICENSE-REPORT.md -sbom SBOM.cdx.json -app-version "${{ steps.kind.outputs.version }}"
 
       # Build the custom release-builder image. GHA layer cache makes
       # subsequent runs reuse the (slow) ICU cross-build layers — only
@@ -382,6 +393,106 @@ jobs:
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
           echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, both covering github.com/dolthub/dolt/go"
 
+      # Stage the CycloneDX SBOM as a standalone, versioned release asset —
+      # modeled on release-manifest.json, NOT on the in-archive license bundle:
+      # the linked-module set is platform-independent, so one SBOM covers every
+      # artifact and a scanner can fetch it by URL without pulling a platform
+      # archive. The generator wrote SBOM.cdx.json at the repo root before
+      # goreleaser ran (so --clean, which wipes dist/, left it untouched); name
+      # the staged copy with the SAME version segment the archives use —
+      # dist/metadata.json's .version, goreleaser's authoritative version — so
+      # the SBOM filename can't drift from the archive filenames.
+      # [LAW:one-source-of-truth]
+      #
+      # Release-only, like 'Upload validated release artifact' below: producing
+      # a *publishable, versioned* SBOM asset is release-shaped work. On a
+      # snapshot gate steps.kind.outputs.version is empty, so the SBOM content
+      # omits the version (see sbom.go) while dist/metadata.json carries a
+      # snapshot version — staging then would name the file for a version the
+      # content omits. Gating here means a staged SBOM exists only when its
+      # content version (steps.kind.outputs.version) equals the filename version
+      # (dist/metadata.json .version) by construction. The generator itself
+      # still runs on every push (it also emits the bundle/report goreleaser
+      # needs), so a broken SBOM generator is still caught before a tag is cut.
+      # [LAW:dataflow-not-control-flow] release-vs-snapshot is the value that
+      # decides whether a publishable asset is produced.
+      - name: Stage the SBOM as a versioned release asset
+        if: steps.kind.outputs.release == 'true'
+        run: |
+          set -euo pipefail
+          test -f SBOM.cdx.json || { echo "::error::SBOM.cdx.json missing — the generator step did not produce it" >&2; exit 1; }
+          VERSION=$(jq -r .version dist/metadata.json)
+          DEST="dist/lit_${VERSION}_sbom.cdx.json"
+          cp SBOM.cdx.json "$DEST"
+
+          # The filename version ($VERSION, from goreleaser's tag parse in
+          # metadata.json) and the SBOM's embedded metadata.component.version
+          # (-app-version, from steps.kind's CHANGELOG regex) are two independent
+          # derivations that agree by construction — steps.kind's value creates
+          # the ephemeral tag goreleaser reads. This guard makes the agreement
+          # CHECKED: if goreleaser ever normalizes the version differently, the
+          # release fails here rather than shipping a file whose name and content
+          # disagree. [LAW:one-source-of-truth] [LAW:no-silent-failure]
+          ACTUAL=$(jq -r '.metadata.component.version' "$DEST")
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::SBOM content version ($ACTUAL) != release/filename version ($VERSION) — metadata.component and the filename disagree" >&2
+            exit 1
+          fi
+          echo "staged $DEST (content version $ACTUAL matches filename)"
+
+      # links-supply-chain-w6m9.2's acceptance criterion, checked against the
+      # STAGED dist/ asset (the exact bytes publish uploads), not the repo-root
+      # copy: the SBOM must validate as CycloneDX via the official cyclonedx-cli
+      # — the tool the ticket names — AND list github.com/dolthub/dolt at its
+      # pinned version. A validated-but-wrong SBOM (dolt dropped) still fails
+      # here because the content check is separate from the schema check.
+      # [LAW:verifiable-goals] [LAW:no-silent-failure]
+      #
+      # Release-only, matching the staging step above: it validates the staged
+      # asset, which exists only for a release, and it keeps the external
+      # cyclonedx-cli download off the snapshot-gate critical path. publish
+      # (needs: validate) runs only after this passes, so a schema-invalid SBOM
+      # blocks the release loudly instead of shipping.
+      - name: Validate the CycloneDX SBOM and assert it covers dolt
+        if: steps.kind.outputs.release == 'true'
+        env:
+          # Pinned so the validator version is a single, reviewable value — the
+          # newest cyclonedx-cli that accepts spec 1.6 (the version the SBOM is
+          # emitted at; see tools/licenses/sbom.go sbomSpecVersion).
+          CYCLONEDX_CLI_VERSION: v0.27.2
+          # sha256 of that version's cyclonedx-linux-x64 asset. We EXECUTE this
+          # downloaded binary, so it is verified against a pinned hash rather
+          # than trusted on TLS alone — fitting for a supply-chain workflow. No
+          # per-binary .sha256 sidecar is published for this release, so the
+          # value is pinned here (not fetched from the same origin it would
+          # authenticate); a version bump must update this hash in the same edit
+          # or the check below fails loudly. [LAW:no-silent-failure]
+          CYCLONEDX_CLI_SHA256: 5e1595542a6367378a3944bbd3008caab3de65d572345361d3b9597b1dbbaaa0
+        run: |
+          set -euo pipefail
+          VERSION=$(jq -r .version dist/metadata.json)
+          SBOM="dist/lit_${VERSION}_sbom.cdx.json"
+
+          bin=$(mktemp)
+          trap 'rm -f "$bin"' EXIT
+          curl -fsSL -o "$bin" "https://github.com/CycloneDX/cyclonedx-cli/releases/download/${CYCLONEDX_CLI_VERSION}/cyclonedx-linux-x64"
+          echo "${CYCLONEDX_CLI_SHA256}  ${bin}" | sha256sum -c -
+          chmod +x "$bin"
+
+          "$bin" validate --input-file "$SBOM" --input-format json --fail-on-errors
+
+          # dolt present exactly once, with a non-empty version. Explicit
+          # ($x | fn) forms throughout — a bare `.version | type == "string" and
+          # length > 0` would compute `length` against the wrong value (the same
+          # jq precedence trap the manifest assertion documents above).
+          jq -e '
+            ([.components[] | select(.name == "github.com/dolthub/dolt/go")]) as $d
+            | ($d | length) == 1
+              and ($d[0].version | type) == "string"
+              and ($d[0].version | length) > 0
+          ' "$SBOM" >/dev/null
+          echo "OK: $SBOM validates as CycloneDX and lists github.com/dolthub/dolt at $(jq -r '.components[] | select(.name=="github.com/dolthub/dolt/go") | .version' "$SBOM")"
+
       # The linux artifacts must be fully static musl binaries: no PT_INTERP,
       # no NEEDED, and they must EXECUTE on both a glibc host (this runner) and
       # a stock Alpine/musl container, on both arches (arm64 under qemu). This
@@ -430,6 +541,7 @@ jobs:
           path: |
             dist/lit_*_*_*.tar.gz
             dist/lit_*_*_*.zip
+            dist/lit_*_sbom.cdx.json
             dist/checksums.txt
             dist/release-manifest.json
             dist/metadata.json
@@ -543,7 +655,7 @@ jobs:
           # wrong path in the list and hide an otherwise-empty download.
           shopt -s nullglob
           assets=()
-          for f in "$DIST"/lit_*_*_*.tar.gz "$DIST"/lit_*_*_*.zip "$DIST"/checksums.txt "$DIST"/release-manifest.json; do
+          for f in "$DIST"/lit_*_*_*.tar.gz "$DIST"/lit_*_*_*.zip "$DIST"/lit_*_sbom.cdx.json "$DIST"/checksums.txt "$DIST"/release-manifest.json; do
             [ -f "$f" ] && assets+=( "$f" )
           done
           if [ "${#assets[@]}" -eq 0 ]; then
