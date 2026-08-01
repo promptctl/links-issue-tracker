@@ -97,8 +97,8 @@ func TestRunHappyPath(t *testing.T) {
 			t.Errorf("%s is empty", path)
 		}
 	}
-	if !strings.Contains(stdout.String(), "wrote") {
-		t.Errorf("stdout summary missing, got: %q", stdout.String())
+	if want := "wrote " + bundlePath + ", " + reportPath + ", and " + sbomPath; !strings.Contains(stdout.String(), want) {
+		t.Errorf("want three-artifact summary %q, got: %q", want, stdout.String())
 	}
 }
 

@@ -422,8 +422,23 @@ jobs:
           set -euo pipefail
           test -f SBOM.cdx.json || { echo "::error::SBOM.cdx.json missing — the generator step did not produce it" >&2; exit 1; }
           VERSION=$(jq -r .version dist/metadata.json)
-          cp SBOM.cdx.json "dist/lit_${VERSION}_sbom.cdx.json"
-          echo "staged dist/lit_${VERSION}_sbom.cdx.json"
+          DEST="dist/lit_${VERSION}_sbom.cdx.json"
+          cp SBOM.cdx.json "$DEST"
+
+          # The filename version ($VERSION, from goreleaser's tag parse in
+          # metadata.json) and the SBOM's embedded metadata.component.version
+          # (-app-version, from steps.kind's CHANGELOG regex) are two independent
+          # derivations that agree by construction — steps.kind's value creates
+          # the ephemeral tag goreleaser reads. This guard makes the agreement
+          # CHECKED: if goreleaser ever normalizes the version differently, the
+          # release fails here rather than shipping a file whose name and content
+          # disagree. [LAW:one-source-of-truth] [LAW:no-silent-failure]
+          ACTUAL=$(jq -r '.metadata.component.version' "$DEST")
+          if [ "$ACTUAL" != "$VERSION" ]; then
+            echo "::error::SBOM content version ($ACTUAL) != release/filename version ($VERSION) — metadata.component and the filename disagree" >&2
+            exit 1
+          fi
+          echo "staged $DEST (content version $ACTUAL matches filename)"
 
       # links-supply-chain-w6m9.2's acceptance criterion, checked against the
       # STAGED dist/ asset (the exact bytes publish uploads), not the repo-root
