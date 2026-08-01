@@ -27,7 +27,15 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		}
 	}
 	// Notice text (not just the name) must ship — the attribution obligation.
-	for _, want := range []string{"UNICODE LICENSE V3", "Zstandard", "MIT license"} {
+	// A UNIQUE substring per lib, so each embedded text is independently
+	// verified: "MIT license" alone would match musl's COPYRIGHT and let
+	// compiler-rt's distinct "The MIT License (Expat)" go unchecked.
+	for _, want := range []string{
+		"UNICODE LICENSE V3",          // icu
+		"Zstandard",                   // zstd
+		"musl as a whole is licensed", // musl
+		"The MIT License (Expat)",     // compiler-rt (zig)
+	} {
 		if !strings.Contains(bundle.String(), want) {
 			t.Errorf("bundle missing native notice text %q", want)
 		}
@@ -44,6 +52,7 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		{"icu", "75.1", "Unicode-3.0"},
 		{"zstd", "1.5.6", "BSD-3-Clause"},
 		{"musl", "1.2.5", "MIT"},
+		{"compiler-rt", "0.14.0", "MIT"},
 	} {
 		i, ok := byName[tc.name]
 		if !ok {
