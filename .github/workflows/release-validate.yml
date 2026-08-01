@@ -52,6 +52,38 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The publish-blocking license gate (links-supply-chain-w6m9.5). If any
+  # component compiled into the release binary — a Go module or a native C
+  # library — carries a license outside tools/licenses/policy.json, this job
+  # fails, and because `publish` needs it, no tag, archive, or asset is ever
+  # published: a non-free build cannot be released, even by accident. This is the
+  # last backstop behind the PR-time gate (ci.yml); it lives in the release
+  # pipeline so it holds however the release is triggered (push or
+  # workflow_dispatch), not only when a PR happened to run first.
+  #
+  # It runs in PARALLEL with `validate` (the ~35-min cross-build), so a clean
+  # tree adds no latency; only `publish` waits on it. CGO_ENABLED=1 is REQUIRED,
+  # not cosmetic: `go list -deps ./cmd/lit` resolves a DIFFERENT set with cgo off
+  # — gozstd and go-icu-regex (the cgo-linked deps) drop out — so the gate must
+  # see the same set the release actually links. It needs no ICU/zstd C
+  # toolchain: `go list` resolves imports without compiling them.
+  # [LAW:single-enforcer] one predicate (CheckPolicy over policy.json), reused by
+  # the PR test and this gate.
+  license-gate:
+    runs-on: ubuntu-latest
+    env:
+      CGO_ENABLED: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Populate module cache
+        run: go mod download
+      - name: License-policy gate (publish-blocking)
+        run: go run ./tools/licenses -check -pkg ./cmd/lit
+
   validate:
     runs-on: ubuntu-latest
     # Surfaced to the publish job: whether this commit is a pending release and,
@@ -597,7 +629,13 @@ jobs:
   # it can only publish what validate built. The tag is cut BY CI; nothing pushes
   # it from a local machine.
   publish:
-    needs: validate
+    # needs BOTH: validate builds the artifact; license-gate is the
+    # publish-blocking freedom check (links-supply-chain-w6m9.5). If license-gate
+    # fails, this job is skipped and nothing is tagged or published — the release
+    # aborts before any asset ships. If validate is skipped (snapshot), the `if`
+    # below keeps publish off anyway. [LAW:no-silent-failure] a non-free posture
+    # cannot reach a published release.
+    needs: [validate, license-gate]
     if: needs.validate.outputs.release == 'true'
     runs-on: ubuntu-latest
     permissions:
