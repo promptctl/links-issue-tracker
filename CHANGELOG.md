@@ -17,6 +17,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Security
 
+## [0.2.1] - 2026-08-01
+
+### Changed
+
+- Rewrote lit's agent-facing prompt surfaces (the CLAUDE.md integration block `lit init` writes, and the `lit quickstart` guidance) into calm, plain, second-person tool documentation. The previous text used the fingerprint of a prompt-injection attack — ALL-CAPS imperatives, threats, and act-behind-the-user framing — which led a security-conscious agent to flag lit as untrustworthy and advise uninstalling it. The agent-native workflow is unchanged; only the register is.
+
 ## [0.2.0] - 2026-07-30
 
 ### Added
