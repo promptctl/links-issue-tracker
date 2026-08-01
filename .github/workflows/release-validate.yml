@@ -424,13 +424,23 @@ jobs:
           # newest cyclonedx-cli that accepts spec 1.6 (the version the SBOM is
           # emitted at; see tools/licenses/sbom.go sbomSpecVersion).
           CYCLONEDX_CLI_VERSION: v0.27.2
+          # sha256 of that version's cyclonedx-linux-x64 asset. We EXECUTE this
+          # downloaded binary, so it is verified against a pinned hash rather
+          # than trusted on TLS alone — fitting for a supply-chain workflow. No
+          # per-binary .sha256 sidecar is published for this release, so the
+          # value is pinned here (not fetched from the same origin it would
+          # authenticate); a version bump must update this hash in the same edit
+          # or the check below fails loudly. [LAW:no-silent-failure]
+          CYCLONEDX_CLI_SHA256: 5e1595542a6367378a3944bbd3008caab3de65d572345361d3b9597b1dbbaaa0
         run: |
           set -euo pipefail
           VERSION=$(jq -r .version dist/metadata.json)
           SBOM="dist/lit_${VERSION}_sbom.cdx.json"
 
           bin=$(mktemp)
+          trap 'rm -f "$bin"' EXIT
           curl -fsSL -o "$bin" "https://github.com/CycloneDX/cyclonedx-cli/releases/download/${CYCLONEDX_CLI_VERSION}/cyclonedx-linux-x64"
+          echo "${CYCLONEDX_CLI_SHA256}  ${bin}" | sha256sum -c -
           chmod +x "$bin"
 
           "$bin" validate --input-file "$SBOM" --input-format json --fail-on-errors

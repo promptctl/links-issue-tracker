@@ -134,6 +134,39 @@ func TestWriteSBOMComponentFields(t *testing.T) {
 	}
 }
 
+// TestWriteSBOMOmitsEmptyAppVersion pins the snapshot-gate path, where the
+// generator runs with -app-version "" (steps.kind sets a version only for a
+// pending release). The subject component must then OMIT the version key
+// entirely — not emit "version": "" — which cyclonedx.Component's
+// `json:"version,omitempty"` tag already does, and carry a purl with no
+// trailing "@". This is the path CI exercises every master push but no other
+// Go test covers. Decoding the component into a generic map is what lets the
+// test distinguish an absent key from an empty string. [LAW:verifiable-goals]
+func TestWriteSBOMOmitsEmptyAppVersion(t *testing.T) {
+	var buf bytes.Buffer
+	if err := WriteSBOM(&buf, synthEntries, ""); err != nil {
+		t.Fatalf("WriteSBOM: %v", err)
+	}
+	var doc struct {
+		Metadata struct {
+			Component map[string]any `json:"component"`
+		} `json:"metadata"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("emitted SBOM is not valid JSON: %v", err)
+	}
+	comp := doc.Metadata.Component
+	if comp["name"] != "lit" {
+		t.Errorf("metadata.component name = %v, want lit", comp["name"])
+	}
+	if v, ok := comp["version"]; ok {
+		t.Errorf("empty appVersion must omit the version key, but component carries version = %v", v)
+	}
+	if got := comp["purl"]; got != "pkg:golang/github.com/promptctl/links-issue-tracker" {
+		t.Errorf("empty-version subject purl = %v, want pkg:golang/github.com/promptctl/links-issue-tracker (no trailing @)", got)
+	}
+}
+
 // TestBuildSBOMDeterministic pins reproducibility: for a fixed inventory and
 // fixed serial + timestamp, the encoded document is byte-identical run to run.
 // The two genuinely-varying fields (serial, timestamp) are parameters here, so
