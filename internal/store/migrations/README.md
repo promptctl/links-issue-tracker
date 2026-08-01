@@ -33,6 +33,11 @@ invertibility that the runtime cannot deliver.
 3. Write the `+goose Down` section: the inverse. It MUST contain at least one
    real SQL statement and that statement MUST execute cleanly when goose runs
    it against a workspace that has just had the Up applied.
+4. Pin the file's content hash in `pinnedVersionContent`
+   (`version_reuse_test.go`), in this same PR. `TestReleasedMigrationsAreContentPinned`
+   fails until you do, and its message prints the exact line to add. This is what
+   makes the version number's content immutable from release forward — see
+   "Released migrations are content-frozen" below.
 
 A skeleton:
 
@@ -47,6 +52,28 @@ ALTER TABLE issues ADD COLUMN priority_band VARCHAR(16) NOT NULL DEFAULT 'normal
 ALTER TABLE issues DROP COLUMN priority_band;
 -- +goose StatementEnd
 ```
+
+## Released migrations are content-frozen
+
+goose keys migrations by version **number**, not by content: a workspace that has
+applied version *N* is stamped on *N* and will never re-run it. So if version *N*'s
+file is later refilled with different content, that content silently never reaches
+already-stamped workspaces — missing columns, absent tables. This is exactly how the
+migrate-drift epic (`links-migrate-drift-hh1t`) bricked workspaces: a baseline rewrite
+refilled version slots 2 and 3 with new content while old workspaces stayed stamped on
+the deleted content.
+
+Two gates make a version number's content immutable from release forward:
+
+| Gate                                       | Lives in                                                  | What it proves                                                                                   |
+| ------------------------------------------ | --------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `TestBaselineFileIsFrozen`                 | `internal/store/migrations/baseline_frozen_test.go`       | v1 (`00001_baseline.sql`) bytes never change — pinned to one sha256.                              |
+| `TestReleasedMigrationsAreContentPinned`   | `internal/store/migrations/version_reuse_test.go`         | Every non-baseline released version's bytes and filename match `pinnedVersionContent`, and none is deleted, renamed, duplicated, or left unpinned. |
+
+`[LAW:single-enforcer]` one content enforcer per version number: baseline_frozen owns
+v1, the pin manifest owns v2+. To change a released migration's effect, **never edit
+its file or reuse its number** — add the change as the next free version number and pin
+that. The gate's failure message says the same thing when it fires.
 
 ## Non-losslessly-invertible migrations
 
