@@ -26,6 +26,28 @@ func TestLoadPolicyEmbedded(t *testing.T) {
 	}
 }
 
+// TestBuzhashExceptionUsesClassifierSentinel makes the one cross-file coupling
+// in the policy checked at test time: policy.json's buzhash exception keys on
+// the license string "Unknown", which is classify.go's unclassifiedLicense
+// constant duplicated into a data file. If that constant is ever renamed, the
+// JSON copy would silently stop matching and buzhash would flip from permitted
+// to a violation. Asserting the constant flows into the expectation catches the
+// drift here, with a message that names the coupling — rather than only
+// surfacing as a confusing buzhash failure in TestDependencyLicensesArePermitted.
+// [LAW:one-source-of-truth] It checks only when the buzhash exception is present,
+// so dropping the dependency later does not false-fail.
+func TestBuzhashExceptionUsesClassifierSentinel(t *testing.T) {
+	p, err := LoadPolicy()
+	if err != nil {
+		t.Fatalf("LoadPolicy: %v", err)
+	}
+	for _, e := range p.ModuleExceptions {
+		if e.Module == "github.com/kch42/buzhash" && e.License != unclassifiedLicense {
+			t.Errorf("buzhash exception license = %q must equal classify.go's unclassifiedLicense = %q; policy.json duplicates that sentinel, and if they drift the exception silently stops matching", e.License, unclassifiedLicense)
+		}
+	}
+}
+
 // TestCheckPolicyAcceptReject is the accept/reject table for the gate predicate.
 // The two accept shapes (allowlisted license; matching (module,license)
 // exception) and everything that is neither a reject are enumerated here so the
