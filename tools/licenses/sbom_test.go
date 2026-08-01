@@ -3,12 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
-
-	lc "github.com/google/licenseclassifier"
 )
 
 // wireBOM is a consumer's-eye view of the encoded SBOM: only the fields a
@@ -197,7 +194,10 @@ func TestBuildSBOMDeterministic(t *testing.T) {
 // additionally runs `cyclonedx validate` against the shipped file; this proves
 // the content contract without that external tool.
 func TestSBOMEndToEndCoversDolt(t *testing.T) {
-	entries := buildEntriesForPkg(t, litPkg)
+	entries, err := buildEntries(litPkg)
+	if err != nil {
+		t.Fatalf("buildEntries(%s): %v", litPkg, err)
+	}
 	bom := decodeSBOM(t, entries, "9.9.9")
 
 	var doltWant string
@@ -223,33 +223,4 @@ func TestSBOMEndToEndCoversDolt(t *testing.T) {
 		return
 	}
 	t.Fatalf("github.com/dolthub/dolt/go not found among %d SBOM components", len(bom.Components))
-}
-
-// buildEntriesForPkg resolves the real linked-module inventory for pkg and
-// classifies each license — the same pipeline run() runs, factored into the
-// test so the SBOM e2e can assert against the true dependency set.
-func buildEntriesForPkg(t *testing.T, pkg string) []Entry {
-	t.Helper()
-	mods, err := LinkedModules(pkg)
-	if err != nil {
-		t.Fatalf("LinkedModules(%s): %v", pkg, err)
-	}
-	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
-	if err != nil {
-		t.Fatalf("build classifier: %v", err)
-	}
-	entries := make([]Entry, 0, len(mods))
-	for _, m := range mods {
-		licensePath, err := FindLicenseFile(m.Dir)
-		if err != nil {
-			t.Fatalf("%s@%s: %v", m.Path, m.Version, err)
-		}
-		text, err := os.ReadFile(licensePath)
-		if err != nil {
-			t.Fatalf("read %s: %v", licensePath, err)
-		}
-		name, confidence := Classify(classifier, string(text))
-		entries = append(entries, Entry{Module: m, LicenseFile: licensePath, LicenseName: name, Confidence: confidence, Text: string(text)})
-	}
-	return entries
 }

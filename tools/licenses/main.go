@@ -79,47 +79,9 @@ func main() {
 // [LAW:effects-at-boundaries] main() itself is left holding only flag parsing
 // and the process-exit boundary.
 func run(pkg, bundlePath, reportPath, sbomPath, appVersion string, stdout io.Writer) error {
-	mods, err := LinkedModules(pkg)
+	entries, err := buildEntries(pkg)
 	if err != nil {
-		return fmt.Errorf("resolve linked modules: %w", err)
-	}
-	// An empty result almost certainly means the package argument or module
-	// resolution is broken, not that the binary genuinely has zero
-	// dependencies — lit links Dolt, cobra, viper, and dozens more.
-	// [LAW:no-silent-failure] refuse to write empty-but-successful-looking
-	// artifacts.
-	if len(mods) == 0 {
-		return fmt.Errorf("no linked modules found for %s; refusing to write an empty bundle/report", pkg)
-	}
-
-	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
-	if err != nil {
-		return fmt.Errorf("build license classifier: %w", err)
-	}
-
-	entries := make([]Entry, 0, len(mods))
-	for _, m := range mods {
-		licensePath, err := FindLicenseFile(m.Dir)
-		if err != nil {
-			// [LAW:no-silent-failure] a linked module with no discoverable or
-			// unambiguous license file is an attribution gap, not a warning:
-			// fail the build so a human resolves it (vendor an override,
-			// replace the dependency) rather than shipping an incomplete or
-			// silently-guessed bundle.
-			return fmt.Errorf("%s@%s: %w", m.Path, m.Version, err)
-		}
-		text, err := os.ReadFile(licensePath)
-		if err != nil {
-			return fmt.Errorf("read %s: %w", licensePath, err)
-		}
-		name, confidence := Classify(classifier, string(text))
-		entries = append(entries, Entry{
-			Module:      m,
-			LicenseFile: licensePath,
-			LicenseName: name,
-			Confidence:  confidence,
-			Text:        string(text),
-		})
+		return err
 	}
 
 	if err := writeFile(bundlePath, func(f *os.File) error { return WriteBundle(f, entries) }); err != nil {
@@ -144,6 +106,63 @@ func run(pkg, bundlePath, reportPath, sbomPath, appVersion string, stdout io.Wri
 
 	fmt.Fprintf(stdout, "licenses: wrote %s and %s for %d linked modules\n", bundlePath, reportPath, len(entries))
 	return nil
+}
+
+// buildEntries resolves the linked-module inventory for pkg and classifies each
+// module's license — one Entry per module. This is the SINGLE enforcer of the
+// classification pipeline: run() renders the bundle/report/SBOM from what this
+// returns, and the end-to-end tests assert against the same function, so there
+// is no second copy of "resolve modules, find the license file, classify it"
+// that could pass in a test while run() emits different entries in production.
+// [LAW:single-enforcer] [LAW:one-source-of-truth]
+//
+// It is the effectful boundary that gathers inputs (go list, license-file
+// reads); the pure renderers (WriteBundle, WriteReport, buildSBOM) consume its
+// output. [LAW:effects-at-boundaries]
+func buildEntries(pkg string) ([]Entry, error) {
+	mods, err := LinkedModules(pkg)
+	if err != nil {
+		return nil, fmt.Errorf("resolve linked modules: %w", err)
+	}
+	// An empty result almost certainly means the package argument or module
+	// resolution is broken, not that the binary genuinely has zero
+	// dependencies — lit links Dolt, cobra, viper, and dozens more.
+	// [LAW:no-silent-failure] refuse to build an empty-but-successful-looking
+	// inventory.
+	if len(mods) == 0 {
+		return nil, fmt.Errorf("no linked modules found for %s; refusing to write an empty bundle/report", pkg)
+	}
+
+	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
+	if err != nil {
+		return nil, fmt.Errorf("build license classifier: %w", err)
+	}
+
+	entries := make([]Entry, 0, len(mods))
+	for _, m := range mods {
+		licensePath, err := FindLicenseFile(m.Dir)
+		if err != nil {
+			// [LAW:no-silent-failure] a linked module with no discoverable or
+			// unambiguous license file is an attribution gap, not a warning:
+			// fail the build so a human resolves it (vendor an override,
+			// replace the dependency) rather than shipping an incomplete or
+			// silently-guessed bundle.
+			return nil, fmt.Errorf("%s@%s: %w", m.Path, m.Version, err)
+		}
+		text, err := os.ReadFile(licensePath)
+		if err != nil {
+			return nil, fmt.Errorf("read %s: %w", licensePath, err)
+		}
+		name, confidence := Classify(classifier, string(text))
+		entries = append(entries, Entry{
+			Module:      m,
+			LicenseFile: licensePath,
+			LicenseName: name,
+			Confidence:  confidence,
+			Text:        string(text),
+		})
+	}
+	return entries, nil
 }
 
 // writeFile creates path, runs write against it, syncs it to durable storage,
