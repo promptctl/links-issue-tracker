@@ -102,6 +102,35 @@ func TestRunHappyPath(t *testing.T) {
 	}
 }
 
+// TestRunWithoutSBOM covers the no-`-sbom` mode (main.go's SBOM-less branch):
+// an empty sbomPath writes only the bundle + report, produces no SBOM file, and
+// emits the two-artifact summary line. TestRunHappyPath exercises the
+// three-artifact path, so without this the return-and-log branch for this still
+// -supported CLI invocation would be uncovered. [LAW:verifiable-goals]
+func TestRunWithoutSBOM(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
+
+	var stdout strings.Builder
+	if err := run(litPkg, bundlePath, reportPath, "", "", &stdout); err != nil {
+		t.Fatalf("run: %v", err)
+	}
+
+	for _, path := range []string{bundlePath, reportPath} {
+		if info, err := os.Stat(path); err != nil || info.Size() == 0 {
+			t.Errorf("%s missing or empty: %v", path, err)
+		}
+	}
+	if _, err := os.Stat(sbomPath); !os.IsNotExist(err) {
+		t.Errorf("no SBOM should be written for an empty sbomPath, but %s exists", sbomPath)
+	}
+	if want := "wrote " + bundlePath + " and " + reportPath; !strings.Contains(stdout.String(), want) {
+		t.Errorf("want two-artifact summary %q, got: %q", want, stdout.String())
+	}
+}
+
 // TestRunEmptyModulesGuard pins the "no linked modules found" error path.
 // "fmt" is a real, valid `go list -deps` target that pulls in zero external
 // modules (stdlib only) — a deterministic way to hit the guard without a

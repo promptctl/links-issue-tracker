@@ -403,7 +403,21 @@ jobs:
       # dist/metadata.json's .version, goreleaser's authoritative version — so
       # the SBOM filename can't drift from the archive filenames.
       # [LAW:one-source-of-truth]
+      #
+      # Release-only, like 'Upload validated release artifact' below: producing
+      # a *publishable, versioned* SBOM asset is release-shaped work. On a
+      # snapshot gate steps.kind.outputs.version is empty, so the SBOM content
+      # omits the version (see sbom.go) while dist/metadata.json carries a
+      # snapshot version — staging then would name the file for a version the
+      # content omits. Gating here means a staged SBOM exists only when its
+      # content version (steps.kind.outputs.version) equals the filename version
+      # (dist/metadata.json .version) by construction. The generator itself
+      # still runs on every push (it also emits the bundle/report goreleaser
+      # needs), so a broken SBOM generator is still caught before a tag is cut.
+      # [LAW:dataflow-not-control-flow] release-vs-snapshot is the value that
+      # decides whether a publishable asset is produced.
       - name: Stage the SBOM as a versioned release asset
+        if: steps.kind.outputs.release == 'true'
         run: |
           set -euo pipefail
           test -f SBOM.cdx.json || { echo "::error::SBOM.cdx.json missing — the generator step did not produce it" >&2; exit 1; }
@@ -418,7 +432,14 @@ jobs:
       # pinned version. A validated-but-wrong SBOM (dolt dropped) still fails
       # here because the content check is separate from the schema check.
       # [LAW:verifiable-goals] [LAW:no-silent-failure]
+      #
+      # Release-only, matching the staging step above: it validates the staged
+      # asset, which exists only for a release, and it keeps the external
+      # cyclonedx-cli download off the snapshot-gate critical path. publish
+      # (needs: validate) runs only after this passes, so a schema-invalid SBOM
+      # blocks the release loudly instead of shipping.
       - name: Validate the CycloneDX SBOM and assert it covers dolt
+        if: steps.kind.outputs.release == 'true'
         env:
           # Pinned so the validator version is a single, reviewable value — the
           # newest cyclonedx-cli that accepts spec 1.6 (the version the SBOM is
