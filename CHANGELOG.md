@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- CI gate (`TestReleasedMigrationsAreContentPinned`) that refuses any change reusing a released migration version number under different content — the mechanism that bricked workspaces in the migrate-drift epic. Every non-baseline migration's content is pinned by sha256; reusing, editing, deleting, or leaving a version number unpinned fails the build with a message naming the collision.
+
 ### Changed
 
 ### Fixed
