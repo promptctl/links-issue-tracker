@@ -391,7 +391,19 @@ jobs:
           grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
           grep -q 'Apache License' "$workdir/THIRD_PARTY_LICENSES"
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
-          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, both covering github.com/dolthub/dolt/go"
+          # links-supply-chain-w6m9.4: the statically-linked native C libraries
+          # must ride the SAME shipped bundle, with their notice text — not just
+          # the Go modules. Check all four by both their report row and a notice
+          # substring unique to each embedded license text.
+          grep -q '| icu | 75.1 | Unicode-3.0 |' "$workdir/LICENSE-REPORT.md"
+          grep -q 'UNICODE LICENSE V3' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '| zstd | 1.5.6 | BSD-3-Clause |' "$workdir/LICENSE-REPORT.md"
+          grep -q 'Zstandard' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '| musl | 1.2.5 | MIT |' "$workdir/LICENSE-REPORT.md"
+          grep -q 'musl as a whole is licensed under the following standard MIT license' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '| compiler-rt | 0.14.0 | MIT |' "$workdir/LICENSE-REPORT.md"
+          grep -q 'The MIT License (Expat)' "$workdir/THIRD_PARTY_LICENSES"
+          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt)"
 
       # Stage the CycloneDX SBOM as a standalone, versioned release asset —
       # modeled on release-manifest.json, NOT on the in-archive license bundle:

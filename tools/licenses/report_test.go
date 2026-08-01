@@ -24,7 +24,7 @@ func TestWriteReport(t *testing.T) {
 		"| github.com/c/c | v3.0.0 | MIT |",
 		"| Apache-2.0 | 1 |",
 		"| MIT | 2 |",
-		"3 Go modules",
+		"3 third-party components",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("output missing %q\n%s", want, out)
