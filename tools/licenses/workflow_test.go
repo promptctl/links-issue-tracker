@@ -53,6 +53,12 @@ func TestReleaseGateBlocksPublish(t *testing.T) {
 	if !nodeContains(publish.Needs, "license-gate") {
 		t.Errorf("publish.needs does not include license-gate — releases are not gated on the license posture (needs: %v)", publish.Needs)
 	}
+	// publish must ALSO depend on validate: it consumes validate's uploaded
+	// artifact, so dropping validate would let publish race the build and fail
+	// with a confusing "artifact not found" at release time.
+	if !nodeContains(publish.Needs, "validate") {
+		t.Errorf("publish.needs does not include validate — publish would run before the artifact is built (needs: %v)", publish.Needs)
+	}
 }
 
 // nodeContains reports whether a YAML `needs:` node — which may be a scalar
