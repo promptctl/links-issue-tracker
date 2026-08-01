@@ -41,8 +41,15 @@ permissions:
                     # ICU cross-toolchain from source
 
 concurrency:
+  # [LAW:no-silent-failure] cancel-in-progress is FALSE on purpose. This workflow
+  # is also the release publisher: a pending-release run builds the real artifact,
+  # materializes the tag locally, and hands off to publish. Cancelling that mid-run
+  # would silently lose the validated artifact + tag and the release would never be
+  # cut — with nothing signalling why. A second master push therefore QUEUES behind
+  # an in-flight run rather than aborting it. The cost (serialized snapshot gates)
+  # is cheap; a silently-dropped release is not.
   group: release-validate-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   validate:
@@ -103,6 +110,12 @@ jobs:
           # '## [X.Y.Z]' -> release or snapshot by whether its tag exists; a
           # version-ish heading that is MALFORMED -> loud error, never a silent
           # fall-through to snapshot. [LAW:no-silent-failure]
+          # [LAW:no-silent-failure] guard the file's existence FIRST, so a broken
+          # checkout or a moved/renamed CHANGELOG errors loudly instead of being
+          # swallowed by the pipeline's `|| true` and masquerading as "no releases
+          # yet". After this guard, `|| true` masks only the benign no-match (grep
+          # exit 1); a missing-file (grep exit 2) can no longer reach it.
+          test -f CHANGELOG.md || { echo "::error::CHANGELOG.md not found at repo root — broken checkout or moved file; refusing to resolve release kind." >&2; exit 1; }
           CAND=$(grep -E '^## \[' CHANGELOG.md | grep -vE '^## \[Unreleased\]' | head -1 || true)
           if [ -z "$CAND" ]; then
             echo "CHANGELOG has no released version yet (only [Unreleased]); snapshot gate."
@@ -112,14 +125,31 @@ jobs:
             exit 1
           else
             VER=$(echo "$CAND" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-            if git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null 2>&1; then
-              echo "v$VER is already tagged; ordinary master push; snapshot gate."
-              echo "release=false" >> "$GITHUB_OUTPUT"
-            else
-              echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
-              echo "release=true" >> "$GITHUB_OUTPUT"
-              echo "version=$VER" >> "$GITHUB_OUTPUT"
-            fi
+            # [LAW:no-silent-failure] `git ls-remote --exit-code` is a three-way
+            # signal, not a boolean: 0 = tag present, 2 = no matching ref, anything
+            # else (128 network/auth/missing-remote) = a real failure. An `if`
+            # collapses 2 AND every error into "no tag" and would flag a spurious
+            # release the moment origin is unreachable. Capture the code and branch
+            # on the actual value; keep stderr visible so the error is loud.
+            set +e
+            git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null
+            r=$?
+            set -e
+            case "$r" in
+              0)
+                echo "v$VER is already tagged; ordinary master push; snapshot gate."
+                echo "release=false" >> "$GITHUB_OUTPUT"
+                ;;
+              2)
+                echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
+                echo "release=true" >> "$GITHUB_OUTPUT"
+                echo "version=$VER" >> "$GITHUB_OUTPUT"
+                ;;
+              *)
+                echo "::error::git ls-remote failed (exit $r) probing refs/tags/v$VER — cannot determine release state; refusing to guess." >&2
+                exit 1
+                ;;
+            esac
           fi
 
       # Proven here on every master push so a broken license generator is caught
@@ -456,7 +486,24 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: release-dist-${{ github.sha }}
-          path: dist
+          path: _artifact
+
+      # [LAW:no-silent-failure] upload-artifact strips the least-common-ancestor
+      # of the uploaded paths, so the files land at either _artifact/ or
+      # _artifact/dist/ depending on that rule — unverifiable locally and liable to
+      # change under us. Rather than hard-code a nesting (a wrong guess silently
+      # globs an empty path into `gh release create`, publishing a release with no
+      # binaries), locate the real dist dir by finding metadata.json. Exactly one,
+      # or fail loudly. Everything downstream reads $DIST.
+      - name: Locate the downloaded dist dir
+        run: |
+          set -euo pipefail
+          mapfile -t metas < <(find _artifact -name metadata.json)
+          if [ "${#metas[@]}" -ne 1 ]; then
+            echo "::error::expected exactly one metadata.json in the downloaded artifact, found ${#metas[@]}: ${metas[*]}" >&2
+            exit 1
+          fi
+          echo "DIST=$(dirname "${metas[0]}")" >> "$GITHUB_ENV"
 
       # The artifact's stamped identity must match the commit + version this job
       # is releasing. It does by construction (validate built it in this run), but
@@ -464,8 +511,8 @@ jobs:
       - name: Verify the artifact matches this release
         run: |
           set -euo pipefail
-          MSHA=$(jq -r .commit dist/metadata.json)
-          MTAG=$(jq -r .tag dist/metadata.json)
+          MSHA=$(jq -r .commit "$DIST/metadata.json")
+          MTAG=$(jq -r .tag "$DIST/metadata.json")
           if [ "$MSHA" != "${{ github.sha }}" ]; then
             echo "::error::artifact commit ($MSHA) != release commit (${{ github.sha }})"; exit 1
           fi
@@ -476,19 +523,40 @@ jobs:
       # gh release create makes the tag at --target (the validated commit) AND
       # publishes in one step. Asset globs mirror goreleaser's name_template
       # (`lit_<version>_<goos>_<goarch>`); tar.gz covers linux/darwin, zip windows.
-      # Re-runs are safe: once this tag exists on origin, validate's kind resolver
-      # sees it and this job no longer runs. [LAW:no-silent-failure]
+      # Re-runs after a CLEAN success are safe: once this tag exists on origin,
+      # validate's kind resolver sees it and this job no longer runs. A PARTIAL
+      # failure (tag created but asset upload died) leaves a dangling tag that would
+      # make that same resolver skip the publish forever — so we surface it loudly
+      # with an explicit recovery path instead of letting it vanish.
+      # [LAW:no-silent-failure]
       - name: Tag and publish the release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           TAG="v${{ needs.validate.outputs.version }}"
-          gh release create "$TAG" \
+          # Assemble the asset list from files that ACTUALLY EXIST and assert it's
+          # non-empty, so a nesting/naming drift fails HERE rather than publishing a
+          # release with no binaries. The `-f` filter is load-bearing: nullglob
+          # drops unmatched *globs* (lit_*.tar.gz) but NOT literal names
+          # (checksums.txt) — without the existence test those literals would keep a
+          # wrong path in the list and hide an otherwise-empty download.
+          shopt -s nullglob
+          assets=()
+          for f in "$DIST"/lit_*_*_*.tar.gz "$DIST"/lit_*_*_*.zip "$DIST"/checksums.txt "$DIST"/release-manifest.json; do
+            [ -f "$f" ] && assets+=( "$f" )
+          done
+          if [ "${#assets[@]}" -eq 0 ]; then
+            echo "::error::no release assets found under $DIST — refusing to publish an empty release" >&2
+            exit 1
+          fi
+          if ! gh release create "$TAG" \
             --repo "${{ github.repository }}" \
             --target "${{ github.sha }}" \
             --title "$TAG" \
             --generate-notes \
-            dist/lit_*_*_*.tar.gz dist/lit_*_*_*.zip \
-            dist/checksums.txt dist/release-manifest.json
+            "${assets[@]}"; then
+            echo "::error::gh release create failed for $TAG. A tag and/or partial release may now exist on origin; validate's kind resolver would then see the tag and skip this publish on every re-run, silently dropping the release. Recovery: 'gh release delete $TAG --repo ${{ github.repository }} --cleanup-tag --yes' removes both the partial release and the tag, then re-run via workflow_dispatch or a fresh master push." >&2
+            exit 1
+          fi
           echo "published $TAG at ${{ github.sha }}"
