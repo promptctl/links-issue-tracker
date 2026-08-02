@@ -135,7 +135,7 @@ func TestInlineReconcileSurfacesContractOnProseHeld(t *testing.T) {
 	// reconciles, finds the held free-text conflict, and surfaces the contract.
 	t.Setenv(DisableAutoSyncEnvVar, "0")
 	surface := captureStderr(t, func() {
-		runCLIInDir(t, consumer, "ready")
+		runCLIInDir(t, consumer, "backlog")
 	})
 
 	assertSyncFailureBlock(t, surface, "lit sync reconcile")

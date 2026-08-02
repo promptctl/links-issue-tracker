@@ -10,9 +10,9 @@ import (
 )
 
 // --status is validated once, at the shared flag seam, so one table over the
-// four views is the whole contract: every workable command rejects the same
+// workable views is the whole contract: every workable command rejects the same
 // inputs with the same usage error. [LAW:single-enforcer]
-var workableViews = []workableView{readyView, backlogView, queueView, nextView}
+var workableViews = []workableView{backlogView, nextView}
 
 func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 	h.t.Helper()
@@ -51,19 +51,19 @@ func TestWorkableStatusAcceptsLegalValues(t *testing.T) {
 	h := newReadyTestHarness(t)
 	issue := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})
 
-	text := h.runReadyText("--status", "open")
+	text := h.runWorkableText("--status", "open")
 	if !strings.Contains(text, issue.ID) {
-		t.Fatalf("ready --status open output = %q, want %q listed", text, issue.ID)
+		t.Fatalf("backlog --status open output = %q, want %q listed", text, issue.ID)
 	}
 
 	// in_progress matches nothing here; the point is it parses (no usage
 	// error) and narrows honestly instead of coercing.
-	err := h.runViewErr(readyView, "--status", "in_progress")
+	err := h.runViewErr(backlogView, "--status", "in_progress")
 	if err != nil {
-		t.Fatalf("ready --status in_progress error = %v, want nil", err)
+		t.Fatalf("backlog --status in_progress error = %v, want nil", err)
 	}
-	text = h.runReadyText("--status", "in_progress")
+	text = h.runWorkableText("--status", "in_progress")
 	if strings.Contains(text, issue.ID) {
-		t.Fatalf("ready --status in_progress output = %q, want %q filtered out", text, issue.ID)
+		t.Fatalf("backlog --status in_progress output = %q, want %q filtered out", text, issue.ID)
 	}
 }

@@ -41,7 +41,7 @@ func newNeedsDesignAnnotator() annotation.Annotator {
 }
 
 // orphanedThreshold is the staleness window after which an in_progress
-// issue is flagged as orphaned. Both `lit ready`'s in-progress section
+// issue is flagged as orphaned. Both `lit backlog`'s in-progress rows
 // and `lit orphaned` read from this single value so the two surfaces
 // cannot drift.
 // [LAW:one-source-of-truth] Single threshold for orphan detection.
@@ -536,21 +536,6 @@ func sortByFocusPath(issues []annotation.AnnotatedIssue) {
 	})
 }
 
-// sortByBlockingAnnotations places issues without blocking annotations first,
-// preserving the original store ordering within each group. The name is
-// deliberate: "readiness" is an interpretation a consumer applies over the
-// neutral fact set of annotations, never a property of the annotations
-// themselves. Calling this "sortByReadiness" would invite future callers to
-// treat ready-ness as an annotation property and violate the "annotations
-// are neutral facts" law.
-func sortByBlockingAnnotations(issues []annotation.AnnotatedIssue) {
-	sort.SliceStable(issues, func(i, j int) bool {
-		iReady := ClassifyReadiness(issues[i].Annotations).IsReady()
-		jReady := ClassifyReadiness(issues[j].Annotations).IsReady()
-		return iReady && !jReady
-	})
-}
-
 func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.AnnotatedIssue {
 	if limit <= 0 || len(issues) <= limit {
 		return issues
@@ -607,22 +592,6 @@ func printNextSummary(w io.Writer, row annotation.AnnotatedIssue) error {
 	return printInlineDeps(w, row, nil)
 }
 
-// readyPreamble is printed before the ready list to give agents context about
-// how to interpret and act on the backlog.
-// [LAW:one-source-of-truth] Single definition of ready preamble text.
-const readyPreamble = `This is the backlog. Always pick the top item UNLESS asked to work on a specific ticket.
-You MUST carefully read every item so you understand the context for the work.
-Dependencies explain the WHY behind what you are building.
-You MUST design for the implementers who will build on top of your work. A poor foundation becomes
-an immediate liability and should be avoided at all costs.
-Downstream tickets are your real acceptance criteria —
-not just "does this work in isolation" but "does this set the project up to be successful in the future."
-Structure your implementation to make downstream tickets simpler and more robust,
-even if the ticket doesn't specify it (but only if it aligns with the downstream tickets).
-IMPORTANT: If you haven't run 'lit quickstart' yet, do so NOW to ensure you understand how to use lit.`
-
-const readyMaxItems = 10
-
 // buildUnblocksMap derives a reverse dependency index from the classified
 // open-dependency facts. For each dependency ID, it returns the IDs of open
 // issues that depend on it.
@@ -638,14 +607,14 @@ func buildUnblocksMap(issues []annotation.AnnotatedIssue) map[string][]string {
 	return m
 }
 
-// partitionWorkable splits the workable rows into the three buckets `lit ready`
-// presents and the cross-project rollup counts: in-progress work, ready leaves
-// (open and unblocked), and blocked leaves (carried as their readiness so a
-// caller can summarize by reason). An in-progress leaf is in-progress even if it
-// also has blockers, matching the presentation order below.
+// partitionWorkable splits the workable rows into the three buckets the
+// cross-project rollup counts: in-progress work, ready leaves (open and
+// unblocked), and blocked leaves (carried as their readiness so a caller can
+// summarize by reason). An in-progress leaf is in-progress even if it also has
+// blockers.
 // [LAW:one-source-of-truth] The ready/in-flight/blocked partition is defined
-// here once; `lit ready`'s sections and the cross-project counts are the same
-// classification, so a per-project count can never disagree with `lit ready`.
+// here once, so a per-project count can never disagree with the classification
+// every workable view applies.
 func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []annotation.AnnotatedIssue, blocked []IssueReadiness) {
 	for i := range issues {
 		readiness := ClassifyReadiness(issues[i].Annotations)
@@ -661,75 +630,8 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 	return inProgress, ready, blocked
 }
 
-// printReadyOutput partitions annotated issues into in-progress, ready, and blocked
-// sections. Ready issues are shown with a preamble and inline dependency context,
-// followed by in-progress work, then a count-by-reason summary for blocked issues.
-func printReadyOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
-	resolved := resolveColumns(columns)
-	inProgress, ready, blocked := partitionWorkable(issues)
-
-	unblocksMap := buildUnblocksMap(issues)
-
-	if err := printReadySection(w, resolved, ready, unblocksMap); err != nil {
-		return err
-	}
-	if err := printInProgressSection(w, resolved, inProgress); err != nil {
-		return err
-	}
-	if err := printBlockedSummary(w, blocked); err != nil {
-		return err
-	}
-	return printRankInversions(w, issues)
-}
-
-// printReadySection prints the preamble, separator, and numbered ready items
-// with inline dependency info. Caps output at readyMaxItems. Agent coaching
-// output belongs on stdout — stderr is for errors only.
-// [LAW:single-enforcer] Single point of preamble emission.
-func printReadySection(w io.Writer, columns []string, ready []annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
-	if _, err := fmt.Fprintln(w, readyPreamble); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w, strings.Repeat("─", 80)); err != nil {
-		return err
-	}
-	if _, err := fmt.Fprintln(w); err != nil {
-		return err
-	}
-
-	display := ready
-	if len(display) > readyMaxItems {
-		display = display[:readyMaxItems]
-	}
-
-	if len(display) == 0 {
-		_, err := fmt.Fprintln(w, "(none ready)")
-		return err
-	}
-
-	// [LAW:dataflow-not-control-flow] Every ready issue flows through the same
-	// numbered-line + dependency rendering path. Empty dependency slices produce
-	// no output lines, not skipped operations.
-	for i, entry := range display {
-		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", nil))
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-		if err := printInlineDeps(w, entry, unblocksMap); err != nil {
-			return err
-		}
-	}
-
-	if len(ready) > readyMaxItems {
-		if _, err := fmt.Fprintf(w, "\n(%d more ready tickets not shown)\n", len(ready)-readyMaxItems); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 // printInlineDeps prints the shared epic/depends-on/unblocks context lines
-// indented under a ready item. The ready view shows exactly the common core;
+// indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
 func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
@@ -742,23 +644,6 @@ func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap m
 	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }
 
-func printInProgressSection(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
-	if len(issues) == 0 {
-		return nil
-	}
-	if _, err := fmt.Fprintln(w, "\nIn Progress"); err != nil {
-		return err
-	}
-	for _, entry := range issues {
-		line := formatIssueColumns(entry.Issue, columns, " | ", nil)
-		line += " | Last Update: " + inProgressSuffix(entry)
-		if _, err := fmt.Fprintln(w, line); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func inProgressSuffix(entry annotation.AnnotatedIssue) string {
 	age := time.Since(entry.UpdatedAt).Truncate(time.Minute)
 	suffix := fmt.Sprintf("%s", age)
@@ -766,22 +651,6 @@ func inProgressSuffix(entry annotation.AnnotatedIssue) string {
 		suffix += " (ORPHANED)"
 	}
 	return suffix
-}
-
-// printBlockedSummary prints a compact count-by-reason summary of blocked issues.
-func printBlockedSummary(w io.Writer, blocked []IssueReadiness) error {
-	if len(blocked) == 0 {
-		return nil
-	}
-	if _, err := fmt.Fprintf(w, "\nBlocked tickets: %d (blocked tickets are not displayed above)\n", len(blocked)); err != nil {
-		return err
-	}
-	for _, kc := range blockingKindCounts(blocked) {
-		if _, err := fmt.Fprintf(w, "  %d: %s\n", kc.Count, kc.Kind.String()); err != nil {
-			return err
-		}
-	}
-	return nil
 }
 
 // printRankInversions prints a count-only warning when dependencies are ranked

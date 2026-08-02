@@ -56,10 +56,12 @@ func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
 }
 
 // TestCompletionIncludesPreviouslyDriftedCommands pins the specific regression
-// this ticket fixes: these eleven were absent from the hand-written bash literal
-// before completion became a registry projection.
+// this ticket fixes: these were absent from the hand-written bash literal before
+// completion became a registry projection. (`queue` was among them but is now a
+// retired, hidden command deliberately excluded from completion — see
+// TestCompletionExcludesRetiredCommands.)
 func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
-	drifted := []string{"assign", "backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "queue", "snapshots"}
+	drifted := []string{"assign", "backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "snapshots"}
 	have := map[string]bool{}
 	for _, name := range topLevelNames(commandCompletionModel()) {
 		have[name] = true
@@ -67,6 +69,21 @@ func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
 	for _, name := range drifted {
 		if !have[name] {
 			t.Errorf("completion model missing command %q that the registry registers", name)
+		}
+	}
+}
+
+// TestCompletionExcludesRetiredCommands pins that a retired (Hidden) command is
+// off the advertised completion surface even though it stays dispatchable — the
+// same Hidden bit cobra reads for `--help`. [LAW:one-source-of-truth]
+func TestCompletionExcludesRetiredCommands(t *testing.T) {
+	have := map[string]bool{}
+	for _, name := range topLevelNames(commandCompletionModel()) {
+		have[name] = true
+	}
+	for _, retired := range []string{"ready", "queue"} {
+		if have[retired] {
+			t.Errorf("completion model advertises retired command %q; it must be hidden", retired)
 		}
 	}
 }
@@ -111,8 +128,8 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 	if !strings.Contains(help, "completion Generate shell completion script") {
 		t.Fatalf("help output missing completion command: %q", help)
 	}
-	if !strings.Contains(help, "ready List open work") {
-		t.Fatalf("help output missing ready command: %q", help)
+	if !strings.Contains(help, "next Print the next workable leaf to lit start") {
+		t.Fatalf("help output missing next command: %q", help)
 	}
 }
 
@@ -122,8 +139,8 @@ func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
 		t.Fatalf("Run(help) error = %v", err)
 	}
 	help := normalizeWhitespace(stdout.String())
-	if !strings.Contains(help, "ready List open work by readiness and rank") {
-		t.Fatalf("help output missing rank-based ready description: %q", help)
+	if !strings.Contains(help, "backlog List the full workable backlog in priority/rank order") {
+		t.Fatalf("help output missing rank-based backlog description: %q", help)
 	}
 	if !strings.Contains(help, "ls List issues (rank by default)") {
 		t.Fatalf("help output missing default rank ls description: %q", help)
