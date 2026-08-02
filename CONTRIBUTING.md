@@ -102,18 +102,10 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 ## Cutting a release
 
 A release ships once per **epic**, not per ticket. Ticket PRs accumulate their
-notes under `## [Unreleased]` in `CHANGELOG.md` and cut nothing on merge — the
-master build just runs the snapshot proof. When the epic's tickets are all
-merged, cut the release with a dedicated `chore(release)` PR:
+notes under `## [Unreleased]` in `CHANGELOG.md` and cut nothing on merge; no
+ticket PR, whatever its type, cuts a release on its own. When the epic's tickets
+are all merged, cut the release with a dedicated `chore(release)` PR that promotes
+the changelog version.
 
-1. Run `scripts/next-version.sh <minor|patch>` to get the tag (e.g. `v0.2.0`).
-   In that PR — which changes nothing but the changelog — rename `## [Unreleased]`
-   to `## [0.2.0] - <date>` (the version **without** the leading `v`) and add a
-   fresh empty `## [Unreleased]` above it.
-2. Merge. The master build (`release-validate.yml`) detects the now-untagged
-   version, builds + validates the real cross-platform artifact, then cuts the
-   tag and publishes the release. No local tag push.
-
-Policy: major is frozen, `minor` = feature/breaking, `patch` = pure bugfix.
-No ticket PR, whatever its type, cuts a release on its own; only the
-`chore(release)` promotion does.
+See [RELEASING.md](RELEASING.md) for the promotion steps, the CI mechanism, and
+the versioning policy — it is the single home for the release procedure.

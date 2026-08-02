@@ -30,6 +30,5 @@ the release version — just add your `CHANGELOG.md` entries under the existing
 cut only when an **epic** is finished, by a dedicated `chore(release)` PR that
 promotes the changelog.
 
-For the promotion steps and the CI mechanism behind them, see
-[CONTRIBUTING.md](CONTRIBUTING.md) → "Cutting a release" (the authoritative
-procedure); [RELEASING.md](RELEASING.md) is the full operator's guide.
+For the promotion steps, the CI mechanism, and the versioning policy, see
+[RELEASING.md](RELEASING.md) — the single home for the release procedure.
