@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -45,6 +46,86 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 	}
 }
 
+// The single-purpose commands folded into flags this pass are retired the same
+// way ready/queue were: a RetiredCommandError whose message names the surviving
+// flag, so a stale invocation is redirected rather than silently broken. Each
+// carries its own pointer, so the expected substrings differ per command.
+func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
+	cases := []struct {
+		name  string
+		wants []string
+	}{
+		{"assign", []string{"retired", "lit update", "--assignee"}},
+		{"ls-at", []string{"retired", "lit ls --at"}},
+		{"overview", []string{"retired", "lit stores --counts"}},
+	}
+	for _, tc := range cases {
+		var out bytes.Buffer
+		err := Run(context.Background(), &out, &out, []string{tc.name})
+
+		var retired RetiredCommandError
+		if !errors.As(err, &retired) {
+			t.Fatalf("lit %s error = %v (%T), want RetiredCommandError", tc.name, err, err)
+		}
+		if retired.Command != tc.name {
+			t.Errorf("RetiredCommandError.Command = %q, want %q", retired.Command, tc.name)
+		}
+		msg := err.Error()
+		for _, want := range tc.wants {
+			if !strings.Contains(msg, want) {
+				t.Errorf("lit %s error = %q, want it to mention %q", tc.name, msg, want)
+			}
+		}
+		if got := ExitCode(err); got != ExitValidation {
+			t.Errorf("lit %s exit code = %d, want %d", tc.name, got, ExitValidation)
+		}
+		if got := commandErrorReason(err); got != "retired_command" {
+			t.Errorf("lit %s reason = %q, want retired_command", tc.name, got)
+		}
+	}
+}
+
+// `bulk import` is a retired subcommand that answers with the pointer to
+// `backup restore` (which owns the same export-restore mechanism) even OUTSIDE a
+// workspace. It drives the production dispatch (`Run`) from a non-repo cwd: the
+// retirement must surface before any workspace open, so a user in a plain
+// directory gets the pointer, not "requires a git repository". This is the
+// skipApp path — a `runAppFamily`-with-nil-app test would skip `runWithApp`
+// entirely and so never exercise the bug this guards.
+func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir(nonRepo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	var out bytes.Buffer
+	err = Run(context.Background(), &out, &out, []string{"bulk", "import"})
+
+	var retired RetiredCommandError
+	if !errors.As(err, &retired) {
+		t.Fatalf("bulk import error = %v (%T), want RetiredCommandError (not a workspace error)", err, err)
+	}
+	if retired.Command != "bulk import" {
+		t.Errorf("RetiredCommandError.Command = %q, want %q", retired.Command, "bulk import")
+	}
+	for _, want := range []string{"retired", "lit backup restore"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("bulk import error = %q, want it to mention %q", err.Error(), want)
+		}
+	}
+	// It is dropped from the advertised bulk subcommand surface (completion/usage)
+	// while staying dispatchable. [LAW:one-source-of-truth]
+	for _, sub := range bulkFamily.visibleSubcommands() {
+		if sub.Name == "import" {
+			t.Errorf("bulk import must not appear in the advertised subcommand surface")
+		}
+	}
+}
+
 // The retired commands stay registered (so they can answer with the pointer) but
 // are marked Hidden, which is the single bit that keeps them off both `--help`
 // and the completion projection.
@@ -54,7 +135,7 @@ func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 	for _, s := range specs {
 		byName[s.Name] = s
 	}
-	for _, name := range []string{"ready", "queue"} {
+	for _, name := range []string{"ready", "queue", "assign", "ls-at", "overview"} {
 		spec, ok := byName[name]
 		if !ok {
 			t.Fatalf("retired command %q must stay registered so it can return its pointer", name)

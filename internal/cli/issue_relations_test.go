@@ -49,8 +49,11 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	if err := runAppFamily(parentFamily, ctx, &stdout, ap, []string{"set", "--child", child.ID, "--parent", parent.ID}); err != nil {
 		t.Fatalf("parent set --child/--parent error = %v", err)
 	}
-	if !strings.Contains(stdout.String(), "--parent-child-->") {
-		t.Fatalf("parent set output = %q, want parent-child arrow", stdout.String())
+	// `parent set` renders the parent-child edge through the same canonical
+	// projection `dep` uses, so the same edge reads the same way whichever
+	// command wrote it: child --child-of--> parent.
+	if !strings.Contains(stdout.String(), child.ID+" --child-of--> "+parent.ID) {
+		t.Fatalf("parent set output = %q, want child-of arrow", stdout.String())
 	}
 
 	detail, err := ap.Store.GetIssueDetail(ctx, child.ID)

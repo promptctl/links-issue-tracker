@@ -61,7 +61,10 @@ func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
 // retired, hidden command deliberately excluded from completion — see
 // TestCompletionExcludesRetiredCommands.)
 func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
-	drifted := []string{"assign", "backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "snapshots"}
+	// `assign` was among the originally-drifted commands but is now retired (folded
+	// into `update --assignee`) and deliberately excluded from completion — see
+	// TestCompletionExcludesRetiredCommands.
+	drifted := []string{"backlog", "downgrade", "followup", "import", "lifeboat", "next", "orphaned", "prefix", "snapshots"}
 	have := map[string]bool{}
 	for _, name := range topLevelNames(commandCompletionModel()) {
 		have[name] = true
@@ -81,7 +84,7 @@ func TestCompletionExcludesRetiredCommands(t *testing.T) {
 	for _, name := range topLevelNames(commandCompletionModel()) {
 		have[name] = true
 	}
-	for _, retired := range []string{"ready", "queue"} {
+	for _, retired := range []string{"ready", "queue", "assign", "ls-at", "overview"} {
 		if have[retired] {
 			t.Errorf("completion model advertises retired command %q; it must be hidden", retired)
 		}
@@ -142,7 +145,7 @@ func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
 	if !strings.Contains(help, "backlog List the full workable backlog in priority/rank order") {
 		t.Fatalf("help output missing rank-based backlog description: %q", help)
 	}
-	if !strings.Contains(help, "ls List issues (rank by default)") {
+	if !strings.Contains(help, "ls List issues (rank by default") {
 		t.Fatalf("help output missing default rank ls description: %q", help)
 	}
 	if !strings.Contains(help, "children List child issues by rank") {

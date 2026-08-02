@@ -160,6 +160,13 @@ func nestUnder(subs []SubcommandSpec, name string, children []SubcommandSpec) []
 type appSubcommand struct {
 	access app.AccessMode
 	run    appRunFn
+	// skipApp runs the handler WITHOUT opening a workspace. A retired subcommand
+	// answers with its documented pointer, which must be reachable from anywhere —
+	// like the top-level retirements — not gated behind a cwd-workspace open that
+	// fails outside a git repo. When set, familyCmd calls run with a nil app.
+	// [LAW:dataflow-not-control-flow] "does this subcommand need an app" is data on
+	// the row, not a branch on the subcommand name.
+	skipApp bool
 }
 
 // appRunFn is the canonical signature for app-mode handlers.
@@ -198,6 +205,12 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 		sub, err := f.resolve(args)
 		if err != nil {
 			return err
+		}
+		// A no-app subcommand (a retirement pointer) runs before any workspace
+		// open, so its message reaches the caller even outside a git repo — the
+		// break is reachable, never masked by a workspace error. [LAW:no-silent-failure]
+		if sub.skipApp {
+			return sub.run(r.ctx, r.stdout, nil, args[1:])
 		}
 		return runWithApp(r.ctx, sub.access, func(commandCtx context.Context, ap *app.App) error {
 			return sub.run(commandCtx, r.stdout, ap, args[1:])
@@ -288,8 +301,12 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessRead, workableRun(nextView))},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runOrphaned)},
-		{Name: "ls", Summary: "List issues (rank by default)", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, runList)},
+		// ls is a raw runner (not appCmd) because `--at <store-dir>` points it at a
+		// foreign store by path and must work outside the current workspace; the
+		// standard appCmd wrapper would open the cwd store before the handler runs.
+		// runList picks the store, then shares one query path. [LAW:one-source-of-truth]
+		{Name: "ls", Summary: "List issues (rank by default; --at <store-dir> lists a discovered store read-only)", GroupID: "operations",
+			Run: func(args []string) error { return runList(ctx, stdout, args) }},
 		{Name: "show", Summary: "Show issue details", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runShow)},
 		{Name: "history", Summary: "Show an issue's state-transition history", GroupID: "operations",
@@ -300,8 +317,11 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessWrite, runRank)},
 		{Name: "start", Summary: "Claim issue work", GroupID: "operations",
 			Run: r.transitionCmd(startSpec)},
-		{Name: "assign", Summary: "Reassign an issue to a different agent (without changing status)", GroupID: "operations",
-			Run: r.appCmd(app.AccessWrite, runAssign)},
+		// assign is retired: reassigning is a single-field write folded into
+		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the
+		// documented pointer, not cobra's unknown-command error. [LAW:no-silent-failure]
+		{Name: "assign", Summary: "(retired) use `lit update <id> --assignee <name>`", GroupID: "operations", Hidden: true,
+			Run: retiredCommandRun("assign", assignRetirementGuidance)},
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
 			Run: r.transitionCmd(doneSpec)},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
@@ -329,29 +349,36 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessRead, runChildren)},
 		{Name: "dep", Summary: "Manage dependency edges", GroupID: "structure",
 			Run: r.familyCmd(depFamily), Subcommands: depFamily.visibleSubcommands()},
-		{Name: "export", Summary: "Export workspace snapshot", GroupID: "data",
+		// export/backup/snapshots are three snapshot-shaped names over two distinct
+		// mechanisms; the summaries below name the mechanism so a reader can tell the
+		// JSON data-export family (export → backup) from the Dolt filesystem/database
+		// snapshots (snapshots). The mechanisms are deliberately NOT merged.
+		{Name: "export", Summary: "Write the backlog out as a portable JSON tree (the data-export primitive; `import`'s inverse)", GroupID: "data",
 			Run: r.appCmd(app.AccessRead, runExport)},
-		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec", GroupID: "data",
+		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec (the one tree-import home)", GroupID: "data",
 			Run: r.appCmd(app.AccessWrite, runImportTree)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runWorkspace(stdout, ws, args)
 			})},
-		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory)", GroupID: "maintenance",
-			Run: func(args []string) error { return runStores(stdout, args) }},
-		{Name: "ls-at", Summary: "List a discovered store's active issues read-only by its storage directory (from `lit stores`)", GroupID: "maintenance",
-			Run: func(args []string) error { return runLsAt(ctx, stdout, args) }},
-		{Name: "overview", Summary: "Cross-project view: ready / in-flight / blocked counts across every discovered store under the given roots (default: current directory). Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
-			Run: func(args []string) error { return runOverview(ctx, stdout, args) }},
+		{Name: "stores", Summary: "List discovered lit store locations under the given roots (default: current directory); --counts reports each store's ready / in-flight / blocked counts instead. Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
+			Run: func(args []string) error { return runStores(ctx, stdout, args) }},
+		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
+		// `lit stores --counts`. Both kept hidden+dispatchable for the documented
+		// pointer. [LAW:no-silent-failure]
+		{Name: "ls-at", Summary: "(retired) use `lit ls --at <store-dir>`", GroupID: "maintenance", Hidden: true,
+			Run: retiredCommandRun("ls-at", lsAtRetirementGuidance)},
+		{Name: "overview", Summary: "(retired) use `lit stores --counts`", GroupID: "maintenance", Hidden: true,
+			Run: retiredCommandRun("overview", overviewRetirementGuidance)},
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runPrefix(stdout, ws, args)
 			})},
 		{Name: "doctor", Summary: "Health check", GroupID: "maintenance",
 			Run: r.appCmdDynamic(resolveDoctorAccessMode, runDoctor)},
-		{Name: "backup", Summary: "Backup snapshot operations", GroupID: "data",
+		{Name: "backup", Summary: "Rotating JSON data-export backups — create/list/restore (wraps `export`; the data-recovery family, distinct from `snapshots`)", GroupID: "data",
 			Run: r.familyCmd(backupFamily), Subcommands: backupFamily.visibleSubcommands()},
-		{Name: "snapshots", Summary: "Filesystem-level workspace snapshots", GroupID: "data",
+		{Name: "snapshots", Summary: "Dolt filesystem-level database snapshots — new/list/restore (the whole-database mechanism, distinct from JSON `backup`)", GroupID: "data",
 			Run: r.wsFamilyCmd(snapshotsFamily), Subcommands: snapshotsFamily.visibleSubcommands()},
 		{Name: "lifeboat", Summary: "Below-the-gate data recovery: dump a workspace's raw contents at any schema version, or recover it to a clean rebuild", GroupID: "maintenance",
 			Run: r.wsFamilyCmd(lifeboatFamily), Subcommands: lifeboatFamily.visibleSubcommands()},
@@ -400,6 +427,17 @@ func buildPassthroughCommand(spec CommandSpec) *cobra.Command {
 // lives, so `lit ready` and `lit queue` both point the caller at the curated
 // surface. [LAW:one-source-of-truth] one pointer, shared by both retirements.
 const workableRetirementGuidance = "use `lit backlog` for the full ranked queue (blocked items shown inline) or `lit next` for the single leaf to start"
+
+// Retirement pointers for the single-purpose commands folded into flags in this
+// pass. Each names the surviving flag so a stale invocation is redirected, never
+// silently broken. [LAW:no-silent-failure] The intent stays reachable; only the
+// standalone verb is gone.
+const (
+	assignRetirementGuidance     = "reassigning is a field write: use `lit update <id> --assignee <name>` (with an optional `--reason`)"
+	lsAtRetirementGuidance       = "use `lit ls --at <store-dir>` — listing a discovered store read-only is now a flag on `ls`, not a separate command"
+	overviewRetirementGuidance   = "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`"
+	bulkImportRetirementGuidance = "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated"
+)
 
 // retiredCommandRun builds the handler for a command retired from the surface:
 // it runs nothing and returns a RetiredCommandError naming its replacement. The

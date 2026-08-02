@@ -54,7 +54,7 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 	gitInit(t, gitOnly)
 
 	var out bytes.Buffer
-	if err := runStores(&out, []string{root}); err != nil {
+	if err := runStores(context.Background(), &out, []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 
@@ -83,7 +83,7 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
-	err := runStores(&out, []string{missing})
+	err := runStores(context.Background(), &out, []string{missing})
 	if err == nil {
 		t.Fatalf("runStores() returned nil error with output %q; want a surfaced Discover failure", out.String())
 	}
@@ -101,7 +101,7 @@ func TestRunStoresEmptyWhenNoStores(t *testing.T) {
 	}
 
 	var out bytes.Buffer
-	if err := runStores(&out, []string{root}); err != nil {
+	if err := runStores(context.Background(), &out, []string{root}); err != nil {
 		t.Fatalf("runStores() error = %v", err)
 	}
 	if out.Len() != 0 {
@@ -355,6 +355,47 @@ func TestGatherCrossProjectRollupCountsWorkable(t *testing.T) {
 	}
 	if row.Label != wantPrefix {
 		t.Fatalf("row.Label = %q; want the config issue prefix %q", row.Label, wantPrefix)
+	}
+}
+
+// TestRunStoresCountsRendersRollup is the fold's acceptance: `stores --counts`
+// routes the same discovery walk into the cross-project count rollup (the former
+// `lit overview`), while bare `stores` still lists storage paths. Proves the flag
+// wiring end-to-end, not just the rollup helper in isolation.
+func TestRunStoresCountsRendersRollup(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("LIT_CONFIG_GLOBAL_PATH", "")
+	t.Setenv("LIT_CONFIG_PROJECT_PATH", "")
+
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks(root) error = %v", err)
+	}
+	repo := filepath.Join(root, "repoReal")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("mkdir repoReal: %v", err)
+	}
+	gitInit(t, repo)
+	_, wantPrefix := seedDiscoverableStore(t, repo, "real", "real-workspace-id")
+
+	var counts bytes.Buffer
+	if err := runStores(context.Background(), &counts, []string{"--counts", root}); err != nil {
+		t.Fatalf("runStores --counts error = %v", err)
+	}
+	got := counts.String()
+	for _, want := range []string{"PROJECT", "READY", "IN-FLIGHT", "BLOCKED", wantPrefix, "TOTAL"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stores --counts output %q missing %q", got, want)
+		}
+	}
+
+	// Bare `stores` lists paths — no count table leaks in without the flag.
+	var plain bytes.Buffer
+	if err := runStores(context.Background(), &plain, []string{root}); err != nil {
+		t.Fatalf("runStores (no --counts) error = %v", err)
+	}
+	if strings.Contains(plain.String(), "PROJECT") || strings.Contains(plain.String(), "TOTAL") {
+		t.Fatalf("bare stores must list paths, not a count table:\n%s", plain.String())
 	}
 }
 
