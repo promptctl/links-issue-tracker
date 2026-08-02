@@ -27,6 +27,14 @@ type CommandSpec struct {
 	// the scripts cannot enumerate a subcommand the registry doesn't.
 	// [LAW:one-source-of-truth]
 	Subcommands []SubcommandSpec
+	// Hidden keeps a real, dispatchable command out of the advertised surface —
+	// root `--help` and the shell-completion projection — without removing it
+	// from dispatch. A retired command stays invocable so it answers with a
+	// documented pointer rather than cobra's bare "unknown command", but the
+	// curated surface no longer lists it. Visibility is a typed property of the
+	// spec, declared once here and read by both the cobra registration and the
+	// completion model, so the two cannot disagree. [LAW:one-source-of-truth]
+	Hidden bool
 }
 
 // SubcommandSpec is one legal first-argument name plus its own nested tree
@@ -258,12 +266,16 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.appCmd(app.AccessWrite, runNew)},
 		{Name: "followup", Summary: "File a follow-up issue parented to a just-closed ticket", GroupID: "operations",
 			Run: r.appCmd(app.AccessWrite, runFollowup)},
-		{Name: "ready", Summary: "List open work by readiness and rank", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, workableRun(readyView))},
+		// ready and queue are retired: next (one leaf) and backlog (full ranked
+		// queue, blocked inline) are the only named workable views. Kept as hidden,
+		// dispatchable specs so an old invocation gets the documented pointer, not
+		// cobra's bare unknown-command error. [LAW:no-silent-failure]
+		{Name: "ready", Summary: "(retired) use `lit backlog` or `lit next`", GroupID: "operations", Hidden: true,
+			Run: retiredCommandRun("ready", workableRetirementGuidance)},
 		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
-		{Name: "queue", Summary: "List the rank-ordered pull sequence (pullable items only, terse)", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, workableRun(queueView))},
+		{Name: "queue", Summary: "(retired) use `lit backlog` or `lit next`", GroupID: "operations", Hidden: true,
+			Run: retiredCommandRun("queue", workableRetirementGuidance)},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableRun(nextView))},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
@@ -318,7 +330,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: func(args []string) error { return runStores(stdout, args) }},
 		{Name: "ls-at", Summary: "List a discovered store's active issues read-only by its storage directory (from `lit stores`)", GroupID: "maintenance",
 			Run: func(args []string) error { return runLsAt(ctx, stdout, args) }},
-		{Name: "overview", Summary: "Cross-project view: ready / in-flight / blocked counts across every discovered store under the given roots (default: current directory). Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit ready` when it configures required_fields", GroupID: "maintenance",
+		{Name: "overview", Summary: "Cross-project view: ready / in-flight / blocked counts across every discovered store under the given roots (default: current directory). Readiness is store-intrinsic; per-repo required-fields policy is not applied, so counts can differ from a project's own `lit backlog` when it configures required_fields", GroupID: "maintenance",
 			Run: func(args []string) error { return runOverview(ctx, stdout, args) }},
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
@@ -364,10 +376,27 @@ func buildPassthroughCommand(spec CommandSpec) *cobra.Command {
 		Short:              spec.Summary,
 		Long:               long,
 		GroupID:            spec.GroupID,
+		Hidden:             spec.Hidden,
 		DisableFlagParsing: true,
 		Args:               cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return spec.Run(args)
 		},
+	}
+}
+
+// workableRetirementGuidance names where the retired workable views' intent now
+// lives, so `lit ready` and `lit queue` both point the caller at the curated
+// surface. [LAW:one-source-of-truth] one pointer, shared by both retirements.
+const workableRetirementGuidance = "use `lit backlog` for the full ranked queue (blocked items shown inline) or `lit next` for the single leaf to start"
+
+// retiredCommandRun builds the handler for a command retired from the surface:
+// it runs nothing and returns a RetiredCommandError naming its replacement. The
+// command stays registered (Hidden) so the invocation yields this documented
+// pointer instead of cobra's bare unknown-command error — the break is
+// deliberate and explained, never silent. [LAW:no-silent-failure]
+func retiredCommandRun(command, replacement string) CommandRunner {
+	return func([]string) error {
+		return RetiredCommandError{Command: command, Replacement: replacement}
 	}
 }

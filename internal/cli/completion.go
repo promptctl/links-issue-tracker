@@ -16,6 +16,17 @@ import (
 // the registry has nor invent one it lacks. [LAW:one-source-of-truth]
 func commandCompletionModel() []CommandSpec {
 	specs := commandSpecs(context.Background(), io.Discard, io.Discard)
+	// Hidden specs (retired commands kept dispatchable for their pointer) are off
+	// the advertised surface, so they are off completion too — the same Hidden bit
+	// cobra reads for `--help`. [LAW:one-source-of-truth]
+	visible := make([]CommandSpec, 0, len(specs)+1)
+	for _, s := range specs {
+		if s.Hidden {
+			continue
+		}
+		visible = append(visible, s)
+	}
+	specs = visible
 	// help is cobra's built-in command (only the default completion command is
 	// disabled on root, not help), so it is a real invocable command the
 	// registry does not own. Listing it keeps completion faithful to the actual

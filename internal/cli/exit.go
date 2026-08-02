@@ -51,6 +51,12 @@ func ExitCode(err error) int {
 	if errors.As(err, &unknownCmd) {
 		return ExitValidation
 	}
+	// A retired command sits alongside an unknown one: the name is no longer a
+	// working command, so the caller must pick a different path. Same class.
+	var retiredCmd RetiredCommandError
+	if errors.As(err, &retiredCmd) {
+		return ExitValidation
+	}
 	var validation ValidationError
 	if errors.As(err, &validation) {
 		return ExitValidation

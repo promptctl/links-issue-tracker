@@ -10,17 +10,16 @@ import (
 )
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
-// bottom understands the ordering story before scanning rows. The text leans
-// on the same vocabulary `lit ready` uses ("backlog") but stresses what makes
-// this view different: nothing is hidden, blocked items keep their ranked
-// position, and the surrounding context (epic, depends-on, blocking reasons)
-// is visible so the order is auditable.
+// bottom understands the ordering story before scanning rows. It stresses what
+// makes this the full workable view: nothing is hidden, blocked items keep their
+// ranked position, and the surrounding context (epic, depends-on, blocking
+// reasons) is visible so the order is auditable.
 const backlogPreamble = `This is the full backlog in priority/rank order — every workable item, blocked or not.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
-Use 'lit next' to pick the top workable item; 'lit ready' to skip blocked items entirely.`
+Use 'lit next' to pick the top workable item to start.`
 
 // printBacklogOutput renders the backlog as a numbered list with inline
 // per-row context (parent epic, dependencies, blocking reasons, in-progress

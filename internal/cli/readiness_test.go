@@ -159,27 +159,3 @@ func TestClassifyReadinessComposite(t *testing.T) {
 	}
 }
 
-// TestBlockingKindCounts pins the blocked-summary aggregation contract: counts
-// are per issue per kind (several reasons of one kind on one issue count
-// once), emitted in the canonical blocking-kind order, zero-count kinds
-// omitted.
-func TestBlockingKindCounts(t *testing.T) {
-	rs := []IssueReadiness{
-		ClassifyReadiness([]annotation.Annotation{
-			{Kind: annotation.OpenDependency, Message: "dep-1"},
-			{Kind: annotation.OpenDependency, Message: "dep-2"},
-			{Kind: annotation.MissingField, Message: "title"},
-		}),
-		ClassifyReadiness([]annotation.Annotation{
-			{Kind: annotation.OpenDependency, Message: "dep-3"},
-		}),
-	}
-	got := blockingKindCounts(rs)
-	want := []kindCount{
-		{Kind: annotation.MissingField, Count: 1},
-		{Kind: annotation.OpenDependency, Count: 2},
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("blockingKindCounts() = %v, want %v", got, want)
-	}
-}

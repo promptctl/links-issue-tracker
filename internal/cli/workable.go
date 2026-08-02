@@ -13,14 +13,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// The workable commands (ready, backlog, queue, next) are one query with four
-// presentations: they all consume gatherWorkableAnnotated and differ only in
-// which knobs they expose, the extra ordering they apply, which rows they keep,
-// and how they render. That variability is data — a workableView preset — not
-// four run functions re-declaring the same flags.
+// The workable commands (backlog, next) are one query with two presentations:
+// they both consume gatherWorkableAnnotated and differ only in which knobs they
+// expose, the extra ordering they apply, which rows they keep, and how they
+// render. That variability is data — a workableView preset — not two run
+// functions re-declaring the same flags. (The retired ready/queue views were two
+// further presets over this same query; retiring them was a surface change, not
+// a query change.)
 // [LAW:one-type-per-behavior] one runner; presentation is a value, not a verb.
-// [LAW:no-mode-explosion] the four presets below are the closed set; no generic
-// fifth command exposes the view as a flag.
+// [LAW:no-mode-explosion] the two presets below are the closed set; no generic
+// third command exposes the view as a flag.
 
 // workableKnobs carries the parsed values of every knob a workable view can
 // expose. A view that does not expose a knob leaves it at the zero value,
@@ -80,19 +82,6 @@ func keepAll(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue { ret
 
 // Each view answers a different question over the same query, and the answer
 // is encoded entirely in its preset values:
-// `ready` — "what should the next agent work on": blocked pushed below
-// unblocked (a presentation choice, so the sort lives here, not in the shared
-// gather), coaching prose, sectioned.
-var readyView = workableView{
-	name:       "ready",
-	hasFilters: true, hasLimit: true, hasColumns: true,
-	order: func(rows []annotation.AnnotatedIssue, _ map[string]store.IssueRelations, _ workableKnobs) {
-		sortByBlockingAnnotations(rows)
-	},
-	keep:   keepAll,
-	render: printReadyOutput,
-}
-
 // `backlog` — "why is the queue shaped this way": canonical rank order with
 // blocked items interleaved at their ranked position, full per-row context.
 var backlogView = workableView{
@@ -101,16 +90,6 @@ var backlogView = workableView{
 	order:  orderCanonical,
 	keep:   keepAll,
 	render: printBacklogOutput,
-}
-
-// `queue` — "what is the rank-ordered pull sequence I am shaping with lit
-// rank": blocked dropped, terse, uncapped, canonical order unmodified.
-var queueView = workableView{
-	name:       "queue",
-	hasFilters: true, hasLimit: true, hasColumns: true,
-	order:  orderCanonical,
-	keep:   filterPullable,
-	render: printQueueOutput,
 }
 
 // `next` — "the one leaf to lit start now": optional --continue bias is one

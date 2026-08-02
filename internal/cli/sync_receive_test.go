@@ -57,7 +57,7 @@ func TestAutomaticReceiveFastForwardsEstablishedClone(t *testing.T) {
 	// Enable automatic receive for this test, then run an ordinary command: the
 	// inline receive fires after it and fast-forwards the consumer.
 	t.Setenv(DisableAutoSyncEnvVar, "0")
-	runCLIInDir(t, consumer, "ready")
+	runCLIInDir(t, consumer, "backlog")
 
 	backlog := runCLIInDir(t, consumer, "backlog")
 	if !strings.Contains(backlog, "second-ticket") {

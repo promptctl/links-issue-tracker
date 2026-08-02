@@ -7,17 +7,23 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// runQueueAnnotated reproduces what `lit queue` computes — the shared workable
-// pipeline narrowed to the pullable (not-blocked) set — so the lane gate can be
-// observed across all three membership surfaces (ready/queue/next) from one
-// fixture, reading real annotated rows rather than a removed JSON encoding.
-func (h readyTestHarness) runQueueAnnotated(rf workableFilter) []annotation.AnnotatedIssue {
+// runPullableAnnotated reproduces the pullable set an agent can start now — the
+// shared workable gather narrowed to rows with no readiness blocker — so the
+// lane gate's membership can be observed directly. It classifies through the
+// public ClassifyReadiness rather than any retired command's private filter.
+func (h readyTestHarness) runPullableAnnotated(rf workableFilter) []annotation.AnnotatedIssue {
 	h.t.Helper()
 	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
-	return filterPullable(annotated)
+	var pullable []annotation.AnnotatedIssue
+	for _, row := range annotated {
+		if ClassifyReadiness(row.Annotations).IsReady() {
+			pullable = append(pullable, row)
+		}
+	}
+	return pullable
 }
 
 func containsID(rows []annotation.AnnotatedIssue, id string) bool {
@@ -39,13 +45,13 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	urgentLater := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "urgent later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
-	// queue drops the blocked urgent sibling; only the earlier one is pullable.
-	queue := h.runQueueAnnotated(workableFilter{})
-	if !containsID(queue, first.ID) {
-		t.Fatalf("queue missing earlier sibling %q; got=%v", first.ID, ids(queue))
+	// The pullable set drops the blocked urgent sibling; only the earlier one is pullable.
+	pullable := h.runPullableAnnotated(workableFilter{})
+	if !containsID(pullable, first.ID) {
+		t.Fatalf("pullable missing earlier sibling %q; got=%v", first.ID, ids(pullable))
 	}
-	if containsID(queue, urgentLater.ID) {
-		t.Fatalf("queue contains blocked urgent later sibling %q; got=%v", urgentLater.ID, ids(queue))
+	if containsID(pullable, urgentLater.ID) {
+		t.Fatalf("pullable contains blocked urgent later sibling %q; got=%v", urgentLater.ID, ids(pullable))
 	}
 
 	// next hands back the earlier sibling, never the urgent-but-blocked one.
@@ -53,13 +59,11 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 		t.Fatalf("next = %q, want earlier sibling %q", pick.ID, first.ID)
 	}
 
-	// ready sinks the blocked sibling below the ready one and annotates it with
-	// the blocking fact pointing at the earlier sibling.
-	ready := h.runReadyAnnotated(workableFilter{}, 0)
-	if ready[0].ID != first.ID {
-		t.Fatalf("ready[0] = %q, want earlier sibling %q; order=%v", ready[0].ID, first.ID, ids(ready))
-	}
-	row := findRow(ready, urgentLater.ID)
+	// The blocked sibling stays present in the full workable view, annotated with
+	// the blocking fact pointing at the earlier sibling — the gate is a readiness
+	// classification, not a removal from the backlog.
+	workable := h.runWorkableAnnotated(workableFilter{}, 0)
+	row := findRow(workable, urgentLater.ID)
 	ann, ok := findAnnotation(row.Annotations, annotation.EarlierSiblingPending)
 	if !ok {
 		t.Fatalf("urgent later sibling missing EarlierSiblingPending annotation; annotations=%v", row.Annotations)
@@ -74,9 +78,9 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	// The moment the earlier sibling closes, the later one becomes pullable —
 	// membership flips on the close, no rank or priority change needed.
 	h.closeIssue(first.ID, "done")
-	queueAfter := h.runQueueAnnotated(workableFilter{})
-	if !containsID(queueAfter, urgentLater.ID) {
-		t.Fatalf("after closing earlier sibling, queue should contain %q; got=%v", urgentLater.ID, ids(queueAfter))
+	pullableAfter := h.runPullableAnnotated(workableFilter{})
+	if !containsID(pullableAfter, urgentLater.ID) {
+		t.Fatalf("after closing earlier sibling, pullable should contain %q; got=%v", urgentLater.ID, ids(pullableAfter))
 	}
 	if pick := h.runNextRow(false); pick.ID != urgentLater.ID {
 		t.Fatalf("after closing earlier sibling, next = %q, want %q", pick.ID, urgentLater.ID)
@@ -93,9 +97,9 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
 	otherLane := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "other lane", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "b"})
 
-	queue := h.runQueueAnnotated(workableFilter{})
-	if !containsID(queue, first.ID) || !containsID(queue, otherLane.ID) {
-		t.Fatalf("both lanes should be pullable in parallel; got=%v", ids(queue))
+	pullable := h.runPullableAnnotated(workableFilter{})
+	if !containsID(pullable, first.ID) || !containsID(pullable, otherLane.ID) {
+		t.Fatalf("both lanes should be pullable in parallel; got=%v", ids(pullable))
 	}
 	// Among ready items urgent still orders first — ordering is unchanged.
 	if pick := h.runNextRow(false); pick.ID != otherLane.ID {
@@ -115,9 +119,9 @@ func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 
 	// Viewing only alice's work, her later sibling is still gated by bob's open
 	// earlier sibling even though bob's ticket is filtered out of the view.
-	queue := h.runQueueAnnotated(workableFilter{Assignee: "alice"})
-	if containsID(queue, mineLater.ID) {
-		t.Fatalf("alice's later sibling should be gated by bob's open earlier sibling; got=%v", ids(queue))
+	pullable := h.runPullableAnnotated(workableFilter{Assignee: "alice"})
+	if containsID(pullable, mineLater.ID) {
+		t.Fatalf("alice's later sibling should be gated by bob's open earlier sibling; got=%v", ids(pullable))
 	}
 }
 
