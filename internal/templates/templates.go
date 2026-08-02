@@ -18,7 +18,7 @@ const (
 	AgentsSectionTemplateName    = "agents-section.md"
 	PrePushHookTemplateName      = "pre-push-hook.sh"
 	QuickstartTemplateName       = "quickstart.md"
-	QuickstartReadyTemplateName  = "quickstart-ready.md"
+	QuickstartWorkTemplateName   = "quickstart-work.md"
 	QuickstartNewTemplateName    = "quickstart-new.md"
 	QuickstartUpdateTemplateName = "quickstart-update.md"
 	QuickstartDoneTemplateName   = "quickstart-done.md"
@@ -35,7 +35,7 @@ var (
 		AgentsSectionTemplateName,
 		PrePushHookTemplateName,
 		QuickstartTemplateName,
-		QuickstartReadyTemplateName,
+		QuickstartWorkTemplateName,
 		QuickstartNewTemplateName,
 		QuickstartUpdateTemplateName,
 		QuickstartDoneTemplateName,
@@ -46,7 +46,7 @@ var (
 	// [LAW:one-source-of-truth] CLI/UX mapping for template identity lives here, not spread across commands.
 	shortAliases = map[string]string{
 		"quickstart":        QuickstartTemplateName,
-		"quickstart-ready":  QuickstartReadyTemplateName,
+		"quickstart-work":   QuickstartWorkTemplateName,
 		"quickstart-new":    QuickstartNewTemplateName,
 		"quickstart-update": QuickstartUpdateTemplateName,
 		"quickstart-done":   QuickstartDoneTemplateName,

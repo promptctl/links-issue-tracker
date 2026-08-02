@@ -18,7 +18,7 @@ small, predictable CLI.
   no drift between "what the tracker says" and "what the branch contains."
 - **Every mutation is a commit.** State is a Dolt database, so issue history is real,
   auditable version history — not an activity log bolted onto a SaaS.
-- **Built agent-first.** Commands like `lit ready`, `lit start`, and `lit done` return
+- **Built agent-first.** Commands like `lit next`, `lit start`, and `lit done` return
   guidance, not just data — the workflow an agent should follow is baked into the output.
 - **One write boundary, one identity per clone.** All worktrees of a clone share one issue
   view (keyed off `git rev-parse --git-common-dir`). You never edit the database by hand.
@@ -60,7 +60,7 @@ From inside any git repository:
 lit init                                              # set up the workspace for this clone
 lit new --title "Build the landing page" \
         --topic landing --type task                   # file your first issue
-lit ready                                             # see what's workable, in priority order
+lit backlog                                           # see what's workable, in priority order
 lit start <id>                                        # claim a ticket
 lit done <id>                                         # finish it (a two-step confirm follows)
 ```

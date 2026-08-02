@@ -45,11 +45,13 @@ Pass `--bottom` when you're filing a batch in order and want creation order pres
 ## 3. See what's workable
 
 ```sh
-lit ready
+lit backlog
 ```
 
-`ready` is the pull view: open work in rank order, blocked items excluded, the top item
-being what should be picked up next. With one ticket filed, yours is the top item.
+`backlog` is the pull view: every workable item in rank order, blocked items shown inline so
+the queue shape is legible, the top item being what should be picked up next. With one ticket
+filed, yours is the top item. (Want just the single next leaf to start, without the list? Use
+`lit next`.)
 
 To read a ticket in full before touching anything:
 
@@ -92,7 +94,7 @@ that distinction honestly.
 ## You've done the whole loop
 
 ```text
-lit init → lit new → lit ready → lit show → lit start → lit comment add → lit done (twice)
+lit init → lit new → lit backlog → lit show → lit start → lit comment add → lit done (twice)
 ```
 
 That loop is the product. Everything else — dependencies, epics, lanes, sync — is

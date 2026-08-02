@@ -602,23 +602,23 @@ schema range is what determines whether this binary can open a given workspace.
 ### `lit quickstart`
 
 ```text
-lit quickstart [ready|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]
+lit quickstart [work|new|update|done|doctor] [--refresh] [--eject[=LIST]] [--force]
 ```
 
 Bare `lit quickstart` prints the router: the authoritative, always-current entry point
 for the loop documented in [Agent setup](agent-setup.md), listing the topic subcommands
-and the `lit ready` → `lit start <id>` fastpath. Each topic prints task-specific
-guidance at the moment of need: `ready` (finding and starting work), `new` (creating
+and the `lit next` → `lit start <id>` fastpath. Each topic prints task-specific
+guidance at the moment of need: `work` (finding and starting work), `new` (creating
 tickets), `update` (managing existing tickets), `done` (finishing work), `doctor`
 (troubleshooting). `--eject` copies the embedded default templates to the global
 override path so you can customize them (`LIST` is comma-separated short names, e.g.
-`quickstart,quickstart-ready,agents,hook`; `--force` overwrites existing overrides);
+`quickstart,quickstart-work,agents,hook`; `--force` overwrites existing overrides);
 `--refresh` re-syncs managed repo assets and reports override drift without touching
 overrides. Topics take no flags.
 
 Mutation commands point back here at the moment of need: the text success output of
 `new`/`followup` ends with a one-line breadcrumb at `lit quickstart new`, `start` at
-`lit quickstart ready`, `done`/`close` at `lit quickstart done`, and
+`lit quickstart work`, `done`/`close` at `lit quickstart done`, and
 `update`/`rank`/`label`/`parent`/`dep` at `lit quickstart update`.
 
 ### `lit completion`
