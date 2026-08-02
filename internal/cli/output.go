@@ -101,7 +101,7 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 			return err
 		}
 	}
-	// "unblocks:" surfaces the same leverage signal `lit ready` shows inline:
+	// "unblocks:" surfaces the same leverage signal `lit backlog` shows inline:
 	// IDs of open issues that depend on this one, i.e. would lose this as an
 	// open dependency when it closes. Empty list = no leverage; line omitted.
 	if ids := openUnblockIDs(detail.Blocks); len(ids) > 0 {

@@ -46,6 +46,10 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &unknownCmd) {
 		return "unknown_command"
 	}
+	var retiredCmd RetiredCommandError
+	if errors.As(err, &retiredCmd) {
+		return "retired_command"
+	}
 	var usage UsageError
 	if errors.As(err, &usage) {
 		return "usage_error"
@@ -84,6 +88,11 @@ func commandErrorRemediation(reason string) string {
 	switch reason {
 	case "unknown_command":
 		return "Run `lit --help` (or `lit help <command>`) to select a supported command path."
+	case "retired_command":
+		// The error message already names the replacement command(s), so a second
+		// remediation line would be a drifting copy of it. Emit none.
+		// [LAW:one-source-of-truth]
+		return ""
 	case "usage_error":
 		return "Run the command with `--help` and retry with valid arguments."
 	case "unsupported_output_flag":

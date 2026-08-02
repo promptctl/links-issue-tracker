@@ -53,7 +53,7 @@ func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
 	// Run an ordinary command with automatic sync enabled: the inline receive
 	// fires, sees the divergence, and reconciles it into linear history.
 	t.Setenv(DisableAutoSyncEnvVar, "0")
-	runCLIInDir(t, consumer, "ready")
+	runCLIInDir(t, consumer, "backlog")
 
 	// The consumer now carries BOTH edits.
 	show := runCLIInDir(t, consumer, "show", ticketID)
@@ -72,7 +72,7 @@ func TestAutomaticReconcileLinearizesDivergedClone(t *testing.T) {
 
 	// Producer fast-forwards to the reconciled head and sees both edits.
 	t.Setenv(DisableAutoSyncEnvVar, "0")
-	runCLIInDir(t, producer, "ready")
+	runCLIInDir(t, producer, "backlog")
 	producerShow := runCLIInDir(t, producer, "show", ticketID)
 	if !strings.Contains(producerShow, "alpha") || !strings.Contains(strings.ToLower(producerShow), "urgent") {
 		t.Fatalf("producer missing converged edits after fast-forward receive:\n%s", producerShow)

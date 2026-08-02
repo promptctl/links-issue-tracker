@@ -122,35 +122,34 @@ func (h readyTestHarness) addDependency(dependentID, dependencyID string) {
 	}
 }
 
-// runReadyAnnotated reproduces exactly what `lit ready` computes — the shared
-// workable pipeline plus the ready-specific blocked-to-bottom sort and limit —
-// and returns the annotated rows. With --json removed this is the honest probe
-// of the command's logic: it inspects the same prepared rows the text renderer
-// consumes, so annotation/parent-epic/order assertions read real domain values
-// rather than re-parsing text. [LAW:single-enforcer]
-func (h readyTestHarness) runReadyAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
+// runWorkableAnnotated reproduces what the surviving workable views compute: the
+// shared gather (which already surfaces any focus path to the top) plus the
+// limit, returning the rows in backlog order — canonical rank/priority, with
+// blocked items kept inline at their ranked position. It inspects the same
+// prepared rows the text renderer consumes, so annotation/parent-epic assertions
+// read real domain values rather than re-parsing text. [LAW:single-enforcer]
+func (h readyTestHarness) runWorkableAnnotated(rf workableFilter, limit int) []annotation.AnnotatedIssue {
 	h.t.Helper()
 	annotated, _, err := gatherWorkableAnnotated(h.ctx, h.ap, rf)
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated(%+v) error = %v", rf, err)
 	}
-	sortByBlockingAnnotations(annotated)
 	return applyLimit(annotated, limit)
 }
 
-func (h readyTestHarness) runReadyText(args ...string) string {
+func (h readyTestHarness) runWorkableText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runWorkable(h.ctx, &stdout, h.ap, args, readyView); err != nil {
-		h.t.Fatalf("runReady(%v) error = %v", args, err)
+	if err := runWorkable(h.ctx, &stdout, h.ap, args, backlogView); err != nil {
+		h.t.Fatalf("runBacklog(%v) error = %v", args, err)
 	}
 	return stdout.String()
 }
 
-func (h readyTestHarness) runReadyErr(args ...string) error {
+func (h readyTestHarness) runWorkableErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runWorkable(h.ctx, &stdout, h.ap, args, readyView)
+	return runWorkable(h.ctx, &stdout, h.ap, args, backlogView)
 }
 
 func findAnnotation(annotations []annotation.Annotation, kind annotation.Kind) (annotation.Annotation, bool) {
@@ -189,26 +188,21 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	})
 	h.closeIssue(closed.ID, "not ready work")
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 	}
-	if !ClassifyReadiness(got[0].Annotations).IsReady() {
-		t.Fatalf("got[0] should not be blocked, annotations=%#v", got[0].Annotations)
+	byID := map[string]annotation.AnnotatedIssue{got[0].ID: got[0], got[1].ID: got[1]}
+	if !ClassifyReadiness(byID[openA.ID].Annotations).IsReady() {
+		t.Fatalf("openA should not be blocked, annotations=%#v", byID[openA.ID].Annotations)
 	}
-	if got[0].ID != openA.ID {
-		t.Fatalf("got[0].ID = %q, want %q", got[0].ID, openA.ID)
+	if ClassifyReadiness(byID[openB.ID].Annotations).IsReady() {
+		t.Fatalf("openB should be blocked, annotations=%#v", byID[openB.ID].Annotations)
 	}
-	if ClassifyReadiness(got[1].Annotations).IsReady() {
-		t.Fatalf("got[1] should be blocked, annotations=%#v", got[1].Annotations)
-	}
-	if got[1].ID != openB.ID {
-		t.Fatalf("got[1].ID = %q, want %q", got[1].ID, openB.ID)
-	}
-	blocker, ok := findAnnotation(got[1].Annotations, annotation.OpenDependency)
+	blocker, ok := findAnnotation(byID[openB.ID].Annotations, annotation.OpenDependency)
 	if !ok {
-		t.Fatalf("got[1] missing open_dependency annotation: %#v", got[1].Annotations)
+		t.Fatalf("openB missing open_dependency annotation: %#v", byID[openB.ID].Annotations)
 	}
 	if blocker.Message != openA.ID {
 		t.Fatalf("open_dependency message = %q, want %q", blocker.Message, openA.ID)
@@ -232,7 +226,7 @@ func TestRunReadyMarksNeedsDesignLabelAsBlocked(t *testing.T) {
 		Labels:    []string{NeedsDesignLabel},
 	})
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2; got=%#v", len(got), got)
 	}
@@ -267,7 +261,7 @@ func TestRunReadySupportsAssigneeAndLimit(t *testing.T) {
 		Assignee:  "bob",
 	})
 
-	got := h.runReadyAnnotated(workableFilter{Assignee: "alice"}, 1)
+	got := h.runWorkableAnnotated(workableFilter{Assignee: "alice"}, 1)
 
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1; got=%#v", len(got), got)
@@ -289,7 +283,7 @@ func TestRunReadyAcceptsOmitemptyRequiredFieldAndAnnotatesMissing(t *testing.T) 
 		Description: "still missing assignee",
 	})
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
@@ -313,7 +307,7 @@ func TestRunReadyErrorsOnInvalidRequiredField(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeReadyConfig("made_up_field")
 
-	err := h.runReadyErr()
+	err := h.runWorkableErr()
 	if err == nil {
 		t.Fatal("runReady expected error for invalid required field")
 	}
@@ -338,7 +332,7 @@ func TestRunReadyShowsInProgressSection(t *testing.T) {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -364,7 +358,7 @@ func TestRunReadyAnnotatesOrphanedInProgressIssues(t *testing.T) {
 	}
 	h.backdateUpdatedAt(issue.ID, 25*time.Hour)
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -387,7 +381,7 @@ func TestRunReadyNoOrphanedAnnotationWhenRecent(t *testing.T) {
 		t.Fatalf("StartIssue error = %v", err)
 	}
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 	if len(got) != 1 {
 		t.Fatalf("len(got) = %d, want 1", len(got))
 	}
@@ -418,7 +412,7 @@ func TestRunReadyAnnotatesRankInversion(t *testing.T) {
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	if len(got) != 2 {
 		t.Fatalf("len(got) = %d, want 2", len(got))
@@ -462,7 +456,7 @@ func TestRunReadyNoRankInversionWhenDependencyRankedAbove(t *testing.T) {
 	// second depends on first — first (dependency) ranked above second → no inversion.
 	h.addDependency(second.ID, first.ID)
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	for _, entry := range got {
 		if entry.ID == second.ID {
@@ -493,31 +487,12 @@ func TestRunReadyTextOutputShowsRankInversions(t *testing.T) {
 	// first depends on second — second (dependency) has worse rank → inversion.
 	h.addDependency(first.ID, second.ID)
 
-	text := h.runReadyText()
+	text := h.runWorkableText()
 	if !strings.Contains(text, "rank inversion") {
 		t.Fatalf("text output missing rank inversion warning: %q", text)
 	}
 	if !strings.Contains(text, "lit doctor --fix") {
 		t.Fatalf("text output missing fix instructions: %q", text)
-	}
-}
-
-func TestRunReadyPreambleGoesToStdout(t *testing.T) {
-	h := newReadyTestHarness(t)
-
-	h.createIssue(store.CreateIssueInput{Prefix: "test",
-		Title:     "Some task",
-		Topic:     "task",
-		IssueType: "task",
-		Priority:  1,
-	})
-
-	stdout := h.runReadyText()
-	if !strings.Contains(stdout, "This is the backlog") {
-		t.Fatal("stdout missing preamble")
-	}
-	if !strings.Contains(stdout, "─") {
-		t.Fatal("stdout missing separator line")
 	}
 }
 
@@ -531,7 +506,7 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 		Title: "Second", Topic: "bbb", IssueType: "task", Priority: 0,
 	})
 
-	text := h.runReadyText()
+	text := h.runWorkableText()
 	aIdx := strings.Index(text, a.ID)
 	bIdx := strings.Index(text, b.ID)
 	if aIdx < 0 || bIdx < 0 {
@@ -542,47 +517,6 @@ func TestRunReadyTextOutputShowsNumberedItems(t *testing.T) {
 	}
 	if !strings.Contains(text, " 1. ") || !strings.Contains(text, " 2. ") {
 		t.Fatal("expected numbered items in output")
-	}
-}
-
-func TestRunReadyTextOutputShowsInlineDeps(t *testing.T) {
-	h := newReadyTestHarness(t)
-
-	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test",
-		Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1,
-	})
-	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test",
-		Title: "Dependent", Topic: "dep", IssueType: "task", Priority: 0,
-	})
-	h.addDependency(dependent.ID, blocker.ID)
-
-	text := h.runReadyText()
-	if !strings.Contains(text, "unblocks: "+dependent.ID) {
-		t.Fatalf("expected unblocks line for blocker, got: %s", text)
-	}
-}
-
-func TestRunReadyTextOutputCapsAt10(t *testing.T) {
-	h := newReadyTestHarness(t)
-
-	for i := 0; i < 12; i++ {
-		h.createIssue(store.CreateIssueInput{Prefix: "test",
-			Title:     fmt.Sprintf("Task %d", i),
-			Topic:     fmt.Sprintf("topic-%02d", i),
-			IssueType: "task",
-			Priority:  model.Priority(i % 2),
-		})
-	}
-
-	text := h.runReadyText()
-	if !strings.Contains(text, "10. ") {
-		t.Fatal("expected 10th numbered item")
-	}
-	if strings.Contains(text, "11. ") {
-		t.Fatal("should not show 11th numbered item")
-	}
-	if !strings.Contains(text, "2 more ready tickets not shown") {
-		t.Fatalf("expected overflow message, got: %s", text)
 	}
 }
 
@@ -612,7 +546,7 @@ func TestRunReadyExcludesEpics(t *testing.T) {
 		Priority:  1,
 	})
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	gotIDs := make(map[string]bool, len(got))
 	for _, entry := range got {
@@ -672,7 +606,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 		ParentID:  nonEpicParent.ID,
 	})
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	byID := make(map[string]annotation.AnnotatedIssue, len(got))
 	for _, entry := range got {
@@ -705,7 +639,7 @@ func TestRunReadyCarriesParentEpic(t *testing.T) {
 		t.Errorf("feature-child row has ParentEpic=%+v; want nil (parent is non-epic)", featureChildRow.ParentEpic)
 	}
 
-	text := h.runReadyText()
+	text := h.runWorkableText()
 	if !strings.Contains(text, "epic: "+epic.ID+"  "+epic.Title) {
 		t.Errorf("text output missing 'epic: %s  %s' line; output:\n%s", epic.ID, epic.Title, text)
 	}
@@ -758,7 +692,7 @@ func TestRunReadyOrdersLeavesByCompositeRank(t *testing.T) {
 		Lane:      "a2",
 	})
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 
 	gotIDs := make([]string, len(got))
 	for i, entry := range got {
@@ -779,7 +713,7 @@ func TestRunReadyReturnsConfigErrorForInvalidProjectConfig(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.writeProjectConfig("[ready\nrequired_fields = [\"description\"]")
 
-	err := h.runReadyErr()
+	err := h.runWorkableErr()
 	if err == nil {
 		t.Fatal("runReady expected config parse error")
 	}
@@ -794,22 +728,6 @@ func (h readyTestHarness) setLabels(issueID string, labels ...string) {
 	h.t.Helper()
 	if _, err := h.ap.Store.Apply(h.ctx, issueID, store.Change{Fields: store.UpdateIssueInput{Labels: &labels}}); err != nil {
 		h.t.Fatalf("Apply(labels) error = %v", err)
-	}
-}
-
-func assertReadyOrder(t *testing.T, got []annotation.AnnotatedIssue, want []string) {
-	t.Helper()
-	gotIDs := make([]string, len(got))
-	for i, entry := range got {
-		gotIDs[i] = entry.ID
-	}
-	if len(gotIDs) != len(want) {
-		t.Fatalf("ready returned %d rows, want %d; ids=%v", len(gotIDs), len(want), gotIDs)
-	}
-	for i := range want {
-		if gotIDs[i] != want[i] {
-			t.Fatalf("ready row %d = %q, want %q; full order=%v", i, gotIDs[i], want[i], gotIDs)
-		}
 	}
 }
 
@@ -837,10 +755,16 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	})
 	h.setLabels(c3.ID, FocusLabel)
 
-	got := h.runReadyAnnotated(workableFilter{}, 0)
-	// c1 is the only ready path member and outranks the unrelated urgent item;
-	// c2/c3 are sibling-gated and pushed below by the blocked-presentation sort.
-	assertReadyOrder(t, got, []string{c1.ID, urgent.ID, c2.ID, c3.ID})
+	// Focusing the goal surfaces its earliest ready prerequisite as the next
+	// thing to start — above the unrelated urgent item, which would otherwise win
+	// on priority. `lit next` is the surviving "what should I start" surface.
+	if pick := h.runNextRow(false); pick.ID != c1.ID {
+		t.Fatalf("next = %q, want earliest ready prerequisite %q", pick.ID, c1.ID)
+	}
+
+	// Every path member carries the focus_path fact pointing at the goal; the
+	// unrelated urgent item does not; and focus never unblocks a gated member.
+	got := h.runWorkableAnnotated(workableFilter{}, 0)
 	byID := map[string]annotation.AnnotatedIssue{}
 	for _, row := range got {
 		byID[row.ID] = row
@@ -861,11 +785,15 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 		t.Fatalf("focus must not unblock gated path member %s", c2.ID)
 	}
 
+	// The path auto-advances as each prerequisite closes: next walks c1 → c2 → c3.
 	h.closeIssue(c1.ID, "done")
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c2.ID, urgent.ID, c3.ID})
-
+	if pick := h.runNextRow(false); pick.ID != c2.ID {
+		t.Fatalf("after closing c1, next = %q, want %q", pick.ID, c2.ID)
+	}
 	h.closeIssue(c2.ID, "done")
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c3.ID, urgent.ID})
+	if pick := h.runNextRow(false); pick.ID != c3.ID {
+		t.Fatalf("after closing c2, next = %q, want %q", pick.ID, c3.ID)
+	}
 }
 
 // The path follows explicit dependency edges transitively: focusing a goal
@@ -873,7 +801,8 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	// A standing-urgent, unrelated item that focus must surface work above.
+	_ = h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
 	})
 	b := h.createIssue(store.CreateIssueInput{Prefix: "test",
@@ -889,7 +818,11 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 	h.addDependency(a.ID, b.ID)
 	h.setLabels(goal.ID, FocusLabel)
 
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{b.ID, urgent.ID, a.ID, goal.ID})
+	// Focus follows explicit dependency edges transitively (goal→a→b), so the
+	// only ready path member — b — is what surfaces to start next.
+	if pick := h.runNextRow(false); pick.ID != b.ID {
+		t.Fatalf("next = %q, want transitive prerequisite %q", pick.ID, b.ID)
+	}
 }
 
 // Removing the focus label restores normal priority ordering, and urgent
@@ -908,14 +841,23 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 	})
 	h.addDependency(goal.ID, prereq.ID)
 
-	// Urgent goal, no focus: its prerequisite does NOT inherit urgency.
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{urgent.ID, prereq.ID, goal.ID})
+	// Urgent goal, no focus: the standing-urgent item is next; the goal's
+	// prerequisite does NOT inherit the goal's urgency, so it does not surface.
+	if pick := h.runNextRow(false); pick.ID != urgent.ID {
+		t.Fatalf("no focus: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
+	}
 
+	// Focusing the goal surfaces its prerequisite above the unrelated urgent item.
 	h.setLabels(goal.ID, FocusLabel)
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{prereq.ID, urgent.ID, goal.ID})
+	if pick := h.runNextRow(false); pick.ID != prereq.ID {
+		t.Fatalf("focused: next = %q, want surfaced prerequisite %q", pick.ID, prereq.ID)
+	}
 
+	// Removing focus restores the standing-urgent ordering.
 	h.setLabels(goal.ID)
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{urgent.ID, prereq.ID, goal.ID})
+	if pick := h.runNextRow(false); pick.ID != urgent.ID {
+		t.Fatalf("focus removed: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
+	}
 }
 
 // Focusing an epic surfaces its unfinished children: container expansion is a
@@ -923,7 +865,8 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 func TestFocusPathExpandsContainerChildren(t *testing.T) {
 	h := newReadyTestHarness(t)
 
-	urgent := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	// A standing-urgent, unrelated item that focus must surface a child above.
+	_ = h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Unrelated urgent", Topic: "noise", IssueType: "task", Priority: 1,
 	})
 	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
@@ -932,10 +875,16 @@ func TestFocusPathExpandsContainerChildren(t *testing.T) {
 	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Child 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
-	c2 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	// A second child that focus also expands onto the path but that stays gated
+	// behind c1, so it is not the one that surfaces next.
+	_ = h.createIssue(store.CreateIssueInput{Prefix: "test",
 		Title: "Child 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	h.setLabels(epic.ID, FocusLabel)
 
-	assertReadyOrder(t, h.runReadyAnnotated(workableFilter{}, 0), []string{c1.ID, urgent.ID, c2.ID})
+	// Focusing an epic expands its children onto the path; the first ready child
+	// surfaces as next.
+	if pick := h.runNextRow(false); pick.ID != c1.ID {
+		t.Fatalf("next = %q, want first ready child %q", pick.ID, c1.ID)
+	}
 }

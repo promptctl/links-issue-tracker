@@ -593,7 +593,7 @@ type workableFilter struct {
 // pushing blocked items to the bottom) is applied by the caller, not here, so
 // consumers that want the unmodified ranking (`lit backlog`) see it as ordered.
 //
-// [LAW:single-enforcer] `lit ready`, `lit next`, and `lit backlog` all
+// [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
 func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
@@ -615,7 +615,7 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 // policy, sort into canonical order, enrich with parent epics. It takes the
 // store and the policy directly — not an *app.App — so any opened store drives
 // it, including a read-only foreign store the process is not cd'd into.
-// [LAW:one-source-of-truth] `lit ready`/`next`/`backlog` and the cross-project
+// [LAW:one-source-of-truth] `lit next`/`backlog` and the cross-project
 // rollup share this one definition of "what is workable, annotated how".
 func classifyWorkable(ctx context.Context, st *store.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
@@ -685,7 +685,7 @@ func classifyWorkable(ctx context.Context, st *store.Store, requiredFields []str
 }
 
 // runOrphaned lists in_progress issues whose last update is older than
-// orphanedThreshold — the same definition `lit ready` uses for the
+// orphanedThreshold — the same definition `lit backlog` uses for the
 // "(ORPHANED)" marker, surfaced as a focused command for reclamation
 // workflows.
 //
@@ -715,7 +715,7 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	// Containers (epics) derive state from children; their own UpdatedAt
 	// has no relationship to whether any agent is working on them, so
 	// orphaning them based on it is meaningless. Drop them — orphan is
-	// a leaf-only concept here, same as in `lit ready`/`lit next`.
+	// a leaf-only concept here, same as in `lit backlog`/`lit next`.
 	issues = filterWorkableIssues(issues)
 	annotated, err := annotation.Annotate(ctx, issues, newOrphanedAnnotator(orphanedThreshold))
 	if err != nil {
@@ -1735,6 +1735,22 @@ type UnsupportedError struct {
 }
 
 func (e UnsupportedError) Error() string { return e.Message }
+
+// RetiredCommandError signals invocation of a command that has been retired from
+// the presented surface. Retirement is deliberate and documented: the command
+// still resolves (so the caller gets this pointer instead of cobra's bare
+// "unknown command"), but it no longer runs — its intent now lives in the named
+// replacement(s). [LAW:types-are-the-program] Retirement is its own typed reason
+// with its own exit code and remediation, distinct from an unknown command (a
+// name that never existed) and an unsupported flag.
+type RetiredCommandError struct {
+	Command     string // the retired command as invoked, e.g. "ready"
+	Replacement string // guidance naming where the command's intent now lives
+}
+
+func (e RetiredCommandError) Error() string {
+	return fmt.Sprintf("the %q command has been retired; %s", e.Command, e.Replacement)
+}
 
 // OutsideWorkspaceError signals that the command requires a git repository context.
 type OutsideWorkspaceError struct {
