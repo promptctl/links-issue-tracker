@@ -1379,7 +1379,7 @@ func TestCloseTransitionAllowsEmptyReason(t *testing.T) {
 // of the target-state lifecycle: each of the six non-identity (from -> to)
 // pairs must be reachable by a single Apply call that records exactly one
 // event carrying the action's name. Closed is reached via Done — the neutral
-// success close `lit update --status closed` constructs. [LAW:behavior-not-structure]
+// success close `lit done` records. [LAW:behavior-not-structure]
 // asserts the contract (one transition per change, the variant's verb), not
 // the implementation (no compound action chains, no dispatch table).
 func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
@@ -1451,10 +1451,10 @@ func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
 // ApplyUpdate that changes the assignee records an event. The Actor on
 // issue_events is the audit substrate for "list every agent that interacted
 // with this ticket" history queries; suppressing the reclaim event would
-// erase the agent's claim from history. `lit update --status in_progress`
-// with a new assignee on an already-in_progress issue is the canonical
-// agent-reclaim path — it records a start event carrying only the assignee
-// change (no from==to status row; history reflects actual mutations).
+// erase the agent's claim from history. `lit start` with a new assignee on an
+// already-in_progress issue is the canonical agent-reclaim path — it records a
+// start event carrying only the assignee change (no from==to status row;
+// history reflects actual mutations).
 func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

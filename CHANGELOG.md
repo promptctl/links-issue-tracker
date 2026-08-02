@@ -17,12 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `lit --help` now presents the state-transition verbs in two groups so the high-traffic status lifecycle stands out: the core verbs (`start`, `done`, `close`, `open`) stay under **Agent Operations**, while the low-traffic retention quartet (`archive`, `unarchive`, `delete`, `restore`) moves to its own **Issue Retention** group. The grouping mirrors the model's `StatusAction`/`RetentionAction` partition; every verb stays a first-class command — only its placement in help changed, never its dispatch.
+
 ### Fixed
 
 - Sync reconciliation of branches with unrelated histories no longer depends on a silent error-swallowing bug in the embedded Dolt driver. The driver's first-row pre-read discarded any error, so a query that failed on its first row (such as `DOLT_MERGE_BASE` raising "no common ancestor" for refs that share no history) could surface as an empty result set instead of the real error. The driver now propagates that error, and merge-base resolution recognizes the "no common ancestor" backend error as the unrelated-histories state directly — the same domain outcome it already handled via an empty result set.
 
 ### Removed
 
+- `lit update --status` is retired: `update` no longer changes an issue's status. The transition verbs (`lit start` / `lit done` / `lit close` / `lit open`) are now the single enforcer of the transition guardrails, so `update --status` is rejected with a documented pointer to them instead of routing status through a second, divergent path. This closes the former `--status closed` back door, which recorded a resolution-less `done` and bypassed `close`'s required outcome. The capability is fully reachable under the verbs; the break is deliberate and named, never silent. `update` remains the home for field edits (`--title`, `--description`, `--assignee`, `--labels`, `--lane`, etc.).
 - The `ready` and `queue` workable views are retired from the command surface, leaving `next` (the single leaf to start) and `backlog` (the full ranked queue with blocked items shown inline) as the only named workable views — `ls` remains the power query and `orphaned` its own staleness view. `lit ready` and `lit queue` no longer appear in `lit --help` or shell completion, and now fail with a documented pointer to `lit backlog` / `lit next` instead of running: the break is deliberate and explained, never silent. The retired presentations (ready's blocked-to-bottom re-sort and coaching preamble; queue's terse pullable-only list) are dropped — `backlog` and `next` carry the surviving intent.
 
 ### Security

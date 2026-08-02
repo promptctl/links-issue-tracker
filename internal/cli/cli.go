@@ -796,6 +796,15 @@ func runHistory(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	return printIssueHistory(stdout, detail)
 }
 
+// statusViaVerbsGuidance is returned when `lit update --status` is used. Status
+// is moved only by the transition verbs, which are [LAW:single-enforcer] the one
+// surface carrying the transition guardrails — `close` requires a resolution,
+// `start` does the claim transfer and identity resolution, each records its own
+// guidance. `update` sets fields; letting it also set status made it a second,
+// divergent face of the same mutation. The break is deliberate and documented:
+// the capability is fully reachable, just under the verbs. [LAW:no-silent-failure]
+const statusViaVerbsGuidance = "lit update no longer changes status — the transition verbs are the single enforcer of the transition guardrails. Use: `lit start <id>` (claim → in_progress), `lit done <id>` (finish → closed), `lit close <id> --resolution <duplicate|superseded|obsolete|wontfix>` (close with an outcome), `lit open <id>` (reopen)"
+
 func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("update")
@@ -807,74 +816,45 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
-	status := fs.String("status", "", "Status: open|in_progress|closed")
-	reason := fs.String("reason", "", "Status transition reason")
+	// --status stays registered (its value discarded) only so a stale invocation
+	// is intercepted with the documented pointer to the transition verbs below,
+	// not pflag's bare "unknown flag". Presence is detected via fs.Visit.
+	fs.String("status", "", "(removed) change status with the transition verbs: lit start|done|close|open")
+	reason := fs.String("reason", "", "Reason recorded on the field-change event")
 	resolveActor := registerActor(fs)
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--status <open|in_progress|closed>] [--reason <text>]"}
+		return UsageError{Message: "usage: lit update <id> [--title <text>] [--description <text>] [--prompt <text>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--lane <key>] [--reason <text>]"}
 	}
 	visited := map[string]bool{}
 	fs.Visit(func(flag *pflag.Flag) { visited[flag.Name] = true })
-	if visited["status"] && strings.TrimSpace(*status) == "" {
-		return errors.New("--status requires a non-empty value")
+	// Status is moved only by the transition verbs; `update` is field mutation.
+	// Rejecting --status here (rather than routing it through an action) keeps
+	// the verbs the single enforcer of the transition guardrails and stops
+	// `update` from being a second, divergent face of the same mutation — most
+	// concretely, no `--status closed` back door around `close`'s required
+	// resolution. The capability is fully reachable under the verbs; the break
+	// is deliberate and named, not silent. [LAW:single-enforcer] [LAW:no-silent-failure]
+	if visited["status"] {
+		return UsageError{Message: statusViaVerbsGuidance}
 	}
 
-	// [LAW:dataflow-not-control-flow] Always build one Change; variability lives in empty fields/action, not in which branch runs.
-	// The reason applies to both the transition event (Reason) and the field
-	// event (Fields.Reason). The actor resolves through the same identity rule
-	// as the assignee — the agent's session wins, else --by/$USER — and is
-	// recorded on every event the change produces. [LAW:single-enforcer]
+	// [LAW:dataflow-not-control-flow] Always build one Change; variability lives
+	// in which field pointers are set, not in which branch runs. The actor
+	// resolves through the same identity rule as the assignee — the agent's
+	// session wins, else --by/$USER — and is recorded on the field-change event.
+	// Fields.Reason annotates that event; with no action, there is no transition
+	// event for update to reason about. [LAW:single-enforcer]
 	in := store.Change{
-		Reason: strings.TrimSpace(*reason),
-		Actor:  resolveActor(),
+		Actor: resolveActor(),
 		Fields: store.UpdateIssueInput{
 			Reason: strings.TrimSpace(*reason),
 		},
-	}
-	if visited["status"] {
-		// CLI flags are a strict boundary: an unrecognized status is an error,
-		// never leniently defaulted — DefaultOpen here would silently turn a
-		// typo into a reopen. [LAW:no-silent-failure]
-		targetState, err := model.ParseState(*status)
-		if err != nil {
-			return err
-		}
-		// Target state → canonical action is boundary constructor policy, owned
-		// where the "make the status X" intent is expressed. Closed constructs
-		// Done — the neutral success close — because a resolution-less Close is
-		// unconstructible; `lit close` is the boundary that records outcomes.
-		switch targetState {
-		case model.StateOpen:
-			in.Action = model.Reopen{}
-		case model.StateInProgress:
-			// Mirror `lit start`: when the user expressed no assignee intent at
-			// all, ask the resolver so a bare `--status in_progress` still picks
-			// up CLAUDE_CODE_SESSION_ID. The discriminator is flag presence, not
-			// value emptiness — an explicit empty is a clear, never an invitation
-			// to self-assign. [LAW:no-silent-failure]
-			transitionAssignee := resolveIdentity("")
-			if visited["assignee"] {
-				transitionAssignee = strings.TrimSpace(*assignee)
-			}
-			in.Action = model.Start{Assignee: transitionAssignee}
-		case model.StateClosed:
-			in.Action = model.Done{}
-		}
-		if in.Reason == "" {
-			// The synthesized transition reason is `lit update` provenance, not
-			// store policy, so it is composed here at the command boundary.
-			prior, err := ap.Store.GetIssue(ctx, positional[0])
-			if err != nil {
-				return err
-			}
-			in.Reason = fmt.Sprintf("status update via lit update: %s -> %s", prior.StatusValue(), targetState)
-		}
 	}
 	if visited["title"] {
 		value := *title
