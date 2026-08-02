@@ -1161,7 +1161,7 @@ func displayAssignee(assignee string) string {
 // topic" (archive, delete, reopen, ...), not a skipped branch.
 // [LAW:dataflow-not-control-flow]
 var transitionBreadcrumbTopics = map[model.ActionName]string{
-	model.ActionStart: "ready",
+	model.ActionStart: "work",
 	model.ActionDone:  "done",
 	model.ActionClose: "done",
 }

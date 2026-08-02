@@ -17,7 +17,7 @@ var quickstartTopics = []struct {
 	Token    string
 	Template string
 }{
-	{"ready", templates.QuickstartReadyTemplateName},
+	{"work", templates.QuickstartWorkTemplateName},
 	{"new", templates.QuickstartNewTemplateName},
 	{"update", templates.QuickstartUpdateTemplateName},
 	{"done", templates.QuickstartDoneTemplateName},

@@ -87,7 +87,7 @@ lit quickstart
 It prints the current, authoritative workflow. The loop it describes is:
 
 ```sh
-lit ready                 # what's workable now, top item first (or: lit next / lit backlog / lit queue)
+lit next                  # the top workable ticket, ready to start (or: lit backlog for the full ranked queue)
 lit show <id>             # read the full ticket before you touch code
 lit start <id>            # claim it (moves it to in_progress, assigns it to you)
 # ...do the work...

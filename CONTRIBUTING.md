@@ -85,7 +85,7 @@ Work is tracked with `lit`, not GitHub Issues. After cloning and building, run:
 lit quickstart      # prints the live command reference and the agent loop
 ```
 
-Pull the next ready ticket (`lit ready`), claim it (`lit start <id>`), and mark
+Pull the next ready ticket (`lit next`), claim it (`lit start <id>`), and mark
 it done when complete (`lit done <id>`). If you're pointing an AI agent at the
 repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 

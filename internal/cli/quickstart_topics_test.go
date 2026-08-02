@@ -44,7 +44,7 @@ func TestQuickstartBareOutputIsRouter(t *testing.T) {
 			t.Fatalf("router output missing topic %q:\n%s", topic, output)
 		}
 	}
-	for _, fastpath := range []string{"`lit ready`", "`lit start <id>`"} {
+	for _, fastpath := range []string{"`lit next`", "`lit start <id>`"} {
 		if !strings.Contains(output, fastpath) {
 			t.Fatalf("router output missing fastpath line %q:\n%s", fastpath, output)
 		}
@@ -59,7 +59,7 @@ func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
 
 	// Each topic's guidance must mention the command the topic is about.
 	wantByTopic := map[string]string{
-		"ready":  "lit ready",
+		"work":   "lit next",
 		"new":    "lit new",
 		"update": "lit rank",
 		"done":   "lit done",
@@ -73,7 +73,7 @@ func TestQuickstartTopicPrintsTaskGuidance(t *testing.T) {
 		if !strings.Contains(output, want) {
 			t.Fatalf("quickstart %s output missing %q:\n%s", topic, want, output)
 		}
-		if strings.Contains(output, "lit quickstart ready` —") {
+		if strings.Contains(output, "lit quickstart work` —") {
 			t.Fatalf("quickstart %s printed the router instead of topic guidance:\n%s", topic, output)
 		}
 	}
@@ -86,7 +86,7 @@ func TestQuickstartUnknownTopicErrors(t *testing.T) {
 	if err == nil {
 		t.Fatal("Run(quickstart bogus) expected error, got nil")
 	}
-	if !strings.Contains(err.Error(), "ready, new, update, done, doctor") {
+	if !strings.Contains(err.Error(), "work, new, update, done, doctor") {
 		t.Fatalf("unknown-topic error should list valid topics, got %q", err.Error())
 	}
 }
@@ -95,8 +95,8 @@ func TestQuickstartTopicRejectsFlags(t *testing.T) {
 	chdirTempRepo(t)
 
 	for _, args := range [][]string{
-		{"quickstart", "ready", "--refresh"},
-		{"quickstart", "ready", "--eject"},
+		{"quickstart", "work", "--refresh"},
+		{"quickstart", "work", "--eject"},
 	} {
 		if _, err := runLit(t, args...); err == nil {
 			t.Fatalf("Run(%v) expected error, got nil", args)
@@ -132,9 +132,9 @@ func TestQuickstartSoilSectionOnRouterOnly(t *testing.T) {
 	if !strings.Contains(router, "## Soil") {
 		t.Fatalf("router output with soil_mode=true missing Soil section:\n%s", router)
 	}
-	topic, err := runLit(t, "quickstart", "ready")
+	topic, err := runLit(t, "quickstart", "work")
 	if err != nil {
-		t.Fatalf("Run(quickstart ready) error = %v", err)
+		t.Fatalf("Run(quickstart work) error = %v", err)
 	}
 	if strings.Contains(topic, "## Soil") {
 		t.Fatalf("topic output must not carry the Soil section:\n%s", topic)
@@ -144,19 +144,19 @@ func TestQuickstartSoilSectionOnRouterOnly(t *testing.T) {
 func TestQuickstartTopicHonorsProjectOverride(t *testing.T) {
 	repo := chdirTempRepo(t)
 
-	overridePath := filepath.Join(repo, ".lit", "templates", "quickstart-ready.md")
+	overridePath := filepath.Join(repo, ".lit", "templates", "quickstart-work.md")
 	if err := os.MkdirAll(filepath.Dir(overridePath), 0o755); err != nil {
 		t.Fatalf("MkdirAll(project templates) error = %v", err)
 	}
-	if err := os.WriteFile(overridePath, []byte("## Custom ready guidance\n"), 0o644); err != nil {
+	if err := os.WriteFile(overridePath, []byte("## Custom work guidance\n"), 0o644); err != nil {
 		t.Fatalf("WriteFile(override) error = %v", err)
 	}
 
-	output, err := runLit(t, "quickstart", "ready")
+	output, err := runLit(t, "quickstart", "work")
 	if err != nil {
-		t.Fatalf("Run(quickstart ready) error = %v", err)
+		t.Fatalf("Run(quickstart work) error = %v", err)
 	}
-	if !strings.Contains(output, "## Custom ready guidance") {
+	if !strings.Contains(output, "## Custom work guidance") {
 		t.Fatalf("topic output should honor the project override:\n%s", output)
 	}
 }

@@ -59,7 +59,7 @@ func TestMutationTextOutputEndsWithBreadcrumb(t *testing.T) {
 	if err := runTransition(ctx, &startOut, ap, []string{issueID}, startSpec); err != nil {
 		t.Fatalf("runTransition(start) error = %v", err)
 	}
-	if got, want := lastLine(startOut.String()), quickstartBreadcrumb("ready"); got != want {
+	if got, want := lastLine(startOut.String()), quickstartBreadcrumb("work"); got != want {
 		t.Fatalf("lit start last line = %q, want breadcrumb %q", got, want)
 	}
 

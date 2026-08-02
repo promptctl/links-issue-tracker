@@ -198,7 +198,7 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 		AgentsSectionTemplateName:    false,
 		PrePushHookTemplateName:      false,
 		QuickstartTemplateName:       false,
-		QuickstartReadyTemplateName:  false,
+		QuickstartWorkTemplateName:   false,
 		QuickstartNewTemplateName:    false,
 		QuickstartUpdateTemplateName: false,
 		QuickstartDoneTemplateName:   false,
