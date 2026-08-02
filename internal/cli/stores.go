@@ -2,15 +2,12 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
 	"text/tabwriter"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -24,14 +21,33 @@ import (
 // they are formatted: a write failure (a closed downstream pipe) stops with a
 // non-zero exit after the lines already emitted, the standard streaming-CLI
 // contract, rather than buffering the whole scan in memory to flush at once.
-func runStores(stdout io.Writer, args []string) error {
-	roots := args
+func runStores(ctx context.Context, stdout io.Writer, args []string) error {
+	fs := newCobraFlagSet("stores")
+	// --counts folds the former `lit overview` in: same discovery walk over the
+	// same roots, but each store is opened read-only and summarized by its
+	// ready/in-flight/blocked counts rather than merely named. It is a summary
+	// projection of the discovered set — a flag on stores, not a separate verb.
+	counts := fs.Bool("counts", false, "Report each discovered store's ready / in-flight / blocked counts (cross-project rollup) instead of listing storage paths")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	roots := make([]string, 0, fs.NArg())
+	for i := 0; i < fs.NArg(); i++ {
+		roots = append(roots, fs.Arg(i))
+	}
 	if len(roots) == 0 {
 		cwd, err := os.Getwd()
 		if err != nil {
 			return fmt.Errorf("get cwd: %w", err)
 		}
 		roots = []string{cwd}
+	}
+	if *counts {
+		rows, err := gatherCrossProjectRollup(ctx, roots)
+		if err != nil {
+			return err
+		}
+		return printCrossProjectRollup(stdout, rows)
 	}
 	locations, err := workspace.Discover(roots)
 	if err != nil {
@@ -45,48 +61,6 @@ func runStores(stdout io.Writer, args []string) error {
 		}
 	}
 	return nil
-}
-
-// runLsAt lists the active issues of the lit store at an explicit storage
-// directory — one of the paths `lit stores` prints — WITHOUT depending on the
-// current working directory's git repository. It is `lit ls` pointed at a foreign
-// store: same active-work default (open + in_progress) and same per-line format,
-// differing only in that the store is named by path instead of resolved from cwd.
-//
-// [LAW:one-source-of-truth] The storage-directory string is turned back into a
-// full store Location through LocationFromStorageDir — the one place that geometry
-// lives — so `lit stores` output feeds straight in without this command
-// re-deriving the "dolt"/"config.json" layout.
-//
-// [CLI] The store opens strictly read-only via OpenLocationForRead: a concurrent
-// writer in the store's own project is unaffected, and no write engine is taken.
-// stdout carries the issue lines and nothing else; a store that has no active
-// issues exits 0 with empty output.
-func runLsAt(ctx context.Context, stdout io.Writer, args []string) error {
-	if len(args) != 1 {
-		return errors.New("usage: lit ls-at <store-dir>  (a storage directory from `lit stores`)")
-	}
-	loc := workspace.LocationFromStorageDir(args[0])
-	st, err := app.OpenLocationForRead(ctx, loc)
-	if err != nil {
-		// [LAW:no-silent-failure] Name the path the operator pointed at so a wrong
-		// or un-initialized store dir is an actionable error, not an empty list.
-		return fmt.Errorf("open store at %q read-only: %w", args[0], err)
-	}
-	defer func() { _ = st.Close() }()
-
-	// [LAW:one-source-of-truth] Mirror `lit ls`'s active-work default (exclude
-	// closed) as data, so "that store's issues" means the same set here as there.
-	issues, err := st.ListIssues(ctx, store.ListIssuesFilter{
-		Statuses: []model.State{model.StateOpen, model.StateInProgress},
-	})
-	if err != nil {
-		// [LAW:no-silent-failure] Name the target path — as the open error above
-		// does — so a read failure over many stores (lit stores | xargs lit ls-at)
-		// says which store's read broke, not a bare store-layer error.
-		return fmt.Errorf("list issues at %q: %w", args[0], err)
-	}
-	return printIssueLines(stdout, issues, nil, nil)
 }
 
 // projectRollup is one project's row in the cross-project overview. It carries
@@ -109,38 +83,6 @@ type projectRollup struct {
 	Blocked    int
 	Err        error // store unreadable — counts unset
 	CloseErr   error // read succeeded (counts valid) but read-only close warned
-}
-
-// runOverview renders a holistic cross-project view: it discovers every lit store
-// beneath the given roots (default: current directory) and reports each project's
-// ready / in-flight / blocked workable counts read-only, with an aggregate across
-// them. It is the many-store rollup of the single-store `lit ls-at`.
-//
-// [LAW:one-source-of-truth] The ready/in-flight/blocked classification is the
-// exact partition `lit ready` uses (classifyWorkable + partitionWorkable), so a
-// project's cross-project counts can never disagree with its own `lit ready`.
-// Per-repo required-fields policy is deliberately NOT applied across the boundary:
-// it is repo config, not a store fact, and a discovered Location carries no repo
-// root to load it from — so readiness here is store-intrinsic, matching `lit ready`
-// exactly for the common case of no configured required_fields.
-//
-// [CLI] Every store opens strictly read-only, never contending with a project's
-// own writer. stdout carries the human-readable table; a store that cannot be read
-// is a clearly marked error row, not a fatal error and never silently dropped.
-func runOverview(ctx context.Context, stdout io.Writer, args []string) error {
-	roots := args
-	if len(roots) == 0 {
-		cwd, err := os.Getwd()
-		if err != nil {
-			return fmt.Errorf("get cwd: %w", err)
-		}
-		roots = []string{cwd}
-	}
-	rows, err := gatherCrossProjectRollup(ctx, roots)
-	if err != nil {
-		return err
-	}
-	return printCrossProjectRollup(stdout, rows)
 }
 
 // gatherCrossProjectRollup discovers every lit store beneath roots and rolls each
@@ -194,7 +136,8 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 	// field-presence gate driven by that config). Every store-intrinsic annotation
 	// — blockers, the lane gate, needs-design — still runs, so those DO cross the
 	// boundary; the required_fields policy is repo config, not a store fact, and a
-	// Location carries no repo root. See runOverview's [LAW:one-source-of-truth].
+	// Location carries no repo root. See gatherCrossProjectRollup's callers
+	// (`lit stores --counts`) and its [LAW:one-source-of-truth].
 	annotated, _, err := classifyWorkable(ctx, st, nil, workableFilter{})
 	if err != nil {
 		row.Err = err
@@ -216,7 +159,8 @@ func rollupLocation(ctx context.Context, loc workspace.Location) (row projectRol
 func printCrossProjectRollup(w io.Writer, rows []projectRollup) error {
 	// "No stores discovered" is a distinct state from "stores found, all empty":
 	// an all-zeros TOTAL cannot tell the two apart, so say it plainly and return,
-	// the way `lit ready` prints "(none ready)". [LAW:no-silent-failure]
+	// the way `lit backlog` says so plainly rather than printing an empty queue.
+	// [LAW:no-silent-failure]
 	if len(rows) == 0 {
 		_, err := fmt.Fprintln(w, "(no stores discovered)")
 		return err

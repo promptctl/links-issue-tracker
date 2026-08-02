@@ -89,7 +89,15 @@ func runParentSet(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "%s --parent-child--> %s\n", rel.SrcID, rel.DstID); err != nil {
+	// [LAW:one-source-of-truth] `parent set` and `dep add --type parent-child`
+	// write the SAME parent-child edge through the SAME store owner
+	// (setSingleValuedEdgeTx); `parent` is the ergonomic face of that one path,
+	// not a divergent second writer. The only thing that used to diverge was the
+	// *presented* line: this command printed "--parent-child-->" while `dep`
+	// prints the identical edge via depRelationForCLI/depRelationLine as
+	// "--child-of-->". Rendering through the same canonical projection here means
+	// one edge reads one way whichever command created it.
+	if _, err := fmt.Fprintln(stdout, depRelationLine(depRelationForCLI(rel))); err != nil {
 		return err
 	}
 	return emitBreadcrumb(stdout, "update")
