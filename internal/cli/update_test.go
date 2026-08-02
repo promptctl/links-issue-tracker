@@ -265,12 +265,18 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	}
 }
 
-func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
+// `update` no longer moves status: the transition verbs are the single enforcer
+// of the transition guardrails. Every requested status must be rejected with the
+// pointer to the verbs, and the issue must be left exactly as it was — no target
+// state has a back door through `update`. [LAW:single-enforcer] Closed is checked
+// explicitly because it was the sharpest gap: `--status closed` used to construct
+// a resolution-less Done, bypassing `close`'s required outcome.
+func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
 	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
-		Title:     "Update status",
+		Title:     "No status via update",
 		Topic:     "status",
 		IssueType: "task",
 		Priority:  0,
@@ -279,65 +285,34 @@ func TestRunUpdateSupportsStatusTransitionWithoutExplicitReason(t *testing.T) {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 
-	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", "in_progress", "--assignee", "tester"}); err != nil {
-		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
-	}
-
-	updated, err := ap.Store.GetIssue(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetIssue() error = %v", err)
-	}
-	if updated.State() != model.StateInProgress {
-		t.Fatalf("updated.State() = %q, want in_progress", updated.State())
-	}
-
-	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
-	if err != nil {
-		t.Fatalf("GetIssueDetail() error = %v", err)
-	}
-	if len(detail.Events) < 2 {
-		t.Fatalf("len(detail.Events) = %d, want >= 2", len(detail.Events))
-	}
-	last := detail.Events[len(detail.Events)-1]
-	if last.Action != "start" {
-		t.Fatalf("last.Action = %q, want start", last.Action)
-	}
-	if !strings.Contains(last.Reason, "status update via lit update") {
-		t.Fatalf("last.Reason = %q, want default update reason", last.Reason)
-	}
-}
-
-// Pins the --status boundary policy to the machine it feeds: each requested
-// state must land the issue in exactly that state, so the switch's constructed
-// action and the variant's Target() cannot drift apart. [LAW:one-source-of-truth]
-func TestRunUpdateStatusLandsOnRequestedState(t *testing.T) {
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
-		Title:     "Status round trip",
-		Topic:     "status",
-		IssueType: "task",
-		Priority:  0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-
-	// The order walks every arm through a real transition:
-	// open→in_progress, in_progress→closed, closed→open.
 	for _, status := range []string{"in_progress", "closed", "open"} {
 		var stdout bytes.Buffer
-		if err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", status}); err != nil {
-			t.Fatalf("runUpdate(--status %s) error = %v", status, err)
+		err := runUpdate(ctx, &stdout, ap, []string{created.ID, "--status", status})
+		if err == nil {
+			t.Fatalf("runUpdate(--status %s) error = nil, want rejection", status)
+		}
+		if got := ExitCode(err); got != ExitUsage {
+			t.Fatalf("runUpdate(--status %s) exit code = %d, want %d", status, got, ExitUsage)
+		}
+		if !strings.Contains(err.Error(), "lit start") || !strings.Contains(err.Error(), "lit close") {
+			t.Fatalf("runUpdate(--status %s) error = %q, want a pointer to the transition verbs", status, err.Error())
 		}
 		got, err := ap.Store.GetIssue(ctx, created.ID)
 		if err != nil {
 			t.Fatalf("GetIssue() error = %v", err)
 		}
-		if string(got.State()) != status {
-			t.Fatalf("after --status %s, State() = %q — the boundary's constructed action disagrees with its Target()", status, got.State())
+		if got.State() != model.StateOpen {
+			t.Fatalf("after rejected --status %s, State() = %q — update must not touch status", status, got.State())
+		}
+		detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
+		if err != nil {
+			t.Fatalf("GetIssueDetail() error = %v", err)
+		}
+		for _, h := range detail.Events {
+			switch h.Action {
+			case "start", "done", "close", "reopen":
+				t.Fatalf("rejected --status %s recorded transition action %q", status, h.Action)
+			}
 		}
 	}
 }
@@ -482,6 +457,8 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	}
 }
 
+// Even an empty --status= is rejected: presence of the flag is the trigger, so
+// there is no value-shaped edge case that slips through to touch status.
 func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
@@ -499,10 +476,13 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	var stdout bytes.Buffer
 	err = runUpdate(ctx, &stdout, ap, []string{created.ID, "--status="})
 	if err == nil {
-		t.Fatal("runUpdate(--status=) error = nil, want validation error")
+		t.Fatal("runUpdate(--status=) error = nil, want rejection")
 	}
-	if err.Error() != "--status requires a non-empty value" {
-		t.Fatalf("runUpdate error = %q, want %q", err.Error(), "--status requires a non-empty value")
+	if got := ExitCode(err); got != ExitUsage {
+		t.Fatalf("runUpdate(--status=) exit code = %d, want %d", got, ExitUsage)
+	}
+	if !strings.Contains(err.Error(), "lit start") {
+		t.Fatalf("runUpdate(--status=) error = %q, want a pointer to the transition verbs", err.Error())
 	}
 }
 
@@ -643,29 +623,6 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	}
 }
 
-func TestRunUpdateStatusInProgressUsesSessionEnvAssignee(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-xyz")
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Prefix: "test", Title: "Update stamps assignee", Topic: "lifecycle", IssueType: "task", Priority: 0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress"}); err != nil {
-		t.Fatalf("runUpdate(--status in_progress) error = %v", err)
-	}
-	updated, err := ap.Store.GetIssue(ctx, issue.ID)
-	if err != nil {
-		t.Fatalf("GetIssue() error = %v", err)
-	}
-	if got, want := updated.AssigneeValue(), "claude_sess-xyz"; got != want {
-		t.Fatalf("updated.AssigneeValue() = %q, want %q", got, want)
-	}
-}
-
 // The session env is deliberately set in the clear/verbatim tests below: the
 // bug being pinned was claim-time session resolution leaking into `update`,
 // where it silently rewrote an explicit clear (or third-party assignee) into
@@ -720,29 +677,3 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	}
 }
 
-func TestRunUpdateClearAssigneeWithStartStaysCleared(t *testing.T) {
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-me")
-	ctx := context.Background()
-	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
-		Prefix: "test", Title: "Start unclaimed", Topic: "lifecycle", IssueType: "task", Priority: 0,
-		Assignee: "claude_abandoned-session",
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue() error = %v", err)
-	}
-	var stdout bytes.Buffer
-	if err := runUpdate(ctx, &stdout, ap, []string{issue.ID, "--status", "in_progress", "--assignee", ""}); err != nil {
-		t.Fatalf("runUpdate(--status in_progress --assignee \"\") error = %v", err)
-	}
-	updated, err := ap.Store.GetIssue(ctx, issue.ID)
-	if err != nil {
-		t.Fatalf("GetIssue() error = %v", err)
-	}
-	if got := updated.State(); got != model.StateInProgress {
-		t.Fatalf("updated.State() = %q, want in_progress", got)
-	}
-	if got := updated.AssigneeValue(); got != "" {
-		t.Fatalf("updated.AssigneeValue() = %q, want empty: explicit clear wins over the bare-status claim convenience", got)
-	}
-}

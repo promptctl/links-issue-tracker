@@ -64,6 +64,14 @@ var commandGroups = []GroupSpec{
 	{ID: "structure", Title: "Dependencies & Structure"},
 	{ID: "data", Title: "Sync & Data"},
 	{ID: "maintenance", Title: "Setup & Maintenance"},
+	// Issue Retention holds the admin quartet (archive/unarchive/delete/restore) —
+	// the RetentionAction axis of the transition sum, distinct from the core
+	// status lifecycle (start/done/close/open). It sits low so the high-traffic
+	// lifecycle verbs stand out in Agent Operations rather than being crowded by
+	// the rare retention verbs. [LAW:one-type-per-behavior] the group boundary
+	// mirrors the model's StatusAction/RetentionAction partition, not an ad-hoc
+	// visual grouping.
+	{ID: "retention", Title: "Issue Retention"},
 	{ID: "guidance", Title: "Guidance & Tooling"},
 }
 
@@ -300,13 +308,16 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 			Run: r.transitionCmd(closeSpec)},
 		{Name: "open", Summary: "Reopen issue(s)", GroupID: "operations",
 			Run: r.transitionCmd(openSpec)},
-		{Name: "archive", Summary: "Archive issue(s)", GroupID: "operations",
+		// Retention quartet: distinct RetentionAction transitions, grouped apart
+		// from the status lifecycle so the core verbs stay prominent. Each stays a
+		// first-class command — moved in help, unchanged in dispatch.
+		{Name: "archive", Summary: "Archive issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(archiveSpec)},
-		{Name: "delete", Summary: "Delete issue(s)", GroupID: "operations",
-			Run: r.transitionCmd(deleteSpec)},
-		{Name: "unarchive", Summary: "Unarchive issue(s)", GroupID: "operations",
+		{Name: "unarchive", Summary: "Unarchive issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(unarchiveSpec)},
-		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "operations",
+		{Name: "delete", Summary: "Delete issue(s)", GroupID: "retention",
+			Run: r.transitionCmd(deleteSpec)},
+		{Name: "restore", Summary: "Restore deleted issue(s)", GroupID: "retention",
 			Run: r.transitionCmd(restoreSpec)},
 		{Name: "comment", Summary: "Add issue comments", GroupID: "operations",
 			Run: r.familyCmd(commentFamily), Subcommands: commentFamily.visibleSubcommands()},

@@ -40,8 +40,7 @@ variable (producing an identity like `claude_<session-id>`). The `--assignee` fl
 lifecycle commands is a *fallback* for when that variable is unset — when both are
 present, the environment wins.
 
-This session resolution is claim-time only: it applies to `lit start` (and a bare
-`lit update --status in_progress` that says nothing about assignee). Field-writing
+This session resolution is claim-time only: it applies to `lit start`. Field-writing
 commands — `new`, `followup`, `update`, `assign` — honor an explicit `--assignee`
 verbatim and never substitute the caller's identity; on `lit update`, an empty
 `--assignee ""` clears the assignee, returning the issue to unassigned.
@@ -215,16 +214,17 @@ the work the issue captures.
 ```text
 lit update <id> [--title <text>] [--description <text>] [--prompt <text>]
            [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
-           [--lane <key>] [--status open|in_progress|closed] [--reason <text>]
+           [--lane <key>] [--reason <text>]
 ```
 
-Field-level edit of an existing issue. `--status` performs a lifecycle transition inline
-(with `--reason` recorded); prefer the dedicated transition commands, which carry
-guidance. `--status closed` records the neutral success close — a `done` event —
-never a resolution-carrying `close`; recording an outcome (wontfix, duplicate, …) is
-`lit close`'s job. `--labels` replaces the full label set — use `lit label add`/`rm` for
-incremental changes. `--assignee` is taken verbatim (no session-identity substitution);
-`--assignee ""` clears the field, returning the issue to unassigned.
+Field-level edit of an existing issue. `update` does **not** change status: the
+transition verbs (`lit start` / `lit done` / `lit close` / `lit open`) are the single
+enforcer of the transition guardrails, so a `--status` flag is rejected with a pointer
+to them. This closes the former `--status closed` back door, which recorded a
+resolution-less `done` and bypassed `close`'s required outcome. `--labels` replaces the
+full label set — use `lit label add`/`rm` for incremental changes. `--assignee` is taken
+verbatim (no session-identity substitution); `--assignee ""` clears the field, returning
+the issue to unassigned. `--reason` is recorded on the field-change event.
 
 ### `lit comment add` / `lit comment rm`
 
@@ -320,12 +320,25 @@ guidance and `--assignee` semantics):
 lit <verb> <id> [--reason <text>]
 ```
 
+The verbs are the single enforcer of the transition guardrails — status is not
+reachable through `lit update` (its `--status` flag is rejected with a pointer
+here). `--help` presents the two groups apart: the high-traffic **status
+lifecycle** under *Agent Operations*, and the low-traffic **retention** quartet
+under *Issue Retention*, so the core verbs stand out.
+
+Status lifecycle (Agent Operations):
+
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
 | `lit start` | any state → `in_progress` | `[--assignee <fallback>]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. |
 | `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |
+
+Retention (Issue Retention):
+
+| Command | Transition | Flags | Notes |
+|---------|-----------|-------|-------|
 | `lit archive` / `lit unarchive` | set / clear the archived flag | | Archived issues hide from listings. |
 | `lit delete` / `lit restore` | set / clear the deleted flag | | Soft delete; `restore` brings it back. |
 
