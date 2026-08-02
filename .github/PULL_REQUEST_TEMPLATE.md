@@ -1,7 +1,7 @@
 <!--
 Thanks for contributing to links (`lit`)! Fill in the sections below.
-See CONTRIBUTING.md for branch & PR conventions (notably: one PR per epic, not
-per leaf ticket).
+See CONTRIBUTING.md for branch & PR conventions (notably: one PR per ticket; the
+release for an epic is a separate, final chore(release) PR).
 -->
 
 ## Summary
