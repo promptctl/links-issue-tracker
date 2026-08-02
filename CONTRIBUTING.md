@@ -92,24 +92,28 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
 ## Branch & PR conventions
 
 - Branch off `master` and keep your branch up to date with `git pull --rebase`.
-- **One PR per epic**, not per leaf ticket: all children of an epic land on a
-  single branch/PR.
+- **One PR per ticket**, so each change is reviewed on its own. The children of
+  an epic land as separate PRs; the release for the whole epic is a final,
+  dedicated `chore(release)` PR (see *Cutting a release*).
 - Open a PR against `master` — don't push directly to it.
 - Keep the suite green (`go test ./...`) and the linter clean
   (`golangci-lint run`) before requesting review.
 
 ## Cutting a release
 
-Every merged feature/fix PR ships a release — one PR, one release, cut by CI on
-merge. The only manual step is in the PR:
+A release ships once per **epic**, not per ticket. Ticket PRs accumulate their
+notes under `## [Unreleased]` in `CHANGELOG.md` and cut nothing on merge — the
+master build just runs the snapshot proof. When the epic's tickets are all
+merged, cut the release with a dedicated `chore(release)` PR:
 
 1. Run `scripts/next-version.sh <minor|patch>` to get the tag (e.g. `v0.2.0`).
-   Rename `## [Unreleased]` in `CHANGELOG.md` to `## [0.2.0] - <date>` — the
-   version **without** the leading `v` — and add a fresh empty `## [Unreleased]`
-   above it. Commit it with the work.
-2. Merge. The master build (`release-validate.yml`) detects the pending version,
-   builds + validates the real cross-platform artifact, then cuts the tag and
-   publishes the release. No local tag push.
+   In that PR — which changes nothing but the changelog — rename `## [Unreleased]`
+   to `## [0.2.0] - <date>` (the version **without** the leading `v`) and add a
+   fresh empty `## [Unreleased]` above it.
+2. Merge. The master build (`release-validate.yml`) detects the now-untagged
+   version, builds + validates the real cross-platform artifact, then cuts the
+   tag and publishes the release. No local tag push.
 
 Policy: major is frozen, `minor` = feature/breaking, `patch` = pure bugfix.
-Docs/chore-only work cuts no release.
+A ticket PR (feature, fix, docs, or chore) never cuts a release on its own; only
+the `chore(release)` promotion does.

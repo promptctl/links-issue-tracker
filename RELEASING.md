@@ -31,20 +31,25 @@ feature or any presumed-breaking change, **patch** = a pure bugfix.
 
 ## Cutting a release
 
-A release is cut entirely by CI when a release-promotion merges to `master`. The
-only manual step is in the PR:
+A release is cut entirely by CI when a release-promotion merges to `master`.
+Releases ship **once per epic**, not per ticket: ticket PRs only add notes under
+`## [Unreleased]` and cut nothing on merge. When an epic's tickets are all merged,
+cut the release with a dedicated `chore(release)` PR that changes nothing but the
+changelog:
 
-1. **In the PR:** rename `## [Unreleased]` in [`CHANGELOG.md`](CHANGELOG.md) to
-   `## [<version>] - <YYYY-MM-DD>` (`<version>` = `scripts/next-version.sh
-   <minor|patch>` without the leading `v`) and add a fresh empty `## [Unreleased]`
-   above it. Commit it with the work.
+1. **In the `chore(release)` PR:** rename `## [Unreleased]` in
+   [`CHANGELOG.md`](CHANGELOG.md) to `## [<version>] - <YYYY-MM-DD>` (`<version>` =
+   `scripts/next-version.sh <minor|patch>` without the leading `v`) and add a fresh
+   empty `## [Unreleased]` above it. This PR touches only the changelog.
 2. **Merge.** The master build
    ([`release-validate.yml`](.github/workflows/release-validate.yml)) sees the
    newest `CHANGELOG` version has no tag yet, builds + validates the real
    cross-platform artifact, then cuts the tag at that commit and publishes the
    release — all in one run. Watch it with `gh run watch`. No local tag push.
 
-Docs/chore/refactor-only work cuts no release — leave `## [Unreleased]` as-is.
+No ticket PR (feature, fix, docs, chore, or refactor) cuts a release on its own —
+leave `## [Unreleased]` as-is. Only the dedicated `chore(release)` promotion above,
+merged at the end of an epic, cuts one.
 
 ### How the pipeline is verified
 

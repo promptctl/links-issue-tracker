@@ -22,10 +22,18 @@ Start by running `lit quickstart` to load the workflow instructions. It prints h
 
 <!-- END LIT INTEGRATION -->
 
-## Releases are cut on merge
+## One PR per ticket; one release per epic
 
-To release a feature/fix, bump `CHANGELOG.md` in that PR: rename `## [Unreleased]`
-to `## [0.2.0] - <date>` (`scripts/next-version.sh <minor|patch>` gives the tag
-`v0.2.0`; the heading drops the `v`) and add a fresh empty `## [Unreleased]` above
-it. Merging is the whole release — CI builds, validates, tags, and publishes
-`v0.2.0`. No local tag push. One merged feature/fix PR, one release.
+Each ticket lands as its **own** reviewable PR. Do **not** bump the release
+version in a ticket PR — just add your `CHANGELOG.md` entries under the existing
+`## [Unreleased]` heading. Merging a ticket PR runs the full CI + snapshot proof
+but cuts **no** release (the newest versioned heading is already tagged, so the
+master build is an ordinary snapshot gate).
+
+A release is cut only when an **epic** is finished, by a dedicated
+`chore(release)` PR that does nothing but promote the changelog: rename
+`## [Unreleased]` to `## [0.2.0] - <date>` (`scripts/next-version.sh <minor|patch>`
+gives the tag `v0.2.0`; the heading drops the `v`) and add a fresh empty
+`## [Unreleased]` above it. Merging that PR is the whole release — CI detects the
+untagged version, builds, validates, tags, and publishes `v0.2.0`. No local tag
+push.
