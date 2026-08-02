@@ -9,6 +9,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+### Changed
+
+### Fixed
+
+### Removed
+
+### Security
+
+## [0.3.0] - 2026-08-02
+
+### Added
+
 - The release is now hard-gated on the license posture: a dedicated `license-gate` CI job runs the policy check over every component compiled into the release binary, and the publish job depends on it. If any dependency (Go module or native library) carries a non-allowlisted license, the release aborts before any tag, archive, or asset is published — a non-free build cannot be released, even from a branch that skipped the PR-time check.
 - The SBOM, `THIRD_PARTY_LICENSES` bundle, license report, and license-policy gate now also cover the statically-linked native C libraries that cgo compiles into release binaries but no go.mod tool can see: ICU 75.1 (Unicode-3.0), zstd 1.5.6 (BSD-3-Clause), musl 1.2.5 (MIT), and compiler-rt via zig 0.14.0 (MIT). Each appears with its name, version, license, `pkg:generic` PURL (SBOM), and verbatim notice text (bundle). Versions are pinned to the release build config, with a CI check tying ICU/zig to `build/Dockerfile.release`.
 - CI license-policy gate: every linked module's license is checked against a committed allowlist (`tools/licenses/policy.json`) of permissive licenses plus documented per-module exceptions, and the build fails if a dependency bump pulls in a non-allowlisted license (GPL/AGPL/SSPL/BUSL, etc.). Runs on every pull request and master push via `go test` (and standalone via `go run ./tools/licenses -check`). Shares the classifier with the license report/SBOM, so the gate checks the exact licenses those artifacts document.
