@@ -426,7 +426,10 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 func runList(ctx context.Context, stdout io.Writer, args []string) error {
 	atDir, hasAt := extractAtDir(args)
 	if hasAt {
-		if strings.TrimSpace(atDir) == "" {
+		// A missing value, or a flag-shaped one (`--at --help`, `--at --status`,
+		// `--at=`), is a usage error, not a store path — reject it here rather than
+		// handing "--help" to the store layer as a directory to open.
+		if strings.TrimSpace(atDir) == "" || strings.HasPrefix(atDir, "-") {
 			return UsageError{Message: "usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}
 		}
 		loc := workspace.LocationFromStorageDir(atDir)
@@ -447,9 +450,17 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 // extractAtDir returns the value of a --at / --at=<dir> flag if present in args.
 // It is a lightweight routing scan, not the authoritative parse: it lets runList
 // decide which store to open before the full flag parse runs. A present-but-empty
-// --at returns ("", true) so the caller can reject it with a usage error.
+// or flag-shaped --at is returned as-is so the caller rejects it with a usage
+// error. It honors the `--` terminator — a bare `--` ends flag parsing, so any
+// later `--at` is a positional literal, not a route. It does not model other
+// flags' arities (that would duplicate the ls flagset, [LAW:one-source-of-truth]),
+// so the implausible case of another flag's value being literally `--at` is not
+// disambiguated here.
 func extractAtDir(args []string) (string, bool) {
 	for i := 0; i < len(args); i++ {
+		if args[i] == "--" {
+			return "", false
+		}
 		switch {
 		case args[i] == "--at":
 			if i+1 < len(args) {

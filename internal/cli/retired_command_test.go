@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"strings"
 	"testing"
 )
@@ -84,17 +85,29 @@ func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
 	}
 }
 
-// `bulk import` is a retired subcommand: it answers with the pointer to
-// `backup restore`, which owns the same export-restore mechanism. It dispatches
-// through the production family table (runAppFamily), and its handler ignores the
-// app, so a nil app is enough to prove the retirement message.
+// `bulk import` is a retired subcommand that answers with the pointer to
+// `backup restore` (which owns the same export-restore mechanism) even OUTSIDE a
+// workspace. It drives the production dispatch (`Run`) from a non-repo cwd: the
+// retirement must surface before any workspace open, so a user in a plain
+// directory gets the pointer, not "requires a git repository". This is the
+// skipApp path — a `runAppFamily`-with-nil-app test would skip `runWithApp`
+// entirely and so never exercise the bug this guards.
 func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir(nonRepo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
 	var out bytes.Buffer
-	err := runAppFamily(bulkFamily, context.Background(), &out, nil, []string{"import"})
+	err = Run(context.Background(), &out, &out, []string{"bulk", "import"})
 
 	var retired RetiredCommandError
 	if !errors.As(err, &retired) {
-		t.Fatalf("bulk import error = %v (%T), want RetiredCommandError", err, err)
+		t.Fatalf("bulk import error = %v (%T), want RetiredCommandError (not a workspace error)", err, err)
 	}
 	if retired.Command != "bulk import" {
 		t.Errorf("RetiredCommandError.Command = %q, want %q", retired.Command, "bulk import")

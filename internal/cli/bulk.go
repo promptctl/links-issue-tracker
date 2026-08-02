@@ -22,8 +22,10 @@ var bulkFamily = commandFamily[appSubcommand]{
 		// that `backup restore` already owns (both call restoreFromExportPath),
 		// and it is the odd verb out in a family of per-`--ids` fan-out ops. Kept
 		// hidden+dispatchable so an old invocation returns the documented pointer
-		// instead of the bare family usage error. [LAW:no-silent-failure]
-		{name: "import", payload: appSubcommand{access: app.AccessRead, run: runBulkImportRetired}, hidden: true},
+		// instead of the bare family usage error. skipApp so the pointer reaches
+		// the caller even outside a workspace, like the top-level retirements.
+		// [LAW:no-silent-failure]
+		{name: "import", payload: appSubcommand{run: runBulkImportRetired, skipApp: true}, hidden: true},
 	},
 }
 

@@ -95,37 +95,27 @@ overwritten — so it is also safe to re-run after a transient network failure.
 
 ## Working the queue
 
-### `lit ready`
+### `lit ready` (retired → `lit backlog` / `lit next`) and `lit queue` (retired → `lit backlog`)
 
-```text
-lit ready [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>]
-```
-
-The pull view: epics with their top workable ticket, plus in-progress and orphaned
-tickets — what should be picked up next, top item first. Blocked items are excluded and
-counted in a footer.
-
-`--status` accepts exactly `open` or `in_progress` on all four workable commands
-(`ready`, `backlog`, `queue`, `next`); anything else — including `closed`, which could
-only ever match nothing — is a usage error (exit 2) naming the legal values.
+Both workable views are retired. `next` (the single leaf to start) and `backlog`
+(the full ranked queue, blocked items inline) are the only named workable views; an
+old `lit ready` or `lit queue` invocation returns a pointer to them (exit 3). The
+retired presentations — ready's blocked-to-bottom re-sort and coaching preamble,
+queue's terse pullable-only list — are dropped; `backlog` and `next` carry the
+surviving intent.
 
 ### `lit backlog`
 
 ```text
-lit backlog [filters as for ready]
+lit backlog [--assignee <a>] [--labels <csv>] [--status open|in_progress] [--type <t>] [--limit <n>] [--columns <csv>]
 ```
 
 Every workable item in rank order with blocked items shown **inline**, so the shape of
 the queue is legible. Use when grooming or re-ranking.
 
-### `lit queue`
-
-```text
-lit queue [filters as for ready]
-```
-
-Terse rank-ordered list of pullable items only — blocked items dropped, no preamble. The
-minimal machine-friendly pull order.
+`--status` accepts exactly `open` or `in_progress` on the workable commands
+(`backlog`, `next`); anything else — including `closed`, which could only ever match
+nothing — is a usage error (exit 2) naming the legal values.
 
 ### `lit next`
 
@@ -134,7 +124,7 @@ lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--continue] 
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
-`ready` — so "the next workable bug" is `lit next --type bug`. `--continue` biases
+`backlog` — so "the next workable bug" is `lit next --type bug`. `--continue` biases
 toward leaves under epics that are already in progress. `--limit` and `--columns` do
 not apply to a single-row summary and are not accepted.
 
@@ -557,6 +547,26 @@ lit workspace
 Prints workspace metadata — which store you are actually talking to. The store is
 selected by the `git rev-parse --git-common-dir` of your **current directory**; when
 listings look unfamiliar, this is the first thing to check.
+
+### `lit stores`
+
+```text
+lit stores [<root> ...] [--counts]
+```
+
+Discovers every lit store beneath the given roots (default: current directory). By
+default it prints one canonical storage directory per line — the paths that feed
+`lit ls --at <dir>`. With `--counts` it instead reports each discovered store's
+ready / in-flight / blocked counts as a cross-project rollup (an aligned table with a
+`TOTAL` row and clearly marked error rows for stores that could not be read) — the
+folded-in former `lit overview`; an old `lit overview` invocation returns a pointer
+here.
+
+Every store opens strictly read-only, never contending with a project's own writer.
+Readiness under `--counts` is **store-intrinsic**: a repo's own `required_fields`
+policy is not applied across the boundary (a discovered store carries no repo root to
+load it from), so counts can differ from that project's own `lit backlog` when it
+configures `required_fields`.
 
 ### `lit prefix set`
 

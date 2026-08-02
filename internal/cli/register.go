@@ -160,6 +160,13 @@ func nestUnder(subs []SubcommandSpec, name string, children []SubcommandSpec) []
 type appSubcommand struct {
 	access app.AccessMode
 	run    appRunFn
+	// skipApp runs the handler WITHOUT opening a workspace. A retired subcommand
+	// answers with its documented pointer, which must be reachable from anywhere —
+	// like the top-level retirements — not gated behind a cwd-workspace open that
+	// fails outside a git repo. When set, familyCmd calls run with a nil app.
+	// [LAW:dataflow-not-control-flow] "does this subcommand need an app" is data on
+	// the row, not a branch on the subcommand name.
+	skipApp bool
 }
 
 // appRunFn is the canonical signature for app-mode handlers.
@@ -198,6 +205,12 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 		sub, err := f.resolve(args)
 		if err != nil {
 			return err
+		}
+		// A no-app subcommand (a retirement pointer) runs before any workspace
+		// open, so its message reaches the caller even outside a git repo — the
+		// break is reachable, never masked by a workspace error. [LAW:no-silent-failure]
+		if sub.skipApp {
+			return sub.run(r.ctx, r.stdout, nil, args[1:])
 		}
 		return runWithApp(r.ctx, sub.access, func(commandCtx context.Context, ap *app.App) error {
 			return sub.run(commandCtx, r.stdout, ap, args[1:])

@@ -120,11 +120,16 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 	}
 }
 
-// TestLsAtRejectsEmptyDir pins that an --at with no value is a usage error naming
-// the flag, rejected before any store opens — the empty string is never handed to
-// the store layer as a path.
-func TestLsAtRejectsEmptyDir(t *testing.T) {
-	for _, args := range [][]string{{"--at"}, {"--at="}, {"--at", ""}} {
+// TestLsAtRejectsEmptyOrFlagShapedDir pins that an --at with no value or a
+// flag-shaped value (`--at --help`, `--at --status`) is a usage error naming the
+// flag, rejected before any store opens — a flag-shaped token is never handed to
+// the store layer as a path (so `--at --help` doesn't try to open a store named
+// "--help").
+func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
+	for _, args := range [][]string{
+		{"--at"}, {"--at="}, {"--at", ""},
+		{"--at", "--help"}, {"--at", "--status"}, {"--at=--nope"},
+	} {
 		var out bytes.Buffer
 		err := runList(context.Background(), &out, args)
 		if err == nil {
@@ -132,6 +137,32 @@ func TestLsAtRejectsEmptyDir(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "--at <store-dir>") {
 			t.Fatalf("ls %v error = %v, want it to name the --at usage", args, err)
+		}
+	}
+}
+
+// TestExtractAtDir pins the routing scan directly: it recognizes both --at forms,
+// honors the `--` terminator (a later --at is a positional literal, not a route),
+// and reports a present-but-empty --at so the caller can reject it.
+func TestExtractAtDir(t *testing.T) {
+	cases := []struct {
+		args    []string
+		wantDir string
+		wantOK  bool
+	}{
+		{[]string{"--at", "/p"}, "/p", true},
+		{[]string{"--at=/p"}, "/p", true},
+		{[]string{"--search", "x", "--at", "/p"}, "/p", true},
+		{[]string{"--status", "open"}, "", false},
+		{[]string{}, "", false},
+		{[]string{"--at"}, "", true},                 // present, no value
+		{[]string{"--at", "--help"}, "--help", true}, // flag-shaped value (caller rejects)
+		{[]string{"--", "--at", "/p"}, "", false},    // terminator: not a route
+	}
+	for _, tc := range cases {
+		gotDir, gotOK := extractAtDir(tc.args)
+		if gotDir != tc.wantDir || gotOK != tc.wantOK {
+			t.Errorf("extractAtDir(%v) = (%q, %v), want (%q, %v)", tc.args, gotDir, gotOK, tc.wantDir, tc.wantOK)
 		}
 	}
 }
