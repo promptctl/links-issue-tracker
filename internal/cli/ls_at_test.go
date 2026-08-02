@@ -15,9 +15,9 @@ import (
 
 // foreignStore stands up a real lit store at an explicit storage directory —
 // a real Dolt database plus the config.json that carries its workspace_id — so
-// runLsAt can be exercised against a store the process is not cd'd into, exactly
-// as `lit stores` output would name it. It returns the storage directory and the
-// id of one seeded active issue.
+// `lit ls --at` can be exercised against a store the process is not cd'd into,
+// exactly as `lit stores` output would name it. It returns the storage directory
+// and the id of one seeded active issue.
 func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) {
 	t.Helper()
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
@@ -55,30 +55,30 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 	return storeDir, issueID
 }
 
-// TestRunLsAtListsForeignStoreIssues is the ticket criterion: pointed at a store
-// location that is not the cwd's repo, the command lists that store's issues.
-func TestRunLsAtListsForeignStoreIssues(t *testing.T) {
+// TestLsAtListsForeignStoreIssues is the ticket criterion: pointed at a store
+// location that is not the cwd's repo, `ls --at <dir>` lists that store's issues.
+func TestLsAtListsForeignStoreIssues(t *testing.T) {
 	storeDir, issueID := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runLsAt(context.Background(), &out, []string{storeDir}); err != nil {
-		t.Fatalf("runLsAt() error = %v", err)
+	if err := runList(context.Background(), &out, []string{"--at", storeDir}); err != nil {
+		t.Fatalf("ls --at error = %v", err)
 	}
 	if !strings.Contains(out.String(), issueID) {
-		t.Fatalf("runLsAt() output = %q, want it to list seeded issue %q", out.String(), issueID)
+		t.Fatalf("ls --at output = %q, want it to list seeded issue %q", out.String(), issueID)
 	}
 }
 
-// TestRunLsAtLeavesStoreWritable is the read-only guarantee: after reading a
+// TestLsAtLeavesStoreWritable is the read-only guarantee: after reading a
 // store by path, the store must still open for write and accept a new issue. A
 // leaked lock or a write engine taken by the read would make this reopen fail —
 // proving the cross-project read never contended with the store's own writer.
-func TestRunLsAtLeavesStoreWritable(t *testing.T) {
+func TestLsAtLeavesStoreWritable(t *testing.T) {
 	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
 
 	var out bytes.Buffer
-	if err := runLsAt(context.Background(), &out, []string{storeDir}); err != nil {
-		t.Fatalf("runLsAt() error = %v", err)
+	if err := runList(context.Background(), &out, []string{"--at", storeDir}); err != nil {
+		t.Fatalf("ls --at error = %v", err)
 	}
 
 	ctx := context.Background()
@@ -102,32 +102,36 @@ func TestRunLsAtLeavesStoreWritable(t *testing.T) {
 	}
 }
 
-// TestRunLsAtRejectsMissingStore pins the loud-failure contract: a path with no
+// TestLsAtRejectsMissingStore pins the loud-failure contract: a path with no
 // lit store is an actionable error naming the path, not an empty success.
-func TestRunLsAtRejectsMissingStore(t *testing.T) {
+func TestLsAtRejectsMissingStore(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "nope", "links")
 
 	var out bytes.Buffer
-	err := runLsAt(context.Background(), &out, []string{missing})
+	err := runList(context.Background(), &out, []string{"--at", missing})
 	if err == nil {
-		t.Fatalf("runLsAt(missing) returned nil error with output %q; want a surfaced failure", out.String())
+		t.Fatalf("ls --at (missing) returned nil error with output %q; want a surfaced failure", out.String())
 	}
 	if !strings.Contains(err.Error(), missing) {
-		t.Fatalf("runLsAt(missing) error = %v, want it to name the path %q", err, missing)
+		t.Fatalf("ls --at (missing) error = %v, want it to name the path %q", err, missing)
 	}
 	if out.Len() != 0 {
-		t.Fatalf("runLsAt(missing) emitted %q before failing; want no output on the error path", out.String())
+		t.Fatalf("ls --at (missing) emitted %q before failing; want no output on the error path", out.String())
 	}
 }
 
-// TestRunLsAtRequiresExactlyOnePath rejects a call with no path or extra args
-// before any store opens, so the usage error cannot depend on a store being
-// resolvable first.
-func TestRunLsAtRequiresExactlyOnePath(t *testing.T) {
-	for _, args := range [][]string{{}, {"a", "b"}} {
+// TestLsAtRejectsEmptyDir pins that an --at with no value is a usage error naming
+// the flag, rejected before any store opens — the empty string is never handed to
+// the store layer as a path.
+func TestLsAtRejectsEmptyDir(t *testing.T) {
+	for _, args := range [][]string{{"--at"}, {"--at="}, {"--at", ""}} {
 		var out bytes.Buffer
-		if err := runLsAt(context.Background(), &out, args); err == nil {
-			t.Fatalf("runLsAt(%v) = nil error, want a usage error", args)
+		err := runList(context.Background(), &out, args)
+		if err == nil {
+			t.Fatalf("ls %v = nil error, want a usage error", args)
+		}
+		if !strings.Contains(err.Error(), "--at <store-dir>") {
+			t.Fatalf("ls %v error = %v, want it to name the --at usage", args, err)
 		}
 	}
 }

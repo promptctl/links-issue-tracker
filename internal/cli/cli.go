@@ -410,8 +410,64 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	return emitBreadcrumb(stdout, "new")
 }
 
-func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+// runList is the `ls` entrypoint. It chooses which store to query, then runs the
+// shared query logic (runListWithStore) against it. With no --at it opens the
+// current workspace's store read-only; with --at <dir> it opens a foreign store
+// by its storage directory (one of the paths `lit stores` prints), WITHOUT
+// depending on the current directory being a lit workspace — this is the folded-in
+// former `lit ls-at`, now `ls` scoped by a flag rather than its own command.
+//
+// The store choice is routed here rather than through the standard appCmd wrapper
+// because appCmd opens the cwd workspace before the handler runs, which would make
+// `ls --at <foreign>` fail outside a workspace even though it never needed the cwd
+// store. extractAtDir is a routing hint only; runListWithStore performs the
+// authoritative flag parse (including --at) so a malformed invocation still errors
+// through the one parser.
+func runList(ctx context.Context, stdout io.Writer, args []string) error {
+	atDir, hasAt := extractAtDir(args)
+	if hasAt {
+		if strings.TrimSpace(atDir) == "" {
+			return UsageError{Message: "usage: lit ls --at <store-dir>  (a storage directory from `lit stores`)"}
+		}
+		loc := workspace.LocationFromStorageDir(atDir)
+		st, err := app.OpenLocationForRead(ctx, loc)
+		if err != nil {
+			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
+			// store dir is an actionable error, not an empty list.
+			return fmt.Errorf("open store at %q read-only: %w", atDir, err)
+		}
+		defer func() { _ = st.Close() }()
+		return runListWithStore(ctx, stdout, st, args)
+	}
+	return runWithApp(ctx, app.AccessRead, func(ctx context.Context, ap *app.App) error {
+		return runListWithStore(ctx, stdout, ap.Store, args)
+	})
+}
+
+// extractAtDir returns the value of a --at / --at=<dir> flag if present in args.
+// It is a lightweight routing scan, not the authoritative parse: it lets runList
+// decide which store to open before the full flag parse runs. A present-but-empty
+// --at returns ("", true) so the caller can reject it with a usage error.
+func extractAtDir(args []string) (string, bool) {
+	for i := 0; i < len(args); i++ {
+		switch {
+		case args[i] == "--at":
+			if i+1 < len(args) {
+				return args[i+1], true
+			}
+			return "", true
+		case strings.HasPrefix(args[i], "--at="):
+			return strings.TrimPrefix(args[i], "--at="), true
+		}
+	}
+	return "", false
+}
+
+func runListWithStore(ctx context.Context, stdout io.Writer, st *store.Store, args []string) error {
 	fs := newCobraFlagSet("ls")
+	// --at is registered so the shared parse accepts it; the store it selects was
+	// already opened by runList, so its value is not re-read here.
+	fs.String("at", "", "List a discovered store by its storage directory (from `lit stores`), read-only, instead of the current workspace")
 	status := fs.String("status", "", "Filter by status: open|in_progress|closed")
 	issueType := fs.String("type", "", "Filter by issue type")
 	assignee := fs.String("assignee", "", "Filter by assignee")
@@ -507,12 +563,12 @@ func runList(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if len(filter.Statuses) == 0 && len(filter.Resolutions) == 0 {
 		filter.Statuses = []model.State{model.StateOpen, model.StateInProgress}
 	}
-	issues, err := ap.Store.ListIssues(ctx, filter)
+	issues, err := st.ListIssues(ctx, filter)
 	if err != nil {
 		return err
 	}
 	columns := parseColumns(*columnsExpr)
-	rels, err := listRelationColumns(ctx, ap.Store, columns, issues)
+	rels, err := listRelationColumns(ctx, st, columns, issues)
 	if err != nil {
 		return err
 	}
@@ -1280,40 +1336,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	return nil
 }
 
-// runAssign rewrites the assignee column on an issue without changing status.
-// Flows through Store.Apply as an action-less change so the resulting event
-// row is a normal field-update event — there is no special "assign" action
-// type, just a generic field mutation. [LAW:one-type-per-behavior]
-func runAssign(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	positional, flagArgs := splitArgs(args, 2)
-	fs := newCobraFlagSet("assign")
-	reason := fs.String("reason", "", "Reassignment reason (optional)")
-	resolveActor := registerActor(fs)
-	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
-		return err
-	}
-	if len(positional) != 2 || fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit assign <id> <new-assignee> [--reason <text>]"}
-	}
-	id := positional[0]
-	newAssignee := strings.TrimSpace(positional[1])
-	if newAssignee == "" {
-		return errors.New("new assignee cannot be empty")
-	}
-	issue, err := ap.Store.Apply(ctx, id, store.Change{
-		// [LAW:single-enforcer] Actor resolves through the shared identity rule;
-		// the second positional arg is the new owner, the actor is who acted.
-		Actor: resolveActor(),
-		Fields: store.UpdateIssueInput{
-			Assignee: &newAssignee,
-			Reason:   *reason,
-		},
-	})
-	if err != nil {
-		return err
-	}
-	return printIssueSummary(stdout, issue)
-}
+// assign is retired: reassigning is a single-field write, so it folds into
+// `lit update <id> --assignee <name>` rather than earning its own verb — see the
+// retired spec in register.go. `update` already resolves the actor through the
+// shared identity rule and records the field-change event, so the fold loses
+// nothing (including the optional --reason). [LAW:one-type-per-behavior]
 
 var commentFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit comment <add|rm> ...",

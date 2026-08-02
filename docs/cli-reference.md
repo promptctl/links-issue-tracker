@@ -41,7 +41,7 @@ lifecycle commands is a *fallback* for when that variable is unset — when both
 present, the environment wins.
 
 This session resolution is claim-time only: it applies to `lit start`. Field-writing
-commands — `new`, `followup`, `update`, `assign` — honor an explicit `--assignee`
+commands — `new`, `followup`, `update` — honor an explicit `--assignee`
 verbatim and never substitute the caller's identity; on `lit update`, an empty
 `--assignee ""` clears the assignee, returning the issue to unassigned.
 
@@ -150,7 +150,7 @@ needs someone to finish or release it.
 ### `lit ls`
 
 ```text
-lit ls [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|closed]
+lit ls [--at <store-dir>] [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|closed]
        [--type <t>] [--labels <csv>] [--assignee <a>] [--has-comments]
        [--updated-after <rfc3339>] [--updated-before <rfc3339>]
        [--include-archived] [--include-deleted]
@@ -158,7 +158,12 @@ lit ls [--ids <csv>] [--search <text>] [--query <q>] [--status open|in_progress|
        [--format lines|table]
 ```
 
-General-purpose listing, ranked by default. `--search` matches title and description
+General-purpose listing, ranked by default. `--at <store-dir>` points `ls` at a
+discovered store by its storage directory (a path from `lit stores`), read-only,
+without depending on the current directory being a lit workspace — every filter,
+sort, column, and format below applies to that foreign store. This is the folded-in
+former `lit ls-at`; an old `lit ls-at <dir>` invocation returns a pointer to
+`lit ls --at <dir>`. `--search` matches title and description
 text; `--query` is a compact query language combining filters and text (e.g.
 `status:in_progress type:task has:comments login`). It is a strict superset of the
 discrete filter and list-shaping flags: every flag above has an equivalent token, so
@@ -299,13 +304,17 @@ naming two issues that resolve to the same epic — their relative order is
 internal to that epic and cannot be set against outside issues (run `rank set`
 among the siblings instead).
 
-### `lit assign`
+### `lit assign` (retired → `lit update --assignee`)
+
+Reassigning is a single-field write, so it is folded into `update` rather than
+kept as its own verb:
 
 ```text
-lit assign <id> <new-assignee> [--reason <text>]
+lit update <id> --assignee <new-assignee> [--reason <text>]
 ```
 
-Reassigns without changing status — hand-off of claimed work.
+`--assignee` is taken verbatim (no session-identity substitution); `--assignee ""`
+clears the field. An old `lit assign` invocation returns a pointer here (exit 3).
 
 ---
 
@@ -371,13 +380,20 @@ Manages epic membership. `--child`/`--parent` are required for `set`; there is n
 positional form. Epics contain children; an epic's completion is derived from
 its children rather than tracked as its own status.
 
+Parent-child is one of the relation edges `lit dep` manages (`--type parent-child`);
+`parent` is the ergonomic face over that same store write, and both render the
+edge identically (`<child> --child-of--> <parent>`). Use whichever reads better —
+they are two faces of one edge, not two writers.
+
 ### `lit children`
 
 ```text
 lit children <parent-id>
 ```
 
-Lists an issue's children in rank order.
+Lists an issue's children in rank order — the ergonomic ranked read of the
+parent-child edge that `lit dep ls <parent> --type parent-child` also exposes as
+raw incident edges. Kept as a convenience distinct from the raw edge list.
 
 ---
 
@@ -402,17 +418,19 @@ command exits non-zero — so `lit bulk close --ids a,b,c && next-step` does **n
 run `next-step` on partial or total failure. Successful items are still applied;
 re-run the command for only the failed IDs after addressing each error.
 
-### `lit import` / `lit bulk import`
+### `lit import`
 
 ```text
 lit import --path <tree-spec.json>
-lit bulk import --path <export.json> [--force]
 ```
 
-Two different inputs: `lit import` bulk-creates issues from a JSON **tree spec**
-(nested parent/child authoring format); `lit bulk import` loads a JSON **export**
-produced by `lit export`, and refuses to overwrite unsynced local state without
-`--force`.
+The one home for tree-spec imports: bulk-creates issues from a JSON **tree spec**
+(the nested parent/child authoring format documented below).
+
+`lit bulk import` is retired. It loaded a JSON **export** — the same restore that
+`lit backup restore --path <export.json>` already owns — so it was a duplicate
+under a name that also collided with tree-spec `import`. Use `lit backup restore`
+to load an export; an old `lit bulk import` invocation returns a pointer there.
 
 ---
 
@@ -454,8 +472,10 @@ diverged and usable.
 lit export
 ```
 
-Writes a complete versioned JSON snapshot of the workspace to stdout (always JSON; no
-flags). The input format for `lit bulk import`.
+Writes a complete versioned JSON **data export** of the workspace to stdout (always
+JSON; no flags) — the portable tree, `import`'s inverse. This is the export
+`lit backup restore` reads. ("snapshot" is reserved for the filesystem-level
+`lit snapshots` mechanism below, a different thing.)
 
 ### `lit backup`
 
@@ -465,11 +485,13 @@ lit backup list
 lit backup restore (--latest | --path <p>) [--force]
 ```
 
-Logical backup snapshots with rotation (`--keep`, default 20). `restore` refuses to
-overwrite unsynced state without `--force`. `--path` accepts any export JSON — a
-backup snapshot or a sync file; provenance does not change behavior. You must name
-a source; there is no implicit default, and `--latest` with `--path` is an error
-rather than a silent precedence.
+Rotating JSON **data-export** backups (`--keep`, default 20) — the data-recovery
+family, wrapping `lit export`; distinct from the filesystem-level `lit snapshots`.
+`restore` refuses to overwrite unsynced state without `--force`, and is the one
+home for loading an export JSON (the retired `lit bulk import` pointed here).
+`--path` accepts any export JSON — a backup file or a sync file; provenance does
+not change behavior. You must name a source; there is no implicit default, and
+`--latest` with `--path` is an error rather than a silent precedence.
 
 ### `lit snapshots`
 
@@ -479,8 +501,9 @@ lit snapshots list
 lit snapshots restore <name>
 ```
 
-Filesystem-level workspace snapshots — coarser and lower-level than `lit backup`,
-capturing the store directory wholesale.
+Dolt filesystem-level database snapshots — the whole-database mechanism, coarser
+and lower-level than the JSON `lit backup` data-export family, capturing the store
+directory wholesale.
 
 ### `lit lifeboat`
 

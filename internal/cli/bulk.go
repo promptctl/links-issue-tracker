@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -14,12 +13,17 @@ import (
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
-	usage: "usage: lit bulk <label|close|archive|import> ...",
+	usage: "usage: lit bulk <label|close|archive> ...",
 	subcommands: []subcommandRow[appSubcommand]{
 		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
 		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkClose}},
 		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.Archive{})}},
-		{name: "import", payload: appSubcommand{access: app.AccessWrite, run: runBulkImport}},
+		// `bulk import` is retired: it was a second name for the export-restore
+		// that `backup restore` already owns (both call restoreFromExportPath),
+		// and it is the odd verb out in a family of per-`--ids` fan-out ops. Kept
+		// hidden+dispatchable so an old invocation returns the documented pointer
+		// instead of the bare family usage error. [LAW:no-silent-failure]
+		{name: "import", payload: appSubcommand{access: app.AccessRead, run: runBulkImportRetired}, hidden: true},
 	},
 }
 
@@ -179,19 +183,10 @@ func runBulkTransition(action model.Action) appRunFn {
 	}
 }
 
-func runBulkImport(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("bulk import")
-	path := fs.String("path", "", "Path to JSON export")
-	force := fs.Bool("force", false, "Force import over unsynced local state")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*path) == "" {
-		return ValidationError{Message: "--path is required"}
-	}
-	if err := restoreFromExportPath(ctx, ap, *path, *force); err != nil {
-		return err
-	}
-	_, err := fmt.Fprintf(stdout, "imported %s\n", filepath.Clean(*path))
-	return err
+// runBulkImportRetired answers a retired `bulk import` invocation with the
+// documented pointer to `backup restore`, which owns the same export-restore
+// mechanism. It ignores the opened app; the row is registered only so the
+// retirement message reaches the caller instead of the family's bare usage error.
+func runBulkImportRetired(_ context.Context, _ io.Writer, _ *app.App, _ []string) error {
+	return RetiredCommandError{Command: "bulk import", Replacement: bulkImportRetirementGuidance}
 }

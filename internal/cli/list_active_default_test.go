@@ -11,12 +11,14 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// runLs drives runList with the given args and returns its rendered lines.
+// runLs drives the shared list logic against the app's store and returns its
+// rendered lines. It calls runListWithStore directly (the store-choosing runList
+// entrypoint routes cwd-vs-`--at`); these tests exercise the query itself.
 func runLs(t *testing.T, ap *app.App, args ...string) string {
 	t.Helper()
 	var buf bytes.Buffer
-	if err := runList(context.Background(), &buf, ap, args); err != nil {
-		t.Fatalf("runList(%v) error = %v", args, err)
+	if err := runListWithStore(context.Background(), &buf, ap.Store, args); err != nil {
+		t.Fatalf("runListWithStore(%v) error = %v", args, err)
 	}
 	return buf.String()
 }
