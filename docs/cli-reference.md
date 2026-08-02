@@ -95,7 +95,7 @@ overwritten — so it is also safe to re-run after a transient network failure.
 
 ## Working the queue
 
-### `lit ready` (retired → `lit backlog` / `lit next`) and `lit queue` (retired → `lit backlog`)
+### `lit ready` / `lit queue` (retired → `lit backlog` / `lit next`)
 
 Both workable views are retired. `next` (the single leaf to start) and `backlog`
 (the full ranked queue, blocked items inline) are the only named workable views; an
