@@ -115,5 +115,5 @@ merged, cut the release with a dedicated `chore(release)` PR:
    tag and publishes the release. No local tag push.
 
 Policy: major is frozen, `minor` = feature/breaking, `patch` = pure bugfix.
-A ticket PR (feature, fix, docs, or chore) never cuts a release on its own; only
-the `chore(release)` promotion does.
+No ticket PR, whatever its type, cuts a release on its own; only the
+`chore(release)` promotion does.

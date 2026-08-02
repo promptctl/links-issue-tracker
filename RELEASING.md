@@ -47,8 +47,8 @@ changelog:
    cross-platform artifact, then cuts the tag at that commit and publishes the
    release — all in one run. Watch it with `gh run watch`. No local tag push.
 
-No ticket PR (feature, fix, docs, chore, or refactor) cuts a release on its own —
-leave `## [Unreleased]` as-is. Only the dedicated `chore(release)` promotion above,
+No ticket PR, whatever its type, cuts a release on its own — leave
+`## [Unreleased]` as-is. Only the dedicated `chore(release)` promotion above,
 merged at the end of an epic, cuts one.
 
 ### How the pipeline is verified
