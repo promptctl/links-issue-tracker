@@ -76,20 +76,29 @@ func parseWhen(raw string) (When, error) {
 
 const frontmatterDelimiter = "---"
 
+// isDelimiter is the one definition of a frontmatter delimiter line: "---"
+// alone, tolerating trailing horizontal whitespace and a CR — the convention
+// every major frontmatter implementation (Jekyll, Hugo) follows.
+// [LAW:one-source-of-truth] Opening and closing checks share it so they
+// cannot drift apart.
+func isDelimiter(line string) bool {
+	return strings.TrimRight(line, " \t\r") == frontmatterDelimiter
+}
+
 // splitFrontmatter divides a definition file into its YAML header and
 // markdown body. A file that never opens a frontmatter block is all body
 // (found=false); a block opened but never closed is an error the caller
 // reports as malformed.
 func splitFrontmatter(content string) (header string, body string, found bool, err error) {
 	firstLine, rest, _ := strings.Cut(content, "\n")
-	if strings.TrimRight(firstLine, "\r") != frontmatterDelimiter {
+	if !isDelimiter(firstLine) {
 		return "", content, false, nil
 	}
 	var headerLines []string
 	remaining := rest
 	for {
 		line, tail, more := strings.Cut(remaining, "\n")
-		if strings.TrimRight(line, "\r") == frontmatterDelimiter {
+		if isDelimiter(line) {
 			return strings.Join(headerLines, "\n"), tail, true, nil
 		}
 		if !more {

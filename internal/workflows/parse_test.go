@@ -211,6 +211,21 @@ func TestParseDefinitionCRLF(t *testing.T) {
 	}
 }
 
+// Delimiter lines tolerate trailing horizontal whitespace, per the frontmatter
+// convention — a trailing space must not silently degrade the file to inert.
+func TestParseDefinitionDelimiterTrailingWhitespace(t *testing.T) {
+	def, warnings, ok := parseDefinition("--- \nevents: [show_backlog]\n---\t\nbody", "ws.md", templates.SourceProject)
+	if !ok {
+		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
+	}
+	if len(def.Events) != 1 || def.Events[0] != EventShowBacklog {
+		t.Fatalf("Events = %v, want frontmatter recognized despite trailing whitespace", def.Events)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+}
+
 func TestParseDefinitionUnknownKeysTolerated(t *testing.T) {
 	// Forward compatibility: a file authored for a newer lit still loads with
 	// the keys this binary understands.
