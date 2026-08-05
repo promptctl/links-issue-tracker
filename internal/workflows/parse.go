@@ -128,7 +128,7 @@ func parseDefinition(content, path string, source templates.Source) (Definition,
 		Name:   strings.TrimSpace(meta.Name),
 		Labels: labels,
 		States: compactStates(meta.States),
-		Events: toEvents(compactStrings(meta.Events)),
+		Events: canonicalEvents(meta.Events),
 		Body:   strings.TrimSpace(body),
 		Source: source,
 		Path:   path,
@@ -175,13 +175,17 @@ func canonicalLabels(values []string, warn func(string) Warning) ([]string, []Wa
 	return out, warnings
 }
 
-// compactStrings trims every entry and drops the empties, so downstream
-// matching never sees a blank event name.
-func compactStrings(values []string) []string {
-	var out []string
+// canonicalEvents stamps authored event entries into the catalog's canonical
+// form: trimmed and lowercased, empties dropped. Catalog names are lowercase
+// snake_case by contract (the catalog test enforces it), so lowercasing here
+// can never collide two distinct events — it only resolves case variants to
+// the form the catalog speaks, symmetric with label canonicalization.
+// [LAW:parse-dont-validate]
+func canonicalEvents(values []string) []Event {
+	var out []Event
 	for _, value := range values {
-		if trimmed := strings.TrimSpace(value); trimmed != "" {
-			out = append(out, trimmed)
+		if trimmed := strings.ToLower(strings.TrimSpace(value)); trimmed != "" {
+			out = append(out, Event(trimmed))
 		}
 	}
 	return out
@@ -197,14 +201,6 @@ func compactStates(activations []StateActivation) []StateActivation {
 		if activation.State != "" {
 			out = append(out, activation)
 		}
-	}
-	return out
-}
-
-func toEvents(names []string) []Event {
-	var out []Event
-	for _, name := range names {
-		out = append(out, Event(name))
 	}
 	return out
 }

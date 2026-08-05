@@ -157,6 +157,21 @@ func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
 	}
 }
 
+// Event entries resolve case variants to the catalog's lowercase canonical
+// form, symmetric with label canonicalization.
+func TestParseDefinitionEventsCanonicalized(t *testing.T) {
+	def, warnings, ok := parseDefinition("---\nevents: [' Show_Ticket ']\n---\nbody", "e.md", templates.SourceProject)
+	if !ok {
+		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
+	}
+	if !reflect.DeepEqual(def.Events, []Event{EventShowTicket}) {
+		t.Fatalf("Events = %v, want lowercased canonical form", def.Events)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none — a case variant is not an unknown event", warnings)
+	}
+}
+
 func TestParseDefinitionCRLF(t *testing.T) {
 	def, _, ok := parseDefinition("---\r\nevents: [show_backlog]\r\n---\r\nbody\r\n", "crlf.md", templates.SourceProject)
 	if !ok {
