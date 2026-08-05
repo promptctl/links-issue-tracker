@@ -6,7 +6,7 @@ require (
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
-	github.com/go-sql-driver/mysql v1.9.3
+	github.com/go-sql-driver/mysql v1.10.0
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148
 	github.com/google/uuid v1.6.0
 	github.com/package-url/packageurl-go v0.1.6
