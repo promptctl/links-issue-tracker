@@ -3,11 +3,12 @@ package store
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 type AddLabelInput struct {
@@ -131,13 +132,9 @@ func canonicalizeLabels(labels []string) ([]string, error) {
 	return out, nil
 }
 
+// normalizeLabel delegates to the domain's canonical label form.
+// [LAW:single-enforcer] The definition lives in model.NormalizeLabel; this
+// wrapper only keeps the store's callsites short.
 func normalizeLabel(label string) (string, error) {
-	normalized := strings.ToLower(strings.TrimSpace(label))
-	if normalized == "" {
-		return "", errors.New("label is required")
-	}
-	if strings.Contains(normalized, ",") {
-		return "", errors.New("label cannot contain commas")
-	}
-	return normalized, nil
+	return model.NormalizeLabel(label)
 }
