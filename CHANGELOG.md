@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- Groundwork for `lit workflows` (user-customizable guidance injection at work-lifecycle moments): the workflow-definition model. Markdown files with YAML frontmatter are discovered recursively under `.lit/workflows/` (project) and `<config>/workflows/` (global) — the folder hierarchy is arbitrary; frontmatter alone declares where a definition activates, via `labels:` / `states:` (with `when: enter|exit`) / `events:` dimensions (OR within a dimension, AND across dimensions). Nearer layers override farther ones by `id` (defaulting to the file's relative path with the `.md` suffix dropped and spaces replaced by underscores). The semantic event catalog (`show_backlog`, `show_ticket`, `work_started`, …) is the stable contract definitions bind to — never command names. Not yet wired into any command; the event dispatch, injection, and `lit workflows` CLI land with the rest of the epic.
+
 ### Changed
 
 ### Fixed
