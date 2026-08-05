@@ -87,6 +87,7 @@ func TestParseDefinitionMalformed(t *testing.T) {
 		"scalar frontmatter":       "---\nhello\n---\nbody",
 		"invalid when":             "---\nstates:\n  - name: open\n    when: banana\n---\nbody",
 		"invalid state entry kind": "---\nstates:\n  - [open]\n---\nbody",
+		"nameless state mapping":   "---\nstates:\n  - when: enter\n---\nbody",
 		"labels not a sequence":    "---\nlabels: 17\n---\nbody",
 	}
 	for name, content := range cases {

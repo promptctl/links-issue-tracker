@@ -44,7 +44,14 @@ func (s *StateActivation) UnmarshalYAML(node *yaml.Node) error {
 		if err != nil {
 			return err
 		}
-		s.State = strings.TrimSpace(aux.Name)
+		name := strings.TrimSpace(aux.Name)
+		// A mapping entry carries authored intent; refusing a nameless one here
+		// keeps that intent from vanishing in a silent drop downstream.
+		// [LAW:parse-dont-validate]
+		if name == "" {
+			return fmt.Errorf("state entry mapping requires a non-empty name")
+		}
+		s.State = name
 		s.When = when
 		return nil
 	default:
@@ -180,8 +187,10 @@ func compactStrings(values []string) []string {
 	return out
 }
 
-// compactStates drops activations whose state name trimmed to nothing, the
-// state-shaped analogue of compactStrings.
+// compactStates drops activations whose state name trimmed to nothing. Only
+// bare empty scalars can reach here — a nameless mapping is already rejected
+// at unmarshal — so what drops is authoring noise with no intent attached,
+// exactly like an empty label or event entry.
 func compactStates(activations []StateActivation) []StateActivation {
 	var out []StateActivation
 	for _, activation := range activations {
