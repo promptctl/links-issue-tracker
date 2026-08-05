@@ -60,10 +60,11 @@ func (s *StateActivation) UnmarshalYAML(node *yaml.Node) error {
 }
 
 // parseWhen is the one place a raw `when:` value becomes a When: absent means
-// enter, anything but enter/exit is a parse error the caller reports as a
-// malformed file. [LAW:parse-dont-validate]
+// enter, anything but enter/exit (case-insensitive, like every frontmatter
+// field) is a parse error the caller reports as a malformed file.
+// [LAW:parse-dont-validate]
 func parseWhen(raw string) (When, error) {
-	switch When(strings.TrimSpace(raw)) {
+	switch When(strings.ToLower(strings.TrimSpace(raw))) {
 	case "", WhenEnter:
 		return WhenEnter, nil
 	case WhenExit:

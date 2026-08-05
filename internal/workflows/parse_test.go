@@ -174,6 +174,18 @@ func TestParseDefinitionStatesCanonicalized(t *testing.T) {
 	}
 }
 
+// `when:` values are case-insensitive like every other frontmatter field.
+func TestParseDefinitionWhenCaseInsensitive(t *testing.T) {
+	content := "---\nstates:\n  - name: open\n    when: Exit\n---\nbody"
+	def, warnings, ok := parseDefinition(content, "w.md", templates.SourceProject)
+	if !ok {
+		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
+	}
+	if !reflect.DeepEqual(def.States, []StateActivation{{State: "open", When: WhenExit}}) {
+		t.Fatalf("States = %v, want exit activation from 'Exit'", def.States)
+	}
+}
+
 // Event entries resolve case variants to the catalog's lowercase canonical
 // form, symmetric with label canonicalization.
 func TestParseDefinitionEventsCanonicalized(t *testing.T) {
