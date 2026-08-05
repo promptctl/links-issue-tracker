@@ -157,6 +157,23 @@ func TestParseDefinitionLabelsCanonicalized(t *testing.T) {
 	}
 }
 
+// State names resolve case variants to the lifecycle's lowercase spelling,
+// in both authored shapes.
+func TestParseDefinitionStatesCanonicalized(t *testing.T) {
+	content := "---\nstates:\n  - ' In_Progress '\n  - name: ' OPEN '\n    when: exit\n---\nbody"
+	def, warnings, ok := parseDefinition(content, "s.md", templates.SourceProject)
+	if !ok {
+		t.Fatalf("parseDefinition() not ok, warnings = %v", warnings)
+	}
+	want := []StateActivation{
+		{State: "in_progress", When: WhenEnter},
+		{State: "open", When: WhenExit},
+	}
+	if !reflect.DeepEqual(def.States, want) {
+		t.Fatalf("States = %v, want %v", def.States, want)
+	}
+}
+
 // Event entries resolve case variants to the catalog's lowercase canonical
 // form, symmetric with label canonicalization.
 func TestParseDefinitionEventsCanonicalized(t *testing.T) {

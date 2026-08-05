@@ -29,7 +29,7 @@ type frontmatter struct {
 func (s *StateActivation) UnmarshalYAML(node *yaml.Node) error {
 	switch node.Kind {
 	case yaml.ScalarNode:
-		s.State = strings.TrimSpace(node.Value)
+		s.State = canonicalState(node.Value)
 		s.When = WhenEnter
 		return nil
 	case yaml.MappingNode:
@@ -44,7 +44,7 @@ func (s *StateActivation) UnmarshalYAML(node *yaml.Node) error {
 		if err != nil {
 			return err
 		}
-		name := strings.TrimSpace(aux.Name)
+		name := canonicalState(aux.Name)
 		// A mapping entry carries authored intent; refusing a nameless one here
 		// keeps that intent from vanishing in a silent drop downstream.
 		// [LAW:parse-dont-validate]
@@ -173,6 +173,14 @@ func canonicalLabels(values []string, warn func(string) Warning) ([]string, []Wa
 		out = append(out, normalized)
 	}
 	return out, warnings
+}
+
+// canonicalState stamps an authored state name into canonical form: trimmed
+// and lowercased, matching how the lifecycle spells the states an Occasion
+// carries. Lowercase-at-the-parse-boundary is the one convention shared by
+// all three activation dimensions; a future custom-stage feature inherits it.
+func canonicalState(name string) string {
+	return strings.ToLower(strings.TrimSpace(name))
 }
 
 // canonicalEvents stamps authored event entries into the catalog's canonical
