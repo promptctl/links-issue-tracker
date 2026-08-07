@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-07
+
 ### Added
 
 - `lit show <id> --field <name>[,<name>...]` prints exactly the requested field(s) and nothing else — no header fields, no parent-epic body, no siblings, no epic/children summary. A single field prints its bare value (e.g. `lit show <id> --field description`), so it round-trips directly into `lit update --description`; multiple fields print as `name: value` lines. An unknown field name fails with a `UsageError` listing the accepted vocabulary, with no partial output. Omitting `--field` leaves the existing full-detail view unchanged.
