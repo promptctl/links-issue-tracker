@@ -4,11 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -16,9 +15,11 @@ const (
 	automationTriggerEnvVar      = "LNKS_AUTOMATION_TRIGGER"
 	automationReasonEnvVar       = "LNKS_AUTOMATION_REASON"
 	automationTraceRefFileEnvVar = "LNKS_AUTOMATION_TRACE_REF_FILE"
-)
 
-var nonTraceSlugPattern = regexp.MustCompile(`[^a-z0-9]+`)
+	// automationTraceKind is this trace kind's directory name under
+	// <storageDir>/traces/. [LAW:one-source-of-truth]
+	automationTraceKind = "automation"
+)
 
 type automationTraceRecord struct {
 	ID          string            `json:"id"`
@@ -44,7 +45,7 @@ type automationContext struct {
 }
 
 func automationTraceDir(ws workspace.Info) string {
-	return filepath.Join(ws.StorageDir, "traces", "automation")
+	return trace.Dir(ws.StorageDir, automationTraceKind)
 }
 
 func readAutomationContextFromEnv() automationContext {
@@ -83,54 +84,27 @@ func maybeRecordAutomatedCommandTrace(ws workspace.Info, command string, sideEff
 }
 
 func recordAutomationTrace(ws workspace.Info, record automationTraceRecord) (automationTraceRef, error) {
-	traceDir := automationTraceDir(ws)
-	if err := os.MkdirAll(traceDir, 0o755); err != nil {
-		return automationTraceRef{}, fmt.Errorf("create automation trace dir: %w", err)
-	}
-	// [LAW:one-source-of-truth] All automatic-action traces use one shared record shape and one storage directory.
-	payload, err := json.MarshalIndent(record, "", "  ")
-	if err != nil {
-		return automationTraceRef{}, fmt.Errorf("marshal automation trace: %w", err)
-	}
-	payload = append(payload, '\n')
-	for attempt := 0; attempt < 5; attempt++ {
-		timestamp := time.Now().UTC()
-		traceID := fmt.Sprintf("%s-%s", timestamp.Format("20060102T150405.000000000Z"), traceSlug(record.Trigger))
-		if attempt > 0 {
-			traceID = fmt.Sprintf("%s-%d", traceID, attempt)
-		}
-		record.ID = traceID
-		record.RecordedAt = timestamp.Format(time.RFC3339Nano)
+	record.Trigger = strings.TrimSpace(record.Trigger)
+	record.Command = strings.TrimSpace(record.Command)
+	record.SideEffect = strings.TrimSpace(record.SideEffect)
+	record.Status = strings.TrimSpace(record.Status)
+	record.Reason = strings.TrimSpace(record.Reason)
+	record.Metadata = compactTraceMetadata(record.Metadata)
+	// [LAW:one-source-of-truth] All automatic-action traces use one shared record shape and, via trace.Write, one collision-retry writer.
+	id, path, err := trace.Write(ws.StorageDir, automationTraceKind, trace.Slug(record.Trigger), func(id string, recordedAt time.Time) ([]byte, error) {
+		record.ID = id
+		record.RecordedAt = recordedAt.Format(time.RFC3339Nano)
 		record.WorkspaceID = ws.WorkspaceID
-		record.Trigger = strings.TrimSpace(record.Trigger)
-		record.Command = strings.TrimSpace(record.Command)
-		record.SideEffect = strings.TrimSpace(record.SideEffect)
-		record.Status = strings.TrimSpace(record.Status)
-		record.Reason = strings.TrimSpace(record.Reason)
-		record.Metadata = compactTraceMetadata(record.Metadata)
-		tracePath := filepath.Join(traceDir, traceID+".json")
 		payload, err := json.MarshalIndent(record, "", "  ")
 		if err != nil {
-			return automationTraceRef{}, fmt.Errorf("marshal automation trace: %w", err)
+			return nil, err
 		}
-		payload = append(payload, '\n')
-		file, openErr := os.OpenFile(tracePath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
-		if openErr != nil {
-			if os.IsExist(openErr) {
-				continue
-			}
-			return automationTraceRef{}, fmt.Errorf("create automation trace: %w", openErr)
-		}
-		if _, writeErr := file.Write(payload); writeErr != nil {
-			_ = file.Close()
-			return automationTraceRef{}, fmt.Errorf("write automation trace: %w", writeErr)
-		}
-		if closeErr := file.Close(); closeErr != nil {
-			return automationTraceRef{}, fmt.Errorf("close automation trace: %w", closeErr)
-		}
-		return automationTraceRef{ID: traceID, Path: tracePath}, nil
+		return append(payload, '\n'), nil
+	})
+	if err != nil {
+		return automationTraceRef{}, err
 	}
-	return automationTraceRef{}, fmt.Errorf("create automation trace: too many id collisions")
+	return automationTraceRef{ID: id, Path: path}, nil
 }
 
 func formatCommand(args []string) string {
@@ -162,14 +136,4 @@ func compactTraceMetadata(input map[string]string) map[string]string {
 		return nil
 	}
 	return output
-}
-
-func traceSlug(input string) string {
-	normalized := strings.ToLower(strings.TrimSpace(input))
-	normalized = nonTraceSlugPattern.ReplaceAllString(normalized, "-")
-	normalized = strings.Trim(normalized, "-")
-	if normalized == "" {
-		return "trace"
-	}
-	return normalized
 }

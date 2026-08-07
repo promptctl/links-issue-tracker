@@ -162,4 +162,7 @@ func TestInitHumanOutputShowsAgentsSource(t *testing.T) {
 	if !strings.Contains(output, "CLAUDE.md (via embedded)") {
 		t.Fatalf("init human output = %q, want CLAUDE.md (via embedded)", output)
 	}
+	if !strings.Contains(output, "`lit workflows`") || !strings.Contains(output, "`lit workflows edit <id-or-point>`") {
+		t.Fatalf("init human output = %q, want a `lit workflows` guidance pointer", output)
+	}
 }

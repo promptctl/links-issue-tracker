@@ -19,15 +19,48 @@ import (
 // definitions itself — that stays match.go/load.go's job — so this file is
 // pure presentation over an already-resolved Set. [LAW:single-enforcer]
 
-const workflowsUsage = "usage: lit workflows [show <id>]"
+const workflowsUsage = "usage: lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]"
 
-// runWorkflows routes the command's two shapes: bare (the overview) and
-// `show <id>` (one definition, resolved). [LAW:dataflow-not-control-flow] both
-// shapes run the same load-then-render pipeline; only which render function
-// receives the Set varies.
+// runWorkflows routes the command's shapes: bare (the overview), `show <id>`
+// (one definition, resolved), `edit <id-or-point>` (scaffold/open an
+// override), and `dry-run` (explain a hypothetical occasion). Extends the
+// hand-rolled positional switch .4 established rather than migrating to
+// commandFamily — see promptctl-orchestration-ffqz.4's comment on why bare
+// `lit workflows` (overview-by-default) doesn't fit that helper.
+// [LAW:dataflow-not-control-flow] every shape but dry-run runs the same
+// load-then-render pipeline; only which render function receives the Set
+// varies. dry-run alone needs its own flagset, since it is the only shape
+// with flags of its own.
 func runWorkflows(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	_ = ctx
 	positional, flagArgs := splitArgs(args, 2)
+	switch {
+	case len(positional) == 0:
+		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
+			return err
+		}
+		return renderWorkflowsOverview(stdout, workflows.Load(ws.RootDir))
+	case len(positional) == 2 && positional[0] == "show":
+		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
+			return err
+		}
+		return renderWorkflowDefinition(stdout, workflows.Load(ws.RootDir), positional[1])
+	case len(positional) == 2 && positional[0] == "edit":
+		if err := parseNoWorkflowsFlags(flagArgs, stdout); err != nil {
+			return err
+		}
+		return runWorkflowsEdit(stdout, ws, positional[1])
+	case len(positional) == 1 && positional[0] == "dry-run":
+		return runWorkflowsDryRun(stdout, ws, flagArgs)
+	default:
+		return UsageError{Message: workflowsUsage}
+	}
+}
+
+// parseNoWorkflowsFlags is the shared "this shape takes no flags" guard the
+// overview/show/edit shapes all run: any flag-shaped or oversupplied
+// positional argument fails loudly rather than being silently ignored.
+func parseNoWorkflowsFlags(flagArgs []string, stdout io.Writer) error {
 	fs := newCobraFlagSet("workflows")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
@@ -35,18 +68,7 @@ func runWorkflows(ctx context.Context, stdout io.Writer, ws workspace.Info, args
 	if fs.NArg() != 0 {
 		return UsageError{Message: workflowsUsage}
 	}
-	set := workflows.Load(ws.RootDir)
-	switch len(positional) {
-	case 0:
-		return renderWorkflowsOverview(stdout, set)
-	case 2:
-		if positional[0] != "show" {
-			return UsageError{Message: workflowsUsage}
-		}
-		return renderWorkflowDefinition(stdout, set, positional[1])
-	default:
-		return UsageError{Message: workflowsUsage}
-	}
+	return nil
 }
 
 // builtinStates is the lifecycle's own state order — the spine every
