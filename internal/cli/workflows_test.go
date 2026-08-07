@@ -217,6 +217,27 @@ func TestWorkflowsEditScaffoldsFreshStateExitPoint(t *testing.T) {
 	}
 }
 
+// TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName pins the
+// last-colon split: a state name that itself contains a colon (states are
+// documented as open strings with no restriction against one) must still
+// parse its :enter/:exit suffix correctly rather than misclassifying the
+// whole point as a label.
+func TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName(t *testing.T) {
+	root := chdirTempRepo(t)
+
+	if _, err := runLit(t, "workflows", "edit", "deploy:staging:enter"); err != nil {
+		t.Fatalf("Run(workflows edit deploy:staging:enter) error = %v", err)
+	}
+	path := filepath.Join(root, ".lit", "workflows", "deploy-staging.md")
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
+	}
+	if !strings.Contains(string(content), "states: [deploy:staging]") {
+		t.Fatalf("scaffolded content = %q, want the live state activation with the colon preserved in the state name", content)
+	}
+}
+
 // TestWorkflowsEditScaffoldsFreshLabelPointAsFallback covers the fallback
 // branch: a point that is neither a known event nor a built-in state name is
 // treated as a label.

@@ -191,11 +191,17 @@ func classifyWorkflowPoint(point string) (dimension string, liveLine string, fil
 	return "labels", fmt.Sprintf("labels: [%s]", point), scaffoldFilenameSlug(point)
 }
 
+// parseStatePointSuffix splits at the LAST colon, not the first: state names
+// are open strings with no restriction against containing one (e.g.
+// "deploy:staging"), so splitting on the first colon would misparse
+// "deploy:staging:enter" as name "deploy", suffix "staging:enter" and fall
+// through to misclassifying the whole point as a label.
 func parseStatePointSuffix(point string) (state string, when workflows.When, ok bool) {
-	name, suffix, found := strings.Cut(point, ":")
-	if !found {
+	i := strings.LastIndex(point, ":")
+	if i < 0 {
 		return "", "", false
 	}
+	name, suffix := point[:i], point[i+1:]
 	switch strings.ToLower(strings.TrimSpace(suffix)) {
 	case "enter":
 		return strings.TrimSpace(name), workflows.WhenEnter, true
