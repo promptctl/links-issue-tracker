@@ -20,6 +20,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/templates"
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -336,6 +337,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
+	workflows.Dispatch(ticketCreatedOccasion(issue))
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -405,6 +407,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
+	workflows.Dispatch(ticketCreatedOccasion(issue))
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -838,6 +841,8 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if err != nil {
 		return err
 	}
+	// The agent viewed the ticket's details either way, --field or full view.
+	workflows.Dispatch(showTicketOccasion(detail.Issue))
 	// --field is the compact, edit-oriented view: exactly the requested
 	// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
 	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
@@ -982,6 +987,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
+	workflows.Dispatch(ticketUpdatedOccasion(issue))
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -1308,6 +1314,16 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 
+	// [LAW:single-enforcer] runTransition is the one status-transition path
+	// (start/done/close/open all arrive here), so it is the one place that
+	// dispatches their events — no per-command re-derivation. Retention
+	// actions (archive/unarchive/delete/restore) are not StatusActions, so
+	// the type assertion excludes them the same way the close-adjacency
+	// block below does.
+	if statusAction, ok := action.(model.StatusAction); ok {
+		workflows.Dispatch(transitionOccasion(statusAction, prior, issue))
+	}
+
 	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
 	// issue over from an existing owner succeeds (intended target-state
 	// semantics) but must not do so silently.
@@ -1384,10 +1400,11 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 	// through the same identity rule as every other actor.
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
+	comment, issue, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
+	workflows.Dispatch(commentAddedOccasion(issue))
 	return printComment(stdout, comment)
 }
 

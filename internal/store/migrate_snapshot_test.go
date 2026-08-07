@@ -404,7 +404,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
-	if _, err := st.AddComment(ctx, AddCommentInput{
+	if _, _, err := st.AddComment(ctx, AddCommentInput{
 		IssueID:   issueB.ID,
 		Body:      "Needs review before merge.",
 		CreatedBy: "bob",

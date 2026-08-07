@@ -70,7 +70,7 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: related.ID, Type: "related-to", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation related-to error = %v", err)
 	}
-	if _, err := st.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "Need compile boundary first.", CreatedBy: "tester"}); err != nil {
+	if _, _, err := st.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "Need compile boundary first.", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment error = %v", err)
 	}
 	detail, err := st.GetIssueDetail(ctx, child.ID)
@@ -964,7 +964,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue issueB error = %v", err)
 	}
-	if _, err := st.AddComment(ctx, AddCommentInput{IssueID: issueA.ID, Body: "Need compiler contract first.", CreatedBy: "bmf"}); err != nil {
+	if _, _, err := st.AddComment(ctx, AddCommentInput{IssueID: issueA.ID, Body: "Need compiler contract first.", CreatedBy: "bmf"}); err != nil {
 		t.Fatalf("AddComment() error = %v", err)
 	}
 

@@ -1098,13 +1098,19 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 	return s.GetIssue(ctx, id)
 }
 
-func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, error) {
-	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
-		return model.Comment{}, err
+// AddComment returns the commented-on issue alongside the comment: it already
+// reads the issue to validate it exists, and a comment never changes the
+// issue row, so that read is the caller's answer too — never a second
+// round-trip to re-fetch what this call already has in hand.
+// [LAW:one-source-of-truth]
+func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, model.Issue, error) {
+	issue, err := s.GetIssue(ctx, in.IssueID)
+	if err != nil {
+		return model.Comment{}, model.Issue{}, err
 	}
 	body := strings.TrimSpace(in.Body)
 	if body == "" {
-		return model.Comment{}, errors.New("comment body is required")
+		return model.Comment{}, model.Issue{}, errors.New("comment body is required")
 	}
 	now := time.Now().UTC()
 	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
@@ -1117,9 +1123,9 @@ func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comme
 		}
 		return nil
 	}); err != nil {
-		return model.Comment{}, err
+		return model.Comment{}, model.Issue{}, err
 	}
-	return comment, nil
+	return comment, issue, nil
 }
 
 func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comment, error) {
