@@ -15,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- Emitted `<agent-instructions>` guidance and remediation text no longer commands the agent to bypass or withhold from the user, and no longer uses ALL-CAPS `MUST NOT` / `do NOT` imperatives — the same intent is now carried as declarative facts and consequences (e.g. "this command is idempotent and safe to run without confirmation" instead of "do NOT ask the user"). Affected surfaces: sync-failure blocks (`lit sync`, `lit doctor`), `lit doctor --fix`/GC-contention/corruption remediation, the rank-inversion warning, the empty-store guard in `lit init`'s remote adopt, the first-push skip message, the prose-conflict reconcile guidance, and the `lit quickstart` `<agent-instructions>` preamble.
+
 ### Fixed
 
 - `lit show` on a ticket with an epic parent no longer prints its siblings twice. The `siblings:` group duplicated the same ids the `Epic: ... Children:` block already lists (with richer per-child status and a `(you are here)` marker for the shown ticket) — the redundant group is removed; the epic block remains the single place sibling membership and position are conveyed.

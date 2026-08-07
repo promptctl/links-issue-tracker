@@ -35,8 +35,8 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error
 	var b strings.Builder
 
 	b.WriteString("<agent-instructions>\n")
-	b.WriteString("A clone of this backlog diverged from the remote. The field-aware merge settled every field EXCEPT the free-text below, which was rewritten on BOTH sides. This is a transient state for you to resolve inline now — local reads still serve the clone's own data, and nothing is committed until you finalize.\n\n")
-	b.WriteString("For each field, MERGE 'ours' and 'theirs' into ONE coherent text that preserves BOTH intents. You are not picking a winner — that is exactly why this is yours and not the engine's. 'base' is the common ancestor, shown so you can see what each side changed.\n\n")
+	b.WriteString("A clone of this backlog diverged from the remote. The field-aware merge settled every field except the free-text below, which was rewritten on both sides. This is a transient state you can resolve inline now — local reads still serve the clone's own data, and nothing is committed until you finalize.\n\n")
+	b.WriteString("For each field, merge 'ours' and 'theirs' into one coherent text that preserves both intents. You are not picking a winner — that is exactly why this is yours to merge and not the engine's. 'base' is the common ancestor, shown so you can see what each side changed.\n\n")
 
 	for _, p := range ordered {
 		fmt.Fprintf(&b, "── %s · %s ──\n", p.IssueID, p.Field)
@@ -46,7 +46,7 @@ func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error
 		b.WriteString("\n")
 	}
 
-	b.WriteString("To finalize, supply your merged text for EVERY field above in ONE command (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced — copy the prefix verbatim, the trailing token pins your merge to THIS conflict):\n\n")
+	b.WriteString("To finalize, supply your merged text for every field above in one command (the divergence is re-derived live, so partial or stale resolutions are rejected and re-surfaced — copy the prefix verbatim, the trailing token pins your merge to this conflict):\n\n")
 	b.WriteString("  ")
 	b.WriteString(proseResolveCommand)
 	for _, p := range ordered {
