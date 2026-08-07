@@ -1,6 +1,9 @@
 package workflows
 
-import "slices"
+import (
+	"fmt"
+	"slices"
+)
 
 // Occasion is one moment at which workflow definitions may fire: the semantic
 // event that occurred, and whatever ticket context the moment carries. Zero
@@ -90,4 +93,33 @@ func matchStates(bound []StateActivation, o Occasion) bool {
 func (a StateActivation) matches(o Occasion) bool {
 	observed := map[When]string{WhenEnter: o.Entered, WhenExit: o.Exited}[a.When]
 	return observed != "" && observed == a.State
+}
+
+// MatchReasons returns, for a definition that fires on the occasion, which
+// specific value in each declared dimension satisfied it — "event:work_started",
+// "label:needs-design", "state:open(enter)" — the shared "why" computation
+// behind both the firing trace (a real occasion) and `lit workflows dry-run`
+// (a hypothetical one). Nil when the definition does not match.
+// [LAW:single-enforcer] built directly on Matches/matches rather than
+// re-deriving the boolean logic, so the two can never disagree about whether
+// a definition fired.
+func (d Definition) MatchReasons(o Occasion) []string {
+	if !d.Matches(o) {
+		return nil
+	}
+	var reasons []string
+	if len(d.Events) > 0 {
+		reasons = append(reasons, "event:"+string(o.Event))
+	}
+	for _, label := range d.Labels {
+		if slices.Contains(o.Labels, label) {
+			reasons = append(reasons, "label:"+label)
+		}
+	}
+	for _, activation := range d.States {
+		if activation.matches(o) {
+			reasons = append(reasons, fmt.Sprintf("state:%s(%s)", activation.State, activation.When))
+		}
+	}
+	return reasons
 }

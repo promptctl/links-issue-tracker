@@ -180,5 +180,8 @@ func writeInitHumanOutput(w io.Writer, report initReport) error {
 			return err
 		}
 	}
+	if _, err := fmt.Fprintf(w, "  Guidance: `lit workflows` shows the work lifecycle and the guidance active at each point (`lit workflows edit <id-or-point>` to customize)\n"); err != nil {
+		return err
+	}
 	return nil
 }

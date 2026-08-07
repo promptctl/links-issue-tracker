@@ -701,6 +701,23 @@ Mutation commands point back here at the moment of need: the text success output
 `lit quickstart work`, `done`/`close` at `lit quickstart done`, and
 `update`/`rank`/`label`/`parent`/`dep` at `lit quickstart update`.
 
+### `lit workflows`
+
+```text
+lit workflows [show <id> | edit <id-or-point> | dry-run [--event <name>] [--label <name>]... [--enter <state>] [--exit <state>] [--issue <id>]]
+```
+
+See [Workflows](workflows.md) for the full format, semantics, and a worked example.
+Bare `lit workflows` prints the lifecycle spine (every dispatched event, the three
+built-in states with enter/exit, and any bound labels) annotated with the definitions
+active at each point and their source layer; `show <id>` resolves one definition
+fully. `edit <id-or-point>` scaffolds a project-layer override (an existing
+definition's id) or a fresh definition (an event name, a state name optionally
+suffixed `:enter`/`:exit`, or — falling through — a label), always prints its path,
+and additionally opens it in `$EDITOR` when stdout is a terminal and `$EDITOR` is set.
+`dry-run` explains a hypothetical occasion built from flags: which definitions would
+fire, why, and the body each would inject — without anything actually firing.
+
 ### `lit completion`
 
 ```text
