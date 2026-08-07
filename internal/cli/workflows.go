@@ -32,6 +32,9 @@ func runWorkflows(ctx context.Context, stdout io.Writer, ws workspace.Info, args
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
+	if fs.NArg() != 0 {
+		return UsageError{Message: workflowsUsage}
+	}
 	set := workflows.Load(ws.RootDir)
 	switch len(positional) {
 	case 0:

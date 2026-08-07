@@ -157,3 +157,18 @@ func TestWorkflowsShowMissingIDIsUsageError(t *testing.T) {
 		t.Fatalf("Run(workflows show) error = %v (%T), want UsageError", err, err)
 	}
 }
+
+// TestWorkflowsRejectsOversuppliedArguments guards against silently
+// swallowing extra positional args past `show <id>` — splitArgs caps
+// positionals at 2 and shunts any overflow into the non-flag args pflag
+// tolerates by default, so this must fail loudly rather than rendering a
+// definition while quietly ignoring the rest of the command line.
+func TestWorkflowsRejectsOversuppliedArguments(t *testing.T) {
+	root := chdirTempRepo(t)
+	writeCLIWorkflow(t, root, "reminder.md", "---\nid: my-id\nevents: [show_ticket]\n---\nbody")
+
+	_, err := runLit(t, "workflows", "show", "my-id", "extra", "junk")
+	if _, ok := err.(UsageError); !ok {
+		t.Fatalf("Run(workflows show my-id extra junk) error = %v (%T), want UsageError", err, err)
+	}
+}
