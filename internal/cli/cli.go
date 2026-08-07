@@ -336,7 +336,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketCreatedOccasion(issue)); err != nil {
+	if err := workflows.Dispatch(stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 		return err
 	}
 	if err := printIssueSummary(stdout, issue); err != nil {
@@ -408,7 +408,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketCreatedOccasion(issue)); err != nil {
+	if err := workflows.Dispatch(stdout, ap.Workspace, ticketCreatedOccasion(issue)); err != nil {
 		return err
 	}
 	if err := printIssueSummary(stdout, issue); err != nil {
@@ -845,7 +845,7 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	// The agent viewed the ticket's details either way, --field or full view.
-	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, showTicketOccasion(detail.Issue)); err != nil {
+	if err := workflows.Dispatch(stdout, ap.Workspace, showTicketOccasion(detail.Issue)); err != nil {
 		return err
 	}
 	// --field is the compact, edit-oriented view: exactly the requested
@@ -992,7 +992,7 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketUpdatedOccasion(issue)); err != nil {
+	if err := workflows.Dispatch(stdout, ap.Workspace, ticketUpdatedOccasion(issue)); err != nil {
 		return err
 	}
 	if err := printIssueSummary(stdout, issue); err != nil {
@@ -1330,7 +1330,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// definition's guidance is injected — `done`'s embedded default is what
 	// prints the post-close capture reminder below.
 	if statusAction, ok := action.(model.StatusAction); ok {
-		if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, transitionOccasion(statusAction, prior, issue)); err != nil {
+		if err := workflows.Dispatch(stdout, ap.Workspace, transitionOccasion(statusAction, prior, issue)); err != nil {
 			return err
 		}
 	}
@@ -1405,7 +1405,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, commentAddedOccasion(issue)); err != nil {
+	if err := workflows.Dispatch(stdout, ap.Workspace, commentAddedOccasion(issue)); err != nil {
 		return err
 	}
 	return printComment(stdout, comment)

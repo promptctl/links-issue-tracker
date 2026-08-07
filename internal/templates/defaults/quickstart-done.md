@@ -4,4 +4,6 @@ Mark a ticket done when all work is completed: `lit done <issue-id>` closes the 
 Close a ticket without marking done: `lit close <issue-id> --resolution <duplicate|superseded|obsolete|wontfix>` (resolution is REQUIRED — it records why the work was not finished; from any non-closed state). duplicate/superseded redirect to a canonical ticket; obsolete = the need is gone; wontfix = a standing decision not to do it. Reopening clears the resolution. Filter closed work by it: `lit ls --query "resolution:wontfix"`.
 Create a follow-up ticket: `lit followup --on <closed-id> --title "..."` — a good habit for capturing work you surface as a child ticket while the context is fresh.
 
+Want to change that follow-up guidance, or make it fire only for certain tickets? `lit workflows edit done` scaffolds an editable override — see `lit workflows` and docs/workflows.md.
+
 **Always** commit your work when you're done.

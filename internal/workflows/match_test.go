@@ -150,3 +150,43 @@ func TestSetMatchingKeepsIDOrder(t *testing.T) {
 		t.Fatalf("Matching() = %+v, want [a c]", got)
 	}
 }
+
+func TestMatchReasonsNilWhenNotMatching(t *testing.T) {
+	def := Definition{Events: []Event{EventShowBacklog}}
+	if got := def.MatchReasons(Occasion{Event: EventShowTicket}); got != nil {
+		t.Fatalf("MatchReasons() = %v, want nil for a non-matching occasion", got)
+	}
+}
+
+func TestMatchReasonsNamesEveryDeclaredDimensionThatMatched(t *testing.T) {
+	def := Definition{
+		Events: []Event{EventWorkFinished},
+		Labels: []string{"needs-design", "blocked"},
+		States: []StateActivation{{State: "closed", When: WhenEnter}},
+	}
+	occasion := Occasion{
+		Event:   EventWorkFinished,
+		Labels:  []string{"needs-design"},
+		Entered: "closed",
+	}
+	got := def.MatchReasons(occasion)
+	want := []string{"event:work_finished", "label:needs-design", "state:closed(enter)"}
+	if len(got) != len(want) {
+		t.Fatalf("MatchReasons() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("MatchReasons() = %v, want %v", got, want)
+		}
+	}
+}
+
+func TestMatchReasonsOnlyListsLabelsThatActuallyOverlap(t *testing.T) {
+	def := Definition{Labels: []string{"needs-design", "blocked"}, Events: []Event{EventShowTicket}}
+	occasion := Occasion{Event: EventShowTicket, Labels: []string{"other", "blocked"}}
+	got := def.MatchReasons(occasion)
+	want := []string{"event:show_ticket", "label:blocked"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("MatchReasons() = %v, want %v", got, want)
+	}
+}

@@ -193,7 +193,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err := view.render(stdout, knobs.columns, rows); err != nil {
 		return err
 	}
-	return workflows.Dispatch(stdout, ap.Workspace.RootDir, view.occasion(rows))
+	return workflows.Dispatch(stdout, ap.Workspace, view.occasion(rows))
 }
 
 // parseWorkableStatus is the strict trust boundary for --status: blank means
