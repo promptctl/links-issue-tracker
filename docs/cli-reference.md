@@ -479,12 +479,15 @@ Whether a document creates or updates is decided entirely by the presence of
   neither a `local_id` in the file nor a real issue is an error.
 - **`id` present: update.** The document is a patch applied to that existing
   issue via the same field set `lit update` exposes: `title`, `description`,
-  `prompt`, `type`, `priority`, `assignee`, `labels`, `lane`, plus `reason`
-  (recorded on the field-change event). At least one of those fields must be
-  set. `topic`, `parent`, `depends_on`, and `local_id` **cannot** appear on an
-  update document — topic is immutable, and reparenting/dependency wiring are
-  `lit parent set`/`lit dep add`'s job, not `import`'s. An `id` that matches no
-  existing issue is a hard error — never a silent create.
+  `prompt`, `type`, `priority`, `assignee`, `labels`, `lane`. At least one of
+  those must be set. `reason` (recorded on the field-change event) is
+  optional annotation, not itself a change — a document with only `id` and
+  `reason` is rejected as having nothing to update, the same as `lit update
+  --reason "..."` with no field flags. `topic`, `parent`, `depends_on`, and
+  `local_id` **cannot** appear on an update document — topic is immutable,
+  and reparenting/dependency wiring are `lit parent set`/`lit dep add`'s job,
+  not `import`'s. An `id` that matches no existing issue is a hard error —
+  never a silent create.
 
 A mixed file (some documents creating, some updating) is legal. Duplicate `id`s
 or duplicate `local_id`s across documents in one file are rejected, as is any

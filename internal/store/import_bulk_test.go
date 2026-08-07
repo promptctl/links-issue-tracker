@@ -174,6 +174,23 @@ func TestBulkApplyRejectsUpdateWithParentOrDependsOn(t *testing.T) {
 	}
 }
 
+func TestBulkApplyRejectsInvalidTypeOrPriorityOnUpdate(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	badType := "ghost"
+	if _, err := st.BulkApply(ctx, "test", "agent", []BulkIssueSpec{{ID: created.ID, IssueType: &badType}}); err == nil || !strings.Contains(err.Error(), "invalid type") {
+		t.Fatalf("BulkApply(update invalid type) error = %v, want invalid-type error", err)
+	}
+	badPriority := 7
+	if _, err := st.BulkApply(ctx, "test", "agent", []BulkIssueSpec{{ID: created.ID, Priority: &badPriority}}); err == nil || !strings.Contains(err.Error(), "invalid priority") {
+		t.Fatalf("BulkApply(update invalid priority) error = %v, want invalid-priority error", err)
+	}
+}
+
 func TestBulkApplyRejectsMissingCreateFields(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)

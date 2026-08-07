@@ -111,7 +111,11 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 	for _, idx := range order {
 		spec := specs[idx]
 		if spec.ID != "" {
-			issue, err := s.Apply(ctx, spec.ID, bulkUpdateChange(spec, actor))
+			change, err := bulkUpdateChange(spec, actor)
+			if err != nil {
+				return BulkApplyResult{}, err
+			}
+			issue, err := s.Apply(ctx, spec.ID, change)
 			if err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
 				return BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
@@ -194,8 +198,11 @@ func resolveBulkRef(ref string, localRealID map[string]string) string {
 // bulkUpdateChange builds the field-patch Change for an update document: one
 // pointer copy per set field, mirroring `lit update`'s per-flag assembly.
 // validateBulkSpecs has already confirmed IssueType/Priority parse and that
-// at least one field is set.
-func bulkUpdateChange(spec BulkIssueSpec, actor string) Change {
+// at least one field is set; the parse errors are still propagated rather
+// than discarded, the same trust-but-verify convention BulkApply's create
+// branch and ImportTree both use for the same already-validated fields.
+// [LAW:no-silent-failure]
+func bulkUpdateChange(spec BulkIssueSpec, actor string) (Change, error) {
 	fields := UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
 	if spec.Title != nil {
 		v := strings.TrimSpace(*spec.Title)
@@ -210,11 +217,17 @@ func bulkUpdateChange(spec BulkIssueSpec, actor string) Change {
 		fields.Prompt = &v
 	}
 	if spec.IssueType != nil {
-		v, _ := model.ParseIssueType(*spec.IssueType)
+		v, err := model.ParseIssueType(*spec.IssueType)
+		if err != nil {
+			return Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
+		}
 		fields.IssueType = &v
 	}
 	if spec.Priority != nil {
-		v, _ := model.ParsePriority(*spec.Priority)
+		v, err := model.ParsePriority(*spec.Priority)
+		if err != nil {
+			return Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
+		}
 		fields.Priority = &v
 	}
 	if spec.Assignee != nil {
@@ -229,7 +242,7 @@ func bulkUpdateChange(spec BulkIssueSpec, actor string) Change {
 		v := *spec.Labels
 		fields.Labels = &v
 	}
-	return Change{Actor: actor, Fields: fields}
+	return Change{Actor: actor, Fields: fields}, nil
 }
 
 func derefOr[T any](p *T, fallback T) T {
