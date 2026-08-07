@@ -16,6 +16,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `lit show` on a ticket with an epic parent no longer prints its siblings twice. The `siblings:` group duplicated the same ids the `Epic: ... Children:` block already lists (with richer per-child status and a `(you are here)` marker for the shown ticket) — the redundant group is removed; the epic block remains the single place sibling membership and position are conveyed.
+
 ### Removed
 
 ### Security
