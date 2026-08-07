@@ -137,11 +137,12 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	if err := printIssueGroup(w, "children", detail.Children); err != nil {
 		return err
 	}
-	// Siblings sit beside children so the parent-child neighborhood reads as one
-	// block: this ticket's children, then its peers under the shared parent.
-	if err := printIssueGroup(w, "siblings", detail.Siblings); err != nil {
-		return err
-	}
+	// No "siblings" group here: when this issue has an epic parent,
+	// writeEpicContext's "Epic: ... Children:" block already lists every
+	// sibling (plus this ticket itself, marked "(you are here)") in rank
+	// order — a strict superset of a bare siblings list. Printing both would
+	// repeat the same ids twice for zero added information.
+	// [LAW:one-source-of-truth]
 	if err := printIssueGroup(w, "depends_on", detail.DependsOn); err != nil {
 		return err
 	}
