@@ -17,9 +17,9 @@ import (
 // directly so it cannot silently regress toward the old ignorable one-liner.
 func assertContractElements(t *testing.T, block string, wantCommands ...string) {
 	t.Helper()
-	// (1) Directive — the standing MUST-NOT-IGNORE instruction.
-	if !strings.Contains(block, "MUST NOT IGNORE") {
-		t.Errorf("block missing the MUST-NOT-IGNORE directive:\n%s", block)
+	// (1) Directive — the standing not-ambient-noise fact.
+	if !strings.Contains(block, "blocking condition") {
+		t.Errorf("block missing the blocking-condition directive:\n%s", block)
 	}
 	if !strings.Contains(block, "surface it to the user as blocking") {
 		t.Errorf("block missing the escalate-to-user instruction:\n%s", block)
@@ -95,7 +95,7 @@ func TestSyncFailureBlockDivergedUnresolvedWithCause(t *testing.T) {
 	if causeIdx < 0 {
 		t.Fatalf("diverged-unresolved block dropped the backend cause entirely:\n%s", block)
 	}
-	if directiveIdx := strings.Index(block, "MUST NOT IGNORE"); directiveIdx > causeIdx {
+	if directiveIdx := strings.Index(block, "blocking condition"); directiveIdx > causeIdx {
 		t.Errorf("backend cause appears above the directive (reads as the headline):\n%s", block)
 	}
 	if !strings.Contains(block, "cause (backend detail") {

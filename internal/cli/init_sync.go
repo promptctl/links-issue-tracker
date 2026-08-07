@@ -98,11 +98,12 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 		return initSyncOutcome{
 			State: initSyncFailed,
 			Error: fmt.Sprintf(
-				"adopting the remote backlog exceeded %s and was aborted — the store is empty, do NOT push "+
-					"from it (a sync push of an empty store cannot help and risks the remote backlog). The data "+
-					"transferred, but the embedded dolt pull did not finish processing it in time (a slow-adopt "+
-					"issue in dolt's pull, not a transfer or data-size problem). Retry `lit init`; if it keeps "+
-					"timing out, escalate the slow adopt rather than re-running blindly",
+				"adopting the remote backlog exceeded %s and was aborted — the store is empty. Pushing from it "+
+					"would risk the remote backlog for no benefit (a sync push of an empty store cannot help), so "+
+					"it should stay untouched until this is resolved. The data transferred, but the embedded dolt "+
+					"pull did not finish processing it in time (a slow-adopt issue in dolt's pull, not a transfer "+
+					"or data-size problem). Retry `lit init`; if it keeps timing out, escalate the slow adopt "+
+					"rather than re-running blindly",
 				adoptRemoteTimeout),
 		}
 	}
@@ -137,8 +138,9 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 			Branch: plan.branch,
 			Error: fmt.Sprintf(
 				"remote %q carries lit ticket data (refs/dolt/*) but cloning it into the local store failed, so the store "+
-					"is empty — do NOT push from it (a sync push of an empty store cannot help and risks the remote "+
-					"backlog). Retry `lit init`; underlying error: %v",
+					"is empty. Pushing from it would risk the remote backlog for no benefit (a sync push of an empty "+
+					"store cannot help), so it should stay untouched until this is resolved. Retry `lit init`; "+
+					"underlying error: %v",
 				plan.remote, err,
 			),
 		}
