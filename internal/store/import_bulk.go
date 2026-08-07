@@ -196,7 +196,7 @@ func resolveBulkRef(ref string, localRealID map[string]string) string {
 // validateBulkSpecs has already confirmed IssueType/Priority parse and that
 // at least one field is set.
 func bulkUpdateChange(spec BulkIssueSpec, actor string) Change {
-	fields := UpdateIssueInput{Reason: spec.Reason}
+	fields := UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
 	if spec.Title != nil {
 		v := strings.TrimSpace(*spec.Title)
 		fields.Title = &v

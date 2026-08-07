@@ -1459,6 +1459,16 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	case ".yaml", ".yml":
 		return runImportBulk(ctx, stdout, ap, data, resolveActor())
 	default:
+		// --by only has a consumer on the YAML update path (it attributes each
+		// update's field-change event); the JSON tree spec always attributes
+		// creates to "links", same as it did before --by existed on this
+		// command. Rejecting a set-but-unused --by here, rather than silently
+		// discarding it, keeps a JSON import with --by behaving the way it did
+		// before this command grew the flag: an error, not a quiet no-op.
+		// [LAW:no-silent-failure]
+		if fs.Changed("by") {
+			return UsageError{Message: "usage: --by only applies to a YAML bulk-update file (--path *.yaml|*.yml); JSON tree-spec import always attributes creates to \"links\""}
+		}
 		return runImportTreeJSON(ctx, stdout, ap, data)
 	}
 }

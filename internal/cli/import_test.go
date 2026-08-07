@@ -155,3 +155,57 @@ func TestRunImportRequiresPath(t *testing.T) {
 		t.Fatalf("runImportTree(no --path) exit code = %d, want %d", ExitCode(err), ExitUsage)
 	}
 }
+
+// --by has no consumer on the JSON tree-spec dispatch branch (it always
+// attributes creates to "links"); a set-but-unused --by there must be
+// rejected, not silently discarded, so a caller relying on it gets the same
+// loud failure this command gave before --by existed on `import` at all.
+func TestRunImportRejectsByFlagOnJSONPath(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	path := writeImportFile(t, "tree.json", `[{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0}]`)
+	var stdout bytes.Buffer
+	err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"})
+	if err == nil {
+		t.Fatal("runImportTree(json --by) error = nil, want usage error")
+	}
+	if ExitCode(err) != ExitUsage {
+		t.Fatalf("runImportTree(json --by) exit code = %d, want %d", ExitCode(err), ExitUsage)
+	}
+}
+
+func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Reason trim", Topic: "import", IssueType: "task",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	path := writeImportFile(t, "reason.yaml", `
+id: `+created.ID+`
+priority: 1
+reason: "  padded reason  "
+`)
+	var stdout bytes.Buffer
+	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
+		t.Fatalf("runImportTree(yaml reason) error = %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	found := false
+	for _, e := range detail.Events {
+		if e.Reason == "padded reason" {
+			found = true
+		}
+		if strings.Contains(e.Reason, "  ") {
+			t.Fatalf("event.Reason = %q, want trimmed (no padding)", e.Reason)
+		}
+	}
+	if !found {
+		t.Fatalf("no event recorded the trimmed reason: %#v", detail.Events)
+	}
+}
