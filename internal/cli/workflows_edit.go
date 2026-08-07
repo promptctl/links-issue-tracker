@@ -54,7 +54,7 @@ func editExistingDefinition(stdout io.Writer, ws workspace.Info, def workflows.D
 	if err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, raw); err != nil {
+	if err := writeWorkflowScaffold(projectPath, def.ID, raw); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "scaffolded override for %q (was %s) -> %s\n", def.ID, def.Source, projectPath); err != nil {
@@ -69,7 +69,7 @@ func editFreshDefinition(stdout io.Writer, ws workspace.Info, point string) erro
 	if err := refuseExistingFile(projectPath, point); err != nil {
 		return err
 	}
-	if err := writeWorkflowScaffold(projectPath, workflows.ScaffoldFresh(dimension, liveLine)); err != nil {
+	if err := writeWorkflowScaffold(projectPath, point, workflows.ScaffoldFresh(dimension, liveLine)); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(stdout, "scaffolded a new definition at %s\n", projectPath); err != nil {
@@ -82,26 +82,46 @@ func projectWorkflowPath(ws workspace.Info, relPath string) string {
 	return filepath.Join(ws.RootDir, ".lit", "workflows", filepath.FromSlash(relPath))
 }
 
-// refuseExistingFile is the one guard both scaffold shapes route through
-// before writing: never clobber a file that's already there, whatever put it
-// there. [LAW:single-enforcer]
+// refuseExistingFile is the fast-path guard both scaffold shapes check
+// before doing any work: never clobber a file that's already there, whatever
+// put it there. It gives a quick, friendly rejection for the common
+// (non-racing) case; writeWorkflowScaffold's O_EXCL open is the actual
+// enforcer, since a stat-then-write here would leave a TOCTOU gap a
+// concurrent `lit workflows edit` could win. [LAW:single-enforcer]
 func refuseExistingFile(path string, subject string) error {
 	if _, err := os.Stat(path); err == nil {
-		return MergeConflictError{Message: fmt.Sprintf("cannot scaffold %q: %s already exists (edit it directly, or run `lit workflows` to see what's already loaded there)", subject, path)}
+		return conflictError(subject, path)
 	} else if !os.IsNotExist(err) {
 		return fmt.Errorf("stat %s: %w", path, err)
 	}
 	return nil
 }
 
-func writeWorkflowScaffold(path string, content []byte) error {
+func conflictError(subject string, path string) error {
+	return MergeConflictError{Message: fmt.Sprintf("cannot scaffold %q: %s already exists (edit it directly, or run `lit workflows` to see what's already loaded there)", subject, path)}
+}
+
+// writeWorkflowScaffold is the actual no-clobber enforcer: O_EXCL makes file
+// creation atomic, so a file that appears between refuseExistingFile's check
+// and this call — the race that check alone cannot close — fails the same
+// way refuseExistingFile's fast path would, instead of silently overwriting
+// whatever landed there. [LAW:single-enforcer]
+func writeWorkflowScaffold(path string, subject string, content []byte) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fmt.Errorf("create %s: %w", filepath.Dir(path), err)
 	}
-	if err := os.WriteFile(path, content, 0o644); err != nil {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+	if err != nil {
+		if os.IsExist(err) {
+			return conflictError(subject, path)
+		}
+		return fmt.Errorf("create %s: %w", path, err)
+	}
+	if _, err := file.Write(content); err != nil {
+		_ = file.Close()
 		return fmt.Errorf("write %s: %w", path, err)
 	}
-	return nil
+	return file.Close()
 }
 
 // openOrPrintWorkflowFile always names the scaffolded/target path — cheap,
@@ -183,12 +203,25 @@ func classifyWorkflowPoint(point string) (dimension string, liveLine string, fil
 		return "states", stateActivationLine(state, when), stateFilenameSlug(state, when)
 	}
 	if workflows.Event(point).Known() {
-		return "events", fmt.Sprintf("events: [%s]", point), scaffoldFilenameSlug(point)
+		return "events", fmt.Sprintf("events: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
 	}
 	if isBuiltinState(point) {
 		return "states", stateActivationLine(point, workflows.WhenEnter), stateFilenameSlug(point, workflows.WhenEnter)
 	}
-	return "labels", fmt.Sprintf("labels: [%s]", point), scaffoldFilenameSlug(point)
+	return "labels", fmt.Sprintf("labels: [%s]", yamlDoubleQuoted(point)), scaffoldFilenameSlug(point)
+}
+
+// yamlDoubleQuoted wraps a value as a YAML double-quoted scalar — the one
+// style whose only special characters are `\` and `"` (a flow-context
+// character like `,` or `]` is literal inside the quotes) — so a point
+// containing a comma, bracket, or colon embeds safely into the flow sequence
+// ScaffoldFresh's live dimension line renders. [LAW:single-enforcer] every
+// value embedded into scaffolded frontmatter routes through this one
+// escaper, applied uniformly rather than only when a special character
+// happens to be present.
+func yamlDoubleQuoted(value string) string {
+	replacer := strings.NewReplacer(`\`, `\\`, `"`, `\"`)
+	return `"` + replacer.Replace(value) + `"`
 }
 
 // parseStatePointSuffix splits at the LAST colon, not the first: state names
@@ -224,9 +257,9 @@ func isBuiltinState(point string) bool {
 
 func stateActivationLine(state string, when workflows.When) string {
 	if when == workflows.WhenExit {
-		return fmt.Sprintf("states: [{name: %s, when: exit}]", state)
+		return fmt.Sprintf("states: [{name: %s, when: exit}]", yamlDoubleQuoted(state))
 	}
-	return fmt.Sprintf("states: [%s]", state)
+	return fmt.Sprintf("states: [%s]", yamlDoubleQuoted(state))
 }
 
 func stateFilenameSlug(state string, when workflows.When) string {

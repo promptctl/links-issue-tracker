@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
 // writeCLIWorkflow authors a workflow definition file under the current
@@ -191,7 +193,7 @@ func TestWorkflowsEditScaffoldsFreshEventPoint(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 	}
-	if !strings.Contains(string(content), "events: [work_started]") {
+	if !strings.Contains(string(content), `events: ["work_started"]`) {
 		t.Fatalf("scaffolded content = %q, want the live events line", content)
 	}
 	if strings.Contains(string(content), "# events: [work_started]") {
@@ -212,7 +214,7 @@ func TestWorkflowsEditScaffoldsFreshStateExitPoint(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 	}
-	if !strings.Contains(string(content), "states: [{name: closed, when: exit}]") {
+	if !strings.Contains(string(content), `states: [{name: "closed", when: exit}]`) {
 		t.Fatalf("scaffolded content = %q, want the live exit state activation", content)
 	}
 }
@@ -233,7 +235,7 @@ func TestWorkflowsEditScaffoldsFreshStateExitPointWithColonInStateName(t *testin
 	if readErr != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 	}
-	if !strings.Contains(string(content), "states: [deploy:staging]") {
+	if !strings.Contains(string(content), `states: ["deploy:staging"]`) {
 		t.Fatalf("scaffolded content = %q, want the live state activation with the colon preserved in the state name", content)
 	}
 }
@@ -252,8 +254,38 @@ func TestWorkflowsEditScaffoldsFreshLabelPointAsFallback(t *testing.T) {
 	if readErr != nil {
 		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
 	}
-	if !strings.Contains(string(content), "labels: [needs-design]") {
+	if !strings.Contains(string(content), `labels: ["needs-design"]`) {
 		t.Fatalf("scaffolded content = %q, want the live labels line", content)
+	}
+}
+
+// TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation is the
+// YAML-escaping regression: unlike labels (model.NormalizeLabel rejects a
+// comma outright), state names have no such restriction, so a state
+// containing a comma is the domain-valid case where an unquoted flow
+// sequence would silently split one activation into two.
+func TestWorkflowsEditScaffoldsFreshStateWithCommaAsOneStateActivation(t *testing.T) {
+	root := chdirTempRepo(t)
+
+	if _, err := runLit(t, "workflows", "edit", "foo,bar:enter"); err != nil {
+		t.Fatalf("Run(workflows edit foo,bar:enter) error = %v", err)
+	}
+	path := filepath.Join(root, ".lit", "workflows", "foo-bar.md")
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile(%s) error = %v", path, readErr)
+	}
+	if !strings.Contains(string(content), `states: ["foo,bar"]`) {
+		t.Fatalf("scaffolded content = %q, want the comma-containing state name double-quoted", content)
+	}
+
+	set := workflows.Load(root)
+	def, ok := set.Lookup("foo-bar")
+	if !ok {
+		t.Fatalf("workflows.Load(%s) has no definition with id foo-bar; loaded ids: %+v", root, set.Definitions)
+	}
+	if len(def.States) != 1 || def.States[0].State != "foo,bar" || def.States[0].When != workflows.WhenEnter {
+		t.Fatalf("def.States = %+v, want exactly one activation {foo,bar enter}", def.States)
 	}
 }
 
@@ -282,6 +314,33 @@ func TestWorkflowsEditOverridesEmbeddedDefaultVerbatim(t *testing.T) {
 	}
 	if !strings.Contains(output, "source: project") {
 		t.Fatalf("workflows show done output = %q, want source: project", output)
+	}
+}
+
+// TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck pins the
+// TOCTOU fix directly: writeWorkflowScaffold's O_EXCL open is the actual
+// enforcer, not just refuseExistingFile's earlier stat — calling it twice for
+// the same path (as a concurrent `edit` racing past the first call's stat
+// check would) must fail on the second call, never silently overwrite the
+// first call's content.
+func TestWriteWorkflowScaffoldEnforcesNoClobberEvenPastTheFastPathCheck(t *testing.T) {
+	root := chdirTempRepo(t)
+	path := filepath.Join(root, ".lit", "workflows", "race.md")
+
+	if err := writeWorkflowScaffold(path, "race", []byte("first")); err != nil {
+		t.Fatalf("writeWorkflowScaffold() first call error = %v", err)
+	}
+	err := writeWorkflowScaffold(path, "race", []byte("second"))
+	var conflict MergeConflictError
+	if !errors.As(err, &conflict) {
+		t.Fatalf("writeWorkflowScaffold() second call error = %v (%T), want MergeConflictError", err, err)
+	}
+	content, readErr := os.ReadFile(path)
+	if readErr != nil {
+		t.Fatalf("ReadFile() error = %v", readErr)
+	}
+	if string(content) != "first" {
+		t.Fatalf("content = %q, want the first call's content untouched", content)
 	}
 }
 
