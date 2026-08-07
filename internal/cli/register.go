@@ -355,7 +355,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// snapshots (snapshots). The mechanisms are deliberately NOT merged.
 		{Name: "export", Summary: "Write the backlog out as a portable JSON tree (the data-export primitive; `import`'s inverse)", GroupID: "data",
 			Run: r.appCmd(app.AccessRead, runExport)},
-		{Name: "import", Summary: "Bulk-create issues from a JSON tree spec (the one tree-import home)", GroupID: "data",
+		{Name: "import", Summary: "Bulk-create/update issues from a file (the one bulk-ingest home): a JSON tree spec, or a YAML file for create-or-update by id selector", GroupID: "data",
 			Run: r.appCmd(app.AccessWrite, runImportTree)},
 		{Name: "workspace", Summary: "Show workspace metadata", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {

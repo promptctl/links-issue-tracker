@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -1427,12 +1428,48 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	return writeJSON(stdout, export)
 }
 
-// runImportTree consumes a JSON tree spec and creates issues in dependency
-// order with best-effort rollback on failure (see Store.ImportTree). The spec
-// is an array of records; each carries a local_id used inside the spec to
-// wire parent/depends_on refs. Real issue IDs are generated at create time
-// and returned in the id_map result. Run `lit doctor` after a failed import
-// to detect any orphans left if rollback itself failed.
+// importUsage is shared by every usage error runImportTree can raise, so a
+// malformed invocation always points at the same two accepted shapes.
+const importUsage = "usage: lit import --path <tree-spec.json | bulk-file.yaml> (see docs/cli-reference.md for both formats)"
+
+// runImportTree reads --path and dispatches on its extension to one of two
+// bulk-ingest formats sharing this one command surface (never two competing
+// stories for "create many issues from a file"): a JSON tree spec
+// (runImportTreeJSON, unchanged) or a YAML bulk create/update file
+// (runImportBulk). [LAW:dataflow-not-control-flow] the format is a value —
+// the file's own extension — not a second flag or mode.
+func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
+	fs := newCobraFlagSet("import")
+	path := fs.String("path", "", "Path to a JSON tree-spec file or a YAML bulk create/update file")
+	resolveActor := registerActor(fs)
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*path) == "" {
+		return UsageError{Message: importUsage}
+	}
+	if fs.NArg() != 0 {
+		return UsageError{Message: importUsage}
+	}
+	data, err := os.ReadFile(*path)
+	if err != nil {
+		return fmt.Errorf("read import spec: %w", err)
+	}
+	switch strings.ToLower(filepath.Ext(*path)) {
+	case ".yaml", ".yml":
+		return runImportBulk(ctx, stdout, ap, data, resolveActor())
+	default:
+		return runImportTreeJSON(ctx, stdout, ap, data)
+	}
+}
+
+// runImportTreeJSON consumes a JSON tree spec and creates issues in
+// dependency order with best-effort rollback on failure (see
+// Store.ImportTree). The spec is an array of records; each carries a
+// local_id used inside the spec to wire parent/depends_on refs. Real issue
+// IDs are generated at create time and returned in the id_map result. Run
+// `lit doctor` after a failed import to detect any orphans left if rollback
+// itself failed.
 //
 // JSON shape (see store.ImportTreeSpec):
 //
@@ -1441,22 +1478,7 @@ func runExport(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 //	  {"local_id": "task-1", "parent": "epic-x", "title": "Design", "type": "task", "topic": "x", "priority": 0},
 //	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
 //	]
-func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	fs := newCobraFlagSet("import")
-	path := fs.String("path", "", "Path to JSON tree spec file")
-	if err := parseFlagSet(fs, args, stdout); err != nil {
-		return err
-	}
-	if strings.TrimSpace(*path) == "" {
-		return UsageError{Message: "usage: lit import --path <file.json>"}
-	}
-	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit import --path <file.json>"}
-	}
-	data, err := os.ReadFile(*path)
-	if err != nil {
-		return fmt.Errorf("read import spec: %w", err)
-	}
+func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
 	specs, err := store.ParseImportTreeSpecs(data)
 	if err != nil {
 		return err
@@ -1470,6 +1492,53 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	for local, real := range result.IDMap {
 		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", local, real); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// runImportBulk consumes a multi-document YAML bulk file and creates or
+// updates each document's issue (see Store.BulkApply and
+// store.BulkIssueSpec for the id-as-selector rule and the full field list).
+//
+// YAML shape — one document per issue, documents separated by `---`:
+//
+//	local_id: epic-x        # optional; lets a later document's parent/depends_on name this one
+//	title: Build X
+//	type: epic
+//	topic: x
+//	---
+//	title: Design
+//	type: task
+//	topic: x
+//	parent: epic-x           # a local_id above, or an existing real issue ID
+//	---
+//	id: existing-issue-7     # present => update that issue instead of creating
+//	title: Renamed
+//	labels: [reviewed]
+func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
+	specs, err := store.ParseBulkSpecs(data)
+	if err != nil {
+		return err
+	}
+	result, err := ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)
+	if err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
+		return err
+	}
+	for ref, real := range result.Created {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", ref, real); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(stdout, "updated %d issues\n", len(result.Updated)); err != nil {
+		return err
+	}
+	for _, id := range result.Updated {
+		if _, err := fmt.Fprintf(stdout, "  %s\n", id); err != nil {
 			return err
 		}
 	}
