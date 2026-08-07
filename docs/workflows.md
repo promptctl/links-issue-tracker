@@ -145,10 +145,10 @@ by an unrelated definition that happens to share the same default filename — i
 fails with a clear conflict message instead of silently clobbering it; edit that file
 directly, or pick a different point.
 
-When stdout is a real terminal and `$EDITOR` is set, `edit` opens the scaffolded (or
-existing) file in it. Otherwise — a script, an agent, a pipe, or a terminal with no
-`$EDITOR` configured — it just prints the path; that's enough to open the file
-yourself.
+`edit` always prints the scaffolded (or existing) file's path to stdout. When stdout
+is a real terminal and `$EDITOR` is set, it additionally opens that file in it. A
+script, an agent, a pipe, or a terminal with no `$EDITOR` configured gets just the
+printed path — enough to open the file yourself.
 
 ### `lit workflows dry-run`
 
