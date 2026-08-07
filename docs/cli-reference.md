@@ -57,9 +57,10 @@ has merged, so it cannot gate the merge. Pre-merge verification belongs at the b
 runs before merge — CI and required PR checks — which lit deliberately does not own. lit
 dictates nothing about a repository's CI, PR, or merge process.
 
-The guidance is template-driven: a transition prints guidance for a phase when a
-`guidance-<action>-<phase>.md` template exists in the workspace, and `done`'s built-in
-`post` template is the only one shipped by default.
+The guidance comes from workflows: user-customizable definitions bound to the
+`work_finished` semantic event (or any label/state/event combination) inject their body
+into the command's output. `done`'s post-close reminder above is the only definition
+shipped as an embedded default today.
 
 ### Lifecycle
 

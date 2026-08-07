@@ -19,7 +19,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
 	"github.com/promptctl/links-issue-tracker/internal/store"
-	"github.com/promptctl/links-issue-tracker/internal/templates"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -337,7 +336,9 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	workflows.Dispatch(ticketCreatedOccasion(issue))
+	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketCreatedOccasion(issue)); err != nil {
+		return err
+	}
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -407,7 +408,9 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	workflows.Dispatch(ticketCreatedOccasion(issue))
+	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketCreatedOccasion(issue)); err != nil {
+		return err
+	}
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -842,7 +845,9 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 		return err
 	}
 	// The agent viewed the ticket's details either way, --field or full view.
-	workflows.Dispatch(showTicketOccasion(detail.Issue))
+	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, showTicketOccasion(detail.Issue)); err != nil {
+		return err
+	}
 	// --field is the compact, edit-oriented view: exactly the requested
 	// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
 	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
@@ -987,7 +992,9 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err != nil {
 		return err
 	}
-	workflows.Dispatch(ticketUpdatedOccasion(issue))
+	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, ticketUpdatedOccasion(issue)); err != nil {
+		return err
+	}
 	if err := printIssueSummary(stdout, issue); err != nil {
 		return err
 	}
@@ -1319,9 +1326,13 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// dispatches their events — no per-command re-derivation. Retention
 	// actions (archive/unarchive/delete/restore) are not StatusActions, so
 	// the type assertion excludes them the same way the close-adjacency
-	// block below does.
+	// block below does. Dispatch is also where any matching workflow
+	// definition's guidance is injected — `done`'s embedded default is what
+	// prints the post-close capture reminder below.
 	if statusAction, ok := action.(model.StatusAction); ok {
-		workflows.Dispatch(transitionOccasion(statusAction, prior, issue))
+		if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, transitionOccasion(statusAction, prior, issue)); err != nil {
+			return err
+		}
 	}
 
 	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
@@ -1332,16 +1343,6 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(start.Assignee)); err != nil {
 				return err
 			}
-		}
-	}
-	postGuidance, hasPostGuidance, err := loadTransitionGuidance(action.Name(), "post", ap.Workspace.RootDir)
-	if err != nil {
-		return fmt.Errorf("load post-guidance: %w", err)
-	}
-	if hasPostGuidance {
-		rendered := renderGuidance(postGuidance, issueID, "")
-		if _, err := fmt.Fprintln(stdout, rendered); err != nil {
-			return err
 		}
 	}
 
@@ -1404,7 +1405,9 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	if err != nil {
 		return err
 	}
-	workflows.Dispatch(commentAddedOccasion(issue))
+	if err := workflows.Dispatch(stdout, ap.Workspace.RootDir, commentAddedOccasion(issue)); err != nil {
+		return err
+	}
 	return printComment(stdout, comment)
 }
 
@@ -1791,29 +1794,6 @@ func toSlice[S ~string](s S) []S {
 		return nil
 	}
 	return []S{s}
-}
-
-// loadTransitionGuidance loads a guidance template for the given action/phase.
-// Returns the template content, whether it exists, and any I/O error.
-// Absent templates are not an error — they simply deactivate the guidance flow.
-func loadTransitionGuidance(action model.ActionName, phase, workspaceRoot string) (string, bool, error) {
-	content, err := templates.LoadGuidance(string(action), phase, workspaceRoot)
-	if err != nil {
-		return "", false, err
-	}
-	if content == "" {
-		return "", false, nil
-	}
-	return strings.TrimSpace(content), true, nil
-}
-
-// renderGuidance interpolates <id> and <token> placeholders in a guidance
-// template. token may be empty (e.g. for post-guidance, where the apply token
-// no longer applies); in that case <token> is replaced with the empty string.
-func renderGuidance(template string, issueID string, token string) string {
-	out := strings.ReplaceAll(template, "<id>", issueID)
-	out = strings.ReplaceAll(out, "<token>", token)
-	return out
 }
 
 func splitCSV(input string) []string {
