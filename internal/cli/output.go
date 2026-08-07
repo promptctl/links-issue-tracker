@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -170,6 +171,75 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 	// field-level transition trail lives behind `lit history` (printIssueHistory)
 	// so a cold reader never mistakes a superseded before→after line for a
 	// current fact. The shared printHistoryEvents renderer keeps its home there.
+	return nil
+}
+
+// issueFieldNames is the single definition of which field names `lit show
+// --field` accepts and how each renders. It is a superset of the table
+// --columns set (resolveColumns): it also exposes the multi-line fields
+// (description, prompt) the field-limited view exists to serve, which a
+// single-line table row cannot carry. [LAW:one-source-of-truth]
+var issueFieldNames = map[string]func(model.Issue) string{
+	"id":          func(i model.Issue) string { return i.ID },
+	"title":       func(i model.Issue) string { return i.Title },
+	"description": func(i model.Issue) string { return i.Description },
+	"prompt":      func(i model.Issue) string { return i.Prompt },
+	"type":        func(i model.Issue) string { return string(i.IssueType) },
+	"topic":       func(i model.Issue) string { return i.Topic },
+	"priority":    func(i model.Issue) string { return i.Priority.String() },
+	"status":      func(i model.Issue) string { return string(i.State()) },
+	"assignee":    func(i model.Issue) string { return i.AssigneeValue() },
+	"labels":      func(i model.Issue) string { return strings.Join(i.Labels, ",") },
+	"rank":        func(i model.Issue) string { return i.Rank },
+	"lane":        func(i model.Issue) string { return i.Lane },
+	"created_at":  func(i model.Issue) string { return i.CreatedAt.Format(time.RFC3339) },
+	"updated_at":  func(i model.Issue) string { return i.UpdatedAt.Format(time.RFC3339) },
+}
+
+// sortedIssueFieldNames lists the valid --field names for the unknown-field
+// error message, so a typo is answered with the exact accepted vocabulary
+// instead of a bare rejection.
+func sortedIssueFieldNames() []string {
+	names := make([]string, 0, len(issueFieldNames))
+	for name := range issueFieldNames {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// printIssueFields renders exactly the requested fields and nothing else — no
+// header, no parent/epic context, no siblings, no children summary — so an
+// agent can read a ticket's description (or any other single field) without
+// the full `lit show` dump. Fields are validated before anything prints, so
+// an unknown name in a multi-field request fails clean rather than emitting
+// a partial result. A single field prints its bare value with no label, so
+// the output round-trips directly into `lit update --description` and
+// similar; multiple fields print as "name: value" lines so a multi-line
+// value stays attributable to its field.
+func printIssueFields(w io.Writer, issue model.Issue, fields []string) error {
+	type resolvedField struct {
+		name  string
+		value string
+	}
+	resolved := make([]resolvedField, 0, len(fields))
+	for _, field := range fields {
+		name := strings.ToLower(strings.TrimSpace(field))
+		getValue, ok := issueFieldNames[name]
+		if !ok {
+			return UsageError{Message: fmt.Sprintf("unknown --field %q; valid fields: %s", field, strings.Join(sortedIssueFieldNames(), ", "))}
+		}
+		resolved = append(resolved, resolvedField{name: name, value: getValue(issue)})
+	}
+	if len(resolved) == 1 {
+		_, err := fmt.Fprintln(w, resolved[0].value)
+		return err
+	}
+	for _, entry := range resolved {
+		if _, err := fmt.Fprintf(w, "%s: %s\n", entry.name, entry.value); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
