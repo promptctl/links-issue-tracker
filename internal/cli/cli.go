@@ -1457,7 +1457,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	switch strings.ToLower(filepath.Ext(*path)) {
 	case ".yaml", ".yml":
-		return runImportBulk(ctx, stdout, ap, data, resolveActor())
+		return runImportBulk(ctx, stdout, ap, data, resolveActor(), fs.Changed("by"))
 	default:
 		// --by only has a consumer on the YAML update path (it attributes each
 		// update's field-change event); the JSON tree spec always attributes
@@ -1527,10 +1527,19 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	id: existing-issue-7     # present => update that issue instead of creating
 //	title: Renamed
 //	labels: [reviewed]
-func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string) error {
+func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string, byChanged bool) error {
 	specs, err := store.ParseBulkSpecs(data)
 	if err != nil {
 		return err
+	}
+	// actor only has a consumer on an update document (it attributes that
+	// document's field-change event; a create has no actor field to carry
+	// it). A file with no update documents at all never reads actor, so a
+	// set-but-unused --by is rejected here rather than silently discarded —
+	// the same treatment the JSON dispatch branch gives --by on a format
+	// that never consumes it. [LAW:no-silent-failure]
+	if byChanged && !bulkSpecsHaveUpdate(specs) {
+		return UsageError{Message: "usage: --by only applies when the file has at least one update document (a document with `id` set); this file has none"}
 	}
 	result, err := ap.Store.BulkApply(ctx, ap.Workspace.IssuePrefix.Value(), actor, specs)
 	if err != nil {
@@ -1553,6 +1562,17 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 		}
 	}
 	return nil
+}
+
+// bulkSpecsHaveUpdate reports whether any document in specs selects an
+// existing issue (id set) rather than creating one.
+func bulkSpecsHaveUpdate(specs []store.BulkIssueSpec) bool {
+	for _, spec := range specs {
+		if spec.ID != "" {
+			return true
+		}
+	}
+	return false
 }
 
 func runWorkspace(stdout io.Writer, ws workspace.Info, args []string) error {

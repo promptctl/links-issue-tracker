@@ -174,6 +174,55 @@ func TestRunImportRejectsByFlagOnJSONPath(t *testing.T) {
 	}
 }
 
+// --by is likewise unused when a YAML file contains only creates (a create
+// has no actor field to carry it) — the same rejection the JSON path gets,
+// for the same reason, on the format that does support --by in general.
+func TestRunImportRejectsByFlagOnCreateOnlyYAML(t *testing.T) {
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	path := writeImportFile(t, "create-only.yaml", "title: Fresh\ntype: task\ntopic: import\n")
+	var stdout bytes.Buffer
+	err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"})
+	if err == nil {
+		t.Fatal("runImportTree(create-only yaml --by) error = nil, want usage error")
+	}
+	if ExitCode(err) != ExitUsage {
+		t.Fatalf("runImportTree(create-only yaml --by) exit code = %d, want %d", ExitCode(err), ExitUsage)
+	}
+}
+
+// A YAML file with at least one update document does consume --by — it
+// attributes that document's field-change event, same as `lit update --by`.
+func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	ctx := context.Background()
+	ap := newTestCLIApp(t)
+	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	path := writeImportFile(t, "update.yaml", "id: "+created.ID+"\ntitle: After\n")
+	var stdout bytes.Buffer
+	if err := runImportTree(ctx, &stdout, ap, []string{"--path", path, "--by", "alice"}); err != nil {
+		t.Fatalf("runImportTree(yaml update --by) error = %v", err)
+	}
+	detail, err := ap.Store.GetIssueDetail(ctx, created.ID)
+	if err != nil {
+		t.Fatalf("GetIssueDetail() error = %v", err)
+	}
+	found := false
+	for _, e := range detail.Events {
+		if e.Actor == "alice" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("no event attributed to --by actor \"alice\": %#v", detail.Events)
+	}
+}
+
 func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
