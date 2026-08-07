@@ -4,3 +4,13 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    # Batch the safe bumps, isolate the risky ones. Minor/patch updates rarely
+    # break and are the source of the go.mod/go.sum merge-conflict churn when they
+    # arrive as separate PRs — one grouped PR means nothing to conflict against.
+    # Major bumps match no group, so Dependabot opens each as its own PR, keeping a
+    # breaking change isolated and easy to bisect.
+    groups:
+      go-safe:
+        update-types:
+          - "minor"
+          - "patch"
