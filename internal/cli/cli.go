@@ -1400,14 +1400,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 	// through the same identity rule as every other actor.
-	comment, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
-	if err != nil {
-		return err
-	}
-	// The occasion names the commented-on ticket's current labels; AddComment
-	// returns only the comment, so this reads the issue it already validated
-	// exists. [LAW:effects-at-boundaries]
-	issue, err := ap.Store.GetIssue(ctx, comment.IssueID)
+	comment, issue, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
