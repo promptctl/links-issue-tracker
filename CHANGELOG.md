@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `lit show <id> --field <name>[,<name>...]` prints exactly the requested field(s) and nothing else — no header fields, no parent-epic body, no siblings, no epic/children summary. A single field prints its bare value (e.g. `lit show <id> --field description`), so it round-trips directly into `lit update --description`; multiple fields print as `name: value` lines. An unknown field name fails with a `UsageError` listing the accepted vocabulary, with no partial output. Omitting `--field` leaves the existing full-detail view unchanged.
 - Groundwork for `lit workflows` (user-customizable guidance injection at work-lifecycle moments): the workflow-definition model. Markdown files with YAML frontmatter are discovered recursively under `.lit/workflows/` (project) and `<config>/workflows/` (global) — the folder hierarchy is arbitrary; frontmatter alone declares where a definition activates, via `labels:` / `states:` (with `when: enter|exit`) / `events:` dimensions (OR within a dimension, AND across dimensions). Nearer layers override farther ones by `id` (defaulting to the file's relative path with the `.md` suffix dropped and spaces replaced by underscores). The semantic event catalog (`show_backlog`, `show_ticket`, `work_started`, …) is the stable contract definitions bind to — never command names. Not yet wired into any command; the event dispatch, injection, and `lit workflows` CLI land with the rest of the epic.
 
 ### Changed

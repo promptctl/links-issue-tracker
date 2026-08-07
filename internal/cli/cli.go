@@ -823,18 +823,24 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	positional, flagArgs := splitArgs(args, 1)
 	fs := newCobraFlagSet("show")
+	fieldsExpr := fs.String("field", "", "Comma-separated field names (e.g. description) to print with no surrounding context; omit for the full detail view")
 	if err := parseFlagSet(fs, flagArgs, stdout); err != nil {
 		return err
 	}
 	if len(positional) != 1 {
-		return UsageError{Message: "usage: lit show <id>"}
+		return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit show <id>"}
+		return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
 	}
 	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 	if err != nil {
 		return err
+	}
+	// --field is the compact, edit-oriented view: exactly the requested
+	// fields, none of the parent/epic/siblings context below. [LAW:dataflow-not-control-flow]
+	if fields := splitCSV(*fieldsExpr); len(fields) > 0 {
+		return printIssueFields(stdout, detail.Issue, fields)
 	}
 	if err := printIssueDetail(stdout, detail); err != nil {
 		return err
