@@ -1,6 +1,9 @@
 Managing existing tickets (lit)
 
 Update fields: `lit update <issue-id> --title "..." --description "..." --priority 1 [--labels a,b]`
+Update many at once: `lit import --path <file.yaml>` with an `id:` in each YAML document
+selects that ticket for the same field patch `lit update` applies — see `lit import` in
+docs/cli-reference.md.
 Rerank: `lit rank <id> [--top] [--bottom] [--above <other-id>] [--below <other-id>]`
 Block/unblock: `lit label add <id> needs-design` / `lit label rm <id> needs-design`
 Focus a goal: `lit label add <id> focus` surfaces the goal's unfinished prerequisite chain at the top of next/backlog (ordering only — blocked items stay blocked); `lit label rm <id> focus` restores normal order
