@@ -305,7 +305,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 		if err != nil {
 			t.Fatalf("create solo: %v", err)
 		}
-		if _, err := st.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
+		if _, _, err := st.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add comment: %v", err)
 		}
 		if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {

@@ -11,6 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
 // The workable commands (backlog, next) are one query with two presentations:
@@ -52,6 +53,12 @@ type workableView struct {
 	order       func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs)
 	keep        func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
 	render      func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue) error
+	// occasion builds the workflow event this view fires once render has
+	// already succeeded on the same rows — backlog's is a constant (a
+	// backlog-wide view names no single ticket), next's reads the one row
+	// render just printed. [LAW:one-type-per-behavior] a third preset
+	// function alongside order/keep/render, not a branch on view identity.
+	occasion func(rows []annotation.AnnotatedIssue) workflows.Occasion
 }
 
 // usage derives the positional-argument error string from the knob set, in the
@@ -87,9 +94,10 @@ func keepAll(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue { ret
 var backlogView = workableView{
 	name:       "backlog",
 	hasFilters: true, hasLimit: true, hasColumns: true,
-	order:  orderCanonical,
-	keep:   keepAll,
-	render: printBacklogOutput,
+	order:    orderCanonical,
+	keep:     keepAll,
+	render:   printBacklogOutput,
+	occasion: func([]annotation.AnnotatedIssue) workflows.Occasion { return backlogOccasion() },
 }
 
 // `next` — "the one leaf to lit start now": optional --continue bias is one
@@ -119,6 +127,11 @@ var nextView = workableView{
 			return errors.New("no ready work")
 		}
 		return printNextSummary(w, rows[0])
+	},
+	// render above already errors out on an empty selection, so occasion is
+	// only ever called with the one row it just printed.
+	occasion: func(rows []annotation.AnnotatedIssue) workflows.Occasion {
+		return nextPulledOccasion(rows[0].Issue)
 	},
 }
 
@@ -177,7 +190,11 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	view.order(annotated, details, knobs)
 	rows := view.keep(annotated)
 	rows = applyLimit(rows, knobs.limit)
-	return view.render(stdout, knobs.columns, rows)
+	if err := view.render(stdout, knobs.columns, rows); err != nil {
+		return err
+	}
+	workflows.Dispatch(view.occasion(rows))
+	return nil
 }
 
 // parseWorkableStatus is the strict trust boundary for --status: blank means

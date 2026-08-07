@@ -149,7 +149,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		body := fmt.Sprintf("Concurrent comment %d", i)
 		commentPlan[id] = body
 		eg.Go(func() error {
-			_, err := st.AddComment(egCtx, AddCommentInput{
+			_, _, err := st.AddComment(egCtx, AddCommentInput{
 				IssueID:   id,
 				Body:      body,
 				CreatedBy: "concurrent-tester",
