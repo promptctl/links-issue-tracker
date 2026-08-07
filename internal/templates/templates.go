@@ -11,7 +11,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
-	"github.com/promptctl/links-issue-tracker/internal/precedence"
 )
 
 const (
@@ -23,8 +22,6 @@ const (
 	QuickstartUpdateTemplateName = "quickstart-update.md"
 	QuickstartDoneTemplateName   = "quickstart-done.md"
 	QuickstartDoctorTemplateName = "quickstart-doctor.md"
-
-	guidanceNamePrefix = "guidance-"
 )
 
 var (
@@ -197,42 +194,4 @@ func projectTemplatePath(workspaceRoot string, name string) pathspec.PathSpec {
 func globalTemplatesDir() pathspec.PathSpec {
 	// [LAW:one-source-of-truth] Global template storage reuses config.ConfigDir as the canonical root.
 	return pathspec.New(config.ConfigDir()).Join("templates")
-}
-
-// GuidanceTemplateName returns the canonical template filename for a
-// transition action's guidance phase (e.g. "guidance-done-post.md").
-func GuidanceTemplateName(action, phase string) string {
-	return guidanceNamePrefix + action + "-" + phase + ".md"
-}
-
-// LoadGuidance resolves a guidance template for the given action and phase
-// ("pre" or "post"). Unlike Load, guidance templates are optional — absence is
-// not an error, the action simply prints no guidance for that phase.
-// Real I/O errors (permission denied, path-is-a-dir) propagate so callers can
-// surface them instead of silently skipping user-configured guidance.
-func LoadGuidance(action, phase, workspaceRoot string) (string, error) {
-	name := GuidanceTemplateName(action, phase)
-
-	projectPath := projectTemplatePath(workspaceRoot, name)
-	projectContent, projectErr := readOptionalFile(projectPath)
-	if projectErr != nil {
-		return "", fmt.Errorf("load guidance template %s: %w", projectPath, projectErr)
-	}
-	globalPath := GlobalPath(name)
-	globalContent, globalErr := readOptionalFile(globalPath)
-	if globalErr != nil {
-		return "", fmt.Errorf("load guidance template %s: %w", globalPath, globalErr)
-	}
-
-	// Embedded default is optional for guidance — missing is not an error.
-	var embedded string
-	if raw, err := EmbeddedDefault(name); err == nil {
-		embedded = string(raw)
-	}
-
-	resolved := precedence.First(projectContent, globalContent, embedded)
-	if resolved == "" {
-		return "", nil
-	}
-	return resolved, nil
 }

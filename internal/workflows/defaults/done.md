@@ -1,0 +1,6 @@
+---
+id: done
+name: Post-close capture reminder
+events: [work_finished]
+---
+Ticket <id> has been closed. Before moving on, take a moment to review related tickets. Did anything in this work change what future work should look like? Is there anything you now know that would help the next agent? If so, update those tickets to capture it. Keeping them current is what keeps future work from drifting or unintentionally reversing decisions made here, so it's worth doing now rather than later. In most cases you can make these updates directly and note them in a short summary for the user; if a change carries real risk, it's fine to check with them first.

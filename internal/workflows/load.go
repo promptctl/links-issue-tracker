@@ -1,6 +1,7 @@
 package workflows
 
 import (
+	"embed"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -13,11 +14,29 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
 
+//go:embed defaults/*.md
+var embeddedDefaultsRaw embed.FS
+
+// embeddedDefaultsFS roots the embedded tree at "defaults" so its entries walk
+// with the same root-relative paths as the project and global layers below.
+var embeddedDefaultsFS = mustSub(embeddedDefaultsRaw, "defaults")
+
+func mustSub(fsys embed.FS, dir string) fs.FS {
+	sub, err := fs.Sub(fsys, dir)
+	if err != nil {
+		// The go:embed directive above guarantees "defaults" exists; a
+		// failure here is a compile-time impossibility, not a state to
+		// recover from at runtime.
+		panic("workflows: embedded defaults subtree missing: " + err.Error())
+	}
+	return sub
+}
+
 // Load discovers every workflow definition visible to the workspace and
-// resolves them into one Set: project layer first, then global, merged by ID
-// with the nearer layer winning — the same layering the managed templates
-// use. (The embedded-defaults layer slots in last when its content ships with
-// the friction-kit ticket; the merge order already reserves its place.)
+// resolves them into one Set: project layer first, then global, then the
+// embedded defaults shipped with this binary — the same
+// project > global > embedded precedence the managed templates use — merged
+// by ID with the nearer layer winning.
 //
 // Load cannot fail: an absent layer contributes nothing, and every per-file
 // problem — unreadable entry, malformed frontmatter, inert or unknown-event
@@ -25,12 +44,13 @@ import (
 // broken workflow file must never break a lit invocation.
 func Load(workspaceRoot string) Set {
 	type layer struct {
-		dir    pathspec.PathSpec
+		fsys   fs.FS
 		source templates.Source
 	}
 	layers := []layer{
-		{projectWorkflowsDir(workspaceRoot), templates.SourceProject},
-		{globalWorkflowsDir(), templates.SourceGlobal},
+		{dirFS(projectWorkflowsDir(workspaceRoot)), templates.SourceProject},
+		{dirFS(globalWorkflowsDir()), templates.SourceGlobal},
+		{embeddedDefaultsFS, templates.SourceEmbedded},
 	}
 
 	var (
@@ -39,10 +59,10 @@ func Load(workspaceRoot string) Set {
 		claimed     = map[string]bool{}
 	)
 	for _, l := range layers {
-		if l.dir.IsEmpty() {
+		if l.fsys == nil {
 			continue
 		}
-		layerDefs, layerWarns := loadLayer(os.DirFS(l.dir.String()), l.source)
+		layerDefs, layerWarns := loadLayer(l.fsys, l.source)
 		warnings = append(warnings, layerWarns...)
 		for _, def := range layerDefs {
 			// Same ID at a farther layer is the override feature, not a
@@ -56,6 +76,15 @@ func Load(workspaceRoot string) Set {
 	}
 	sort.Slice(definitions, func(i, j int) bool { return definitions[i].ID < definitions[j].ID })
 	return Set{Definitions: definitions, Warnings: warnings}
+}
+
+// dirFS adapts a possibly-absent filesystem layer root to fs.FS, so Load's
+// layer loop treats every layer — real directory or embedded — uniformly.
+func dirFS(dir pathspec.PathSpec) fs.FS {
+	if dir.IsEmpty() {
+		return nil
+	}
+	return os.DirFS(dir.String())
 }
 
 // loadLayer walks one layer root recursively and parses every *.md file into
