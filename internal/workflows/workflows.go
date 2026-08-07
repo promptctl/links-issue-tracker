@@ -96,3 +96,15 @@ type Set struct {
 	Definitions []Definition
 	Warnings    []Warning
 }
+
+// Lookup returns the definition with the given ID, if one is loaded. IDs are
+// unique within a resolved Set by construction (Load claims each ID once
+// across layers), so at most one definition can match.
+func (s Set) Lookup(id string) (Definition, bool) {
+	for _, def := range s.Definitions {
+		if def.ID == id {
+			return def, true
+		}
+	}
+	return Definition{}, false
+}

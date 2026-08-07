@@ -15,3 +15,4 @@ Run any of the subcommands below for task-specific guidance; they're cheap to ca
 Fastpath:
 `lit next` — pick the top workable ticket
 `lit start <id>` — claim it and begin
+`lit workflows` — see this project's whole work lifecycle and the guidance active at each point (`lit workflows show <id>` for one definition resolved)
