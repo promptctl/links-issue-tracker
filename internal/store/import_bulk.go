@@ -148,8 +148,11 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 			Assignee:    derefOr(spec.Assignee, ""),
 			Lane:        derefOr(spec.Lane, ""),
 			Labels:      derefOr(spec.Labels, nil),
-			Placement:   RankBottom,
-			Prefix:      prefix,
+			// Placement is left at its zero value (RankTop), matching
+			// ImportTree — both are `lit import --path <file>`, so a create
+			// lands the same place in the ranked order regardless of which
+			// format the file is. [LAW:one-source-of-truth]
+			Prefix: prefix,
 		})
 		if err != nil {
 			leaked := s.rollbackCreatedIssues(ctx, createdIDs)

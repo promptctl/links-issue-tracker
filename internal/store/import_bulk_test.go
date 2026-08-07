@@ -4,6 +4,8 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
 func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
@@ -41,6 +43,44 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 	}
 	if !foundDep {
 		t.Fatalf("t2.DependsOn missing t1: %#v", detail.DependsOn)
+	}
+}
+
+// BulkApply's creates use the same rank placement as ImportTree's (RankTop,
+// the CreateIssueInput zero value) — both are `lit import --path <file>`,
+// so a create lands the same place in the ranked order regardless of which
+// format the file is.
+func TestBulkApplyCreatesUseTopPlacementLikeImportTree(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+	title := func(s string) *string { return &s }
+	issueType := title("task")
+	topic := title("bulk")
+	specs := []BulkIssueSpec{
+		{Title: title("First"), IssueType: issueType, Topic: topic},
+		{Title: title("Second"), IssueType: issueType, Topic: topic},
+	}
+	result, err := st.BulkApply(ctx, "test", "agent", specs)
+	if err != nil {
+		t.Fatalf("BulkApply() error = %v", err)
+	}
+	var first, second model.Issue
+	for ref, real := range result.Created {
+		issue, err := st.GetIssue(ctx, real)
+		if err != nil {
+			t.Fatalf("GetIssue(%s) error = %v", ref, err)
+		}
+		if issue.Title == "First" {
+			first = issue
+		} else {
+			second = issue
+		}
+	}
+	if first.Rank == "" || second.Rank == "" {
+		t.Fatalf("missing rank: first=%#v second=%#v", first, second)
+	}
+	if !(second.Rank < first.Rank) {
+		t.Fatalf("second.Rank = %q, first.Rank = %q; want second < first (RankTop places each new create above the one before it)", second.Rank, first.Rank)
 	}
 }
 
