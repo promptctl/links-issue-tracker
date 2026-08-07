@@ -3,7 +3,6 @@ package workflows
 import (
 	"fmt"
 	"io"
-	"os"
 	"path/filepath"
 	"strings"
 
@@ -19,8 +18,12 @@ import (
 // occasion, and writes every match's body to w — the same agent-facing
 // stream the calling command already writes to — in Set.Matching's stable ID
 // order, each with <id> interpolated to the occasion's IssueID.
-// [LAW:effects-at-boundaries] w and ws are the only effects; the matching
-// itself stays the pure logic in match.go.
+// [LAW:effects-at-boundaries] w, errOut, and ws are the only effects; the
+// matching itself stays the pure logic in match.go. errOut is the diagnostic
+// stream a trace-write failure goes to — a workflows package function never
+// hardcodes os.Stderr itself; every CLI call site passes it explicitly, so
+// the decision of where diagnostics land lives at the boundary, not inside
+// this leaf/matching package, and a test can capture or discard it freely.
 //
 // When at least one definition fires, Dispatch also records a firing trace
 // (trace.go) — which definitions fired and why (Definition.MatchReasons) —
@@ -54,7 +57,7 @@ import (
 // which definition) is promptctl-orchestration-ffqz.4's job ("the see-it
 // surface"); a partial version here would leave two places deciding how
 // workflow warnings render. [LAW:single-enforcer]
-func Dispatch(w io.Writer, ws workspace.Info, o Occasion) error {
+func Dispatch(w io.Writer, errOut io.Writer, ws workspace.Info, o Occasion) error {
 	set := Load(ws.RootDir)
 	matched := set.Matching(o)
 	for _, def := range matched {
@@ -64,7 +67,7 @@ func Dispatch(w io.Writer, ws workspace.Info, o Occasion) error {
 	}
 	if len(matched) > 0 && filepath.IsAbs(ws.StorageDir) {
 		if _, err := recordFiring(ws, o, matched); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: workflow firing trace could not be recorded (%v); guidance was still injected\n", err)
+			fmt.Fprintf(errOut, "lit: workflow firing trace could not be recorded (%v); guidance was still injected\n", err)
 		}
 	}
 	return nil

@@ -3,6 +3,7 @@ package workflows
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -28,7 +29,7 @@ func TestDispatchInjectsMatchingBodyWithIDInterpolated(t *testing.T) {
 	writeWorkflow(t, project, "needs-design.md", "---\nlabels: [needs-design]\n---\nTicket <id> needs a design review.")
 
 	var out bytes.Buffer
-	err := Dispatch(&out, testWorkspace(workspaceRoot), Occasion{Event: EventShowTicket, IssueID: "lit-42", Labels: []string{"needs-design"}})
+	err := Dispatch(&out, io.Discard, testWorkspace(workspaceRoot), Occasion{Event: EventShowTicket, IssueID: "lit-42", Labels: []string{"needs-design"}})
 	if err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
@@ -44,7 +45,7 @@ func TestDispatchWritesMultipleMatchesInIDOrder(t *testing.T) {
 	writeWorkflow(t, project, "a.md", "---\nid: a\nevents: [show_backlog]\n---\na body")
 
 	var out bytes.Buffer
-	if err := Dispatch(&out, testWorkspace(workspaceRoot), Occasion{Event: EventShowBacklog}); err != nil {
+	if err := Dispatch(&out, io.Discard, testWorkspace(workspaceRoot), Occasion{Event: EventShowBacklog}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 	got := out.String()
@@ -59,7 +60,7 @@ func TestDispatchNonMatchingOccasionWritesNothing(t *testing.T) {
 	writeWorkflow(t, project, "only-backlog.md", "---\nevents: [show_backlog]\n---\nbacklog only")
 
 	var out bytes.Buffer
-	if err := Dispatch(&out, testWorkspace(workspaceRoot), Occasion{Event: EventShowTicket, IssueID: "lit-1"}); err != nil {
+	if err := Dispatch(&out, io.Discard, testWorkspace(workspaceRoot), Occasion{Event: EventShowTicket, IssueID: "lit-1"}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if got := out.String(); got != "" {
@@ -78,7 +79,7 @@ func TestDispatchMalformedDefinitionDegradesToWarningNotError(t *testing.T) {
 	writeWorkflow(t, project, "good.md", "---\nevents: [show_backlog]\n---\ngood body")
 
 	var out bytes.Buffer
-	if err := Dispatch(&out, testWorkspace(workspaceRoot), Occasion{Event: EventShowBacklog}); err != nil {
+	if err := Dispatch(&out, io.Discard, testWorkspace(workspaceRoot), Occasion{Event: EventShowBacklog}); err != nil {
 		t.Fatalf("Dispatch() error = %v, want the malformed file to degrade to a warning, not fail dispatch", err)
 	}
 	if got := out.String(); !strings.Contains(got, "good body") {
@@ -90,7 +91,7 @@ func TestDispatchEmbeddedDoneDefaultFiresOnWorkFinished(t *testing.T) {
 	workspaceRoot, _ := isolate(t)
 
 	var out bytes.Buffer
-	if err := Dispatch(&out, testWorkspace(workspaceRoot), Occasion{Event: EventWorkFinished, IssueID: "lit-7"}); err != nil {
+	if err := Dispatch(&out, io.Discard, testWorkspace(workspaceRoot), Occasion{Event: EventWorkFinished, IssueID: "lit-7"}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if got := out.String(); !strings.Contains(got, "Ticket lit-7 has been closed.") {
@@ -109,7 +110,7 @@ func TestDispatchRecordsFiringTraceOnlyWhenSomethingFires(t *testing.T) {
 	writeWorkflow(t, project, "needs-design.md", "---\nid: needs-design-note\nlabels: [needs-design]\nevents: [show_ticket]\n---\nNeeds design.")
 
 	var out bytes.Buffer
-	if err := Dispatch(&out, ws, Occasion{Event: EventShowTicket, IssueID: "lit-42", Labels: []string{"needs-design"}}); err != nil {
+	if err := Dispatch(&out, io.Discard, ws, Occasion{Event: EventShowTicket, IssueID: "lit-42", Labels: []string{"needs-design"}}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 
@@ -141,7 +142,7 @@ func TestDispatchRecordsFiringTraceOnlyWhenSomethingFires(t *testing.T) {
 	}
 
 	var out2 bytes.Buffer
-	if err := Dispatch(&out2, ws, Occasion{Event: EventShowBacklog}); err != nil {
+	if err := Dispatch(&out2, io.Discard, ws, Occasion{Event: EventShowBacklog}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 	entriesAfter, err := os.ReadDir(traceDir)
@@ -175,7 +176,7 @@ func TestDispatchWithEmptyStorageDirNeverWritesRelativeToCWD(t *testing.T) {
 
 	ws := workspace.Info{RootDir: workspaceRoot} // StorageDir deliberately left empty
 	var out bytes.Buffer
-	if err := Dispatch(&out, ws, Occasion{Event: EventWorkFinished, IssueID: "lit-1"}); err != nil {
+	if err := Dispatch(&out, io.Discard, ws, Occasion{Event: EventWorkFinished, IssueID: "lit-1"}); err != nil {
 		t.Fatalf("Dispatch() error = %v", err)
 	}
 	if _, statErr := os.Stat(filepath.Join(scratch, "traces")); !os.IsNotExist(statErr) {

@@ -117,14 +117,14 @@ func openOrPrintWorkflowFile(stdout io.Writer, path string) error {
 	if !isTerminal(stdout) {
 		return nil
 	}
-	editor := strings.TrimSpace(os.Getenv("EDITOR"))
-	if editor == "" {
+	editorCmd := strings.Fields(os.Getenv("EDITOR"))
+	if len(editorCmd) == 0 {
 		return nil
 	}
-	cmd := exec.Command(editor, path)
+	cmd := exec.Command(editorCmd[0], append(editorCmd[1:], path)...)
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, editor, err)
+		return fmt.Errorf("open %s in $EDITOR (%s): %w", path, os.Getenv("EDITOR"), err)
 	}
 	return nil
 }
