@@ -26,9 +26,16 @@ import (
 //
 // Load/parse problems surface as Set.Warnings, not here: a malformed
 // definition must never break the command that triggered this Dispatch, so
-// this function never inspects or prints them. [LAW:no-silent-failure] The
-// warnings are not discarded — they ride along on the Set for whichever
-// surface takes on displaying them.
+// this function never inspects or prints them, and none are surfaced to the
+// user yet — a known, tracked gap, not a silent design claim.
+// [LAW:no-silent-failure] Dispatch deliberately doesn't fill that gap itself:
+// w is the calling command's own agent-facing stdout, so printing an
+// unrelated workflow-authoring warning into it would surface a config
+// diagnostic on every single invocation, not just the ones that touch
+// workflows. Displaying Set.Warnings with real detail (source layer, path,
+// which definition) is promptctl-orchestration-ffqz.4's job ("the see-it
+// surface"); a partial version here would leave two places deciding how
+// workflow warnings render. [LAW:single-enforcer]
 func Dispatch(w io.Writer, workspaceRoot string, o Occasion) error {
 	set := Load(workspaceRoot)
 	for _, def := range set.Matching(o) {
