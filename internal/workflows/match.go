@@ -10,6 +10,15 @@ import "slices"
 type Occasion struct {
 	// Event is the semantic event fired, or zero when the moment carries none.
 	Event Event
+	// IssueID identifies the acted-on ticket, empty when the moment has no
+	// single acted-on ticket (e.g. a backlog-wide view). Matching never reads
+	// it — Matches keys only on Event/Labels/Entered/Exited — it exists so
+	// display and tracing consumers can name which ticket fired an event
+	// without re-deriving it from context. [LAW:one-source-of-truth] one
+	// Occasion carries everything a dispatch site knows about the moment,
+	// rather than a second payload type duplicating Labels/Entered/Exited
+	// alongside it.
+	IssueID string
 	// Labels are the acted-on ticket's labels in the store's canonical form
 	// (model.NormalizeLabel; definitions are stamped into the same form at
 	// parse time, so comparison here is exact). Nil when the moment has no
