@@ -54,11 +54,13 @@ const (
 )
 
 // syncFailureMustNotIgnore is the constant directive every block opens with. The
-// severity below varies with the divergence's values; the standing instruction
-// not to route around a sync failure does not. It is phrased in the imperative
-// register agents act on, because in the 2026-07-08 incident an agent read a
-// softer "will retry" line for two days and classified it as ambient noise.
-const syncFailureMustNotIgnore = "MUST NOT IGNORE: this is not ambient noise. Do NOT classify it as a known quirk, retry past it, or route around it. Resolve it now — or explicitly surface it to the user as blocking — before continuing ticket work."
+// severity below varies with the divergence's values; the standing fact that a
+// sync failure is not ambient noise does not. It states the consequence of
+// treating it as routine rather than commanding the agent not to, because in the
+// 2026-07-08 incident an agent read a softer "will retry" line for two days and
+// classified it as ambient noise — the fix is a block that reads as urgent on its
+// own terms, not one that issues orders.
+const syncFailureMustNotIgnore = "This is a blocking condition, not ambient noise or a routine quirk — retrying past it or routing around it will not resolve it. Resolve it now, or explicitly surface it to the user as blocking, before continuing ticket work."
 
 // SyncFailure is the domain state of one non-transient sync failure, independent
 // of where it surfaced. It is the single input to the one contract renderer, so
@@ -311,7 +313,7 @@ func (f SyncFailure) escalationLine() string {
 	span := f.Ahead + f.Behind
 	if f.persistent() {
 		return fmt.Sprintf(
-			"ESCALATION — INCIDENT: this divergence has persisted for %s across %d commit(s) — far past a transient hiccup. Treat the workspace as blocked on it: resolve it now or surface it to the user as blocking. Do NOT keep doing ticket work around it.",
+			"ESCALATION — INCIDENT: this divergence has persisted for %s across %d commit(s) — far past a transient hiccup. Treat the workspace as blocked on it: resolve it now or surface it to the user as blocking. Ticket work continued around it will compound on top of an unresolved divergence.",
 			f.agePhrase(), span)
 	}
 	return fmt.Sprintf(

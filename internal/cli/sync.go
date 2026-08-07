@@ -23,8 +23,8 @@ const debugSyncBranchEnvVar = "LINKS_DEBUG_DOLT_SYNC_BRANCH"
 // surface as an error, etc.) and must not be silently ignored.
 const firstPushSkipMessage = "Skipping lit sync: remote has no refs yet. " +
 	"This is normal ONLY for the very first push to a brand-new empty repo. " +
-	"If you have pushed to this remote before, do NOT ignore this message — " +
-	"something is wrong (check the remote URL, credentials, or run `git ls-remote <remote>`)."
+	"If you have pushed to this remote before, this message means something is wrong — " +
+	"check the remote URL, credentials, or run `git ls-remote <remote>`."
 
 // syncRunFn is the handler shape for sync subcommands: every one operates on
 // the workspace's open sync store.

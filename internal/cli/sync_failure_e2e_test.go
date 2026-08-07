@@ -71,7 +71,7 @@ func captureStderr(t *testing.T, fn func()) string {
 func assertSyncFailureBlock(t *testing.T, surface string, wantCommands ...string) {
 	t.Helper()
 	for _, want := range append([]string{
-		"<agent-instructions>", "MUST NOT IGNORE", "surface it to the user as blocking",
+		"<agent-instructions>", "blocking condition", "surface it to the user as blocking",
 		"WHAT HAPPENED:", "HOW TO RESOLVE", "ESCALATION",
 	}, wantCommands...) {
 		if !strings.Contains(surface, want) {

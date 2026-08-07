@@ -302,7 +302,7 @@ func TestPrintSyncPushPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T
 	if !strings.Contains(got, "ONLY") {
 		t.Fatalf("printSyncPushPayload() = %q, want emphasis that skip is only valid on first push", got)
 	}
-	if !strings.Contains(got, "do NOT ignore") && !strings.Contains(got, "something is wrong") {
+	if !strings.Contains(got, "this message means something is wrong") {
 		t.Fatalf("printSyncPushPayload() = %q, want warning that non-initial skips are a problem", got)
 	}
 }
