@@ -136,6 +136,9 @@ func TestRunDoctorReportsNoRemoteFreshness(t *testing.T) {
 	if !strings.Contains(got, "sync: no git remote configured") {
 		t.Fatalf("runDoctor() output missing no-remote freshness line: %q", got)
 	}
+	if !strings.Contains(got, "build:") {
+		t.Fatalf("runDoctor() output missing build status line: %q", got)
+	}
 }
 
 // TestRunDoctorSurfacesUnresolvedFreshness drives the resolution-failure path

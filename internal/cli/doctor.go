@@ -70,12 +70,13 @@ func (r doctorSyncReport) divergenceFailure() (SyncFailure, bool) {
 		return SyncFailure{}, false
 	}
 	return SyncFailure{
-		Class:  syncFailureDivergedUnresolved,
-		Remote: r.Freshness.Remote,
-		Branch: r.Freshness.Branch,
-		Ahead:  r.Freshness.Ahead,
-		Behind: r.Freshness.Behind,
-		Age:    r.Age,
+		Class:     syncFailureDivergedUnresolved,
+		Remote:    r.Freshness.Remote,
+		Branch:    r.Freshness.Branch,
+		Ahead:     r.Freshness.Ahead,
+		Behind:    r.Freshness.Behind,
+		Age:       r.Age,
+		BuildNote: resolveBuildStatusNote(time.Now()),
 	}, true
 }
 
@@ -244,6 +245,11 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// the boundary, before the pure text rendering below.
 	syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
 	if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
+		return err
+	}
+	// [LAW:one-source-of-truth] version.Info is the only source; resolved here
+	// (not inside a pure renderer) because it is itself a boundary read.
+	if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
 		return err
 	}
 	dependencyCycle := "none"

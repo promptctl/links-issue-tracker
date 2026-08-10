@@ -116,7 +116,11 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 		// remote, remote empty, no lit data on the remote, or a resolution error).
 		// planRemoteAdopt has closed its probe connection in every case.
 		if situation := remoteSituationLine(outcome.State); situation != "" {
-			progressf("init", "%s", situation)
+			// The dev-vs-release build status rides along here because this line
+			// IS the moment init commits to a "start fresh" decision (no remote
+			// backlog adopted); naming the build removes the guesswork in a later
+			// "why didn't my ticket show up" investigation. [LAW:effects-at-boundaries]
+			progressf("init", "%s (%s)", situation, resolveBuildStatusNote(time.Now()))
 		}
 		return outcome
 	}
@@ -267,17 +271,22 @@ func gitBackedURLForRemote(gitRemotes []workspace.GitRemote, remote string) stri
 // writeInitSyncLine renders the one human-facing line the adopt step contributes.
 // Adopted and failed are the states a user must see; the other outcomes mean
 // "fresh empty workspace was the right result", already conveyed by the headline.
-func writeInitSyncLine(w io.Writer, outcome initSyncOutcome) error {
+// Both cases name buildNote (the dev-vs-release build status, resolved once by
+// the caller): these are exactly init's "committed to adopt" and "reached a
+// failure" moments, and a stale local binary silently missing a landed fix was
+// the suspected root cause of the field incident this epic exists to prevent.
+func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) error {
 	switch outcome.State {
 	case initSyncAdopted:
-		_, err := fmt.Fprintf(w, "  Pulled existing backlog from %s/%s\n", outcome.Remote, outcome.Branch)
+		_, err := fmt.Fprintf(w, "  Pulled existing backlog from %s/%s (%s)\n", outcome.Remote, outcome.Branch, buildNote)
 		return err
 	case initSyncFailed:
 		_, err := fmt.Fprintf(
 			w,
-			"  Warning: could not pull existing backlog%s: %s\n",
+			"  Warning: could not pull existing backlog%s: %s (%s)\n",
 			remoteSuffix(outcome.Remote),
 			outcome.Error,
+			buildNote,
 		)
 		return err
 	default:

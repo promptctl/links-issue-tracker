@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -102,7 +103,11 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 	}
 
-	return writeInitHumanOutput(stdout, report)
+	// Resolved once, here at the boundary, and threaded through as a value so
+	// writeInitHumanOutput/writeInitSyncLine stay pure renderers over an
+	// already-known build status. [LAW:effects-at-boundaries]
+	buildNote := resolveBuildStatusNote(time.Now())
+	return writeInitHumanOutput(stdout, report, buildNote)
 }
 
 type labeledStatus struct {
@@ -133,7 +138,7 @@ func formatLabeledEntry(item labeledStatus) string {
 	return entry
 }
 
-func writeInitHumanOutput(w io.Writer, report initReport) error {
+func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) error {
 	items := []labeledStatus{
 		{"pre-push hook", report.Hooks, ""},
 		{"AGENTS.md", report.Agents, sourceDetail(report.AgentsSource, report.Agents)},
@@ -162,7 +167,7 @@ func writeInitHumanOutput(w io.Writer, report initReport) error {
 			return err
 		}
 	}
-	if err := writeInitSyncLine(w, report.Sync); err != nil {
+	if err := writeInitSyncLine(w, report.Sync, buildNote); err != nil {
 		return err
 	}
 	if len(updated) > 0 {

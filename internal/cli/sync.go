@@ -202,11 +202,12 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 // without a live store. [LAW:dataflow-not-control-flow]
 func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now time.Time) (SyncFailureError, bool) {
 	base := SyncFailure{
-		Remote: remote,
-		Branch: branch,
-		Ahead:  result.Ahead,
-		Behind: result.Behind,
-		Age:    ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
+		Remote:    remote,
+		Branch:    branch,
+		Ahead:     result.Ahead,
+		Behind:    result.Behind,
+		Age:       ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
+		BuildNote: resolveBuildStatusNote(now),
 	}
 	switch result.State {
 	case store.SyncPullProsePending:

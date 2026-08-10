@@ -104,6 +104,16 @@ type SyncFailure struct {
 	// holds; this is that visibility, rendered as its own section of the block.
 	// [LAW:types-are-the-program] the field present names the class that produced it.
 	Inventory *store.UnrelatedInventory
+	// BuildNote is the dev-vs-release build status line, resolved once at the
+	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
+	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never
+	// computed inside blockString. A sync failure is exactly the moment the
+	// field incident showed nobody was asking "is the binary that made this
+	// decision current" — this answers it inline, without a second `lit
+	// version` call. [LAW:effects-at-boundaries] Empty means the constructing
+	// boundary did not set it (e.g. a test literal); blockString omits the
+	// line rather than fabricating one.
+	BuildNote string
 }
 
 // remoteSchemaAheadFailure builds the sync-failure contract for a store
@@ -125,6 +135,7 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 		RemoteSchemaVersion: ahead.RemoteVersion,
 		LocalSupportedMax:   ahead.BinarySupportedMax,
 		RemoteProducer:      ahead.RemoteProducerVersion,
+		BuildNote:           resolveBuildStatusNote(time.Now()),
 	}, true
 }
 
@@ -187,6 +198,14 @@ func (f SyncFailure) blockString() string {
 	// nothing for the other classes, so this adds no branch. [LAW:dataflow-not-control-flow]
 	for _, line := range f.inventoryLines() {
 		fmt.Fprintf(&b, "%s\n", line)
+	}
+
+	// (2c) Build status — names whether the binary that hit this failure is a
+	// dev build (and how stale), so a mysterious failure doesn't need a
+	// separate `lit version` round trip to rule out "this is a known-fixed bug
+	// on an old local build."
+	if f.BuildNote != "" {
+		fmt.Fprintf(&b, "%s\n\n", f.BuildNote)
 	}
 
 	// (3) How to resolve — the exact commands, in order, for this class.
