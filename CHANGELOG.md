@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `just build` now stamps `internal/version.{Commit,Date}` via `-ldflags`, computed locally (`git rev-parse HEAD`, the local clock — no network call) through the new `scripts/version-ldflags.sh`, which `scripts/install.sh`'s source mode now shares too. `lit version` reports the real commit and how long ago the binary was built instead of unconditionally "commit unknown, built unknown", and warns when a binary is older than `internal/version.StaleBuildThreshold` (7 days) — the previous silence made a stale local binary look identical to a fresh one, which is the suspected root cause of the links-sync-pgct field incident. `just build` deliberately leaves `Version` unstamped so ordinary local builds stay `IsDev == true`, preserving the guard that keeps a stray dev build from overwriting a real release's downgrade stamp.
+
 ### Fixed
 
 - `Store.ClearParent` and `Store.RemoveLabel` no longer discard the error from `RowsAffected()` after their `DELETE`; a genuine driver/query error reading the affected-row count now surfaces as that error instead of being misread as a false "not found" (matching the pattern already used by `RemoveRelation` and the issue-status/retention writes).
