@@ -119,6 +119,9 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	if fetchErr != nil {
 		return fetchErr
 	}
+	if err := markFetchSuccess(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+	}
 	if !*verbose {
 		_, err := fmt.Fprintln(stdout, "fetched")
 		return err
@@ -201,6 +204,12 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		// schema ahead of this binary surfaces as the one sync-failure contract
 		// (exit ExitConflict, naming `lit upgrade`), not the raw store refusal.
 		return asSyncFailure(err)
+	}
+	// SyncPull succeeding means its internal SyncReceive fetched the remote
+	// successfully (the fetch is the first step of every outcome branch below),
+	// so this is a real "we talked to the remote" moment regardless of state.
+	if err := markFetchSuccess(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	pullTraceMetadata["state"] = string(result.State)
 	// A held free-text conflict is a non-transient divergence the agent must

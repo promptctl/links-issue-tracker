@@ -210,6 +210,14 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 	}
 
 	result, receiveErr := syncStore.SyncReceive(ctx, remoteName, syncBranch)
+	if receiveErr == nil {
+		// SyncReceive's first step is DOLT_FETCH; a nil error means that fetch
+		// succeeded regardless of the resulting freshness state (up to date,
+		// fast-forwarded, ahead, diverged, or never synced all reach here).
+		if err := markFetchSuccess(ws); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
+		}
+	}
 	traceMetadata := map[string]string{
 		"remote":      remoteName,
 		"sync_branch": syncBranch,

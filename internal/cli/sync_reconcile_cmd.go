@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -499,6 +500,9 @@ func freshReconcileTarget(ctx context.Context, syncStore *store.Store, ws worksp
 	}
 	if err := syncStore.SyncFetch(ctx, remoteName, false); err != nil {
 		return "", "", false, fmt.Errorf("fetch %q before reconcile: %w", remoteName, err)
+	}
+	if err := markFetchSuccess(ws); err != nil {
+		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
 	return remoteName, branchName, true, nil
 }
