@@ -44,10 +44,39 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	syncOutcome := adoptRemoteTicketsOnInit(ctx, ws)
 	recordInitSyncTrace(ws, syncOutcome, time.Now())
 
-	// Every non-adopt outcome (greenfield, local tickets already present, no
-	// eligible remote, remote empty, no remote data, or a failed adopt) leaves
-	// the workspace needing a local store; EnsureDatabase is idempotent, so a
-	// store that already exists reports created=false. [LAW:dataflow-not-control-flow]
+	// A failed adopt is a genuinely uncertain result — lit could not confirm
+	// whether it is safe to start fresh, whether because reading the local
+	// store or resolving/probing the remote itself errored — never a
+	// confirmed-empty one like the outcomes below. Falling through to create a
+	// fresh store here would risk silently stranding whatever backlog the
+	// remote (or the unreadable local store) actually holds behind a problem
+	// lit merely failed to diagnose. So init hard-stops before any store
+	// exists, surfacing the real underlying failure (already carried in
+	// syncOutcome.Error) with no flag or prompt to proceed past it — the
+	// caller re-runs `lit init` once the cause is fixed.
+	// [LAW:no-silent-failure] [LAW:dataflow-not-control-flow] one sealed
+	// discriminant decides both branches; no second "is this bad" check drifts
+	// from the one adoptRemoteTicketsOnInit already made.
+	if syncOutcome.State == initSyncFailed {
+		// The wrapper stays deliberately generic — "confirm the workspace
+		// state" rather than "confirm the remote" — because initSyncFailed also
+		// covers a local store read failing (store.LocalHasTickets erroring),
+		// which has nothing to do with the remote; syncOutcome.Error carries
+		// the specific cause either way. buildNote rides along too, same as the
+		// adopted/failure lines this replaces: a stale local binary silently
+		// missing a landed fix was the suspected root cause of the field
+		// incident this epic exists to prevent, so a failure names it without a
+		// second `lit version` round trip. [LAW:effects-at-boundaries]
+		return fmt.Errorf(
+			"could not confirm the workspace state, so init is refusing to create a fresh store: %s (%s)",
+			syncOutcome.Error, resolveBuildStatusNote(time.Now()),
+		)
+	}
+
+	// Every remaining non-adopt outcome (greenfield, local tickets already
+	// present, no eligible remote, remote empty, no remote data) leaves the
+	// workspace needing a local store; EnsureDatabase is idempotent, so a store
+	// that already exists reports created=false. [LAW:dataflow-not-control-flow]
 	// the create runs on a single value (did we adopt?), not a scatter of cases.
 	dbCreated := true
 	if syncOutcome.State != initSyncAdopted {
