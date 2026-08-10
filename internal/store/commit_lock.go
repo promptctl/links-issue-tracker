@@ -34,7 +34,21 @@ var processCommitMutex sync.Mutex
 var commitLockPIDRunning = isCommitLockPIDRunning
 
 const (
-	transientRetryMaxAttempts = 12
+	// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
+	// bound the total wait (~25s: five uncapped doublings then 25 more attempts
+	// at the 1s cap) for a transient online-GC contention to clear. Sized to
+	// match the engine-write lock's ~30s budget for "how long do we wait on a
+	// co-resident holder of this store" (links-sync-pgct.11): the lock bounds
+	// how long two engines can be concurrently OPEN, but this retry is what
+	// absorbs the brief settle window right after one releases — under real
+	// system load (a slower/contended CI runner, an earlier mirror's real
+	// network push taking longer) that window is not always sub-second, and a
+	// budget tuned only for a quick intra-process GC blip cut this retry off
+	// before a legitimately-finishing prior holder released, escalating a
+	// recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
+	// wedged holder still surfaces as that same terminal error, just after the
+	// longer budget elapses rather than hanging forever.
+	transientRetryMaxAttempts = 30
 	transientRetryBaseDelay   = 50 * time.Millisecond
 	transientRetryMaxDelay    = 1 * time.Second
 	commitLockStaleAfter      = 10 * time.Minute
