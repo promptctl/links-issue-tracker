@@ -69,16 +69,28 @@ type SyncCadence string
 
 const (
 	// SyncCadenceOnPush mirrors only when the managed pre-push git hook runs
-	// (one push per `git push`). This is the default and today's behavior.
+	// (one push per `git push`). Opt-in: a mutation on this cadence is only
+	// durable on the remote once the user remembers to `git push` — exactly the
+	// manual act whose absence stranded 25 changes in the links-sync-pgct field
+	// incident. Kept for users who deliberately want to batch their network
+	// traffic, never as the default a workspace falls into silently.
 	SyncCadenceOnPush SyncCadence = "on-push"
 	// SyncCadenceOnChange mirrors after every mutating lit command, shrinking
-	// the window where local ticket state is invisible to other clones.
+	// the window where local ticket state is invisible to other clones to
+	// roughly zero. The default: a connected workspace's changes reach the
+	// remote without a separate push step, so "durable locally" and "durable on
+	// the remote" stop being two facts a human has to keep in sync by hand.
+	// [LAW:one-source-of-truth] (links-sync-pgct.3)
 	SyncCadenceOnChange SyncCadence = "on-change"
 )
 
 // syncCadences is the closed set of legal cadence values in documentation
-// order. [LAW:one-source-of-truth] The default, validation, and the error
-// message all derive from this one list, so they cannot drift.
+// order. [LAW:one-source-of-truth] valid() and syncCadenceValues() both derive
+// from this one list, so validation and the error message cannot drift from
+// each other. The shipped default (Load's `v.SetDefault` call) is a separate,
+// independently chosen literal — deliberately not "whichever value is first in
+// this list" — so reordering this list alone never changes which cadence a
+// workspace with no config file falls into.
 var syncCadences = []SyncCadence{SyncCadenceOnPush, SyncCadenceOnChange}
 
 func (c SyncCadence) valid() bool {
@@ -154,7 +166,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("ready.required_fields", []string{})
 	v.SetDefault("quickstart.soil_mode", false)
 	v.SetDefault("snapshot.retention_budget", 5)
-	v.SetDefault("sync.cadence", string(SyncCadenceOnPush))
+	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
 	v.SetDefault("sync.receive", true)
 
 	required, err := configLayers(workspaceRoot).merge(v)
