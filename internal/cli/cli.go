@@ -840,6 +840,11 @@ func runShow(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if fs.NArg() != 0 {
 		return UsageError{Message: "usage: lit show <id> [--field <name>[,<name>...]]"}
 	}
+	// links-sync-pgct.2: `lit show` is named explicitly as one of the ordinary
+	// read commands unpushed/unfetched drift must surface on.
+	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
+		return err
+	}
 	detail, err := ap.Store.GetIssueDetail(ctx, positional[0])
 	if err != nil {
 		return err
