@@ -32,7 +32,7 @@ func TestWriteInitSyncLine(t *testing.T) {
 		{
 			// A failed adopt no longer reaches this renderer: runInit hard-stops and
 			// returns the real underlying error before report.Sync is ever built (see
-			// TestInitFailsLoudlyAndCreatesNoStoreWhenAdoptDetectionFails). This case
+			// TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails). This case
 			// pins that writeInitSyncLine renders nothing for the state regardless,
 			// so a future caller that DID pass it a failed outcome would not get a
 			// second, drifting rendering of the failure.
