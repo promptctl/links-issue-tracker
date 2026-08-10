@@ -30,14 +30,15 @@ func TestWriteInitSyncLine(t *testing.T) {
 			want:    "  Pulled existing backlog from origin/master (" + testBuildNote + ")\n",
 		},
 		{
-			name:    "failed surfaces the error loudly, with build status",
+			// A failed adopt no longer reaches this renderer: runInit hard-stops and
+			// returns the real underlying error before report.Sync is ever built (see
+			// TestInitFailsLoudlyAndCreatesNoStoreWhenAdoptDetectionFails). This case
+			// pins that writeInitSyncLine renders nothing for the state regardless,
+			// so a future caller that DID pass it a failed outcome would not get a
+			// second, drifting rendering of the failure.
+			name:    "failed is silent here — the caller surfaces it as a command error instead",
 			outcome: initSyncOutcome{State: initSyncFailed, Remote: "origin", Error: "boom"},
-			want:    "  Warning: could not pull existing backlog from origin: boom (" + testBuildNote + ")\n",
-		},
-		{
-			name:    "failed without a resolved remote still surfaces",
-			outcome: initSyncOutcome{State: initSyncFailed, Error: "boom"},
-			want:    "  Warning: could not pull existing backlog: boom (" + testBuildNote + ")\n",
+			want:    "",
 		},
 		{
 			name:    "has local tickets is silent",
@@ -181,15 +182,17 @@ func TestInitAdoptsExistingRemoteBacklog(t *testing.T) {
 	}
 }
 
-// TestInitFailsLoudlyWhenRemoteHasDataButAdoptCannotComplete is the regression
-// guard for the silent-empty data-loss bug: when the remote advertises lit
-// ticket data (refs/dolt/*) but the backlog does not adopt, init must NOT leave
-// a silent empty store — it must surface the failure loudly so the operator
-// knows the store is empty and must not be pushed. The failure is forced
-// deterministically by pointing the consumer's sync branch at a name the remote
-// does not carry, which is exactly the shape that produced the silent
-// no_remote_data outcome before the fix.
-func TestInitFailsLoudlyWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
+// TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete is the regression
+// guard for the silent-empty data-loss bug, updated for links-sync-pgct.1: when
+// the remote advertises lit ticket data (refs/dolt/*) but the clone-based adopt
+// cannot complete, init must NOT leave a silent (or even a loudly-warned-but-
+// created) empty store — an adopt failure is a genuinely uncertain result, so
+// init exits non-zero and creates no store at all, surfacing the real
+// underlying failure. The failure is forced deterministically by pointing the
+// consumer's sync branch at a name the remote does not carry, which drives
+// AdoptRemoteByClone itself to fail (the data is confirmed present via
+// refs/dolt/*, but nothing exists at that specific branch to clone).
+func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
 	remote := filepath.Join(base, "remote.git")
@@ -216,20 +219,82 @@ func TestInitFailsLoudlyWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	runGit(t, consumer, "config", "user.name", "bravo")
 
 	// Force the adopt to resolve a branch the remote's Dolt data is not on, so
-	// the post-fetch freshness check reports not-synced even though the data is
-	// there — the precise condition that used to fall through to silent empty.
+	// the clone-based adopt fails even though refs/dolt/* is confirmed present —
+	// the precise condition that used to fall through to silent empty.
 	t.Setenv("LINKS_DEBUG_DOLT_SYNC_BRANCH", "branch-the-remote-does-not-have")
-	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	initOut, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
 
-	if !strings.Contains(initOut, "could not pull existing backlog") {
-		t.Fatalf("init must surface the adopt failure loudly, got:\n%s", initOut)
+	if initErr == nil {
+		t.Fatalf("Run(init) error = nil, want a hard failure when adopt cannot complete; output:\n%s", initOut)
 	}
-	if !strings.Contains(initOut, "refs/dolt/") {
-		t.Fatalf("loud failure must name the remote data it could not adopt, got:\n%s", initOut)
+	if !strings.Contains(initErr.Error(), "refusing to create a fresh store") {
+		t.Fatalf("init error = %q, want it to name the refusal to create a fresh store", initErr.Error())
+	}
+	if !strings.Contains(initErr.Error(), "refs/dolt/") {
+		t.Fatalf("init error must name the remote data it could not adopt, got: %q", initErr.Error())
 	}
 	// And it must NOT have silently claimed an adopt.
 	if strings.Contains(initOut, "Pulled existing backlog") {
 		t.Fatalf("init reported an adopt that did not happen:\n%s", initOut)
+	}
+	// NOT asserted here: that no on-disk dbDir remains. AdoptRemoteByClone
+	// unconditionally MkdirAlls its root before attempting the clone, so a
+	// clone-stage failure (unlike a pre-clone detection failure) can leave a
+	// partial directory regardless of this ticket's fix — that residue is
+	// links-sync-pgct.9's scope, not this one's. This test's job ends at "init
+	// refused and told the truth"; TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails
+	// below covers the pre-clone case where no store artifact is ever touched.
+}
+
+// TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails is the direct
+// regression guard for links-sync-pgct.1's headline scenario: resolving or
+// probing the remote itself fails (a `git ls-remote`-shaped error — bad
+// credentials, unreachable host, or here, a URL that cannot be resolved at
+// all), never even reaching the "does it carry lit data" question. That is a
+// genuinely uncertain result, not a confirmed-empty one, so init must exit
+// non-zero, create no store, and surface the real git failure — never guess
+// "empty" and proceed.
+func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	// A local-path URL under a directory that does not exist makes `git
+	// ls-remote` fail deterministically and immediately — no network, no
+	// timeout to wait out — while still looking like a normal configured
+	// remote to resolveSyncRemote/GitRemotes.
+	badRemote := filepath.Join(t.TempDir(), "gone", "does-not-exist.git")
+	runGit(t, repo, "remote", "add", "origin", badRemote)
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+
+	initOut, initErr := runCLIInDirAllowError(t, repo, "init", "--skip-hooks", "--skip-agents")
+
+	if initErr == nil {
+		t.Fatalf("Run(init) error = nil, want a hard failure when remote detection fails; output:\n%s", initOut)
+	}
+	if !strings.Contains(initErr.Error(), "refusing to create a fresh store") {
+		t.Fatalf("init error = %q, want it to name the refusal to create a fresh store", initErr.Error())
+	}
+	if strings.Contains(initErr.Error(), "could not adopt") {
+		t.Fatalf("init error = %q, must surface the real git failure, not a generic message", initErr.Error())
+	}
+	if !strings.Contains(initErr.Error(), "build:") {
+		t.Fatalf("init error = %q, want the dev-vs-release build status named on this failure too", initErr.Error())
+	}
+	if _, statErr := os.Stat(ws.DatabasePath); !os.IsNotExist(statErr) {
+		t.Fatalf("DatabasePath stat = %v, want no store to have been created after a detection failure", statErr)
+	}
+
+	// links-sync-pgct.5 made every init/sync decision durably traced
+	// unconditionally, including failures; this hard-stop must not regress that
+	// — the decision is recorded even though init itself now aborts on it.
+	records := readSyncTraceRecords(t, ws)
+	if len(records) != 1 {
+		t.Fatalf("sync trace records for the failed init = %d, want exactly 1: %+v", len(records), records)
+	}
+	if records[0].Decision != string(initSyncFailed) || records[0].Status != "error" {
+		t.Fatalf("trace record = %+v, want decision=%q status=error", records[0], initSyncFailed)
 	}
 }
 
@@ -284,6 +349,18 @@ func newInitTestRepo(t *testing.T) string {
 // output. The chdir is restored on cleanup; these tests must not run in parallel.
 func runCLIInDir(t *testing.T, dir string, args ...string) string {
 	t.Helper()
+	out, err := runCLIInDirAllowError(t, dir, args...)
+	if err != nil {
+		t.Fatalf("Run(%v) error = %v\noutput:\n%s", args, err, out)
+	}
+	return out
+}
+
+// runCLIInDirAllowError is runCLIInDir's counterpart for callers that expect
+// (and must inspect) a command failure — runCLIInDir itself fatals on any
+// error, which is the wrong shape for a test asserting the failure path.
+func runCLIInDirAllowError(t *testing.T, dir string, args ...string) (string, error) {
+	t.Helper()
 	prevWD, err := os.Getwd()
 	if err != nil {
 		t.Fatalf("Getwd() error = %v", err)
@@ -294,8 +371,6 @@ func runCLIInDir(t *testing.T, dir string, args ...string) string {
 	defer func() { _ = os.Chdir(prevWD) }()
 
 	var out bytes.Buffer
-	if err := Run(context.Background(), &out, &out, args); err != nil {
-		t.Fatalf("Run(%v) error = %v\noutput:\n%s", args, err, out.String())
-	}
-	return out.String()
+	runErr := Run(context.Background(), &out, &out, args)
+	return out.String(), runErr
 }
