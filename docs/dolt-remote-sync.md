@@ -86,6 +86,26 @@ Before each `lit sync` command, `lit` reconciles Dolt remotes to exactly match `
 The hook auto-runs one canonical `lit sync push` per git push, never blocks the git push, and emits a warning that includes the trigger, remote, retry command, and trace path if DB sync fails.
 Successful and failed automatic runs both write trace files under the workspace `traces_dir` returned by `lit workspace`.
 
+## Durable sync/init decision trace
+
+Every decision `lit init`'s remote-adopt step or a `lit sync fetch/pull/push/reconcile`
+reaches — including the on-change mirror and the inline receive/reconcile below —
+is recorded unconditionally as a JSON record under a `sync/` subdirectory
+alongside the workspace's `automation/` trace directory (the one `lit workspace`
+reports as `traces_dir`) — both live under one shared `traces/` parent, e.g.
+`traces/automation/` and `traces/sync/` as siblings. It is recorded whether the
+command ran directly or under automation (a git hook, the on-change mirror, the
+inline receive). This is separate from, and in addition to, the automation
+trace `lit workspace`'s `traces_dir` names above: that one is written only when
+`LNKS_AUTOMATION_TRIGGER` is set, so a directly-run interactive command left no
+record there at all. A sync-trace record's `trigger` field is empty for an
+interactive occasion and names the trigger for an automated one, so the two trace
+kinds can never disagree about what fired a given occasion. It gives every
+sync/init decision a durable history to inspect after the fact, whether or not
+it happened under automation — before this, an interactive session's decisions
+(including its inline auto-receive/reconcile, which usually runs with no
+trigger set) left no record anywhere once the process exited.
+
 ## Push cadence
 
 The cadence — how often lit mirrors the store to the remote — is a single

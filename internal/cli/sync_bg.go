@@ -233,5 +233,8 @@ func recordMirrorError(ws workspace.Info, cause error) error {
 			"lit: on-change mirror could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
+	// recordSyncCommandTrace already sets Reason from cause; no metadata needed
+	// to carry the same string a second time.
+	recordSyncCommandTrace(ws, "lit sync push", "error", cause, nil)
 	return nil
 }
