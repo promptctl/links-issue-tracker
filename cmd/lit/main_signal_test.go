@@ -182,6 +182,7 @@ func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
 	runGit(t, base, "init", "--bare", "remote.git")
 	runGit(t, root, "remote", "add", "origin", filepath.Join(base, "remote.git"))
 
+	pinOnPushCadence(t, base)
 	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
@@ -192,6 +193,30 @@ func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
 		t.Fatalf("resolve workspace: %v", err)
 	}
 	return ws
+}
+
+// pinOnPushCadence writes a config.toml selecting on-push cadence under dir and
+// points lit's global-config lookup at it for the rest of the calling test —
+// t.Setenv restores the prior value on test cleanup, and every runLit/
+// exec.Command call site in this file builds its child env from this process's
+// os.Environ() (see litEnv), so one call here is enough for the whole test
+// without threading an env map through every call site.
+//
+// The SIGTERM wedge tests are specifically about the INLINE RECEIVE; the
+// on-change cadence's background push mirror is an orthogonal automatic
+// behavior that, once it became the shipped default (links-sync-pgct.3),
+// introduced a second async actor racing these tests' wedge/verification
+// steps and collided on the store's single read-write engine ("database is
+// read only") — a real flake these tests are not designed to account for. Both
+// wedge tests pin cadence explicitly instead of depending on whatever value
+// happens to be the shipped default. [LAW:locality-or-seam]
+func pinOnPushCadence(t *testing.T, dir string) {
+	t.Helper()
+	path := filepath.Join(dir, "wedge-test-config.toml")
+	if err := os.WriteFile(path, []byte("[sync]\ncadence = \"on-push\"\n"), 0o644); err != nil {
+		t.Fatalf("write cadence-pin config: %v", err)
+	}
+	t.Setenv("LIT_CONFIG_GLOBAL_PATH", path)
 }
 
 // runLit runs a lit command to completion via a re-exec of the test binary.
@@ -392,6 +417,7 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) workspace.Info
 	runGit(t, root, "add", "-A")
 	runGit(t, root, "commit", "-m", "seed")
 
+	pinOnPushCadence(t, base)
 	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)

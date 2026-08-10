@@ -115,18 +115,26 @@ per-project at `.lit/config.toml`):
 
 ```toml
 [sync]
-cadence = "on-push"   # default
+cadence = "on-change"   # default
 ```
 
 | value       | meaning                                                                 |
 | ----------- | ----------------------------------------------------------------------- |
-| `on-push`   | mirror only when the managed pre-push hook runs (one push per `git push`). The default and historical behavior. |
-| `on-change` | additionally mirror after every mutating lit command (`new`, `start`, `update`, `close`, `comment`, `rank`, …), shrinking the window where local ticket state is invisible to other clones. |
+| `on-change` | mirror after every mutating lit command (`new`, `start`, `update`, `close`, `comment`, `rank`, …), in addition to the pre-push hook. The default: a mutation on a connected workspace reaches the remote without a separate push step, so "durable locally" and "durable on the remote" don't drift apart into a manual act someone has to remember. |
+| `on-push`   | mirror only when the managed pre-push hook runs (one push per `git push`). Opt-in, for a workspace that deliberately wants to batch outgoing network traffic instead of pushing on every mutation. |
 
 `on-change` runs the same `lit sync push` the pre-push hook runs, after the
-command completes. It is best-effort: a push failure is surfaced on stderr and
-recorded as an automation trace, but never fails the command — the ticket
-change is already durable in the local Dolt store. An unknown cadence value is
+command completes, as a non-blocking background mirror. It is best-effort: a
+push failure is surfaced on stderr and recorded as an automation trace, but
+never fails the command — the ticket change is already durable in the local
+Dolt store. Whichever cadence is chosen, a push that stays pending is not
+silent: `lit backlog`, `lit next`, and `lit show` print a `sync: N local
+change(s) not pushed …` line whenever the store reads ahead-of-remote, so a
+failed or skipped push is a loud, recurring fact the next time one of those
+commands runs, rather than something only `lit doctor` would surface. That
+banner is wired into those three read commands only — a session that runs
+only mutating commands (`new`, `start`, `update`, `close`, …) between pushes
+won't see it until it next runs one of the three. An unknown cadence value is
 rejected at config load.
 
 ## Receive automation
