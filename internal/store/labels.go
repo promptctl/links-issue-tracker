@@ -56,7 +56,10 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 		if err != nil {
 			return fmt.Errorf("delete label: %w", err)
 		}
-		affected, _ := res.RowsAffected()
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
 		if affected == 0 {
 			return fmt.Errorf("label %q not found on issue %q", label, issueID)
 		}

@@ -444,7 +444,10 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 		if err != nil {
 			return fmt.Errorf("delete parent relation: %w", err)
 		}
-		affected, _ := res.RowsAffected()
+		affected, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("rows affected: %w", err)
+		}
 		if affected == 0 {
 			return NotFoundError{Entity: "parent relation", ID: childID}
 		}
