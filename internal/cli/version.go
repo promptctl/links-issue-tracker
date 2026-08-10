@@ -50,13 +50,13 @@ func runVersion(stdout io.Writer, args []string) error {
 	// this is a trust-boundary check on link-time-injected input, not a guard
 	// papering over a value that should never be absent.
 	if age, ok := info.BuildAge(time.Now()); ok {
-		if _, err := fmt.Fprintf(stdout, "built %s ago\n", humanizeDuration(age)); err != nil {
+		if _, err := fmt.Fprintf(stdout, "built %s ago\n", humanizeCoarseDuration(age)); err != nil {
 			return err
 		}
 		if age >= version.StaleBuildThreshold {
 			if _, err := fmt.Fprintf(stdout,
 				"WARNING: binary is older than %s — run `just build` (or `just install`) to pick up recent fixes\n",
-				humanizeDuration(version.StaleBuildThreshold),
+				humanizeCoarseDuration(version.StaleBuildThreshold),
 			); err != nil {
 				return err
 			}
@@ -65,21 +65,4 @@ func runVersion(stdout io.Writer, args []string) error {
 
 	_, err = fmt.Fprintf(stdout, "schema versions supported: %d–%d\n", info.Schema.Min, info.Schema.Max)
 	return err
-}
-
-// humanizeDuration renders a duration as a coarse, human-legible phrase — the
-// same day/hour/minute bucketing convention SyncFailure.agePhrase
-// (sync_failure.go) uses for divergence age, so "how stale" reads
-// consistently across lit's surfaces.
-func humanizeDuration(d time.Duration) string {
-	switch {
-	case d >= 48*time.Hour:
-		return fmt.Sprintf("%d days", int(d/(24*time.Hour)))
-	case d >= 2*time.Hour:
-		return fmt.Sprintf("%d hours", int(d/time.Hour))
-	case d >= 2*time.Minute:
-		return fmt.Sprintf("%d minutes", int(d/time.Minute))
-	default:
-		return "under a minute"
-	}
 }

@@ -6,9 +6,9 @@
 #     source scripts/version-ldflags.sh
 #     go build -ldflags "-X ${pkg}.Commit=$LIT_BUILD_COMMIT -X ${pkg}.Date=$LIT_BUILD_DATE" ...
 #
-# Both values come from local commands only (git rev-parse HEAD, the local
-# system clock) — no network call, so a from-source build stamps identically
-# on a restricted or air-gapped machine. [LAW:one-source-of-truth] the
+# Both values come from local commands only (git rev-parse --short HEAD, the
+# local system clock) — no network call, so a from-source build stamps
+# identically on a restricted or air-gapped machine. [LAW:one-source-of-truth] the
 # Justfile's `build` recipe and scripts/install.sh's source mode both source
 # this and nowhere else computes these two strings, so they cannot drift
 # apart the way install.sh's now-removed inline copy could have.
