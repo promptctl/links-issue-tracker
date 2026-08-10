@@ -47,15 +47,23 @@ func markFetchSuccess(ws workspace.Info) error {
 }
 
 // lastFetchSuccessAge reports how long ago a fetch last succeeded. ok is false
-// when no fetch has ever succeeded on this workspace (or the marker cannot be
-// read) — mirroring shouldReceiveNow's reading that a missing marker means
-// "never happened (or cannot tell)", not "infinitely stale": a workspace that
-// simply has not had automatic receive run yet is not flagged before it gets
-// the chance to. [LAW:no-defensive-null-guards] absence is a real, distinct
-// state, not a fabricated worst-case age.
+// when no fetch has ever succeeded on this workspace — mirroring
+// shouldReceiveNow's reading that a missing marker means "never happened",
+// not "infinitely stale": a workspace that simply has not had automatic
+// receive run yet is not flagged before it gets the chance to.
+// [LAW:no-defensive-null-guards] absence is a real, distinct state, not a
+// fabricated worst-case age. A stat error other than "does not exist" —
+// permission denied, a corrupt storage dir — is a real operational failure,
+// not evidence of "never fetched"; it is surfaced to stderr rather than
+// silently folded into the same ok=false, so a broken storage dir is
+// diagnosable instead of just reading as a quiet workspace.
+// [LAW:no-silent-failure]
 func lastFetchSuccessAge(ws workspace.Info, now time.Time) (age time.Duration, ok bool) {
 	info, err := os.Stat(fetchSuccessMarkerPath(ws))
 	if err != nil {
+		if !os.IsNotExist(err) {
+			fmt.Fprintf(os.Stderr, "lit: fetch-success marker unreadable: %v\n", err)
+		}
 		return 0, false
 	}
 	return now.Sub(info.ModTime()), true

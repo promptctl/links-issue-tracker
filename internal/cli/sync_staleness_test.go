@@ -98,6 +98,17 @@ func TestSyncStalenessLines(t *testing.T) {
 			dontWant:      []string{"not pushed"},
 		},
 		{
+			name: "diverged AND stale fetch still warns about the fetch (independent conditions)",
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
+			}},
+			fetchAge:      staleAge,
+			fetchAgeKnown: true,
+			wantLines:     1,
+			wantSubstrs:   []string{"last successful fetch"},
+			dontWant:      []string{"not pushed"},
+		},
+		{
 			name: "behind alone does not warn (auto-receive fast-forwards it)",
 			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Behind: 4,

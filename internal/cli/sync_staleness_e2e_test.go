@@ -82,6 +82,31 @@ func TestBacklogNextShowWarnOnUnpushedChangesAndClearAfterPush(t *testing.T) {
 	}
 }
 
+// TestShowFieldOutputStaysCleanOfStalenessWarning pins that `lit show <id>
+// --field <name>` — the compact, machine-parseable contract that automation
+// round-trips into `lit update` (documented as printing "exactly the
+// requested field(s) and nothing else") — never gets the sync banner
+// prepended, even when there IS unpushed local state to warn about. The
+// banner belongs only to the full-detail view.
+func TestShowFieldOutputStaysCleanOfStalenessWarning(t *testing.T) {
+	dir, ticketID := unpushedCloneWithOneLocalChange(t)
+
+	fieldOut := runCLIInDir(t, dir, "show", ticketID, "--field", "title")
+	if strings.Contains(fieldOut, "sync:") {
+		t.Fatalf("`lit show --field` output was contaminated by the staleness banner:\n%q", fieldOut)
+	}
+	if strings.TrimSpace(fieldOut) != "unpushed-ticket" {
+		t.Fatalf("`lit show --field title` = %q, want the bare field value", fieldOut)
+	}
+
+	// The full-detail view (no --field) on the SAME ticket still warns —
+	// confirming the gate is on --field, not a workspace-wide accident.
+	fullOut := runCLIInDir(t, dir, "show", ticketID)
+	if !strings.Contains(fullOut, "sync:") || !strings.Contains(fullOut, "not pushed") {
+		t.Fatalf("`lit show` full-detail view lost the staleness warning:\n%s", fullOut)
+	}
+}
+
 // TestBacklogWarnsOnStaleFetchAndClearsAfterFetch drives the ticket's second,
 // independent condition end to end — "the last fetch is older than a
 // threshold" — through the real fetch-success marker wiring: the marker is
