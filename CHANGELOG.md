@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `Store.ClearParent` and `Store.RemoveLabel` no longer discard the error from `RowsAffected()` after their `DELETE`; a genuine driver/query error reading the affected-row count now surfaces as that error instead of being misread as a false "not found" (matching the pattern already used by `RemoveRelation` and the issue-status/retention writes).
 - `Store.RemoveLabel`'s zero-rows case now returns `NotFoundError` instead of a plain error, matching every other not-found path in the store; a `lit label remove` of a label that isn't on the issue now exits with the correct not-found exit code instead of falling through to the generic one.
+- `internal/cli/sync_failure.go`'s doc comment on `syncFailureUnrelatedHistories` no longer claims the wholesale/union resolution surface "is not yet built" — `lit sync reconcile combine` and `lit sync reconcile take <local|remote>` already exist and are what the class's rendered guidance names (the comment had drifted from `resolutionSteps()`, which already listed all three commands).
 
 ## [0.4.0] - 2026-08-07
 
