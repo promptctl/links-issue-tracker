@@ -61,7 +61,7 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 			return fmt.Errorf("rows affected: %w", err)
 		}
 		if affected == 0 {
-			return fmt.Errorf("label %q not found on issue %q", label, issueID)
+			return NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}
 		}
 		return nil
 	}); err != nil {

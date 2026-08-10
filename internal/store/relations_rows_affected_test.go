@@ -43,6 +43,37 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	}
 }
 
+// The same masking risk exists in RemoveLabel's DELETE FROM labels statement;
+// this proves its RowsAffected() error is likewise surfaced rather than
+// misread as a real zero-rows "label not found" result. (links-store-mb6e.1)
+func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: issue.ID, Name: "critical", CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddLabel() error = %v", err)
+	}
+
+	causeErr := errors.New("synthetic driver failure reading affected rows")
+	swapInExecErrDB(t, st, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, causeErr)
+
+	_, err = st.RemoveLabel(ctx, issue.ID, "critical")
+	if err == nil {
+		t.Fatalf("RemoveLabel() error = nil, want the injected RowsAffected failure")
+	}
+	var notFound NotFoundError
+	if errors.As(err, &notFound) {
+		t.Fatalf("RemoveLabel() masked a genuine RowsAffected error as NotFoundError: %v", err)
+	}
+	if !strings.Contains(err.Error(), causeErr.Error()) {
+		t.Fatalf("RemoveLabel() error = %v, want it to wrap %q", err, causeErr)
+	}
+}
+
 // swapInExecErrDB replaces the store's live Dolt connection with one that,
 // whenever it prepares a statement whose text contains match, executes it for
 // real (so the underlying row is genuinely deleted) but forces its
