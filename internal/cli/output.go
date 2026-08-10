@@ -441,6 +441,26 @@ func formatHistoryTimestamp(value time.Time) string {
 	return value.Local().Format(historyTimestampLayout)
 }
 
+// humanizeCoarseDuration renders a non-negative duration as a coarse,
+// human-legible phrase — days/hours/minutes bucketed at 48h/2h/2m, so "how
+// long ago" reads consistently across every surface that reports an age
+// (sync-divergence age in SyncFailure.agePhrase, build age in runVersion).
+// [LAW:single-enforcer] the one place this bucketing convention is defined;
+// callers with their own "unknown"/zero handling wrap this rather than
+// reimplementing the thresholds.
+func humanizeCoarseDuration(d time.Duration) string {
+	switch {
+	case d >= 48*time.Hour:
+		return fmt.Sprintf("%d days", int(d/(24*time.Hour)))
+	case d >= 2*time.Hour:
+		return fmt.Sprintf("%d hours", int(d/time.Hour))
+	case d >= 2*time.Minute:
+		return fmt.Sprintf("%d minutes", int(d/time.Minute))
+	default:
+		return "under a minute"
+	}
+}
+
 // isLiveIssue reports whether an issue is still in play — open or in_progress,
 // and neither archived nor deleted. This is the single definition of liveness
 // shared by the rendering surfaces (now-unblocked-dependents, open-siblings)

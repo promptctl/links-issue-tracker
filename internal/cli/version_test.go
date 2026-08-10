@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 	"github.com/promptctl/links-issue-tracker/internal/version"
@@ -89,5 +90,76 @@ func TestVersionRejectsPositionalArgs(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "usage") {
 		t.Errorf("err = %v, want a usage error message", err)
+	}
+}
+
+// TestVersionReportsBuildAgeWhenDateStamped pins the ticket-level fix: a
+// binary with a stamped Date (what `just build` now produces via
+// scripts/version-ldflags.sh, even without a stamped Version) reports how
+// long ago it was built instead of leaving the reader to guess from a bare
+// timestamp.
+func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
+	origV, origC, origD := version.Version, version.Commit, version.Date
+	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
+	version.Version = ""
+	version.Commit = "abcdef0"
+	version.Date = time.Now().Add(-3 * time.Hour).UTC().Format(time.RFC3339)
+
+	var stdout bytes.Buffer
+	if err := runVersion(&stdout, nil); err != nil {
+		t.Fatalf("runVersion error = %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "built 3 hours ago") {
+		t.Errorf("output missing build-age line for a 3h-old stamp:\n%s", out)
+	}
+	if strings.Contains(out, "WARNING") {
+		t.Errorf("output warned about staleness for a 3h-old build:\n%s", out)
+	}
+}
+
+// TestVersionFlagsStaleBuild pins the staleness half of the ticket: a Date
+// older than version.StaleBuildThreshold surfaces a rebuild warning, so an
+// agent reading `lit version` learns its binary is worth rebuilding without
+// having to compute the age itself.
+func TestVersionFlagsStaleBuild(t *testing.T) {
+	origV, origC, origD := version.Version, version.Commit, version.Date
+	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
+	version.Version = ""
+	version.Commit = "abcdef0"
+	version.Date = time.Now().Add(-10 * 24 * time.Hour).UTC().Format(time.RFC3339)
+
+	var stdout bytes.Buffer
+	if err := runVersion(&stdout, nil); err != nil {
+		t.Fatalf("runVersion error = %v", err)
+	}
+	out := stdout.String()
+	if !strings.Contains(out, "built 10 days ago") {
+		t.Errorf("output missing build-age line for a 10d-old stamp:\n%s", out)
+	}
+	if !strings.Contains(out, "WARNING") {
+		t.Errorf("output did not flag a 10d-old build as stale:\n%s", out)
+	}
+}
+
+// TestVersionOmitsBuildAgeWithoutDate pins the no-fabrication guard at the CLI
+// surface: an unstamped Date (the pre-ticket `just build`, or any build whose
+// linker never set it) prints no "built X ago" line and no staleness warning
+// — the existing "built unknown" phrasing (TestVersionHumanLabelsDevBuild)
+// stays the whole story.
+func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
+	origV, origC, origD := version.Version, version.Commit, version.Date
+	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
+	version.Version = ""
+	version.Commit = ""
+	version.Date = ""
+
+	var stdout bytes.Buffer
+	if err := runVersion(&stdout, nil); err != nil {
+		t.Fatalf("runVersion error = %v", err)
+	}
+	out := stdout.String()
+	if strings.Contains(out, "ago") || strings.Contains(out, "WARNING") {
+		t.Errorf("output rendered an age/warning with no Date stamped:\n%s", out)
 	}
 }

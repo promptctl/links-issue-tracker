@@ -15,6 +15,8 @@
 package version
 
 import (
+	"time"
+
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -22,11 +24,27 @@ import (
 // -X .../internal/version.Commit=... -X .../internal/version.Date=..."` at link
 // time. Empty strings indicate a build that did not stamp them — treated as a
 // development build in Info.IsDev.
+//
+// [LAW:single-enforcer] Three writers stamp these, and only these: goreleaser
+// (all three fields, for tagged releases), scripts/install.sh's source mode
+// (all three, Version via `git describe`), and the Justfile's `build` recipe
+// (Commit + Date only, via scripts/version-ldflags.sh — deliberately NOT
+// Version, so a plain `just build` stays IsDev==true; see BuildAge below for
+// why Commit/Date alone are still worth stamping).
 var (
 	Version string
 	Commit  string
 	Date    string
 )
+
+// StaleBuildThreshold is the build age past which `lit version` flags a
+// locally built binary as worth rebuilding. This package's build-age
+// reporting exists because a stale local binary silently missing a landed
+// fix is the suspected root cause of the field incident that motivated the
+// links-sync-pgct epic — nothing in `lit version` could tell anyone the
+// binary predated the fix. [LAW:one-source-of-truth] the one constant every
+// staleness check compares against.
+const StaleBuildThreshold = 7 * 24 * time.Hour
 
 // Info is the typed snapshot of this binary's identity and capabilities. It is
 // the single shape every downstream consumer reads; consumers MUST NOT parse
@@ -72,4 +90,25 @@ func Get() (Info, error) {
 		IsDev:   Version == "",
 		Schema:  SchemaSupport{Min: migrations.Baseline, Max: max},
 	}, nil
+}
+
+// BuildAge reports how long ago i.Date was stamped, relative to now. ok is
+// false when Date is empty, fails to parse as RFC3339, or names a future
+// instant (clock skew) — an unstamped build, or a value that cannot be
+// trusted, must never render a fabricated age.
+// [LAW:effects-at-boundaries] the clock is a parameter, not read internally,
+// so this stays a pure function callers can test with no mocks.
+func (i Info) BuildAge(now time.Time) (age time.Duration, ok bool) {
+	if i.Date == "" {
+		return 0, false
+	}
+	stamped, err := time.Parse(time.RFC3339, i.Date)
+	if err != nil {
+		return 0, false
+	}
+	age = now.Sub(stamped)
+	if age < 0 {
+		return 0, false
+	}
+	return age, true
 }

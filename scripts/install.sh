@@ -211,8 +211,6 @@ case "$mode" in
         # Empty input passes through unchanged (no leading `v` to strip); bare
         # SHAs from `git describe --always` are hex and never start with `v`.
         ver="${ver#v}"
-        commit="$(git rev-parse --short HEAD 2>/dev/null || true)"
-        date="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
         pkg="github.com/promptctl/links-issue-tracker/internal/version"
         # Put ICU/zstd on the cgo search path for the embedded Dolt engine. This
         # is the single source of truth for those flags (a no-op off macOS), so
@@ -221,8 +219,13 @@ case "$mode" in
         # release/latest download modes build nothing and must not require ICU.
         # shellcheck source=scripts/cgo-env.sh
         . "$ROOT_DIR/scripts/cgo-env.sh"
+        # Commit + Date come from the same source `just build` uses, so the two
+        # from-source entrypoints can never stamp different values for the same
+        # checkout. [LAW:one-source-of-truth]
+        # shellcheck source=scripts/version-ldflags.sh
+        . "$ROOT_DIR/scripts/version-ldflags.sh"
         GOFLAGS="${GOFLAGS:+$GOFLAGS }-buildvcs=false" go build \
-            -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${commit} -X ${pkg}.Date=${date}" \
+            -ldflags "-X ${pkg}.Version=${ver} -X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE}" \
             -o "$TARGET_DIR/$BIN_NAME" ./cmd/lit
         ;;
     release|latest)
