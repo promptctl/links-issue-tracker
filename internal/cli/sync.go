@@ -105,11 +105,19 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 		return err
 	}
 	if _, err := syncDoltRemotesFromGit(ctx, syncStore, ws); err != nil {
+		// A could-not-attempt failure (git-remote reconciliation itself failed,
+		// before any fetch was even tried) is still a decision this command
+		// reached — trace it, matching the coverage recordMirrorError/
+		// recordReceiveError give this same failure class on the mirror/receive
+		// paths. [LAW:no-silent-failure]
+		recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
 		return err
 	}
 	remoteName := strings.TrimSpace(*remote)
-	if err := syncStore.SyncFetch(ctx, remoteName, *prune); err != nil {
-		return err
+	fetchErr := syncStore.SyncFetch(ctx, remoteName, *prune)
+	recordSyncCommandTrace(ws, "lit sync fetch", "fetched", fetchErr, map[string]string{"remote": remoteName})
+	if fetchErr != nil {
+		return fetchErr
 	}
 	if !*verbose {
 		_, err := fmt.Fprintln(stdout, "fetched")
@@ -129,6 +137,11 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
+		// A could-not-attempt failure — traced like every other decision this
+		// command reaches, matching the coverage recordMirrorError/
+		// recordReceiveError give this same failure class on the mirror/receive
+		// paths. [LAW:no-silent-failure]
+		recordSyncCommandTrace(ws, "lit sync pull", "error", err, nil)
 		return err
 	}
 	remoteName, remoteErr := resolveSyncRemote(
@@ -137,6 +150,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		syncState.gitRemotes,
 	)
 	if remoteErr != nil {
+		recordSyncCommandTrace(ws, "lit sync pull", "error", remoteErr, nil)
 		return remoteErr
 	}
 	if remoteName == "" {
@@ -145,6 +159,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"reason": "no_sync_remote",
 			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
 		}
+		recordSyncCommandTrace(ws, "lit sync pull", "no_sync_remote", nil, nil)
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
@@ -156,7 +171,9 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// branch unavailable" that DefaultRemoteBranch's swallowed error would produce.
 	// This matches the receive path, so receive/pull/push treat refsErr identically.
 	if refsErr != nil {
-		return fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+		checkErr := fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+		recordSyncCommandTrace(ws, "lit sync pull", "error", checkErr, map[string]string{"remote": remoteName})
+		return checkErr
 	}
 	if !hasRefs {
 		payload := map[string]any{
@@ -165,15 +182,19 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 			"remote": remoteName,
 			"raw":    firstPushSkipMessage,
 		}
+		recordSyncCommandTrace(ws, "lit sync pull", "remote_empty", nil, map[string]string{"remote": remoteName})
 		return printSyncPullPayload(stdout, payload, *verbose)
 	}
 	resolvedBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
 	if err != nil {
+		recordSyncCommandTrace(ws, "lit sync pull", "error", err, map[string]string{"remote": remoteName})
 		return err
 	}
 	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 	result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
+	pullTraceMetadata := map[string]string{"remote": remoteName, "sync_branch": resolvedBranch}
 	if err != nil {
+		recordSyncCommandTrace(ws, "lit sync pull", "error", err, pullTraceMetadata)
 		// An explicit pull is not best-effort: a fetch or reconcile failure is
 		// surfaced as a command error, not swallowed the way the background
 		// receive tolerates a transient hiccup. [LAW:no-silent-failure] A remote
@@ -181,14 +202,17 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		// (exit ExitConflict, naming `lit upgrade`), not the raw store refusal.
 		return asSyncFailure(err)
 	}
+	pullTraceMetadata["state"] = string(result.State)
 	// A held free-text conflict is a non-transient divergence the agent must
 	// resolve: it routes through the one sync-failure contract and is RETURNED, so
 	// the command exits ExitConflict — the same exit `lit sync reconcile` gives for
 	// the identical state, rather than a stdout line under a success exit. Every
 	// other pull outcome is a payload the printer renders. [LAW:single-enforcer]
 	if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
+		recordSyncHeldTrace(ws, "lit sync pull", failure, pullTraceMetadata)
 		return failure
 	}
+	recordSyncCommandTrace(ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
 	return printSyncPullPayload(stdout, buildSyncPullPayload(remoteName, resolvedBranch, result), *verbose)
 }
 
@@ -241,6 +265,12 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// performSyncPush has no compaction branch and a skipped push never compacts.
 	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, syncStore.SyncCompactAndPush)
 	if err != nil {
+		// A could-not-attempt failure (performSyncPush returned before reaching
+		// its own trace-recording push attempt) — traced here, matching the
+		// coverage recordMirrorError already gives this exact failure class on
+		// the on-change mirror path that shares performSyncPush.
+		// [LAW:no-silent-failure]
+		recordSyncCommandTrace(ws, "lit sync push", "error", err, nil)
 		return err
 	}
 	// [LAW:no-silent-failure] The push error surfaces as the command's exit
@@ -322,6 +352,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		return syncPushOutcome{}, remoteErr
 	}
 	if remoteName == "" {
+		recordSyncCommandTrace(ws, "lit sync push", "no_sync_remote", nil, nil)
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return syncPushOutcome{
 			status:  "skipped",
@@ -339,6 +370,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		return syncPushOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
 	}
 	if !hasRefs {
+		recordSyncCommandTrace(ws, "lit sync push", "remote_empty", nil, map[string]string{"remote": remoteName})
 		return syncPushOutcome{
 			status:  "skipped",
 			reason:  "remote_empty",
@@ -382,6 +414,29 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		traceReason,
 		traceMetadata,
 	)
+	// The durable, unconditional counterpart: recorded whether or not
+	// LNKS_AUTOMATION_TRIGGER is set, so an interactive `lit sync push` (and the
+	// on-change mirror, which shares this function) both leave a trace behind.
+	// Its own reason, not traceReason: "managed automation requested sync push"
+	// is only true of the automation-gated record above (which fires only when
+	// a trigger actually did request the push) — reusing it here would print
+	// that false claim on every interactive `lit sync push` a human runs
+	// directly. [LAW:no-silent-failure] a trace record that misattributes its
+	// own cause is a lie the next reader has no way to catch.
+	syncPushDecision := "pushed"
+	durableReason := ""
+	if pushErr != nil {
+		syncPushDecision = "error"
+		durableReason = pushErr.Error()
+	}
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   formatCommand(syncCommandArgs),
+		Decision:  syncPushDecision,
+		Status:    traceStatus,
+		Reason:    durableReason,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+		Metadata:  traceMetadata,
+	})
 	return syncPushOutcome{
 		status:     "ok",
 		remote:     remoteName,

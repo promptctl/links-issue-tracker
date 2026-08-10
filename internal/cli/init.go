@@ -42,6 +42,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	// adoptRemoteTicketsOnInit owns the whole decision and returns the
 	// discriminated outcome; only initSyncAdopted means the store now exists.
 	syncOutcome := adoptRemoteTicketsOnInit(ctx, ws)
+	recordInitSyncTrace(ws, syncOutcome, time.Now())
 
 	// Every non-adopt outcome (greenfield, local tickets already present, no
 	// eligible remote, remote empty, no remote data, or a failed adopt) leaves

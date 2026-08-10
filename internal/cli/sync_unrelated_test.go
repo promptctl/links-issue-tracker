@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // TestSyncFailureBlockUnrelatedHistories pins the contract the unrelated-histories
@@ -121,7 +122,8 @@ func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
 // operator sees what each side holds on `lit sync reconcile`.
 func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 	var sink strings.Builder
-	err := reportReconcileResult(&sink, "origin", "master", store.SyncReconcileResult{
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	err := reportReconcileResult(&sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
 		State:  store.SyncReconcileUnrelated,
 		Ahead:  1,
 		Behind: 1,
@@ -162,7 +164,8 @@ func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 // the same exit a held prose conflict gives — rather than a bland success line.
 func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	var sink strings.Builder
-	err := reportReconcileResult(&sink, "origin", "master", store.SyncReconcileResult{
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	err := reportReconcileResult(&sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
 		State:  store.SyncReconcileUnrelated,
 		Ahead:  7,
 		Behind: 7,
@@ -195,9 +198,10 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 		OnlyRemote: []string{"proj-remoteA"},
 		OnBoth:     []string{"proj-shared"},
 	}
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 
 	var remote strings.Builder
-	if err := reportTakeOutcome(&remote, "origin", "master", store.SyncReconcileResult{
+	if err := reportTakeOutcome(&remote, ws, "lit sync reconcile take remote", "origin", "master", store.SyncReconcileResult{
 		State:     store.SyncReconcileTookRemote,
 		Unrelated: inv,
 	}); err != nil {
@@ -218,7 +222,7 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 	}
 
 	var local strings.Builder
-	if err := reportTakeOutcome(&local, "origin", "master", store.SyncReconcileResult{
+	if err := reportTakeOutcome(&local, ws, "lit sync reconcile take local", "origin", "master", store.SyncReconcileResult{
 		State:     store.SyncReconcileTookLocal,
 		Unrelated: inv,
 	}); err != nil {
@@ -237,7 +241,8 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 // output states an explicit "(0)" rather than a blank the reader must interpret.
 func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
 	var out strings.Builder
-	if err := reportTakeOutcome(&out, "origin", "master", store.SyncReconcileResult{
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", "origin", "master", store.SyncReconcileResult{
 		State:     store.SyncReconcileTookRemote,
 		Unrelated: &store.UnrelatedInventory{OnlyRemote: []string{"proj-remoteA"}},
 	}); err != nil {
