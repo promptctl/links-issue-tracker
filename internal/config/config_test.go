@@ -42,8 +42,8 @@ func TestLoadDefaults(t *testing.T) {
 	if cfg.Snapshot.RetentionBudget != 5 {
 		t.Fatalf("expected snapshot.retention_budget=5 by default, got %d", cfg.Snapshot.RetentionBudget)
 	}
-	if cfg.Sync.Cadence != SyncCadenceOnPush {
-		t.Fatalf("expected sync.cadence=on-push by default, got %q", cfg.Sync.Cadence)
+	if cfg.Sync.Cadence != SyncCadenceOnChange {
+		t.Fatalf("expected sync.cadence=on-change by default, got %q", cfg.Sync.Cadence)
 	}
 	if !cfg.Sync.Receive {
 		t.Fatal("expected sync.receive=true by default (seamless multi-machine), got false")
@@ -87,6 +87,30 @@ func TestLoadSyncCadenceFromTOML(t *testing.T) {
 	}
 	if cfg.Sync.Cadence != SyncCadenceOnChange {
 		t.Fatalf("expected sync.cadence=on-change from file, got %q", cfg.Sync.Cadence)
+	}
+}
+
+// TestLoadSyncCadenceOnPushFromTOML pins the opt-out path now that on-change is
+// the default (TestLoadDefaults): a user who deliberately wants manual push
+// control must still be able to select on-push from file, and Load must not
+// silently keep the default when a file explicitly asks for the other value.
+func TestLoadSyncCadenceOnPushFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte("[sync]\ncadence = \"on-push\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := Load(pathspec.PathSpec{})
+	if err != nil {
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
+	}
+	if cfg.Sync.Cadence != SyncCadenceOnPush {
+		t.Fatalf("expected sync.cadence=on-push from file, got %q", cfg.Sync.Cadence)
 	}
 }
 
