@@ -51,7 +51,7 @@ signal we layer on, not a definition.
 
 ## Proposal
 
-### Phase 1 — convention + heartbeat (ship now)
+### Phase 1 — convention (shipped)
 
 **1. Canonical assignee shape: `claude_<sessionId>`**
 
@@ -68,29 +68,7 @@ Codex) need a slot too. Document the convention:
 The shape lets future tooling parse owner-kind without breaking the
 free-form column.
 
-**2. Heartbeat event, not a heartbeat column**
-
-Add `lit heartbeat <id>` that emits a field-history event of kind
-`heartbeat` carrying `(actor, timestamp)` and no field changes. The
-field-history `issue_events` table is already the right substrate —
-it's an append-only event log keyed on issue.
-
-Orphan detection becomes:
-
-```
-in_progress AND time.Since(latest_event_for(owner)) >= threshold
-```
-
-`UpdatedAt` is replaced by `latest_event_for(owner)` — an event the
-owning agent produced, not "anybody touched the row." This kills the
-false-negative case where a different actor's edit silently resets
-the orphan clock.
-
-Agents call `lit heartbeat` from their loop (e.g., once per
-tool-cycle, or on session resume). No new schema; the event log
-already exists.
-
-**3. Ownership transfer is `lit assign`**
+**2. Ownership transfer is `lit assign`**
 
 Already shipped (`lit assign` on the field-history branch). Document
 it as the canonical handoff
@@ -98,9 +76,10 @@ mechanism. No new command.
 
 ### Phase 2 — process liveness (deferred)
 
-Heartbeat replaces *staleness* with *quietness* — better, but still a
-proxy. The ground-truth check is "is session `<sessionId>` actually
-running right now?" That requires an external probe:
+Orphan detection still runs on the `UpdatedAt` staleness heuristic from
+the current implementation; the ground-truth check would be "is session
+`<sessionId>` actually running right now?" That requires an external
+probe:
 
 - A Claude Code "list active sessions" API or local socket
 - A sentinel file written by the session, cleaned up on exit
@@ -116,23 +95,20 @@ remaining false-positive rate justifies the integration cost.
    (including compactions) — not worktree, not branch, not user.
 2. **How do we encode ownership?** `assignee = claude_<sessionId>` as
    convention. Free-form column unchanged.
-3. **How do we enforce ownership?** `lit start --assignee` already
-   stamps it (`runTransition` rejects `start` without `--assignee`).
-   Phase 1 adds heartbeat events; phase 2
-   adds process-level liveness.
-4. **What about compaction?** Same session, same owner. Heartbeat
-   continues uninterrupted across compaction boundaries.
+3. **How do we enforce ownership?** Not strictly, today. `resolveIdentity`
+   (`internal/cli/cli.go`) stamps `claude_<sessionId>` whenever
+   `CLAUDE_CODE_SESSION_ID` is set; otherwise it passes the explicit
+   `--assignee` through unenforced, and `start` still succeeds with an
+   empty assignee. Phase 2 adds process-level liveness.
+4. **What about compaction?** Same session, same owner.
 5. **What about worktree agents?** Worktree existence is a soft
    liveness signal worth surfacing in `lit doctor`, but not part of
    identity. Don't bake it into ownership.
 
 ## Why this aligns with project laws
 
-- **one-source-of-truth**: identity lives in `assignee`; liveness
-  lives in the event log. No new column duplicating either.
-- **dataflow-not-control-flow**: heartbeat is just another event in
-  the stream; orphan detection reads the same event log everything
-  else does. No new conditional path.
+- **one-source-of-truth**: identity lives in `assignee`. No new
+  column duplicating it.
 - **single-enforcer**: orphan classification stays in
   `newOrphanedAnnotator`; only the lookup changes.
 
