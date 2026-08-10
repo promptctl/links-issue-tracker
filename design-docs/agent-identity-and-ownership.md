@@ -95,9 +95,11 @@ remaining false-positive rate justifies the integration cost.
    (including compactions) — not worktree, not branch, not user.
 2. **How do we encode ownership?** `assignee = claude_<sessionId>` as
    convention. Free-form column unchanged.
-3. **How do we enforce ownership?** `lit start --assignee` already
-   stamps it (`runTransition` rejects `start` without `--assignee`).
-   Phase 2 adds process-level liveness.
+3. **How do we enforce ownership?** Not strictly, today. `resolveIdentity`
+   (`internal/cli/cli.go`) stamps `claude_<sessionId>` whenever
+   `CLAUDE_CODE_SESSION_ID` is set; otherwise it passes the explicit
+   `--assignee` through unenforced, and `start` still succeeds with an
+   empty assignee. Phase 2 adds process-level liveness.
 4. **What about compaction?** Same session, same owner.
 5. **What about worktree agents?** Worktree existence is a soft
    liveness signal worth surfacing in `lit doctor`, but not part of
