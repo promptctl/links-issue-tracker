@@ -673,7 +673,11 @@ lit version
 ```
 
 Prints binary version, build metadata, and the supported schema version range. The
-schema range is what determines whether this binary can open a given workspace.
+schema range is what determines whether this binary can open a given workspace. A
+build stamped with a commit and date (every `just build` and `scripts/install.sh`
+source build) also reports how long ago it was built, and warns when that's past
+`internal/version.StaleBuildThreshold` — a nudge to rebuild before a landed fix goes
+unnoticed.
 
 ---
 

@@ -326,18 +326,10 @@ func (f SyncFailure) escalationLine() string {
 // (the store had no timestamp) reads as an explicit unknown rather than a
 // misleading "0 seconds". [LAW:no-silent-failure]
 func (f SyncFailure) agePhrase() string {
-	switch {
-	case f.Age <= 0:
+	if f.Age <= 0 {
 		return "an unknown duration"
-	case f.Age >= 48*time.Hour:
-		return fmt.Sprintf("%d days", int(f.Age/(24*time.Hour)))
-	case f.Age >= 2*time.Hour:
-		return fmt.Sprintf("%d hours", int(f.Age/time.Hour))
-	case f.Age >= 2*time.Minute:
-		return fmt.Sprintf("%d minutes", int(f.Age/time.Minute))
-	default:
-		return "under a minute"
 	}
+	return humanizeCoarseDuration(f.Age)
 }
 
 // inventoryLines renders the both-sides issue-id partition as its own labeled

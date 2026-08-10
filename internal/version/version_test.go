@@ -2,6 +2,7 @@ package version
 
 import (
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
@@ -85,5 +86,56 @@ func TestInfoFieldsRoundTripFromLinkTimeVariables(t *testing.T) {
 	}
 	if info.Date != Date {
 		t.Errorf("Date round-trip: got %q, set %q", info.Date, Date)
+	}
+}
+
+// TestBuildAgeComputesFromStampedDate pins the contract `lit version` relies
+// on to report "built X ago": a well-formed RFC3339 Date yields the exact
+// elapsed duration against the now passed in, not against the wall clock —
+// BuildAge takes now as a parameter precisely so this is testable without
+// waiting or mocking time.Now().
+func TestBuildAgeComputesFromStampedDate(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	info := Info{Date: "2026-08-02T12:00:00Z"}
+
+	age, ok := info.BuildAge(now)
+	if !ok {
+		t.Fatal("BuildAge ok = false, want true for a well-formed past Date")
+	}
+	if want := 7 * 24 * time.Hour; age != want {
+		t.Errorf("BuildAge = %v, want %v", age, want)
+	}
+}
+
+// TestBuildAgeRejectsUnstampedOrUnparseableDate pins the "never fabricate an
+// age" guard: an empty Date (an unstamped build — e.g. plain `go build` with
+// no ldflags before this ticket) and a malformed Date both report ok=false,
+// so callers never render a bogus "built X ago" for a binary that never
+// recorded a trustworthy timestamp.
+func TestBuildAgeRejectsUnstampedOrUnparseableDate(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	for name, date := range map[string]string{
+		"empty":     "",
+		"malformed": "not-a-timestamp",
+	} {
+		t.Run(name, func(t *testing.T) {
+			info := Info{Date: date}
+			if _, ok := info.BuildAge(now); ok {
+				t.Errorf("BuildAge ok = true for Date %q, want false", date)
+			}
+		})
+	}
+}
+
+// TestBuildAgeRejectsFutureDate pins the clock-skew guard: a Date after now
+// (a stamp from a machine with a fast clock, or a corrupted link-time value)
+// must not report a negative "age" — ok=false rather than a misleading
+// duration.
+func TestBuildAgeRejectsFutureDate(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	info := Info{Date: "2026-08-10T12:00:00Z"}
+
+	if _, ok := info.BuildAge(now); ok {
+		t.Error("BuildAge ok = true for a future Date, want false")
 	}
 }
