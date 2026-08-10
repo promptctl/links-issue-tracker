@@ -37,8 +37,9 @@ const (
 	// base for a three-way merge and the field-aware reconcile cannot combine them.
 	// Like a schema-ahead block and unlike an ordinary divergence, this never clears
 	// by retrying — only a deliberate choice resolves it: take one side's backlog
-	// wholesale or union the two. Remedy: escalate the choice (the wholesale/union
-	// resolution surface is not yet built).
+	// wholesale or union the two. Remedy: `lit sync reconcile combine` (union both)
+	// or `lit sync reconcile take <local|remote>` (adopt one side wholesale) — see
+	// resolutionSteps below for the full, current command list.
 	syncFailureUnrelatedHistories syncFailureClass = "unrelated_histories"
 )
 
