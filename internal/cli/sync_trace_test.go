@@ -241,11 +241,16 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 		t.Errorf("interactive push record reason = %q, want empty (not the automation-only canned reason)", pushRecord.Reason)
 	}
 	// reconcile's Reason should be populated even on a plain "ok" decision —
-	// matching reconcileReasonForState, the one source of truth every
-	// reportReconcileResult branch already uses.
+	// via reconcileCommandReasonForState, not reconcileReasonForState: this
+	// record comes from an explicit `lit sync reconcile`, and
+	// reconcileReasonForState's phrasing ("automatic reconcile...") belongs to
+	// the inline auto-reconcile path alone, never this one.
 	reconcileRecord := records[3]
-	if reconcileRecord.Reason != reconcileReasonForState(store.SyncReconcileNotDiverged) {
-		t.Errorf("reconcile record reason = %q, want %q", reconcileRecord.Reason, reconcileReasonForState(store.SyncReconcileNotDiverged))
+	if reconcileRecord.Reason != reconcileCommandReasonForState(store.SyncReconcileNotDiverged) {
+		t.Errorf("reconcile record reason = %q, want %q", reconcileRecord.Reason, reconcileCommandReasonForState(store.SyncReconcileNotDiverged))
+	}
+	if strings.Contains(reconcileRecord.Reason, "automatic reconcile") {
+		t.Errorf("explicit `lit sync reconcile`'s trace reason falsely attributes itself to automation: %q", reconcileRecord.Reason)
 	}
 	// Every command that resolved a sync branch must spell the metadata key the
 	// same way — "sync_branch" — so a reader filtering traces/sync/ by that key

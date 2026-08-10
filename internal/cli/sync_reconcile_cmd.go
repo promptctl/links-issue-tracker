@@ -258,6 +258,29 @@ func takeReasonForState(state store.SyncReconcileState) string {
 	}
 }
 
+// reconcileCommandReasonForState is reconcileReasonForState's counterpart for
+// reportReconcileResult, the one output path for the three explicit,
+// user-initiated reconcile commands (`lit sync reconcile`, `resolve`,
+// `combine`) — never the inline auto-reconcile reconcileReasonForState was
+// written for. Reusing that mapping here would attribute an explicit command
+// to automation (e.g. a `lit sync reconcile combine` trace reading "automatic
+// reconcile completed with state combined"), the same misattribution
+// takeReasonForState already exists to avoid for `take`. [LAW:one-source-of-truth]
+func reconcileCommandReasonForState(state store.SyncReconcileState) string {
+	switch state {
+	case store.SyncReconcileLinearized:
+		return "reconciled: the divergence merged into linear history"
+	case store.SyncReconcileProsePending:
+		return "every field resolved but free-text diverged on both sides; held for inline merge"
+	case store.SyncReconcileCombined:
+		return "combined: unioned both backlogs into one forward commit"
+	case store.SyncReconcileNotDiverged:
+		return "the clone is not diverged from the remote; nothing to reconcile"
+	default:
+		return "reconcile completed with state " + string(state)
+	}
+}
+
 // reportTakeOutcome renders a take-one resolution. Each successful take names the
 // discarded side's unique issues from the both-sides inventory, so the operator sees
 // exactly what was dropped — the discard is reported, never silent. A not-diverged
@@ -366,7 +389,7 @@ func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, 
 			Command:   command,
 			Decision:  string(result.State),
 			Status:    "ok",
-			Reason:    reconcileReasonForState(result.State),
+			Reason:    reconcileCommandReasonForState(result.State),
 			BuildNote: buildNote,
 			Metadata:  metadata,
 		})
@@ -428,14 +451,18 @@ func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, 
 // by every reconcile outcome that completed and settled on a definite state
 // (as opposed to SyncReconcileUnrelated, which is agent-actionable and routes
 // through recordSyncHeldTrace with the fuller SyncFailure context instead).
-// [LAW:one-source-of-truth] [LAW:composability] one call site for the four
-// switch branches that only differ in which state they name.
+// Every caller of reportReconcileResult (this function's only caller) is an
+// explicit, user-initiated command, so its Reason comes from
+// reconcileCommandReasonForState, not reconcileReasonForState — the latter's
+// "automatic reconcile..." phrasing belongs to the inline auto-reconcile path
+// alone. [LAW:one-source-of-truth] [LAW:composability] one call site for the
+// four switch branches that only differ in which state they name.
 func recordReconcileDecisionTrace(ws workspace.Info, command string, state store.SyncReconcileState, metadata map[string]string) {
 	recordSyncTraceLogged(ws, syncTraceRecord{
 		Command:   command,
 		Decision:  string(state),
 		Status:    "ok",
-		Reason:    reconcileReasonForState(state),
+		Reason:    reconcileCommandReasonForState(state),
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
 	})
