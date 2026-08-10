@@ -103,9 +103,13 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		}
 	}
 
-	// Resolved once, here at the boundary, and threaded through as a value so
-	// writeInitHumanOutput/writeInitSyncLine stay pure renderers over an
-	// already-known build status. [LAW:effects-at-boundaries]
+	// Resolved for the human output, here at the boundary, and threaded through
+	// as a value so writeInitHumanOutput/writeInitSyncLine stay pure renderers
+	// over an already-known build status. This is a separate resolution from
+	// the one adoptRemoteTicketsBlocking makes for the progress-line
+	// announcement — that one covers the "start fresh" decision on the
+	// progress channel, this one covers the adopted/failed line here.
+	// [LAW:effects-at-boundaries]
 	buildNote := resolveBuildStatusNote(time.Now())
 	return writeInitHumanOutput(stdout, report, buildNote)
 }

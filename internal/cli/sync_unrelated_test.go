@@ -180,6 +180,9 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	if !strings.Contains(err.Error(), "no common history") {
 		t.Fatalf("contract does not name unrelated histories:\n%s", err.Error())
 	}
+	if failure.Failure.BuildNote == "" {
+		t.Fatal("reportReconcileResult did not resolve BuildNote")
+	}
 }
 
 // TestReportTakeOutcomeReportsDiscard proves the take-one surface names the discarded

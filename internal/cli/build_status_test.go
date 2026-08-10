@@ -47,6 +47,19 @@ func TestBuildStatusNoteDevBuildStale(t *testing.T) {
 	}
 }
 
+// TestBuildStatusNoteDevBuildAtExactThreshold pins the boundary: buildStatusNote
+// compares age with >=, so an age exactly equal to version.StaleBuildThreshold
+// must already read STALE, not "one tick short." A future change that silently
+// swaps >= for > would flip this case and this test would catch it.
+func TestBuildStatusNoteDevBuildAtExactThreshold(t *testing.T) {
+	now := time.Date(2026, 8, 9, 12, 0, 0, 0, time.UTC)
+	info := version.Info{IsDev: true, Date: now.Add(-version.StaleBuildThreshold).Format(time.RFC3339)}
+	got := buildStatusNote(info, now)
+	if !strings.Contains(got, "STALE") {
+		t.Fatalf("buildStatusNote() = %q, want STALE at age == StaleBuildThreshold exactly", got)
+	}
+}
+
 // TestBuildStatusNoteDevBuildNoDate pins the no-fabrication guard: a dev build
 // with no stamped Date (the pre-ldflags `go build`) states the date is
 // unknown rather than rendering a fabricated age.

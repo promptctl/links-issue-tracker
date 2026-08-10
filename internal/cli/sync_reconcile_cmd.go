@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -274,6 +275,7 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 			Ahead:     result.Ahead,
 			Behind:    result.Behind,
 			Inventory: result.Unrelated,
+			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 	case store.SyncReconcileProsePending:
 		if resolved {
