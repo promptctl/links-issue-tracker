@@ -77,8 +77,9 @@ mechanism. No new command.
 ### Phase 2 — process liveness (deferred)
 
 Orphan detection still runs on the `UpdatedAt` staleness heuristic from
-Phase 1; the ground-truth check would be "is session `<sessionId>`
-actually running right now?" That requires an external probe:
+the current implementation; the ground-truth check would be "is session
+`<sessionId>` actually running right now?" That requires an external
+probe:
 
 - A Claude Code "list active sessions" API or local socket
 - A sentinel file written by the session, cleaned up on exit
