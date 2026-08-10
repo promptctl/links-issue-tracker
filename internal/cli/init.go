@@ -45,24 +45,30 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 	recordInitSyncTrace(ws, syncOutcome, time.Now())
 
 	// A failed adopt is a genuinely uncertain result — lit could not confirm
-	// whether the remote already carries a backlog — never a confirmed-empty
-	// one like the outcomes below. Falling through to create a fresh store here
-	// would risk silently stranding whatever backlog the remote actually holds
-	// behind a credentials/network/URL problem lit merely failed to diagnose.
-	// So init hard-stops before any store exists, surfacing the real underlying
-	// failure (already carried in syncOutcome.Error) with no flag or prompt to
-	// proceed past it — the caller re-runs `lit init` once the cause is fixed.
+	// whether it is safe to start fresh, whether because reading the local
+	// store or resolving/probing the remote itself errored — never a
+	// confirmed-empty one like the outcomes below. Falling through to create a
+	// fresh store here would risk silently stranding whatever backlog the
+	// remote (or the unreadable local store) actually holds behind a problem
+	// lit merely failed to diagnose. So init hard-stops before any store
+	// exists, surfacing the real underlying failure (already carried in
+	// syncOutcome.Error) with no flag or prompt to proceed past it — the
+	// caller re-runs `lit init` once the cause is fixed.
 	// [LAW:no-silent-failure] [LAW:dataflow-not-control-flow] one sealed
 	// discriminant decides both branches; no second "is this bad" check drifts
 	// from the one adoptRemoteTicketsOnInit already made.
 	if syncOutcome.State == initSyncFailed {
-		// buildNote rides along here too, same as the adopted/failure lines this
-		// replaces: a stale local binary silently missing a landed fix was the
-		// suspected root cause of the field incident this epic exists to prevent,
-		// so a failure names it without a second `lit version` round trip.
-		// [LAW:effects-at-boundaries]
+		// The wrapper stays deliberately generic — "confirm the workspace
+		// state" rather than "confirm the remote" — because initSyncFailed also
+		// covers a local store read failing (store.LocalHasTickets erroring),
+		// which has nothing to do with the remote; syncOutcome.Error carries
+		// the specific cause either way. buildNote rides along too, same as the
+		// adopted/failure lines this replaces: a stale local binary silently
+		// missing a landed fix was the suspected root cause of the field
+		// incident this epic exists to prevent, so a failure names it without a
+		// second `lit version` round trip. [LAW:effects-at-boundaries]
 		return fmt.Errorf(
-			"could not determine whether the remote already carries a lit backlog, so init is refusing to create a fresh store: %s (%s)",
+			"could not confirm the workspace state, so init is refusing to create a fresh store: %s (%s)",
 			syncOutcome.Error, resolveBuildStatusNote(time.Now()),
 		)
 	}

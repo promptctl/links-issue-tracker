@@ -42,9 +42,10 @@ const (
 	// initSyncAdopted: the existing backlog was pulled into the fresh store.
 	initSyncAdopted initSyncState = "adopted"
 	// initSyncFailed: adopt was attempted but errored on a genuinely uncertain
-	// result — lit could not confirm the remote is empty, so it must not guess.
-	// The caller refuses to create a store and surfaces the error — never
-	// swallowed, never proceeded past. [LAW:no-silent-failure]
+	// result — reading the local store or resolving/probing the remote itself
+	// failed, so lit could not confirm it is safe to start fresh and must not
+	// guess. The caller refuses to create a store and surfaces the error —
+	// never swallowed, never proceeded past. [LAW:no-silent-failure]
 	initSyncFailed initSyncState = "failed"
 )
 
@@ -71,11 +72,12 @@ type initSyncOutcome struct {
 // — a freshly-initialized store's bootstrap root is unrelated to the remote, so
 // a merge fails with "no common ancestor"; adopt resets to the remote head.
 //
-// A failure to reach or read the remote (or, distinctly, to clone confirmed
-// remote data) is a genuinely uncertain result, not a confirmed-empty one —
-// it is surfaced loudly in the outcome AND refuses the rest of init: the
-// caller (runInit) hard-stops on initSyncFailed before creating any store,
-// rather than guessing "empty" on a result it could not actually confirm.
+// A failure at any step of that decision — reading the local store, reaching
+// or probing the remote, or, distinctly, cloning confirmed remote data — is a
+// genuinely uncertain result, not a confirmed-empty one: it is surfaced
+// loudly in the outcome AND refuses the rest of init. The caller (runInit)
+// hard-stops on initSyncFailed before creating any store, rather than
+// guessing "empty" on a result it could not actually confirm.
 // [LAW:no-silent-failure]
 // adoptRemoteTicketsBlockingFn is the adopt body, indirected through a var so a
 // test can substitute a controllable stand-in and exercise the hard-stop
