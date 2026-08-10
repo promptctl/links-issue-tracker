@@ -234,6 +234,23 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		traceReason,
 		traceMetadata,
 	)
+	// The durable, unconditional counterpart: an inline receive commonly runs
+	// with no LNKS_AUTOMATION_TRIGGER set (maybeAutoSyncAfterCommand does not
+	// set one), so without this call every ordinary interactive command's
+	// automatic receive would leave no trace at all — the exact gap that let
+	// the field incident this epic exists to prevent go unnoticed for ten days.
+	receiveDecision := string(result.State)
+	if receiveErr != nil {
+		receiveDecision = "error"
+	}
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   "lit sync receive",
+		Decision:  receiveDecision,
+		Status:    traceStatus,
+		Reason:    traceReason,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+		Metadata:  traceMetadata,
+	})
 	outcome := syncReceiveOutcome{
 		status:             "ok",
 		remote:             remoteName,
@@ -286,6 +303,23 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 	); traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic reconcile trace not recorded: %v\n", traceErr)
 	}
+	// The durable, unconditional counterpart — same reasoning as performSyncReceive's:
+	// this reconcile is reached from an inline receive that commonly runs with no
+	// automation trigger set, so without this call it would otherwise leave no
+	// durable record of the exact decision (linearized / prose-pending / unrelated)
+	// that the field incident's silent divergence turned on.
+	reconcileDecision := string(result.State)
+	if reconcileErr != nil {
+		reconcileDecision = "error"
+	}
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   "lit sync reconcile",
+		Decision:  reconcileDecision,
+		Status:    traceStatus,
+		Reason:    traceReason,
+		BuildNote: resolveBuildStatusNote(time.Now()),
+		Metadata:  traceMetadata,
+	})
 	// The trace above records the attempt out-of-band; the caller (receiveInline)
 	// surfaces a non-converging reconcile — hard failure OR held free-text — to
 	// stderr through the one sync-failure contract, so both classes read as the
@@ -350,4 +384,7 @@ func recordReceiveError(ws workspace.Info, cause error) {
 			"lit: automatic receive could not record failure trace (%v); original error: %v\n",
 			traceErr, cause)
 	}
+	// recordSyncCommandTrace already sets Reason from cause; no metadata needed
+	// to carry the same string a second time.
+	recordSyncCommandTrace(ws, "lit sync receive", "error", cause, nil)
 }

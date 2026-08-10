@@ -300,3 +300,37 @@ func remoteSuffix(remote string) string {
 	}
 	return " from " + remote
 }
+
+// recordInitSyncTrace writes the durable, unconditional trace record for
+// init's remote-adopt decision. It is the only place this outcome is
+// persisted: writeInitSyncLine and remoteSituationLine only render it into the
+// human-facing report/progress output, which nothing reads back after the
+// process exits — the exact gap that let the field incident this epic exists
+// to prevent go unnoticed for ten days. Every state reaches here, not only
+// the two writeInitSyncLine prints, so a benign "started fresh" decision is
+// as durably recorded as an adopt or a failure. [LAW:no-silent-failure]
+// A trace-write failure is reported to stderr, not fatal — init already
+// succeeded at initializing the workspace by the time this runs.
+// [LAW:effects-at-boundaries]
+func recordInitSyncTrace(ws workspace.Info, outcome initSyncOutcome, now time.Time) {
+	status := "ok"
+	if outcome.State == initSyncFailed {
+		status = "error"
+	}
+	// [LAW:one-source-of-truth] "sync_branch" matches the key every other sync
+	// trace call site (fetch/pull/push/receive/reconcile) uses for this same
+	// concept, so a reader filtering traces/sync/ by metadata.sync_branch sees
+	// every command's records, not all but init's.
+	metadata := map[string]string{
+		"remote":      outcome.Remote,
+		"sync_branch": outcome.Branch,
+	}
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   "lit init",
+		Decision:  string(outcome.State),
+		Status:    status,
+		Reason:    outcome.Error,
+		BuildNote: resolveBuildStatusNote(now),
+		Metadata:  metadata,
+	})
+}
