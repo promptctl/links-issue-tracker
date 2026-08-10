@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -291,5 +292,150 @@ func TestReconcileAbortLeavesDurableTraceInteractively(t *testing.T) {
 	}
 	if rec.Status != "ok" {
 		t.Fatalf("status = %q, want ok", rec.Status)
+	}
+}
+
+// TestReconcileTakeAndCombineLeaveDurableTracesInteractively is the trace
+// counterpart to sync_unrelated_e2e_test.go's TestReconcileCombineUnionsUnrelatedHistories:
+// `lit sync reconcile take` and `lit sync reconcile combine` are the two
+// resolution commands new alongside this ticket's tracing work, and — unlike
+// TestExplicitSyncCommandsLeaveDurableTracesInteractively's plain "sync
+// reconcile" on a non-diverged clone — only fire their TookRemote/TookLocal/
+// Combined trace branches against a real unrelated-histories divergence, so
+// this drives the same disjoint-init fixture those e2e tests already use and
+// inspects the actual trace files on disk (not just stdout/exit code, which
+// sync_unrelated_test.go's direct reportTakeOutcome/reportReconcileResult
+// calls already cover).
+func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
+	t.Setenv(DisableAutoSyncEnvVar, "1")
+
+	newDisjointConsumer := func(t *testing.T) (consumer string, ws workspace.Info) {
+		t.Helper()
+		base := t.TempDir()
+		runGit(t, base, "init", "--bare", "remote.git")
+		remote := filepath.Join(base, "remote.git")
+
+		producer := filepath.Join(base, "alpha")
+		runGit(t, base, "clone", remote, "alpha")
+		runGit(t, producer, "config", "user.email", "a@a.co")
+		runGit(t, producer, "config", "user.name", "alpha")
+		if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+			t.Fatalf("write readme error = %v", err)
+		}
+		runGit(t, producer, "add", "-A")
+		runGit(t, producer, "commit", "-m", "seed")
+		runGit(t, producer, "push", "origin", "HEAD")
+		runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+		runCLIInDir(t, producer, "new", "--title", "producer-ticket", "--topic", "demo", "--type", "task")
+
+		consumer = filepath.Join(base, "bravo")
+		runGit(t, base, "clone", remote, "bravo")
+		runGit(t, consumer, "config", "user.email", "b@b.co")
+		runGit(t, consumer, "config", "user.name", "bravo")
+		runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+		runCLIInDir(t, consumer, "new", "--title", "consumer-ticket", "--topic", "demo", "--type", "task")
+
+		// Producer publishes last, so the consumer's independently-inited
+		// history and the producer's are disjoint by the time consumer reconciles.
+		runCLIInDir(t, producer, "sync", "push", "--set-upstream")
+
+		resolvedWs, err := workspace.Resolve(consumer)
+		if err != nil {
+			t.Fatalf("workspace.Resolve() error = %v", err)
+		}
+		return consumer, resolvedWs
+	}
+
+	t.Run("take remote", func(t *testing.T) {
+		consumer, ws := newDisjointConsumer(t)
+		before := len(readSyncTraceRecords(t, ws))
+
+		out, err := runCLIInDirErr(t, consumer, "sync", "reconcile", "take", "remote")
+		if err != nil {
+			t.Fatalf("`sync reconcile take remote` errored: %v\n%s", err, out)
+		}
+
+		records := readSyncTraceRecords(t, ws)[before:]
+		if len(records) != 1 {
+			t.Fatalf("sync trace records after `sync reconcile take remote` = %d, want exactly 1: %+v", len(records), records)
+		}
+		rec := records[0]
+		if rec.Command != "lit sync reconcile take remote" {
+			t.Fatalf("command = %q, want %q", rec.Command, "lit sync reconcile take remote")
+		}
+		if rec.Decision != string(store.SyncReconcileTookRemote) {
+			t.Fatalf("decision = %q, want %q", rec.Decision, store.SyncReconcileTookRemote)
+		}
+		if rec.Trigger != "" {
+			t.Fatalf("trigger = %q, want empty — run directly, not under automation", rec.Trigger)
+		}
+		if rec.Status != "ok" {
+			t.Fatalf("status = %q, want ok: %+v", rec.Status, rec)
+		}
+	})
+
+	t.Run("combine", func(t *testing.T) {
+		consumer, ws := newDisjointConsumer(t)
+		before := len(readSyncTraceRecords(t, ws))
+
+		out, err := runCLIInDirErr(t, consumer, "sync", "reconcile", "combine")
+		if err != nil {
+			t.Fatalf("`sync reconcile combine` errored: %v\n%s", err, out)
+		}
+
+		records := readSyncTraceRecords(t, ws)[before:]
+		if len(records) != 1 {
+			t.Fatalf("sync trace records after `sync reconcile combine` = %d, want exactly 1: %+v", len(records), records)
+		}
+		rec := records[0]
+		if rec.Command != reconcileCombineCommand {
+			t.Fatalf("command = %q, want %q", rec.Command, reconcileCombineCommand)
+		}
+		if rec.Decision != string(store.SyncReconcileCombined) {
+			t.Fatalf("decision = %q, want %q", rec.Decision, store.SyncReconcileCombined)
+		}
+		if rec.Trigger != "" {
+			t.Fatalf("trigger = %q, want empty — run directly, not under automation", rec.Trigger)
+		}
+		if rec.Status != "ok" {
+			t.Fatalf("status = %q, want ok: %+v", rec.Status, rec)
+		}
+	})
+}
+
+// TestRecordSyncCommandTraceErrorPath is the direct unit-test counterpart to
+// the end-to-end coverage above: every recordSyncCommandTrace call site across
+// this package relies on its error-path translation (a non-nil err always
+// forces decision/status to "error" and Reason to err.Error(), regardless of
+// the caller-supplied decision label), so that translation gets its own
+// focused test rather than only being exercised incidentally through
+// happy-path e2e runs.
+func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+
+	cause := fmt.Errorf("simulated backend failure")
+	recordSyncCommandTrace(ws, "lit sync fetch", "fetched", cause, map[string]string{"remote": "origin"})
+
+	records := readSyncTraceRecords(t, ws)
+	if len(records) != 1 {
+		t.Fatalf("sync trace records = %d, want exactly 1: %+v", len(records), records)
+	}
+	rec := records[0]
+	if rec.Decision != "error" {
+		t.Fatalf("decision = %q, want %q — the caller-supplied \"fetched\" must not survive a non-nil err", rec.Decision, "error")
+	}
+	if rec.Status != "error" {
+		t.Fatalf("status = %q, want error", rec.Status)
+	}
+	if rec.Reason != cause.Error() {
+		t.Fatalf("reason = %q, want %q", rec.Reason, cause.Error())
+	}
+	if rec.Metadata["remote"] != "origin" {
+		t.Fatalf("metadata[remote] = %q, want origin — the caller's metadata must still pass through on the error path", rec.Metadata["remote"])
 	}
 }
