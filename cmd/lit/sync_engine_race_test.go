@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // TestBurstOfMutationsNeverHitsEngineReadOnlyCollision is the acceptance pin
@@ -89,6 +90,14 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
 
+	// Independent oracle, same technique as
+	// TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush: a plain
+	// `dolt clone` of the bare remote, touched by nothing else in this test.
+	ref := "remotes/origin/" + branch
+	oracleDir := filepath.Join(base, "oracle-clone")
+	runDolt(t, base, "clone", "file://"+remoteGit, oracleDir)
+	baseline := doltRefCommitCount(t, oracleDir, ref)
+
 	// No config.toml: this run exercises the shipped default (on-change), the
 	// same way a fresh agent workspace does — and, unlike the bootstrap calls
 	// above, does NOT set disableAutoSyncEnvVar, so every mutation below
@@ -107,5 +116,35 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		if strings.Contains(lower, "online garbage collection") && strings.Contains(lower, "reconnect") {
 			t.Fatalf("lit new #%d hit an online-GC reconnect collision:\noutput:\n%s", i, out)
 		}
+	}
+
+	// Settle before returning: every mutation above spawns its own detached
+	// on-change mirror subprocess (or shares one via the mirror-spawn
+	// debounce), and none of them are guaranteed to have finished pushing —
+	// let alone fully exited — the instant the LAST `lit new` above returns.
+	// Returning without waiting for that real, in-flight background work to
+	// land would leave a lingering subprocess racing this test's own
+	// t.TempDir() cleanup (observed directly: an "unlinkat ...: directory not
+	// empty" cleanup failure from a still-open file handle) and, worse,
+	// racing the NEXT test in this package for CPU/disk — exactly the kind of
+	// cross-test resource contention that made this test itself flaky in a
+	// full-package run. Polling this same independent oracle used above until
+	// it observes every commit is both a stronger assertion (the burst's data
+	// actually reached the remote, not just "no error printed") and the wait
+	// that lets the last mirror actually finish and exit before this test
+	// hands the machine back. [LAW:no-ambient-temporal-coupling]
+	const settleTimeout = 30 * time.Second
+	const settlePollInterval = 300 * time.Millisecond
+	deadline := time.Now().Add(settleTimeout)
+	for {
+		if _, err := tryDolt(oracleDir, "fetch", "origin"); err == nil {
+			if doltRefCommitCount(t, oracleDir, ref) >= baseline+burstSize {
+				return
+			}
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning", burstSize, settleTimeout)
+		}
+		time.Sleep(settlePollInterval)
 	}
 }
