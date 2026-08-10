@@ -11,30 +11,48 @@ import (
 	"time"
 )
 
-// TestWorkspaceLockSharedHoldersCoexist pins the contract that multiple Stores
-// open against the same workspace each take their own shared (LOCK_SH) hold and
-// none of them block another. Without this invariant, two concurrent readers
-// (e.g. agent A running lit ls while agent B runs lit show) would serialize on
-// startup or, worse, the second would error with workspace-busy.
+// TestWorkspaceLockSharedHoldersCoexist pins the contract that multiple
+// read-only Stores open against the same workspace each take their own shared
+// (LOCK_SH) hold and none of them block another. Without this invariant, two
+// concurrent readers (e.g. agent A running lit ls while agent B runs lit
+// show) would serialize on startup or, worse, the second would error with
+// workspace-busy.
+//
+// This exercises OpenForRead specifically, not Open: read-write opens do NOT
+// share this coexistence contract — links-sync-pgct.11's engine-write lock
+// deliberately makes two concurrent Open (or OpenSync) calls on the same path
+// serialize instead, since embedded Dolt permits only one read-write engine
+// per path. See TestEngineWriteLockSerializesConcurrentOpen and
+// TestEngineWriteLockSerializesOpenAgainstOpenSync in engine_lock_test.go for
+// that companion (deliberately opposite) contract.
 func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
-	first, err := Open(ctx, doltRoot, "test-workspace-id")
+	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
-		t.Fatalf("first Open() error = %v", err)
+		t.Fatalf("bootstrap Open() error = %v", err)
+	}
+	if err := bootstrap.Close(); err != nil {
+		t.Fatalf("bootstrap Close() error = %v", err)
+	}
+
+	first, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("first OpenForRead() error = %v", err)
 	}
 	defer first.Close()
 
-	// Second Open against the same workspace must succeed without waiting on
-	// the first's shared hold to release. Pass a context with the same
-	// 10s deadline into Open so the goroutine cannot outlive the test —
-	// without this, a hanging Open would leak a goroutine after t.Fatal.
+	// Second OpenForRead against the same workspace must succeed without
+	// waiting on the first's shared hold to release. Pass a context with the
+	// same 10s deadline into OpenForRead so the goroutine cannot outlive the
+	// test — without this, a hanging OpenForRead would leak a goroutine
+	// after t.Fatal.
 	openCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
 	go func() {
-		s, err := Open(openCtx, doltRoot, "test-workspace-id")
+		s, err := OpenForRead(openCtx, doltRoot, "test-workspace-id")
 		if err != nil {
 			done <- err
 			return
@@ -45,10 +63,10 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	select {
 	case err := <-done:
 		if err != nil {
-			t.Fatalf("second Open() error = %v", err)
+			t.Fatalf("second OpenForRead() error = %v", err)
 		}
 	case <-openCtx.Done():
-		t.Fatal("second Open() did not complete within 10s — shared holds must coexist")
+		t.Fatal("second OpenForRead() did not complete within 10s — shared holds must coexist")
 	}
 }
 

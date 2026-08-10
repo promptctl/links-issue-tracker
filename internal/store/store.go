@@ -35,6 +35,7 @@ type Store struct {
 	commitLockPath       string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
+	releaseEngineLock    func() error
 
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
@@ -227,6 +228,24 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 			err = errors.Join(err, relErr)
 		}
 	}()
+	// [LAW:single-enforcer] The engine-write lock is acquired before
+	// EnsureDatabase/openStoreConnection so no read-write embedded Dolt
+	// engine is opened by this process while another process's is still
+	// live on the same path — the invariant embedded Dolt itself enforces
+	// with a hard failure ("database is read only") the moment two try to
+	// coexist. Waiting here converts that hard failure into a bounded wait.
+	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := engineRelease(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
@@ -235,12 +254,14 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	s.releaseEngineLock = engineRelease
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	if err = s.withCommitLock(ctx, s.migrate); err != nil {
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil
+		s.releaseEngineLock = nil
 		return nil, err
 	}
 	success = true
@@ -345,12 +366,22 @@ func (s *Store) Close() error {
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	// [LAW:dataflow-not-control-flow] Workspace lock release runs on every
-	// Close, regardless of whether the DB closed cleanly — the shared hold
-	// must end with the Store's lifetime so a subsequent restore is not
-	// pinned by a dead Store. errors.Join keeps both failures observable
-	// when db.Close and release both fail; a leaked workspace lock would
-	// silently block every future restore with workspace-busy.
+	// [LAW:dataflow-not-control-flow] The engine lock releases first (it was
+	// acquired last, after the workspace lock — see Open/OpenSync), then the
+	// workspace lock, on every Close regardless of whether the DB closed
+	// cleanly: the next opener anywhere (this process's next command, or a
+	// waiting mirror/foreground command in another process) must see this
+	// path free the instant the store's lifetime ends. errors.Join keeps
+	// every failure observable when db.Close and a release both fail; a
+	// leaked engine lock would strand every future opener on this path
+	// exactly like a leaked workspace lock strands restores.
+	if s.releaseEngineLock != nil {
+		release := s.releaseEngineLock
+		s.releaseEngineLock = nil
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}
 	if s.releaseWorkspaceLock != nil {
 		release := s.releaseWorkspaceLock
 		s.releaseWorkspaceLock = nil

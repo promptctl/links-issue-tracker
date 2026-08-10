@@ -171,7 +171,6 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
-	defer syncB.Close()
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch: %v", err)
 	}
@@ -179,6 +178,14 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("SyncPush onto ahead remote = %v, want *RemoteSchemaAheadError", err)
+	}
+	// Close before touching rootC below: rootB and rootC are test-fixture
+	// sibling directories under the same t.TempDir() parent (unlike a real
+	// workspace's uniquely-parented storage dir), so they share the
+	// engine-write lock's sibling-of-doltRootDir path (links-sync-pgct.11).
+	// syncB is done with its work; hold nothing open past this point.
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("syncB.Close(): %v", err)
 	}
 
 	// Property: zero commits reached the remote. A fresh clone still sees the seed

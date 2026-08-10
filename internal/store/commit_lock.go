@@ -53,8 +53,8 @@ type connectionRotator func() error
 type commitLockContextKey struct{}
 
 // withMutation runs a mutation under a held commit lock. It begins a tx,
-// invokes fn, commits the tx, and runs the working-set commit via
-// commitWorkingSet (re-entrant: the lock is already held, so acquireCommitLock
+// invokes fn, commits the tx, and runs the working-set commit — all as ONE
+// retried unit (re-entrant: the lock is already held, so acquireCommitLock
 // short-circuits). The lock is acquired and released exactly once.
 //
 // [LAW:dataflow-not-control-flow] Every mutation runs the same sequence;
@@ -62,20 +62,35 @@ type commitLockContextKey struct{}
 // [LAW:single-enforcer] Lock acquisition, tx lifecycle, and transient-retry
 // are all owned at their respective single boundaries; withMutation composes
 // them rather than duplicating any of them.
+//
+// The whole BeginTx→fn→tx.Commit→commitWorkingSetOnce sequence is inside
+// retryTransientGCContention, not just the final DOLT_COMMIT step
+// (links-sync-pgct.11): tx.Commit() — the plain SQL transaction commit that
+// lands fn's writes into Dolt's working set, distinct from the later DOLT_COMMIT
+// that versions them — touches the same manifest and is just as exposed to a
+// still-settling handoff from another process's read-write engine (see the
+// engine-write lock in workspace_lock.go, which bounds how long two engines can
+// be concurrently OPEN but not the brief settle window immediately after one
+// closes). Retrying the whole unit is safe: fn only ever writes through the tx
+// parameter it's given, so a fresh BeginTx + a full re-run of fn on a rotated
+// connection reproduces the same intended writes with nothing left over from
+// the failed attempt — defer tx.Rollback() discards it before the retry begins.
 func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin %s tx: %w", message, err)
-		}
-		defer tx.Rollback()
-		if err := fn(ctx, tx); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit %s tx: %w", message, err)
-		}
-		return s.commitWorkingSet(ctx, message)
+		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+			tx, err := s.db.BeginTx(ctx, nil)
+			if err != nil {
+				return fmt.Errorf("begin %s tx: %w", message, err)
+			}
+			defer tx.Rollback()
+			if err := fn(ctx, tx); err != nil {
+				return err
+			}
+			if err := tx.Commit(); err != nil {
+				return fmt.Errorf("commit %s tx: %w", message, err)
+			}
+			return s.commitWorkingSetOnce(ctx, message)
+		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
 
