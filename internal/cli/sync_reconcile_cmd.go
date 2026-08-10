@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
@@ -274,6 +275,7 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 			Ahead:     result.Ahead,
 			Behind:    result.Behind,
 			Inventory: result.Unrelated,
+			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 	case store.SyncReconcileProsePending:
 		if resolved {
@@ -281,7 +283,7 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 				return err
 			}
 		}
-		if err := renderProsePendingGuidance(stdout, result.Pending); err != nil {
+		if err := renderProsePendingGuidance(stdout, result.Pending, resolveBuildStatusNote(time.Now())); err != nil {
 			return err
 		}
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
