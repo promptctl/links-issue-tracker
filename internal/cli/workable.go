@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
@@ -168,6 +169,12 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	}
 	issueTypeValue, err := parseWorkableType(*issueType)
 	if err != nil {
+		return err
+	}
+	// Backlog and next are exactly the "ordinary read command" surface
+	// links-sync-pgct.2 targets: printed first, so unpushed/unfetched drift is
+	// the first thing on screen rather than a diagnostic nobody runs.
+	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 		return err
 	}
 	knobs := workableKnobs{
