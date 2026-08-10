@@ -283,7 +283,7 @@ func reportReconcileResult(stdout io.Writer, remote, branch string, result store
 				return err
 			}
 		}
-		if err := renderProsePendingGuidance(stdout, result.Pending); err != nil {
+		if err := renderProsePendingGuidance(stdout, result.Pending, resolveBuildStatusNote(time.Now())); err != nil {
 			return err
 		}
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}

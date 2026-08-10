@@ -26,8 +26,11 @@ func buildStatusNote(info version.Info, now time.Time) string {
 		return "build: dev build (build date unknown)"
 	}
 	if age >= version.StaleBuildThreshold {
+		// "at least", not "older than": the guard is >=, so age can equal the
+		// threshold exactly, and "built 7 days ago — older than 7 days" would
+		// contradict itself at that exact boundary.
 		return fmt.Sprintf(
-			"build: dev build, built %s ago — STALE (older than %s; run `just build` to refresh)",
+			"build: dev build, built %s ago — STALE (at least %s old; run `just build` to refresh)",
 			humanizeCoarseDuration(age), humanizeCoarseDuration(version.StaleBuildThreshold),
 		)
 	}
