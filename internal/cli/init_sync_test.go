@@ -12,6 +12,12 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
+// testBuildNote is a fixed sentinel stood in for the real (clock-dependent)
+// resolveBuildStatusNote result, so these tests assert on the exact rendered
+// line without depending on the wall clock or the test binary's own
+// version.Info stamp.
+const testBuildNote = "build: TEST-SENTINEL"
+
 func TestWriteInitSyncLine(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -19,19 +25,19 @@ func TestWriteInitSyncLine(t *testing.T) {
 		want    string
 	}{
 		{
-			name:    "adopted names remote and branch",
+			name:    "adopted names remote, branch, and build status",
 			outcome: initSyncOutcome{State: initSyncAdopted, Remote: "origin", Branch: "master"},
-			want:    "  Pulled existing backlog from origin/master\n",
+			want:    "  Pulled existing backlog from origin/master (" + testBuildNote + ")\n",
 		},
 		{
-			name:    "failed surfaces the error loudly",
+			name:    "failed surfaces the error loudly, with build status",
 			outcome: initSyncOutcome{State: initSyncFailed, Remote: "origin", Error: "boom"},
-			want:    "  Warning: could not pull existing backlog from origin: boom\n",
+			want:    "  Warning: could not pull existing backlog from origin: boom (" + testBuildNote + ")\n",
 		},
 		{
 			name:    "failed without a resolved remote still surfaces",
 			outcome: initSyncOutcome{State: initSyncFailed, Error: "boom"},
-			want:    "  Warning: could not pull existing backlog: boom\n",
+			want:    "  Warning: could not pull existing backlog: boom (" + testBuildNote + ")\n",
 		},
 		{
 			name:    "has local tickets is silent",
@@ -57,7 +63,7 @@ func TestWriteInitSyncLine(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			var out bytes.Buffer
-			if err := writeInitSyncLine(&out, tc.outcome); err != nil {
+			if err := writeInitSyncLine(&out, tc.outcome, testBuildNote); err != nil {
 				t.Fatalf("writeInitSyncLine() error = %v", err)
 			}
 			if got := out.String(); got != tc.want {
@@ -86,6 +92,9 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		if !strings.Contains(progress.String(), "already holds tickets") {
 			t.Fatalf("progress missing the resolved-situation line:\n%s", progress.String())
 		}
+		if !strings.Contains(progress.String(), "build:") {
+			t.Fatalf("progress missing the dev-vs-release build status on this fresh decision:\n%s", progress.String())
+		}
 	})
 
 	t.Run("reports not_configured when no git remote exists", func(t *testing.T) {
@@ -101,6 +110,9 @@ func TestAdoptRemoteTicketsOnInitGates(t *testing.T) {
 		}
 		if !strings.Contains(progress.String(), "no eligible git remote") {
 			t.Fatalf("progress missing the resolved-situation line:\n%s", progress.String())
+		}
+		if !strings.Contains(progress.String(), "build:") {
+			t.Fatalf("progress missing the dev-vs-release build status on this fresh decision:\n%s", progress.String())
 		}
 	})
 }

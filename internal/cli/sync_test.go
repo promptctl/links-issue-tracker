@@ -92,6 +92,9 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 	if failure.Failure.Age != 3*time.Hour {
 		t.Fatalf("age = %v, want 3h (derived from OldestDivergedUnix)", failure.Failure.Age)
 	}
+	if failure.Failure.BuildNote == "" {
+		t.Fatal("syncFailureFromPull did not resolve BuildNote")
+	}
 	// Every non-held state stays a printable payload, not a contract error.
 	for _, state := range []store.SyncPullState{
 		store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized,

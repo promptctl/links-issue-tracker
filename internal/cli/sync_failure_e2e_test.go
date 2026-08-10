@@ -222,6 +222,9 @@ func TestInlineSyncFailureMapping(t *testing.T) {
 	if failure.Class != syncFailureDivergedUnresolved || failure.Cause == nil {
 		t.Fatalf("hard failure = %+v, want divergedUnresolved with a cause", failure)
 	}
+	if failure.BuildNote == "" {
+		t.Fatal("inlineSyncFailure did not resolve BuildNote")
+	}
 	if block := failure.blockString(); !strings.Contains(block, backend.Error()) || !strings.Contains(block, "INCIDENT") {
 		t.Fatalf("hard-failure block missing demoted cause or incident escalation:\n%s", block)
 	}

@@ -100,11 +100,12 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		return SyncFailure{}, false
 	}
 	base := SyncFailure{
-		Remote: o.remote,
-		Branch: o.branch,
-		Ahead:  o.ahead,
-		Behind: o.behind,
-		Age:    ageFromOldestDivergedUnix(o.oldestDivergedUnix, now),
+		Remote:    o.remote,
+		Branch:    o.branch,
+		Ahead:     o.ahead,
+		Behind:    o.behind,
+		Age:       ageFromOldestDivergedUnix(o.oldestDivergedUnix, now),
+		BuildNote: resolveBuildStatusNote(now),
 	}
 	switch {
 	case o.reconcile.err != nil:

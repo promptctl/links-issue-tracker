@@ -30,13 +30,23 @@ const guidanceClose = "If you're able to resolve this inline, please do so. Ensu
 // The transient nature is load-bearing: the divergence is re-derived live, so an
 // agent that reads this, merges, and runs the printed resolve command finalizes
 // the reconcile; an agent that does nothing leaves the clone diverged and usable.
-func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending) error {
+//
+// buildNote is the dev-vs-release build status (resolveBuildStatusNote,
+// resolved by the caller), embedded in the envelope in the same position
+// SyncFailure.blockString() uses — a prose-pending block is one of the sync
+// failure classes, so it names the same diagnostic every other failure surface
+// does, even though it renders through this separate path rather than through
+// SyncFailure itself. Empty is silently omitted, never fabricated.
+func renderProsePendingGuidance(w io.Writer, pending []merge.ProsePending, buildNote string) error {
 	ordered := merge.SortPending(pending)
 	var b strings.Builder
 
 	b.WriteString("<agent-instructions>\n")
 	b.WriteString("A clone of this backlog diverged from the remote. The field-aware merge settled every field except the free-text below, which was rewritten on both sides. This is a transient state you can resolve inline now — local reads still serve the clone's own data, and nothing is committed until you finalize.\n\n")
 	b.WriteString("For each field, merge 'ours' and 'theirs' into one coherent text that preserves both intents. You are not picking a winner — that is exactly why this is yours to merge and not the engine's. 'base' is the common ancestor, shown so you can see what each side changed.\n\n")
+	if buildNote != "" {
+		fmt.Fprintf(&b, "%s\n\n", buildNote)
+	}
 
 	for _, p := range ordered {
 		fmt.Fprintf(&b, "── %s · %s ──\n", p.IssueID, p.Field)

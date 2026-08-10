@@ -55,12 +55,15 @@ func TestParseProseResolutionsRejectsUnknownField(t *testing.T) {
 
 func TestProseGuidanceNamesRealAbortCommand(t *testing.T) {
 	var b bytes.Buffer
-	if err := renderProsePendingGuidance(&b, []merge.ProsePending{{IssueID: "links-x.1", Field: merge.ProseTitle, Base: "b", Ours: "o", Theirs: "t"}}); err != nil {
+	if err := renderProsePendingGuidance(&b, []merge.ProsePending{{IssueID: "links-x.1", Field: merge.ProseTitle, Base: "b", Ours: "o", Theirs: "t"}}, testBuildNote); err != nil {
 		t.Fatalf("renderProsePendingGuidance() error = %v", err)
 	}
 	out := b.String()
 	if !strings.Contains(out, "lit sync reconcile abort") {
 		t.Fatalf("guidance missing abort command:\n%s", out)
+	}
+	if !strings.Contains(out, testBuildNote) {
+		t.Fatalf("guidance missing build status:\n%s", out)
 	}
 	// The abort command is a subcommand, not a flag: the guidance must not print the
 	// non-existent `abort --abort` form.

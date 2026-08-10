@@ -62,28 +62,31 @@ type doctorSyncReport struct {
 
 // divergenceFailure returns the sync-failure contract for a diverged workspace,
 // or ok=false for any non-diverged freshness. The age rides on the report
-// (computed at the resolve boundary), so this is a pure derivation and the same
-// value drives both the rendered escalation and the exit decision.
-// [LAW:dataflow-not-control-flow]
+// (computed at the resolve boundary), so this is a mostly-pure derivation — the
+// same value drives both the rendered escalation and the exit decision — except
+// for the resolveBuildStatusNote call, which reads this binary's build identity
+// at call time rather than from the report. [LAW:dataflow-not-control-flow]
 func (r doctorSyncReport) divergenceFailure() (SyncFailure, bool) {
 	if r.Kind != doctorSyncResolved || r.Freshness.State() != store.SyncDiverged {
 		return SyncFailure{}, false
 	}
 	return SyncFailure{
-		Class:  syncFailureDivergedUnresolved,
-		Remote: r.Freshness.Remote,
-		Branch: r.Freshness.Branch,
-		Ahead:  r.Freshness.Ahead,
-		Behind: r.Freshness.Behind,
-		Age:    r.Age,
+		Class:     syncFailureDivergedUnresolved,
+		Remote:    r.Freshness.Remote,
+		Branch:    r.Freshness.Branch,
+		Ahead:     r.Freshness.Ahead,
+		Behind:    r.Freshness.Behind,
+		Age:       r.Age,
+		BuildNote: resolveBuildStatusNote(time.Now()),
 	}, true
 }
 
 // doctorDivergenceExit is the one place doctor turns a persistent divergence into
 // a nonzero exit: a divergence past the persistence threshold is an incident, not
 // a diagnostic note, so a health check must not pass while the workspace is
-// silently stuck. Kept pure over the already-resolved report so the exit contract
-// is unit-testable without a store aged for real. [LAW:no-silent-failure]
+// silently stuck. Kept mostly-pure over the already-resolved report — divergenceFailure's
+// build-identity read is the one exception — so the exit contract is
+// unit-testable without a store aged for real. [LAW:no-silent-failure]
 func doctorDivergenceExit(report doctorSyncReport) error {
 	if failure, diverged := report.divergenceFailure(); diverged && failure.persistent() {
 		return SyncFailureError{Failure: failure}
@@ -244,6 +247,11 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// the boundary, before the pure text rendering below.
 	syncReport := resolveDoctorSyncFreshness(ctx, ap.Workspace, ap.Store)
 	if err := printWorkspaceIdentity(stdout, ap.Workspace); err != nil {
+		return err
+	}
+	// [LAW:one-source-of-truth] version.Info is the only source; resolved here
+	// (not inside a pure renderer) because it is itself a boundary read.
+	if _, err := fmt.Fprintln(stdout, resolveBuildStatusNote(time.Now())); err != nil {
 		return err
 	}
 	dependencyCycle := "none"

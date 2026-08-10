@@ -204,6 +204,33 @@ func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 	})
 }
 
+// TestSyncFailureBlockNamesBuildStatus pins that a populated BuildNote renders
+// verbatim in the block — the field the sync failure's construction boundary
+// (asSyncFailure, syncFailureFromPull, doctorSyncReport.divergenceFailure)
+// sets via resolveBuildStatusNote.
+func TestSyncFailureBlockNamesBuildStatus(t *testing.T) {
+	block := SyncFailure{
+		Class:     syncFailureDivergedUnresolved,
+		Remote:    "origin",
+		Branch:    "master",
+		BuildNote: "build: dev build, built 3 hours ago",
+	}.blockString()
+	if !strings.Contains(block, "build: dev build, built 3 hours ago") {
+		t.Errorf("block missing the build status line:\n%s", block)
+	}
+}
+
+// TestSyncFailureBlockOmitsBuildStatusWhenUnset pins that blockString never
+// fabricates a build status line for a SyncFailure value that never went
+// through a construction boundary (e.g. a bare test literal, as the other
+// tests in this file use) — BuildNote is opt-in data, not a default.
+func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
+	block := SyncFailure{Class: syncFailureDivergedUnresolved, Remote: "origin", Branch: "master"}.blockString()
+	if strings.Contains(block, "build:") {
+		t.Errorf("block rendered a build status line with BuildNote unset:\n%s", block)
+	}
+}
+
 // remoteSchemaAheadFailure/asSyncFailure adapt the store's typed remote-ahead
 // refusal into the one contract error, exiting ExitConflict — so every surface
 // renders the identical block from the same store error. A non-matching error
@@ -220,6 +247,12 @@ func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 	if failure.Class != syncFailureRemoteSchemaAhead || failure.RemoteSchemaVersion != 7 ||
 		failure.LocalSupportedMax != 4 || failure.RemoteProducer != "v9.9.0" {
 		t.Fatalf("mapped failure = %+v", failure)
+	}
+	// The construction boundary must resolve build status itself — a bare
+	// SyncFailure literal (as most tests in this file use) leaves it empty, but
+	// this real construction path must not.
+	if failure.BuildNote == "" {
+		t.Fatal("remoteSchemaAheadFailure did not resolve BuildNote")
 	}
 	converted := asSyncFailure(storeErr)
 	var syncFailure SyncFailureError
@@ -268,6 +301,14 @@ func TestDoctorDivergenceExit(t *testing.T) {
 		t.Fatal("persistent divergence did not produce a doctor exit error")
 	} else if code := ExitCode(err); code != ExitConflict {
 		t.Fatalf("persistent-divergence exit = %d, want %d", code, ExitConflict)
+	} else {
+		var syncErr SyncFailureError
+		if !errors.As(err, &syncErr) {
+			t.Fatalf("err = %v, want a SyncFailureError", err)
+		}
+		if syncErr.Failure.BuildNote == "" {
+			t.Fatal("divergenceFailure did not resolve BuildNote")
+		}
 	}
 
 	// Fresh divergence → no error (stays a diagnostic line, zero exit).

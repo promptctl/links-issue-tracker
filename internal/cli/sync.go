@@ -197,16 +197,20 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 // pull outcomes are agent-actionable this way: a held free-text conflict and a
 // no-common-ancestor divergence — both non-transient, both routed through the one
 // contract so the exit code and the block match `lit sync reconcile`. A hard pull
-// error is already surfaced as a returned error upstream. It is a pure mapping —
-// the clock is supplied as an argument — so the contract shape is unit-testable
-// without a live store. [LAW:dataflow-not-control-flow]
+// error is already surfaced as a returned error upstream. It is a mostly-pure
+// mapping — the clock is supplied as an argument, so the contract SHAPE is
+// unit-testable without a live store — but it also reads this binary's build
+// identity via resolveBuildStatusNote (link-time version vars plus the embedded
+// migration registry), so it is not safe to memoize or assume side-effect-free.
+// [LAW:dataflow-not-control-flow]
 func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now time.Time) (SyncFailureError, bool) {
 	base := SyncFailure{
-		Remote: remote,
-		Branch: branch,
-		Ahead:  result.Ahead,
-		Behind: result.Behind,
-		Age:    ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
+		Remote:    remote,
+		Branch:    branch,
+		Ahead:     result.Ahead,
+		Behind:    result.Behind,
+		Age:       ageFromOldestDivergedUnix(result.OldestDivergedUnix, now),
+		BuildNote: resolveBuildStatusNote(now),
 	}
 	switch result.State {
 	case store.SyncPullProsePending:
