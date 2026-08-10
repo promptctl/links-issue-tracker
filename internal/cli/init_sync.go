@@ -309,9 +309,13 @@ func remoteSuffix(remote string) string {
 // to prevent go unnoticed for ten days. Every state reaches here, not only
 // the two writeInitSyncLine prints, so a benign "started fresh" decision is
 // as durably recorded as an adopt or a failure. [LAW:no-silent-failure]
-// A trace-write failure is reported to stderr, not fatal — init already
-// succeeded at initializing the workspace by the time this runs.
-// [LAW:effects-at-boundaries]
+// Called before EnsureDatabase/installHooks/ensureLinksAgentFiles, any of
+// which can still fail and abort `lit init` as a whole — so this record
+// captures only the adopt decision, not a claim that init overall succeeded.
+// A trace-write failure here is reported to stderr, not fatal: the adopt
+// decision itself already happened one way or the other by this point, and
+// failing to durably log it does not undo it or need to block the rest of
+// init. [LAW:effects-at-boundaries]
 func recordInitSyncTrace(ws workspace.Info, outcome initSyncOutcome, now time.Time) {
 	status := "ok"
 	if outcome.State == initSyncFailed {
