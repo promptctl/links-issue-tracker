@@ -41,9 +41,11 @@ const (
 	initSyncNoRemoteData initSyncState = "no_remote_data"
 	// initSyncAdopted: the existing backlog was pulled into the fresh store.
 	initSyncAdopted initSyncState = "adopted"
-	// initSyncFailed: adopt was attempted but errored; the workspace is still
-	// initialized (empty), and the error is surfaced — never swallowed.
-	// [LAW:no-silent-failure]
+	// initSyncFailed: adopt was attempted but errored on a genuinely uncertain
+	// result — reading the local store or resolving/probing the remote itself
+	// failed, so lit could not confirm it is safe to start fresh and must not
+	// guess. The caller refuses to create a store and surfaces the error —
+	// never swallowed, never proceeded past. [LAW:no-silent-failure]
 	initSyncFailed initSyncState = "failed"
 )
 
@@ -70,9 +72,13 @@ type initSyncOutcome struct {
 // — a freshly-initialized store's bootstrap root is unrelated to the remote, so
 // a merge fails with "no common ancestor"; adopt resets to the remote head.
 //
-// It is best-effort within init: a failure to reach or read the remote is
-// surfaced loudly in the outcome but does not refuse init, because the workspace
-// itself is validly initialized (empty). [LAW:no-silent-failure]
+// A failure at any step of that decision — reading the local store, reaching
+// or probing the remote, or, distinctly, cloning confirmed remote data — is a
+// genuinely uncertain result, not a confirmed-empty one: it is surfaced
+// loudly in the outcome AND refuses the rest of init. The caller (runInit)
+// hard-stops on initSyncFailed before creating any store, rather than
+// guessing "empty" on a result it could not actually confirm.
+// [LAW:no-silent-failure]
 // adoptRemoteTicketsBlockingFn is the adopt body, indirected through a var so a
 // test can substitute a controllable stand-in and exercise the hard-stop
 // without a real (slow, leak-prone) fetch. Production never reassigns it.
@@ -237,10 +243,11 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 // remoteSituationLine renders the resolved remote-data situation for the
 // benign non-adopt outcomes, so a user watching init knows what lit decided
 // about the remote rather than inferring it from silence. The failed state is
-// deliberately absent: a failure has exactly one loud channel
-// (writeInitSyncLine's warning), never a second copy here. [LAW:single-enforcer]
-// An exhaustive match on the sealed state — variability lives in the outcome
-// value, not in whether a caller logs. [LAW:dataflow-not-control-flow]
+// deliberately absent: a failure has exactly one loud channel — the command
+// error runInit returns before this progress line would even be reached —
+// never a second copy here. [LAW:single-enforcer] An exhaustive match on the
+// sealed state — variability lives in the outcome value, not in whether a
+// caller logs. [LAW:dataflow-not-control-flow]
 func remoteSituationLine(state initSyncState) string {
 	switch state {
 	case initSyncHasLocalTickets:
@@ -268,37 +275,24 @@ func gitBackedURLForRemote(gitRemotes []workspace.GitRemote, remote string) stri
 	return ""
 }
 
-// writeInitSyncLine renders the one human-facing line the adopt step contributes.
-// Adopted and failed are the states a user must see; the other outcomes mean
-// "fresh empty workspace was the right result", already conveyed by the headline.
-// Both cases name buildNote (the dev-vs-release build status, resolved once by
-// the caller): these are exactly init's "committed to adopt" and "reached a
-// failure" moments, and a stale local binary silently missing a landed fix was
-// the suspected root cause of the field incident this epic exists to prevent.
+// writeInitSyncLine renders the one human-facing line the adopt step
+// contributes. Adopted is the only state a user must see here; every other
+// outcome, failed included, means the headline already conveys the whole
+// story. A failed adopt no longer reaches this renderer at all — runInit
+// hard-stops and returns the real underlying error before report.Sync is
+// ever built — so writeInitSyncLine now only has one non-silent case to
+// render, and the failure has exactly one channel: the returned command
+// error. [LAW:single-enforcer] buildNote (the dev-vs-release build status,
+// resolved once by the caller) names build staleness at exactly the moment
+// init commits to "adopted" — a stale local binary silently missing a landed
+// fix was the suspected root cause of the field incident this epic exists to
+// prevent.
 func writeInitSyncLine(w io.Writer, outcome initSyncOutcome, buildNote string) error {
-	switch outcome.State {
-	case initSyncAdopted:
-		_, err := fmt.Fprintf(w, "  Pulled existing backlog from %s/%s (%s)\n", outcome.Remote, outcome.Branch, buildNote)
-		return err
-	case initSyncFailed:
-		_, err := fmt.Fprintf(
-			w,
-			"  Warning: could not pull existing backlog%s: %s (%s)\n",
-			remoteSuffix(outcome.Remote),
-			outcome.Error,
-			buildNote,
-		)
-		return err
-	default:
+	if outcome.State != initSyncAdopted {
 		return nil
 	}
-}
-
-func remoteSuffix(remote string) string {
-	if remote == "" {
-		return ""
-	}
-	return " from " + remote
+	_, err := fmt.Fprintf(w, "  Pulled existing backlog from %s/%s (%s)\n", outcome.Remote, outcome.Branch, buildNote)
+	return err
 }
 
 // recordInitSyncTrace writes the durable, unconditional trace record for
