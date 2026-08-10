@@ -3,6 +3,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -107,14 +108,14 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "0"},
 			"new", "--title", "burst-issue", "--topic", "demo")
 		if err != nil {
-			t.Fatalf("lit new #%d failed: %v\noutput:\n%s", i, err, out)
+			t.Fatalf("lit new #%d failed: %v\noutput:\n%s\n%s", i, err, out, dumpMirrorLog(root))
 		}
 		lower := strings.ToLower(out)
 		if strings.Contains(lower, "database is read only") || strings.Contains(lower, "cannot update manifest") {
-			t.Fatalf("lit new #%d hit an engine open-collision instead of waiting for it to clear:\noutput:\n%s", i, out)
+			t.Fatalf("lit new #%d hit an engine open-collision instead of waiting for it to clear:\noutput:\n%s\n%s", i, out, dumpMirrorLog(root))
 		}
 		if strings.Contains(lower, "online garbage collection") && strings.Contains(lower, "reconnect") {
-			t.Fatalf("lit new #%d hit an online-GC reconnect collision:\noutput:\n%s", i, out)
+			t.Fatalf("lit new #%d hit an online-GC reconnect collision:\noutput:\n%s\n%s", i, out, dumpMirrorLog(root))
 		}
 	}
 
@@ -143,8 +144,29 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 			}
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning", burstSize, settleTimeout)
+			t.Fatalf("burst's %d commits never all reached the remote within %s of the last lit new returning\n%s", burstSize, settleTimeout, dumpMirrorLog(root))
 		}
 		time.Sleep(settlePollInterval)
 	}
+}
+
+// dumpMirrorLog reads the on-change mirror's durable log (mirrorLogName in
+// internal/cli/sync_bg.go) at its conventional path — <git-common-dir>/links/
+// mirror.log, i.e. <root>/.git/links/mirror.log for a plain (non-worktree)
+// repo, matching internal/workspace.deriveLocation's StorageDir derivation —
+// and formats it for inclusion in a failure message. Every mirror this test's
+// foreground commands spawn writes here, so on a failure this is the one place
+// that can show what a background mirror (parent-wait, single-flight,
+// engine-lock wait, push) was actually doing when the failure happened,
+// instead of guessing from the foreground command's error alone.
+func dumpMirrorLog(root string) string {
+	path := filepath.Join(root, ".git", "links", "mirror.log")
+	content, err := os.ReadFile(path)
+	if err != nil {
+		return fmt.Sprintf("mirror log (%s) unavailable: %v", path, err)
+	}
+	if len(content) == 0 {
+		return fmt.Sprintf("mirror log (%s) is empty", path)
+	}
+	return fmt.Sprintf("mirror log (%s):\n%s", path, content)
 }
