@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -350,9 +351,28 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		consumer, ws := newDisjointConsumer(t)
 		before := len(readSyncTraceRecords(t, ws))
 
+		// The bare take is refused by the owner-approval gate (links-sync-pgct.4)
+		// and that refusal is itself a durably-traced decision.
 		out, err := runCLIInDirErr(t, consumer, "sync", "reconcile", "take", "remote")
+		if err == nil {
+			t.Fatalf("`sync reconcile take remote` without approval succeeded:\n%s", out)
+		}
+		refusals := readSyncTraceRecords(t, ws)[before:]
+		if len(refusals) != 1 {
+			t.Fatalf("sync trace records after the refused take = %d, want exactly 1: %+v", len(refusals), refusals)
+		}
+		if refusals[0].Command != "lit sync reconcile take remote" || refusals[0].Decision != "owner_approval_required" {
+			t.Fatalf("refusal trace = command %q decision %q, want the take command with decision owner_approval_required", refusals[0].Command, refusals[0].Decision)
+		}
+		tokenMatch := regexp.MustCompile(`--owner-approved ([0-9a-f]{12})`).FindStringSubmatch(err.Error())
+		if tokenMatch == nil {
+			t.Fatalf("take refusal carries no approval token:\n%s", err.Error())
+		}
+		before = len(readSyncTraceRecords(t, ws))
+
+		out, err = runCLIInDirErr(t, consumer, "sync", "reconcile", "take", "remote", "--owner-approved", tokenMatch[1])
 		if err != nil {
-			t.Fatalf("`sync reconcile take remote` errored: %v\n%s", err, out)
+			t.Fatalf("`sync reconcile take remote` with approval errored: %v\n%s", err, out)
 		}
 
 		records := readSyncTraceRecords(t, ws)[before:]

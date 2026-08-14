@@ -140,6 +140,32 @@ func markRunAttempt(ws workspace.Info, markerPath string) error {
 	return nil
 }
 
+// writeMarkerAtomic writes a storage-dir marker via temp-file-and-rename: two
+// lit processes (a foreground command and a detached mirror) can complete
+// near-simultaneously, and a reader must see one whole payload or the other,
+// never a torn write. [LAW:no-ambient-temporal-coupling]
+// [LAW:one-type-per-behavior] the one atomic-marker primitive; the push-outcome
+// and owner-notify markers are instances distinguished only by path and payload.
+func writeMarkerAtomic(ws workspace.Info, markerPath string, payload []byte) error {
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(ws.StorageDir, filepath.Base(markerPath)+"-*")
+	if err != nil {
+		return err
+	}
+	if _, err := tmp.Write(payload); err != nil {
+		_ = tmp.Close()
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		_ = os.Remove(tmp.Name())
+		return err
+	}
+	return os.Rename(tmp.Name(), markerPath)
+}
+
 // receiveMarkerPath is the single debounce marker for automatic receive: its
 // modification time is the last time a receive was attempted. [LAW:one-source-of-truth]
 func receiveMarkerPath(ws workspace.Info) string {

@@ -73,6 +73,9 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
+	// The mutations below spawn detached mirrors; the last one can outlive the
+	// test body, so the TempDir sweep must wait for mirror quiescence.
+	awaitMirrorQuiescence(t, root)
 	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)

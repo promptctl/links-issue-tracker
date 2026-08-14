@@ -128,6 +128,26 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	assertIDSet(t, "on-both", res.Unrelated.OnBoth, []string{shared})
 }
 
+// ownerApprovedTakeToken exercises the owner-approval gate on the way to a
+// permitted take (links-sync-pgct.4): the bare call must refuse with a fresh
+// token and the destruction inventory, mutating nothing — the only way any test
+// (like any surface) obtains a token is by reading the refusal.
+func ownerApprovedTakeToken(t *testing.T, ctx context.Context, st *Store, remote, branch string, choice UnrelatedResolution) string {
+	t.Helper()
+	_, err := st.SyncResolveUnrelated(ctx, remote, branch, choice, "")
+	var approval OwnerApprovalRequiredError
+	if !errors.As(err, &approval) {
+		t.Fatalf("SyncResolveUnrelated(%s) without approval = %v, want OwnerApprovalRequiredError", choice, err)
+	}
+	if approval.ApprovalToken == "" || approval.Stale {
+		t.Fatalf("bare take refusal carried token=%q stale=%v, want a fresh token", approval.ApprovalToken, approval.Stale)
+	}
+	if approval.Inventory == nil {
+		t.Fatalf("bare take refusal carried no inventory naming what the take would destroy")
+	}
+	return approval.ApprovalToken
+}
+
 // TestSyncResolveUnrelatedTakeRemote drives the ticket's criterion for the remote
 // side: from the unrelated-histories state, choosing remote makes local content equal
 // the remote and sync report clean, and the discard of the local-only issue is
@@ -148,7 +168,8 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeRemote)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
 	}
@@ -199,7 +220,8 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal)
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
 	}
@@ -247,6 +269,66 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+}
+
+// TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide pins the gate's binding
+// (links-sync-pgct.4): a token authorizes destroying one exact fork on one exact
+// side, so presenting it for the other side is refused as stale, and a local
+// commit landing after issuance voids it — the refusal re-mints a token for the
+// moved fork, and only that fresh token runs. No refused path mutates.
+func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	seedReconcileRemote(t, ctx, rootA, remoteURL)
+	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	localToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
+
+	// Side binding: a take-local approval does not authorize take-remote.
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, localToken)
+	var wrongSide OwnerApprovalRequiredError
+	if !errors.As(err, &wrongSide) || !wrongSide.Stale {
+		t.Fatalf("take-remote with a take-local token = %v, want a stale-approval refusal", err)
+	}
+
+	// Fork binding: a local commit after issuance voids the token. updateLocal
+	// opens its own store, so the handle closes around it (one writer per path).
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B) before local mutation: %v", err)
+	}
+	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("moved")})
+	syncB = openSyncOrFatal(t, ctx, rootB)
+	defer func() { _ = syncB.Close() }()
+	headAfterMove := headCommit(t, ctx, syncB)
+
+	_, err = syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, localToken)
+	var stale OwnerApprovalRequiredError
+	if !errors.As(err, &stale) || !stale.Stale {
+		t.Fatalf("take-local with a pre-move token = %v, want a stale-approval refusal", err)
+	}
+	if stale.ApprovalToken == localToken {
+		t.Fatalf("the moved fork re-minted the same token, want a fresh one bound to the new head")
+	}
+	if got := headCommit(t, ctx, syncB); got != headAfterMove {
+		t.Fatalf("a refused take moved the data branch: %s -> %s", headAfterMove, got)
+	}
+
+	// The re-minted token authorizes the take against the fork as it now stands.
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, stale.ApprovalToken)
+	if err != nil {
+		t.Fatalf("take-local with the re-minted token: %v", err)
+	}
+	if res.State != SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	}
 }
 
 // TestSyncReconcileCombineUnionsBothSides drives the ticket's core acceptance criterion:
@@ -480,12 +562,18 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 	}
 	headBefore := headCommit(t, ctx, syncB)
 
-	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	// The shared-history refusal precedes the owner gate: a mergeable divergence is
+	// never takeable, approved or not, so no token is minted for it.
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, "")
 	if err == nil {
 		t.Fatalf("SyncResolveUnrelated on a shared-history divergence returned nil, want a refusal")
 	}
 	if !strings.Contains(err.Error(), "shares history") {
 		t.Fatalf("refusal error = %q, want it to name the shared history", err.Error())
+	}
+	var approval OwnerApprovalRequiredError
+	if errors.As(err, &approval) {
+		t.Fatalf("shared-history refusal minted an approval token, want the merge redirect instead")
 	}
 	if got := headCommit(t, ctx, syncB); got != headBefore {
 		t.Fatalf("data branch moved during a refused take: %s -> %s", headBefore, got)
@@ -520,8 +608,11 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 	}
 	headBefore := headCommit(t, ctx, syncB)
 
-	// take-local: refused with the schema-ahead contract, no write.
-	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal)
+	// take-local: owner-approved, then refused with the schema-ahead contract, no
+	// write — the approval gate governs WHO may run the destruction; the schema
+	// guard still governs whether the store may author the commit at all.
+	takeLocalToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, takeLocalToken)
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("take-local onto schema-ahead remote = %v, want *RemoteSchemaAheadError", err)
@@ -534,7 +625,8 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 
 	// take-remote: exempt — it adopts the schema-ahead head wholesale (the recovery that
 	// gets a stale binary the newer data), so it proceeds rather than refusing.
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote)
+	takeRemoteToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeRemote)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, takeRemoteToken)
 	if err != nil {
 		t.Fatalf("take-remote onto schema-ahead remote errored, want it exempt: %v", err)
 	}

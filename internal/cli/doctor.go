@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -299,5 +300,15 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// sync-failure contract on stderr and exits nonzero — the stdout freshness line
 	// above stays the routine diagnostic; this is the escalation. Corruption (a
 	// harder failure) already returned above, so it wins when both hold.
-	return doctorDivergenceExit(syncReport)
+	// Doctor can be the FIRST detector when auto-sync is disabled, so its
+	// escalation feeds the owner channel like every other surface, de-duplicated
+	// per episode (links-sync-pgct.4).
+	exitErr := doctorDivergenceExit(syncReport)
+	var syncFailure SyncFailureError
+	if errors.As(exitErr, &syncFailure) {
+		if ev, ok := ownerNotifyEventForFailure(syncFailure.Failure); ok {
+			maybeNotifyOwner(ctx, ap.Workspace, ev)
+		}
+	}
+	return exitErr
 }

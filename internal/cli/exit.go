@@ -39,6 +39,13 @@ func ExitCode(err error) int {
 	if errors.As(err, &syncFailure) {
 		return ExitConflict
 	}
+	// The take gate's refusal is the same unresolved-divergence condition
+	// persisting — the take did not run — so it shares the conflict exit.
+	// [LAW:one-source-of-truth]
+	var ownerApproval ownerApprovalRefusalError
+	if errors.As(err, &ownerApproval) {
+		return ExitConflict
+	}
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
 		return ExitCorruption
