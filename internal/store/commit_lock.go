@@ -81,27 +81,38 @@ type commitLockContextKey struct{}
 // retryTransientGCContention, not just the final DOLT_COMMIT step
 // (links-sync-pgct.11): tx.Commit() — the plain SQL transaction commit that
 // lands fn's writes into Dolt's working set, distinct from the later DOLT_COMMIT
-// that versions them — touches the same manifest and is just as exposed to a
-// still-settling handoff from another process's read-write engine (see the
-// engine-write lock in workspace_lock.go, which bounds how long two engines can
-// be concurrently OPEN but not the brief settle window immediately after one
-// closes). Retrying the whole unit is safe: fn only ever writes through the tx
-// parameter it's given, so a fresh BeginTx + a full re-run of fn on a rotated
-// connection reproduces the same intended writes with nothing left over from
-// the failed attempt — defer tx.Rollback() discards it before the retry begins.
+// that versions them — touches the same manifest and is just as exposed to
+// transient online-GC contention.
+//
+// The unit is two phases with an owned resume point, not one blind re-run:
+// staging (BeginTx→fn→tx.Commit) and versioning (DOLT_COMMIT). While staging
+// fails, retrying it whole is safe — fn only writes through the tx it's given,
+// and the deferred Rollback discards the failed attempt. But once tx.Commit
+// has SUCCEEDED, fn's writes are durably staged in the working set (they
+// survive a connection rotation), so a retry provoked by a transient failure
+// in the versioning step must resume AT versioning: re-running fn would apply
+// the mutation a second time on top of its own staged writes (CreateIssue's
+// collision check, for one, would mint a duplicate issue under a higher
+// nonce). The staged flag is the phase marker each attempt resumes from.
+// [LAW:no-ambient-temporal-coupling] the phase is explicit owned state, not an
+// assumption about which step happened to fail.
 func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	staged := false
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			tx, err := s.db.BeginTx(ctx, nil)
-			if err != nil {
-				return fmt.Errorf("begin %s tx: %w", message, err)
-			}
-			defer tx.Rollback()
-			if err := fn(ctx, tx); err != nil {
-				return err
-			}
-			if err := tx.Commit(); err != nil {
-				return fmt.Errorf("commit %s tx: %w", message, err)
+			if !staged {
+				tx, err := s.db.BeginTx(ctx, nil)
+				if err != nil {
+					return fmt.Errorf("begin %s tx: %w", message, err)
+				}
+				defer tx.Rollback()
+				if err := fn(ctx, tx); err != nil {
+					return err
+				}
+				if err := tx.Commit(); err != nil {
+					return fmt.Errorf("commit %s tx: %w", message, err)
+				}
+				staged = true
 			}
 			return s.commitWorkingSetOnce(ctx, message)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
@@ -224,6 +235,11 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 // and withMutation) gets the same message shape with no per-callsite repetition.
 // [LAW:single-enforcer] One trim+default rule for Dolt commit messages.
 func (s *Store) commitWorkingSetOnce(ctx context.Context, message string) error {
+	if s.commitWorkingSetHookForTest != nil {
+		if err := s.commitWorkingSetHookForTest(); err != nil {
+			return err
+		}
+	}
 	trimmed := strings.TrimSpace(message)
 	if trimmed == "" {
 		trimmed = "links mutation"
