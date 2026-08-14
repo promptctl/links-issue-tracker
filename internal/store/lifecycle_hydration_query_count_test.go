@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"sync/atomic"
 	"testing"
 )
@@ -78,15 +79,9 @@ func listingQueryCount(t *testing.T, ctx context.Context, epicCount int) int64 {
 func swapInCountingDB(t *testing.T, st *Store) *int64 {
 	t.Helper()
 	var n int64
-	// Dolt exposes its connection through driver.DriverContext, not the legacy
-	// Driver.Open(name) path, so route through OpenConnector.
-	dc, ok := st.db.Driver().(driver.DriverContext)
-	if !ok {
-		t.Fatalf("Dolt driver does not implement driver.DriverContext")
-	}
-	inner, err := dc.OpenConnector(buildDoltDSN(st.doltRootDir, st.workspaceID, true))
+	inner, err := newDoltConnector(st.doltRootDir, st.workspaceID, doltDatabaseName, st.access)
 	if err != nil {
-		t.Fatalf("OpenConnector error = %v", err)
+		t.Fatalf("newDoltConnector error = %v", err)
 	}
 	next := sql.OpenDB(&countingConnector{inner: inner, n: &n})
 	next.SetMaxOpenConns(1)
@@ -122,6 +117,16 @@ func (c *countingConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *countingConnector) Driver() driver.Driver { return c.inner.Driver() }
+
+// Close forwards to the wrapped connector so sql.DB.Close really closes the
+// inner engine — with the singleton cache bypassed, an unforwarded Close would
+// leak the engine (and its journal lock) for the rest of the test process.
+func (c *countingConnector) Close() error {
+	if closer, ok := c.inner.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 type countingConn struct {
 	inner driver.Conn

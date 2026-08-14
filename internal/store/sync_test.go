@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -79,9 +78,9 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
 
-	bootstrap, err := sql.Open(doltDriverName, buildDoltDSN(doltRoot, "test-workspace-id", false))
+	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", engineWrite)
 	if err != nil {
-		t.Fatalf("sql.Open() bootstrap error = %v", err)
+		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
 	if _, err := bootstrap.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
 		t.Fatalf("bootstrap create database error = %v", err)

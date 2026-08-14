@@ -221,13 +221,22 @@ func (c *Connector) openEngineWithRetry(ctx context.Context) (*engine.SqlEngine,
 		Autocommit: true,
 	}
 
-	// For deterministic retries on lock contention.
-	if c.cfg.BackOff != nil {
+	// For deterministic retries on lock contention. A non-nil BackOff implies both
+	// underlying load params (upstream behavior); each is also independently
+	// addressable via Config so an embedder can choose deterministic open/close
+	// lifecycles without fail-fast, or fail-fast under its own retry policy.
+	disableCache := c.cfg.BackOff != nil || c.cfg.DisableSingletonCache
+	failOnLockTimeout := c.cfg.BackOff != nil || c.cfg.FailOnJournalLockTimeout
+	if disableCache || failOnLockTimeout {
 		if seCfg.DBLoadParams == nil {
 			seCfg.DBLoadParams = make(map[string]interface{})
 		}
-		seCfg.DBLoadParams[dbfactory.DisableSingletonCacheParam] = struct{}{}
-		seCfg.DBLoadParams[dbfactory.FailOnJournalLockTimeoutParam] = struct{}{}
+		if disableCache {
+			seCfg.DBLoadParams[dbfactory.DisableSingletonCacheParam] = struct{}{}
+		}
+		if failOnLockTimeout {
+			seCfg.DBLoadParams[dbfactory.FailOnJournalLockTimeoutParam] = struct{}{}
+		}
 	}
 
 	var fs filesys.Filesys = filesys.LocalFS

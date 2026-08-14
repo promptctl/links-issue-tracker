@@ -145,7 +145,7 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}

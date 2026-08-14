@@ -82,7 +82,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 		}
 		return RawDump{}, fmt.Errorf("stat database dir: %w", statErr)
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return RawDump{}, err
 	}

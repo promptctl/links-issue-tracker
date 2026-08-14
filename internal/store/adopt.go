@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -122,7 +121,7 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 // remote defaults to the refs/dolt/data ref — the same ref lit's sync push
 // writes — so no explicit ref is needed.
 func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID, remoteName, remoteURL, branch string) error {
-	db, err := sql.Open(doltDriverName, buildDoltDSN(serverRoot, workspaceID, false))
+	db, err := openDoltPool(serverRoot, workspaceID, "", engineWrite)
 	if err != nil {
 		return fmt.Errorf("open dolt for clone: %w", err)
 	}
@@ -134,13 +133,17 @@ func cloneRemoteDatabase(ctx context.Context, serverRoot, workspaceID, remoteNam
 	return nil
 }
 
-// evictSingleton drops dolt's in-process singleton chunk-store cache entries for
-// the database at dbDir (the live store and its stats sidecar), closing the
-// underlying stores. Best-effort: a missing entry is a no-op, and a close error
-// here would only mask the adopt that follows, so it is intentionally not
-// surfaced — the subsequent clone is what must succeed. The key form mirrors
-// dolt's own DeleteFromSingletonCache callers (`<dbloc>/.dolt/noms`).
+// evictSingleton drops dolt's in-process singleton chunk-store cache entries
+// for the database at dbDir (the live store and its stats sidecar) WITHOUT
+// closing them. lit's own opens bypass the cache entirely (see
+// newDoltConnector), so any entry found here was left by a dolt-internal load
+// path (e.g. during DOLT_CLONE) whose store the owning engine has already
+// closed — closing the carcass a second time trips dolt's refcount assert on
+// the archive readers the two instances shared. Dropping the entry is the
+// whole job: it only exists to keep a stale cached handle from ever serving
+// the re-adopted path. Best-effort: a missing entry is a no-op. The key form
+// mirrors dolt's own DeleteFromSingletonCache callers (`<dbloc>/.dolt/noms`).
 func evictSingleton(dbDir string) {
-	_ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms")), true)
-	_ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms")), true)
+	_ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "noms")), false)
+	_ = dbfactory.DeleteFromSingletonCache(filepath.ToSlash(filepath.Join(dbDir, ".dolt", "stats", ".dolt", "noms")), false)
 }
