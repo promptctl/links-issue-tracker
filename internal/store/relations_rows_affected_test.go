@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"io"
 	"strings"
 	"testing"
 )
@@ -83,13 +84,9 @@ func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
 // of counting.
 func swapInExecErrDB(t *testing.T, st *Store, match string, causeErr error) {
 	t.Helper()
-	dc, ok := st.db.Driver().(driver.DriverContext)
-	if !ok {
-		t.Fatalf("Dolt driver does not implement driver.DriverContext")
-	}
-	inner, err := dc.OpenConnector(buildDoltDSN(st.doltRootDir, st.workspaceID, true))
+	inner, err := newDoltConnector(st.doltRootDir, st.workspaceID, doltDatabaseName, st.access)
 	if err != nil {
-		t.Fatalf("OpenConnector error = %v", err)
+		t.Fatalf("newDoltConnector error = %v", err)
 	}
 	next := sql.OpenDB(&execErrConnector{inner: inner, match: match, causeErr: causeErr})
 	next.SetMaxOpenConns(1)
@@ -120,6 +117,16 @@ func (c *execErrConnector) Connect(ctx context.Context) (driver.Conn, error) {
 }
 
 func (c *execErrConnector) Driver() driver.Driver { return c.inner.Driver() }
+
+// Close forwards to the wrapped connector so sql.DB.Close really closes the
+// inner engine — with the singleton cache bypassed, an unforwarded Close would
+// leak the engine (and its journal lock) for the rest of the test process.
+func (c *execErrConnector) Close() error {
+	if closer, ok := c.inner.(io.Closer); ok {
+		return closer.Close()
+	}
+	return nil
+}
 
 // execErrConn deliberately implements only the base driver.Conn surface (no
 // QueryerContext/ExecerContext), so database/sql routes every ExecContext

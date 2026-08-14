@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
@@ -116,5 +117,46 @@ func TestAcquireCommitLockReclaimsDeadOwner(t *testing.T) {
 
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+}
+
+// TestWithMutationResumesAtVersioningAfterStagedCommit pins withMutation's
+// phase resume: when the staging transaction has committed and only the
+// versioning step (DOLT_COMMIT) fails transiently, the retry must re-run
+// versioning alone. Re-running the mutation body against its own staged
+// writes would double-apply it — for CreateIssue, the in-tx collision check
+// would find the staged row and mint a SECOND issue under a higher nonce —
+// so the discriminating assertion is that exactly one issue exists afterward.
+func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	fires := 0
+	st.commitWorkingSetHookForTest = func() error {
+		fires++
+		if fires == 1 {
+			return transientGCContentionError{err: errors.New("simulated: this connection was established when this server performed an online garbage collection. please reconnect.")}
+		}
+		return nil
+	}
+
+	created, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync"})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if created.ID == "" {
+		t.Fatalf("CreateIssue() returned an empty id")
+	}
+	if fires < 2 {
+		t.Fatalf("versioning step ran %d time(s); want the transient failure to have forced a retry", fires)
+	}
+	st.commitWorkingSetHookForTest = nil
+
+	count, err := st.LocalIssueCount(ctx)
+	if err != nil {
+		t.Fatalf("LocalIssueCount() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("LocalIssueCount() = %d, want exactly 1 — more means the retry re-ran the staged mutation body", count)
 	}
 }

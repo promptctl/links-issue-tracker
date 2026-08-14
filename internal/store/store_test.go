@@ -1764,7 +1764,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	seed, err := openStoreConnection(doltRoot, "test-workspace-id")
+	seed, err := openStoreConnection(doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}

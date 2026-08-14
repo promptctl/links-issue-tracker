@@ -153,7 +153,7 @@ func verifyHeadUnchanged(ctx context.Context, canonicalDoltDir, workspaceID, exp
 	if expectedHead == "" {
 		return fmt.Errorf("%w: cannot verify the live workspace has not advanced; re-run `lit lifeboat dump` against the current workspace and recover from that artifact", ErrMissingDumpProvenance)
 	}
-	s, err := openStoreConnection(canonicalDoltDir, workspaceID)
+	s, err := openStoreConnection(canonicalDoltDir, workspaceID, engineRead)
 	if err != nil {
 		return fmt.Errorf("re-read live workspace head: %w", err)
 	}

@@ -4,8 +4,10 @@ go 1.25.7
 
 require (
 	github.com/CycloneDX/cyclonedx-go v0.11.0
+	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
+	github.com/dolthub/fslock v0.0.3
 	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148
 	github.com/google/uuid v1.6.0
@@ -65,14 +67,12 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/sts v1.33.16 // indirect
 	github.com/aws/smithy-go v1.24.2 // indirect
 	github.com/bcicen/jstream v1.0.1 // indirect
-	github.com/cenkalti/backoff/v4 v4.2.1 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/cncf/xds/go v0.0.0-20251210132809-ee656c7534f5 // indirect
 	github.com/denisbrodbeck/machineid v1.0.1 // indirect
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
-	github.com/dolthub/fslock v0.0.3 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790 // indirect
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect

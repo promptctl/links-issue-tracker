@@ -124,15 +124,33 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 			err = errors.Join(err, relErr)
 		}
 	}()
+	// [LAW:single-enforcer] Same engine-write lock Store.Open acquires, and
+	// for the same reason: OpenSync is the on-change mirror's own engine
+	// open, so it is exactly the call site that must wait out an earlier
+	// foreground command's (or earlier mirror's) still-live engine instead
+	// of colliding with it. See links-sync-pgct.11.
+	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := engineRelease(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
 	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	s.releaseEngineLock = engineRelease
 	success = true
 	return s, nil
 }

@@ -31,6 +31,25 @@ const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 // pays the fetch latency.
 const receiveDebounceInterval = 10 * time.Second
 
+// mirrorSpawnDebounceInterval bounds how often a command spawns a NEW on-change
+// mirror subprocess: a mutation burst triggers at most one spawn per interval,
+// not one fork/exec per mutation (links-sync-pgct.11). The single-flight sync-push
+// lock (TryAcquireSyncPushLock) already stops two mirrors from both opening an
+// engine, but it does nothing about the fork/exec + wait-for-parent-exit startup
+// cost of every LOSING mirror in between — each one is real CPU/process-table
+// pressure that a loaded machine feels, and that pressure is what turned into
+// engine-write-lock contention exhausting the transient-retry budget on CI (a
+// burst of `lit new` calls with no pacing spawned up to 15 subprocesses, most of
+// which existed only to lose the single-flight race). Shorter than
+// receiveDebounceInterval: push latency is the whole point of on-change cadence
+// (no explicit `sync push` step), so an ordinary, non-bursty mutation should still
+// get a near-immediate mirror — only a genuine burst coalesces. Coalescing is
+// still safe at any interval: the eventual mirror pushes the current HEAD, which
+// already includes every commit that landed since the last one that ran (same
+// "commits that landed before this push go out with it" property spawnBackgroundMirror
+// already documents for the single-flight lock).
+const mirrorSpawnDebounceInterval = 1 * time.Second
+
 // shouldSyncAfterMutation is the pure push-cadence decision: only a mutating
 // (write) command under the on-change policy triggers the push mirror. Read-mode
 // commands and the opt-in on-push policy never do.
@@ -61,13 +80,23 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
 	}
-	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) {
+	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) && shouldSpawnMirrorNow(ws, time.Now(), mirrorSpawnDebounceInterval) {
+		// The marker records "an attempt happened" and is written first,
+		// unconditionally for every outcome below — remote-check error, no
+		// remote, spawn failure, spawn success. The debounce rate-limits the
+		// whole attempt (including its stderr noise when something is wrong),
+		// not just the happy path: a burst against a broken remote check must
+		// not re-run the check and re-print the warning on every mutation.
+		// [LAW:dataflow-not-control-flow]
+		if err := markMirrorSpawnAttempt(ws); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: on-change mirror-spawn debounce marker not written: %v\n", err)
+		}
 		// Cheap precondition, mirroring receiveInline's own check below: a
 		// remote-less workspace has nothing to push to, so skip the subprocess
-		// spawn entirely rather than pay fork/exec cost on every mutation only to
-		// have the mirror discover "no remote" for itself. This matters more now
-		// that on-change is the shipped default (links-sync-pgct.3) rather than an
-		// opt-in a user chose knowing the cost. [LAW:carrying-cost]
+		// spawn entirely rather than pay fork/exec cost only to have the mirror
+		// discover "no remote" for itself. This matters more now that on-change
+		// is the shipped default (links-sync-pgct.3) rather than an opt-in a
+		// user chose knowing the cost. [LAW:carrying-cost]
 		hasRemote, err := workspaceHasGitRemote(ctx, ws)
 		if err != nil {
 			// Unexpected — surface it rather than silently skip or silently spawn
@@ -84,6 +113,33 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	}
 }
 
+// shouldRunNow reports whether the debounce interval has elapsed since
+// markerPath was last touched. A missing or unreadable marker means "never run
+// (or cannot tell)" → allow. now and interval are parameters so the decision is
+// testable without sleeping. [LAW:one-type-per-behavior] One debounce primitive;
+// automatic receive and the on-change mirror spawn are two instances
+// distinguished only by which marker path and interval they pass in — neither
+// owns its own copy of the stat-and-compare logic.
+func shouldRunNow(markerPath string, now time.Time, interval time.Duration) bool {
+	info, err := os.Stat(markerPath)
+	if err != nil {
+		return true
+	}
+	return now.Sub(info.ModTime()) >= interval
+}
+
+// markRunAttempt records "this ran now" by setting markerPath's modification
+// time to now, creating it if absent.
+func markRunAttempt(ws workspace.Info, markerPath string) error {
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		return fmt.Errorf("ensure storage dir for debounce marker: %w", err)
+	}
+	if err := os.WriteFile(markerPath, nil, 0o644); err != nil {
+		return fmt.Errorf("write debounce marker %s: %w", filepath.Base(markerPath), err)
+	}
+	return nil
+}
+
 // receiveMarkerPath is the single debounce marker for automatic receive: its
 // modification time is the last time a receive was attempted. [LAW:one-source-of-truth]
 func receiveMarkerPath(ws workspace.Info) string {
@@ -91,27 +147,32 @@ func receiveMarkerPath(ws workspace.Info) string {
 }
 
 // shouldReceiveNow reports whether the debounce interval has elapsed since the
-// last receive attempt. A missing or unreadable marker means "never received (or
-// cannot tell)" → allow. now and interval are parameters so the decision is
-// testable without sleeping.
+// last receive attempt.
 func shouldReceiveNow(ws workspace.Info, now time.Time, interval time.Duration) bool {
-	info, err := os.Stat(receiveMarkerPath(ws))
-	if err != nil {
-		return true
-	}
-	return now.Sub(info.ModTime()) >= interval
+	return shouldRunNow(receiveMarkerPath(ws), now, interval)
 }
 
-// markReceiveAttempt records "a receive was attempted now" by setting the marker
-// file's modification time to now (creating it if absent).
+// markReceiveAttempt records "a receive was attempted now".
 func markReceiveAttempt(ws workspace.Info) error {
-	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		return fmt.Errorf("ensure storage dir for receive marker: %w", err)
-	}
-	if err := os.WriteFile(receiveMarkerPath(ws), nil, 0o644); err != nil {
-		return fmt.Errorf("write receive marker: %w", err)
-	}
-	return nil
+	return markRunAttempt(ws, receiveMarkerPath(ws))
+}
+
+// mirrorSpawnMarkerPath is the single debounce marker for the on-change mirror
+// spawn: its modification time is the last time a mirror subprocess was
+// spawned. [LAW:one-source-of-truth]
+func mirrorSpawnMarkerPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, "mirror-spawn.last")
+}
+
+// shouldSpawnMirrorNow reports whether the debounce interval has elapsed since
+// the last mirror spawn.
+func shouldSpawnMirrorNow(ws workspace.Info, now time.Time, interval time.Duration) bool {
+	return shouldRunNow(mirrorSpawnMarkerPath(ws), now, interval)
+}
+
+// markMirrorSpawnAttempt records "a mirror was spawned now".
+func markMirrorSpawnAttempt(ws workspace.Info) error {
+	return markRunAttempt(ws, mirrorSpawnMarkerPath(ws))
 }
 
 // workspaceHasGitRemote reports whether the workspace has at least one git remote

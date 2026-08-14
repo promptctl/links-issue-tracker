@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,7 +13,8 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/dolthub/driver"
+	"github.com/cenkalti/backoff/v4"
+	embedded "github.com/dolthub/driver"
 
 	"github.com/google/uuid"
 
@@ -23,18 +23,31 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/rank"
 )
 
+const doltDatabaseName = "links"
+
+// engineAccess is the engine-open contract discriminator. A write-capable open
+// must end with a store that can update the journal manifest, so it fails fast
+// on cross-process lock contention and retries the open (bounded) until the
+// holder releases; a read open tolerates dolt's read-only fallback — reading a
+// store someone else is writing is exactly its job. [LAW:types-are-the-program]
+// The contract is a typed input to the one connection assembly point, not a
+// per-callsite improvisation.
+type engineAccess int
+
 const (
-	doltDriverName   = "dolt"
-	doltDatabaseName = "links"
+	engineRead engineAccess = iota
+	engineWrite
 )
 
 type Store struct {
 	db                   *sql.DB
 	workspaceID          string
 	doltRootDir          string
+	access               engineAccess
 	commitLockPath       string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
+	releaseEngineLock    func() error
 
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
@@ -45,6 +58,14 @@ type Store struct {
 	// an explicit owner, not an ambient package global — so tests holding their
 	// own Store can never race on it (and t.Parallel() stays safe).
 	applyPreMutationHookForTest func()
+
+	// commitWorkingSetHookForTest, if non-nil, fires at the top of every
+	// commitWorkingSetOnce — the versioning (DOLT_COMMIT) step — and its error,
+	// if any, stands in for that step failing. Production callers leave it nil;
+	// the withMutation phase-resume test uses it to fail versioning transiently
+	// exactly once, proving a retry resumes at versioning instead of re-running
+	// the staged mutation body. Same per-Store seam rationale as above.
+	commitWorkingSetHookForTest func() error
 }
 
 type NotFoundError struct {
@@ -227,20 +248,40 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 			err = errors.Join(err, relErr)
 		}
 	}()
+	// [LAW:single-enforcer] The engine-write lock is acquired before
+	// EnsureDatabase/openStoreConnection so no read-write embedded Dolt
+	// engine is opened by this process while another process's is still
+	// live on the same path — the invariant embedded Dolt itself enforces
+	// with a hard failure ("database is read only") the moment two try to
+	// coexist. Waiting here converts that hard failure into a bounded wait.
+	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if success {
+			return
+		}
+		if relErr := engineRelease(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	s.releaseEngineLock = engineRelease
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	if err = s.withCommitLock(ctx, s.migrate); err != nil {
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil
+		s.releaseEngineLock = nil
 		return nil, err
 	}
 	success = true
@@ -279,7 +320,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		}
 		return nil, fmt.Errorf("stat database dir: %w", statErr)
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID)
+	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
 	}
@@ -345,12 +386,22 @@ func (s *Store) Close() error {
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	// [LAW:dataflow-not-control-flow] Workspace lock release runs on every
-	// Close, regardless of whether the DB closed cleanly — the shared hold
-	// must end with the Store's lifetime so a subsequent restore is not
-	// pinned by a dead Store. errors.Join keeps both failures observable
-	// when db.Close and release both fail; a leaked workspace lock would
-	// silently block every future restore with workspace-busy.
+	// [LAW:dataflow-not-control-flow] The engine lock releases first (it was
+	// acquired last, after the workspace lock — see Open/OpenSync), then the
+	// workspace lock, on every Close regardless of whether the DB closed
+	// cleanly: the next opener anywhere (this process's next command, or a
+	// waiting mirror/foreground command in another process) must see this
+	// path free the instant the store's lifetime ends. errors.Join keeps
+	// every failure observable when db.Close and a release both fail; a
+	// leaked engine lock would strand every future opener on this path
+	// exactly like a leaked workspace lock strands restores.
+	if s.releaseEngineLock != nil {
+		release := s.releaseEngineLock
+		s.releaseEngineLock = nil
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}
 	if s.releaseWorkspaceLock != nil {
 		release := s.releaseWorkspaceLock
 		s.releaseWorkspaceLock = nil
@@ -361,43 +412,39 @@ func (s *Store) Close() error {
 	return err
 }
 
-func openStoreConnection(doltRootDir string, workspaceID string) (*Store, error) {
-	db, err := sql.Open(doltDriverName, buildDoltDSN(doltRootDir, workspaceID, true))
+func openStoreConnection(doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
-		return nil, fmt.Errorf("open dolt: %w", err)
+		return nil, err
 	}
-	// [LAW:single-enforcer] Each Store owns one embedded Dolt SQL connection so the process cannot self-conflict through the database/sql pool.
-	db.SetMaxOpenConns(1)
-	db.SetMaxIdleConns(1)
-	db.SetConnMaxLifetime(0)
 	return &Store{
 		db:             db,
 		workspaceID:    workspaceID,
 		doltRootDir:    doltRootDir,
+		access:         access,
 		commitLockPath: commitLockPathForDolt(doltRootDir),
 		telemetryDir:   filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}, nil
 }
 
-// reconnect swaps s.db for a fresh connection using the same DSN.
-// Dolt's online garbage collection invalidates any SQL connection that was
-// open when it ran ("this connection can no longer be used. please reconnect."),
-// so callers that invoke DOLT_GC must rotate the pooled connection before
-// any subsequent query. Must be called while the commit lock is held so no
-// concurrent caller observes a torn s.db pointer.
+// reconnect swaps s.db for a fresh connection with the Store's own open
+// contract. Dolt's online garbage collection invalidates any SQL connection
+// that was open when it ran ("this connection can no longer be used. please
+// reconnect."), so callers that invoke DOLT_GC must rotate the pooled
+// connection before any subsequent query. Must be called while the commit lock
+// is held so no concurrent caller observes a torn s.db pointer.
 //
-// The new handle is opened and configured before the old one is closed, so a
-// failure to open the replacement leaves s.db pointing at the still-working
-// original handle rather than tearing the Store.
+// The new handle is opened and configured before the old one is closed; the
+// swap is safe because the pool's engine opens lazily on first use, which
+// happens only after prev.Close() below has already released the prior engine
+// — the process never holds two engines on the path.
+// [LAW:no-ambient-temporal-coupling]
 func (s *Store) reconnect() error {
-	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the DSN's doltRootDir/workspaceID, not whether the rotation occurs.
-	next, err := sql.Open(doltDriverName, buildDoltDSN(s.doltRootDir, s.workspaceID, true))
+	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
+	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)
 	if err != nil {
 		return fmt.Errorf("reopen dolt: %w", err)
 	}
-	next.SetMaxOpenConns(1)
-	next.SetMaxIdleConns(1)
-	next.SetConnMaxLifetime(0)
 	prev := s.db
 	s.db = next
 	if err := prev.Close(); err != nil && !errors.Is(err, context.Canceled) {
@@ -2440,17 +2487,27 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return false, fmt.Errorf("create dolt root dir: %w", err)
 	}
-	db, err := sql.Open(doltDriverName, buildDoltDSN(root, workspaceID, false))
-	if err != nil {
-		return false, fmt.Errorf("open dolt bootstrap: %w", err)
+	// The two bootstrap pools run strictly one-after-another: with the singleton
+	// cache bypassed, each pool owns a real engine whose journal lock lives until
+	// that pool closes, so the second open must not begin while the first is
+	// still live. [LAW:no-ambient-temporal-coupling] The explicit Close IS the
+	// ordering owner — a deferred close would hold both engines at once.
+	if err := func() error {
+		db, err := openDoltPool(root, workspaceID, "", engineWrite)
+		if err != nil {
+			return err
+		}
+		defer db.Close()
+		if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
+			return fmt.Errorf("create dolt database: %w", err)
+		}
+		return nil
+	}(); err != nil {
+		return false, err
 	}
-	defer db.Close()
-	if _, err := db.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
-		return false, fmt.Errorf("create dolt database: %w", err)
-	}
-	db, err = sql.Open(doltDriverName, buildDoltDSN(root, workspaceID, true))
+	db, err := openDoltPool(root, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
-		return false, fmt.Errorf("open dolt bootstrap database: %w", err)
+		return false, err
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
@@ -2496,19 +2553,74 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	return nil
 }
 
-func buildDoltDSN(doltRootDir, workspaceID string, includeDatabase bool) string {
+// engineOpenRetryMaxElapsed bounds how long a write-capable engine open keeps
+// retrying while another process's engine holds the journal manifest lock.
+// Matches the engine-write flock's ~30s budget for "how long do we wait on a
+// co-resident holder of this store" (workspace_lock.go): the flock serializes
+// lit's own writers, and this retry absorbs the residue the flock cannot see —
+// the beat between another process releasing the flock (Store.Close) and its
+// OS-level journal lock actually clearing (process teardown), or a non-lit
+// dolt process holding the store. A package variable so tests can shrink the
+// budget without sleeping through the production one.
+var engineOpenRetryMaxElapsed = 30 * time.Second
+
+// newEngineOpenBackOff builds the per-connector retry policy for write-capable
+// engine opens. Fresh instance per connector — backoff state is per-open, and
+// the connector Resets it before each engine open.
+func newEngineOpenBackOff() backoff.BackOff {
+	bo := backoff.NewExponentialBackOff()
+	bo.InitialInterval = 50 * time.Millisecond
+	bo.MaxInterval = time.Second
+	bo.MaxElapsedTime = engineOpenRetryMaxElapsed
+	return bo
+}
+
+// newDoltConnector assembles the embedded-driver connector every store
+// connection is built from. database selects the initial database ("" for the
+// bootstrap opens that create it). access is the open contract: engineWrite
+// opens fail fast on a foreign journal-lock holder and retry (bounded) instead
+// of accepting dolt's silent read-only fallback — a "successfully opened" write
+// store IS the proof it can write ([LAW:parse-dont-validate]); engineRead keeps
+// the fallback, because reading beside a live writer is a read open's whole
+// contract. Both bypass dolt's in-process singleton cache, so a Store's
+// lifetime and its engine's (and journal lock's) lifetime are the same fact
+// rather than a cached shadow that outlives Close. [LAW:one-source-of-truth]
+func newDoltConnector(doltRootDir, workspaceID, database string, access engineAccess) (*embedded.Connector, error) {
 	author := strings.TrimSpace(workspaceID)
 	if author == "" {
 		author = "links"
 	}
 	author = strings.ReplaceAll(author, "@", "_")
-	query := url.Values{}
-	query.Set("commitname", author)
-	query.Set("commitemail", fmt.Sprintf("%s@links.local", author))
-	if includeDatabase {
-		query.Set("database", doltDatabaseName)
+	cfg := embedded.Config{
+		Directory:             filepath.Clean(doltRootDir),
+		CommitName:            author,
+		CommitEmail:           fmt.Sprintf("%s@links.local", author),
+		Database:              database,
+		DisableSingletonCache: true,
 	}
-	return "file://" + filepath.ToSlash(filepath.Clean(doltRootDir)) + "?" + query.Encode()
+	if access == engineWrite {
+		cfg.BackOff = newEngineOpenBackOff()
+	}
+	connector, err := embedded.NewConnector(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("open dolt: %w", err)
+	}
+	return connector, nil
+}
+
+// openDoltPool wraps newDoltConnector's connector in the one configured
+// database/sql pool shape every store connection uses.
+func openDoltPool(doltRootDir, workspaceID, database string, access engineAccess) (*sql.DB, error) {
+	connector, err := newDoltConnector(doltRootDir, workspaceID, database, access)
+	if err != nil {
+		return nil, err
+	}
+	db := sql.OpenDB(connector)
+	// [LAW:single-enforcer] Each Store owns one embedded Dolt SQL connection so the process cannot self-conflict through the database/sql pool.
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
+	db.SetConnMaxLifetime(0)
+	return db, nil
 }
 
 func dirExists(path string) bool {

@@ -65,6 +65,38 @@ func TestShouldReceiveNowDebounce(t *testing.T) {
 	}
 }
 
+// TestShouldSpawnMirrorNowDebounce pins the mirror-spawn instance of the shared
+// debounce primitives (shouldRunNow/markRunAttempt): a missing marker allows a
+// spawn, a fresh marker blocks inside the interval, an aged one allows again —
+// and the two debounce instances are independent facts, so marking a mirror
+// spawn must not consume the receive debounce or vice versa.
+func TestShouldSpawnMirrorNowDebounce(t *testing.T) {
+	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+	now := time.Now()
+	interval := time.Second
+
+	if !shouldSpawnMirrorNow(ws, now, interval) {
+		t.Fatalf("missing marker should allow a mirror spawn")
+	}
+	if err := markMirrorSpawnAttempt(ws); err != nil {
+		t.Fatalf("markMirrorSpawnAttempt error = %v", err)
+	}
+	if _, err := os.Stat(mirrorSpawnMarkerPath(ws)); err != nil {
+		t.Fatalf("mirror-spawn marker not created: %v", err)
+	}
+	if shouldSpawnMirrorNow(ws, now.Add(100*time.Millisecond), interval) {
+		t.Fatalf("mirror spawn inside the debounce interval should be blocked")
+	}
+	if !shouldSpawnMirrorNow(ws, now.Add(interval+time.Second), interval) {
+		t.Fatalf("mirror spawn past the debounce interval should be allowed")
+	}
+	// Independence: the mirror marker must not have consumed the receive
+	// debounce — each instance owns its own marker file.
+	if !shouldReceiveNow(ws, now, interval) {
+		t.Fatalf("marking a mirror spawn must not debounce the receive")
+	}
+}
+
 // TestIsTruthyEnv pins the kill-switch parsing: only explicit boolean-true values
 // enable it; empty, unset, and unrecognized strings are false so background sync
 // is never disabled by accident.

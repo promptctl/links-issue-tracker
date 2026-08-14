@@ -585,7 +585,6 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() of version-slot-reuse workspace error = %v; want a transparent repair, not a refusal", err)
 	}
-	defer repaired.Close()
 
 	cols, err := repaired.tableColumns(ctx, "issues")
 	if err != nil {
@@ -604,6 +603,13 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 	}
 	if applied != headVersion(t) {
 		t.Errorf("recordedMigrationVersion() = %d after repair, want registry max %d — repair must not touch goose_db_version bookkeeping, only the schema it already claims", applied, headVersion(t))
+	}
+	// Close before the second Open below: embedded Dolt permits only one
+	// read-write engine per path (links-sync-pgct.11), and this test opens
+	// the same doltRoot again next — repaired must release first, exactly as
+	// a real command sequence would.
+	if err := repaired.Close(); err != nil {
+		t.Fatalf("repaired.Close() error = %v", err)
 	}
 
 	// A second Open must be a clean no-op: the drift is gone, so
