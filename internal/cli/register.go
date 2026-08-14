@@ -190,7 +190,7 @@ func (r *commandRegistrar) appCmd(access app.AccessMode, fn appRunFn) CommandRun
 
 func (r *commandRegistrar) appCmdDynamic(resolve func([]string) app.AccessMode, fn appRunFn) CommandRunner {
 	return func(args []string) error {
-		return runWithApp(r.ctx, resolve(args), func(commandCtx context.Context, ap *app.App) error {
+		return runWithApp(r.ctx, r.stdout, resolve(args), func(commandCtx context.Context, ap *app.App) error {
 			return fn(commandCtx, r.stdout, ap, args)
 		})
 	}
@@ -212,7 +212,7 @@ func (r *commandRegistrar) familyCmd(f commandFamily[appSubcommand]) CommandRunn
 		if sub.skipApp {
 			return sub.run(r.ctx, r.stdout, nil, args[1:])
 		}
-		return runWithApp(r.ctx, sub.access, func(commandCtx context.Context, ap *app.App) error {
+		return runWithApp(r.ctx, r.stdout, sub.access, func(commandCtx context.Context, ap *app.App) error {
 			return sub.run(commandCtx, r.stdout, ap, args[1:])
 		})
 	}

@@ -99,7 +99,7 @@ func runWithWorkspace(run func(workspace.Info) error) error {
 	return run(ws)
 }
 
-func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
+func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode, run func(context.Context, *app.App) error) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return fmt.Errorf("get cwd: %w", err)
@@ -122,6 +122,18 @@ func runWithApp(ctx context.Context, accessMode app.AccessMode, run func(context
 	}()
 	if runErr != nil {
 		return runErr
+	}
+	// The staleness banner for mutating commands lives HERE, at the one seam
+	// every mutating command flows through — not per-handler like the read
+	// commands' banner, because per-handler wiring is exactly how mutations were
+	// missed in the first place (links-sync-pgct.10): every mutating command
+	// added since would have had to remember the call. A command that only
+	// mutates now still hears about failing pushes. [LAW:locality-or-seam]
+	// It runs after the engine close on purpose: it reads only storage-dir
+	// markers, needing no engine, and precedes the auto-sync below so the banner
+	// reports the last COMPLETED attempt rather than racing the one about to spawn.
+	if accessMode == app.AccessWrite {
+		printMutationSyncStalenessWarning(stdout, ws, time.Now())
 	}
 	// [LAW:single-enforcer] One owner consults the auto-sync policy after a
 	// successful command, AND after that command's engine is closed: the on-change
@@ -449,7 +461,7 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 		defer func() { _ = st.Close() }()
 		return runListWithStore(ctx, stdout, st, args)
 	}
-	return runWithApp(ctx, app.AccessRead, func(ctx context.Context, ap *app.App) error {
+	return runWithApp(ctx, stdout, app.AccessRead, func(ctx context.Context, ap *app.App) error {
 		return runListWithStore(ctx, stdout, ap.Store, args)
 	})
 }
