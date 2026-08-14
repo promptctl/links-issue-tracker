@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -130,6 +131,29 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *stor
 		Freshness: freshness,
 		Age:       ageFromOldestDivergedUnix(freshness.OldestDivergedUnix, time.Now()),
 	}
+}
+
+// printPushOutcomeHealth renders the last-push-failure line when — and only
+// when — the last push attempt did not land. It is what makes the detached
+// mirror's failure sink discoverable from the one surface users are told to
+// check: the banner elsewhere compresses the failure to one line, while doctor
+// names the durable record (mirror.log, with its last-write age) that holds
+// the full story. A healthy or never-pushed workspace prints nothing — the
+// freshness line above already covers those states, and a second line about
+// them would be a drifting copy. [LAW:one-source-of-truth]
+func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time) error {
+	rec, age, known := lastPushOutcome(ws, now)
+	if !known || !rec.failed() {
+		return nil
+	}
+	logNote := ""
+	logPath := filepath.Join(ws.StorageDir, mirrorLogName)
+	if info, err := os.Stat(logPath); err == nil {
+		logNote = fmt.Sprintf(" — mirror log: %s (last written %s ago)", logPath, humanizeCoarseDuration(now.Sub(info.ModTime())))
+	}
+	_, err := fmt.Fprintf(w, "sync: last push attempt FAILED %s ago: %s%s\n",
+		humanizeCoarseDuration(age), oneLineReason(rec.Reason), logNote)
+	return err
 }
 
 // printSyncFreshness renders the freshness line. Every resolved state names the
@@ -262,6 +286,9 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		return err
 	}
 	if err := printSyncFreshness(stdout, syncReport); err != nil {
+		return err
+	}
+	if err := printPushOutcomeHealth(stdout, ap.Workspace, time.Now()); err != nil {
 		return err
 	}
 	// [LAW:single-enforcer] Corruption classification is output-format agnostic and always enforced here.

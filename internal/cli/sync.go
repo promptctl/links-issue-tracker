@@ -347,7 +347,12 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // remote resolution); a push that ran and failed is carried in outcome.pushErr
 // with its trace already recorded, leaving the caller to decide whether that
 // fails it (the command) or is best-effort (the cadence owner).
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (syncPushOutcome, error) {
+func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
+	// the push-outcome marker behind, so "are pushes working?" is answerable by
+	// any later command without an engine. One deferred write over the named
+	// results covers every return path by construction. [LAW:single-enforcer]
+	defer func() { recordPushOutcome(ws, pushOutcomeOf(outcome, retErr)) }()
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
@@ -432,10 +437,10 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	// that false claim on every interactive `lit sync push` a human runs
 	// directly. [LAW:no-silent-failure] a trace record that misattributes its
 	// own cause is a lie the next reader has no way to catch.
-	syncPushDecision := "pushed"
+	syncPushDecision := pushDecisionPushed
 	durableReason := ""
 	if pushErr != nil {
-		syncPushDecision = "error"
+		syncPushDecision = pushDecisionError
 		durableReason = pushErr.Error()
 	}
 	recordSyncTraceLogged(ws, syncTraceRecord{
