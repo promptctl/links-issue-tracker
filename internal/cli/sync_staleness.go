@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -105,13 +106,71 @@ func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAg
 			f.Ahead, ref,
 		))
 	}
-	if fetchAgeKnown && fetchAge >= unfetchedStalenessThreshold {
-		lines = append(lines, fmt.Sprintf(
-			"sync: last successful fetch from %s was %s ago (over %s) — run 'lit sync fetch'",
-			ref, humanizeCoarseDuration(fetchAge), humanizeCoarseDuration(unfetchedStalenessThreshold),
-		))
-	}
+	lines = append(lines, fetchStalenessLines(ref, fetchAge, fetchAgeKnown)...)
 	return lines
+}
+
+// fetchStalenessLines renders the stale-fetch warning. ref names the remote
+// when the caller has resolved one ("origin/main"); an empty ref renders the
+// same warning without it — the store-free mutation-side banner knows the
+// fetch age (a marker stat) but not the remote (an engine read), and the
+// warning must not be withheld for want of a name.
+// [LAW:one-type-per-behavior] one renderer, the ref is data.
+func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool) []string {
+	if !fetchAgeKnown || fetchAge < unfetchedStalenessThreshold {
+		return nil
+	}
+	from := ""
+	if ref != "" {
+		from = " from " + ref
+	}
+	return []string{fmt.Sprintf(
+		"sync: last successful fetch%s was %s ago (over %s) — run 'lit sync fetch'",
+		from, humanizeCoarseDuration(fetchAge), humanizeCoarseDuration(unfetchedStalenessThreshold),
+	)}
+}
+
+// syncPushFailureLines renders the loud signal for a workspace whose last push
+// attempt did not land — the condition links-sync-pgct.10 exists to surface.
+// The ahead-count banner above cannot serve a mutating command: its own commit
+// is pushed only by a mirror that runs after the process exits, so a mutating
+// command is ALWAYS ahead at the moment it would print, and a banner that fires
+// on every healthy mutation trains its readers to ignore it. "The last attempt
+// failed" is the discriminator that separates degraded from healthy, and it
+// needs no engine — exactly what a post-close, post-mutation print site can
+// afford. Pure over the already-read marker state. [LAW:dataflow-not-control-flow]
+func syncPushFailureLines(rec pushOutcomeRecord, age time.Duration, known bool) []string {
+	if !known || !rec.failed() {
+		return nil
+	}
+	to := ""
+	if rec.Remote != "" && rec.Branch != "" {
+		to = " to " + rec.Remote + "/" + rec.Branch
+	}
+	return []string{fmt.Sprintf(
+		"sync: automatic push%s is FAILING — last attempt %s ago: %s — changes stay on this machine until a push succeeds; run 'lit sync push'",
+		to, humanizeCoarseDuration(age), oneLineReason(rec.Reason),
+	)}
+}
+
+// oneLineReason compresses a recorded failure into banner size: first line
+// only, capped. The banner is the signal; the full text lives in the sync
+// trace and mirror.log, which `lit doctor` points at. [LAW:one-source-of-truth]
+// the banner cites the record rather than trying to be it.
+func oneLineReason(reason string) string {
+	const maxLen = 160
+	line := reason
+	if i := strings.IndexByte(line, '\n'); i >= 0 {
+		line = line[:i]
+	}
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "(no reason recorded)"
+	}
+	if runes := []rune(line); len(runes) > maxLen {
+		line = string(runes[:maxLen]) + "…"
+	}
+	return line
 }
 
 // printSyncStalenessWarning resolves sync freshness and last-fetch age (the
@@ -127,10 +186,43 @@ func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAg
 func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st *store.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
 	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
-	for _, line := range syncStalenessLines(report, fetchAge, fetchAgeKnown) {
+	// The push-failure line leads: it names the CAUSE (pushes are failing),
+	// which the ahead-count line below only shows the accumulating effect of.
+	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
+	lines := syncPushFailureLines(rec, pushAge, pushKnown)
+	lines = append(lines, syncStalenessLines(report, fetchAge, fetchAgeKnown)...)
+	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// printMutationSyncStalenessWarning is the staleness banner for mutating
+// commands — the surface links-sync-pgct.10 adds. It runs at the one dispatch
+// seam every mutating command already flows through, after the command's
+// engine has closed, so it reads only the storage-dir markers (push outcome,
+// fetch success): the store-backed ahead count is both unavailable there and,
+// per syncPushFailureLines' rationale, the wrong predicate for a mutating
+// session anyway. A session that only chains mutations against a failing
+// remote now hears about it on its very next command instead of never.
+//
+// Write failures are reported to stderr, never returned: the mutation this
+// banner trails is already durable, and an exit code that flips nonzero over
+// a banner write (an agent piping stdout through `head` gets EPIPE here)
+// would tell the caller the mutation failed when it succeeded — the exit code
+// stays truthful about the command's own work. [LAW:no-silent-failure] the
+// failure is still loud, on the channel that cannot lie about the mutation.
+func printMutationSyncStalenessWarning(w io.Writer, ws workspace.Info, now time.Time) {
+	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
+	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
+	lines := syncPushFailureLines(rec, pushAge, pushKnown)
+	lines = append(lines, fetchStalenessLines("", fetchAge, fetchAgeKnown)...)
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(w, line); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: staleness banner not written: %v\n", err)
+			return
+		}
+	}
 }

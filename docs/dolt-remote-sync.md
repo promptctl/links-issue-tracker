@@ -128,14 +128,27 @@ command completes, as a non-blocking background mirror. It is best-effort: a
 push failure is surfaced on stderr and recorded as an automation trace, but
 never fails the command — the ticket change is already durable in the local
 Dolt store. Whichever cadence is chosen, a push that stays pending is not
-silent: `lit backlog`, `lit next`, and `lit show` print a `sync: N local
-change(s) not pushed …` line whenever the store reads ahead-of-remote, so a
-failed or skipped push is a loud, recurring fact the next time one of those
-commands runs, rather than something only `lit doctor` would surface. That
-banner is wired into those three read commands only — a session that runs
-only mutating commands (`new`, `start`, `update`, `close`, …) between pushes
-won't see it until it next runs one of the three. An unknown cadence value is
-rejected at config load.
+silent. Every push attempt — mirror or explicit — records how it ended in a
+`push-outcome.last` marker in the workspace's storage dir, and two banners
+read it:
+
+- `lit backlog`, `lit next`, and `lit show` print a `sync: N local change(s)
+  not pushed …` line whenever the store reads ahead-of-remote, and lead with
+  a `sync: automatic push … is FAILING` line when the last push attempt
+  failed.
+- **Every mutating command** (`new`, `start`, `update`, `close`, `comment`,
+  `rank`, …) prints the same failure banner after its own output when the
+  last push attempt failed — so a session that only chains mutations against
+  a broken remote hears about it on its very next command, not only when it
+  happens to run one of the three read commands. (The mutating-side banner
+  keys on "the last attempt failed", not the ahead count: a mutating command
+  is always momentarily ahead at its own end, because its mirror pushes only
+  after the process exits.)
+
+`lit doctor` additionally names the durable evidence when the last attempt
+failed: the failure reason and the mirror worker's log
+(`<storage-dir>/mirror.log`, with its last-write age). An unknown cadence
+value is rejected at config load.
 
 ## Receive automation
 
