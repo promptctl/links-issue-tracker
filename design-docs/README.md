@@ -16,6 +16,8 @@ carries its own `Status:` header that tells you how to treat it:
   code has moved on since, so expect divergence from the current tree.
 - **Draft / proposal** — a direction that was being explored. Some of it landed,
   some didn't.
+- **Accepted design** — a validated design, written to stay accurate before,
+  during, and after its implementation unless a later design supersedes it.
 
 When a design doc and the code disagree, **the code wins** — these are the
 record of intent, not a spec the implementation is held to. For current usage,
@@ -37,3 +39,6 @@ see the [README](../README.md) and the [docs](../docs/) site.
   agents are identified and how ticket ownership is modeled.
 - **[agent-native-guidance-proposal.md](agent-native-guidance-proposal.md)** —
   a proposal for injecting workflow guidance into command output.
+- **[work-claims.md](work-claims.md)** — how parallel checkouts coordinate over
+  one shared backlog: purely derived claims, lane granularity, and the privacy
+  invariant for a synced store. *Accepted design.*
