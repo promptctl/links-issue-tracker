@@ -69,10 +69,10 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 	if outcome.traceErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic receive trace not recorded: %v\n", outcome.traceErr)
 	}
-	surfaceInlineFailure(outcome, time.Now())
+	surfaceInlineOutcome(ctx, ws, outcome, time.Now())
 }
 
-// surfaceInlineFailure renders a non-converging inline reconcile — a held free-text
+// surfaceInlineOutcome renders a non-converging inline reconcile — a held free-text
 // conflict or a hard backend failure — to stderr through the one sync-failure
 // contract, and does nothing when the receive/reconcile settled cleanly. It keeps
 // receiveInline a pure orchestrator: the decision of WHETHER to surface lives in
@@ -82,10 +82,41 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 // can no longer read as an ignorable line the way the raw "will retry" error once
 // did. [LAW:decomposition] [LAW:no-silent-failure] [LAW:single-enforcer] one
 // contract, whether the failure flows out as a returned error or is printed here.
-func surfaceInlineFailure(outcome syncReceiveOutcome, now time.Time) {
+//
+// The inline receive runs after nearly every command, which makes this seam the
+// owner channel's workhorse (links-sync-pgct.4): a surfaced divergence notifies
+// the owner out-of-band (de-duplicated per episode), and a receive that settled
+// cleanly against the remote ends the divergence episode. The hook is passed the
+// command's ctx, not the receive's 15s timeoutCtx: the receive fetch already
+// completed, and its remaining budget must not shorten the notifier's own.
+// [LAW:no-ambient-temporal-coupling]
+func surfaceInlineOutcome(ctx context.Context, ws workspace.Info, outcome syncReceiveOutcome, now time.Time) {
 	if failure, ok := outcome.inlineSyncFailure(now); ok {
 		fmt.Fprintln(os.Stderr, failure.blockString())
+		if ev, evOK := ownerNotifyEventForFailure(failure); evOK {
+			maybeNotifyOwner(ctx, ws, ev)
+		}
+		return
 	}
+	if outcome.settledCleanly() {
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
+	}
+}
+
+// settledCleanly reports whether the receive both contacted the remote and left
+// no unresolved divergence — the condition that ends a divergence episode. A
+// skipped receive (no remote, empty remote) and a failed one carry no such
+// information and leave the episode standing. [LAW:dataflow-not-control-flow]
+// the outcome's values decide; the caller runs unconditionally.
+func (o syncReceiveOutcome) settledCleanly() bool {
+	if o.status != "ok" || o.receiveErr != nil {
+		return false
+	}
+	if o.reconcile == nil {
+		return true
+	}
+	return o.reconcile.err == nil &&
+		(o.reconcile.state == store.SyncReconcileLinearized || o.reconcile.state == store.SyncReconcileNotDiverged)
 }
 
 // inlineSyncFailure derives the sync-failure contract for an inline reconcile

@@ -517,6 +517,8 @@ lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose]
 lit sync reconcile                                              # run the field-aware reconcile; surface any prose divergence
 lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT … # finalize with the agent's merged text
 lit sync reconcile abort                                        # leave the clone diverged for now
+lit sync reconcile combine                                      # unrelated histories: union both backlogs, keeping every issue
+lit sync reconcile take local|remote [--owner-approved TOKEN]   # unrelated histories: adopt one side wholesale — DESTRUCTIVE, refuses without owner approval
 ```
 
 Mirrors issue data through git remotes so one backlog is shared across clones — see
@@ -535,6 +537,16 @@ fingerprint pins each merge to the exact conflict it was made against, so a
 partial or stale resolution (including one merged against a since-changed
 base/ours/theirs) is rejected and re-surfaced. `abort` defers — the clone stays
 diverged and usable.
+
+For **unrelated histories** (no common ancestor, so the field-aware merge has no
+base), `combine` unions both backlogs with nothing dropped and needs no
+approval, while `take local|remote` adopts one side wholesale and **permanently
+discards the other side's unique issues** — run bare it exits 5 with a refusal
+naming what would be destroyed and a one-time token; only the owner's explicit
+go-ahead, asserted via `--owner-approved <token>`, runs it. See
+[Sync and remotes](dolt-remote-sync.md) for the owner-notification hook
+(`sync.owner_notify_cmd`) that carries divergence and push-failure events out
+of band.
 
 ### `lit export`
 

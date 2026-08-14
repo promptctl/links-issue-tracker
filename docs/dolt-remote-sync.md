@@ -198,3 +198,64 @@ untouched (still diverged, still usable on local truth), and holds the conflict 
 a **prose-pending** state recorded on an automation trace for the agent surface to
 merge inline. Reverting a peer's semantic field is incoherent distrust, so every
 other field converges deterministically; prose is the sole agent boundary.
+
+## Owner notifications
+
+The in-band surfaces above talk to whoever runs the next command — usually an
+agent. The party who can actually *lose work* when sync degrades is the OWNER,
+so lit also carries the event out of the terminal: when it detects a real
+divergence (no common ancestor, a reconcile it could not converge, a held prose
+conflict) or a push attempt fails, it runs a shell command you configure —
+e.g. a push to an [ntfy](https://ntfy.sh) topic — at detection time:
+
+```toml
+[sync]
+owner_notify_cmd = 'curl -s -H "Title: lit sync degraded" -d "$LIT_NOTIFY_SUMMARY" https://ntfy.example/lit'
+```
+
+The command runs via `sh -c` in the repo root, time-boxed to 10s, with the
+event's facts in the environment:
+
+| variable             | value                                                            |
+| -------------------- | ---------------------------------------------------------------- |
+| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, or `push_failed` |
+| `LIT_NOTIFY_SUMMARY` | the one-sentence domain description of what degraded             |
+| `LIT_NOTIFY_REMOTE`  | the sync remote concerned (may be empty for an unresolved push)  |
+| `LIT_NOTIFY_BRANCH`  | the sync branch concerned                                        |
+| `LIT_NOTIFY_REPO`    | the repository root, for owners who run several backlogs         |
+
+Notifications are de-duplicated **per episode**: the first detection of a
+condition fires immediately, re-detections of the same ongoing condition are
+suppressed (re-pinging at most daily while it persists), and the episode ends
+when the condition resolves — a landed push, a converged reconcile — so the
+*next* occurrence notifies immediately again. A failed hook is loud on stderr,
+recorded in the sync traces, and retried on the next detection. Empty (the
+default) configures no channel and runs nothing; `LIT_DISABLE_AUTO_SYNC=1`
+suppresses the hook along with all other automatic sync side effects.
+
+## Destructive reconcile requires owner approval
+
+Unrelated histories (independently-initialized stores sharing one remote) never
+merge automatically — resolving them is a deliberate choice among:
+
+- `lit sync reconcile combine` — the union: every issue kept, shared ids
+  field-merged, an on-both prose conflict held for inline resolution. This is
+  the keep-everything default and stays **agent-runnable** with no approval.
+- `lit sync reconcile take local|remote` — one side survives **wholesale and
+  the other side's unique issues are permanently discarded**.
+
+Because a take destroys one side's work, it refuses to run without the owner's
+explicit approval. Run bare, it exits 5 with a refusal block naming exactly
+which issues the take would discard and a one-time approval token; only
+
+```text
+lit sync reconcile take <side> --owner-approved <token>
+```
+
+runs the destruction. The token is a digest of both heads *and* the chosen
+side: any new commit on either side — or presenting a take-local token to
+take-remote — voids it, and the refusal re-mints a fresh one for the fork as it
+now stands. The gate is procedural, not cryptographic: an agent at the fork is
+told, unmistakably, that this decision belongs to the human who owns the
+backlog, and the audit trail (the sync traces record every `owner_approval_required`
+refusal and every approved take) shows who claimed that authority and when.

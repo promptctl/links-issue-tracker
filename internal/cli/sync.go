@@ -219,9 +219,17 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// other pull outcome is a payload the printer renders. [LAW:single-enforcer]
 	if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
 		recordSyncHeldTrace(ws, "lit sync pull", failure, pullTraceMetadata)
+		// A held pull is a detection moment: the owner hears out-of-band, the day
+		// it happens, not through later archaeology (links-sync-pgct.4).
+		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
+			maybeNotifyOwner(ctx, ws, ev)
+		}
 		return failure
 	}
 	recordSyncCommandTrace(ws, "lit sync pull", string(result.State), nil, pullTraceMetadata)
+	// A pull that completed without a held state converged (or found nothing to
+	// converge): the divergence episode, if one was notified, is over.
+	clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 	return printSyncPullPayload(stdout, buildSyncPullPayload(remoteName, resolvedBranch, result), *verbose)
 }
 
@@ -351,8 +359,14 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
-	// results covers every return path by construction. [LAW:single-enforcer]
-	defer func() { recordPushOutcome(ws, pushOutcomeOf(outcome, retErr)) }()
+	// results covers every return path by construction, and the same record
+	// feeds the owner's out-of-band channel: a failed attempt notifies, a landed
+	// push ends the episode. [LAW:single-enforcer]
+	defer func() {
+		rec := pushOutcomeOf(outcome, retErr)
+		recordPushOutcome(ws, rec)
+		observePushOutcomeForOwner(ctx, ws, rec, retErr, outcome.pushErr)
+	}()
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		return syncPushOutcome{}, err

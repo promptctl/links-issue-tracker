@@ -59,6 +59,14 @@ type SyncConfig struct {
 	// goal; the off switch is the documented exception. [LAW:no-mode-explosion]
 	// One boolean, one default, not a second cadence enum.
 	Receive bool `mapstructure:"receive"`
+	// OwnerNotifyCmd is the owner's out-of-band channel for degraded sync state
+	// (links-sync-pgct.4): a shell command lit runs when it detects a real
+	// divergence or a failing push — e.g. a curl to an ntfy topic — with the
+	// event's facts in LIT_NOTIFY_* environment variables. Empty (the default)
+	// means no channel is configured and nothing runs. One string, not a mode:
+	// what to send and where is the command's business, never lit's.
+	// [LAW:no-mode-explosion]
+	OwnerNotifyCmd string `mapstructure:"owner_notify_cmd"`
 }
 
 // SyncCadence selects when lit mirrors its Dolt store to the configured git
@@ -168,6 +176,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("snapshot.retention_budget", 5)
 	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
 	v.SetDefault("sync.receive", true)
+	v.SetDefault("sync.owner_notify_cmd", "")
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {

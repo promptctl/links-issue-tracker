@@ -38,6 +38,10 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &syncFailure) {
 		return "sync_divergence"
 	}
+	var ownerApproval ownerApprovalRefusalError
+	if errors.As(err, &ownerApproval) {
+		return "owner_approval_required"
+	}
 	var corruption CorruptionError
 	if errors.As(err, &corruption) {
 		return "corruption_detected"
@@ -105,6 +109,9 @@ func commandErrorRemediation(reason string) string {
 		// The SyncFailureError message IS the full remediation (directive + steps +
 		// escalation), so a second remediation line here would be a drifting copy of
 		// it. Emit none. [LAW:one-source-of-truth]
+		return ""
+	case "owner_approval_required":
+		// Same shape: the refusal block IS the remediation. [LAW:one-source-of-truth]
 		return ""
 	case "corruption_detected":
 		return "Run `lit doctor --fix integrity` and retry. <agent-instructions>This command is idempotent and safe to run without confirmation.</agent-instructions>"
