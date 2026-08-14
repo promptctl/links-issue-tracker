@@ -46,6 +46,9 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	if _, err := exec.LookPath("dolt"); err != nil {
+		t.Skip("dolt not available")
+	}
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
@@ -119,21 +122,35 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		}
 	}
 
-	// Settle before returning: every mutation above spawns its own detached
-	// on-change mirror subprocess (or shares one via the mirror-spawn
-	// debounce), and none of them are guaranteed to have finished pushing —
-	// let alone fully exited — the instant the LAST `lit new` above returns.
-	// Returning without waiting for that real, in-flight background work to
-	// land would leave a lingering subprocess racing this test's own
-	// t.TempDir() cleanup (observed directly: an "unlinkat ...: directory not
-	// empty" cleanup failure from a still-open file handle) and, worse,
-	// racing the NEXT test in this package for CPU/disk — exactly the kind of
-	// cross-test resource contention that made this test itself flaky in a
-	// full-package run. Polling this same independent oracle used above until
-	// it observes every commit is both a stronger assertion (the burst's data
-	// actually reached the remote, not just "no error printed") and the wait
-	// that lets the last mirror actually finish and exit before this test
-	// hands the machine back. [LAW:no-ambient-temporal-coupling]
+	// Sweep, then settle. The mirror-spawn debounce means the burst's FINAL
+	// mutations may have spawned no mirror of their own (inside the 1s window
+	// after the last spawn, with the last live mirror's HEAD read already
+	// behind them) — that tail is bounded staleness the on-change design
+	// accepts, swept by the next mutation, read-command staleness banner, or
+	// push. This test's claim is the collision class above, not eager
+	// delivery (TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush
+	// pins that deterministically for a single mutation), so an explicit push
+	// IS the deterministic sweeper here rather than a bet on mirror timing.
+	// [LAW:no-ambient-temporal-coupling] It also exercises the same
+	// engine-open path against any still-live mirror one more time.
+	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+		"sync", "push"); err != nil {
+		t.Fatalf("final sweep lit sync push: %v\noutput:\n%s\n%s", err, out, dumpMirrorLog(root))
+	}
+
+	// Settle before returning: mirrors spawned above may still be pushing —
+	// or merely still exiting — the instant the sweep returns. Returning
+	// without waiting for that real, in-flight background work to land would
+	// leave a lingering subprocess racing this test's own t.TempDir() cleanup
+	// (observed directly: an "unlinkat ...: directory not empty" cleanup
+	// failure from a still-open file handle) and, worse, racing the NEXT test
+	// in this package for CPU/disk — exactly the kind of cross-test resource
+	// contention that made this test itself flaky in a full-package run.
+	// Polling this same independent oracle used above until it observes every
+	// commit is both a stronger assertion (the burst's data actually reached
+	// the remote, not just "no error printed") and the wait that lets the
+	// last mirror actually finish and exit before this test hands the machine
+	// back.
 	const settleTimeout = 30 * time.Second
 	const settlePollInterval = 300 * time.Millisecond
 	deadline := time.Now().Add(settleTimeout)

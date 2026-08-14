@@ -81,24 +81,28 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 		return
 	}
 	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) && shouldSpawnMirrorNow(ws, time.Now(), mirrorSpawnDebounceInterval) {
+		// The marker records "an attempt happened" and is written first,
+		// unconditionally for every outcome below — remote-check error, no
+		// remote, spawn failure, spawn success. The debounce rate-limits the
+		// whole attempt (including its stderr noise when something is wrong),
+		// not just the happy path: a burst against a broken remote check must
+		// not re-run the check and re-print the warning on every mutation.
+		// [LAW:dataflow-not-control-flow]
+		if err := markMirrorSpawnAttempt(ws); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: on-change mirror-spawn debounce marker not written: %v\n", err)
+		}
 		// Cheap precondition, mirroring receiveInline's own check below: a
 		// remote-less workspace has nothing to push to, so skip the subprocess
-		// spawn entirely rather than pay fork/exec cost on every mutation only to
-		// have the mirror discover "no remote" for itself. This matters more now
-		// that on-change is the shipped default (links-sync-pgct.3) rather than an
-		// opt-in a user chose knowing the cost. [LAW:carrying-cost]
+		// spawn entirely rather than pay fork/exec cost only to have the mirror
+		// discover "no remote" for itself. This matters more now that on-change
+		// is the shipped default (links-sync-pgct.3) rather than an opt-in a
+		// user chose knowing the cost. [LAW:carrying-cost]
 		hasRemote, err := workspaceHasGitRemote(ctx, ws)
 		if err != nil {
 			// Unexpected — surface it rather than silently skip or silently spawn
 			// against unknown remote state. [LAW:no-silent-failure]
 			fmt.Fprintf(os.Stderr, "lit: on-change background push not started, could not check git remotes: %v\n", err)
 		} else if hasRemote {
-			// Debounce marker is touched even on a spawn failure below, same as
-			// receiveInline: a remote that's currently failing spawns shouldn't be
-			// retried on every single mutation either.
-			if err := markMirrorSpawnAttempt(ws); err != nil {
-				fmt.Fprintf(os.Stderr, "lit: on-change mirror-spawn debounce marker not written: %v\n", err)
-			}
 			if err := spawnBackgroundMirror(ws, os.Getpid()); err != nil {
 				fmt.Fprintf(os.Stderr, "lit: on-change background push not started: %v\n", err)
 			}
