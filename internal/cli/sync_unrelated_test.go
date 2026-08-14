@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -123,7 +124,7 @@ func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
 func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(&sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
 		State:  store.SyncReconcileUnrelated,
 		Ahead:  1,
 		Behind: 1,
@@ -165,7 +166,7 @@ func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	err := reportReconcileResult(&sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
+	err := reportReconcileResult(context.Background(), &sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
 		State:  store.SyncReconcileUnrelated,
 		Ahead:  7,
 		Behind: 7,

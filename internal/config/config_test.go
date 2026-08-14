@@ -48,6 +48,30 @@ func TestLoadDefaults(t *testing.T) {
 	if !cfg.Sync.Receive {
 		t.Fatal("expected sync.receive=true by default (seamless multi-machine), got false")
 	}
+	if cfg.Sync.OwnerNotifyCmd != "" {
+		t.Fatalf("expected sync.owner_notify_cmd empty by default (no channel configured), got %q", cfg.Sync.OwnerNotifyCmd)
+	}
+}
+
+func TestLoadSyncOwnerNotifyCmdFromTOML(t *testing.T) {
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "links-issue-tracker")
+	if err := os.MkdirAll(configDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	payload := "[sync]\nowner_notify_cmd = 'curl -s -d \"$LIT_NOTIFY_SUMMARY\" https://ntfy.example/lit'\n"
+	if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(payload), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", dir)
+
+	cfg, err := Load(pathspec.PathSpec{})
+	if err != nil {
+		t.Fatalf("Load(pathspec.PathSpec{}) error = %v", err)
+	}
+	if want := `curl -s -d "$LIT_NOTIFY_SUMMARY" https://ntfy.example/lit`; cfg.Sync.OwnerNotifyCmd != want {
+		t.Fatalf("sync.owner_notify_cmd = %q, want %q", cfg.Sync.OwnerNotifyCmd, want)
+	}
 }
 
 func TestLoadSyncReceiveFromTOML(t *testing.T) {

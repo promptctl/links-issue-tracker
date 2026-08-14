@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -94,7 +95,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 		recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(stdout, ws, reconcileShowCommand, remote, branch, result, false)
+	return reportReconcileResult(ctx, stdout, ws, reconcileShowCommand, remote, branch, result, false)
 }
 
 // runSyncReconcileResolve finalizes a prose-pending reconcile with the agent's
@@ -132,7 +133,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 		recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(stdout, ws, proseResolveCommand, remote, branch, result, true)
+	return reportReconcileResult(ctx, stdout, ws, proseResolveCommand, remote, branch, result, true)
 }
 
 // runSyncReconcileAbort defers the reconcile: the clone stays diverged and usable.
@@ -162,8 +163,14 @@ func runSyncReconcileAbort(ctx context.Context, stdout io.Writer, ws workspace.I
 // store resolution value; anything else is a usage error. The chosen side survives and
 // the OTHER side's unique issues are discarded BY DESIGN, which the outcome names
 // explicitly rather than dropping silently. [LAW:no-silent-failure]
+//
+// The take is the epic's "agent-mediated destruction" path, so it runs only with
+// the owner's approval (links-sync-pgct.4): without a matching --owner-approved
+// token the store's gate refuses, and this surfaces the refusal block naming what
+// the take would destroy and how the owner authorizes it.
 func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
 	fs := newCobraFlagSet("sync reconcile take")
+	ownerApproved := fs.String("owner-approved", "", "Owner-issued approval token for this exact divergence and side (printed by the refusal this command gives without it)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -187,8 +194,32 @@ func runSyncReconcileTake(ctx context.Context, stdout io.Writer, ws workspace.In
 		_, writeErr := fmt.Fprintln(stdout, "nothing to reconcile: no remote with shared ticket history yet")
 		return writeErr
 	}
-	result, err := syncStore.SyncResolveUnrelated(ctx, remote, branch, choice)
+	result, err := syncStore.SyncResolveUnrelated(ctx, remote, branch, choice, strings.TrimSpace(*ownerApproved))
 	if err != nil {
+		var approval store.OwnerApprovalRequiredError
+		if errors.As(err, &approval) {
+			// The gate firing is a real decision, durably traced like its sibling
+			// outcomes; the refusal also re-surfaces the unrelated-histories state,
+			// so the owner hears about the fork an agent just tried to resolve
+			// destructively (deduplicated with the detection-time notification).
+			// [LAW:no-silent-failure]
+			recordSyncTraceLogged(ws, syncTraceRecord{
+				Command:   command,
+				Decision:  "owner_approval_required",
+				Status:    "ok",
+				Reason:    approval.Error(),
+				BuildNote: resolveBuildStatusNote(time.Now()),
+				Metadata:  map[string]string{"remote": remote, "sync_branch": branch},
+			})
+			if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+				Class:  syncFailureUnrelatedHistories,
+				Remote: remote,
+				Branch: branch,
+			}); ok {
+				maybeNotifyOwner(ctx, ws, ev)
+			}
+			return ownerApprovalRefusalError{Approval: approval, Remote: remote, Branch: branch}
+		}
 		recordSyncCommandTrace(ws, command, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
@@ -223,7 +254,7 @@ func runSyncReconcileCombine(ctx context.Context, stdout io.Writer, ws workspace
 		recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(stdout, ws, reconcileCombineCommand, remote, branch, result, false)
+	return reportReconcileResult(ctx, stdout, ws, reconcileCombineCommand, remote, branch, result, false)
 }
 
 // parseUnrelatedSide maps the take command's positional to the store resolution
@@ -315,16 +346,19 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	ref := remote + "/" + branch
 	switch result.State {
 	case store.SyncReconcileTookRemote:
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintf(stdout,
 			"took remote: the local backlog now equals %s and sync is clean (no push needed).\nDISCARDED the local-only issue(s), by design: %s\n",
 			ref, describeIDSet(discardedIDs(result.Unrelated, store.TakeRemote)))
 		return err
 	case store.SyncReconcileTookLocal:
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintf(stdout,
 			"took local: your backlog now sits on top of %s as one forward commit; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
 			ref, describeIDSet(discardedIDs(result.Unrelated, store.TakeLocal)))
 		return err
 	case store.SyncReconcileNotDiverged:
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:
@@ -358,8 +392,10 @@ func discardedIDs(inv *store.UnrelatedInventory, choice store.UnrelatedResolutio
 // divergence (re-surfaced) from a first-time surface, so the agent knows to re-merge
 // the CURRENT conflicts shown. It records the durable, unconditional trace for the
 // reconcile decision — the one point every one of the three callers' outcomes
-// passes through. [LAW:single-enforcer]
-func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
+// passes through — and it feeds the owner channel the same way every surface does:
+// a held state notifies out-of-band, a converged one ends the divergence episode
+// (links-sync-pgct.4). [LAW:single-enforcer]
+func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, command string, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
 	metadata := map[string]string{"remote": remote, "sync_branch": branch}
 	switch result.State {
 	case store.SyncReconcileUnrelated:
@@ -377,6 +413,9 @@ func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, 
 			BuildNote: resolveBuildStatusNote(time.Now()),
 		}}
 		recordSyncHeldTrace(ws, command, failure, metadata)
+		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
+			maybeNotifyOwner(ctx, ws, ev)
+		}
 		return failure
 	case store.SyncReconcileProsePending:
 		metadata["pending"] = strconv.Itoa(len(result.Pending))
@@ -399,16 +438,29 @@ func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, 
 				return err
 			}
 		}
+		// A held prose state on the explicit reconcile can be the FIRST detection
+		// (auto-sync disabled), so it notifies like every other surface, de-duplicated
+		// against the inline receive's earlier detection when there was one.
+		if ev, ok := ownerNotifyEventForFailure(SyncFailure{
+			Class:  syncFailureProseHeld,
+			Remote: remote,
+			Branch: branch,
+			Fields: result.Pending,
+		}); ok {
+			maybeNotifyOwner(ctx, ws, ev)
+		}
 		if err := renderProsePendingGuidance(stdout, result.Pending, buildNote); err != nil {
 			return err
 		}
 		return MergeConflictError{Message: fmt.Sprintf("reconcile holds %d free-text field(s) for inline merge; run `%s` with your merged text", len(result.Pending), proseResolveCommand)}
 	case store.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintln(stdout, "reconciled: the divergence merged into linear history; the next push fast-forwards")
 		return err
 	case store.SyncReconcileCombined:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		// Report what the union KEPT from each side, so "nothing dropped" is evidenced, not
 		// asserted: the both-sides partition names the kept-local, kept-remote, and
 		// field-merged shared ids. A defensively-absent inventory reads as empty sides, which
@@ -429,6 +481,7 @@ func reportReconcileResult(stdout io.Writer, ws workspace.Info, command string, 
 		return err
 	case store.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
+		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintln(stdout, "nothing to reconcile: the clone is not diverged from the remote")
 		return err
 	default:

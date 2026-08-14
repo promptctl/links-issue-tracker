@@ -77,35 +77,18 @@ func pushOutcomeOf(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	}
 }
 
-// recordPushOutcome writes the marker via temp-file-and-rename: an explicit
-// `lit sync push` and a detached mirror can complete near-simultaneously, and
-// a reader must see one whole record or the other, never a torn write.
-// [LAW:no-ambient-temporal-coupling] A write failure is surfaced to stderr and
-// not returned — the push's own success or failure is already decided and must
-// not be re-colored by bookkeeping. [LAW:no-silent-failure]
+// recordPushOutcome writes the marker atomically (writeMarkerAtomic: an explicit
+// `lit sync push` and a detached mirror can complete near-simultaneously, and a
+// reader must see one whole record or the other). A write failure is surfaced to
+// stderr and not returned — the push's own success or failure is already decided
+// and must not be re-colored by bookkeeping. [LAW:no-silent-failure]
 func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 	err := func() error {
-		if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-			return err
-		}
 		payload, err := json.Marshal(rec)
 		if err != nil {
 			return err
 		}
-		tmp, err := os.CreateTemp(ws.StorageDir, "push-outcome-*")
-		if err != nil {
-			return err
-		}
-		if _, err := tmp.Write(append(payload, '\n')); err != nil {
-			_ = tmp.Close()
-			_ = os.Remove(tmp.Name())
-			return err
-		}
-		if err := tmp.Close(); err != nil {
-			_ = os.Remove(tmp.Name())
-			return err
-		}
-		return os.Rename(tmp.Name(), pushOutcomeMarkerPath(ws))
+		return writeMarkerAtomic(ws, pushOutcomeMarkerPath(ws), append(payload, '\n'))
 	}()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: push-outcome marker not written: %v\n", err)

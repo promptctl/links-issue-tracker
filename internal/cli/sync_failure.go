@@ -297,12 +297,14 @@ func (f SyncFailure) resolutionSteps() []string {
 		// EACH SIDE HOLDS section shows exactly what each loses) and combine, the union
 		// that KEEPS every issue (shared ids field-merged, an on-both prose conflict held
 		// for inline resolution). combine is listed first as the keep-everything default;
-		// a take is the answer only when one side should genuinely win wholesale.
+		// a take is the answer only when one side should genuinely win wholesale — and a
+		// take is gated on the OWNER's approval (links-sync-pgct.4): run bare it refuses
+		// with the approval steps, so the party who can lose work authorizes the loss.
 		// [LAW:no-silent-failure] every named command is real and present.
 		return []string{
 			"lit sync reconcile combine       # KEEP BOTH: union every issue (shared ids field-merged; a prose conflict is held for you to resolve inline), then push",
-			"lit sync reconcile take remote   # adopt their backlog wholesale (discards your local-only issues)",
-			"lit sync reconcile take local    # keep your backlog wholesale (discards their remote-only issues), then push",
+			"lit sync reconcile take remote   # DESTRUCTIVE, owner approval required: adopt their backlog wholesale (discards your local-only issues)",
+			"lit sync reconcile take local    # DESTRUCTIVE, owner approval required: keep your backlog wholesale (discards their remote-only issues), then push",
 			"lit sync reconcile               # re-shows what each side holds (only-local, only-remote, on-both)",
 		}
 	default:

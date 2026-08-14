@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"time"
@@ -42,6 +44,48 @@ func (r UnrelatedResolution) valid() bool {
 	return r == TakeLocal || r == TakeRemote
 }
 
+// takeApprovalToken derives the owner-approval token that authorizes destroying
+// one side of THIS exact unrelated-history fork: a digest of both heads and the
+// chosen side, the prose-resolve Fingerprint device lifted from field scope to
+// whole-backlog scope. The owner approves a specific destruction — these ids, at
+// these heads, this side — so any commit on either side (or approving one side
+// and running the other) changes the token and voids the approval.
+// [LAW:types-are-the-program] "the owner saw THIS fork and chose" becomes a
+// checkable value rather than an assumption. Deliberately unexported: the only
+// way to obtain a token is to run the take and read its refusal, so the
+// destruction inventory has been surfaced before any approval can exist.
+func takeApprovalToken(localHead, remoteHead string, choice UnrelatedResolution) string {
+	sum := sha256.Sum256([]byte("take:" + string(choice) + "\x00" + localHead + "\x00" + remoteHead))
+	return hex.EncodeToString(sum[:6])
+}
+
+// OwnerApprovalRequiredError is the take gate's refusal: the divergence is real
+// and takeable, but the supplied approval does not match this exact fork+side,
+// so nothing was mutated. It carries everything the surface needs to put the
+// decision in front of the OWNER — the current token, both heads, the
+// both-sides inventory of what the take would keep and destroy — because the
+// party who can lose work is the party who must authorize the loss.
+// [LAW:parse-dont-validate] the error is the checkpoint's output: downstream
+// rendering needs no second store read to describe the refusal.
+type OwnerApprovalRequiredError struct {
+	Choice UnrelatedResolution
+	// ApprovalToken is the token that WOULD authorize this take right now.
+	ApprovalToken string
+	// Stale is true when a token was supplied but no longer matches — the
+	// backlog moved since it was issued, or it was issued for the other side.
+	Stale                 bool
+	LocalHead, RemoteHead string
+	Ahead, Behind         int64
+	Inventory             *UnrelatedInventory
+}
+
+func (e OwnerApprovalRequiredError) Error() string {
+	if e.Stale {
+		return fmt.Sprintf("sync reconcile take %s: the supplied owner approval no longer matches this divergence (the backlog moved, or it was issued for the other side)", e.Choice)
+	}
+	return fmt.Sprintf("sync reconcile take %s is destructive and requires explicit owner approval", e.Choice)
+}
+
 // SyncResolveUnrelated settles an unrelated-history divergence by taking one side
 // wholesale. It reads the SAME decision state the field-aware reconcile reads —
 // captureReconcilePlan under the commit lock — and requires an unrelated divergence:
@@ -61,7 +105,16 @@ func (r UnrelatedResolution) valid() bool {
 // head wholesale, authors no replay commit and is exempt. CONSTRAINT (embedded Dolt
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
 // background worker.
-func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice UnrelatedResolution) (SyncReconcileResult, error) {
+//
+// ownerApproval is the owner-confirmation step (links-sync-pgct.4): the take runs
+// only when it matches this exact fork+side's takeApprovalToken. Anything else —
+// absent, stale, or issued for the other side — returns OwnerApprovalRequiredError
+// carrying the current token and inventory, with nothing mutated. The check runs
+// under the same commit lock as the mutation, so there is no gap between the state
+// the owner approved and the state destroyed. [LAW:no-ambient-temporal-coupling]
+// [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
+// any of its surfaces.
+func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
 		return SyncReconcileResult{}, err
@@ -106,6 +159,22 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 			return err
 		}
 		result.Unrelated = inventory
+
+		// The owner-confirmation gate, after the inventory read so the refusal can
+		// name exactly what the take would destroy, and before any mutation.
+		expected := takeApprovalToken(plan.localHead, plan.remoteHead, choice)
+		if ownerApproval != expected {
+			return OwnerApprovalRequiredError{
+				Choice:        choice,
+				ApprovalToken: expected,
+				Stale:         ownerApproval != "",
+				LocalHead:     plan.localHead,
+				RemoteHead:    plan.remoteHead,
+				Ahead:         plan.ahead,
+				Behind:        plan.behind,
+				Inventory:     inventory,
+			}
+		}
 
 		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote, trimmedBranch, choice)
 	})
