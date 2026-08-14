@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **two** independent patches. When refreshing (below), both
+This copy carries **three** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -54,6 +54,34 @@ is surfaced instead of swallowed. Search for `peekErr` in `statement.go` and the
 `peek_error_test.go` pins the contract. See lit ticket
 `promptctl-dolt-driver-iip`.
 
+### Patch 3 — working engine-open knobs (`config.go`, `connector.go`, `driver.go`)
+
+Upstream keys both of dolt's embedded-open load params —
+`DisableSingletonCacheParam` (fresh store per open, real close on engine
+close) and `FailOnJournalLockTimeoutParam` (fail fast with
+`nbs.ErrDatabaseLocked` instead of silently opening read-only) — on a single
+condition: `Config.BackOff != nil`. lit needs them decoupled: every lit open
+must bypass the singleton cache (so a Store's close actually releases the
+journal manifest lock instead of pinning it until process exit), but only
+*write-capable* opens want fail-fast + retry — read opens keep the read-only
+fallback, which is their contract. The patch adds two explicit `Config`
+fields, `DisableSingletonCache` and `FailOnJournalLockTimeout`, each mapped
+to its load param independently; a non-nil `BackOff` still implies both, so
+upstream behavior is unchanged. `config_load_params_test.go` pins the
+mapping.
+
+The patch also makes the params actually reach the databases (`driver.go`,
+`openSqlEngine`), which upstream's plumbing never did: the params were
+threaded into envs only inside `engine.NewSqlEngine`, *after*
+`MultiEnvForDirectory` had loaded (or arranged lazy loads for) the databases
+with default semantics. `openSqlEngine` now passes a params-carrier `DoltEnv`
+into the env load (dolt clones `DBLoadParams` from it into every env it
+creates, before those envs load), and then forces each env's lazy database
+load and returns its `DBLoadError` as the open error — without that check,
+`CollectDBs` dereferences a nil `DoltDB` and panics on exactly the
+`ErrDatabaseLocked` failure the retry path exists to catch. See lit ticket
+`links-sync-pgct.11`.
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -63,14 +91,23 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **both** patches against the new version, copying the rest of
-   upstream's changes through untouched:
+3. Re-apply **all three** patches against the new version, copying the rest
+   of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
    - Patch 2: re-apply the first-row error propagation in `statement.go`
      (capture `Peek()`'s error into `doltRows.err`, mapping `io.EOF` to nil)
      and the `rows.err` guard at the top of `doltRows.Next()` in `rows.go`.
      Run `peek_error_test.go` to confirm it holds.
+   - Patch 3: re-add the `DisableSingletonCache` / `FailOnJournalLockTimeout`
+     fields to `Config` and their independent mapping to `DBLoadParams` in
+     `connector.go` (`BackOff != nil` still implies both), and re-apply
+     `driver.go`'s `openSqlEngine` changes: the params-carrier `DoltEnv`
+     passed into the env load, and the forced lazy-load check that surfaces
+     `DBLoadError` instead of letting `CollectDBs` panic on a nil `DoltDB`.
+     Run `config_load_params_test.go` to confirm the mapping holds, and lit's
+     `internal/store` engine_open_contract_test.go for the end-to-end
+     behavior.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 

@@ -34,7 +34,21 @@ var processCommitMutex sync.Mutex
 var commitLockPIDRunning = isCommitLockPIDRunning
 
 const (
-	transientRetryMaxAttempts = 12
+	// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
+	// bound the total wait (~25s: five uncapped doublings then 25 more attempts
+	// at the 1s cap) for a transient online-GC contention to clear. Sized to
+	// match the engine-write lock's ~30s budget for "how long do we wait on a
+	// co-resident holder of this store" (links-sync-pgct.11): the lock bounds
+	// how long two engines can be concurrently OPEN, but this retry is what
+	// absorbs the brief settle window right after one releases — under real
+	// system load (a slower/contended CI runner, an earlier mirror's real
+	// network push taking longer) that window is not always sub-second, and a
+	// budget tuned only for a quick intra-process GC blip cut this retry off
+	// before a legitimately-finishing prior holder released, escalating a
+	// recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
+	// wedged holder still surfaces as that same terminal error, just after the
+	// longer budget elapses rather than hanging forever.
+	transientRetryMaxAttempts = 30
 	transientRetryBaseDelay   = 50 * time.Millisecond
 	transientRetryMaxDelay    = 1 * time.Second
 	commitLockStaleAfter      = 10 * time.Minute
@@ -53,8 +67,8 @@ type connectionRotator func() error
 type commitLockContextKey struct{}
 
 // withMutation runs a mutation under a held commit lock. It begins a tx,
-// invokes fn, commits the tx, and runs the working-set commit via
-// commitWorkingSet (re-entrant: the lock is already held, so acquireCommitLock
+// invokes fn, commits the tx, and runs the working-set commit — all as ONE
+// retried unit (re-entrant: the lock is already held, so acquireCommitLock
 // short-circuits). The lock is acquired and released exactly once.
 //
 // [LAW:dataflow-not-control-flow] Every mutation runs the same sequence;
@@ -62,20 +76,46 @@ type commitLockContextKey struct{}
 // [LAW:single-enforcer] Lock acquisition, tx lifecycle, and transient-retry
 // are all owned at their respective single boundaries; withMutation composes
 // them rather than duplicating any of them.
+//
+// The whole BeginTx→fn→tx.Commit→commitWorkingSetOnce sequence is inside
+// retryTransientGCContention, not just the final DOLT_COMMIT step
+// (links-sync-pgct.11): tx.Commit() — the plain SQL transaction commit that
+// lands fn's writes into Dolt's working set, distinct from the later DOLT_COMMIT
+// that versions them — touches the same manifest and is just as exposed to
+// transient online-GC contention.
+//
+// The unit is two phases with an owned resume point, not one blind re-run:
+// staging (BeginTx→fn→tx.Commit) and versioning (DOLT_COMMIT). While staging
+// fails, retrying it whole is safe — fn only writes through the tx it's given,
+// and the deferred Rollback discards the failed attempt. But once tx.Commit
+// has SUCCEEDED, fn's writes are durably staged in the working set (they
+// survive a connection rotation), so a retry provoked by a transient failure
+// in the versioning step must resume AT versioning: re-running fn would apply
+// the mutation a second time on top of its own staged writes (CreateIssue's
+// collision check, for one, would mint a duplicate issue under a higher
+// nonce). The staged flag is the phase marker each attempt resumes from.
+// [LAW:no-ambient-temporal-coupling] the phase is explicit owned state, not an
+// assumption about which step happened to fail.
 func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	staged := false
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return fmt.Errorf("begin %s tx: %w", message, err)
-		}
-		defer tx.Rollback()
-		if err := fn(ctx, tx); err != nil {
-			return err
-		}
-		if err := tx.Commit(); err != nil {
-			return fmt.Errorf("commit %s tx: %w", message, err)
-		}
-		return s.commitWorkingSet(ctx, message)
+		return retryTransientGCContention(ctx, func(ctx context.Context) error {
+			if !staged {
+				tx, err := s.db.BeginTx(ctx, nil)
+				if err != nil {
+					return fmt.Errorf("begin %s tx: %w", message, err)
+				}
+				defer tx.Rollback()
+				if err := fn(ctx, tx); err != nil {
+					return err
+				}
+				if err := tx.Commit(); err != nil {
+					return fmt.Errorf("commit %s tx: %w", message, err)
+				}
+				staged = true
+			}
+			return s.commitWorkingSetOnce(ctx, message)
+		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
 
@@ -195,6 +235,11 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 // and withMutation) gets the same message shape with no per-callsite repetition.
 // [LAW:single-enforcer] One trim+default rule for Dolt commit messages.
 func (s *Store) commitWorkingSetOnce(ctx context.Context, message string) error {
+	if s.commitWorkingSetHookForTest != nil {
+		if err := s.commitWorkingSetHookForTest(); err != nil {
+			return err
+		}
+	}
 	trimmed := strings.TrimSpace(message)
 	if trimmed == "" {
 		trimmed = "links mutation"

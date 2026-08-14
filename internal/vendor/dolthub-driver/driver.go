@@ -19,6 +19,8 @@ import (
 	"database/sql"
 	"database/sql/driver"
 	"errors"
+	"fmt"
+	"maps"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/commands/engine"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -61,10 +63,43 @@ func openSqlEngine(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.F
 	if openSqlEngineForConnector != nil {
 		return openSqlEngineForConnector(ctx, cfg, fs, dir, version, seCfg)
 	}
-	// fs already switched to dir, so passing "." as a path
-	mrEnv, err := LoadMultiEnvFromDir(ctx, cfg, fs, ".", version)
+	// fs already switched to dir, so passing "." as a path.
+	//
+	// The engine's DBLoadParams must reach the env loads THEMSELVES, via the
+	// carrier dEnv that MultiEnvForDirectory clones params from into every env
+	// it creates — NewSqlEngine's own threading of seCfg.DBLoadParams into envs
+	// happens only after MultiEnvForDirectory has already loaded the databases,
+	// which is too late for params that shape the storage open itself
+	// (singleton-cache bypass, journal-lock fail-fast). Passing nil here left
+	// those opens on default semantics no matter what the connector requested.
+	var carrier *env.DoltEnv
+	if len(seCfg.DBLoadParams) > 0 {
+		carrier = &env.DoltEnv{Version: version, DBLoadParams: maps.Clone(seCfg.DBLoadParams)}
+	}
+	mrEnv, err := loadMultiEnvFromDirWithParams(ctx, cfg, fs, ".", version, carrier)
 	if err != nil {
 		return nil, err
+	}
+
+	// Force each env's lazy database load now, and surface its failure as THE
+	// open error. CollectDBs (inside NewSqlEngine) dereferences each env's
+	// DoltDB without consulting DBLoadError, so a load that fails under
+	// FailOnJournalLockTimeoutParam — the retryable nbs.ErrDatabaseLocked this
+	// connector's whole retry path exists to catch — would otherwise panic on a
+	// nil DB instead of reaching the caller's backoff.
+	var loadErr error
+	_ = mrEnv.Iter(func(name string, dEnv *env.DoltEnv) (stop bool, iterErr error) {
+		if dEnv.DoltDB(ctx) == nil {
+			loadErr = dEnv.DBLoadError
+			if loadErr == nil {
+				loadErr = fmt.Errorf("database %q failed to load", name)
+			}
+			return true, nil
+		}
+		return false, nil
+	})
+	if loadErr != nil {
+		return nil, loadErr
 	}
 
 	return engine.NewSqlEngine(ctx, mrEnv, seCfg)
@@ -98,11 +133,24 @@ func LoadMultiEnvFromDir(
 	fs filesys.Filesys,
 	path, version string,
 ) (*env.MultiRepoEnv, error) {
+	return loadMultiEnvFromDirWithParams(ctx, cfg, fs, path, version, nil)
+}
+
+// loadMultiEnvFromDirWithParams is LoadMultiEnvFromDir with an optional
+// carrier dEnv whose DBLoadParams MultiEnvForDirectory applies to every env it
+// creates before loading that env's database.
+func loadMultiEnvFromDirWithParams(
+	ctx context.Context,
+	cfg config.ReadWriteConfig,
+	fs filesys.Filesys,
+	path, version string,
+	carrier *env.DoltEnv,
+) (*env.MultiRepoEnv, error) {
 
 	multiDbDirFs, err := fs.WithWorkingDir(path)
 	if err != nil {
 		return nil, errhand.VerboseErrorFromError(err)
 	}
 
-	return env.MultiEnvForDirectory(ctx, cfg, multiDbDirFs, version, nil)
+	return env.MultiEnvForDirectory(ctx, cfg, multiDbDirFs, version, carrier)
 }

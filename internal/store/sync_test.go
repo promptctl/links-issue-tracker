@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -79,9 +78,9 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
 
-	bootstrap, err := sql.Open(doltDriverName, buildDoltDSN(doltRoot, "test-workspace-id", false))
+	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", engineWrite)
 	if err != nil {
-		t.Fatalf("sql.Open() bootstrap error = %v", err)
+		t.Fatalf("openDoltPool() bootstrap error = %v", err)
 	}
 	if _, err := bootstrap.ExecContext(ctx, fmt.Sprintf("CREATE DATABASE IF NOT EXISTS %s", doltDatabaseName)); err != nil {
 		t.Fatalf("bootstrap create database error = %v", err)
@@ -459,7 +458,6 @@ func TestSyncPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
 	}
-	defer sync.Close()
 	if err := sync.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
 		t.Fatalf("SyncAddRemote() error = %v", err)
 	}
@@ -474,6 +472,13 @@ func TestSyncPushDelivers(t *testing.T) {
 	}
 	if got.State() != SyncUpToDate {
 		t.Fatalf("after no-compact push: state = %q (%+v), want up-to-date", got.State(), got)
+	}
+	// Close before the next commit/OpenSync round: embedded Dolt permits only
+	// one read-write engine per path (links-sync-pgct.11), and this test's
+	// own commit() helper opens a fresh Open() next — sync must release
+	// first, exactly as a real command sequence would.
+	if err := sync.Close(); err != nil {
+		t.Fatalf("sync.Close() error = %v", err)
 	}
 
 	// A later commit pushed without compaction must also reach the remote.

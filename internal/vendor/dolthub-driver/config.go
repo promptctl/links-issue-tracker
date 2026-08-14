@@ -55,11 +55,29 @@ type Config struct {
 	// BackOff enables bounded retries when opening the embedded engine.
 	//
 	// If nil, engine open is attempted once.
-	// If non-nil, NewConnector will retry opens for retryable errors using this BackOff.
+	// If non-nil, NewConnector will retry opens for retryable errors using this BackOff,
+	// and both DisableSingletonCache and FailOnJournalLockTimeout are implied (retrying
+	// an open is only meaningful when each attempt constructs a fresh store and lock
+	// contention surfaces as a retryable error instead of a silent read-only fallback).
 	//
 	// Note: BackOff implementations are stateful; callers should generally provide a
 	// fresh instance per connector, and the connector will call Reset() before use.
 	BackOff backoff.BackOff
+
+	// DisableSingletonCache bypasses dolt's in-process singleton database cache for
+	// this connector's engine opens: each open constructs a fresh underlying store,
+	// and closing the engine actually closes the store (releasing its journal
+	// manifest lock) instead of leaving a cached instance pinned until process
+	// exit. Implied by a non-nil BackOff; settable on its own for embedders that
+	// want deterministic open/close lifecycles without open retries.
+	DisableSingletonCache bool
+
+	// FailOnJournalLockTimeout makes an engine open whose exclusive journal
+	// manifest lock is held elsewhere fail fast with nbs.ErrDatabaseLocked instead
+	// of silently opening the database in read-only mode. Implied by a non-nil
+	// BackOff; settable on its own for embedders that supply their own retry policy
+	// above the connector.
+	FailOnJournalLockTimeout bool
 
 	// Version is the Dolt environment version string used when loading repos (optional).
 	// If empty, the connector will use a reasonable default.
