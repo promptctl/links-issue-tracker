@@ -70,6 +70,13 @@ var (
 	commitLockHeartbeatEvery = time.Minute
 )
 
+// commitLockTouch is the heartbeat's one effect, swappable so tests can pin
+// the release ordering contract deterministically — release joins any
+// in-flight beat, and the lock file outlives every beat — instead of betting
+// on straggler timing. Production never assigns it.
+// [LAW:effects-at-boundaries]
+var commitLockTouch = os.Chtimes
+
 type retryOperation func(context.Context) error
 type retryDelayFunc func(attempt int) time.Duration
 type retrySleepFunc func(context.Context, time.Duration) error
@@ -431,7 +438,7 @@ func startCommitLockHeartbeat(lockPath string) func() {
 				return
 			case <-ticker.C:
 				now := time.Now()
-				if err := os.Chtimes(lockPath, now, now); err != nil && !warned {
+				if err := commitLockTouch(lockPath, now, now); err != nil && !warned {
 					warned = true
 					fmt.Fprintf(os.Stderr, "lit: commit-lock heartbeat could not refresh %s; a hold longer than %s may be reclaimed as stale by a contender: %v\n", lockPath, commitLockStaleAfter, err)
 				}

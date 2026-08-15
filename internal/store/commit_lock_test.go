@@ -5,6 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -144,9 +146,15 @@ func TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim(t *testing.T) {
 	}
 	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
 
+	// 40x beat-to-staleness margin — wider than production's 10x — because a
+	// compressed timeline is exposed to real scheduler freezes: a whole-process
+	// stall longer than the staleness window (hypervisor pause, cgroup
+	// throttling) starves the heartbeat and the contender's next poll steals
+	// legitimately. At 1s a stall must outlast a full second to flake, versus
+	// 250ms where CI-plausible pauses reproduced the steal deterministically.
 	originalStale := commitLockStaleAfter
 	originalBeat := commitLockHeartbeatEvery
-	commitLockStaleAfter = 250 * time.Millisecond
+	commitLockStaleAfter = time.Second
 	commitLockHeartbeatEvery = 25 * time.Millisecond
 	t.Cleanup(func() {
 		commitLockStaleAfter = originalStale
@@ -200,9 +208,10 @@ func TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim(t *testing.T) {
 // TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt pins that the
 // heartbeat is owned by the acquisition primitive itself — Store mutations
 // and external LockCommitPath callers alike hold under it without opting in —
-// by backdating the held lock's mtime and watching a beat pull it back to
-// now. Release removes the file, and with the stop-then-remove ordering no
-// straggler touch lands afterwards.
+// by backdating the held lock's mtime and watching a real on-disk beat pull
+// it back to now, and that release removes the file. The stop-before-remove
+// ordering is pinned separately and deterministically by
+// TestCommitLockReleaseStopsHeartbeatBeforeRemove.
 func TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 
@@ -243,6 +252,87 @@ func TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt(t *testing.T) {
 	release()
 	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
 		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+}
+
+// TestCommitLockReleaseStopsHeartbeatBeforeRemove pins the release ordering
+// contract deterministically through the commitLockTouch seam: release joins
+// any in-flight beat (it cannot return while one is executing), the lock file
+// outlives every beat (a beat never observes the path already removed), and
+// no beat runs after release returns. Mutation-tested: dropping the
+// stopped-join lets release return during the blocked beat; reordering
+// remove-before-stop makes the blocked beat observe a missing file; never
+// stopping the goroutine fires a beat after release — each is caught by
+// construction, not by timing.
+func TestCommitLockReleaseStopsHeartbeatBeforeRemove(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+
+	originalBeat := commitLockHeartbeatEvery
+	originalTouch := commitLockTouch
+	commitLockHeartbeatEvery = 10 * time.Millisecond
+	t.Cleanup(func() {
+		commitLockHeartbeatEvery = originalBeat
+		commitLockTouch = originalTouch
+	})
+
+	firstTouchStarted := make(chan struct{})
+	firstTouchProceed := make(chan struct{})
+	var firstOnce sync.Once
+	var afterRelease atomic.Bool
+	var violation atomic.Value
+	commitLockTouch = func(path string, atime, mtime time.Time) error {
+		isFirst := false
+		firstOnce.Do(func() { isFirst = true })
+		if isFirst {
+			close(firstTouchStarted)
+			<-firstTouchProceed
+		}
+		if afterRelease.Load() {
+			violation.Store("a beat ran after release returned")
+		}
+		if _, err := os.Stat(path); err != nil {
+			violation.Store("lock file missing during an in-flight beat: " + err.Error())
+		}
+		return os.Chtimes(path, atime, mtime)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := acquireCommitLockAtPath(ctx, lockPath)
+	if err != nil {
+		t.Fatalf("acquireCommitLockAtPath() error = %v", err)
+	}
+
+	<-firstTouchStarted
+
+	releaseDone := make(chan struct{})
+	go func() {
+		release()
+		close(releaseDone)
+	}()
+
+	// The beat is still blocked inside commitLockTouch; a correct release is
+	// structurally unable to return yet. Only the dropped-join mutation can
+	// close releaseDone here.
+	select {
+	case <-releaseDone:
+		close(firstTouchProceed)
+		t.Fatalf("release returned while a beat was in flight — the stop join is gone")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(firstTouchProceed)
+	<-releaseDone
+	afterRelease.Store(true)
+
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+
+	// Give a leaked heartbeat several beat intervals to betray itself.
+	time.Sleep(5 * commitLockHeartbeatEvery)
+	if v := violation.Load(); v != nil {
+		t.Fatalf("release ordering violated: %s", v)
 	}
 }
 
