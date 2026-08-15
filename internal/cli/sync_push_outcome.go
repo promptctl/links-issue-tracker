@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -75,6 +76,20 @@ func pushOutcomeOf(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Branch:   outcome.branch,
 		}
 	}
+}
+
+// completePushAttempt is the one completion seam for how a push attempt ended
+// — the attempt that ran (performSyncPush's deferred call, any outcome) and
+// the attempt that could not start (a mirror dying before its engine opened, a
+// spawner that could not launch a mirror) both flow through here, so the
+// push-outcome marker and the owner's out-of-band channel are always fed the
+// same record and can never disagree about the same attempt.
+// [LAW:single-enforcer] Callers construct nothing themselves: the record is
+// derived once, from the same two values, for every producer.
+func completePushAttempt(ctx context.Context, ws workspace.Info, outcome syncPushOutcome, attemptErr error) {
+	rec := pushOutcomeOf(outcome, attemptErr)
+	recordPushOutcome(ws, rec)
+	observePushOutcomeForOwner(ctx, ws, rec, attemptErr, outcome.pushErr)
 }
 
 // recordPushOutcome writes the marker atomically (writeMarkerAtomic: an explicit

@@ -16,7 +16,10 @@ import (
 // for links-sync-pgct.11: on a connected workspace with on-change cadence (the
 // shipped default), a burst of several mutating lit commands run back-to-back
 // must never surface Dolt's raw "database is read only" (or the online-GC
-// reconnect variant) error, and every command must exit 0.
+// reconnect variant) error, and every command must exit 0. Since
+// links-sync-pgct.12 it is also the acceptance pin for the burst tail: every
+// commit — including the final mutation's — reaches the remote with NO
+// explicit sweep push, proved by the independent oracle poll at the end.
 //
 // The race this reproduces: each mutating command's on-change mirror is a
 // detached subprocess that keeps running (spawning its own read-write
@@ -122,36 +125,35 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		}
 	}
 
-	// Sweep, then settle. The mirror-spawn debounce means the burst's FINAL
-	// mutations may have spawned no mirror of their own (inside the 1s window
-	// after the last spawn, with the last live mirror's HEAD read already
-	// behind them) — that tail is bounded staleness the on-change design
-	// accepts, swept by the next mutation, read-command staleness banner, or
-	// push. This test's claim is the collision class above, not eager
-	// delivery (TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush
-	// pins that deterministically for a single mutation), so an explicit push
-	// IS the deterministic sweeper here rather than a bet on mirror timing.
-	// [LAW:no-ambient-temporal-coupling] It also exercises the same
-	// engine-open path against any still-live mirror one more time.
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
-		"sync", "push"); err != nil {
-		t.Fatalf("final sweep lit sync push: %v\noutput:\n%s\n%s", err, out, dumpMirrorLog(root))
-	}
-
-	// Settle before returning: mirrors spawned above may still be pushing —
-	// or merely still exiting — the instant the sweep returns. Returning
-	// without waiting for that real, in-flight background work to land would
-	// leave a lingering subprocess racing this test's own t.TempDir() cleanup
-	// (observed directly: an "unlinkat ...: directory not empty" cleanup
-	// failure from a still-open file handle) and, worse, racing the NEXT test
-	// in this package for CPU/disk — exactly the kind of cross-test resource
-	// contention that made this test itself flaky in a full-package run.
-	// Polling this same independent oracle used above until it observes every
-	// commit is both a stronger assertion (the burst's data actually reached
-	// the remote, not just "no error printed") and the wait that lets the
-	// last mirror actually finish and exit before this test hands the machine
-	// back.
-	const settleTimeout = 30 * time.Second
+	// No sweep push. The oracle poll below alone proving delivery IS the
+	// acceptance for links-sync-pgct.12: the burst's FINAL mutation either
+	// observed a fresh mirror-pending claim (a spawned, not-yet-cleared
+	// mirror whose engine open — and so HEAD read — still lies ahead of the
+	// mutation's closed session) or claimed the marker and spawned its own
+	// mirror. Under the old 1s spawn debounce that tail was a timing bet, and
+	// this test needed an explicit `lit sync push` sweep to be deterministic;
+	// a sweep now would mask a regression in exactly the guarantee this test
+	// pins. [LAW:no-ambient-temporal-coupling] the invariant is owned state
+	// (the mirror-pending marker), not a time window, so the poll may bet on
+	// it.
+	//
+	// The poll also settles the machine before returning: mirrors may still
+	// be pushing — or merely still exiting — the instant the last lit new
+	// returns. Returning without waiting for that real, in-flight background
+	// work to land would leave a lingering subprocess racing this test's own
+	// t.TempDir() cleanup (observed directly: an "unlinkat ...: directory not
+	// empty" cleanup failure from a still-open file handle) and, worse,
+	// racing the NEXT test in this package for CPU/disk — exactly the kind of
+	// cross-test resource contention that made this test itself flaky in a
+	// full-package run.
+	//
+	// Budget: delivery of the tail can legitimately chain up to three full
+	// mirror cycles (the in-flight push finishing, the holder's post-release
+	// re-check cycle, and one more if a claim lands mid-cycle), each a real
+	// engine open plus a push. Generous headroom for a loaded CI machine
+	// costs nothing when healthy — the poll returns the moment the count
+	// matches.
+	const settleTimeout = 60 * time.Second
 	const settlePollInterval = 300 * time.Millisecond
 	deadline := time.Now().Add(settleTimeout)
 	for {

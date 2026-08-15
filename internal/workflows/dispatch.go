@@ -41,7 +41,7 @@ import (
 // this package could enforce on its own input type.
 // A trace-write failure never fails Dispatch — the guidance was already
 // written to w — it goes to stderr instead, the same best-effort shape
-// recordMirrorError uses for the sibling automation trace.
+// recordMirrorTraceError uses for the sibling automation trace.
 // [LAW:no-silent-failure] the failure is never swallowed, only kept off the
 // agent-facing stream.
 //

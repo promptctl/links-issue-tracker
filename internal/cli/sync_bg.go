@@ -105,10 +105,20 @@ func mirrorEnv() []string {
 }
 
 // runBackgroundMirror is the detached worker. It runs as its own process after
-// the spawning command has returned, so it must establish two invariants before
-// touching the store: the command's engine is released (wait-for-parent), and
-// no other mirror is running (single-flight). Only then does it open its own
-// engine and push. [LAW:no-ambient-temporal-coupling]
+// the spawning command has returned, so it establishes the engine-release
+// invariant first (wait-for-parent), then runs single-flight push cycles until
+// no mirror-pending claim remains. [LAW:no-ambient-temporal-coupling]
+//
+// The cycle loop is what makes losing the single-flight race safe to treat as
+// a silent exit (links-sync-pgct.12): the loser's spawner claimed the
+// mirror-pending marker, and the current lock holder is obligated to re-check
+// that marker AFTER releasing — a claim it cannot have covered (stamped while
+// its engine was open, or after) triggers another full cycle on a fresh
+// engine, whose open then postdates the claimant's commit. Custody of the
+// marker passes from holder to holder at the lock, never resting on timing.
+// Losing therefore never strands a claim, and the loser still exits without
+// opening a store, writing a trace, or creating a file — the quiescence
+// property test cleanups rely on.
 func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("sync " + backgroundMirrorSubcommand)
 	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the mirror waits for it to exit")
@@ -116,57 +126,102 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 		return err
 	}
 
-	// 1. Wait for the spawning command's embedded engine to be released. Opening
+	// Wait for the spawning command's embedded engine to be released. Opening
 	// a second engine on the same path while the first is live collides on
 	// Dolt's online garbage collection. If the parent outlives the timeout, the
 	// precondition is unmet — abort rather than race a live engine.
 	// [LAW:no-ambient-temporal-coupling]
 	if !waitForParentExit(*parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
-		return recordMirrorError(ws, fmt.Errorf(
+		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 			*parentPID, mirrorParentWaitTimeout))
 	}
 
-	// 2. Single-flight. A lost race is the coalescing path, not an error: the
-	// holding mirror pushes the current HEAD (which already includes this
-	// commit) and re-reads freshness before it releases.
-	release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
-	if err != nil {
-		return recordMirrorError(ws, fmt.Errorf("acquire sync-push lock: %w", err))
+	for {
+		// Teardown owns the loop's lifetime: once the context is done (the
+		// SIGTERM grace window), starting another engine cycle would fight the
+		// shutdown for its last seconds. A cycle that observed the cancellation
+		// recorded its own ending; a teardown that lands before any cycle is
+		// the same shape as a crash, and the claim's staleness recovery is the
+		// designed answer for both. [LAW:no-ambient-temporal-coupling]
+		if ctx.Err() != nil {
+			return nil
+		}
+		release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
+		if err != nil {
+			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("acquire sync-push lock: %w", err))
+		}
+		if !acquired {
+			// Lost the single-flight race: the holder's post-release re-check
+			// below now owns any claim this mirror was spawned for. Exit with
+			// no store open, no trace, no file — see the function comment.
+			return nil
+		}
+		attempted := mirrorCycle(ctx, ws)
+		// Released only after the cycle's engine has closed (mirrorCycle's
+		// deferred Close), so the lock brackets the whole session. The kernel
+		// drops the flock on process exit, so an unlock error cannot strand
+		// the lock; surfacing it would only add noise to a detached worker.
+		_ = release()
+		if !attempted {
+			// The failure was already completed through the push-outcome seam;
+			// looping again would hot-spin on the same broken precondition.
+			// Any surviving claim ages into crash recovery.
+			return nil
+		}
+		if !mirrorPendingSet(ws) {
+			return nil
+		}
+		// A claim landed that this cycle's HEAD read may not include (its
+		// commit preceded this cycle's open only if its command's session did
+		// — a claim alone cannot prove that). Run another cycle on a fresh
+		// engine: its open postdates the claimant's closed session, which is
+		// the proof. An extra cycle for a claim that WAS already covered is an
+		// up-to-date push — cheap, and always on the correct side.
+		// [LAW:dataflow-not-control-flow] every cycle runs the same path; only
+		// the marker decides whether another begins.
 	}
-	if !acquired {
-		return nil
-	}
-	// The kernel drops the flock on process exit, so an unlock error here cannot
-	// strand the lock; surfacing it would only add noise to a detached worker.
-	defer func() { _ = release() }()
+}
 
-	// 3. Mirror on this worker's own engine — the only one open on the path now.
+// mirrorCycle is one full engine session of the mirror: open, push
+// (performSyncPush clears the mirror-pending marker at entry and completes the
+// attempt's outcome record on every path), close. It reports whether the push
+// attempt was reached; false means the failure was already completed through
+// the push-outcome seam and the caller must stop rather than loop on a broken
+// precondition.
+func mirrorCycle(ctx context.Context, ws workspace.Info) (attempted bool) {
 	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		return recordMirrorError(ws, fmt.Errorf("open sync store: %w", err))
+		_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err))
+		return false
 	}
 	defer syncStore.Close()
-	return mirrorOnce(ctx, syncStore, ws)
+	mirrorOnce(ctx, syncStore, ws)
+	return true
 }
 
 // mirrorOnce runs the one shared push path, without compaction. It is a single
 // path with no freshness branch: [LAW:dataflow-not-control-flow] the skip
 // decisions (no remote, empty remote) already live in performSyncPush, and an
-// up-to-date push is a cheap no-op, so the mirror does not pre-decide whether to
-// push. It does not loop, either — the engine reports the tracking ref "as of
-// last fetch", so an in-session re-read is stale. Coalescing of a burst comes
-// from dolt push sending the current HEAD (commits that landed before this push
-// go out with it) funnelled through the single-flight lock; a commit that lands
-// after this push is mirrored by the next mutation's mirror or the pre-push
-// hook. The unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) error {
+// up-to-date push is a cheap no-op, so the mirror does not pre-decide whether
+// to push. It never re-pushes in the same session, either: the engine is the
+// path's only writer, so an in-session HEAD re-read can never see a newer
+// commit — commits land only between sessions. Coalescing of a burst comes
+// from dolt push sending the current HEAD (commits that landed before this
+// session's open go out with it) funnelled through the single-flight lock; a
+// commit that lands after this session is a fresh mirror-pending claim, and
+// the caller's post-release re-check answers it with another whole cycle. The
+// unsynced window shrinks toward zero without ever blocking a mutation.
+func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) {
 	// The mirror pushes without compaction — plain SyncPush, never the
 	// compact-and-push variant the explicit command uses.
 	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false, syncStore.SyncPush)
 	if err != nil {
-		// Could-not-attempt (reconcile/remote resolution): record and stop.
-		return recordMirrorError(ws, err)
+		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
+		// own deferred completion already recorded the outcome; this adds only
+		// the mirror's out-of-band automation trace.
+		recordMirrorTraceError(ws, err)
+		return
 	}
 	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
 	// that trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
@@ -183,7 +238,6 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
 		fmt.Fprintln(os.Stderr, failure.blockString())
 	}
-	return nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning
@@ -213,14 +267,42 @@ func waitForParentExit(parentPID int, getppid func() int, timeout, poll time.Dur
 	return true
 }
 
-// recordMirrorError writes the failure to the shared automation trace so a
-// detached mirror that fails is loud out-of-band rather than silent. It always
-// returns nil: the mutation is already durable, so the mirror is best-effort
-// and never reports a non-zero exit. [LAW:no-silent-failure] If the trace write
-// itself fails, the error is not swallowed — it goes to stderr, the worker's
-// only remaining channel (discarded when detached, visible when the hidden
-// subcommand is run in the foreground for debugging).
-func recordMirrorError(ws workspace.Info, cause error) error {
+// completeMirrorWithoutAttempt is the completion path for a mirror that died
+// BEFORE reaching a push attempt (parent-wait timeout, sync-push-lock error,
+// engine-open failure). These endings were the deliberate gap links-sync-pgct.10
+// left and this ticket closes: they now flow through the same
+// completePushAttempt seam as an attempt that ran, so the push-outcome marker
+// and the owner notification hear "the push layer could not even start" from
+// the one record they already share — never a second representation of push
+// health. [LAW:one-source-of-truth] The trace half stays: it is the ordered
+// audit log, not the "where do things stand" marker. Always returns nil: the
+// mutation is already durable, so the mirror is best-effort and never reports
+// a non-zero exit.
+//
+// The dying mirror also releases the mirror-pending claim it was spawned to
+// answer, so the NEXT mutation re-claims and re-spawns at once instead of
+// waiting out the staleness window — which stays reserved for the endings
+// that run no code at all (SIGKILL, power loss). Racing a newer live claim
+// errs toward the safe side: a claim removed early only makes some mutation
+// spawn a redundant mirror, while a claim left behind would falsely read as
+// coverage for up to the staleness bound.
+func completeMirrorWithoutAttempt(ctx context.Context, ws workspace.Info, cause error) error {
+	completePushAttempt(ctx, ws, syncPushOutcome{}, cause)
+	recordMirrorTraceError(ws, cause)
+	clearMirrorPending(ws)
+	return nil
+}
+
+// recordMirrorTraceError writes a mirror failure to the shared automation
+// trace so a detached mirror's ending is loud out-of-band rather than silent.
+// [LAW:no-silent-failure] If the trace write itself fails, the error is not
+// swallowed — it goes to stderr, the worker's only remaining channel
+// (discarded when detached, visible when the hidden subcommand is run in the
+// foreground for debugging). Traces only: the push-outcome completion either
+// already ran inside performSyncPush (a failure after the attempt started) or
+// is completeMirrorWithoutAttempt's job (a failure before it) — this function
+// writing it too would double-complete one attempt.
+func recordMirrorTraceError(ws workspace.Info, cause error) {
 	if _, traceErr := maybeRecordAutomatedCommandTrace(
 		ws,
 		"lit sync push",
@@ -236,5 +318,4 @@ func recordMirrorError(ws workspace.Info, cause error) error {
 	// recordSyncCommandTrace already sets Reason from cause; no metadata needed
 	// to carry the same string a second time.
 	recordSyncCommandTrace(ws, "lit sync push", "error", cause, nil)
-	return nil
 }
