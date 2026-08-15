@@ -3,6 +3,7 @@
 package dbsnapshot
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -33,7 +34,7 @@ func TestCloneTree_PreservesPermsUnderRestrictiveUmask(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(root, "dst")
-	if err := cloneTree(src, dst); err != nil {
+	if err := cloneTree(context.Background(), src, dst); err != nil {
 		t.Fatal(err)
 	}
 	dirInfo, err := os.Stat(filepath.Join(dst, "nested"))
@@ -49,5 +50,44 @@ func TestCloneTree_PreservesPermsUnderRestrictiveUmask(t *testing.T) {
 	}
 	if fileInfo.Mode().Perm() != 0o644 {
 		t.Fatalf("file perm = %v, want 0644 (umask 077 must not affect snapshot)", fileInfo.Mode().Perm())
+	}
+}
+
+// TestTake_CloneFailureLeavesNoResidue drives the same cleanup path a
+// ctx-canceled copy takes — cloneTree fails partway, the .tmp is removed, the
+// .reserve released — using a FIFO (an unsupported entry type) as the
+// deterministic mid-tree failure. On Darwin the FIFO also forces the
+// Clonefile fast path to be irrelevant: even if the syscall clones it, the
+// walk fallback on other filesystems must behave identically, and the
+// contract asserted here is only "a failed Take strands nothing".
+func TestTake_CloneFailureLeavesNoResidue(t *testing.T) {
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "a"), []byte("a"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(src, "fifo"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	_, err := Take(context.Background(), src, snapshotsDir, "")
+	if err == nil {
+		// Darwin's Clonefile clones FIFOs wholesale; only the walk-based
+		// paths refuse them. Either outcome is legal — the residue contract
+		// below is what this test pins.
+		t.Log("Take succeeded (CoW fast path clones special files)")
+	}
+	entries, readErr := os.ReadDir(snapshotsDir)
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	for _, e := range entries {
+		if IsProducerArtifactName(e.Name()) {
+			t.Fatalf("failed Take stranded producer artifact: %s", e.Name())
+		}
 	}
 }

@@ -17,9 +17,17 @@
 // store, so the requirement is a documented precondition, not an acquired
 // one; PR #379's review caught the previous "Take is safe with open
 // connections" wording inviting the next caller to skip the locks.)
+//
+// Distinct from those store-owned preconditions, the package acquires its own
+// producer beacon (an flock inside snapshotsDir, see producerBeaconName): Take
+// holds it shared, residue collection probes it exclusive, and it is always
+// the innermost hold — after workspace, engine, and commit locks — taken by
+// code that already holds nothing else it could wait on, so it cannot extend
+// any lock cycle.
 package dbsnapshot
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -30,6 +38,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
 
 // Snapshot is a frozen copy of a Dolt storage directory.
@@ -42,14 +52,61 @@ type Snapshot struct {
 // ErrSnapshotMissing is returned by Restore when the named snapshot doesn't exist.
 var ErrSnapshotMissing = errors.New("dbsnapshot: snapshot not found")
 
+// producerBeaconName is the flock-backed liveness beacon inside snapshotsDir.
+// Every Take holds it SHARED for its whole reserve→copy→rename window;
+// CollectOrphanedResidue probes it EXCLUSIVE, so holding exclusively is
+// kernel proof (surviving SIGKILL, panics, and os.Exit alike) that every
+// producer artifact in the directory belongs to a dead producer. The name
+// contains a dot, which sanitizeLabel maps out of every legal snapshot name,
+// so no snapshot can ever collide with it.
+const producerBeaconName = ".links-snapshot-producer.lock"
+
+// producerBeaconRetryAttempts/producerBeaconRetryDelay bound how long a Take
+// waits out a collector's exclusive hold. That hold covers only a ReadDir and
+// a handful of renames (deletes happen after it is released), so ~1s is three
+// orders of magnitude of headroom; exhausting it means a collector is wedged,
+// which should surface loudly rather than queue silently.
+const (
+	producerBeaconRetryAttempts = 20
+	producerBeaconRetryDelay    = 50 * time.Millisecond
+)
+
+func producerBeaconPath(snapshotsDir string) string {
+	return filepath.Join(snapshotsDir, producerBeaconName)
+}
+
+// ErrSnapshotsBusy is the sentinel Take's producer-beacon contention wraps,
+// so callers detect "retry shortly" programmatically the same way every other
+// lock contention in this codebase is detected — via errors.Is, with the
+// message text as context guidance rather than the contract.
+var ErrSnapshotsBusy = errors.New("snapshot producer beacon busy")
+
 // Take clones databaseDir into <snapshotsDir>/<name>/ and returns the snapshot.
 // label is optional ("" = no suffix); non-safe characters are normalized.
 // Atomicity: the clone lands in <name>.tmp first, then renames to <name> on
-// success — an interrupt leaves no half-snapshot in the listing.
+// success — an interrupt leaves no half-snapshot in the listing, and whatever
+// .tmp/.reserve residue an uncleanable death (SIGKILL, the interrupt guard's
+// post-grace hard exit) strands is reclaimed at the next Take's entry, under
+// the producer beacon's liveness proof.
+//
+// ctx cancels the copy between files and between chunks of a large file, so
+// an interrupt aborts the walk and runs the cleanup below instead of dying
+// with the tree half-written.
 //
 // [LAW:single-enforcer] All snapshot creation flows through this one function;
-// no other code constructs snapshot directories.
-func Take(databaseDir, snapshotsDir, label string) (Snapshot, error) {
+// no other code constructs snapshot directories. Residue collection rides the
+// same boundary — Take's entry — because that is the one point reached by
+// every producer on every attempt BEFORE new disk is consumed: an ENOSPC'd
+// copy whose retry must first reclaim a dead predecessor's store-sized corpse
+// is the motivating regime, and any wiring downstream of a successful take
+// (the retention tail, say) is unreachable in exactly that regime.
+func Take(ctx context.Context, databaseDir, snapshotsDir, label string) (Snapshot, error) {
+	// One explicit gate so a pre-canceled ctx refuses identically on every
+	// platform — Darwin's single-syscall Clonefile fast path would otherwise
+	// mint a snapshot the walk-based platforms refuse.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return Snapshot{}, ctxErr
+	}
 	info, err := os.Stat(databaseDir)
 	if err != nil {
 		return Snapshot{}, fmt.Errorf("stat database dir: %w", err)
@@ -60,12 +117,41 @@ func Take(databaseDir, snapshotsDir, label string) (Snapshot, error) {
 	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
 		return Snapshot{}, fmt.Errorf("create snapshots dir: %w", err)
 	}
+	// Collection runs before this Take holds the beacon shared — holding it
+	// would turn the collector's exclusive probe into a guaranteed self-skip.
+	// A collection failure is loud but must not fail the take: the snapshot
+	// this call was asked for is still mintable, and the residue stays for
+	// the next attempt (same shape, same rationale, and the same stderr
+	// channel as the reconcile prune's post-durable-success demotion in
+	// sync_reconcile.go). [LAW:no-silent-failure] loud, but never a false
+	// failure of work that can still succeed.
+	if collectErr := CollectOrphanedResidue(snapshotsDir); collectErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: could not collect orphaned snapshot residue (the take proceeds; collection retries next take): %v\n", collectErr)
+	}
+	releaseBeacon, acquired, err := filelock.Acquire(ctx, producerBeaconPath(snapshotsDir), false, producerBeaconRetryAttempts, producerBeaconRetryDelay)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("acquire snapshot producer beacon: %w", err)
+	}
+	if !acquired {
+		return Snapshot{}, fmt.Errorf("dbsnapshot: residue collection is holding the snapshots directory at %s and did not finish within its budget; retry: %w", snapshotsDir, ErrSnapshotsBusy)
+	}
+	// LIFO with the .reserve removal below: the beacon outlives every producer
+	// artifact, so a collector can never classify a live Take's paths as dead.
+	// A failed release only defers residue collection until this process
+	// exits (the kernel drops the hold then regardless), so it is demoted to
+	// the same stderr channel as a collection failure rather than converting
+	// a possibly-already-durable snapshot into a reported failure.
+	defer func() {
+		if relErr := releaseBeacon(); relErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: could not release snapshot producer beacon (residue collection defers until this process exits): %v\n", relErr)
+		}
+	}()
 	reserved, err := reserveSnapshotPaths(snapshotsDir, label)
 	if err != nil {
 		return Snapshot{}, err
 	}
 	defer os.Remove(reserved.reservePath)
-	if err := cloneTree(databaseDir, reserved.tmpPath); err != nil {
+	if err := cloneTree(ctx, databaseDir, reserved.tmpPath); err != nil {
 		_ = os.RemoveAll(reserved.tmpPath)
 		return Snapshot{}, fmt.Errorf("clone tree: %w", err)
 	}
@@ -106,8 +192,8 @@ func reserveSnapshotPaths(snapshotsDir, label string) (reservedPaths, error) {
 	for attempt := 0; attempt < maxReserveAttempts; attempt++ {
 		name := formatName(candidate, label)
 		finalPath := filepath.Join(snapshotsDir, name)
-		reservePath := finalPath + ".reserve"
-		tmpPath := finalPath + ".tmp"
+		reservePath := finalPath + reserveSuffix
+		tmpPath := finalPath + tmpSuffix
 		switch err := os.Mkdir(reservePath, 0o755); {
 		case err == nil:
 			finalFree, statErr := pathFree(finalPath)
@@ -173,9 +259,6 @@ func List(snapshotsDir string) ([]Snapshot, error) {
 			continue
 		}
 		name := entry.Name()
-		if strings.HasSuffix(name, ".tmp") || strings.HasSuffix(name, ".reserve") {
-			continue
-		}
 		created, ok := parseName(name)
 		if !ok {
 			continue
@@ -261,6 +344,12 @@ func PruneMatching(snapshotsDir string, keep int, match func(name string) bool) 
 	if keep <= 0 {
 		return fmt.Errorf("dbsnapshot: keep must be > 0")
 	}
+	// Residue collection deliberately does NOT ride this boundary: every
+	// prune call site sits downstream of a successful Take, which makes a
+	// prune-side sweep unreachable in the disk-full regime where reclaiming
+	// a dead predecessor's corpse is the whole point, and a collection
+	// failure here would disable retention for every producer at once.
+	// Collection lives at Take's entry instead.
 	snapshots, err := List(snapshotsDir)
 	if err != nil {
 		return err
@@ -317,7 +406,69 @@ func validateSnapshotName(name string) error {
 	return nil
 }
 
+// The name suffixes the producer machinery owns: an in-flight copy (.tmp), a
+// reservation claim (.reserve), and a corpse the collector has condemned
+// (.condemned). No legal snapshot name can carry one — sanitizeLabel maps '.'
+// out of every label — so the suffix namespace is disjoint from snapshot
+// names by construction, not by filtering discipline.
+//
+// [LAW:one-source-of-truth] reserveSnapshotPaths mints .tmp/.reserve names
+// and condemnResidue mints .condemned names from these same constants the
+// predicates below read.
+const (
+	tmpSuffix       = ".tmp"
+	reserveSuffix   = ".reserve"
+	condemnedSuffix = ".condemned"
+)
+
+var producerArtifactSuffixes = []string{tmpSuffix, reserveSuffix, condemnedSuffix}
+
+// IsProducerArtifactName reports whether name sits in the producer-artifact
+// suffix namespace. This is the broad REJECTION predicate: any such name is
+// refused as a snapshot (List, Restore validation) regardless of its head.
+// Destruction uses the deliberately narrower isCollectibleResidue — reject
+// broadly, delete narrowly. Exported so tests outside the package can assert
+// "no producer artifact was stranded" against the same definition.
+func IsProducerArtifactName(name string) bool {
+	for _, suffix := range producerArtifactSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCollectibleResidue reports whether the collector may destroy the entry:
+// either a .condemned corpse (only ever minted by a collector under the
+// beacon's exclusive proof, so the suffix alone is lit's provenance), or a
+// .tmp/.reserve whose remaining head has exactly the <unix-ns>[-<label>]
+// shape reserveSnapshotPaths mints. A foreign "backup.tmp" an operator
+// parked in the directory fails the head check and is untouchable — every
+// non-collector consumer of this directory treats unrecognized names as
+// inert, and the one destructive actor must not be the exception.
+func isCollectibleResidue(name string) bool {
+	if strings.HasSuffix(name, condemnedSuffix) {
+		return true
+	}
+	for _, suffix := range []string{tmpSuffix, reserveSuffix} {
+		if head, ok := strings.CutSuffix(name, suffix); ok {
+			_, parses := parseName(head)
+			return parses
+		}
+	}
+	return false
+}
+
+// parseName is the one predicate for "is this a snapshot name". Rejecting
+// producer artifacts here (not just in List's loop) means every consumer —
+// List, validateSnapshotName, and through it Restore — refuses them from one
+// source; previously Restore would accept a labeled ".tmp" leftover ("<ns>-
+// <label>.tmp" parses as <ns>) and install a torn partial copy as the
+// database. [LAW:one-source-of-truth]
 func parseName(name string) (time.Time, bool) {
+	if IsProducerArtifactName(name) {
+		return time.Time{}, false
+	}
 	head := name
 	if idx := strings.IndexByte(name, '-'); idx >= 0 {
 		head = name[:idx]
@@ -344,11 +495,16 @@ func sanitizeLabel(label string) string {
 
 // walkAndCopy creates dst as a tree-copy of src using copyFile for each
 // regular file. Directories are recreated with their source perm bits.
-// Symlinks are recreated; other special entries error out.
-func walkAndCopy(src, dst string, copyFile func(src, dst string) error) error {
+// Symlinks are recreated; other special entries error out. The per-entry ctx
+// gate is what lets an interrupt abandon a long fallback copy mid-tree and
+// hand control back to Take's cleanup within the interrupt guard's grace.
+func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context.Context, src, dst string) error) error {
 	return filepath.WalkDir(src, func(srcPath string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
+		}
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return ctxErr
 		}
 		rel, relErr := filepath.Rel(src, srcPath)
 		if relErr != nil {
@@ -374,7 +530,7 @@ func walkAndCopy(src, dst string, copyFile func(src, dst string) error) error {
 			}
 			return os.Symlink(target, dstPath)
 		case d.Type().IsRegular():
-			return copyFile(srcPath, dstPath)
+			return copyFile(ctx, srcPath, dstPath)
 		default:
 			return fmt.Errorf("dbsnapshot: unsupported file type at %s: %v", srcPath, d.Type())
 		}
@@ -382,8 +538,13 @@ func walkAndCopy(src, dst string, copyFile func(src, dst string) error) error {
 }
 
 // plainFileCopy is the universal fallback: open src, create dst with the
-// source's perm bits, io.Copy.
-func plainFileCopy(src, dst string) error {
+// source's perm bits, chunked copy. The destination's Close error is part of
+// the copy's outcome, not discarded via defer: on write-back-at-close
+// filesystems (NFS commit-on-close, delayed-allocation ENOSPC) a failed final
+// flush is the only signal the file is truncated, and swallowing it would let
+// Take rename a torn copy into the listing as a restorable snapshot.
+// [LAW:no-silent-failure]
+func plainFileCopy(ctx context.Context, src, dst string) error {
 	srcF, err := os.Open(src)
 	if err != nil {
 		return err
@@ -397,10 +558,40 @@ func plainFileCopy(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstF.Close()
-	if _, err := io.Copy(dstF, srcF); err != nil {
+	if err := copyWithContext(ctx, dstF, srcF); err != nil {
+		_ = dstF.Close()
 		return err
 	}
 	// OpenFile's mode is filtered by umask; Chmod forces exact source perms.
-	return dstF.Chmod(info.Mode().Perm())
+	if err := dstF.Chmod(info.Mode().Perm()); err != nil {
+		_ = dstF.Close()
+		return err
+	}
+	return dstF.Close()
+}
+
+// copyContextChunk bounds how many bytes copy between ctx checks. Dolt table
+// files can be multi-gigabyte monoliths, so between-files cancellation alone
+// would leave an interrupt blocked for the length of one file — the exact
+// slow-copy case the ctx support exists for. 32MiB keeps cancellation latency
+// sub-second on any medium worth copying to.
+const copyContextChunk = 32 << 20
+
+// copyWithContext copies src into dst in copyContextChunk pieces, consulting
+// ctx between pieces. io.CopyN is used (rather than wrapping src in a
+// ctx-checking io.Reader) because *os.File's ReadFrom unwraps the LimitedReader
+// CopyN builds, so each chunk still rides the kernel fast paths
+// (copy_file_range/sendfile) instead of degrading to a userspace buffer loop.
+func copyWithContext(ctx context.Context, dst, src *os.File) error {
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if _, err := io.CopyN(dst, src, copyContextChunk); err != nil {
+			if errors.Is(err, io.EOF) {
+				return nil
+			}
+			return err
+		}
+	}
 }
