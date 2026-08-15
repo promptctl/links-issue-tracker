@@ -52,10 +52,10 @@ func isUserSnapshotName(name string) bool {
 // or any other in-process mutation. Routes through store.LockCommitPath so the
 // lock primitive stays single-source.
 //
-// Reader-vs-rotator exclusion is owned by the workspace-busy lock: shared
-// holds in store.Open / store.OpenForRead and runSnapshotsNew's copy,
-// exclusive holds in runSnapshotsRestore and the other directory rotators.
-// This commit lock remains the writer-vs-writer gate only.
+// Reader-vs-rotator exclusion is owned by the workspace lock (shared holds
+// for directory readers, exclusive for rotators — the contract and its
+// callers live at store/workspace_lock.go); this commit lock remains the
+// writer-vs-writer gate only.
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
@@ -65,28 +65,67 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) err
 	return fn()
 }
 
-func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) (err error) {
+func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
+	// [LAW:no-silent-failure] A stray positional is a misfired intent (the
+	// sibling restore takes its argument positionally, so `snapshots new
+	// nightly` is a natural typo for `--label nightly`); accepting it would
+	// mint an unlabeled snapshot the operator then can't find by the name
+	// they thought they gave it.
+	if fs.NArg() != 0 {
+		return UsageError{Message: "usage: lit snapshots new [--label <text>]"}
+	}
 	cfg, err := config.Load(pathspec.New(ws.RootDir))
 	if err != nil {
 		return err
 	}
-	// [LAW:single-enforcer] The copy below reads the Dolt directory file by
-	// file — the same kind of actor as an open Store — so it takes the same
-	// shared workspace hold every Store open takes. That contends with the
-	// exclusive holds of the directory rotators (snapshots restore, remote
-	// adopt, workspace promotion) without blocking ordinary readers; the
-	// commit lock alone never did, because rotators don't hold it during
-	// their destructive window (links-sync-pgct.14's torn-snapshot race).
-	// Acquired before the commit lock, matching the workspace→commit order
-	// of runSnapshotsRestore and store.Open.
-	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
+	snap, err := takeUserSnapshot(ctx, ws, strings.TrimSpace(*label))
 	if err != nil {
 		return err
+	}
+	// Prune runs after the workspace hold is released: it deletes only aged
+	// snapshot directories under the storage dir and never reads the Dolt
+	// directory, so a multi-gigabyte RemoveAll must not keep rotators
+	// refusing workspace-busy (their exclusive acquisition is one-attempt).
+	// The commit lock still serializes it against concurrent snapshot
+	// producers, exactly as before the copy grew its workspace hold.
+	//
+	// [LAW:single-enforcer] User-snapshot retention bounds *user* snapshots
+	// only; migration snapshots share the directory but are pruned
+	// independently by migrate() under its own budget. Without the kind
+	// filter, `lit snapshots new` could evict a recovery snapshot the
+	// migration system is depending on.
+	if err := withCommitLock(ctx, ws, func() error {
+		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
+	}); err != nil {
+		return err
+	}
+	_, err = fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path)
+	return err
+}
+
+// takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
+// copy needs and releases them at return, so the caller's housekeeping never
+// extends the exclusion window past the last directory read.
+//
+// [LAW:single-enforcer] The copy reads the Dolt directory file by file — the
+// same kind of actor as an open Store — so it takes the same shared workspace
+// hold every Store open takes, acquired before the commit lock in the same
+// workspace→commit order as runSnapshotsRestore and store.Open. That contends
+// with every rotator's exclusive hold without blocking ordinary readers; the
+// commit lock alone never did, because rotators don't hold it during their
+// destructive window (links-sync-pgct.14's torn-snapshot race). The two holds
+// own rotator exclusion and writer serialization respectively; engine-lifecycle
+// I/O that holds neither (a concurrent open's journal crash-recovery after an
+// unclean kill) is a distinct, narrower exposure tracked by links-sync-pgct.15.
+func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
+	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
+	if err != nil {
+		return dbsnapshot.Snapshot{}, err
 	}
 	// [LAW:no-silent-failure] Same release contract as runSnapshotsRestore: a
 	// failed release can leave the workspace stuck busy for later commands,
@@ -96,24 +135,26 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 			err = errors.Join(err, relErr)
 		}
 	}()
-	var snap dbsnapshot.Snapshot
+	// Same post-lock ordering as every store open: only a marker checked
+	// under the held workspace lock is binding (a live adopt holds the lock
+	// exclusively, so reaching this line proves any marker present belongs
+	// to a dead adopt). Without this check the copy would snapshot condemned
+	// residue as a "restorable" recovery point — and the retention prune
+	// would then evict a good snapshot to keep the garbage one.
+	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
+		return dbsnapshot.Snapshot{}, err
+	}
 	if err := withCommitLock(ctx, ws, func() error {
-		s, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), strings.TrimSpace(*label))
+		s, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), label)
 		if err != nil {
 			return err
 		}
 		snap = s
-		// [LAW:single-enforcer] User-snapshot retention bounds *user*
-		// snapshots only; migration snapshots share the directory but are
-		// pruned independently by migrate() under its own budget. Without
-		// the kind filter, `lit snapshots new` could evict a recovery
-		// snapshot the migration system is depending on.
-		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
+		return nil
 	}); err != nil {
-		return err
+		return dbsnapshot.Snapshot{}, err
 	}
-	_, err = fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path)
-	return err
+	return snap, nil
 }
 
 func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error {

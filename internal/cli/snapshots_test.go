@@ -6,7 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -380,15 +380,73 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 	// artifact (final dir, .tmp clone target, .reserve sentinel) is created,
 	// so the raw directory listing is byte-identical.
 	after := rawSnapshotDirEntries(t, ws)
-	if strings.Join(before, "\n") != strings.Join(after, "\n") {
+	if !slices.Equal(before, after) {
 		t.Fatalf("refused snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
 	}
 }
 
-// rawSnapshotDirEntries lists every entry name in the snapshots dir, sorted,
-// with no kind filtering — unlike snapshotsOnDisk it includes .tmp/.reserve
-// residue, because tests asserting "nothing was created" must see partial
-// artifacts too.
+// TestSnapshotsNew_RefusesOnPendingAdoptMarker pins that the copy honors the
+// adopt-pending condemnation the same way every store open does: a marker
+// present under the held workspace lock means the directory is a dead adopt's
+// partial residue, and snapshotting it would install garbage in the listing
+// as a "restorable" recovery point — worse, the retention prune would then
+// evict a good snapshot to keep it.
+func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	markerPath := store.AdoptPendingMarkerPath(ws.DatabasePath)
+	if err := os.WriteFile(markerPath, []byte(`{"remote":"origin","branch":"main"}`), 0o644); err != nil {
+		t.Fatalf("write adopt-pending marker: %v", err)
+	}
+	defer func() { _ = os.Remove(markerPath) }()
+
+	before := rawSnapshotDirEntries(t, ws)
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	if err == nil {
+		t.Fatalf("snapshots new succeeded on a marker-condemned workspace; expected refusal\nstdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "adopt was interrupted") {
+		t.Fatalf("error %q must carry the standard interrupted-adopt condemnation", err.Error())
+	}
+
+	after := rawSnapshotDirEntries(t, ws)
+	if !slices.Equal(before, after) {
+		t.Fatalf("refused snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// TestSnapshotsNew_RejectsPositionalArgs pins the usage contract: the
+// command's only input is --label, and a stray positional (a natural typo,
+// since sibling restore takes its argument positionally) is a usage error —
+// not a silently unlabeled snapshot the operator can't find later.
+func TestSnapshotsNew_RejectsPositionalArgs(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	before := rawSnapshotDirEntries(t, ws)
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new", "nightly-backup"})
+	if err == nil {
+		t.Fatalf("snapshots new with a positional succeeded; expected usage error\nstdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "usage: lit snapshots new") {
+		t.Fatalf("error %q must be the snapshots-new usage error", err.Error())
+	}
+
+	after := rawSnapshotDirEntries(t, ws)
+	if !slices.Equal(before, after) {
+		t.Fatalf("rejected snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// rawSnapshotDirEntries lists every entry name in the snapshots dir (in
+// os.ReadDir's sorted-by-filename order) with no kind filtering — unlike
+// snapshotsOnDisk it includes .tmp/.reserve residue, because tests asserting
+// "nothing was created" must see partial artifacts too.
 func rawSnapshotDirEntries(t *testing.T, ws workspace.Info) []string {
 	t.Helper()
 	entries, err := os.ReadDir(snapshotsDirFor(ws))
@@ -402,7 +460,6 @@ func rawSnapshotDirEntries(t *testing.T, ws workspace.Info) []string {
 	for _, e := range entries {
 		names = append(names, e.Name())
 	}
-	sort.Strings(names)
 	return names
 }
 
