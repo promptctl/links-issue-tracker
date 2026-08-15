@@ -1779,7 +1779,7 @@ func (s *Store) ensureMetaValue(ctx context.Context, guard *snapshotGuard, key, 
 	if current == value {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("ensure meta %s: %w", key, err)
 	}
 	if err := s.setMeta(ctx, nil, key, value); err != nil {
@@ -1796,7 +1796,7 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 	if strings.TrimSpace(current) != "" {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("ensure meta %s default: %w", key, err)
 	}
 	// [LAW:one-source-of-truth] Schema-version writes preserve the recorded version as the canonical migration state once it exists.

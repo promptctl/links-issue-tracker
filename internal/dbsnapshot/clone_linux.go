@@ -3,7 +3,7 @@
 package dbsnapshot
 
 import (
-	"io"
+	"context"
 	"os"
 
 	"golang.org/x/sys/unix"
@@ -15,11 +15,11 @@ import (
 //
 // [LAW:dataflow-not-control-flow] Platform variability lives in which file Go
 // links in (a value), not in a runtime branch inside one function.
-func cloneTree(src, dst string) error {
-	return walkAndCopy(src, dst, ficloneOrCopy)
+func cloneTree(ctx context.Context, src, dst string) error {
+	return walkAndCopy(ctx, src, dst, ficloneOrCopy)
 }
 
-func ficloneOrCopy(src, dst string) error {
+func ficloneOrCopy(ctx context.Context, src, dst string) error {
 	srcF, err := os.Open(src)
 	if err != nil {
 		return err
@@ -38,7 +38,7 @@ func ficloneOrCopy(src, dst string) error {
 		// OpenFile's mode is filtered by umask; Chmod forces exact source perms.
 		return dstF.Chmod(info.Mode().Perm())
 	}
-	if _, err := io.Copy(dstF, srcF); err != nil {
+	if err := copyWithContext(ctx, dstF, srcF); err != nil {
 		return err
 	}
 	return dstF.Chmod(info.Mode().Perm())

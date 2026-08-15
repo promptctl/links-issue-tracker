@@ -233,7 +233,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 // discarded by design. It is idempotent under retry: the snapshot is cached and the
 // reset targets a fixed ref. [LAW:no-silent-failure]
 func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, trackingRef string) error {
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return fmt.Errorf("snapshot before take-remote: %w", err)
 	}
 	if err := resetHardToRef(ctx, s.db, trackingRef); err != nil {

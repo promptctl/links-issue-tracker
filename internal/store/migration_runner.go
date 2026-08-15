@@ -364,7 +364,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 	// quarantineFastFail reads it. Reading a stale-shaped table would fail
 	// with a raw column-not-found SQL error instead of proceeding; ordering
 	// the self-heal first means the fast-fail below always sees a table it
-	// can query. Committed immediately, ahead of guard.ensure(), so it also
+	// can query. Committed immediately, ahead of guard.ensure(ctx), so it also
 	// survives a checkpoint reset should one fire later in this Open.
 	//
 	// [LAW:single-enforcer] Quarantine table creation is decoupled from goose
@@ -398,7 +398,7 @@ func (s *Store) runMigration(ctx context.Context, guard *snapshotGuard) error {
 			return fmt.Errorf("reconcile pre-goose workspace: %w", err)
 		}
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return fmt.Errorf("migrate: %w", err)
 	}
 	if hook := migrationPostSnapshotHookForTest; hook != nil {

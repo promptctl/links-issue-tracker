@@ -776,7 +776,7 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// rather than performing an irreversible automatic mutation with no recovery point.
 	// The guard is owned by the caller and shared across GC-contention retries, so
 	// ensure() takes exactly one snapshot no matter how many attempts run.
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return 0, fmt.Errorf("snapshot before reconcile: %w", err)
 	}
 

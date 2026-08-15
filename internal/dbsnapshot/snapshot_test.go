@@ -1,6 +1,7 @@
 package dbsnapshot
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -13,7 +14,7 @@ import (
 func TestTake_RejectsMissingSource(t *testing.T) {
 	t.Parallel()
 	snapshotsDir := t.TempDir()
-	_, err := Take(filepath.Join(snapshotsDir, "nonexistent"), snapshotsDir, "")
+	_, err := Take(context.Background(), filepath.Join(snapshotsDir, "nonexistent"), snapshotsDir, "")
 	if err == nil {
 		t.Fatalf("Take against missing source should error")
 	}
@@ -37,7 +38,7 @@ func TestTakeAndList_NewestFirst(t *testing.T) {
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
 	for i := 0; i < 3; i++ {
-		if _, err := Take(src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
 	}
@@ -111,7 +112,7 @@ func TestRestore_RoundTrip(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
-	snap, err := Take(src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, snapshotsDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -151,7 +152,7 @@ func TestRestore_SurvivesMissingDatabaseDir(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
-	snap, err := Take(src, snapshotsDir, "")
+	snap, err := Take(context.Background(), src, snapshotsDir, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,9 +192,10 @@ func TestRestore_RejectsUnsafeNames(t *testing.T) {
 		"../sibling",
 		"sub/dir",
 		"/etc/passwd",
-		"1700000000-../etc",        // parseName head digits, but contains separator
-		"snap-1700000000-abc",      // legacy naming scheme from prior PR
-		"1700000000000000000.tmp",  // crash-leftover form
+		"1700000000-../etc",             // parseName head digits, but contains separator
+		"snap-1700000000-abc",           // legacy naming scheme from prior PR
+		"1700000000000000000.tmp",       // crash-leftover form
+		"1700000000000000000-label.tmp", // labeled crash-leftover: digit head parses, suffix must still refuse
 		"trailing/",
 	}
 	for _, name := range cases {
@@ -264,7 +266,7 @@ func TestPrune_KeepsExactlyN(t *testing.T) {
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
 	for i := 0; i < 7; i++ {
-		if _, err := Take(src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -329,12 +331,12 @@ func TestPruneMatching_KindAwareRetention(t *testing.T) {
 	// (label="kind-b"). With keep=2 against an "a" matcher, only "a"
 	// snapshots should be pruned, leaving 2 of them; every "b" must remain.
 	for i := 0; i < 6; i++ {
-		if _, err := Take(src, snapshotsDir, "kind-a"); err != nil {
+		if _, err := Take(context.Background(), src, snapshotsDir, "kind-a"); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for i := 0; i < 5; i++ {
-		if _, err := Take(src, snapshotsDir, "kind-b"); err != nil {
+		if _, err := Take(context.Background(), src, snapshotsDir, "kind-b"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -378,7 +380,7 @@ func TestPruneMatching_NilMatchPrunesAll(t *testing.T) {
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
 	for i := 0; i < 5; i++ {
-		if _, err := Take(src, snapshotsDir, ""); err != nil {
+		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -401,7 +403,7 @@ func TestTake_LabelAppearsInName(t *testing.T) {
 	if err := os.MkdirAll(src, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snap, err := Take(src, filepath.Join(root, "snapshots"), "pre-migration #5 / foo!")
+	snap, err := Take(context.Background(), src, filepath.Join(root, "snapshots"), "pre-migration #5 / foo!")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -430,7 +432,7 @@ func TestCloneTree_PreservesContentAndStructure(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(src, "nested", "deeper", "c"), []byte("gamma"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := cloneTree(src, dst); err != nil {
+	if err := cloneTree(context.Background(), src, dst); err != nil {
 		t.Fatal(err)
 	}
 	cases := []struct {
@@ -465,7 +467,7 @@ func TestTake_HandlesRapidConsecutive(t *testing.T) {
 	snapshotsDir := filepath.Join(root, "snapshots")
 	seen := map[string]bool{}
 	for i := 0; i < 50; i++ {
-		s, err := Take(src, snapshotsDir, "")
+		s, err := Take(context.Background(), src, snapshotsDir, "")
 		if err != nil {
 			t.Fatalf("Take %d: %v", i, err)
 		}
@@ -502,7 +504,7 @@ func TestTake_ConcurrentNoCollisions(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			s, err := Take(src, snapshotsDir, "")
+			s, err := Take(context.Background(), src, snapshotsDir, "")
 			if err != nil {
 				errs <- err
 				return
@@ -565,7 +567,7 @@ func TestPlainFileCopy_PreservesPerms(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(root, "b")
-	if err := plainFileCopy(src, dst); err != nil {
+	if err := plainFileCopy(context.Background(), src, dst); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(dst)
@@ -590,6 +592,16 @@ func TestParseName(t *testing.T) {
 		{"abc-def", false},
 		{"", false},
 		{"0", false},
+		// Producer artifacts are rejected by parseName itself so every
+		// consumer (List, Restore's validateSnapshotName) refuses them from
+		// one predicate. The labeled ".tmp" form is the regression case: its
+		// digit head parses, and before the predicate move Restore would
+		// accept it and install a torn partial copy.
+		{"1700000000000000000.tmp", false},
+		{"1700000000000000000-label.tmp", false},
+		{"1700000000000000000.reserve", false},
+		{"1700000000000000000-label.reserve", false},
+		{"1700000000000000000.tmp.condemned", false},
 	}
 	for _, tc := range cases {
 		_, ok := parseName(tc.name)

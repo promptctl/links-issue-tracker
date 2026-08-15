@@ -31,19 +31,18 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 	return st, doltRoot
 }
 
-// snapshotCount returns how many entries exist in the workspace's snapshots
+// snapshotCount returns how many snapshots exist in the workspace's snapshots
 // directory. Used to assert "no snapshot taken" for the refusal paths.
+// Counts via dbsnapshot.List — the package's own definition of "a snapshot
+// exists" — rather than raw dir entries, which would also count non-snapshot
+// machinery like the producer beacon file. [LAW:one-source-of-truth]
 func snapshotCount(t *testing.T, doltRoot string) int {
 	t.Helper()
-	dir := migrationSnapshotsDir(doltRoot)
-	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0
-	}
+	list, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
 	if err != nil {
-		t.Fatalf("readdir snapshots: %v", err)
+		t.Fatalf("list snapshots: %v", err)
 	}
-	return len(entries)
+	return len(list)
 }
 
 // TestAppliedSchemaVersionMatchesRecorded pins the exported reader `lit upgrade`

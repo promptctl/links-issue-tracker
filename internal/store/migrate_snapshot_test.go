@@ -220,7 +220,7 @@ func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
 	// touch them at all.
 	for i := 0; i < migrationSnapshotRetention+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
-		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, label); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), doltRoot, snapshotsDir, label); err != nil {
 			t.Fatalf("Take migration-shaped snapshot %d error = %v", i, err)
 		}
 	}
@@ -285,13 +285,13 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 	// plus several extra migration snapshots beyond the migration retention.
 	const userSnaps = 25
 	for i := 0; i < userSnaps; i++ {
-		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, "user"); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), doltRoot, snapshotsDir, "user"); err != nil {
 			t.Fatalf("Take user snapshot %d: %v", i, err)
 		}
 	}
 	for i := 0; i < migrationSnapshotRetention+5; i++ {
 		label := formatMigrationSnapshotLabel(time.Now().Add(time.Duration(i) * time.Nanosecond))
-		if _, err := dbsnapshot.Take(doltRoot, snapshotsDir, label); err != nil {
+		if _, err := dbsnapshot.Take(context.Background(), doltRoot, snapshotsDir, label); err != nil {
 			t.Fatalf("Take migration snapshot %d: %v", i, err)
 		}
 	}

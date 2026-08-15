@@ -4,9 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
 
 // [LAW:single-enforcer] Workspace-exclusivity lock acquisition lives here so
@@ -29,13 +30,12 @@ import (
 // acquireWorkspaceLock; the acquisition sequence (OpenFile, tryLockFile,
 // retry-or-error) is the same every call.
 //
-// [LAW:locality-or-seam] The lock primitive is platform-specific (POSIX
-// flock(2) vs. Win32 LockFileEx) and lives in workspace_lock_posix.go and
-// workspace_lock_windows.go behind a typed seam. Adding a new platform is
-// a parallel-but-isolated change — no edit to this file or to callers.
-// The seam shape: tryLockFile(file, exclusive) returns nil on success,
-// errLockWouldBlock on contention, or another error on real failure;
-// unlockFile(file) releases the hold.
+// [LAW:locality-or-seam] The lock primitive (POSIX flock(2) vs. Win32
+// LockFileEx) and its acquisition loop live in internal/filelock behind a
+// typed seam shared with every other flock-backed coordination point (e.g.
+// dbsnapshot's snapshot-producer beacon). This file keeps only the lock
+// *meanings*: which path, which mode, which retry budget, and which
+// operator guidance wraps contention.
 
 // ErrWorkspaceBusy is the sentinel every workspace-lock contention error
 // wraps. Callers detect contention with errors.Is(err, ErrWorkspaceBusy)
@@ -43,14 +43,10 @@ import (
 //
 // [LAW:one-source-of-truth] One sentinel for "lock is held by someone else";
 // the wrapping messages differ to give context-appropriate guidance, but the
-// programmatic discriminator is uniform.
+// programmatic discriminator is uniform. filelock reports contention as a
+// value, and acquireStoreLock is the one boundary that stamps it with this
+// domain meaning.
 var ErrWorkspaceBusy = errors.New("workspace busy")
-
-// errLockWouldBlock is the internal seam between the platform-neutral
-// acquisition loop and the platform-specific tryLockFile. The loop converts
-// it into ErrWorkspaceBusy after retries are exhausted; any other error from
-// tryLockFile is a real failure surfaced immediately.
-var errLockWouldBlock = errors.New("lock would block")
 
 const (
 	// ~5s wall-clock cap: 100 attempts with 99 inter-attempt sleeps of 50ms
@@ -147,18 +143,29 @@ func SyncPushLockPath(databasePath string) string {
 // what keeps two sibling mirrors from opening a second embedded Dolt engine on
 // the one path and colliding on online GC.
 func TryAcquireSyncPushLock(databasePath string) (func() error, bool, error) {
-	release, err := acquireFileLock(context.Background(), SyncPushLockPath(databasePath), true, 1, 0)
-	if errors.Is(err, ErrWorkspaceBusy) {
-		return nil, false, nil
-	}
-	if err != nil {
-		return nil, false, err
-	}
-	return release, true, nil
+	return filelock.Acquire(context.Background(), SyncPushLockPath(databasePath), true, 1, 0)
 }
 
 func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	return acquireFileLock(ctx, WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
+	return acquireStoreLock(ctx, WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
+}
+
+// acquireStoreLock runs the shared filelock acquisition and stamps its
+// contention outcome with the store's domain sentinel.
+//
+// [LAW:parse-dont-validate] filelock reports contention as a value (a healthy
+// lock being held is not a failure of the primitive); this is the one
+// boundary where that value becomes ErrWorkspaceBusy, so every store lock's
+// contention carries the same errors.Is discriminator.
+func acquireStoreLock(ctx context.Context, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
+	release, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, maxAttempts, delay)
+	if err != nil {
+		return nil, err
+	}
+	if !acquired {
+		return nil, ErrWorkspaceBusy
+	}
+	return release, nil
 }
 
 // EngineLockPath returns the read-write-engine-exclusivity lock path for a
@@ -201,7 +208,7 @@ const (
 // passes through, so "only one read-write engine per path" cannot be violated
 // by a call site racing ahead of it — no call site decides this for itself.
 func acquireEngineWriteLock(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireFileLock(ctx, EngineLockPath(doltRootDir), true, engineWriteRetryAttempts, engineWriteRetryDelay)
+	release, err := acquireStoreLock(ctx, EngineLockPath(doltRootDir), true, engineWriteRetryAttempts, engineWriteRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees
@@ -211,62 +218,6 @@ func acquireEngineWriteLock(ctx context.Context, doltRootDir string) (func() err
 	return release, err
 }
 
-// acquireFileLock is the path-parametrized acquisition loop shared by every
-// flock-backed coordination point (the workspace-exclusivity lock and the
-// background-mirror single-flight lock). [LAW:one-source-of-truth] One
-// OpenFile → tryLockFile → retry-or-error sequence; the lock's meaning lives
-// entirely in which path and (exclusive, maxAttempts, delay) the caller passes.
-func acquireFileLock(ctx context.Context, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
-		return nil, fmt.Errorf("ensure workspace lock dir: %w", err)
-	}
-	file, err := os.OpenFile(lockPath, os.O_CREATE|os.O_RDWR, 0o600)
-	if err != nil {
-		return nil, fmt.Errorf("open workspace lock: %w", err)
-	}
-	for attempt := 0; attempt < maxAttempts; attempt++ {
-		err = tryLockFile(file, exclusive)
-		if err == nil {
-			fd := file
-			// [LAW:no-silent-failure] Both unlock and close failures
-			// matter (FD leak; lock stuck held) so the release contract
-			// surfaces them jointly via errors.Join instead of picking one.
-			return func() error {
-				var unlockErr error
-				if e := unlockFile(fd); e != nil {
-					unlockErr = fmt.Errorf("release workspace lock: %w", e)
-				}
-				var closeErr error
-				if e := fd.Close(); e != nil {
-					closeErr = fmt.Errorf("close workspace lock fd: %w", e)
-				}
-				return errors.Join(unlockErr, closeErr)
-			}, nil
-		}
-		if !errors.Is(err, errLockWouldBlock) {
-			return nil, joinWithClose(fmt.Errorf("lock workspace: %w", err), file)
-		}
-		if attempt+1 == maxAttempts {
-			break
-		}
-		if waitErr := waitWithContext(ctx, delay); waitErr != nil {
-			return nil, joinWithClose(waitErr, file)
-		}
-	}
-	return nil, joinWithClose(ErrWorkspaceBusy, file)
-}
-
-// joinWithClose closes the lock file and returns the primary error joined
-// with any close error. Used on every failure path inside
-// acquireWorkspaceLock so an FD leak / close-time error stays observable
-// alongside the failure that triggered the release.
-//
-// [LAW:no-silent-failure] A leaked FD or a close error is real signal —
-// silently dropping it (`_ = file.Close()`) hid debugging information on
-// the exact paths that are hardest to diagnose.
-func joinWithClose(primary error, file *os.File) error {
-	if closeErr := file.Close(); closeErr != nil {
-		return errors.Join(primary, fmt.Errorf("close workspace lock fd: %w", closeErr))
-	}
-	return primary
-}
+// The path-parametrized acquisition loop these wrappers share lives at
+// filelock.Acquire; only the lock meanings (paths, modes, budgets, operator
+// guidance) remain here.
