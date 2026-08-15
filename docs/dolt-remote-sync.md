@@ -120,7 +120,7 @@ cadence = "on-change"   # default
 
 | value       | meaning                                                                 |
 | ----------- | ----------------------------------------------------------------------- |
-| `on-change` | mirror after every mutating lit command (`new`, `start`, `update`, `close`, `comment`, `rank`, …), in addition to the pre-push hook. The default: a mutation on a connected workspace reaches the remote without a separate push step, so "durable locally" and "durable on the remote" don't drift apart into a manual act someone has to remember. |
+| `on-change` | mirror after mutating lit commands (`new`, `start`, `update`, `close`, `comment`, `rank`, …), in addition to the pre-push hook. Spawns are coalesced to at most one mirror subprocess per second (a `mirror-spawn.last` marker in the workspace's storage dir), which loses nothing: the mirror that runs pushes the current HEAD, which already includes every commit since the last one. The marker is stamped for every attempt — including one whose git-remote check failed — so a workspace with a broken remote configuration warns once per interval rather than once per mutation. The default: a mutation on a connected workspace reaches the remote without a separate push step, so "durable locally" and "durable on the remote" don't drift apart into a manual act someone has to remember. |
 | `on-push`   | mirror only when the managed pre-push hook runs (one push per `git push`). Opt-in, for a workspace that deliberately wants to batch outgoing network traffic instead of pushing on every mutation. |
 
 `on-change` runs the same `lit sync push` the pre-push hook runs, after the
@@ -186,9 +186,22 @@ three-way state (base = merge-base, ours = local head, theirs = remote head) and
 resolves it field by field with deterministic, no-clock rules: a field only one
 side moved is taken from that side; a field both sides moved to different values
 is settled by its policy (e.g. priority and status take the dominant value). The
-merged result is replayed as **one forward commit on top of the remote head**, so
-the history stays linear — no merge commit, no per-machine DAG — and the next push
-fast-forwards. The reconcile is transparent for everything the rules can settle.
+merged result is replayed **forward on top of the remote head**, so the history
+stays linear — no merge commit, no per-machine DAG — and the next push
+fast-forwards. The replay preserves the folded side's per-commit provenance: each
+local commit the spine lacked lands individually with its original message,
+timestamp, and author (commits whose projection changes nothing are dropped —
+for example schema/migration-only commits whose work the lift commit below
+already carries), and a marker commit naming the reconcile settles the sequence — its diff
+is whatever the merge policy itself decided beyond the folded side's content. When
+the remote head is at an older schema, one machinery commit (`reconcile: lift
+remote head to current schema`) precedes the provenance commits, carrying the
+schema DDL and migration bookkeeping so no replayed commit's diff includes schema
+work that was never its own; on a current-schema head no such commit lands. The
+same granular replay serves the unrelated-history `combine` (each local commit
+projected as its union with the remote backlog) and `take local` (whose marker
+commit's diff is the owner-approved discard of the remote-only issues). The
+reconcile is transparent for everything the rules can settle.
 
 The one class the rules cannot settle is a concurrent **free-text rewrite** —
 title, description, or agent prompt changed to different text on both sides. Those

@@ -9,11 +9,15 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// takeLocalCommitMessage labels the single forward commit a take-local resolution
-// replays onto the remote head, so the linear history names what produced it —
-// distinct from the field-aware merge's reconcileCommitMessage.
+// takeLocalCommitMessage labels the marker commit that settles a take-local
+// resolution's forward replay onto the remote head, so the linear history names
+// what produced it — distinct from the field-aware merge's
+// reconcileCommitMessage. Its diff is the take's own act: the discard of the
+// remote-only issues the owner approved dropping.
 const takeLocalCommitMessage = "reconcile: take local backlog over unrelated remote history"
 
 // UnrelatedResolution is the whole-store choice that settles an unrelated-history
@@ -100,7 +104,7 @@ func (e OwnerApprovalRequiredError) Error() string {
 //
 // It is snapshot-guarded and GC-retry-wrapped like the three-way reconcile — the take
 // is destructive, so a pre-mutation recovery point matters even more here. take-local,
-// which authors a replay commit on the remote head, also shares the three-way path's
+// which authors replay commits on the remote head, also shares the three-way path's
 // schema-ahead refusal (guardCommitSchemaAhead); take-remote, which adopts the remote
 // head wholesale, authors no replay commit and is exempt. CONSTRAINT (embedded Dolt
 // one-RW-engine-per-path): runs INLINE/foreground on the caller's own engine, never a
@@ -203,7 +207,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	case TakeLocal:
-		// take-local authors a replay commit ON the remote head (commitReplayAndAdvance),
+		// take-local authors replay commits ON the remote head (commitReplayAndAdvance),
 		// so it shares the three-way path's full safe-replay envelope — schema-ahead refusal
 		// included: a replay below an ahead remote's schema would drop the newer fields and
 		// regress the shared remote on push (the 2026-07-08 incident shape).
@@ -245,25 +249,46 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult,
 	return nil
 }
 
-// takeLocalOntoRemoteHead replays the local backlog as one forward commit on the
-// remote head, so local becomes a fast-forwardable descendant carrying its own content
-// — the mirror of take-remote, built to converge the remote onto local on the next
-// push (the local branch pointer is all this store can move directly; it reaches the
-// remote only through a fast-forward). It reuses the exact safe-replay the three-way
-// reconcile uses: scratch branch, snapshot-first, one atomic data-branch advance. The
-// export is local's own content read at localHead, so the remote-only issues are
-// absent from it — discarded by design. [LAW:single-enforcer] one safe-replay, one
-// scratch lifecycle, shared with the field-aware path.
+// takeLocalOntoRemoteHead replays the local backlog forward onto the remote head, so
+// local becomes a fast-forwardable descendant carrying its own content — the mirror
+// of take-remote, built to converge the remote onto local on the next push (the local
+// branch pointer is all this store can move directly; it reaches the remote only
+// through a fast-forward). The local chain's commits land individually under their
+// own provenance, projected as unions with the remote content exactly as a combine
+// projects them — so mid-chain history stays a whole backlog — and the take's marker
+// commit settles on local's own content: ITS diff is the discard of the remote-only
+// issues, attributing the owner-approved destruction to the take itself rather than
+// smearing it into local's first commit. It reuses the exact safe-replay the
+// three-way reconcile uses: scratch branch, snapshot-first, one atomic data-branch
+// advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
+// lifecycle, shared with the field-aware path.
 func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, dataBranch, scratchBranch, localHead, remoteHead string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratchBranch, localHead, func() error {
 		local, err := s.exportAtCommit(ctx, localHead)
 		if err != nil {
 			return err
 		}
-		if err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, takeLocalCommitMessage, local); err != nil {
+		theirs, err := s.exportAtCommit(ctx, remoteHead)
+		if err != nil {
+			return err
+		}
+		chain, err := readFoldedChain(ctx, s.db, remoteHead, localHead)
+		if err != nil {
+			return err
+		}
+		// The no-base union projection combine uses; only the terminal export
+		// differs — the take settles on local's content, not the union.
+		// [LAW:dataflow-not-control-flow]
+		steps, err := s.buildFoldSteps(ctx, chain, model.Export{}, theirs, merge.ThreeWay(model.Export{}, local, theirs).Provisional())
+		if err != nil {
+			return err
+		}
+		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, takeLocalCommitMessage, local, steps)
+		if err != nil {
 			return err
 		}
 		result.State = SyncReconcileTookLocal
+		result.Replayed = replayed
 		return nil
 	})
 }

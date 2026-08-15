@@ -160,3 +160,42 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		t.Fatalf("LocalIssueCount() = %d, want exactly 1 — more means the retry re-ran the staged mutation body", count)
 	}
 }
+
+// TestCommitWorkingSetOnceRendersStamp pins the commit-stamp flag rendering the
+// reconcile's provenance replay depends on: a non-default Author lands verbatim
+// as the commit's committer/email (not the session identity), a fixed past Date
+// lands to the second, and AllowEmpty lands a commit even on a clean working
+// set. The replay tests cannot see a dropped --author on their own — the
+// original and the replayed commit share the session identity there — so this
+// test stamps an identity the session does not have.
+func TestCommitWorkingSetOnceRendersStamp(t *testing.T) {
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	date := time.Date(2025, 3, 7, 9, 30, 45, 0, time.UTC)
+	stamp := commitStamp{
+		Message:    "stamped provenance probe",
+		Date:       date,
+		Author:     "prov-author <prov@example.test>",
+		AllowEmpty: true,
+	}
+	if err := st.commitWorkingSetOnce(ctx, stamp); err != nil {
+		t.Fatalf("commitWorkingSetOnce(stamp) error = %v", err)
+	}
+
+	var committer, email, message string
+	var got time.Time
+	err := st.db.QueryRowContext(ctx, `SELECT committer, email, date, message FROM dolt_log('HEAD') LIMIT 1`).Scan(&committer, &email, &got, &message)
+	if err != nil {
+		t.Fatalf("read stamped head: %v", err)
+	}
+	if committer != "prov-author" || email != "prov@example.test" {
+		t.Fatalf("stamped author = %s <%s>, want prov-author <prov@example.test>", committer, email)
+	}
+	if !got.UTC().Equal(date) {
+		t.Fatalf("stamped date = %s, want %s", got.UTC(), date)
+	}
+	if message != "stamped provenance probe" {
+		t.Fatalf("stamped message = %q, want %q", message, stamp.Message)
+	}
+}
