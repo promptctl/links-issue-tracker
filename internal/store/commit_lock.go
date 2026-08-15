@@ -369,8 +369,8 @@ func commitLockPathForDolt(databasePath string) string {
 
 func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), error) {
 	processCommitMutex.Lock()
-	locked, err := tryAcquireFileLock(lockPath)
-	for errors.Is(err, os.ErrExist) && !locked {
+	hold, err := tryAcquireFileLock(lockPath)
+	for errors.Is(err, os.ErrExist) && hold == nil {
 		if staleErr := removeStaleCommitLock(lockPath, commitLockStaleAfter); staleErr != nil {
 			processCommitMutex.Unlock()
 			return nil, fmt.Errorf("acquire commit lock: %w", staleErr)
@@ -379,52 +379,130 @@ func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), erro
 			processCommitMutex.Unlock()
 			return nil, waitErr
 		}
-		locked, err = tryAcquireFileLock(lockPath)
+		hold, err = tryAcquireFileLock(lockPath)
 	}
 	if err != nil {
 		processCommitMutex.Unlock()
 		return nil, fmt.Errorf("acquire commit lock: %w", err)
 	}
-	if !locked {
+	if hold == nil {
 		processCommitMutex.Unlock()
 		if ctxErr := ctx.Err(); ctxErr != nil {
 			return nil, ctxErr
 		}
 		return nil, errors.New("acquire commit lock: lock not acquired")
 	}
-	stopHeartbeat := startCommitLockHeartbeat(lockPath)
+	stopHeartbeat := startCommitLockHeartbeat(*hold)
 	return func() {
 		// [LAW:no-ambient-temporal-coupling] Stop-then-remove: stop blocks
 		// until the refresher has fully exited, so no straggler touch can land
-		// on the path after this Remove — where it would warn spuriously or
-		// freshen a successor holder's file.
+		// on the path after this Remove.
 		stopHeartbeat()
-		_ = os.Remove(lockPath)
+		releaseCommitLockFile(*hold)
 		processCommitMutex.Unlock()
 	}, nil
 }
 
-// startCommitLockHeartbeat refreshes lockPath's mtime every
+// commitLockHold is proof that this process minted the lock file at path: the
+// identity of the file it created, captured from the open descriptor before
+// anyone could swap the path. Both writers that mutate the lock file — the
+// heartbeat's touch and release's remove — take a hold and act only while the
+// path still resolves to that same file, so a holder that was reclaimed from
+// (a frozen process past the age window, or either of the pre-existing steal
+// vectors removeStaleCommitLock documents) can neither freshen nor delete its
+// successor's live lock. Identity is compared with os.SameFile — inode on
+// unix, file index on Windows — so the fence needs no lock-file format change
+// and stays byte-compatible with binaries that predate it.
+//
+// [LAW:types-are-the-program] the token is minted at creation and consumed by
+// both writers, so "touch or remove a lock this process does not own" stops
+// being a call any caller can express. The residual stat→act window is
+// microseconds and cannot be closed inside a create-file protocol at all;
+// closing it entirely is the flock migration tracked in
+// links-snapshots-3dtv.2.
+type commitLockHold struct {
+	path     string
+	identity os.FileInfo
+}
+
+// ownsFile reports whether path still resolves to the file this hold minted.
+// A definitive answer — the file is gone, or a different file sits there —
+// comes back as false with no error; an indeterminate one carries the stat
+// failure so the caller reports it instead of guessing an owner.
+// [LAW:no-silent-failure] [LAW:parse-dont-validate] the two outcomes are
+// distinct values, never collapsed onto one "not ours" that hides I/O trouble.
+func (h commitLockHold) ownsFile() (bool, error) {
+	current, err := os.Stat(h.path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return os.SameFile(h.identity, current), nil
+}
+
+// releaseCommitLockFile removes the lock file only while it is still the file
+// this hold minted. A lock reclaimed out from under a live holder belongs to
+// whoever holds it now: removing it would hand a third process an instant
+// O_EXCL acquire beside the current holder, turning one steal into two live
+// writers. The mutation is already over by the time release runs, so every
+// outcome here is a diagnostic rather than a failure — but a detected steal is
+// exactly the evidence this epic exists to surface, so it is loud.
+// [LAW:no-silent-failure] the previous `_ = os.Remove(...)` also discarded
+// genuine removal errors; they now say so.
+func releaseCommitLockFile(hold commitLockHold) {
+	owns, err := hold.ownsFile()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: could not confirm ownership of commit lock %s at release; leaving it for age-based reclaim: %v\n", hold.path, err)
+		return
+	}
+	if !owns {
+		fmt.Fprintf(os.Stderr, "lit: commit lock %s was reclaimed by another process while this one still held it — another lit process may have been writing this workspace concurrently; leaving the current holder's lock in place\n", hold.path)
+		return
+	}
+	if err := os.Remove(hold.path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "lit: could not remove commit lock %s; a contender will reclaim it by age: %v\n", hold.path, err)
+	}
+}
+
+// startCommitLockHeartbeat refreshes the held lock file's mtime every
 // commitLockHeartbeatEvery until the returned stop is called; stop blocks
-// until the refresher has exited. The mtime is the one liveness signal a
-// contender can read where the recorded PID means nothing — a foreign host's
-// process table on a shared filesystem — so the holder keeps that map true
-// for as long as it is actually alive and scheduled, and an age past
-// commitLockStaleAfter really does mean no live holder is working
-// (links-snapshots-3dtv.1: without this, any legitimate hold longer than the
-// threshold — a non-reflink `lit snapshots new` on a big store — was stolen
-// mid-operation by the next contender, and two writers interleaved).
+// until the refresher has exited. It keeps removeStaleCommitLock's age arm
+// truthful: the holder re-stamps the mtime for as long as it is alive and
+// scheduled, so an age past commitLockStaleAfter means no live holder is
+// working (links-snapshots-3dtv.1: without this, any legitimate hold longer
+// than the threshold — a non-reflink `lit snapshots new` on a big store — was
+// stolen mid-operation by the next contender, and two writers interleaved).
 // [FRAMING:representation] the heartbeat is the machine redrawing the
 // liveness map on a cadence the hold owns; "operations finish inside the
 // staleness window" was a timing bet, and this replaces it.
 // [LAW:no-ambient-temporal-coupling]
 //
-// A failed touch must not fail the hold — the mutation the lock protects is
-// the point, and aborting it over a liveness refresh would invert priorities
-// — but it is not silent either: it warns once per hold that age-based theft
-// protection is degraded (the dbsnapshot residue-collector precedent for
-// diagnostics that never fail the host op). [LAW:no-silent-failure]
-func startCommitLockHeartbeat(lockPath string) func() {
+// What it does NOT cover, stated plainly because the age arm is only one of
+// two reclaim arms: the dead-PID arm never consults the mtime, so on a shared
+// filesystem — where a contender probes a foreign host's PID against its own
+// process table and reads ESRCH — a fresh, actively beating holder is still
+// reclaimed instantly. Nor does beating survive a forward wall-clock step
+// larger than the window, since ModTime ages against a clock the beat cannot
+// hold still. Both are pre-existing holes in a PID-file protocol rather than
+// regressions here, both are tracked in links-snapshots-3dtv.2, and until
+// that lands the ownership fence below is what keeps them from compounding: a
+// holder reclaimed by either vector stops beating and says so, instead of
+// silently freshening the thief's lock.
+//
+// Two outcomes per beat, neither of which may fail the hold — the mutation
+// the lock protects is the point, and aborting it over a liveness refresh
+// would invert priorities (the dbsnapshot residue-collector precedent for
+// diagnostics that never fail the host op). A touch that errors warns once
+// per hold that age protection is degraded and keeps beating, because a
+// transient filesystem error should not permanently disarm the heartbeat. A
+// beat that finds the path no longer bound to its own file has been reclaimed
+// from: it warns and exits, since every further beat would land on the
+// current holder's lock and, by holding a dead successor's lock inside the
+// freshness window, could lock the workspace out permanently.
+// [LAW:no-silent-failure]
+func startCommitLockHeartbeat(hold commitLockHold) func() {
 	done := make(chan struct{})
 	stopped := make(chan struct{})
 	go func() {
@@ -437,10 +515,22 @@ func startCommitLockHeartbeat(lockPath string) func() {
 			case <-done:
 				return
 			case <-ticker.C:
+				owns, err := hold.ownsFile()
+				if err != nil {
+					if !warned {
+						warned = true
+						fmt.Fprintf(os.Stderr, "lit: commit-lock heartbeat could not check %s; a hold longer than %s may be reclaimed as stale by a contender: %v\n", hold.path, commitLockStaleAfter, err)
+					}
+					continue
+				}
+				if !owns {
+					fmt.Fprintf(os.Stderr, "lit: commit lock %s was reclaimed by another process while this one still held it — another lit process may be writing this workspace concurrently; this hold stops refreshing it\n", hold.path)
+					return
+				}
 				now := time.Now()
-				if err := commitLockTouch(lockPath, now, now); err != nil && !warned {
+				if err := commitLockTouch(hold.path, now, now); err != nil && !warned {
 					warned = true
-					fmt.Fprintf(os.Stderr, "lit: commit-lock heartbeat could not refresh %s; a hold longer than %s may be reclaimed as stale by a contender: %v\n", lockPath, commitLockStaleAfter, err)
+					fmt.Fprintf(os.Stderr, "lit: commit-lock heartbeat could not refresh %s; a hold longer than %s may be reclaimed as stale by a contender: %v\n", hold.path, commitLockStaleAfter, err)
 				}
 			}
 		}
@@ -451,36 +541,60 @@ func startCommitLockHeartbeat(lockPath string) func() {
 	}
 }
 
-func tryAcquireFileLock(path string) (bool, error) {
+// tryAcquireFileLock creates the lock file exclusively and returns the hold
+// that proves this process minted it, or nil with the reason it could not.
+// The identity comes from the open descriptor rather than a second os.Stat of
+// the path, so it names the file this call created even if another process
+// replaces the path an instant later. [LAW:one-source-of-truth] acquisition
+// and the ownership proof are minted together; there is no window where a
+// caller holds one without the other.
+func tryAcquireFileLock(path string) (*commitLockHold, error) {
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
-		return false, err
+		return nil, err
 	}
 	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
-		return false, err
+		return nil, err
+	}
+	identity, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		_ = os.Remove(path)
+		return nil, err
 	}
 	if closeErr := file.Close(); closeErr != nil {
 		_ = os.Remove(path)
-		return false, closeErr
+		return nil, closeErr
 	}
-	return true, nil
+	return &commitLockHold{path: path, identity: identity}, nil
 }
 
 // removeStaleCommitLock reclaims a lock whose holder is gone by either
 // signal: the recorded owner PID is dead, or the file has sat untouched for
-// staleAfter. Age stays sufficient on its own — it is the only signal that
-// survives a shared filesystem, where the PID belongs to a foreign host's
-// process table and proves nothing in either direction — and the holder-side
-// heartbeat is what makes it truthful: every live holder re-touches its file
-// at commitLockHeartbeatEvery, so an age past staleAfter means no live holder
-// is working (dead, frozen mid-hold, or a pre-heartbeat lit, whose exposure
-// is exactly the old behavior). Requiring a dead PID before the age arm was
-// considered and rejected: it would leave a foreign host's dead holder
-// unreclaimable forever whenever its recorded PID aliases a live local
-// process. [LAW:one-source-of-truth] the mtime is the single cross-host
-// liveness map; the heartbeat writes it, this reclaim reads it.
+// staleAfter.
+//
+// The age arm is truthful, and the holder-side heartbeat is what makes it so:
+// every live holder re-touches its file at commitLockHeartbeatEvery, so an
+// age past staleAfter means no live holder is working — dead, frozen
+// mid-hold, or a pre-heartbeat lit, whose exposure is exactly the old
+// behavior. Age stays sufficient on its own rather than requiring a dead PID
+// first, which was considered and rejected: gating it would leave a foreign
+// host's dead holder unreclaimable forever whenever its recorded PID aliases
+// a live local process.
+//
+// The owner arm is NOT truthful on a shared filesystem, and the heartbeat
+// does not help it: commitLockPIDRunning probes a recorded PID against THIS
+// host's process table, so a lock held and actively beaten by another host
+// reads as dead-owner and is reclaimed seconds after it was taken, mtime
+// untouched by the decision. Age is the only arm that means anything
+// cross-host. Fixing the owner arm needs the lock file to record which host
+// minted it (or the flock protocol that makes liveness a kernel fact) — a
+// protocol change tracked in links-snapshots-3dtv.2, deliberately not folded
+// into the heartbeat. Until then commitLockHold's ownership fence bounds the
+// damage: the reclaimed-from holder stops beating and says so, rather than
+// silently freshening and later deleting the new holder's lock.
 func removeStaleCommitLock(path string, staleAfter time.Duration) error {
 	info, err := os.Stat(path)
 	if errors.Is(err, os.ErrNotExist) {

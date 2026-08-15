@@ -120,12 +120,12 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 func TestLockFileContainsCurrentPID(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 
-	locked, err := tryAcquireFileLock(lockPath)
+	hold, err := tryAcquireFileLock(lockPath)
 	if err != nil {
 		t.Fatalf("tryAcquireFileLock() error = %v", err)
 	}
-	if !locked {
-		t.Fatal("tryAcquireFileLock() returned locked=false")
+	if hold == nil {
+		t.Fatal("tryAcquireFileLock() returned no hold")
 	}
 
 	content, err := os.ReadFile(lockPath)
@@ -135,6 +135,15 @@ func TestLockFileContainsCurrentPID(t *testing.T) {
 	expected := fmt.Sprintf("%d\n", os.Getpid())
 	if string(content) != expected {
 		t.Fatalf("lock content = %q, want %q", string(content), expected)
+	}
+	// The minted hold must name the file that was just created — it is what
+	// the heartbeat and release check before touching or removing anything.
+	owns, err := hold.ownsFile()
+	if err != nil {
+		t.Fatalf("hold.ownsFile() error = %v", err)
+	}
+	if !owns {
+		t.Fatal("hold does not own the lock file it just created")
 	}
 	_ = os.Remove(lockPath)
 }
@@ -158,16 +167,16 @@ func TestTryAcquireFileLockIsAtomicUnderRace(t *testing.T) {
 	for range racers {
 		eg.Go(func() error {
 			<-start
-			locked, err := tryAcquireFileLock(lockPath)
-			if locked && err == nil {
+			hold, err := tryAcquireFileLock(lockPath)
+			if hold != nil && err == nil {
 				winners.Add(1)
 				return nil
 			}
-			if !locked && errors.Is(err, os.ErrExist) {
+			if hold == nil && errors.Is(err, os.ErrExist) {
 				existsErrs.Add(1)
 				return nil
 			}
-			return fmt.Errorf("unexpected racer outcome: locked=%v err=%v", locked, err)
+			return fmt.Errorf("unexpected racer outcome: hold=%v err=%v", hold, err)
 		})
 	}
 	close(start)

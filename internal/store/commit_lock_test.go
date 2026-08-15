@@ -125,6 +125,18 @@ func TestRemoveStaleCommitLockRemovesAgedLiveOwner(t *testing.T) {
 	}
 }
 
+// holdForExistingLock builds the ownership token for a lock file the test
+// wrote directly, standing in for the hold a foreign holder's own
+// tryAcquireFileLock would have minted.
+func holdForExistingLock(t *testing.T, path string) commitLockHold {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("Stat(%s) error = %v", path, err)
+	}
+	return commitLockHold{path: path, identity: info}
+}
+
 // TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim pins the
 // links-snapshots-3dtv.1 acceptance shape on a compressed timeline: a live
 // holder that works far longer than the staleness window cannot lose the lock
@@ -161,18 +173,22 @@ func TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim(t *testing.T) {
 		commitLockHeartbeatEvery = originalBeat
 	})
 
-	stopHeartbeat := startCommitLockHeartbeat(lockPath)
+	// sync.OnceFunc + Cleanup rather than a stop before each Fatalf: a Fatalf
+	// runs Goexit, so any assertion that forgets its own stop would leak the
+	// ticker goroutine for the life of the test binary, where its warn path
+	// reads commitLockStaleAfter with no happens-before edge to the Cleanup
+	// that restores it — a -race report stacked on top of the real failure.
+	stopHeartbeat := sync.OnceFunc(startCommitLockHeartbeat(holdForExistingLock(t, lockPath)))
+	t.Cleanup(stopHeartbeat)
 
 	contendCtx, cancel := context.WithTimeout(context.Background(), 6*commitLockStaleAfter)
 	defer cancel()
 	release, err := acquireCommitLockAtPath(contendCtx, lockPath)
 	if err == nil {
 		release()
-		stopHeartbeat()
 		t.Fatalf("contender acquired a live, heartbeating holder's lock — age reclaim stole from a live holder")
 	}
 	if !errors.Is(err, context.DeadlineExceeded) {
-		stopHeartbeat()
 		t.Fatalf("contender error = %v, want context.DeadlineExceeded from waiting out a held lock", err)
 	}
 
@@ -221,29 +237,36 @@ func TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	release, err := acquireCommitLockAtPath(ctx, lockPath)
+	acquired, err := acquireCommitLockAtPath(ctx, lockPath)
 	if err != nil {
 		t.Fatalf("acquireCommitLockAtPath() error = %v", err)
 	}
+	// Idempotent and Cleanup-registered: acquireCommitLockAtPath holds the
+	// package-global processCommitMutex, so a future assertion inside the hold
+	// that forgets its release would park every later commit-lock test until
+	// the package timeout.
+	release := sync.OnceFunc(acquired)
+	t.Cleanup(release)
 
 	past := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(lockPath, past, past); err != nil {
-		release()
 		t.Fatalf("Chtimes(backdate) error = %v", err)
 	}
 
+	// Any mtime newer than the backdate is a beat: the file only ever holds
+	// `past` or a beat's now. A "younger than X" threshold would instead go
+	// vacuous the moment the backdate shrinks inside X, passing with the
+	// heartbeat deleted entirely.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		info, statErr := os.Stat(lockPath)
 		if statErr != nil {
-			release()
 			t.Fatalf("Stat(lock) error = %v", statErr)
 		}
-		if time.Since(info.ModTime()) < time.Minute {
+		if info.ModTime().After(past) {
 			break
 		}
 		if time.Now().After(deadline) {
-			release()
 			t.Fatalf("heartbeat never refreshed the backdated mtime")
 		}
 		time.Sleep(10 * time.Millisecond)
@@ -333,6 +356,70 @@ func TestCommitLockReleaseStopsHeartbeatBeforeRemove(t *testing.T) {
 	time.Sleep(5 * commitLockHeartbeatEvery)
 	if v := violation.Load(); v != nil {
 		t.Fatalf("release ordering violated: %s", v)
+	}
+}
+
+// TestDeposedHolderNeitherFreshensNorDeletesSuccessorLock pins the ownership
+// fence on both writers at once, by staging the aftermath of a steal: holder
+// A's lock is reclaimed and successor B mints a new file at the same path
+// while A is still running. A's heartbeat must not freshen B's lock (left
+// unchecked, a deposed holder keeps a dead successor's lock permanently
+// inside the freshness window, locking the workspace out forever), and A's
+// release must not delete it (which would hand a third process an instant
+// O_EXCL acquire beside live B — one steal becoming two writers).
+func TestDeposedHolderNeitherFreshensNorDeletesSuccessorLock(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+	if err := os.WriteFile(lockPath, []byte("4242\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(lock) error = %v", err)
+	}
+	deposed := holdForExistingLock(t, lockPath)
+
+	originalBeat := commitLockHeartbeatEvery
+	commitLockHeartbeatEvery = 10 * time.Millisecond
+	t.Cleanup(func() { commitLockHeartbeatEvery = originalBeat })
+
+	stopHeartbeat := sync.OnceFunc(startCommitLockHeartbeat(deposed))
+	t.Cleanup(stopHeartbeat)
+
+	// The steal: the deposed holder's file is reclaimed and the successor
+	// mints its own at the same path. A distinct inode is what the fence
+	// reads, so assert the stand-in really is one.
+	if err := os.Remove(lockPath); err != nil {
+		t.Fatalf("Remove(lock) error = %v", err)
+	}
+	if err := os.WriteFile(lockPath, []byte("777\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(successor lock) error = %v", err)
+	}
+	successor := holdForExistingLock(t, lockPath)
+	if os.SameFile(deposed.identity, successor.identity) {
+		t.Skip("filesystem reused the identity for a recreated file; the fence cannot be exercised here")
+	}
+	successorMtime := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, successorMtime, successorMtime); err != nil {
+		t.Fatalf("Chtimes(successor) error = %v", err)
+	}
+
+	// Several beat intervals: every one of them would land on the successor's
+	// file if the heartbeat touched by path alone.
+	time.Sleep(10 * commitLockHeartbeatEvery)
+
+	info, err := os.Stat(lockPath)
+	if err != nil {
+		t.Fatalf("Stat(successor lock) error = %v", err)
+	}
+	if !info.ModTime().Equal(successorMtime) {
+		t.Fatalf("successor lock mtime = %v, want it untouched at %v — the deposed holder's heartbeat freshened someone else's lock", info.ModTime(), successorMtime)
+	}
+
+	stopHeartbeat()
+	releaseCommitLockFile(deposed)
+
+	content, err := os.ReadFile(lockPath)
+	if err != nil {
+		t.Fatalf("successor lock should survive the deposed holder's release, read err = %v", err)
+	}
+	if string(content) != "777\n" {
+		t.Fatalf("lock content = %q, want the successor's %q", content, "777\n")
 	}
 }
 
