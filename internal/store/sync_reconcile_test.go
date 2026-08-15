@@ -2,9 +2,11 @@ package store
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -34,6 +36,10 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
+	// B's folded side is its one "apply update" commit; capture its original
+	// timestamp and author so the replay's provenance claim is checked against
+	// them.
+	originals := originalCommitsByMessage(t, ctx, syncB, "apply update")
 	res, err := syncB.SyncReconcile(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
@@ -51,10 +57,24 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 		t.Fatalf("merged priority = %d, want urgent (B's edit lost)", merged.Priority)
 	}
 
-	// History is linear: the reconcile head commit has exactly one parent (the
-	// remote head), not two — no merge commit. The branch is one ahead / zero
-	// behind, so the push fast-forwards.
-	assertSingleParentHead(t, ctx, syncB, res.RemoteHead)
+	// History is linear on the remote head with no merge commit, and the folded
+	// side's provenance survived the fold: B's own commit landed under its
+	// original message and timestamp, settled by the reconcile's marker commit.
+	assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
+	if res.Replayed != 1 {
+		t.Fatalf("replayed provenance commits = %d, want 1 (B's update)", res.Replayed)
+	}
+	spine := spineSince(t, ctx, syncB, res.RemoteHead)
+	if len(spine) != 2 || spine[0].message != "apply update" || spine[1].message != reconcileCommitMessage {
+		t.Fatalf("replayed spine = %+v, want [apply update, %q]", spine, reconcileCommitMessage)
+	}
+	original := originals["apply update"]
+	if !spine[0].date.UTC().Equal(original.date.UTC().Truncate(time.Second)) {
+		t.Fatalf("replayed commit date = %s, want the original %s (to the second)", spine[0].date.UTC(), original.date.UTC())
+	}
+	if spine[0].committer != original.committer || spine[0].email != original.email {
+		t.Fatalf("replayed commit author = %s <%s>, want the original %s <%s>", spine[0].committer, spine[0].email, original.committer, original.email)
+	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
 	// Property: the linearized outcome — the one that DOES mutate the data branch —
 	// leaves a clean working set (no staged/unstaged residue, no held conflicts).
@@ -63,8 +83,8 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
 	}
-	if fresh.State() != SyncAhead || fresh.Ahead != 1 {
-		t.Fatalf("post-reconcile freshness = %q ahead=%d behind=%d, want ahead/1/0", fresh.State(), fresh.Ahead, fresh.Behind)
+	if fresh.State() != SyncAhead || fresh.Ahead != 2 {
+		t.Fatalf("post-reconcile freshness = %q ahead=%d behind=%d, want ahead/2/0 (provenance commit + marker)", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
 	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
@@ -385,35 +405,125 @@ func getIssueOrFatal(t *testing.T, ctx context.Context, st *Store, id string) mo
 	return issue
 }
 
-// assertSingleParentHead fails unless the current HEAD commit has exactly one
-// parent, and that parent is the remote head — i.e. the reconcile replayed onto
-// the remote head linearly with no merge commit.
-func assertSingleParentHead(t *testing.T, ctx context.Context, st *Store, remoteHead string) {
+// assertLinearSpineToRemoteHead fails unless the current HEAD descends from the
+// remote head through single-parent commits only — the reconcile's history
+// contract: the fold lands as a linear forward sequence on the remote head (the
+// folded side's provenance commits, then the marker), never a merge commit and
+// never a rewritten spine. The walk terminates on any history: a merge commit
+// or the parentless root fails it before it can loop.
+func assertLinearSpineToRemoteHead(t *testing.T, ctx context.Context, st *Store, remoteHead string) {
 	t.Helper()
-	head, err := readDoltHead(ctx, st.db)
+	current, err := readDoltHead(ctx, st.db)
 	if err != nil {
 		t.Fatalf("read head: %v", err)
 	}
-	rows, err := st.db.QueryContext(ctx, `SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?`, head)
+	for current != remoteHead {
+		rows, err := st.db.QueryContext(ctx, `SELECT parent_hash FROM dolt_commit_ancestors WHERE commit_hash = ?`, current)
+		if err != nil {
+			t.Fatalf("read commit ancestors: %v", err)
+		}
+		var parents []string
+		for rows.Next() {
+			var p string
+			if err := rows.Scan(&p); err != nil {
+				rows.Close()
+				t.Fatalf("scan parent: %v", err)
+			}
+			parents = append(parents, p)
+		}
+		if err := rows.Err(); err != nil {
+			rows.Close()
+			t.Fatalf("iterate parents: %v", err)
+		}
+		rows.Close()
+		if len(parents) != 1 {
+			t.Fatalf("commit %s on the replayed spine has %d parents %v, want 1 (linear descent from remote head %s)", current, len(parents), parents, remoteHead)
+		}
+		current = parents[0]
+	}
+}
+
+// spineEntry is one commit of the replayed spine as the TESTS read it — via a
+// direct dolt_log query, deliberately independent of the production
+// readFoldedChain reader so a bug there cannot vouch for itself. Committer and
+// email are kept as raw components (never re-joined through the production
+// "name <email>" formatting) so author-preservation is asserted independently
+// of how production spells the --author string.
+type spineEntry struct {
+	hash      string
+	message   string
+	committer string
+	email     string
+	date      time.Time
+}
+
+// spineSince lists the commits reachable from HEAD but not from exclusiveBase,
+// oldest-first — the segment a reconcile's replay built on the remote head.
+func spineSince(t *testing.T, ctx context.Context, st *Store, exclusiveBase string) []spineEntry {
+	t.Helper()
+	head := headCommit(t, ctx, st)
+	spine := scanSpineEntries(t, ctx, st, exclusiveBase+".."+head)
+	for i, j := 0, len(spine)-1; i < j; i, j = i+1, j-1 {
+		spine[i], spine[j] = spine[j], spine[i]
+	}
+	return spine
+}
+
+// originalCommitsByMessage reads the commit (timestamp, committer, email) of
+// each named message from the store's CURRENT branch history, requiring exactly
+// one commit per message — an absent or duplicated message would silently
+// weaken a provenance assertion built on it.
+func originalCommitsByMessage(t *testing.T, ctx context.Context, st *Store, messages ...string) map[string]spineEntry {
+	t.Helper()
+	found := make(map[string][]spineEntry)
+	for _, e := range scanSpineEntries(t, ctx, st, "HEAD") {
+		found[e.message] = append(found[e.message], e)
+	}
+	originals := make(map[string]spineEntry, len(messages))
+	for _, message := range messages {
+		if len(found[message]) != 1 {
+			t.Fatalf("history holds %d commits with message %q, want exactly 1", len(found[message]), message)
+		}
+		originals[message] = found[message][0]
+	}
+	return originals
+}
+
+// scanSpineEntries reads one dolt_log revision expression into spineEntry rows
+// in dolt_log's own (newest-first) order.
+func scanSpineEntries(t *testing.T, ctx context.Context, st *Store, revision string) []spineEntry {
+	t.Helper()
+	rows, err := st.db.QueryContext(ctx, `SELECT commit_hash, committer, email, date, message FROM dolt_log(?)`, revision)
 	if err != nil {
-		t.Fatalf("read commit ancestors: %v", err)
+		t.Fatalf("read commit log %q: %v", revision, err)
 	}
 	defer rows.Close()
-	var parents []string
+	var entries []spineEntry
 	for rows.Next() {
-		var p string
-		if err := rows.Scan(&p); err != nil {
-			t.Fatalf("scan parent: %v", err)
+		var e spineEntry
+		if err := rows.Scan(&e.hash, &e.committer, &e.email, &e.date, &e.message); err != nil {
+			t.Fatalf("scan log commit: %v", err)
 		}
-		parents = append(parents, p)
+		entries = append(entries, e)
 	}
 	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate parents: %v", err)
+		t.Fatalf("iterate log %q: %v", revision, err)
 	}
-	if len(parents) != 1 {
-		t.Fatalf("reconcile head %s has %d parents %v, want 1 (no merge commit)", head, len(parents), parents)
+	return entries
+}
+
+// assertIssuePresentAsOf reads whether an issue row exists at a specific spine
+// commit — how the tests see a mid-chain state without moving any branch. The
+// commit hash comes from dolt_log (base32, trusted alphabet) and is
+// interpolated because the engine does not accept a bound placeholder for AS OF.
+func assertIssuePresentAsOf(t *testing.T, ctx context.Context, st *Store, commit, issueID string, want bool) {
+	t.Helper()
+	var count int
+	query := fmt.Sprintf("SELECT COUNT(*) FROM issues AS OF '%s' WHERE id = ?", commit)
+	if err := st.db.QueryRowContext(ctx, query, issueID).Scan(&count); err != nil {
+		t.Fatalf("read issue %s AS OF %s: %v", issueID, commit, err)
 	}
-	if parents[0] != remoteHead {
-		t.Fatalf("reconcile head parent = %s, want remote head %s", parents[0], remoteHead)
+	if got := count == 1; got != want {
+		t.Fatalf("issue %s present at %s = %v, want %v", issueID, commit, got, want)
 	}
 }
