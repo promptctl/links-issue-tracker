@@ -49,11 +49,16 @@ type adoptPendingMarker struct {
 var errAdoptPending = errors.New("adopt pending")
 
 // writeAdoptPendingMarker durably records "a destructive adopt is in flight"
-// and must complete BEFORE the first destructive act. The fsync is
-// load-bearing: the marker's whole job is surviving a crash or an abandoned
-// clone goroutine mid-write, and a marker sitting in the page cache when the
-// power goes protects nothing. If the truth-teller cannot be made durable,
-// the destructive window must not open. [LAW:no-silent-failure]
+// and must complete BEFORE the first destructive act. It writes via
+// temp-file-then-rename — the same shape as internal/cli's writeMarkerAtomic
+// (which internal/store cannot import without a cycle) — plus the fsync that
+// marker doesn't need and this one does: this marker's whole job is surviving
+// a crash, and a marker sitting in the page cache when the power goes
+// protects nothing. The rename makes a torn marker unrepresentable: the
+// marker path either holds the whole payload or nothing, and a failure
+// partway leaves only an inert temp file, never a stray marker condemning a
+// workspace nothing destructive ever touched. If the truth-teller cannot be
+// made durable, the destructive window must not open. [LAW:no-silent-failure]
 func writeAdoptPendingMarker(cleanRoot, remote, branch string, now time.Time) error {
 	payload, err := json.Marshal(adoptPendingMarker{
 		StartedAt: now.UTC().Format(time.RFC3339),
@@ -63,26 +68,28 @@ func writeAdoptPendingMarker(cleanRoot, remote, branch string, now time.Time) er
 	if err != nil {
 		return fmt.Errorf("encode adopt-pending marker: %w", err)
 	}
-	path := AdoptPendingMarkerPath(cleanRoot)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o644)
+	f, err := os.CreateTemp(cleanRoot, adoptPendingMarkerName+".tmp-*")
 	if err != nil {
 		return fmt.Errorf("write adopt-pending marker: %w", err)
 	}
 	if _, err := f.Write(payload); err != nil {
-		return errors.Join(fmt.Errorf("write adopt-pending marker: %w", err), f.Close())
+		return errors.Join(fmt.Errorf("write adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))
 	}
 	if err := f.Sync(); err != nil {
-		return errors.Join(fmt.Errorf("sync adopt-pending marker: %w", err), f.Close())
+		return errors.Join(fmt.Errorf("sync adopt-pending marker: %w", err), f.Close(), os.Remove(f.Name()))
 	}
 	if err := f.Close(); err != nil {
-		return fmt.Errorf("close adopt-pending marker: %w", err)
+		return errors.Join(fmt.Errorf("close adopt-pending marker: %w", err), os.Remove(f.Name()))
+	}
+	if err := os.Rename(f.Name(), AdoptPendingMarkerPath(cleanRoot)); err != nil {
+		return errors.Join(fmt.Errorf("install adopt-pending marker: %w", err), os.Remove(f.Name()))
 	}
 	// [LAW:no-silent-failure] exception: the directory fsync that would make
-	// the new dirent itself crash-durable is not supported on every platform
-	// (Windows cannot fsync a directory handle), and there is no recovery
-	// action when it fails — the file's own fsync above is the load-bearing
-	// one, so a dirent-durability miss only narrows back to the pre-marker
-	// crash window rather than corrupting anything.
+	// the renamed dirent itself crash-durable is not supported on every
+	// platform (Windows cannot fsync a directory handle), and there is no
+	// recovery action when it fails — the file's own fsync above is the
+	// load-bearing one, so a dirent-durability miss only narrows back to the
+	// pre-marker crash window rather than corrupting anything.
 	if dir, dirErr := os.Open(cleanRoot); dirErr == nil {
 		_ = dir.Sync()
 		_ = dir.Close()
@@ -130,11 +137,24 @@ func requireNoPendingAdopt(cleanRoot string) error {
 	}
 	return fmt.Errorf(
 		"%w: a `lit init` backlog adopt was interrupted before completing (%s; marker %s), so the on-disk store "+
-			"is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it discards the "+
-			"leftover and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to "+
-			"abandon the adopt and start fresh — nothing local-only exists under an interrupted adopt",
+			"is that adopt's leftover partial state, not a usable backlog. Run `lit init` to retry: it sets the "+
+			"leftover aside and re-clones the remote backlog. If the remote no longer carries the backlog, delete %s to "+
+			"abandon the adopt and start fresh",
 		errAdoptPending, interrupted, path, cleanRoot,
 	)
+}
+
+// PendingAdopt reports whether the workspace at databasePath is condemned by
+// an interrupted adopt: non-nil exactly when every store open would refuse,
+// and the returned error is that same refusal (or the loud read failure when
+// the marker's absence cannot be confirmed). init's decision layer consults
+// it so a "start fresh with an empty backlog" verdict is never narrated over
+// residue that the store layer is about to refuse — one coherent verdict per
+// command. Advisory outside the workspace lock: the binding refusal remains
+// the post-lock check inside each open. [LAW:single-enforcer] both readers
+// share this one marker-reading function; no second parse exists.
+func PendingAdopt(databasePath string) error {
+	return requireNoPendingAdopt(databasePath)
 }
 
 // LocalHasTickets reports whether an initialized store at doltRootDir holds any
@@ -152,12 +172,15 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 	// An interrupted adopt's residue is "nothing to lose" BY CONSTRUCTION: the
 	// marker is only ever written after this same gate confirmed the store
 	// held no tickets, and no mutation can run while it stands (every normal
-	// open refuses on it). Answering false here — without opening whatever
-	// undefined partial state the clone left — is what lets the retrying
-	// `lit init` discard the residue and re-clone instead of wedging on an
-	// unopenable leftover. A marker read failure stays loud: it is the one
-	// state where "safe to discard" genuinely cannot be confirmed.
-	// [LAW:parse-dont-validate] [LAW:no-silent-failure]
+	// open refuses on it). A stale pre-marker binary could violate that
+	// construction by minting tickets over the residue — which is why the
+	// adopt SETS the leftover ASIDE rather than deleting it, keeping even the
+	// violated case recoverable. Answering false here — without opening
+	// whatever undefined partial state the clone left — is what lets the
+	// retrying `lit init` displace the residue and re-clone instead of
+	// wedging on an unopenable leftover. A marker read failure stays loud: it
+	// is the one state where "safe to set aside" genuinely cannot be
+	// confirmed. [LAW:parse-dont-validate] [LAW:no-silent-failure]
 	if err := requireNoPendingAdopt(cleanRoot); err != nil {
 		if errors.Is(err, errAdoptPending) {
 			return false, nil
@@ -202,17 +225,20 @@ func LocalHasTickets(ctx context.Context, doltRootDir, workspaceID string) (bool
 // under an already-opened path would leave the cache pointing at the pre-swap
 // (empty) store. The caller must therefore NOT open the store before calling
 // this (init's adopt decision is made from git signals alone for a fresh store).
-// A non-empty target left by a prior bootstrap or interrupted adopt is
-// discarded first — the caller has already verified it holds no local tickets
+// A non-empty target left by a prior bootstrap or interrupted adopt is SET
+// ASIDE first (renamed to a sibling `<root>.adopt-displaced-<ts>` directory,
+// never deleted) — the caller has already verified it holds no local tickets
 // via LocalHasTickets (for interrupted-adopt residue, via its marker
-// fast-path). [LAW:no-silent-failure] every failure is returned, never
+// fast-path), and the displacement makes even a violated verification
+// recoverable. [LAW:no-silent-failure] every failure is returned, never
 // swallowed.
 //
 // Postcondition (two states, never three): a nil return means the database
 // directory holds the complete cloned backlog and no adopt-pending marker
-// remains; an error return means no partial database remains either — or,
-// when even the cleanup could not complete, the durable marker remains to
-// keep the leftover from ever being opened as a store.
+// remains; an error return means no partial database remains at the
+// canonical path either — or, when even the cleanup (or the final marker
+// clear) could not complete, the durable marker remains to keep the
+// leftover from ever being opened as a store.
 // [LAW:types-are-the-program] "undefined partial state that looks valid" is
 // unrepresentable at this seam.
 func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteName, remoteURL, branch string) (err error) {
@@ -258,18 +284,24 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 		return err
 	}
 
+	// A prior bootstrap's empty database or an interrupted adopt's residue is
+	// SET ASIDE, never deleted: the caller's LocalHasTickets gate confirmed
+	// "nothing to lose" (for residue, via the marker fast-path), but that
+	// answer trusts an invariant a stale pre-marker binary on someone's PATH
+	// could have violated by minting tickets over the residue — displacement
+	// costs a rename and makes the wrong-answer case recoverable instead of
+	// destroyed. The target is a sibling of the dolt root, outside the
+	// engine's server root (a second database dir inside it would surface as
+	// a phantom database), and DOLT_CLONE — which refuses an existing target
+	// — gets the vacated path. Eviction precedes the rename so no cached
+	// handle keyed by the canonical path ever serves the displaced (or the
+	// re-cloned) store stale. ENOENT means nothing to displace; any other
+	// rename failure aborts with the marker in place. [LAW:no-silent-failure]
 	dbDir := filepath.Join(cleanRoot, doltDatabaseName)
-	if dirExists(dbDir) {
-		// A prior bootstrap left an empty database, or an interrupted adopt
-		// left partial residue (the caller's LocalHasTickets gate confirmed
-		// "nothing to lose" either way — for residue, via the marker
-		// fast-path). Discard it so DOLT_CLONE — which refuses an existing
-		// target — can recreate it, evicting any cached handle first so the
-		// clone is read fresh rather than from the stale store.
-		evictSingleton(dbDir)
-		if err := os.RemoveAll(dbDir); err != nil {
-			return fmt.Errorf("remove database before adopt: %w", err)
-		}
+	evictSingleton(dbDir)
+	displaced := fmt.Sprintf("%s.adopt-displaced-%d", cleanRoot, time.Now().UTC().UnixNano())
+	if err := os.Rename(dbDir, displaced); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("set aside database before adopt: %w", err)
 	}
 
 	if cloneErr := cloneRemoteDatabase(ctx, cleanRoot, workspaceID, remoteName, remoteURL, branch); cloneErr != nil {
@@ -277,15 +309,19 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 		// that is a fork-internal courtesy; lit owns its postcondition here: a
 		// RETURNED failure leaves no partial database and no marker, so the
 		// retry the error text asks for starts from a provably clean slate.
-		// If the residue cannot be removed, the marker stays — it is the
-		// truth-teller that keeps the leftover from ever being opened as a
-		// store. [LAW:no-silent-failure] every cleanup miss rides the returned
-		// error; nothing is swallowed.
-		if dirExists(dbDir) {
-			evictSingleton(dbDir)
-			if rmErr := os.RemoveAll(dbDir); rmErr != nil {
-				return errors.Join(cloneErr, fmt.Errorf("clean up partial clone: %w", rmErr))
-			}
+		// The removal runs unconditionally — RemoveAll on an absent path is a
+		// nil no-op, and gating it on a stat would let a transient stat error
+		// skip the removal yet still clear the marker, reconstructing exactly
+		// the partial-that-reads-as-valid state this function exists to make
+		// unrepresentable. Unlike the pre-clone displacement above, this
+		// deletes: the dbDir here is this run's OWN partial clone (the clone
+		// started from a vacated path), provably junk. If it cannot be
+		// removed, the marker stays — the truth-teller that keeps the
+		// leftover from ever being opened as a store. [LAW:no-silent-failure]
+		// every cleanup miss rides the returned error; nothing is swallowed.
+		evictSingleton(dbDir)
+		if rmErr := os.RemoveAll(dbDir); rmErr != nil {
+			return errors.Join(cloneErr, fmt.Errorf("clean up partial clone: %w", rmErr))
 		}
 		if clearErr := clearAdoptPendingMarker(cleanRoot); clearErr != nil {
 			return errors.Join(cloneErr, clearErr)
@@ -299,8 +335,20 @@ func AdoptRemoteByClone(ctx context.Context, doltRootDir, workspaceID, remoteNam
 		return fmt.Errorf("clone of remote %q produced no %q database", remoteName, doltDatabaseName)
 	}
 	// The last act: marker-present means "never fully adopted", so the marker
-	// may only leave after the clone's product is validated above.
-	return clearAdoptPendingMarker(cleanRoot)
+	// may only leave after the clone's product is validated above. A clear
+	// failure here is the one state where the backlog IS complete and only
+	// the marker condemns it — say exactly that, or init's caller would
+	// report a download that succeeded as a clone that failed, and the
+	// advised retry (which sets this clone aside and re-downloads) would
+	// read as data loss instead of the safe, if wasteful, path it is.
+	// [LAW:no-silent-failure] the message carries the true state.
+	if clearErr := clearAdoptPendingMarker(cleanRoot); clearErr != nil {
+		return fmt.Errorf(
+			"the backlog cloned completely, but the adopt-completion marker could not be cleared, so the store stays "+
+				"refused until a retry of `lit init` completes (the retry sets this download aside and re-clones; no "+
+				"remote data is at risk): %w", clearErr)
+	}
+	return nil
 }
 
 // cloneRemoteDatabase opens an embedded Dolt engine rooted at serverRoot (with

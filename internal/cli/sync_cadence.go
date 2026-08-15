@@ -144,8 +144,13 @@ func markRunAttempt(ws workspace.Info, markerPath string) error {
 // lit processes (a foreground command and a detached mirror) can complete
 // near-simultaneously, and a reader must see one whole payload or the other,
 // never a torn write. [LAW:no-ambient-temporal-coupling]
-// [LAW:one-type-per-behavior] the one atomic-marker primitive; the push-outcome
-// and owner-notify markers are instances distinguished only by path and payload.
+// [LAW:one-type-per-behavior] the one atomic-marker primitive for the cli's
+// storage-dir markers; the push-outcome and owner-notify markers are instances
+// distinguished only by path and payload. The store's adopt-pending marker
+// (store.writeAdoptPendingMarker) is the same temp-and-rename shape plus the
+// fsync its crash-survival contract needs — it cannot share this function
+// without an import cycle (store cannot import cli), so the two are kept
+// deliberately congruent rather than unified.
 func writeMarkerAtomic(ws workspace.Info, markerPath string, payload []byte) error {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return err

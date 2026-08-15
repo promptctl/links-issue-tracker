@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -161,6 +162,78 @@ func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 		t.Fatalf("healing adopt left the adopt-pending marker behind (stat = %v)", statErr)
 	}
 	assertHasIssueAfterAdopt(t, ctx, consumer, id)
+
+	// The residue was SET ASIDE, not deleted: displacement is what keeps even
+	// a violated nothing-to-lose invariant (a stale pre-marker binary having
+	// minted tickets over the residue) recoverable by hand.
+	displaced, err := filepath.Glob(consumer + ".adopt-displaced-*")
+	if err != nil || len(displaced) != 1 {
+		t.Fatalf("displaced-residue dirs = %v (glob err %v), want exactly one", displaced, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(displaced[0], "not-a-database")); statErr != nil {
+		t.Fatalf("displaced residue lost the junk payload (stat = %v); displacement must preserve bytes", statErr)
+	}
+}
+
+// TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder pins the standalone
+// bootstrap's lock discipline: EnsureDatabase's check-then-create must
+// serialize against an adopt's destructive window (which runs under the
+// exclusive workspace hold), so while that hold is live it reports
+// workspace-busy instead of racing the holder's discard+clone with a CREATE.
+func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	release, err := LockWorkspaceExclusive(ctx, root)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	defer func() {
+		if err := release(); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+	}()
+	if _, err := EnsureDatabase(ctx, root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("EnsureDatabase under exclusive hold = %v, want ErrWorkspaceBusy", err)
+	}
+}
+
+// TestMarkerRefusalIsReservedForDeadAdopts pins the liveness discrimination
+// the post-lock check placement buys: while the exclusive workspace hold is
+// live (a healthy adopt mid-clone), a concurrent open reports workspace-busy
+// — never the false "interrupted before completing" diagnosis — and the
+// interrupted-adopt refusal fires only once the hold is gone (the adopt died).
+func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
+		t.Fatalf("EnsureDatabase(setup): %v", err)
+	}
+	if err := writeAdoptPendingMarker(root, "origin", "master", time.Now()); err != nil {
+		t.Fatalf("writeAdoptPendingMarker: %v", err)
+	}
+
+	release, err := LockWorkspaceExclusive(ctx, root)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	_, openErr := OpenForRead(ctx, root, "ws")
+	if !errors.Is(openErr, ErrWorkspaceBusy) {
+		t.Fatalf("OpenForRead during live hold = %v, want ErrWorkspaceBusy", openErr)
+	}
+	if openErr != nil && strings.Contains(openErr.Error(), "interrupted") {
+		t.Fatalf("OpenForRead during live hold reported a dead adopt: %v", openErr)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	_, openErr = OpenForRead(ctx, root, "ws")
+	if openErr == nil || !strings.Contains(openErr.Error(), "interrupted") {
+		t.Fatalf("OpenForRead after the hold died = %v, want the interrupted-adopt refusal", openErr)
+	}
 }
 
 // TestPendingAdoptMarkerCondemnsEveryNormalOpen pins the refusal contract:

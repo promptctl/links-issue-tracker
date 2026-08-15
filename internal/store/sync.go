@@ -141,8 +141,16 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 			err = errors.Join(err, relErr)
 		}
 	}()
+	// Post-lock, same as Store.Open: a marker seen while holding the
+	// workspace lock always belongs to a dead adopt (a live one holds the
+	// lock exclusively), so this refusal can neither fire on a healthy
+	// in-flight adopt nor miss a dead one that expired while we waited.
+	// [LAW:no-ambient-temporal-coupling]
+	if err = requireNoPendingAdopt(doltRootDir); err != nil {
+		return nil, err
+	}
 	// [LAW:single-enforcer] Sync bootstrap reuses the Store database initializer so first-run sync and regular store opens share one creation boundary.
-	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)

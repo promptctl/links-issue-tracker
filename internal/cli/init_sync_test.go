@@ -372,9 +372,13 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 	// The corner with no adopt to retry: residue present but the remote gone.
 	// Init must NOT bless the leftover as a fresh store (that is the silent
 	// split-brain the epic exists to prevent) — it fails loudly, naming the
-	// leftover and the abandon-and-start-fresh remedy.
+	// leftover and the abandon-and-start-fresh remedy, and it delivers ONE
+	// verdict: the decision layer converts the would-be "starting with an
+	// empty backlog" narration into the refusal, so the operator is never
+	// told "starting fresh" by a command that then refuses to.
 	writeAbandonedAdoptMarker()
 	runGit(t, consumer, "remote", "remove", "origin")
+	progress := captureProgress(t)
 	out, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
 	if initErr == nil {
 		t.Fatalf("Run(init, remote gone) error = nil, want the interrupted-adopt refusal; output:\n%s", out)
@@ -383,6 +387,9 @@ func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
 		if !strings.Contains(initErr.Error(), want) {
 			t.Fatalf("init error = %q, want it to contain %q", initErr.Error(), want)
 		}
+	}
+	if strings.Contains(progress.String(), "empty backlog") {
+		t.Fatalf("init narrated a start-fresh decision it then refused:\n%s", progress.String())
 	}
 }
 
