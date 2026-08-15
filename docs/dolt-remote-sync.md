@@ -192,7 +192,11 @@ fast-forwards. The replay preserves the folded side's per-commit provenance: eac
 local commit the spine lacked lands individually with its original message,
 timestamp, and author (commits whose change the spine already contained are
 dropped), and a marker commit naming the reconcile settles the sequence — its diff
-is whatever the merge policy itself decided beyond the folded side's content. The
+is whatever the merge policy itself decided beyond the folded side's content. When
+the remote head is at an older schema, one machinery commit (`reconcile: lift
+remote head to current schema`) precedes the provenance commits, carrying the
+schema DDL and migration bookkeeping so no replayed commit's diff includes schema
+work that was never its own; on a current-schema head no such commit lands. The
 same granular replay serves the unrelated-history `combine` (each local commit
 projected as its union with the remote backlog) and `take local` (whose marker
 commit's diff is the owner-approved discard of the remote-only issues). The

@@ -37,8 +37,9 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	// B's folded side is its one "apply update" commit; capture its original
-	// timestamp so the replay's provenance claim is checked against it.
-	originals := commitDatesByMessage(t, ctx, syncB, "apply update")
+	// timestamp and author so the replay's provenance claim is checked against
+	// them.
+	originals := originalCommitsByMessage(t, ctx, syncB, "apply update")
 	res, err := syncB.SyncReconcile(ctx, "origin", "master")
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
@@ -67,8 +68,12 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if len(spine) != 2 || spine[0].message != "apply update" || spine[1].message != reconcileCommitMessage {
 		t.Fatalf("replayed spine = %+v, want [apply update, %q]", spine, reconcileCommitMessage)
 	}
-	if !spine[0].date.UTC().Equal(originals["apply update"].UTC().Truncate(time.Second)) {
-		t.Fatalf("replayed commit date = %s, want the original %s (to the second)", spine[0].date.UTC(), originals["apply update"].UTC())
+	original := originals["apply update"]
+	if !spine[0].date.UTC().Equal(original.date.UTC().Truncate(time.Second)) {
+		t.Fatalf("replayed commit date = %s, want the original %s (to the second)", spine[0].date.UTC(), original.date.UTC())
+	}
+	if spine[0].committer != original.committer || spine[0].email != original.email {
+		t.Fatalf("replayed commit author = %s <%s>, want the original %s <%s>", spine[0].committer, spine[0].email, original.committer, original.email)
 	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
 	// Property: the linearized outcome — the one that DOES mutate the data branch —
@@ -440,11 +445,16 @@ func assertLinearSpineToRemoteHead(t *testing.T, ctx context.Context, st *Store,
 
 // spineEntry is one commit of the replayed spine as the TESTS read it — via a
 // direct dolt_log query, deliberately independent of the production
-// readFoldedChain reader so a bug there cannot vouch for itself.
+// readFoldedChain reader so a bug there cannot vouch for itself. Committer and
+// email are kept as raw components (never re-joined through the production
+// "name <email>" formatting) so author-preservation is asserted independently
+// of how production spells the --author string.
 type spineEntry struct {
-	hash    string
-	message string
-	date    time.Time
+	hash      string
+	message   string
+	committer string
+	email     string
+	date      time.Time
 }
 
 // spineSince lists the commits reachable from HEAD but not from exclusiveBase,
@@ -452,59 +462,54 @@ type spineEntry struct {
 func spineSince(t *testing.T, ctx context.Context, st *Store, exclusiveBase string) []spineEntry {
 	t.Helper()
 	head := headCommit(t, ctx, st)
-	rows, err := st.db.QueryContext(ctx, `SELECT commit_hash, date, message FROM dolt_log(?)`, exclusiveBase+".."+head)
-	if err != nil {
-		t.Fatalf("read replayed spine %s..%s: %v", exclusiveBase, head, err)
-	}
-	defer rows.Close()
-	var spine []spineEntry
-	for rows.Next() {
-		var e spineEntry
-		if err := rows.Scan(&e.hash, &e.date, &e.message); err != nil {
-			t.Fatalf("scan spine commit: %v", err)
-		}
-		spine = append(spine, e)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate spine: %v", err)
-	}
+	spine := scanSpineEntries(t, ctx, st, exclusiveBase+".."+head)
 	for i, j := 0, len(spine)-1; i < j; i, j = i+1, j-1 {
 		spine[i], spine[j] = spine[j], spine[i]
 	}
 	return spine
 }
 
-// commitDatesByMessage reads the commit timestamp of each named message from
-// the store's CURRENT branch history, requiring exactly one commit per message
-// — an absent or duplicated message would silently weaken a provenance
-// assertion built on it.
-func commitDatesByMessage(t *testing.T, ctx context.Context, st *Store, messages ...string) map[string]time.Time {
+// originalCommitsByMessage reads the commit (timestamp, committer, email) of
+// each named message from the store's CURRENT branch history, requiring exactly
+// one commit per message — an absent or duplicated message would silently
+// weaken a provenance assertion built on it.
+func originalCommitsByMessage(t *testing.T, ctx context.Context, st *Store, messages ...string) map[string]spineEntry {
 	t.Helper()
-	rows, err := st.db.QueryContext(ctx, `SELECT date, message FROM dolt_log('HEAD')`)
-	if err != nil {
-		t.Fatalf("read history for commit dates: %v", err)
+	found := make(map[string][]spineEntry)
+	for _, e := range scanSpineEntries(t, ctx, st, "HEAD") {
+		found[e.message] = append(found[e.message], e)
 	}
-	defer rows.Close()
-	found := make(map[string][]time.Time)
-	for rows.Next() {
-		var date time.Time
-		var message string
-		if err := rows.Scan(&date, &message); err != nil {
-			t.Fatalf("scan history commit: %v", err)
-		}
-		found[message] = append(found[message], date)
-	}
-	if err := rows.Err(); err != nil {
-		t.Fatalf("iterate history: %v", err)
-	}
-	dates := make(map[string]time.Time, len(messages))
+	originals := make(map[string]spineEntry, len(messages))
 	for _, message := range messages {
 		if len(found[message]) != 1 {
 			t.Fatalf("history holds %d commits with message %q, want exactly 1", len(found[message]), message)
 		}
-		dates[message] = found[message][0]
+		originals[message] = found[message][0]
 	}
-	return dates
+	return originals
+}
+
+// scanSpineEntries reads one dolt_log revision expression into spineEntry rows
+// in dolt_log's own (newest-first) order.
+func scanSpineEntries(t *testing.T, ctx context.Context, st *Store, revision string) []spineEntry {
+	t.Helper()
+	rows, err := st.db.QueryContext(ctx, `SELECT commit_hash, committer, email, date, message FROM dolt_log(?)`, revision)
+	if err != nil {
+		t.Fatalf("read commit log %q: %v", revision, err)
+	}
+	defer rows.Close()
+	var entries []spineEntry
+	for rows.Next() {
+		var e spineEntry
+		if err := rows.Scan(&e.hash, &e.committer, &e.email, &e.date, &e.message); err != nil {
+			t.Fatalf("scan log commit: %v", err)
+		}
+		entries = append(entries, e)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatalf("iterate log %q: %v", revision, err)
+	}
+	return entries
 }
 
 // assertIssuePresentAsOf reads whether an issue row exists at a specific spine

@@ -728,7 +728,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	foldedMessages := []string{"create issue", "apply update", "add label"}
-	originals := commitDatesByMessage(t, ctx, syncB, foldedMessages...)
+	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
 	if err != nil {
@@ -800,7 +800,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 	foldedMessages := []string{"create issue", "apply update", "add label"}
-	originals := commitDatesByMessage(t, ctx, syncB, foldedMessages...)
+	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
 	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
 	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, token)
@@ -850,8 +850,9 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 // assertFoldedSpine fails unless the replayed spine is exactly the folded
 // side's data commits — original messages in original order, each timestamp
 // equal to the original to the second (Dolt's --date granularity truncates
-// sub-second precision) — settled by the marker commit as its final entry.
-func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string, originals map[string]time.Time, markerMessage string) {
+// sub-second precision), each author equal to the original committer/email —
+// settled by the marker commit as its final entry.
+func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string, originals map[string]spineEntry, markerMessage string) {
 	t.Helper()
 	if len(spine) != len(foldedMessages)+1 {
 		t.Fatalf("replayed spine holds %d commits %+v, want %d folded + 1 marker", len(spine), spine, len(foldedMessages))
@@ -860,8 +861,12 @@ func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string
 		if spine[i].message != message {
 			t.Fatalf("spine[%d] message = %q, want %q (original order preserved)", i, spine[i].message, message)
 		}
-		if want := originals[message].UTC().Truncate(time.Second); !spine[i].date.UTC().Equal(want) {
+		original := originals[message]
+		if want := original.date.UTC().Truncate(time.Second); !spine[i].date.UTC().Equal(want) {
 			t.Fatalf("spine[%d] (%q) date = %s, want original %s", i, message, spine[i].date.UTC(), want)
+		}
+		if spine[i].committer != original.committer || spine[i].email != original.email {
+			t.Fatalf("spine[%d] (%q) author = %s <%s>, want original %s <%s>", i, message, spine[i].committer, spine[i].email, original.committer, original.email)
 		}
 	}
 	if last := spine[len(spine)-1].message; last != markerMessage {

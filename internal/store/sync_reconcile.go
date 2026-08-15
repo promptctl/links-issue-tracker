@@ -592,6 +592,40 @@ func (s *Store) buildFoldSteps(ctx context.Context, chain []foldedCommit, base, 
 	return steps, nil
 }
 
+// replayExportOnScratch lands one export as one commit on the reconcile scratch
+// branch: stage (one tx through writeExportTx), then version (one DOLT_COMMIT
+// via commitWorkingSetOnce) — a SINGLE attempt, deliberately without
+// withStampedMutation's self-rotating transient retry. The session's
+// current-branch is per-connection state, and the retry's rotate
+// (Store.reconnect) opens a fresh connection on the DEFAULT branch — so an
+// inline retry mid-replay would resume committing onto the data branch,
+// silently breaking the guarantee that the data branch moves only by the one
+// atomic reset. Instead a transient failure bubbles raw to replayUnderGuard's
+// outer retryTransientGCContention, whose next attempt re-enters
+// runOnReconcileScratch and re-checkouts the scratch branch as its FIRST op —
+// the whole spine is rebuilt from the fixed anchors on the fresh connection.
+// [LAW:no-ambient-temporal-coupling] scratch-session recovery has exactly one
+// owner: the outer scratch-rebuilding retry, never a branch-blind inner one.
+// [LAW:single-enforcer] the commit lock still wraps it (re-entrant under the
+// reconcile's held lock), and the write body is the same writeExportTx the
+// ordinary pipeline uses.
+func (s *Store) replayExportOnScratch(ctx context.Context, export model.Export, stamp commitStamp) error {
+	return s.withCommitLock(ctx, func(ctx context.Context) error {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
+		}
+		defer tx.Rollback()
+		if err := writeExportTx(ctx, tx, export); err != nil {
+			return err
+		}
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
+		}
+		return s.commitWorkingSetOnce(ctx, stamp)
+	})
+}
+
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
 // merges them against base (a real merge-base export, or the empty export for a combine),
@@ -700,8 +734,11 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// The lift's own changes (schema DDL, migration bookkeeping) land as the
 	// machinery's own named commit — or no commit at all on a current-schema
 	// head — so the first provenance step's diff is purely its folded commit's
-	// change, never schema work that was not its own.
-	if err := s.commitWorkingSet(ctx, reconcileLiftCommitMessage); err != nil {
+	// change, never schema work that was not its own. Committed via the
+	// single-attempt commitWorkingSetOnce for the same reason every commit
+	// below goes through replayExportOnScratch: a self-rotating retry would
+	// resume on the data branch (see replayExportOnScratch).
+	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
 		return 0, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
 	}
 	liftedBase, err := readDoltHead(ctx, s.db)
@@ -709,11 +746,11 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 		return 0, fmt.Errorf("read lifted base: %w", err)
 	}
 	for _, step := range steps {
-		if err := s.replaceFromExport(ctx, step.export, step.stamp); err != nil {
+		if err := s.replayExportOnScratch(ctx, step.export, step.stamp); err != nil {
 			return 0, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
 		}
 	}
-	if err := s.replaceFromExport(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
+	if err := s.replayExportOnScratch(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
 		return 0, err
 	}
 	replayedCommit, err := readDoltHead(ctx, s.db)
