@@ -570,7 +570,9 @@ type replayStep struct {
 // local head. [LAW:effects-at-boundaries] all reads happen here, before any
 // replay commit, because reading a commit resets the one scratch branch the
 // replay then builds on; the steps carry the materialized exports across that
-// boundary.
+// boundary. That makes the replay O(chain × backlog) in memory and writes — a
+// deliberate trade at divergence scale, tracked for streaming/bounding as
+// links-sync-pgct.13 before large histories make it bite.
 func (s *Store) buildFoldSteps(ctx context.Context, chain []foldedCommit, base, theirs, finalProvisional model.Export) ([]replayStep, error) {
 	steps := make([]replayStep, 0, len(chain))
 	for i, c := range chain {

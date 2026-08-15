@@ -318,10 +318,14 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 // the receive was inline or foreground.
 func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote, branch string) *reconcileOutcome {
 	result, reconcileErr := syncStore.SyncReconcile(ctx, remote, branch)
+	// "replayed" matches the explicit reconcile/take reporters: the durable
+	// trace carries the provenance-replay count for every outcome, zero
+	// included, so the trail can distinguish a granular fold from a no-op.
 	traceMetadata := map[string]string{
 		"remote":      remote,
 		"sync_branch": branch,
 		"state":       string(result.State),
+		"replayed":    strconv.Itoa(result.Replayed),
 	}
 	traceStatus := "ok"
 	traceReason := reconcileReasonForState(result.State)

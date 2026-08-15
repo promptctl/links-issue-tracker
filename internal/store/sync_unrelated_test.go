@@ -926,60 +926,73 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // re-checkouts the scratch branch before rebuilding the whole spine. An
 // inline self-rotating retry here would resume committing on the data branch
 // — the corruption this test exists to catch; had the retried attempt run
-// anywhere but the rebuilt scratch, the spine, contents, and clean-state
-// assertions below could not all hold. The injected failure hits the FIRST
-// commit of the replay (the lift), the earliest point a rotation could
-// strand the session off the scratch branch.
+// anywhere but the rebuilt scratch, the linear-descent, spine, contents, and
+// clean-state assertions could not all hold. The injection point is the
+// discriminator each subtest carries: the replay's first commit is the lift
+// (committed directly via commitWorkingSetOnce — the earliest point a
+// rotation could strand the session off the scratch branch), and its second
+// is the first provenance step (a replayExportOnScratch commit — pinning the
+// per-step single-attempt contract, not just the lift's).
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
-	ctx := context.Background()
-	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
-	remoteURL := "file://" + filepath.Join(base, "remote")
+	for _, tc := range []struct {
+		name   string
+		failAt int
+	}{
+		{name: "at the lift commit", failAt: 1},
+		{name: "inside a provenance step", failAt: 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			base := t.TempDir()
+			rootA := filepath.Join(base, "a")
+			rootB := filepath.Join(base, "b")
+			remoteURL := "file://" + filepath.Join(base, "remote")
 
-	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+			remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+			localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+			updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
 
-	syncB := openSyncOrFatal(t, ctx, rootB)
-	defer func() { _ = syncB.Close() }()
-	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
-		t.Fatalf("SyncFetch(B): %v", err)
-	}
-	foldedMessages := []string{"create issue", "apply update"}
-	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
+			syncB := openSyncOrFatal(t, ctx, rootB)
+			defer func() { _ = syncB.Close() }()
+			if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+				t.Fatalf("SyncFetch(B): %v", err)
+			}
+			foldedMessages := []string{"create issue", "apply update"}
+			originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
-	fires := 0
-	syncB.commitWorkingSetHookForTest = func() error {
-		fires++
-		if fires == 1 {
-			return transientGCContentionError{err: errors.New("injected transient online-gc contention mid-replay")}
-		}
-		return nil
-	}
+			fires := 0
+			syncB.commitWorkingSetHookForTest = func() error {
+				fires++
+				if fires == tc.failAt {
+					return transientGCContentionError{err: errors.New("injected transient online-gc contention mid-replay")}
+				}
+				return nil
+			}
 
-	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
-	if err != nil {
-		t.Fatalf("SyncReconcileCombine(B) did not recover from the mid-replay transient failure: %v", err)
-	}
-	syncB.commitWorkingSetHookForTest = nil
-	if fires < 2 {
-		t.Fatalf("commit hook fired %d time(s); want the injected failure to have forced an outer retry", fires)
-	}
-	if res.State != SyncReconcileCombined {
-		t.Fatalf("combine state = %q, want %q", res.State, SyncReconcileCombined)
-	}
-	if res.Replayed != len(foldedMessages) {
-		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
-	}
+			res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+			if err != nil {
+				t.Fatalf("SyncReconcileCombine(B) did not recover from the mid-replay transient failure: %v", err)
+			}
+			syncB.commitWorkingSetHookForTest = nil
+			if fires <= tc.failAt {
+				t.Fatalf("commit hook fired %d time(s); want the injected failure at %d to have forced an outer retry", fires, tc.failAt)
+			}
+			if res.State != SyncReconcileCombined {
+				t.Fatalf("combine state = %q, want %q", res.State, SyncReconcileCombined)
+			}
+			if res.Replayed != len(foldedMessages) {
+				t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
+			}
 
-	// The rebuilt spine is intact — provenance, marker, linearity — and the
-	// store is clean: the failed first attempt leaked nothing onto the data
-	// branch and left no scratch residue.
-	assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
-	spine := spineSince(t, ctx, syncB, res.RemoteHead)
-	assertFoldedSpine(t, spine, foldedMessages, originals, combineCommitMessage)
-	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID, remoteIssueID})
-	assertScratchBranchCleanedUp(t, ctx, syncB)
-	assertWorkingSetClean(t, ctx, syncB)
+			// The rebuilt spine is intact — provenance, marker, linearity — and
+			// the store is clean: the failed first attempt leaked nothing onto
+			// the data branch and left no scratch residue.
+			assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
+			spine := spineSince(t, ctx, syncB, res.RemoteHead)
+			assertFoldedSpine(t, spine, foldedMessages, originals, combineCommitMessage)
+			assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID, remoteIssueID})
+			assertScratchBranchCleanedUp(t, ctx, syncB)
+			assertWorkingSetClean(t, ctx, syncB)
+		})
+	}
 }
