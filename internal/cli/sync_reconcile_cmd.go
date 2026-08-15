@@ -322,7 +322,10 @@ func reconcileCommandReasonForState(state store.SyncReconcileState) string {
 // rendering — the one point every take outcome (success or bug) passes through.
 // [LAW:single-enforcer]
 func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remote, branch string, result store.SyncReconcileResult) error {
-	metadata := map[string]string{"remote": remote, "sync_branch": branch}
+	// "replayed" makes the provenance-replay count part of the durable trace,
+	// not just the stdout line; zero is honest data for outcomes that fold
+	// nothing. [LAW:dataflow-not-control-flow] recorded unconditionally.
+	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	decision := string(result.State)
 	status := "ok"
 	// [LAW:one-source-of-truth] a dedicated mapping, not reconcileReasonForState:
@@ -407,7 +410,9 @@ func discardedIDs(inv *store.UnrelatedInventory, choice store.UnrelatedResolutio
 // a held state notifies out-of-band, a converged one ends the divergence episode
 // (links-sync-pgct.4). [LAW:single-enforcer]
 func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, command string, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
-	metadata := map[string]string{"remote": remote, "sync_branch": branch}
+	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
+	// of the durable trace for every outcome, zero included.
+	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	switch result.State {
 	case store.SyncReconcileUnrelated:
 		// [LAW:single-enforcer] one contract, every surface — the block is the error's

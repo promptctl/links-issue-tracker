@@ -291,9 +291,10 @@ func (s *Store) commitWorkingSetOnce(ctx context.Context, stamp commitStamp) err
 	if stamp.Author != "" {
 		args = append(args, "--author", stamp.Author)
 	}
-	query := "CALL DOLT_COMMIT(?" + strings.Repeat(", ?", len(args)-1) + ")"
+	// [LAW:single-enforcer] buildProcedureCall owns the CALL-with-N-placeholders
+	// spelling; this renders no second copy of it.
 	var commitHash string
-	err := s.db.QueryRowContext(ctx, query, args...).Scan(&commitHash)
+	err := s.db.QueryRowContext(ctx, buildProcedureCall("DOLT_COMMIT", len(args)), args...).Scan(&commitHash)
 	if err == nil {
 		return nil
 	}

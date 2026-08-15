@@ -162,10 +162,12 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 	if !strings.Contains(approved, "took local") {
 		t.Fatalf("approved take did not report taking local:\n%s", approved)
 	}
-	// The take reports its provenance replay: the folded local commits landed
-	// individually, not as one squash (links-sync-pgct.6).
-	if !strings.Contains(approved, "replayed with original messages and timestamps") {
-		t.Fatalf("approved take did not report the provenance replay:\n%s", approved)
+	// The take reports its provenance replay with the exact count: the
+	// consumer's one create-issue data commit landed individually, not as one
+	// squash (links-sync-pgct.6). The count makes the assertion falsifiable —
+	// a squash regression reports 0 and cannot satisfy it.
+	if !strings.Contains(approved, "1 local commit replayed with original messages and timestamps") {
+		t.Fatalf("approved take did not report the one-commit provenance replay:\n%s", approved)
 	}
 	assertBacklogHolds(t, consumer, "consumer-ticket", true)
 	assertBacklogHolds(t, consumer, "producer-ticket", false)
