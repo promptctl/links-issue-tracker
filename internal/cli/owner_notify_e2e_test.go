@@ -162,6 +162,11 @@ func TestTakeRefusesWithoutOwnerApprovalEndToEnd(t *testing.T) {
 	if !strings.Contains(approved, "took local") {
 		t.Fatalf("approved take did not report taking local:\n%s", approved)
 	}
+	// The take reports its provenance replay: the folded local commits landed
+	// individually, not as one squash (links-sync-pgct.6).
+	if !strings.Contains(approved, "replayed with original messages and timestamps") {
+		t.Fatalf("approved take did not report the provenance replay:\n%s", approved)
+	}
 	assertBacklogHolds(t, consumer, "consumer-ticket", true)
 	assertBacklogHolds(t, consumer, "producer-ticket", false)
 }

@@ -14,15 +14,27 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// reconcileCommitMessage labels the single forward commit a settled reconcile
-// replays onto the remote head, so the linear history names what produced it.
+// reconcileCommitMessage labels the marker commit that settles a reconcile's
+// forward replay onto the remote head, so the linear history names what
+// produced it. It concludes the provenance replay of the folded side's own
+// commits, and its diff is whatever the merge policy itself decided beyond the
+// folded side's last state (usually nothing; the agent's prose resolutions
+// when there were any).
 const reconcileCommitMessage = "reconcile: field-aware merge of remote divergence"
 
-// combineCommitMessage labels the single forward commit a combine replays onto the
-// remote head. It is distinct from reconcileCommitMessage so linear history names the
-// no-base union (both backlogs merged with no common ancestor) apart from an ordinary
-// shared-history reconcile.
+// combineCommitMessage labels the marker commit that settles a combine's forward
+// replay onto the remote head. It is distinct from reconcileCommitMessage so linear
+// history names the no-base union (both backlogs merged with no common ancestor)
+// apart from an ordinary shared-history reconcile.
 const combineCommitMessage = "reconcile: combine unrelated histories (union of both backlogs)"
+
+// reconcileLiftCommitMessage labels the commit that lands the schema lift of an
+// older-schema remote head — the migration DDL and its bookkeeping — as the
+// reconcile machinery's own act, BEFORE any provenance step, so no folded
+// commit's replayed diff carries schema changes that were never its own. On a
+// remote head already at this binary's schema the lift changes nothing and no
+// such commit lands.
+const reconcileLiftCommitMessage = "reconcile: lift remote head to current schema"
 
 // unrelatedHandling is how a reconcile treats a divergence with NO common ancestor: it
 // is a resolution VALUE flowing through the one reconcile boundary, not a parallel mode
@@ -38,13 +50,14 @@ const (
 	detectOnly unrelatedHandling = iota
 	// unionCombine unions both sides (degrading the three-way merge to a two-way over an
 	// empty base), holding on-both prose for the agent exactly as the shared path does, and
-	// replays the union as one forward commit on the remote head. It is the explicit combine
+	// replays the union forward onto the remote head — the folded local commits under
+	// their own provenance, settled by the combine marker. It is the explicit combine
 	// choice, never the autonomous default.
 	unionCombine
 )
 
 // reconcileScratchPrefix names the throwaway branches the reconcile builds its
-// merged commit on. Each reconcile derives a UNIQUE branch under this prefix, so
+// replayed spine on. Each reconcile derives a UNIQUE branch under this prefix, so
 // cleanup only ever touches a branch this run created — never an unrelated branch
 // that happened to share a fixed name. [LAW:locality-or-seam] the scratch ref is
 // this run's private seam. A startup sweep drops any leftovers a killed run
@@ -100,8 +113,10 @@ const (
 	// freshness states own those paths.
 	SyncReconcileNotDiverged SyncReconcileState = "not_diverged"
 	// SyncReconcileLinearized: the field-aware engine resolved every field; the
-	// merged result was replayed as one forward commit on the remote head, leaving
-	// linear history with no merge commit, so the next push fast-forwards.
+	// merged result was replayed forward onto the remote head — the folded local
+	// commits landing individually with their original messages and timestamps,
+	// concluded by the reconcile's marker commit — leaving linear history with no
+	// merge commit, so the next push fast-forwards.
 	SyncReconcileLinearized SyncReconcileState = "linearized"
 	// SyncReconcileProsePending: the engine settled every code-owned field, but at
 	// least one free-text field diverged on both sides. Nothing is committed and
@@ -120,11 +135,13 @@ const (
 	// never crashed through an empty merge-base. [LAW:no-silent-failure]
 	SyncReconcileUnrelated SyncReconcileState = "unrelated_histories"
 	// SyncReconcileTookLocal: the operator resolved an unrelated-history divergence by
-	// taking the LOCAL side wholesale. The local backlog was replayed as one forward
-	// commit on the remote head, so it is now a fast-forwardable descendant the next
-	// push converges the remote onto; the remote-only issues were discarded by design.
-	// Only SyncResolveUnrelated produces this — the autonomous reconcile never picks a
-	// side. [LAW:no-silent-failure] a data-dropping resolution is only ever a deliberate
+	// taking the LOCAL side wholesale. The local backlog was replayed forward onto the
+	// remote head — its commits landing individually with their original messages and
+	// timestamps, concluded by the take's marker commit whose diff is the discard —
+	// so it is now a fast-forwardable descendant the next push converges the remote
+	// onto; the remote-only issues were discarded by design. Only SyncResolveUnrelated
+	// produces this — the autonomous reconcile never picks a side.
+	// [LAW:no-silent-failure] a data-dropping resolution is only ever a deliberate
 	// choice, never the automatic path.
 	SyncReconcileTookLocal SyncReconcileState = "took_local"
 	// SyncReconcileTookRemote: the operator resolved an unrelated-history divergence by
@@ -135,9 +152,11 @@ const (
 	// SyncReconcileCombined: the operator resolved an unrelated-history divergence by
 	// COMBINING both sides — the union of every issue, with ids present on both field-merged
 	// against an empty base (the two-way degrade of the three-way engine). The unioned
-	// backlog was replayed as one forward commit on the remote head, so local is now a
-	// fast-forwardable descendant the next push converges the remote onto; NO side's unique
-	// issues were dropped. Only the combine resolution produces this, and only when every
+	// backlog was replayed forward onto the remote head — the folded local commits landing
+	// individually with their original messages and timestamps, concluded by the combine's
+	// marker commit — so local is now a fast-forwardable descendant the next push converges
+	// the remote onto; NO side's unique issues were dropped. Only the combine resolution
+	// produces this, and only when every
 	// prose field settled — an on-both prose divergence lands SyncReconcileProsePending
 	// instead, exactly as the shared-history three-way does. [LAW:no-silent-failure] the
 	// union never silently drops an issue; a shared-id prose conflict is held, never picked.
@@ -165,11 +184,18 @@ type SyncReconcileResult struct {
 	// anchors. [LAW:types-are-the-program] the field present names the state that
 	// produced it.
 	Unrelated *UnrelatedInventory
+	// Replayed counts the folded side's commits that landed individually — with
+	// their original message, timestamp, and author — ahead of the settling marker
+	// commit. Zero for every non-mutating outcome, and for a fold whose every
+	// per-commit projection was already contained in the spine (only the marker
+	// landed). It is read back off the spine after the replay, so it reports what
+	// actually landed, not what was attempted. [FRAMING:representation]
+	Replayed int
 }
 
-// settleFn turns the three-way merge of a divergence into the export to replay as
-// the single forward commit, OR a non-empty pending set that holds the reconcile
-// for the agent surface. It is the ONLY thing that differs between the autonomous
+// settleFn turns the three-way merge of a divergence into the export the replay
+// settles on (the marker commit's content), OR a non-empty pending set that holds
+// the reconcile for the agent surface. It is the ONLY thing that differs between the autonomous
 // reconcile (which can never resolve prose itself) and the agent-resolved finalize
 // (which splices the agent's merged text in): the lock, freshness gate, anchor
 // capture, scratch branch, and atomic reparent are identical for both, so they
@@ -213,10 +239,12 @@ func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
 // pure field-aware merge engine. It reads the three-way state (base = merge-base,
 // ours = local head, theirs = remote head) from Dolt, runs the engine, and — when
 // every field resolves — adopts the remote head as the new base and replays the
-// merged result as one forward commit, so the log reads as a single continuous
-// stream and the subsequent push always fast-forwards. When a free-text field
-// diverged on both sides it commits nothing, leaves the local branch untouched,
-// and returns the prose conflicts for the agent surface.
+// folded local commits forward onto it under their own provenance (original
+// message, timestamp, author), settling with the reconcile's marker commit, so
+// the log reads as a single continuous stream and the subsequent push always
+// fast-forwards. When a free-text field diverged on both sides it commits
+// nothing, leaves the local branch untouched, and returns the prose conflicts
+// for the agent surface.
 //
 // [LAW:effects-at-boundaries] This method owns the effects (read/reset/commit);
 // the merge DECISION is the pure engine. The reconciling machine knows only its
@@ -242,12 +270,13 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // divergence. It re-derives the SAME three-way state SyncReconcile read — the
 // prose-pending state is never snapshot-persisted, so the live refs are the one
 // source of truth ([LAW:one-source-of-truth]) — and replays the merge with the
-// agent's merged prose spliced in, as the SAME single forward commit on the remote
-// head. Resolutions that no longer match the live divergence do not commit; the
+// agent's merged prose spliced in, through the SAME provenance replay onto the
+// remote head (the agent's resolutions land as the marker commit's diff).
+// Resolutions that no longer match the live divergence do not commit; the
 // result comes back SyncReconcileProsePending with the CURRENT conflicts for the
 // agent to re-merge. [LAW:no-silent-failure]
 //
-// It shares SyncReconcile's safe-replay verbatim: the merged commit is built on a
+// It shares SyncReconcile's safe-replay verbatim: the replayed spine is built on a
 // unique scratch branch and the data branch advances with one atomic reset, so an
 // interrupted finalize can never orphan the clone's local work.
 func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (SyncReconcileResult, error) {
@@ -380,7 +409,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 				result.State = SyncReconcileUnrelated
 				return nil
 			}
-			// unionCombine: replay the union of both sides. combine authors a replay commit
+			// unionCombine: replay the union of both sides. combine authors replay commits
 			// ON the remote head, so it takes the SAME safe-replay envelope as the three-way
 			// path (schema-ahead refusal included). The empty base degrades the merge to a
 			// two-way union; combineFromAnchors is the only difference from the shared path.
@@ -403,7 +432,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 
 // replayUnderGuard runs a mutating reconcile body — the shared-history three-way OR the
 // no-base combine — inside the one safety envelope both need: refuse a schema-ahead remote
-// BEFORE any write (adopting an ahead head would author a replay commit below its schema and
+// BEFORE any write (adopting an ahead head would author replay commits below its schema and
 // drop every field the newer schema added — the 2026-07-08 incident), sweep any scratch
 // branch a killed run abandoned (the commit lock guarantees every one is an orphan), derive
 // this run's unique scratch name, and carry ONE snapshot guard across GC-contention retries
@@ -424,13 +453,14 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 }
 
 // reconcileFromAnchors reads the three exports at fixed commit hashes, runs the
-// engine, and — when settled — builds the merged commit on a scratch branch, then
-// advances the data branch to it with one atomic reset. ALL intermediate branch
-// movement (the reset-based reads, the merged commit) happens on the scratch
-// branch, so the data branch never leaves localHead until the merged commit is
-// fully built; the data branch then moves exactly once, atomically, to a finished
-// commit. An interruption anywhere before that single reset leaves the data branch
-// (and the local work on it) untouched at localHead. [LAW:no-silent-failure] local
+// engine, and — when settled — builds the replayed spine (the folded commits'
+// provenance steps, then the marker) on a scratch branch, then advances the data
+// branch to it with one atomic reset. ALL intermediate branch movement (the
+// reset-based reads, the spine's commits) happens on the scratch branch, so the
+// data branch never leaves localHead until the spine is fully built; the data
+// branch then moves exactly once, atomically, to a finished commit. An
+// interruption anywhere before that single reset leaves the data branch (and the
+// local work on it) untouched at localHead. [LAW:no-silent-failure] local
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
@@ -458,13 +488,118 @@ func (s *Store) combineFromAnchors(ctx context.Context, result *SyncReconcileRes
 	})
 }
 
+// foldedCommit is one commit of the folded side's chain — the provenance the
+// replay preserves: what the commit said, when it happened, and who authored
+// it. It is read off dolt_log at fixed anchors, so a retried attempt sees the
+// identical chain. [FRAMING:representation] the chain is the folded side's own
+// map of its history; the replay re-lands that map on the new spine instead of
+// flattening it into one squash.
+type foldedCommit struct {
+	hash    string
+	message string
+	author  string
+	date    time.Time
+}
+
+// foldedChainRange spells the folded side of a divergence as a dolt_log
+// revision range: every commit reachable from localHead that the remote spine
+// lacks. One spelling serves both divergence shapes — on unrelated histories
+// it is the entire local chain; on a shared base it is exactly the ahead
+// commits — so no caller re-derives "the folded side" from a base commit.
+// [LAW:one-source-of-truth]
+func foldedChainRange(remoteHead, localHead string) string {
+	return remoteHead + ".." + localHead
+}
+
+// readFoldedChain lists the folded side's commits oldest-first — replay order —
+// with the message, author, and timestamp each replayed commit preserves. The
+// range is bound, not interpolated.
+func readFoldedChain(ctx context.Context, db *sql.DB, remoteHead, localHead string) ([]foldedCommit, error) {
+	rows, err := db.QueryContext(ctx,
+		`SELECT commit_hash, committer, email, date, message FROM dolt_log(?)`,
+		foldedChainRange(remoteHead, localHead))
+	if err != nil {
+		return nil, fmt.Errorf("read folded chain %s..%s: %w", remoteHead, localHead, err)
+	}
+	defer rows.Close()
+	var chain []foldedCommit
+	for rows.Next() {
+		var c foldedCommit
+		var committer, email string
+		if err := rows.Scan(&c.hash, &committer, &email, &c.date, &c.message); err != nil {
+			return nil, fmt.Errorf("scan folded chain commit: %w", err)
+		}
+		c.author = fmt.Sprintf("%s <%s>", committer, email)
+		chain = append(chain, c)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate folded chain: %w", err)
+	}
+	if len(chain) > 0 && chain[0].hash != localHead {
+		// The newest folded commit IS the local head by construction; anything else
+		// means the chain read answered for different anchors than the plan captured,
+		// and replaying it would attribute the wrong provenance. [LAW:no-silent-failure]
+		return nil, fmt.Errorf("folded chain starts at %q, want local head %q", chain[0].hash, localHead)
+	}
+	// dolt_log lists newest-first; reverse into replay (oldest-first) order.
+	for i, j := 0, len(chain)-1; i < j; i, j = i+1, j-1 {
+		chain[i], chain[j] = chain[j], chain[i]
+	}
+	return chain, nil
+}
+
+// replayStep is one forward commit of the provenance replay: the projected
+// backlog content to land, under the folded commit's own stamp. Steps whose
+// projection equals the spine's prior state land nothing — Dolt's empty-diff
+// skip is the arbiter of "this commit changed nothing here" (a migration or
+// bookkeeping commit), so no parallel equality check exists in Go.
+// [LAW:one-source-of-truth]
+type replayStep struct {
+	export model.Export
+	stamp  commitStamp
+}
+
+// buildFoldSteps materializes the provenance replay: for each folded commit,
+// the backlog AS OF that commit merged against theirs over base — the folded
+// side's history as it lands on the spine, so each replayed commit's diff is
+// that commit's own change in union terms. The merge's Provisional export makes
+// every step total (an on-both prose divergence carries the deterministic
+// tiebreak value mid-chain; the settled truth still lands in the terminal
+// marker), and the newest step reuses finalProvisional — the provisional of the
+// merge the caller already ran — rather than re-reading and re-merging the
+// local head. [LAW:effects-at-boundaries] all reads happen here, before any
+// replay commit, because reading a commit resets the one scratch branch the
+// replay then builds on; the steps carry the materialized exports across that
+// boundary.
+func (s *Store) buildFoldSteps(ctx context.Context, chain []foldedCommit, base, theirs, finalProvisional model.Export) ([]replayStep, error) {
+	steps := make([]replayStep, 0, len(chain))
+	for i, c := range chain {
+		var projected model.Export
+		if i == len(chain)-1 {
+			projected = finalProvisional
+		} else {
+			at, err := s.exportAtCommit(ctx, c.hash)
+			if err != nil {
+				return nil, err
+			}
+			projected = merge.ThreeWay(base, at, theirs).Provisional()
+		}
+		steps = append(steps, replayStep{
+			export: projected,
+			stamp:  commitStamp{Message: c.message, Date: c.date, Author: c.author},
+		})
+	}
+	return steps, nil
+}
+
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
 // merges them against base (a real merge-base export, or the empty export for a combine),
-// and either holds the prose divergence for the agent or replays the merged export as one
-// forward commit on remoteHead with message, landing settledState. The caller has already
-// read base (or left it empty), so the ONLY difference between the two producers is that
-// value and the two labels — the safety-critical replay is written once.
+// and either holds the prose divergence for the agent or replays the folded chain forward
+// onto remoteHead — each folded commit under its own provenance, settled by the marker
+// commit carrying message — landing settledState. The caller has already read base (or left
+// it empty), so the ONLY difference between the two producers is that value and the two
+// labels — the safety-critical replay is written once.
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/message/state are values, not
 // a branch duplicated through the replay.
 func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch, localHead, remoteHead string, base model.Export, message string, settledState SyncReconcileState) error {
@@ -493,11 +628,21 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult,
 		return nil
 	}
 
-	if err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, message, export); err != nil {
+	chain, err := readFoldedChain(ctx, s.db, remoteHead, localHead)
+	if err != nil {
+		return err
+	}
+	steps, err := s.buildFoldSteps(ctx, chain, base, theirs, merged.Provisional())
+	if err != nil {
+		return err
+	}
+	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, message, export, steps)
+	if err != nil {
 		return err
 	}
 	result.State = settledState
 	result.Pending = nil
+	result.Replayed = replayed
 	return nil
 }
 
@@ -525,29 +670,64 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch, scratchBr
 
 // commitReplayAndAdvance is the snapshot-guarded safe-replay every mutating reconcile
 // shares: on the scratch branch it adopts remoteHead as the base, LIFTS it to this
-// binary's schema, replays export as one forward commit, snapshots the pre-mutation
-// data branch, then advances the data branch to that finished commit with one atomic
-// reset. The caller has already computed export — a field-aware three-way merge or a
-// wholesale take-one — so this owns only the replay, identically for both.
-// [LAW:single-enforcer] the safety-critical replay is written once.
+// binary's schema, replays the folded side's provenance steps as individual forward
+// commits, settles with the marker commit carrying export under message, snapshots the
+// pre-mutation data branch, then advances the data branch to that finished commit with
+// one atomic reset. The caller has already computed export and steps — a field-aware
+// three-way merge or a wholesale take-one — so this owns only the replay, identically
+// for both. It returns how many provenance steps actually landed (Dolt drops the
+// empty-diff ones), read back off the spine it built. [LAW:single-enforcer] the
+// safety-critical replay is written once.
+//
+// The marker commit is unconditional (allow-empty): the operation that produced this
+// history must be named IN the history even when the folded side's last state already
+// equals the settled result — and its diff, when there is one, is exactly what the
+// merge policy decided beyond the folded side's own content (the discard of a take,
+// the agent's prose resolutions). The steps before it carry the folded side's
+// provenance; the marker carries the reconcile's.
 //
 // The lift is required when remoteHead is older-schema: replaceFromExport writes this
 // binary's columns, which the remote commit's table may not yet have; lifting first
-// (reusing the migration chain) lands the schema DDL and the replayed data in the SAME
-// commit — one committed unit or nothing, never a half-migrated intermediate. The data
-// branch is untouched until the single atomic reset. [LAW:no-ambient-temporal-coupling]
-// no observer sees a half-built state; it lives only on the scratch branch.
-func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch, remoteHead, message string, export model.Export) error {
+// (reusing the migration chain) lands the schema DDL with the first landing commit,
+// still only on the scratch branch — the data branch never holds a half-migrated
+// intermediate because it is untouched until the single atomic reset.
+// [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
+// only on the scratch branch.
+func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch, remoteHead, message string, export model.Export, steps []replayStep) (int, error) {
 	if err := s.resetAndLift(ctx, remoteHead); err != nil {
-		return fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
+		return 0, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
-	if err := s.replaceFromExport(ctx, export, message); err != nil {
-		return err
+	// The lift's own changes (schema DDL, migration bookkeeping) land as the
+	// machinery's own named commit — or no commit at all on a current-schema
+	// head — so the first provenance step's diff is purely its folded commit's
+	// change, never schema work that was not its own.
+	if err := s.commitWorkingSet(ctx, reconcileLiftCommitMessage); err != nil {
+		return 0, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
+	}
+	liftedBase, err := readDoltHead(ctx, s.db)
+	if err != nil {
+		return 0, fmt.Errorf("read lifted base: %w", err)
+	}
+	for _, step := range steps {
+		if err := s.replaceFromExport(ctx, step.export, step.stamp); err != nil {
+			return 0, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
+		}
+	}
+	if err := s.replaceFromExport(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
+		return 0, err
 	}
 	replayedCommit, err := readDoltHead(ctx, s.db)
 	if err != nil {
-		return fmt.Errorf("read replayed commit: %w", err)
+		return 0, fmt.Errorf("read replayed commit: %w", err)
 	}
+	// What landed is what Dolt kept, not what was attempted: count the spine
+	// segment above the lifted base and subtract the marker, so the reported
+	// number is folded-side provenance only. [FRAMING:representation]
+	landed, err := countCommitsInRange(ctx, s.db, liftedBase, replayedCommit)
+	if err != nil {
+		return 0, err
+	}
+	replayed := landed - 1
 
 	// Snapshot-first: capture the pre-mutation filesystem state so this automatic
 	// data-branch advance is reversible via `lit snapshots restore`. The data branch
@@ -558,19 +738,19 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// The guard is owned by the caller and shared across GC-contention retries, so
 	// ensure() takes exactly one snapshot no matter how many attempts run.
 	if _, err := guard.ensure(); err != nil {
-		return fmt.Errorf("snapshot before reconcile: %w", err)
+		return 0, fmt.Errorf("snapshot before reconcile: %w", err)
 	}
 
 	// Advance the data branch to the finished commit with one atomic reset. This is
 	// the only mutation of the data branch; before it, the data branch is at its
-	// pre-reconcile head, after it, at the complete replayed commit — never an
+	// pre-reconcile head, after it, at the complete replayed spine — never an
 	// in-between. [LAW:one-source-of-truth] one authoritative ordering; no per-machine
 	// merge-commit DAG — linear history that fast-forward pushes.
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
-		return fmt.Errorf("return to data branch %q: %w", dataBranch, err)
+		return 0, fmt.Errorf("return to data branch %q: %w", dataBranch, err)
 	}
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_RESET", "--hard", replayedCommit); err != nil {
-		return fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
+		return 0, fmt.Errorf("advance %q to replayed commit: %w", dataBranch, err)
 	}
 	// The data branch now durably holds the result; roll the recovery snapshots off to
 	// the retention budget. IsReconcileSnapshotName is disjoint from the
@@ -587,7 +767,19 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not prune old recovery snapshots (replay already committed): %v\n", err)
 	}
-	return nil
+	return replayed, nil
+}
+
+// countCommitsInRange counts the commits reachable from head but not from
+// exclusiveBase — the spine segment a replay built, marker included. It reuses
+// the folded-chain range spelling, so "the segment between two anchors" has one
+// definition. [LAW:one-source-of-truth]
+func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head string) (int, error) {
+	var count int
+	if err := db.QueryRowContext(ctx, `SELECT COUNT(*) FROM dolt_log(?)`, foldedChainRange(exclusiveBase, head)).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count replayed commits %s..%s: %w", exclusiveBase, head, err)
+	}
+	return count, nil
 }
 
 // cleanupReconcileScratch returns the session to the data branch and deletes the

@@ -186,9 +186,17 @@ three-way state (base = merge-base, ours = local head, theirs = remote head) and
 resolves it field by field with deterministic, no-clock rules: a field only one
 side moved is taken from that side; a field both sides moved to different values
 is settled by its policy (e.g. priority and status take the dominant value). The
-merged result is replayed as **one forward commit on top of the remote head**, so
-the history stays linear — no merge commit, no per-machine DAG — and the next push
-fast-forwards. The reconcile is transparent for everything the rules can settle.
+merged result is replayed **forward on top of the remote head**, so the history
+stays linear — no merge commit, no per-machine DAG — and the next push
+fast-forwards. The replay preserves the folded side's per-commit provenance: each
+local commit the spine lacked lands individually with its original message,
+timestamp, and author (commits whose change the spine already contained are
+dropped), and a marker commit naming the reconcile settles the sequence — its diff
+is whatever the merge policy itself decided beyond the folded side's content. The
+same granular replay serves the unrelated-history `combine` (each local commit
+projected as its union with the remote backlog) and `take local` (whose marker
+commit's diff is the owner-approved discard of the remote-only issues). The
+reconcile is transparent for everything the rules can settle.
 
 The one class the rules cannot settle is a concurrent **free-text rewrite** —
 title, description, or agent prompt changed to different text on both sides. Those

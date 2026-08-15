@@ -282,7 +282,7 @@ func takeReasonForState(state store.SyncReconcileState) string {
 	case store.SyncReconcileTookRemote:
 		return "took remote: the local backlog now equals the remote; local-only issues discarded by design"
 	case store.SyncReconcileTookLocal:
-		return "took local: the local backlog now sits ahead of the remote as one forward commit; remote-only issues discarded by design"
+		return "took local: the local backlog's commits were replayed onto the remote head with their provenance; remote-only issues discarded by design"
 	case store.SyncReconcileNotDiverged:
 		return "the clone is not diverged from the remote; nothing to reconcile"
 	default:
@@ -305,7 +305,7 @@ func reconcileCommandReasonForState(state store.SyncReconcileState) string {
 	case store.SyncReconcileProsePending:
 		return "every field resolved but free-text diverged on both sides; held for inline merge"
 	case store.SyncReconcileCombined:
-		return "combined: unioned both backlogs into one forward commit"
+		return "combined: unioned both backlogs, replaying the local commits with their provenance"
 	case store.SyncReconcileNotDiverged:
 		return "the clone is not diverged from the remote; nothing to reconcile"
 	default:
@@ -354,8 +354,8 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	case store.SyncReconcileTookLocal:
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
 		_, err := fmt.Fprintf(stdout,
-			"took local: your backlog now sits on top of %s as one forward commit; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
-			ref, describeIDSet(discardedIDs(result.Unrelated, store.TakeLocal)))
+			"took local: your backlog now sits on top of %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\nDISCARDED the remote-only issue(s), by design: %s\n",
+			ref, describeReplayed(result.Replayed), describeIDSet(discardedIDs(result.Unrelated, store.TakeLocal)))
 		return err
 	case store.SyncReconcileNotDiverged:
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
@@ -364,6 +364,17 @@ func reportTakeOutcome(stdout io.Writer, ws workspace.Info, command string, remo
 	default:
 		return fmt.Errorf("sync reconcile take: unexpected result state %q — this is a bug; please report it", result.State)
 	}
+}
+
+// describeReplayed phrases the provenance-replay count for the fold outcomes:
+// how many of the folded side's commits landed individually ahead of the marker
+// commit. Zero is a real outcome (every folded change was already contained in
+// the spine), so it renders explicitly rather than vanishing.
+func describeReplayed(count int) string {
+	if count == 1 {
+		return "1 local commit"
+	}
+	return fmt.Sprintf("%d local commits", count)
 }
 
 // discardedIDs is the side the take drops: taking remote discards the local-only
@@ -456,7 +467,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	case store.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
-		_, err := fmt.Fprintln(stdout, "reconciled: the divergence merged into linear history; the next push fast-forwards")
+		_, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed))
 		return err
 	case store.SyncReconcileCombined:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
@@ -470,11 +481,12 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 			inv = &store.UnrelatedInventory{}
 		}
 		_, err := fmt.Fprintf(stdout,
-			"combined: unioned both backlogs onto %s as one forward commit; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\n"+
+			"combined: unioned both backlogs onto %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\n"+
 				"  kept local-only:  %s\n"+
 				"  kept remote-only: %s\n"+
 				"  field-merged on both: %s\n",
 			remote+"/"+branch,
+			describeReplayed(result.Replayed),
 			describeIDSet(inv.OnlyLocal),
 			describeIDSet(inv.OnlyRemote),
 			describeIDSet(inv.OnBoth))

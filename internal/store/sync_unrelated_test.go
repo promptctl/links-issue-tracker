@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -523,7 +524,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	}
 	combined := exportB
 	combined.Issues = append(combined.Issues, sharedIssue)
-	if err := stB.replaceFromExport(ctx, combined, "plant shared issue"); err != nil {
+	if err := stB.replaceFromExport(ctx, combined, commitStamp{Message: "plant shared issue"}); err != nil {
 		t.Fatalf("replaceFromExport(B): %v", err)
 	}
 	if err := stB.Close(); err != nil {
@@ -696,6 +697,191 @@ func assertIDSet(t *testing.T, label string, got, want []string) {
 	}
 	if !reflect.DeepEqual(gotSorted, wantSorted) {
 		t.Fatalf("%s partition = %v, want %v", label, gotSorted, wantSorted)
+	}
+}
+
+// TestSyncReconcileCombinePreservesFoldedProvenance drives the links-sync-pgct.6
+// acceptance: reconcile two workspaces with unrelated histories where the local
+// side holds N data commits; after combine, those changes appear as individually
+// attributable commits on the new spine — original message and timestamp (to the
+// second, Dolt's --date granularity) preserved, in their original order, each
+// mid-chain state a whole union backlog — settled by the combine's marker
+// commit; the contents equal the union and the push fast-forwards. The squash
+// this replaces is the 2026-08-08 field-incident cost: the data survived but its
+// provenance did not.
+func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	// B's folded side: three data commits with distinct messages — create,
+	// update, add label — so each one is individually identifiable on the spine.
+	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	foldedMessages := []string{"create issue", "apply update", "add label"}
+	originals := commitDatesByMessage(t, ctx, syncB, foldedMessages...)
+
+	res, err := syncB.SyncReconcileCombine(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcileCombine(B): %v", err)
+	}
+	if res.State != SyncReconcileCombined {
+		t.Fatalf("combine state = %q (pending=%+v), want %q", res.State, res.Pending, SyncReconcileCombined)
+	}
+	if res.Replayed != len(foldedMessages) {
+		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
+	}
+
+	// The spine: B's three data commits in original order under original
+	// messages and timestamps, then the combine marker. B's bootstrap commits
+	// (init, migrations, workspace meta) project no backlog change onto the
+	// spine, so they land nothing.
+	assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
+	spine := spineSince(t, ctx, syncB, res.RemoteHead)
+	assertFoldedSpine(t, spine, foldedMessages, originals, combineCommitMessage)
+
+	// Mid-chain states are whole backlogs: the union projection carries the
+	// remote-only issue from the FIRST replayed commit, not just from the marker.
+	assertIssuePresentAsOf(t, ctx, syncB, spine[0].hash, remoteIssueID, true)
+
+	// Contents equal the union, and the spine fast-forward-pushes; the remote
+	// side converges onto it.
+	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID, remoteIssueID})
+	assertWorkingSetClean(t, ctx, syncB)
+	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("fast-forward SyncPush(B) after combine: %v", err)
+	}
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B): %v", err)
+	}
+	syncA := openSyncOrFatal(t, ctx, rootA)
+	defer func() { _ = syncA.Close() }()
+	recv, err := syncA.SyncReceive(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(A): %v", err)
+	}
+	if recv.State != SyncReceiveFastForwarded {
+		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
+	}
+	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID, remoteIssueID})
+}
+
+// TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance is the same
+// acceptance for the take-local resolution (which the engine permits only on
+// unrelated histories — a shared-history divergence is mergeable and refused):
+// after the owner-approved take, the local side's commits appear individually
+// on the spine with message and timestamp preserved, and the DISCARD of the
+// remote-only issues is the marker commit's own diff — present through the last
+// provenance commit, gone at the marker — attributing the destruction to the
+// take itself rather than to any of local's commits.
+func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := filepath.Join(base, "a")
+	rootB := filepath.Join(base, "b")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
+	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	foldedMessages := []string{"create issue", "apply update", "add label"}
+	originals := commitDatesByMessage(t, ctx, syncB, foldedMessages...)
+
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, token)
+	if err != nil {
+		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
+	}
+	if res.State != SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	}
+	if res.Replayed != len(foldedMessages) {
+		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
+	}
+
+	assertLinearSpineToRemoteHead(t, ctx, syncB, res.RemoteHead)
+	spine := spineSince(t, ctx, syncB, res.RemoteHead)
+	assertFoldedSpine(t, spine, foldedMessages, originals, takeLocalCommitMessage)
+
+	// The discard is the take's own act: the remote-only issue survives through
+	// every provenance commit (union projections) and disappears exactly at the
+	// marker — so history attributes the owner-approved destruction to the take,
+	// not to any of local's replayed commits.
+	assertIssuePresentAsOf(t, ctx, syncB, spine[len(spine)-2].hash, remoteIssueID, true)
+	assertIssuePresentAsOf(t, ctx, syncB, spine[len(spine)-1].hash, remoteIssueID, false)
+
+	// Contents are local's backlog wholesale, and the spine fast-forward-pushes;
+	// the remote side converges onto it.
+	assertLocalIssueIDs(t, ctx, syncB, []string{localIssueID})
+	assertWorkingSetClean(t, ctx, syncB)
+	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
+		t.Fatalf("fast-forward SyncPush(B) after take-local: %v", err)
+	}
+	if err := syncB.Close(); err != nil {
+		t.Fatalf("Close(B): %v", err)
+	}
+	syncA := openSyncOrFatal(t, ctx, rootA)
+	defer func() { _ = syncA.Close() }()
+	recv, err := syncA.SyncReceive(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReceive(A): %v", err)
+	}
+	if recv.State != SyncReceiveFastForwarded {
+		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
+	}
+	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
+}
+
+// assertFoldedSpine fails unless the replayed spine is exactly the folded
+// side's data commits — original messages in original order, each timestamp
+// equal to the original to the second (Dolt's --date granularity truncates
+// sub-second precision) — settled by the marker commit as its final entry.
+func assertFoldedSpine(t *testing.T, spine []spineEntry, foldedMessages []string, originals map[string]time.Time, markerMessage string) {
+	t.Helper()
+	if len(spine) != len(foldedMessages)+1 {
+		t.Fatalf("replayed spine holds %d commits %+v, want %d folded + 1 marker", len(spine), spine, len(foldedMessages))
+	}
+	for i, message := range foldedMessages {
+		if spine[i].message != message {
+			t.Fatalf("spine[%d] message = %q, want %q (original order preserved)", i, spine[i].message, message)
+		}
+		if want := originals[message].UTC().Truncate(time.Second); !spine[i].date.UTC().Equal(want) {
+			t.Fatalf("spine[%d] (%q) date = %s, want original %s", i, message, spine[i].date.UTC(), want)
+		}
+	}
+	if last := spine[len(spine)-1].message; last != markerMessage {
+		t.Fatalf("spine marker message = %q, want %q", last, markerMessage)
+	}
+}
+
+// addLabelLocal adds a label to an issue and leaves it local (unpushed) — a
+// third distinct data-commit message for provenance fixtures.
+func addLabelLocal(t *testing.T, ctx context.Context, root, id, label string) {
+	t.Helper()
+	st, err := Open(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("Open(label %s): %v", root, err)
+	}
+	if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: id, Name: label, CreatedBy: "test"}); err != nil {
+		t.Fatalf("AddLabel(%s): %v", id, err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close(label): %v", err)
 	}
 }
 

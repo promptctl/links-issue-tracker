@@ -66,16 +66,48 @@ type connectionRotator func() error
 
 type commitLockContextKey struct{}
 
-// withMutation runs a mutation under a held commit lock. It begins a tx,
-// invokes fn, commits the tx, and runs the working-set commit — all as ONE
+// commitStamp is everything a mutation may declare about the Dolt commit it
+// produces. The zero value beyond Message is the ordinary mutation: stamped
+// now, authored by the session identity, skipped when the working set already
+// equals HEAD. The reconcile's provenance replay sets the rest — a folded
+// commit lands under its ORIGINAL message, timestamp, and author, and the
+// settling marker commit lands even when it changes nothing.
+// [LAW:types-are-the-program] the stamp is a value crossing the one commit
+// boundary; zero means exactly today's behavior, so no caller changes meaning
+// by ignoring it. [LAW:dataflow-not-control-flow] per-commit variability is
+// data through one pipeline, never a second commit path.
+type commitStamp struct {
+	Message string
+	// Date, when non-zero, becomes the commit timestamp via --date. Dolt's
+	// date parsing is second-granular (RFC3339 without fractional seconds), so
+	// sub-second precision truncates.
+	Date time.Time
+	// Author, when non-empty, is passed as --author "Name <email>", replacing
+	// the session identity Dolt would otherwise stamp.
+	Author string
+	// AllowEmpty lands a commit even when the working set equals HEAD — for
+	// marker commits whose existence, not diff, is the point.
+	AllowEmpty bool
+}
+
+// withMutation runs a mutation under a held commit lock with the ordinary
+// message-only stamp. It is the high-traffic spelling of withStampedMutation;
+// the reconcile's provenance replay is the one caller that needs the full
+// stamp.
+func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error {
+	return s.withStampedMutation(ctx, commitStamp{Message: message}, fn)
+}
+
+// withStampedMutation runs a mutation under a held commit lock. It begins a
+// tx, invokes fn, commits the tx, and runs the working-set commit — all as ONE
 // retried unit (re-entrant: the lock is already held, so acquireCommitLock
 // short-circuits). The lock is acquired and released exactly once.
 //
 // [LAW:dataflow-not-control-flow] Every mutation runs the same sequence;
-// per-site variability is carried in `message` and `fn`, not in branches.
+// per-site variability is carried in `stamp` and `fn`, not in branches.
 // [LAW:single-enforcer] Lock acquisition, tx lifecycle, and transient-retry
-// are all owned at their respective single boundaries; withMutation composes
-// them rather than duplicating any of them.
+// are all owned at their respective single boundaries; withStampedMutation
+// composes them rather than duplicating any of them.
 //
 // The whole BeginTx→fn→tx.Commit→commitWorkingSetOnce sequence is inside
 // retryTransientGCContention, not just the final DOLT_COMMIT step
@@ -96,25 +128,25 @@ type commitLockContextKey struct{}
 // nonce). The staged flag is the phase marker each attempt resumes from.
 // [LAW:no-ambient-temporal-coupling] the phase is explicit owned state, not an
 // assumption about which step happened to fail.
-func (s *Store) withMutation(ctx context.Context, message string, fn func(ctx context.Context, tx *sql.Tx) error) error {
+func (s *Store) withStampedMutation(ctx context.Context, stamp commitStamp, fn func(ctx context.Context, tx *sql.Tx) error) error {
 	staged := false
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			if !staged {
 				tx, err := s.db.BeginTx(ctx, nil)
 				if err != nil {
-					return fmt.Errorf("begin %s tx: %w", message, err)
+					return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
 				}
 				defer tx.Rollback()
 				if err := fn(ctx, tx); err != nil {
 					return err
 				}
 				if err := tx.Commit(); err != nil {
-					return fmt.Errorf("commit %s tx: %w", message, err)
+					return fmt.Errorf("commit %s tx: %w", stamp.Message, err)
 				}
 				staged = true
 			}
-			return s.commitWorkingSetOnce(ctx, message)
+			return s.commitWorkingSetOnce(ctx, stamp)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
@@ -224,28 +256,44 @@ func (s *Store) commitWorkingSet(ctx context.Context, message string) error {
 	// [LAW:one-source-of-truth] A process-shared commit lock at this boundary is the canonical writer serialization mechanism.
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
-			return s.commitWorkingSetOnce(ctx, message)
+			return s.commitWorkingSetOnce(ctx, commitStamp{Message: message})
 		}, s.reconnect, transientRetryDelay, waitWithContext)
 	})
 }
 
-// commitWorkingSetOnce is the single function that hands a commit message to
-// Dolt, so it owns what a valid commit message looks like: trimmed and never
-// empty. Routing normalization through here means every caller (commitWorkingSet
-// and withMutation) gets the same message shape with no per-callsite repetition.
-// [LAW:single-enforcer] One trim+default rule for Dolt commit messages.
-func (s *Store) commitWorkingSetOnce(ctx context.Context, message string) error {
+// commitWorkingSetOnce is the single function that hands a commit to Dolt, so
+// it owns what a valid commit looks like: the message trimmed and never empty,
+// and the stamp's optional date/author/allow-empty rendered as DOLT_COMMIT
+// flags. A "nothing to commit" outcome is success-with-no-commit — the value
+// diff is empty, so there is no change to version (and the reconcile's
+// provenance replay leans on exactly this to drop folded commits whose
+// projection changed nothing). [LAW:single-enforcer] One trim+default rule and
+// one flag rendering for Dolt commits.
+func (s *Store) commitWorkingSetOnce(ctx context.Context, stamp commitStamp) error {
 	if s.commitWorkingSetHookForTest != nil {
 		if err := s.commitWorkingSetHookForTest(); err != nil {
 			return err
 		}
 	}
-	trimmed := strings.TrimSpace(message)
+	trimmed := strings.TrimSpace(stamp.Message)
 	if trimmed == "" {
 		trimmed = "links mutation"
 	}
+	args := []any{"-Am", trimmed}
+	if stamp.AllowEmpty {
+		args = append(args, "--allow-empty")
+	}
+	if !stamp.Date.IsZero() {
+		// RFC3339 in UTC is one of Dolt's supported date layouts; formatting in
+		// UTC keeps the stored instant independent of this machine's zone.
+		args = append(args, "--date", stamp.Date.UTC().Format(time.RFC3339))
+	}
+	if stamp.Author != "" {
+		args = append(args, "--author", stamp.Author)
+	}
+	query := "CALL DOLT_COMMIT(?" + strings.Repeat(", ?", len(args)-1) + ")"
 	var commitHash string
-	err := s.db.QueryRowContext(ctx, `CALL DOLT_COMMIT('-Am', ?)`, trimmed).Scan(&commitHash)
+	err := s.db.QueryRowContext(ctx, query, args...).Scan(&commitHash)
 	if err == nil {
 		return nil
 	}
