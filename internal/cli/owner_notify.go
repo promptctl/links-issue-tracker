@@ -188,6 +188,12 @@ func runOwnerNotifyHook(ctx context.Context, hook, repoRoot string, ev ownerNoti
 	hookCtx, cancel := context.WithTimeout(ctx, ownerNotifyHookTimeout)
 	defer cancel()
 	cmd := exec.CommandContext(hookCtx, "sh", "-c", hook)
+	// The deadline kills the sh, but CombinedOutput also waits for the output
+	// pipe to close — a hook's backgrounded child inheriting stdout would hold
+	// the caller past the cap indefinitely. WaitDelay forces Wait to abandon
+	// the pipe shortly after the kill, making the timeout the real bound.
+	// [LAW:no-ambient-temporal-coupling]
+	cmd.WaitDelay = time.Second
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"LIT_NOTIFY_KIND="+string(ev.Kind),
@@ -222,17 +228,17 @@ func clearOwnerNotify(ws workspace.Info, kinds ...ownerNotifyKind) {
 // observePushOutcomeForOwner is the push half of the owner channel, fed by the
 // same completion record the push-outcome marker persists so the two can never
 // disagree about how the attempt ended. [LAW:one-source-of-truth] A landed push
-// ends the push episode; a failed attempt notifies — except a deliberate
-// cancellation (ctrl-C mid-push), which is an operator abandoning the attempt,
-// not the remote degrading.
-func observePushOutcomeForOwner(ctx context.Context, ws workspace.Info, rec pushOutcomeRecord, attemptErr, pushErr error) {
+// ends the push episode; a failed attempt notifies. A deliberate cancellation
+// (an operator abandoning the attempt, not the remote degrading) and a
+// legitimately busy workspace never reach the notify arm at all: pushOutcomeOf
+// classifies them as their own non-failed decisions, so this function needs no
+// error inspection of its own — the record IS the classification.
+// [LAW:single-enforcer]
+func observePushOutcomeForOwner(ctx context.Context, ws workspace.Info, rec pushOutcomeRecord) {
 	switch {
 	case rec.Decision == pushDecisionPushed:
 		clearOwnerNotify(ws, ownerNotifyPushFailed)
 	case rec.failed():
-		if errors.Is(attemptErr, context.Canceled) || errors.Is(pushErr, context.Canceled) {
-			return
-		}
 		maybeNotifyOwner(ctx, ws, ownerNotifyEvent{
 			Kind:    ownerNotifyPushFailed,
 			Summary: fmt.Sprintf("a lit sync push to %s failed: %s — local ticket changes are not reaching the shared backlog.", pushTarget(rec.Remote, rec.Branch), rec.Reason),

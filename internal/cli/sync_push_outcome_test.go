@@ -2,12 +2,15 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -47,6 +50,24 @@ func TestPushOutcomeOf(t *testing.T) {
 			name:    "landed push records pushed",
 			outcome: syncPushOutcome{status: "ok", remote: "origin", branch: "master"},
 			want:    pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"},
+		},
+		{
+			name: "cancellation before the attempt records canceled, not error",
+			err:  fmt.Errorf("open sync store: %w", context.Canceled),
+			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "open sync store: context canceled"},
+		},
+		{
+			name: "cancellation mid-push records canceled with the resolved ref",
+			outcome: syncPushOutcome{
+				status: "ok", remote: "origin", branch: "master",
+				pushErr: fmt.Errorf("push: %w", context.Canceled),
+			},
+			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "push: context canceled", Remote: "origin", Branch: "master"},
+		},
+		{
+			name: "workspace legitimately busy records its own decision, not error",
+			err:  fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy),
+			want: pushOutcomeRecord{Decision: pushDecisionWorkspaceBusy, Reason: "open sync store: workspace busy"},
 		},
 	}
 	for _, tc := range cases {

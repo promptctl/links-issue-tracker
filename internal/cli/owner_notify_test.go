@@ -170,7 +170,9 @@ func TestMaybeNotifyOwnerHonorsAutoSyncKillSwitch(t *testing.T) {
 // TestObservePushOutcomeForOwner pins the push half's episode semantics: a
 // failed attempt notifies, a landed push deletes the episode marker, and a
 // deliberately cancelled attempt does neither — an operator abandoning a push
-// is not the remote degrading.
+// is not the remote degrading. The cancelled record is built through
+// pushOutcomeOf, the real seam, so this also pins that the derivation (not
+// this observer) owns the cancellation class.
 func TestObservePushOutcomeForOwner(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	sink := filepath.Join(t.TempDir(), "notifications")
@@ -178,7 +180,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 	ctx := context.Background()
 
 	failed := pushOutcomeRecord{Decision: pushDecisionError, Reason: "remote unreachable", Remote: "origin", Branch: "master"}
-	observePushOutcomeForOwner(ctx, ws, failed, nil, errors.New("remote unreachable"))
+	observePushOutcomeForOwner(ctx, ws, failed)
 	if payload, err := os.ReadFile(sink); err != nil || string(payload) != "push_failed\n" {
 		t.Fatalf("failed push did not notify exactly once: payload=%q err=%v", payload, err)
 	}
@@ -186,13 +188,16 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 		t.Fatalf("failed push left no episode marker: %v", err)
 	}
 
-	observePushOutcomeForOwner(ctx, ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"}, nil, nil)
+	observePushOutcomeForOwner(ctx, ws, pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"})
 	if _, err := os.Stat(ownerNotifyMarkerPath(ws, ownerNotifyPushFailed)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a landed push did not end the episode (stat err=%v)", err)
 	}
 
-	cancelled := pushOutcomeRecord{Decision: pushDecisionError, Reason: context.Canceled.Error()}
-	observePushOutcomeForOwner(ctx, ws, cancelled, context.Canceled, nil)
+	cancelled := pushOutcomeOf(syncPushOutcome{}, context.Canceled)
+	if cancelled.Decision != pushDecisionCanceled || cancelled.failed() {
+		t.Fatalf("pushOutcomeOf(canceled) = %+v, want the non-failed canceled decision", cancelled)
+	}
+	observePushOutcomeForOwner(ctx, ws, cancelled)
 	if payload, _ := os.ReadFile(sink); strings.Count(string(payload), "push_failed") != 1 {
 		t.Fatalf("a cancelled push notified the owner: %q", payload)
 	}
