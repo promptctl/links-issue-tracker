@@ -213,7 +213,7 @@ func (s *Store) downgradeLocked(ctx context.Context, targetSchemaVersion int64) 
 		snapshotsDir,
 		formatDowngradeSnapshotLabel(time.Now()),
 	)
-	snap, err := guard.ensure()
+	snap, err := guard.ensure(ctx)
 	if err != nil {
 		return fmt.Errorf("downgrade: %w", err)
 	}

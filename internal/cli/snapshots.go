@@ -145,7 +145,7 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 		return dbsnapshot.Snapshot{}, err
 	}
 	if err := withCommitLock(ctx, ws, func() error {
-		s, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), label)
+		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
 		if err != nil {
 			return err
 		}

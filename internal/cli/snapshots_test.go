@@ -498,3 +498,51 @@ func captureRun(t *testing.T, args ...string) *bytes.Buffer {
 	}
 	return &stderr
 }
+
+// TestSnapshotsNew_CollectsInterruptOrphanedResidue pins links-snapshots-3dtv's
+// acceptance shape end-to-end: .tmp/.reserve residue stranded by an
+// interrupted snapshot copy (fabricated here exactly as a post-grace hard
+// exit leaves it) is invisible to `lit snapshots list` yet reclaimed by the
+// very next `lit snapshots new`, whose retention tail runs the residue
+// collection under the producer beacon's liveness proof.
+func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	snapshotsDir := snapshotsDirFor(ws)
+	tmpResidue := filepath.Join(snapshotsDir, "1700000000000000001.tmp")
+	reserveResidue := filepath.Join(snapshotsDir, "1700000000000000001.reserve")
+	if err := os.MkdirAll(filepath.Join(tmpResidue, "nested"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpResidue, "nested", "partial"), []byte("half-copied"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(reserveResidue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	// The residue is invisible to the listing (the pre-fix trap: nothing an
+	// operator can see or prune).
+	var listOut bytes.Buffer
+	if err := Run(context.Background(), &listOut, &listOut, []string{"snapshots", "list"}); err != nil {
+		t.Fatalf("snapshots list: %v", err)
+	}
+	if strings.Contains(listOut.String(), "1700000000000000001") {
+		t.Fatalf("residue leaked into the listing:\n%s", listOut.String())
+	}
+
+	var newOut bytes.Buffer
+	if err := Run(context.Background(), &newOut, &newOut, []string{"snapshots", "new"}); err != nil {
+		t.Fatalf("snapshots new: %v", err)
+	}
+	if firstSnapshotName(newOut.String()) == "" {
+		t.Fatalf("snapshots new returned no name: %s", newOut.String())
+	}
+
+	for _, residue := range []string{tmpResidue, reserveResidue} {
+		if _, err := os.Stat(residue); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("residue %s must be collected by the next snapshots new, stat err=%v", residue, err)
+		}
+	}
+}

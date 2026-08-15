@@ -1,6 +1,6 @@
 //go:build windows
 
-package store
+package filelock
 
 import (
 	"errors"
@@ -9,11 +9,11 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Windows implementation of the workspace-lock primitive. LockFileEx /
-// UnlockFileEx are the Win32 analogues of POSIX flock(2): shared and
-// exclusive byte-range locks enforced by the kernel across processes.
-// We lock the entire address space (low=0xFFFFFFFF, high=0xFFFFFFFF) on
-// the lock file so the semantics match flock's whole-file model.
+// Windows implementation of the lock primitive. LockFileEx / UnlockFileEx
+// are the Win32 analogues of POSIX flock(2): shared and exclusive byte-range
+// locks enforced by the kernel across processes. We lock the entire address
+// space (low=0xFFFFFFFF, high=0xFFFFFFFF) on the lock file so the semantics
+// match flock's whole-file model.
 //
 // LOCKFILE_FAIL_IMMEDIATELY makes contention observable instead of latent —
 // the call returns ERROR_LOCK_VIOLATION rather than blocking, matching the
@@ -35,7 +35,7 @@ func tryLockFile(file *os.File, exclusive bool) error {
 	ol := new(windows.Overlapped)
 	err := windows.LockFileEx(windows.Handle(file.Fd()), flags, 0, lockfileBytesLockLow, lockfileBytesLockHigh, ol)
 	if errors.Is(err, windows.ERROR_LOCK_VIOLATION) {
-		return errLockWouldBlock
+		return errWouldBlock
 	}
 	// LOCKFILE_FAIL_IMMEDIATELY makes LockFileEx synchronous: it either
 	// acquires the byte range immediately or returns ERROR_LOCK_VIOLATION.

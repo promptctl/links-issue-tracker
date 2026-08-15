@@ -31,19 +31,33 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 	return st, doltRoot
 }
 
-// snapshotCount returns how many entries exist in the workspace's snapshots
+// snapshotCount returns how many snapshots exist in the workspace's snapshots
 // directory. Used to assert "no snapshot taken" for the refusal paths.
+// Counts via dbsnapshot.List — the package's own definition of "a snapshot
+// exists" — rather than raw dir entries, which would also count non-snapshot
+// machinery like the producer beacon file. [LAW:one-source-of-truth]
+//
+// Because List refuses producer-artifact names by design, the count alone
+// can no longer notice a Take that strands its .tmp/.reserve; the explicit
+// artifact scan keeps that cleanup invariant pinned (the raw-entry counter
+// this replaced guarded it incidentally).
 func snapshotCount(t *testing.T, doltRoot string) int {
 	t.Helper()
 	dir := migrationSnapshotsDir(doltRoot)
 	entries, err := os.ReadDir(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("readdir snapshots: %v", err)
 	}
-	return len(entries)
+	for _, e := range entries {
+		if dbsnapshot.IsProducerArtifactName(e.Name()) {
+			t.Fatalf("stranded producer artifact in snapshots dir: %s", e.Name())
+		}
+	}
+	list, err := dbsnapshot.List(dir)
+	if err != nil {
+		t.Fatalf("list snapshots: %v", err)
+	}
+	return len(list)
 }
 
 // TestAppliedSchemaVersionMatchesRecorded pins the exported reader `lit upgrade`

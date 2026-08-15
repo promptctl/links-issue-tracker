@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -124,11 +125,11 @@ func newSnapshotGuard(databaseDir, snapshotsDir, label string) *snapshotGuard {
 
 // ensure takes the snapshot on first call and returns the cached snapshot on
 // subsequent calls. Idempotent within one migrate() invocation.
-func (g *snapshotGuard) ensure() (dbsnapshot.Snapshot, error) {
+func (g *snapshotGuard) ensure(ctx context.Context) (dbsnapshot.Snapshot, error) {
 	if g.taken != nil {
 		return *g.taken, nil
 	}
-	snap, err := dbsnapshot.Take(g.databaseDir, g.snapshotsDir, g.label)
+	snap, err := dbsnapshot.Take(ctx, g.databaseDir, g.snapshotsDir, g.label)
 	if err != nil {
 		return dbsnapshot.Snapshot{}, fmt.Errorf("snapshot before migration: %w", err)
 	}

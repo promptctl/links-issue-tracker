@@ -54,7 +54,7 @@ type ddlStep struct {
 
 // existsProbe returns SQL that yields one row iff this step's target is
 // already present in the schema (i.e. the DDL would be a no-op). When
-// the probe yields no rows, the runner calls guard.ensure() and runs
+// the probe yields no rows, the runner calls guard.ensure(ctx) and runs
 // stmt.
 func (d ddlStep) existsProbe() string {
 	if d.parent == "" {
@@ -578,7 +578,7 @@ func (s *Store) translateIssueHistoryToEvents(ctx context.Context, guard *snapsh
 	if !hasPending {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("translate issue_history: %w", err)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -835,7 +835,7 @@ func (s *Store) execGatedCreate(ctx context.Context, guard *snapshotGuard, probe
 	if exists {
 		return false, nil
 	}
-	if _, snapErr := guard.ensure(); snapErr != nil {
+	if _, snapErr := guard.ensure(ctx); snapErr != nil {
 		return false, fmt.Errorf("%s: %w", label, snapErr)
 	}
 	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -869,7 +869,7 @@ func (s *Store) execGatedMutation(ctx context.Context, guard *snapshotGuard, pro
 	if !needed {
 		return false, nil
 	}
-	if _, snapErr := guard.ensure(); snapErr != nil {
+	if _, snapErr := guard.ensure(ctx); snapErr != nil {
 		return false, fmt.Errorf("%s: %w", label, snapErr)
 	}
 	if _, err := s.db.ExecContext(ctx, stmt); err != nil {
@@ -1019,7 +1019,7 @@ func (s *Store) ensureIssueRanks(ctx context.Context, guard *snapshotGuard) (boo
 	if len(ids) == 0 {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("ensureIssueRanks: %w", err)
 	}
 	// [LAW:no-silent-failure] The rank backfill is all-or-nothing: a
@@ -1093,7 +1093,7 @@ func (s *Store) resetPrioritiesToNormal(ctx context.Context, guard *snapshotGuar
 	if hasCanonicalPriorityConstraint(constraints) {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("reset priorities to normal: %w", err)
 	}
 	if _, err := s.db.ExecContext(ctx, fmt.Sprintf("UPDATE issues SET priority = %d", model.PriorityNormal)); err != nil {
@@ -1158,7 +1158,7 @@ func (s *Store) ensureStatusConstraint(ctx context.Context, guard *snapshotGuard
 	if hasCanonicalStatusConstraint(checks) {
 		return false, nil
 	}
-	if _, err := guard.ensure(); err != nil {
+	if _, err := guard.ensure(ctx); err != nil {
 		return false, fmt.Errorf("ensure status constraint: %w", err)
 	}
 	for _, constraint := range checks {
