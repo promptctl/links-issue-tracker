@@ -108,8 +108,9 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 					"would risk the remote backlog for no benefit (a sync push of an empty store cannot help), so "+
 					"it should stay untouched until this is resolved. The data transferred, but the embedded dolt "+
 					"clone did not finish processing it in time (a slow-adopt issue in dolt's clone, not a transfer "+
-					"or data-size problem). Retry `lit init`; if it keeps timing out, escalate the slow adopt "+
-					"rather than re-running blindly",
+					"or data-size problem). Retry `lit init` — the interrupted download's leftovers are discarded "+
+					"automatically on retry; if it keeps timing out, escalate the slow adopt rather than "+
+					"re-running blindly",
 				adoptRemoteTimeout),
 		}
 	}

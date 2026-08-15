@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -237,13 +238,152 @@ func TestInitHardStopsWhenRemoteHasDataButAdoptCannotComplete(t *testing.T) {
 	if strings.Contains(initOut, "Pulled existing backlog") {
 		t.Fatalf("init reported an adopt that did not happen:\n%s", initOut)
 	}
-	// NOT asserted here: that no on-disk dbDir remains. AdoptRemoteByClone
-	// unconditionally MkdirAlls its root before attempting the clone, so a
-	// clone-stage failure (unlike a pre-clone detection failure) can leave a
-	// partial directory regardless of this ticket's fix — that residue is
-	// links-sync-pgct.9's scope, not this one's. This test's job ends at "init
-	// refused and told the truth"; TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails
-	// below covers the pre-clone case where no store artifact is ever touched.
+
+	// links-sync-pgct.9: a clone failure that RETURNS leaves the store root
+	// with no residue at all — no partial database, no adopt-pending marker —
+	// so the retry the error text asks for starts from a provably clean slate.
+	// (AdoptRemoteByClone still MkdirAlls the root itself; empty is the
+	// postcondition, absence is not.)
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	entries, err := os.ReadDir(ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", ws.DatabasePath, err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("failed adopt left residue in the store root: %v", names)
+	}
+
+	// The retry story the failure message promises: once the cause is fixed
+	// (here, the branch override removed), a plain re-run of `lit init`
+	// adopts the remote backlog with no manual cleanup in between.
+	if err := os.Unsetenv("LINKS_DEBUG_DOLT_SYNC_BRANCH"); err != nil {
+		t.Fatalf("Unsetenv error = %v", err)
+	}
+	retryOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	if !strings.Contains(retryOut, "Pulled existing backlog from origin/master") {
+		t.Fatalf("retry init output missing adopt line:\n%s", retryOut)
+	}
+	backlog := runCLIInDir(t, consumer, "backlog")
+	if !strings.Contains(backlog, "remote-ticket") {
+		t.Fatalf("retry backlog missing adopted ticket:\n%s", backlog)
+	}
+}
+
+// TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse is links-sync-pgct.9's
+// guard for the failure shapes that cannot run any in-process cleanup: an
+// adopt abandoned mid-clone (init's deadline abandons the clone goroutine and
+// the process exits; SIGKILL; power loss) leaves the durable adopt-pending
+// marker plus an undefined partial store, fabricated here directly. Every
+// normal command must refuse that residue loudly — most critically `lit new`,
+// whose EnsureDatabase would otherwise create a fresh store over it and
+// re-create the epic's field incident (a fresh workspace silently shadowing
+// the remote backlog). A plain `lit init` retry must heal: discard the
+// residue, adopt the remote backlog, clear the marker. And when the remote
+// signal is gone too, init fails loudly naming the leftover rather than
+// blessing it as a fresh store.
+func TestInitHealsAbandonedAdoptResidueOtherCommandsRefuse(t *testing.T) {
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	producer := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, producer, "config", "user.email", "a@a.co")
+	runGit(t, producer, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(producer, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, producer, "add", "-A")
+	runGit(t, producer, "commit", "-m", "seed")
+	runGit(t, producer, "push", "origin", "HEAD")
+	runCLIInDir(t, producer, "init", "--skip-hooks", "--skip-agents")
+	runCLIInDir(t, producer, "new", "--title", "remote-ticket", "--topic", "demo", "--type", "task")
+	runCLIInDir(t, producer, "sync", "push", "--set-upstream")
+
+	consumer := filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, consumer, "config", "user.email", "b@b.co")
+	runGit(t, consumer, "config", "user.name", "bravo")
+	ws, err := workspace.Resolve(consumer)
+	if err != nil {
+		t.Fatalf("workspace.Resolve() error = %v", err)
+	}
+	writeAbandonedAdoptMarker := func() {
+		t.Helper()
+		if err := os.MkdirAll(ws.DatabasePath, 0o755); err != nil {
+			t.Fatalf("MkdirAll(%q) error = %v", ws.DatabasePath, err)
+		}
+		marker := `{"started_at":"2026-08-15T00:00:00Z","remote":"origin","branch":"master"}`
+		if err := os.WriteFile(store.AdoptPendingMarkerPath(ws.DatabasePath), []byte(marker), 0o644); err != nil {
+			t.Fatalf("write marker error = %v", err)
+		}
+	}
+	writeAbandonedAdoptMarker()
+
+	assertRefusal := func(args ...string) {
+		t.Helper()
+		out, cmdErr := runCLIInDirAllowError(t, consumer, args...)
+		if cmdErr == nil {
+			t.Fatalf("Run(%v) error = nil, want the interrupted-adopt refusal; output:\n%s", args, out)
+		}
+		for _, want := range []string{"interrupted", "lit init"} {
+			if !strings.Contains(cmdErr.Error(), want) {
+				t.Fatalf("Run(%v) error = %q, want it to contain %q", args, cmdErr.Error(), want)
+			}
+		}
+	}
+	assertRefusal("backlog")
+	assertRefusal("new", "--title", "shadow", "--topic", "demo", "--type", "task")
+	// The refused `lit new` must not have created ANY store artifact: the
+	// residue plus marker is exactly what was fabricated, nothing more.
+	entries, err := os.ReadDir(ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("ReadDir(%q) error = %v", ws.DatabasePath, err)
+	}
+	if len(entries) != 1 {
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		t.Fatalf("refused commands changed the store root, want only the marker: %v", names)
+	}
+
+	// The heal: a plain `lit init` discards the residue, adopts the remote
+	// backlog, and clears the marker — no manual cleanup anywhere.
+	initOut := runCLIInDir(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	if !strings.Contains(initOut, "Pulled existing backlog from origin/master") {
+		t.Fatalf("healing init output missing adopt line:\n%s", initOut)
+	}
+	if _, statErr := os.Stat(store.AdoptPendingMarkerPath(ws.DatabasePath)); !os.IsNotExist(statErr) {
+		t.Fatalf("healing init left the adopt-pending marker (stat = %v)", statErr)
+	}
+	backlog := runCLIInDir(t, consumer, "backlog")
+	if !strings.Contains(backlog, "remote-ticket") {
+		t.Fatalf("healed backlog missing adopted ticket:\n%s", backlog)
+	}
+
+	// The corner with no adopt to retry: residue present but the remote gone.
+	// Init must NOT bless the leftover as a fresh store (that is the silent
+	// split-brain the epic exists to prevent) — it fails loudly, naming the
+	// leftover and the abandon-and-start-fresh remedy.
+	writeAbandonedAdoptMarker()
+	runGit(t, consumer, "remote", "remove", "origin")
+	out, initErr := runCLIInDirAllowError(t, consumer, "init", "--skip-hooks", "--skip-agents")
+	if initErr == nil {
+		t.Fatalf("Run(init, remote gone) error = nil, want the interrupted-adopt refusal; output:\n%s", out)
+	}
+	for _, want := range []string{"interrupted", "delete"} {
+		if !strings.Contains(initErr.Error(), want) {
+			t.Fatalf("init error = %q, want it to contain %q", initErr.Error(), want)
+		}
+	}
 }
 
 // TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails is the direct

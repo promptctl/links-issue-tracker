@@ -346,13 +346,23 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 }
 
 func validateOpenArgs(doltRootDir string, workspaceID string) error {
-	if _, err := validateDoltRootDir(doltRootDir); err != nil {
+	cleanRoot, err := validateDoltRootDir(doltRootDir)
+	if err != nil {
 		return err
 	}
 	if strings.TrimSpace(workspaceID) == "" {
 		return errors.New("workspace id is required")
 	}
-	return nil
+	// [LAW:single-enforcer] Every normal store entry point (Open, OpenForRead,
+	// OpenSync, EnsureDatabase, DumpRaw) crosses this one boundary, so the
+	// rule "an interrupted adopt's residue is never opened — or built upon by
+	// CREATE DATABASE IF NOT EXISTS — as if it were a store" cannot be
+	// violated by an entry point that forgot to check. The adopt machinery
+	// itself (AdoptRemoteByClone and its clone engine via openDoltPool) does
+	// not route through here: it owns the marker's whole lifecycle under the
+	// exclusive workspace lock, and LocalHasTickets consumes the marker as
+	// its own "nothing to lose" fast-path before ever reaching an open.
+	return requireNoPendingAdopt(cleanRoot)
 }
 
 // validateDoltRootDir validates a Dolt root path argument and returns its cleaned,
