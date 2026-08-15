@@ -2,8 +2,12 @@ package store
 
 import (
 	"context"
+	"errors"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // TestLocalHasTicketsDoesNotCreateStore proves the adopt gate can answer "is
@@ -77,5 +81,209 @@ func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root, id string
 	defer st.Close()
 	if _, err := st.GetIssue(ctx, id); err != nil {
 		t.Fatalf("GetIssue(%s) after adopt: %v (the adopted backlog is not readable)", id, err)
+	}
+}
+
+// TestAdoptRemoteByCloneFailedCloneLeavesNoResidue pins AdoptRemoteByClone's
+// two-state postcondition on the RETURNED-failure arm (links-sync-pgct.9): a
+// clone that fails and returns leaves neither a partial database directory
+// nor an adopt-pending marker, so the retry the error text asks for starts
+// from a provably clean slate — and the retry itself succeeds.
+func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	producer := filepath.Join(base, "producer")
+	consumer := filepath.Join(base, "consumer")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	id := seedReconcileRemote(t, ctx, producer, remoteURL)
+
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "branch-the-remote-does-not-have"); err == nil {
+		t.Fatal("AdoptRemoteByClone(bad branch) = nil, want error")
+	}
+	if dirExists(filepath.Join(consumer, doltDatabaseName)) {
+		t.Fatal("failed adopt left a partial database directory behind")
+	}
+	if _, statErr := os.Stat(AdoptPendingMarkerPath(consumer)); !os.IsNotExist(statErr) {
+		t.Fatalf("failed adopt left the adopt-pending marker behind (stat = %v); a handled failure must clear it", statErr)
+	}
+
+	// The clean slate is not cosmetic: the retry adopts successfully.
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+		t.Fatalf("AdoptRemoteByClone(retry): %v", err)
+	}
+	if _, statErr := os.Stat(AdoptPendingMarkerPath(consumer)); !os.IsNotExist(statErr) {
+		t.Fatalf("successful adopt left the adopt-pending marker behind (stat = %v)", statErr)
+	}
+	assertHasIssueAfterAdopt(t, ctx, consumer, id)
+}
+
+// TestAdoptRemoteByCloneHealsAbandonedAdoptResidue pins the NON-returning
+// failure arm's recovery (links-sync-pgct.9): an adopt abandoned mid-clone
+// (crash, SIGKILL, init's deadline abandoning the clone goroutine) leaves the
+// durable marker plus whatever undefined partial state the clone had reached
+// — fabricated here directly, since the whole point of the marker is that no
+// in-process cleanup runs in that shape. The residue is deliberately
+// UNOPENABLE junk: LocalHasTickets answering (false, nil) therefore proves it
+// consumed the marker without opening the leftover, and the retried adopt
+// discards it and re-clones to a working store with the marker gone.
+func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
+	ctx := context.Background()
+	base := t.TempDir()
+	producer := filepath.Join(base, "producer")
+	consumer := filepath.Join(base, "consumer")
+	remoteURL := "file://" + filepath.Join(base, "remote")
+	id := seedReconcileRemote(t, ctx, producer, remoteURL)
+
+	junkDB := filepath.Join(consumer, doltDatabaseName)
+	if err := os.MkdirAll(junkDB, 0o755); err != nil {
+		t.Fatalf("MkdirAll(junk db): %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(junkDB, "not-a-database"), []byte("junk"), 0o644); err != nil {
+		t.Fatalf("WriteFile(junk): %v", err)
+	}
+	// Garbage marker content: PRESENCE is the semantic, so an abandoned write
+	// (or torn content) must condemn exactly like a well-formed marker.
+	if err := os.WriteFile(AdoptPendingMarkerPath(consumer), []byte("not json"), 0o644); err != nil {
+		t.Fatalf("WriteFile(marker): %v", err)
+	}
+
+	has, err := LocalHasTickets(ctx, consumer, "ws")
+	if err != nil {
+		t.Fatalf("LocalHasTickets(residue) = %v, want nil — the gate must consume the marker, not open the junk", err)
+	}
+	if has {
+		t.Fatal("LocalHasTickets(residue) = true, want false: adopt residue is nothing-to-lose by construction")
+	}
+
+	if err := AdoptRemoteByClone(ctx, consumer, "ws", "origin", remoteURL, "master"); err != nil {
+		t.Fatalf("AdoptRemoteByClone(over residue): %v", err)
+	}
+	if _, statErr := os.Stat(AdoptPendingMarkerPath(consumer)); !os.IsNotExist(statErr) {
+		t.Fatalf("healing adopt left the adopt-pending marker behind (stat = %v)", statErr)
+	}
+	assertHasIssueAfterAdopt(t, ctx, consumer, id)
+
+	// The residue was SET ASIDE, not deleted: displacement is what keeps even
+	// a violated nothing-to-lose invariant (a stale pre-marker binary having
+	// minted tickets over the residue) recoverable by hand.
+	displaced, err := filepath.Glob(consumer + ".adopt-displaced-*")
+	if err != nil || len(displaced) != 1 {
+		t.Fatalf("displaced-residue dirs = %v (glob err %v), want exactly one", displaced, err)
+	}
+	if _, statErr := os.Stat(filepath.Join(displaced[0], "not-a-database")); statErr != nil {
+		t.Fatalf("displaced residue lost the junk payload (stat = %v); displacement must preserve bytes", statErr)
+	}
+}
+
+// TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder pins the standalone
+// bootstrap's lock discipline: EnsureDatabase's check-then-create must
+// serialize against an adopt's destructive window (which runs under the
+// exclusive workspace hold), so while that hold is live it reports
+// workspace-busy instead of racing the holder's discard+clone with a CREATE.
+func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll: %v", err)
+	}
+	release, err := LockWorkspaceExclusive(ctx, root)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	defer func() {
+		if err := release(); err != nil {
+			t.Fatalf("release: %v", err)
+		}
+	}()
+	if _, err := EnsureDatabase(ctx, root, "ws"); !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("EnsureDatabase under exclusive hold = %v, want ErrWorkspaceBusy", err)
+	}
+}
+
+// TestMarkerRefusalIsReservedForDeadAdopts pins the liveness discrimination
+// the post-lock check placement buys: while the exclusive workspace hold is
+// live (a healthy adopt mid-clone), a concurrent open reports workspace-busy
+// — never the false "interrupted before completing" diagnosis — and the
+// interrupted-adopt refusal fires only once the hold is gone (the adopt died).
+func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
+		t.Fatalf("EnsureDatabase(setup): %v", err)
+	}
+	if err := writeAdoptPendingMarker(root, "origin", "master", time.Now()); err != nil {
+		t.Fatalf("writeAdoptPendingMarker: %v", err)
+	}
+
+	release, err := LockWorkspaceExclusive(ctx, root)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	_, openErr := OpenForRead(ctx, root, "ws")
+	if !errors.Is(openErr, ErrWorkspaceBusy) {
+		t.Fatalf("OpenForRead during live hold = %v, want ErrWorkspaceBusy", openErr)
+	}
+	if openErr != nil && strings.Contains(openErr.Error(), "interrupted") {
+		t.Fatalf("OpenForRead during live hold reported a dead adopt: %v", openErr)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release: %v", err)
+	}
+
+	_, openErr = OpenForRead(ctx, root, "ws")
+	if openErr == nil || !strings.Contains(openErr.Error(), "interrupted") {
+		t.Fatalf("OpenForRead after the hold died = %v, want the interrupted-adopt refusal", openErr)
+	}
+}
+
+// TestPendingAdoptMarkerCondemnsEveryNormalOpen pins the refusal contract:
+// with the marker present, every normal entry point — Open, OpenForRead,
+// EnsureDatabase (which would otherwise CREATE-IF-NOT-EXISTS right over the
+// residue), OpenSync, and DumpRaw — refuses loudly, naming the interrupted
+// adopt and the `lit init` remedy, EVEN when the leftover happens to be a
+// perfectly openable database. Removing the marker restores every open,
+// proving the marker was the sole condemner.
+func TestPendingAdoptMarkerCondemnsEveryNormalOpen(t *testing.T) {
+	ctx := context.Background()
+	root := filepath.Join(t.TempDir(), "dolt")
+	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
+		t.Fatalf("EnsureDatabase(setup): %v", err)
+	}
+	if err := writeAdoptPendingMarker(root, "origin", "master", time.Now()); err != nil {
+		t.Fatalf("writeAdoptPendingMarker: %v", err)
+	}
+
+	assertCondemned := func(name string, err error) {
+		t.Helper()
+		if err == nil {
+			t.Fatalf("%s under adopt-pending marker = nil, want the interrupted-adopt refusal", name)
+		}
+		for _, want := range []string{"interrupted", "origin/master", "lit init"} {
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("%s refusal = %q, want it to contain %q", name, err.Error(), want)
+			}
+		}
+	}
+
+	_, err := Open(ctx, root, "ws")
+	assertCondemned("Open", err)
+	_, err = OpenForRead(ctx, root, "ws")
+	assertCondemned("OpenForRead", err)
+	_, err = EnsureDatabase(ctx, root, "ws")
+	assertCondemned("EnsureDatabase", err)
+	_, err = OpenSync(ctx, root, "ws")
+	assertCondemned("OpenSync", err)
+	_, err = DumpRaw(ctx, root, "ws")
+	assertCondemned("DumpRaw", err)
+
+	if err := os.Remove(AdoptPendingMarkerPath(root)); err != nil {
+		t.Fatalf("Remove(marker): %v", err)
+	}
+	st, err := OpenForRead(ctx, root, "ws")
+	if err != nil {
+		t.Fatalf("OpenForRead after clearing the marker: %v — the marker must be the sole condemner", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }

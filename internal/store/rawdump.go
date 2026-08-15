@@ -82,6 +82,14 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 		}
 		return RawDump{}, fmt.Errorf("stat database dir: %w", statErr)
 	}
+	// Post-lock, same as every open: an interrupted adopt's residue is not a
+	// store to dump — nothing local-only can exist under the marker, so the
+	// honest lifeboat answer is "re-run lit init", not a dump of half-cloned
+	// bytes. [LAW:no-ambient-temporal-coupling] checked under the shared
+	// hold so a live adopt reads as workspace-busy, never as condemned.
+	if err = requireNoPendingAdopt(doltRootDir); err != nil {
+		return RawDump{}, err
+	}
 	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return RawDump{}, err

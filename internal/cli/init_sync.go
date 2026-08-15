@@ -104,12 +104,13 @@ func adoptRemoteTicketsOnInit(ctx context.Context, ws workspace.Info) initSyncOu
 		return initSyncOutcome{
 			State: initSyncFailed,
 			Error: fmt.Sprintf(
-				"adopting the remote backlog exceeded %s and was aborted — the store is empty. Pushing from it "+
-					"would risk the remote backlog for no benefit (a sync push of an empty store cannot help), so "+
+				"adopting the remote backlog exceeded %s and was aborted — the store is not usable yet. Pushing "+
+					"from this workspace would risk the remote backlog for no benefit (a sync push cannot help), so "+
 					"it should stay untouched until this is resolved. The data transferred, but the embedded dolt "+
 					"clone did not finish processing it in time (a slow-adopt issue in dolt's clone, not a transfer "+
-					"or data-size problem). Retry `lit init`; if it keeps timing out, escalate the slow adopt "+
-					"rather than re-running blindly",
+					"or data-size problem). Retry `lit init` — the interrupted download's leftovers are set aside "+
+					"automatically on retry; if it keeps timing out, escalate the slow adopt rather than "+
+					"re-running blindly",
 				adoptRemoteTimeout),
 		}
 	}
@@ -147,9 +148,9 @@ func adoptRemoteTicketsBlocking(ctx context.Context, ws workspace.Info) initSync
 			Remote: plan.remote,
 			Branch: plan.branch,
 			Error: fmt.Sprintf(
-				"remote %q carries lit ticket data (refs/dolt/*) but cloning it into the local store failed, so the store "+
-					"is empty. Pushing from it would risk the remote backlog for no benefit (a sync push of an empty "+
-					"store cannot help), so it should stay untouched until this is resolved. Retry `lit init`; "+
+				"remote %q carries lit ticket data (refs/dolt/*) but adopting it did not complete, so the local store "+
+					"is not usable yet. Pushing from this workspace would risk the remote backlog for no benefit "+
+					"(a sync push cannot help), so it should stay untouched until this is resolved. Retry `lit init`; "+
 					"underlying error: %v",
 				plan.remote, err,
 			),
@@ -176,6 +177,25 @@ type adoptClonePlan struct {
 // post-fetch tracking ref — so no slow fetch happens here.
 // [LAW:dataflow-not-control-flow] [LAW:types-are-the-program]
 func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, initSyncOutcome) {
+	// residueErr is non-nil when the workspace holds an interrupted adopt's
+	// residue. A residue workspace may still ADOPT (the clone path heals it),
+	// but it must never resolve to a benign "start fresh with an empty
+	// backlog" verdict — narrating that and then refusing at EnsureDatabase
+	// (whose post-lock gate will not build on residue) would be two
+	// contradictory verdicts from one command. freshOutcome converts exactly
+	// those terminals into the loud interrupted-adopt failure, decided here
+	// at the decision layer from the same marker reader the store's own
+	// refusal uses. [LAW:one-source-of-truth] [LAW:dataflow-not-control-flow]
+	// every benign terminal flows through the one converter; the marker state
+	// is a value it carries, not a branch each return site remembers.
+	residueErr := store.PendingAdopt(ws.DatabasePath)
+	freshOutcome := func(o initSyncOutcome) (*adoptClonePlan, initSyncOutcome) {
+		if residueErr != nil {
+			return nil, initSyncOutcome{State: initSyncFailed, Remote: o.Remote, Branch: o.Branch, Error: residueErr.Error()}
+		}
+		return nil, o
+	}
+
 	// Preserve any existing local backlog: only an empty or absent store may
 	// adopt, because adopt-by-clone replaces the store wholesale. The check does
 	// not create the store, so a fresh init leaves the target path untouched for
@@ -199,7 +219,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		return nil, initSyncOutcome{State: initSyncFailed, Error: err.Error()}
 	}
 	if remote == "" {
-		return nil, initSyncOutcome{State: initSyncNotConfigured}
+		return freshOutcome(initSyncOutcome{State: initSyncNotConfigured})
 	}
 	// [LAW:single-enforcer] First-push detection is centralized so init, pull,
 	// and push share one definition of "remote is empty".
@@ -208,7 +228,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Error: refsErr.Error()}
 	}
 	if !hasRefs {
-		return nil, initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote}
+		return freshOutcome(initSyncOutcome{State: initSyncRemoteEmpty, Remote: remote})
 	}
 	branch, err := resolveSyncBranch(ctx, ws.RootDir, remote)
 	if err != nil {
@@ -226,7 +246,7 @@ func planRemoteAdopt(ctx context.Context, ws workspace.Info) (*adoptClonePlan, i
 		return nil, initSyncOutcome{State: initSyncFailed, Remote: remote, Branch: branch, Error: dataErr.Error()}
 	}
 	if !hasData {
-		return nil, initSyncOutcome{State: initSyncNoRemoteData, Remote: remote, Branch: branch}
+		return freshOutcome(initSyncOutcome{State: initSyncNoRemoteData, Remote: remote, Branch: branch})
 	}
 	url := gitBackedURLForRemote(gitRemotes, remote)
 	if url == "" {
