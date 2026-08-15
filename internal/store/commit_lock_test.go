@@ -91,6 +91,161 @@ func TestRemoveStaleCommitLockRemovesStaleMalformedOwner(t *testing.T) {
 	}
 }
 
+// TestRemoveStaleCommitLockRemovesAgedLiveOwner pins the deliberate shape of
+// the age arm: age alone reclaims even from an owner whose PID probes alive.
+// This is the release valve for holders that are alive but not working — a
+// SIGSTOPped/frozen process, or a foreign host's dead holder whose recorded
+// PID happens to alias a live local process (the case a dead-PID requirement
+// would wedge forever). Live WORKING holders never reach this cell: their
+// heartbeat keeps the mtime inside the window
+// (TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim).
+func TestRemoveStaleCommitLockRemovesAgedLiveOwner(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+	if err := os.WriteFile(lockPath, []byte("4242\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(lock) error = %v", err)
+	}
+	staleTime := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
+		t.Fatalf("Chtimes(lock) error = %v", err)
+	}
+
+	originalProbe := commitLockPIDRunning
+	commitLockPIDRunning = func(pid int) (bool, error) {
+		return true, nil
+	}
+	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
+
+	if err := removeStaleCommitLock(lockPath, time.Minute); err != nil {
+		t.Fatalf("removeStaleCommitLock() error = %v", err)
+	}
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("aged lock should be reclaimed even from a live-probing owner, stat err = %v", err)
+	}
+}
+
+// TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim pins the
+// links-snapshots-3dtv.1 acceptance shape on a compressed timeline: a live
+// holder that works far longer than the staleness window cannot lose the lock
+// to age alone, because its heartbeat keeps the mtime inside the window — and
+// the moment the holder stops beating (frozen, or killed mid-hold), a
+// contender reclaims promptly. The holder is simulated as a FOREIGN process
+// (lock file written directly, heartbeat run against it) because an
+// in-process contender parks on processCommitMutex and never reaches the
+// stale-file logic.
+func TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+	if err := os.WriteFile(lockPath, []byte("4242\n"), 0o600); err != nil {
+		t.Fatalf("WriteFile(lock) error = %v", err)
+	}
+
+	originalProbe := commitLockPIDRunning
+	commitLockPIDRunning = func(pid int) (bool, error) {
+		return true, nil
+	}
+	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
+
+	originalStale := commitLockStaleAfter
+	originalBeat := commitLockHeartbeatEvery
+	commitLockStaleAfter = 250 * time.Millisecond
+	commitLockHeartbeatEvery = 25 * time.Millisecond
+	t.Cleanup(func() {
+		commitLockStaleAfter = originalStale
+		commitLockHeartbeatEvery = originalBeat
+	})
+
+	stopHeartbeat := startCommitLockHeartbeat(lockPath)
+
+	contendCtx, cancel := context.WithTimeout(context.Background(), 6*commitLockStaleAfter)
+	defer cancel()
+	release, err := acquireCommitLockAtPath(contendCtx, lockPath)
+	if err == nil {
+		release()
+		stopHeartbeat()
+		t.Fatalf("contender acquired a live, heartbeating holder's lock — age reclaim stole from a live holder")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) {
+		stopHeartbeat()
+		t.Fatalf("contender error = %v, want context.DeadlineExceeded from waiting out a held lock", err)
+	}
+
+	content, readErr := os.ReadFile(lockPath)
+	if readErr != nil {
+		t.Fatalf("lock file should survive the contention window, read err = %v", readErr)
+	}
+	if string(content) != "4242\n" {
+		t.Fatalf("lock content = %q, want the original holder's %q — a steal-and-reacquire cycle rewrote it", content, "4242\n")
+	}
+	info, statErr := os.Stat(lockPath)
+	if statErr != nil {
+		t.Fatalf("Stat(lock) error = %v", statErr)
+	}
+	if age := time.Since(info.ModTime()); age > commitLockStaleAfter {
+		t.Fatalf("lock mtime is %v old after contention — the heartbeat was not keeping it fresh", age)
+	}
+
+	stopHeartbeat()
+
+	reclaimCtx, cancelReclaim := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancelReclaim()
+	release, err = acquireCommitLockAtPath(reclaimCtx, lockPath)
+	if err != nil {
+		t.Fatalf("contender should reclaim once the holder stops beating, error = %v", err)
+	}
+	release()
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+}
+
+// TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt pins that the
+// heartbeat is owned by the acquisition primitive itself — Store mutations
+// and external LockCommitPath callers alike hold under it without opting in —
+// by backdating the held lock's mtime and watching a beat pull it back to
+// now. Release removes the file, and with the stop-then-remove ordering no
+// straggler touch lands afterwards.
+func TestAcquireCommitLockStartsHeartbeatAndReleaseStopsIt(t *testing.T) {
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+
+	originalBeat := commitLockHeartbeatEvery
+	commitLockHeartbeatEvery = 25 * time.Millisecond
+	t.Cleanup(func() { commitLockHeartbeatEvery = originalBeat })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	release, err := acquireCommitLockAtPath(ctx, lockPath)
+	if err != nil {
+		t.Fatalf("acquireCommitLockAtPath() error = %v", err)
+	}
+
+	past := time.Now().Add(-time.Hour)
+	if err := os.Chtimes(lockPath, past, past); err != nil {
+		release()
+		t.Fatalf("Chtimes(backdate) error = %v", err)
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		info, statErr := os.Stat(lockPath)
+		if statErr != nil {
+			release()
+			t.Fatalf("Stat(lock) error = %v", statErr)
+		}
+		if time.Since(info.ModTime()) < time.Minute {
+			break
+		}
+		if time.Now().After(deadline) {
+			release()
+			t.Fatalf("heartbeat never refreshed the backdated mtime")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	release()
+	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
+		t.Fatalf("release should remove lock file, stat err = %v", err)
+	}
+}
+
 func TestAcquireCommitLockReclaimsDeadOwner(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	if err := os.WriteFile(lockPath, []byte("99999\n"), 0o600); err != nil {
