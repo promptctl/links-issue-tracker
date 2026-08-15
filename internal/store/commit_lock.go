@@ -422,15 +422,27 @@ func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), erro
 // links-snapshots-3dtv.2.
 type commitLockHold struct {
 	path     string
+	ownerPID int
 	identity os.FileInfo
 }
 
-// ownsFile reports whether path still resolves to the file this hold minted.
-// A definitive answer — the file is gone, or a different file sits there —
-// comes back as false with no error; an indeterminate one carries the stat
-// failure so the caller reports it instead of guessing an owner.
-// [LAW:no-silent-failure] [LAW:parse-dont-validate] the two outcomes are
-// distinct values, never collapsed onto one "not ours" that hides I/O trouble.
+// ownsFile reports whether the lock file at path is still the one this hold
+// minted. A definitive answer — the file is gone, a different file sits
+// there, or someone else's PID is written in it — comes back as false with no
+// error; an indeterminate one carries the read failure so the caller reports
+// it instead of guessing an owner. [LAW:no-silent-failure]
+// [LAW:parse-dont-validate] the two outcomes are distinct values, never
+// collapsed onto one "not ours" that hides I/O trouble.
+//
+// Identity and recorded PID are both required because each covers the other's
+// blind spot. os.SameFile compares inode (unix) / file index (windows), and
+// filesystems that allocate the lowest free inode — ext4 among them — hand a
+// successor's create the very inode this hold's file just freed, so identity
+// alone can read a thief's lock as ours. The recorded PID closes that: a live
+// successor on this host cannot share our PID. Conversely a successor on
+// ANOTHER host can coincidentally match our PID number, which is where
+// identity carries the check. Both failing at once needs inode reuse and a
+// PID collision across hosts in the same instant.
 func (h commitLockHold) ownsFile() (bool, error) {
 	current, err := os.Stat(h.path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -439,7 +451,16 @@ func (h commitLockHold) ownsFile() (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	return os.SameFile(h.identity, current), nil
+	if !os.SameFile(h.identity, current) {
+		return false, nil
+	}
+	// [LAW:single-enforcer] readCommitLockOwnerPID is the one parser of this
+	// file's contents; the fence reads through it rather than growing a second.
+	pid, hasOwnerPID, err := readCommitLockOwnerPID(h.path)
+	if err != nil {
+		return false, err
+	}
+	return hasOwnerPID && pid == h.ownerPID, nil
 }
 
 // releaseCommitLockFile removes the lock file only while it is still the file
@@ -553,7 +574,8 @@ func tryAcquireFileLock(path string) (*commitLockHold, error) {
 	if err != nil {
 		return nil, err
 	}
-	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
+	ownerPID := os.Getpid()
+	if _, err := fmt.Fprintf(file, "%d\n", ownerPID); err != nil {
 		_ = file.Close()
 		_ = os.Remove(path)
 		return nil, err
@@ -568,7 +590,7 @@ func tryAcquireFileLock(path string) (*commitLockHold, error) {
 		_ = os.Remove(path)
 		return nil, closeErr
 	}
-	return &commitLockHold{path: path, identity: identity}, nil
+	return &commitLockHold{path: path, ownerPID: ownerPID, identity: identity}, nil
 }
 
 // removeStaleCommitLock reclaims a lock whose holder is gone by either

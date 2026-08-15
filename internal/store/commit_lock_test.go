@@ -126,15 +126,15 @@ func TestRemoveStaleCommitLockRemovesAgedLiveOwner(t *testing.T) {
 }
 
 // holdForExistingLock builds the ownership token for a lock file the test
-// wrote directly, standing in for the hold a foreign holder's own
-// tryAcquireFileLock would have minted.
-func holdForExistingLock(t *testing.T, path string) commitLockHold {
+// wrote directly, standing in for the hold that file's own producer would
+// have minted — ownerPID is the PID written in the file, not this process's.
+func holdForExistingLock(t *testing.T, path string, ownerPID int) commitLockHold {
 	t.Helper()
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatalf("Stat(%s) error = %v", path, err)
 	}
-	return commitLockHold{path: path, identity: info}
+	return commitLockHold{path: path, ownerPID: ownerPID, identity: info}
 }
 
 // TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim pins the
@@ -178,7 +178,7 @@ func TestCommitLockHeartbeatProtectsLiveHolderFromAgeReclaim(t *testing.T) {
 	// ticker goroutine for the life of the test binary, where its warn path
 	// reads commitLockStaleAfter with no happens-before edge to the Cleanup
 	// that restores it — a -race report stacked on top of the real failure.
-	stopHeartbeat := sync.OnceFunc(startCommitLockHeartbeat(holdForExistingLock(t, lockPath)))
+	stopHeartbeat := sync.OnceFunc(startCommitLockHeartbeat(holdForExistingLock(t, lockPath, 4242)))
 	t.Cleanup(stopHeartbeat)
 
 	contendCtx, cancel := context.WithTimeout(context.Background(), 6*commitLockStaleAfter)
@@ -359,6 +359,83 @@ func TestCommitLockReleaseStopsHeartbeatBeforeRemove(t *testing.T) {
 	}
 }
 
+// TestCommitLockHoldOwnsFile pins the fence predicate on each shape it must
+// separate, including the two cases where either half alone would be fooled:
+// a successor that inherits our freed inode (identity matches, PID does not)
+// and a successor on another host that happens to share our PID number (PID
+// matches, identity does not).
+func TestCommitLockHoldOwnsFile(t *testing.T) {
+	writeLock := func(t *testing.T, path, content string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+			t.Fatalf("WriteFile(%s) error = %v", path, err)
+		}
+	}
+
+	t.Run("its own file", func(t *testing.T) {
+		lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+		writeLock(t, lockPath, "4242\n")
+		owns, err := holdForExistingLock(t, lockPath, 4242).ownsFile()
+		if err != nil || !owns {
+			t.Fatalf("ownsFile() = %v, %v; want true, nil", owns, err)
+		}
+	})
+
+	t.Run("successor inheriting the freed inode", func(t *testing.T) {
+		lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+		writeLock(t, lockPath, "777\n")
+		// The hold names this very file — the state a filesystem produces
+		// when it hands a successor's create the inode we just freed — but
+		// the PID in it is the successor's, which is what gives it away.
+		hold := holdForExistingLock(t, lockPath, 4242)
+		owns, err := hold.ownsFile()
+		if err != nil {
+			t.Fatalf("ownsFile() error = %v", err)
+		}
+		if owns {
+			t.Fatal("ownsFile() = true for a reused inode carrying another process's PID — the PID half of the fence is not doing its job")
+		}
+	})
+
+	t.Run("foreign file sharing our PID number", func(t *testing.T) {
+		dir := t.TempDir()
+		lockPath := filepath.Join(dir, ".links-commit.lock")
+		writeLock(t, lockPath, "4242\n")
+		hold := holdForExistingLock(t, lockPath, 4242)
+		// Rename a distinct file over the path: guarantees a different
+		// identity on every filesystem, with identical PID content — the
+		// cross-host PID collision the identity half exists to catch.
+		other := filepath.Join(dir, "other")
+		writeLock(t, other, "4242\n")
+		if err := os.Rename(other, lockPath); err != nil {
+			t.Fatalf("Rename() error = %v", err)
+		}
+		owns, err := hold.ownsFile()
+		if err != nil {
+			t.Fatalf("ownsFile() error = %v", err)
+		}
+		if owns {
+			t.Fatal("ownsFile() = true for a different file with a matching PID — the identity half of the fence is not doing its job")
+		}
+	})
+
+	t.Run("file already gone", func(t *testing.T) {
+		lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+		writeLock(t, lockPath, "4242\n")
+		hold := holdForExistingLock(t, lockPath, 4242)
+		if err := os.Remove(lockPath); err != nil {
+			t.Fatalf("Remove() error = %v", err)
+		}
+		owns, err := hold.ownsFile()
+		if err != nil {
+			t.Fatalf("a missing lock file is a definitive answer, not an error; got %v", err)
+		}
+		if owns {
+			t.Fatal("ownsFile() = true for a removed file")
+		}
+	})
+}
+
 // TestDeposedHolderNeitherFreshensNorDeletesSuccessorLock pins the ownership
 // fence on both writers at once, by staging the aftermath of a steal: holder
 // A's lock is reclaimed and successor B mints a new file at the same path
@@ -372,7 +449,7 @@ func TestDeposedHolderNeitherFreshensNorDeletesSuccessorLock(t *testing.T) {
 	if err := os.WriteFile(lockPath, []byte("4242\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(lock) error = %v", err)
 	}
-	deposed := holdForExistingLock(t, lockPath)
+	deposed := holdForExistingLock(t, lockPath, 4242)
 
 	originalBeat := commitLockHeartbeatEvery
 	commitLockHeartbeatEvery = 10 * time.Millisecond
@@ -381,18 +458,17 @@ func TestDeposedHolderNeitherFreshensNorDeletesSuccessorLock(t *testing.T) {
 	stopHeartbeat := sync.OnceFunc(startCommitLockHeartbeat(deposed))
 	t.Cleanup(stopHeartbeat)
 
-	// The steal: the deposed holder's file is reclaimed and the successor
-	// mints its own at the same path. A distinct inode is what the fence
-	// reads, so assert the stand-in really is one.
+	// The steal, spelled exactly as a real contender performs it: unlink the
+	// deposed holder's file, then create a fresh one carrying the successor's
+	// own PID. Deliberately NOT a rename — unlink-then-create is what lets a
+	// filesystem that allocates the lowest free inode (ext4, where CI runs)
+	// hand the successor the very inode just freed, so this is the shape that
+	// exercises the PID half of the fence rather than skipping past it.
 	if err := os.Remove(lockPath); err != nil {
 		t.Fatalf("Remove(lock) error = %v", err)
 	}
 	if err := os.WriteFile(lockPath, []byte("777\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(successor lock) error = %v", err)
-	}
-	successor := holdForExistingLock(t, lockPath)
-	if os.SameFile(deposed.identity, successor.identity) {
-		t.Skip("filesystem reused the identity for a recreated file; the fence cannot be exercised here")
 	}
 	successorMtime := time.Now().Add(-time.Hour)
 	if err := os.Chtimes(lockPath, successorMtime, successorMtime); err != nil {
