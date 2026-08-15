@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,6 +31,16 @@ const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 // per interval. The receive is inline, so this also bounds how often a command
 // pays the fetch latency.
 const receiveDebounceInterval = 10 * time.Second
+
+// remoteAbsentRecheckInterval bounds how often a confirmed remote-less
+// workspace re-runs the mirror path's git-remote check. The mirror-pending
+// claim carries the coverage guarantee only where a remote exists; without
+// one, every mutation would otherwise pay a git subprocess plus marker
+// create/remove churn re-confirming the same absence — the rate bound the
+// deleted spawn debounce used to provide for exactly this state.
+// [LAW:carrying-cost] The only cost is mirror onset: a remote added to a
+// hot workspace waits at most this long before mutations resume claiming.
+const remoteAbsentRecheckInterval = 10 * time.Second
 
 // shouldSyncAfterMutation is the pure push-cadence decision: only a mutating
 // (write) command under the on-change policy triggers the push mirror. Read-mode
@@ -89,6 +100,13 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 // launched — and only an owned claim is released, so a degraded claim read can
 // never remove another mutation's live claim.
 func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
+	// A recently confirmed remote-less workspace short-circuits before the
+	// claim: no remote means no coverage to owe, so no marker churn and no git
+	// subprocess per mutation — the debounce applies only to re-confirming
+	// absence, never to any path that issues a coverage verdict.
+	if !shouldRunNow(remoteAbsentMarkerPath(ws), time.Now(), remoteAbsentRecheckInterval) {
+		return
+	}
 	ownsClaim := false
 	claim, claimErr := claimMirrorPending(ws, time.Now())
 	switch {
@@ -102,6 +120,10 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	default:
 		ownsClaim = true
 	}
+	// An owned claim that turns out unspawnable is released BEFORE the
+	// completion effects below: the completion can run the owner-notify hook
+	// to its cap, and mutations landing during it must not read the doomed
+	// claim as live coverage. [LAW:no-ambient-temporal-coupling]
 	releaseClaim := func() {
 		if ownsClaim {
 			clearMirrorPending(ws)
@@ -115,23 +137,33 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	// the cost. [LAW:carrying-cost]
 	hasRemote, err := workspaceHasGitRemote(ctx, ws)
 	if err != nil {
+		releaseClaim()
 		fmt.Fprintf(os.Stderr, "lit: on-change background push not started, could not check git remotes: %v\n", err)
 		completePushAttempt(ctx, ws, syncPushOutcome{}, fmt.Errorf("check git remotes before on-change mirror spawn: %w", err))
-		releaseClaim()
 		return
 	}
 	if !hasRemote {
 		// A healthy skip, not a failure: with no remote there is no coverage to
 		// owe, and un-claiming keeps the marker truthful for the day a remote
 		// is added. The push-outcome marker is untouched — the mirror path owns
-		// writing "no_sync_remote" when an attempt actually resolves remotes.
+		// writing "no_sync_remote" when an attempt actually resolves remotes —
+		// and the absence marker rate-bounds re-confirming this state.
 		releaseClaim()
+		if err := markRunAttempt(ws, remoteAbsentMarkerPath(ws)); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: remote-absent marker not written: %v\n", err)
+		}
 		return
 	}
+	// A connected workspace retires any leftover absence marker so the next
+	// remote-less confirmation starts a fresh interval rather than inheriting
+	// a stale one. Absent is the common case and costs one syscall.
+	if err := os.Remove(remoteAbsentMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "lit: remote-absent marker not cleared: %v\n", err)
+	}
 	if err := spawnBackgroundMirror(ws, os.Getpid()); err != nil {
+		releaseClaim()
 		fmt.Fprintf(os.Stderr, "lit: on-change background push not started: %v\n", err)
 		completePushAttempt(ctx, ws, syncPushOutcome{}, fmt.Errorf("spawn on-change mirror: %w", err))
-		releaseClaim()
 	}
 }
 
@@ -139,9 +171,10 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 // markerPath was last touched. A missing or unreadable marker means "never run
 // (or cannot tell)" → allow. now and interval are parameters so the decision is
 // testable without sleeping. [LAW:one-type-per-behavior] The one debounce
-// primitive, parametrized by marker path and interval; automatic receive is
-// its only instance today (the on-change mirror spawn stopped being one when
-// links-sync-pgct.12 replaced its time window with the mirror-pending claim).
+// primitive, parametrized by marker path and interval; automatic receive and
+// the remote-absent recheck are its instances (the on-change mirror spawn
+// stopped being one when links-sync-pgct.12 replaced its time window with the
+// mirror-pending claim — a rate bound cannot carry a coverage guarantee).
 func shouldRunNow(markerPath string, now time.Time, interval time.Duration) bool {
 	info, err := os.Stat(markerPath)
 	if err != nil {
@@ -208,6 +241,13 @@ func shouldReceiveNow(ws workspace.Info, now time.Time, interval time.Duration) 
 // markReceiveAttempt records "a receive was attempted now".
 func markReceiveAttempt(ws workspace.Info) error {
 	return markRunAttempt(ws, receiveMarkerPath(ws))
+}
+
+// remoteAbsentMarkerPath is the single marker for "this workspace was last
+// confirmed to have no git remote": its modification time is when that
+// confirmation ran. [LAW:one-source-of-truth]
+func remoteAbsentMarkerPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, "remote-absent.last")
 }
 
 // workspaceHasGitRemote reports whether the workspace has at least one git remote

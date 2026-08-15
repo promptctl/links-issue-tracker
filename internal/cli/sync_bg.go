@@ -29,8 +29,13 @@ const (
 	// mirrorParentWaitTimeout bounds the wait for the spawning command to
 	// release its engine. The wait ends the instant the parent exits; the cap
 	// only guards a parent that never exits (e.g. a long-lived REPL), in which
-	// case the mirror gives up rather than hang forever.
-	mirrorParentWaitTimeout = 30 * time.Second
+	// case the mirror gives up rather than hang forever. Sized above the
+	// parent's own designed post-spawn tail — the spawn happens BEFORE the
+	// inline receive (15s cap) and any owner-notify hook a receive-detected
+	// divergence runs (10s cap + 1s pipe WaitDelay), so a healthy parent can
+	// legitimately live ~26s past the spawn; a bound inside that window would
+	// manufacture parent-wait failures out of the parent's own scheduled work.
+	mirrorParentWaitTimeout = 60 * time.Second
 	mirrorParentPollDelay   = 20 * time.Millisecond
 )
 
@@ -129,9 +134,13 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	// Wait for the spawning command's embedded engine to be released. Opening
 	// a second engine on the same path while the first is live collides on
 	// Dolt's online garbage collection. If the parent outlives the timeout, the
-	// precondition is unmet — abort rather than race a live engine.
+	// precondition is unmet — abort rather than race a live engine. A wait cut
+	// short by teardown is not that failure: it ends as a teardown, below.
 	// [LAW:no-ambient-temporal-coupling]
-	if !waitForParentExit(*parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+	if !waitForParentExit(ctx, *parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
+		if ctx.Err() != nil {
+			return teardownMirror(ws, ctx.Err())
+		}
 		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
 			*parentPID, mirrorParentWaitTimeout))
@@ -140,12 +149,9 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	for {
 		// Teardown owns the loop's lifetime: once the context is done (the
 		// SIGTERM grace window), starting another engine cycle would fight the
-		// shutdown for its last seconds. A cycle that observed the cancellation
-		// recorded its own ending; a teardown that lands before any cycle is
-		// the same shape as a crash, and the claim's staleness recovery is the
-		// designed answer for both. [LAW:no-ambient-temporal-coupling]
+		// shutdown for its last seconds. [LAW:no-ambient-temporal-coupling]
 		if ctx.Err() != nil {
-			return nil
+			return teardownMirror(ws, ctx.Err())
 		}
 		release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
 		if err != nil {
@@ -157,6 +163,10 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 			// no store open, no trace, no file — see the function comment.
 			return nil
 		}
+		// The cycle-start instant is the re-check's ordering witness: any
+		// marker older than it existed before this cycle's entry-clear ran,
+		// so its survival means the clear is failing, not that a claim landed.
+		cycleStart := time.Now()
 		attempted := mirrorCycle(ctx, ws)
 		// Released only after the cycle's engine has closed (mirrorCycle's
 		// deferred Close), so the lock brackets the whole session. The kernel
@@ -169,18 +179,43 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 			// Any surviving claim ages into crash recovery.
 			return nil
 		}
-		if !mirrorPendingSet(ws) {
+		again, recheckErr := recheckMirrorPending(ws, cycleStart)
+		if recheckErr != nil {
+			// A re-check that cannot give a truthful verdict (unreadable
+			// marker, or a marker this cycle's own clear failed to remove) is
+			// terminal, loudly: cycling on it would push forever against a
+			// marker that never goes away. [LAW:no-silent-failure]
+			recordMirrorTraceError(ws, recheckErr)
 			return nil
 		}
-		// A claim landed that this cycle's HEAD read may not include (its
-		// commit preceded this cycle's open only if its command's session did
-		// — a claim alone cannot prove that). Run another cycle on a fresh
-		// engine: its open postdates the claimant's closed session, which is
-		// the proof. An extra cycle for a claim that WAS already covered is an
-		// up-to-date push — cheap, and always on the correct side.
-		// [LAW:dataflow-not-control-flow] every cycle runs the same path; only
-		// the marker decides whether another begins.
+		if !again {
+			return nil
+		}
+		// A claim landed after this cycle began, so its claimant's commit may
+		// postdate this cycle's HEAD read (its commit preceded this cycle's
+		// open only if its command's session did — a claim alone cannot prove
+		// that). Run another cycle on a fresh engine: its open postdates the
+		// claimant's closed session, which is the proof. An extra cycle for a
+		// claim that WAS already covered is an up-to-date push — cheap, and
+		// always on the correct side. [LAW:dataflow-not-control-flow] every
+		// cycle runs the same path; only the marker decides whether another
+		// begins.
 	}
+}
+
+// teardownMirror is the ending for a mirror dismantled by its own context (the
+// SIGTERM grace window) rather than by a failure: it releases the claim so the
+// NEXT mutation re-claims and re-spawns immediately instead of waiting out the
+// staleness window, traces the ending for the audit log, and deliberately
+// writes NO push-outcome record — the teardown attempted nothing, so the last
+// COMPLETED attempt's record (possibly a healthy "pushed" from this very
+// process's previous cycle) remains the truthful answer to "where do things
+// stand". [FRAMING:representation] Recording the teardown as an outcome would
+// overwrite that answer with a non-event.
+func teardownMirror(ws workspace.Info, cause error) error {
+	clearMirrorPending(ws)
+	recordMirrorTraceError(ws, cause)
+	return nil
 }
 
 // mirrorCycle is one full engine session of the mirror: open, push
@@ -253,13 +288,16 @@ func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) 
 // interval; the boolean distinguishes "parent exited" from "parent outlived the
 // wait" so the caller aborts rather than proceeding blindly on a timeout.
 // getppid is a parameter so the wait is testable without a real process tree.
-func waitForParentExit(parentPID int, getppid func() int, timeout, poll time.Duration) bool {
+// A done context also ends the wait (false): a mirror in the SIGTERM grace
+// window must spend it releasing state, not sleeping toward a deadline; the
+// caller tells teardown from timeout by ctx.Err().
+func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, timeout, poll time.Duration) bool {
 	if parentPID <= 0 {
 		return true
 	}
 	deadline := time.Now().Add(timeout)
 	for getppid() == parentPID {
-		if time.Now().After(deadline) {
+		if ctx.Err() != nil || time.Now().After(deadline) {
 			return false
 		}
 		time.Sleep(poll)
@@ -280,16 +318,20 @@ func waitForParentExit(parentPID int, getppid func() int, timeout, poll time.Dur
 // a non-zero exit.
 //
 // The dying mirror also releases the mirror-pending claim it was spawned to
-// answer, so the NEXT mutation re-claims and re-spawns at once instead of
-// waiting out the staleness window — which stays reserved for the endings
-// that run no code at all (SIGKILL, power loss). Racing a newer live claim
-// errs toward the safe side: a claim removed early only makes some mutation
-// spawn a redundant mirror, while a claim left behind would falsely read as
-// coverage for up to the staleness bound.
+// answer — FIRST, before the completion effects, because the completion can
+// run the owner-notify hook for up to its cap and every mutation landing in
+// that window would otherwise read the claim as live coverage from a mirror
+// already known dead. Releasing first bounds that exposure to the inherent
+// instant of the removal; the next mutation then re-claims and re-spawns at
+// once instead of waiting out the staleness window — which stays reserved for
+// the endings that run no code at all (SIGKILL, power loss). Racing a newer
+// live claim errs toward the safe side: a claim removed early only makes some
+// mutation spawn a redundant mirror, while a claim left behind would falsely
+// read as coverage. [LAW:no-ambient-temporal-coupling]
 func completeMirrorWithoutAttempt(ctx context.Context, ws workspace.Info, cause error) error {
+	clearMirrorPending(ws)
 	completePushAttempt(ctx, ws, syncPushOutcome{}, cause)
 	recordMirrorTraceError(ws, cause)
-	clearMirrorPending(ws)
 	return nil
 }
 

@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -62,6 +65,46 @@ func TestShouldReceiveNowDebounce(t *testing.T) {
 	// Past the interval: allowed again.
 	if !shouldReceiveNow(ws, now.Add(interval+time.Second), interval) {
 		t.Fatalf("receive past the debounce interval should be allowed")
+	}
+}
+
+// TestEnsureMirrorCoverageDebouncesRemoteAbsent pins the unconnected-workspace
+// rate bound: the first mutation on a remote-less workspace confirms the
+// absence (git subprocess) and stamps remote-absent.last; mutations inside the
+// recheck interval short-circuit before the claim — no marker churn, no git
+// call, observable as the absence marker's mtime standing still — and no
+// mirror-pending claim survives either call.
+func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: filepath.Join(root, ".lit")}}
+	ctx := context.Background()
+
+	ensureMirrorCoverage(ctx, ws)
+	info, err := os.Stat(remoteAbsentMarkerPath(ws))
+	if err != nil {
+		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
+	}
+	if mirrorPendingSet(ws) {
+		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
+	}
+	stamped := info.ModTime()
+
+	ensureMirrorCoverage(ctx, ws)
+	info, err = os.Stat(remoteAbsentMarkerPath(ws))
+	if err != nil {
+		t.Fatalf("absence marker vanished: %v", err)
+	}
+	if !info.ModTime().Equal(stamped) {
+		t.Fatal("a mutation inside the recheck interval re-ran the absence confirmation; the debounce must short-circuit it")
+	}
+	if mirrorPendingSet(ws) {
+		t.Fatal("a debounced remote-less mutation left a mirror-pending claim behind")
 	}
 }
 

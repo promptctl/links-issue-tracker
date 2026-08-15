@@ -92,6 +92,14 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
+	// The oracle poll below proves DELIVERY, not quiescence: a mirror can
+	// still owe a post-release re-check cycle (a claim stamped after the
+	// delivering cycle's entry-clear) when the commit count is already
+	// satisfied, and that no-op cycle's engine would race this test's TempDir
+	// sweep. The quiescence cleanup owns TempDir safety — it holds the
+	// single-flight lock through the sweep, so an in-cycle mirror is waited
+	// out and a pre-lock one exits silently. [LAW:no-ambient-temporal-coupling]
+	awaitMirrorQuiescence(t, root)
 	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
@@ -137,15 +145,9 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// (the mirror-pending marker), not a time window, so the poll may bet on
 	// it.
 	//
-	// The poll also settles the machine before returning: mirrors may still
-	// be pushing — or merely still exiting — the instant the last lit new
-	// returns. Returning without waiting for that real, in-flight background
-	// work to land would leave a lingering subprocess racing this test's own
-	// t.TempDir() cleanup (observed directly: an "unlinkat ...: directory not
-	// empty" cleanup failure from a still-open file handle) and, worse,
-	// racing the NEXT test in this package for CPU/disk — exactly the kind of
-	// cross-test resource contention that made this test itself flaky in a
-	// full-package run.
+	// The poll proves delivery only; TempDir safety against a mirror that
+	// outlives the satisfied commit count (a post-release re-check cycle) is
+	// owned by the awaitMirrorQuiescence cleanup registered above.
 	//
 	// Budget: delivery of the tail can legitimately chain up to three full
 	// mirror cycles (the in-flight push finishing, the holder's post-release

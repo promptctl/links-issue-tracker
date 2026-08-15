@@ -375,7 +375,17 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	// results covers every return path by construction, and the same record
 	// feeds the owner's out-of-band channel: a failed attempt notifies, a landed
 	// push ends the episode. [LAW:single-enforcer]
+	// A panic mid-attempt (an embedded-engine panic during the push) must not
+	// unwind through this defer with zero-valued results — that would fabricate
+	// a "pushed" record, clear a live failure episode, and (the marker having
+	// been consumed above) leave the evaporated attempt covered by nothing.
+	// Record the panic as the attempt's ending, then let it continue.
+	// [LAW:no-silent-failure]
 	defer func() {
+		if r := recover(); r != nil {
+			completePushAttempt(ctx, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			panic(r)
+		}
 		completePushAttempt(ctx, ws, outcome, retErr)
 	}()
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)

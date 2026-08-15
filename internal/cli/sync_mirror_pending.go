@@ -90,6 +90,15 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
 	if err == nil {
 		if closeErr := file.Close(); closeErr != nil {
+			// The create succeeded, so a marker THIS function made now exists —
+			// but the error return means the caller never learns it owns one
+			// (ensureMirrorCoverage's claimErr branch cannot release it). Remove
+			// it here, where the ownership is still known, so a close failure
+			// (close-to-open flush on network filesystems) cannot orphan a
+			// fresh marker that falsely covers mutations for the staleness
+			// window. Best-effort: if even the remove fails, the caller's
+			// spawn-regardless mirror clears it at its push attempt's entry.
+			_ = os.Remove(path)
 			return pendingClaimed, fmt.Errorf("close mirror-pending marker: %w", closeErr)
 		}
 		return pendingClaimed, nil
@@ -104,7 +113,13 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 		}
 		return pendingClaimed, fmt.Errorf("stat mirror-pending marker: %w", statErr)
 	}
-	if now.Sub(info.ModTime()) < mirrorPendingStaleAfter {
+	// Negative age — a marker stamped in the future — can only be a crash
+	// orphan seen across a backward clock step (an SIGKILLed claimant, then an
+	// RTC/NTP correction): claims are stamped from this machine's one clock,
+	// so no live claimant writes ahead of now. Reading it as covered would
+	// suppress every spawn until wall clock caught up; reading it as stale
+	// costs at most one redundant spawn. [LAW:no-silent-failure]
+	if age := now.Sub(info.ModTime()); age >= 0 && age < mirrorPendingStaleAfter {
 		return pendingCovered, nil
 	}
 	// Crash recovery: the marker's dedicated mirror died without clearing or
@@ -137,11 +152,41 @@ func clearMirrorPending(ws workspace.Info) {
 	}
 }
 
-// mirrorPendingSet reports whether any marker exists, fresh or stale — the
-// single-flight holder's post-release re-check. Staleness is irrelevant
-// there: any marker means commits may sit behind the holder's last HEAD read,
-// and cycling on a stale one recovers a crashed claimant's residue for free.
+// mirrorPendingSet reports whether any marker exists, fresh or stale. Test
+// observability for the claim lifecycle; the mirror loop's own re-check is
+// recheckMirrorPending, which additionally proves the marker is a NEW claim.
 func mirrorPendingSet(ws workspace.Info) bool {
 	_, err := os.Stat(mirrorPendingMarkerPath(ws))
 	return err == nil
+}
+
+// recheckMirrorPending is the single-flight holder's post-release verdict:
+// again=true means a claim landed after cycleStart (stamped after the cycle's
+// entry-clear ran, so its claimant may sit behind the cycle's HEAD read) and
+// the holder owes another cycle. Staleness is irrelevant here — any new claim
+// means commits may be uncovered, and cycling on a stale one recovers a
+// crashed claimant's residue for free.
+//
+// A non-nil error is a STOP, not a retry: a marker older than cycleStart
+// survived the cycle's own entry-clear, meaning the clear is failing (a
+// read-only storage dir whose engine and push still work), and a loop keyed on
+// bare existence would run full push cycles forever against a marker it can
+// never remove; an unreadable marker gives the loop no truthful basis either
+// way. Both endings leave the claim to the next mutation's own claim (or
+// staleness recovery), with the error surfaced by the caller rather than a
+// silent exit dropping custody. [LAW:no-silent-failure]
+func recheckMirrorPending(ws workspace.Info, cycleStart time.Time) (again bool, err error) {
+	info, statErr := os.Stat(mirrorPendingMarkerPath(ws))
+	if errors.Is(statErr, os.ErrNotExist) {
+		return false, nil
+	}
+	if statErr != nil {
+		return false, fmt.Errorf("re-check mirror-pending marker: %w", statErr)
+	}
+	if info.ModTime().Before(cycleStart) {
+		return false, fmt.Errorf(
+			"mirror-pending marker from %s survived this cycle's clear (started %s); stopping rather than cycling against a marker that cannot be removed",
+			info.ModTime().Format(time.RFC3339), cycleStart.Format(time.RFC3339))
+	}
+	return true, nil
 }
