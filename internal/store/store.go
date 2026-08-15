@@ -266,7 +266,19 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 			err = errors.Join(err, relErr)
 		}
 	}()
-	if _, err = EnsureDatabase(ctx, doltRootDir, workspaceID); err != nil {
+	// The adopt-pending check runs HERE, after both locks are held — never
+	// before. A pre-lock check is a decision made about a workspace another
+	// process may still be rewriting: a caller that read "no marker", then
+	// blocked on the lock while an adopt started and died mid-clone, would
+	// sail into the residue on a stale answer. Under the lock the marker's
+	// meaning is unambiguous — a live adopt holds the workspace lock
+	// exclusively, so marker-with-acquirable-lock always means a DEAD adopt.
+	// [LAW:no-ambient-temporal-coupling] the lock is the liveness owner; the
+	// check's answer is only valid while it is held.
+	if err = requireNoPendingAdopt(doltRootDir); err != nil {
+		return nil, err
+	}
+	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
 	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
@@ -320,6 +332,12 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 		}
 		return nil, fmt.Errorf("stat database dir: %w", statErr)
 	}
+	// Post-lock, same as Open: a shared hold excludes a live adopt (which
+	// holds the workspace lock exclusively), so a marker seen here always
+	// belongs to a dead one. [LAW:no-ambient-temporal-coupling]
+	if err = requireNoPendingAdopt(doltRootDir); err != nil {
+		return nil, err
+	}
 	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
@@ -338,13 +356,54 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	return s, nil
 }
 
-func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {
+// EnsureDatabase bootstraps the database for standalone callers (lit init's
+// non-adopt outcomes; tests). It takes the same workspace-shared + engine-write
+// lock pair Store.Open holds, in the same order, for the same reasons: the
+// bootstrap opens read-write embedded engines (one per path is the hard
+// invariant), and its check-then-create must be serialized against a
+// concurrent adopt's destructive window — an unlocked CREATE could land
+// between an adopt's discard and clone, or be destroyed by it. Open and
+// OpenSync do NOT call this: they already hold both locks and call
+// ensureDoltDatabase directly, so the locks are never re-entered.
+// [LAW:single-enforcer] one lock discipline for every write-capable
+// bootstrap, owned at the entry points that hold it.
+func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ bool, err error) {
 	if err := validateOpenArgs(doltRootDir, workspaceID); err != nil {
+		return false, err
+	}
+	release, err := acquireWorkspaceShared(ctx, doltRootDir)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if relErr := release(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
+	if err != nil {
+		return false, err
+	}
+	defer func() {
+		if relErr := engineRelease(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
+	// Post-lock, same as every open: refuse to build on an interrupted
+	// adopt's residue — CREATE DATABASE IF NOT EXISTS would bless it as a
+	// fresh store. [LAW:no-ambient-temporal-coupling]
+	if err := requireNoPendingAdopt(doltRootDir); err != nil {
 		return false, err
 	}
 	return ensureDoltDatabase(ctx, doltRootDir, workspaceID)
 }
 
+// validateOpenArgs stays a pure argument check — no filesystem reads — so a
+// caller reaching for it never inherits I/O failure modes. The adopt-pending
+// refusal deliberately does NOT live here: it must run AFTER the caller's
+// workspace lock is held (see the requireNoPendingAdopt call in each entry
+// point), because a pre-lock answer can go stale while the caller waits out
+// a concurrent adopt. [LAW:no-ambient-temporal-coupling]
 func validateOpenArgs(doltRootDir string, workspaceID string) error {
 	if _, err := validateDoltRootDir(doltRootDir); err != nil {
 		return err
