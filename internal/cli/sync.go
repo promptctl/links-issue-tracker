@@ -107,7 +107,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	if _, err := syncDoltRemotesFromGit(ctx, syncStore, ws); err != nil {
 		// A could-not-attempt failure (git-remote reconciliation itself failed,
 		// before any fetch was even tried) is still a decision this command
-		// reached — trace it, matching the coverage recordMirrorError/
+		// reached — trace it, matching the coverage recordMirrorTraceError/
 		// recordReceiveError give this same failure class on the mirror/receive
 		// paths. [LAW:no-silent-failure]
 		recordSyncCommandTrace(ws, "lit sync fetch", "error", err, nil)
@@ -141,7 +141,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {
 		// A could-not-attempt failure — traced like every other decision this
-		// command reaches, matching the coverage recordMirrorError/
+		// command reaches, matching the coverage recordMirrorTraceError/
 		// recordReceiveError give this same failure class on the mirror/receive
 		// paths. [LAW:no-silent-failure]
 		recordSyncCommandTrace(ws, "lit sync pull", "error", err, nil)
@@ -284,7 +284,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	if err != nil {
 		// A could-not-attempt failure (performSyncPush returned before reaching
 		// its own trace-recording push attempt) — traced here, matching the
-		// coverage recordMirrorError already gives this exact failure class on
+		// coverage recordMirrorTraceError already gives this exact failure class on
 		// the on-change mirror path that shares performSyncPush.
 		// [LAW:no-silent-failure]
 		recordSyncCommandTrace(ws, "lit sync push", "error", err, nil)
@@ -355,17 +355,38 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // remote resolution); a push that ran and failed is carried in outcome.pushErr
 // with its trace already recorded, leaving the caller to decide whether that
 // fails it (the command) or is best-effort (the cadence owner).
+//
+// Precondition: the caller holds the path's one read-write engine (syncStore
+// is that engine). The mirror-pending clear below is only sound inside an
+// engine session — that is what puts every commit whose command could have
+// observed the marker strictly before this session's HEAD read.
 func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+	// This attempt now answers for every mutation committed before this engine
+	// session opened: clear the mirror-pending marker so their commands (and
+	// later ones observing it) stop counting on a further mirror
+	// (links-sync-pgct.12). Cleared at entry, not on success — if the attempt
+	// then skips or fails, that ending is loudly recorded just below, and the
+	// next mutation re-claims and re-spawns rather than a stale "covered"
+	// promise papering over a push that never landed. [LAW:no-ambient-temporal-coupling]
+	clearMirrorPending(ws)
 	// Every completion — could-not-attempt, skip, pushed, push-failed — leaves
 	// the push-outcome marker behind, so "are pushes working?" is answerable by
 	// any later command without an engine. One deferred write over the named
 	// results covers every return path by construction, and the same record
 	// feeds the owner's out-of-band channel: a failed attempt notifies, a landed
 	// push ends the episode. [LAW:single-enforcer]
+	// A panic mid-attempt (an embedded-engine panic during the push) must not
+	// unwind through this defer with zero-valued results — that would fabricate
+	// a "pushed" record, clear a live failure episode, and (the marker having
+	// been consumed above) leave the evaporated attempt covered by nothing.
+	// Record the panic as the attempt's ending, then let it continue.
+	// [LAW:no-silent-failure]
 	defer func() {
-		rec := pushOutcomeOf(outcome, retErr)
-		recordPushOutcome(ws, rec)
-		observePushOutcomeForOwner(ctx, ws, rec, retErr, outcome.pushErr)
+		if r := recover(); r != nil {
+			completePushAttempt(ctx, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			panic(r)
+		}
+		completePushAttempt(ctx, ws, outcome, retErr)
 	}()
 	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
 	if err != nil {

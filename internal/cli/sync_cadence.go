@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -31,24 +32,15 @@ const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 // pays the fetch latency.
 const receiveDebounceInterval = 10 * time.Second
 
-// mirrorSpawnDebounceInterval bounds how often a command spawns a NEW on-change
-// mirror subprocess: a mutation burst triggers at most one spawn per interval,
-// not one fork/exec per mutation (links-sync-pgct.11). The single-flight sync-push
-// lock (TryAcquireSyncPushLock) already stops two mirrors from both opening an
-// engine, but it does nothing about the fork/exec + wait-for-parent-exit startup
-// cost of every LOSING mirror in between — each one is real CPU/process-table
-// pressure that a loaded machine feels, and that pressure is what turned into
-// engine-write-lock contention exhausting the transient-retry budget on CI (a
-// burst of `lit new` calls with no pacing spawned up to 15 subprocesses, most of
-// which existed only to lose the single-flight race). Shorter than
-// receiveDebounceInterval: push latency is the whole point of on-change cadence
-// (no explicit `sync push` step), so an ordinary, non-bursty mutation should still
-// get a near-immediate mirror — only a genuine burst coalesces. Coalescing is
-// still safe at any interval: the eventual mirror pushes the current HEAD, which
-// already includes every commit that landed since the last one that ran (same
-// "commits that landed before this push go out with it" property spawnBackgroundMirror
-// already documents for the single-flight lock).
-const mirrorSpawnDebounceInterval = 1 * time.Second
+// remoteAbsentRecheckInterval bounds how often a confirmed remote-less
+// workspace re-runs the mirror path's git-remote check. The mirror-pending
+// claim carries the coverage guarantee only where a remote exists; without
+// one, every mutation would otherwise pay a git subprocess plus marker
+// create/remove churn re-confirming the same absence — the rate bound the
+// deleted spawn debounce used to provide for exactly this state.
+// [LAW:carrying-cost] The only cost is mirror onset: a remote added to a
+// hot workspace waits at most this long before mutations resume claiming.
+const remoteAbsentRecheckInterval = 10 * time.Second
 
 // shouldSyncAfterMutation is the pure push-cadence decision: only a mutating
 // (write) command under the on-change policy triggers the push mirror. Read-mode
@@ -80,46 +72,109 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
 		return
 	}
-	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) && shouldSpawnMirrorNow(ws, time.Now(), mirrorSpawnDebounceInterval) {
-		// The marker records "an attempt happened" and is written first,
-		// unconditionally for every outcome below — remote-check error, no
-		// remote, spawn failure, spawn success. The debounce rate-limits the
-		// whole attempt (including its stderr noise when something is wrong),
-		// not just the happy path: a burst against a broken remote check must
-		// not re-run the check and re-print the warning on every mutation.
-		// [LAW:dataflow-not-control-flow]
-		if err := markMirrorSpawnAttempt(ws); err != nil {
-			fmt.Fprintf(os.Stderr, "lit: on-change mirror-spawn debounce marker not written: %v\n", err)
-		}
-		// Cheap precondition, mirroring receiveInline's own check below: a
-		// remote-less workspace has nothing to push to, so skip the subprocess
-		// spawn entirely rather than pay fork/exec cost only to have the mirror
-		// discover "no remote" for itself. This matters more now that on-change
-		// is the shipped default (links-sync-pgct.3) rather than an opt-in a
-		// user chose knowing the cost. [LAW:carrying-cost]
-		hasRemote, err := workspaceHasGitRemote(ctx, ws)
-		if err != nil {
-			// Unexpected — surface it rather than silently skip or silently spawn
-			// against unknown remote state. [LAW:no-silent-failure]
-			fmt.Fprintf(os.Stderr, "lit: on-change background push not started, could not check git remotes: %v\n", err)
-		} else if hasRemote {
-			if err := spawnBackgroundMirror(ws, os.Getpid()); err != nil {
-				fmt.Fprintf(os.Stderr, "lit: on-change background push not started: %v\n", err)
-			}
-		}
+	if shouldSyncAfterMutation(accessMode, cfg.Sync.Cadence) {
+		ensureMirrorCoverage(ctx, ws)
 	}
 	if cfg.Sync.Receive {
 		receiveInline(ctx, ws)
 	}
 }
 
+// ensureMirrorCoverage upholds the on-change tail guarantee for the mutation
+// that just committed (links-sync-pgct.12): claim the mirror-pending marker,
+// and either a fresh marker proves an already-spawned, not-yet-cleared mirror
+// will read HEAD after this command's closed engine session (see
+// sync_mirror_pending.go for the ordering proof), or this command owns the
+// spawn. Spawn rate falls out of the claim itself — one spawn per
+// clear-to-claim cycle, however dense the burst — replacing the fixed 1s
+// debounce whose window was exactly the stranded-tail bug.
+// [LAW:no-ambient-temporal-coupling]
+//
+// Every failure that breaks the claim-to-mirror chain completes through the
+// same pushOutcomeRecord seam as a push attempt that ran (completePushAttempt),
+// so the staleness banner and the owner's out-of-band channel hear about a
+// mirror that could not even start exactly the way they hear about a push
+// that failed — one representation of push health, never a second.
+// [LAW:one-source-of-truth] The claim this command owns is then released so
+// the next mutation retries the spawn instead of trusting a mirror that never
+// launched — and only an owned claim is released, so a degraded claim read can
+// never remove another mutation's live claim.
+func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
+	// A recently confirmed remote-less workspace short-circuits before the
+	// claim: no remote means no coverage to owe, so no marker churn and no git
+	// subprocess per mutation — the debounce applies only to re-confirming
+	// absence, never to any path that issues a coverage verdict.
+	if !shouldRunNow(remoteAbsentMarkerPath(ws), time.Now(), remoteAbsentRecheckInterval) {
+		return
+	}
+	ownsClaim := false
+	claim, claimErr := claimMirrorPending(ws, time.Now())
+	switch {
+	case claimErr != nil:
+		// Coverage state unreadable: spawning is the safe side (a redundant
+		// mirror is a no-op push behind the single-flight lock; a skipped one
+		// is a stranded tail), but the broken marker is loud. [LAW:no-silent-failure]
+		fmt.Fprintf(os.Stderr, "lit: mirror-pending marker unavailable (%v); spawning a mirror regardless\n", claimErr)
+	case claim == pendingCovered:
+		return
+	default:
+		ownsClaim = true
+	}
+	// An owned claim that turns out unspawnable is released BEFORE the
+	// completion effects below: the completion can run the owner-notify hook
+	// to its cap, and mutations landing during it must not read the doomed
+	// claim as live coverage. [LAW:no-ambient-temporal-coupling]
+	releaseClaim := func() {
+		if ownsClaim {
+			clearMirrorPending(ws)
+		}
+	}
+	// Cheap precondition, mirroring receiveInline's own check: a remote-less
+	// workspace has nothing to push to, so skip the subprocess spawn entirely
+	// rather than pay fork/exec cost only to have the mirror discover "no
+	// remote" for itself. This matters more now that on-change is the shipped
+	// default (links-sync-pgct.3) rather than an opt-in a user chose knowing
+	// the cost. [LAW:carrying-cost]
+	hasRemote, err := workspaceHasGitRemote(ctx, ws)
+	if err != nil {
+		releaseClaim()
+		fmt.Fprintf(os.Stderr, "lit: on-change background push not started, could not check git remotes: %v\n", err)
+		completePushAttempt(ctx, ws, syncPushOutcome{}, fmt.Errorf("check git remotes before on-change mirror spawn: %w", err))
+		return
+	}
+	if !hasRemote {
+		// A healthy skip, not a failure: with no remote there is no coverage to
+		// owe, and un-claiming keeps the marker truthful for the day a remote
+		// is added. The push-outcome marker is untouched — the mirror path owns
+		// writing "no_sync_remote" when an attempt actually resolves remotes —
+		// and the absence marker rate-bounds re-confirming this state.
+		releaseClaim()
+		if err := markRunAttempt(ws, remoteAbsentMarkerPath(ws)); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: remote-absent marker not written: %v\n", err)
+		}
+		return
+	}
+	// A connected workspace retires any leftover absence marker so the next
+	// remote-less confirmation starts a fresh interval rather than inheriting
+	// a stale one. Absent is the common case and costs one syscall.
+	if err := os.Remove(remoteAbsentMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(os.Stderr, "lit: remote-absent marker not cleared: %v\n", err)
+	}
+	if err := spawnBackgroundMirror(ws, os.Getpid()); err != nil {
+		releaseClaim()
+		fmt.Fprintf(os.Stderr, "lit: on-change background push not started: %v\n", err)
+		completePushAttempt(ctx, ws, syncPushOutcome{}, fmt.Errorf("spawn on-change mirror: %w", err))
+	}
+}
+
 // shouldRunNow reports whether the debounce interval has elapsed since
 // markerPath was last touched. A missing or unreadable marker means "never run
 // (or cannot tell)" → allow. now and interval are parameters so the decision is
-// testable without sleeping. [LAW:one-type-per-behavior] One debounce primitive;
-// automatic receive and the on-change mirror spawn are two instances
-// distinguished only by which marker path and interval they pass in — neither
-// owns its own copy of the stat-and-compare logic.
+// testable without sleeping. [LAW:one-type-per-behavior] The one debounce
+// primitive, parametrized by marker path and interval; automatic receive and
+// the remote-absent recheck are its instances (the on-change mirror spawn
+// stopped being one when links-sync-pgct.12 replaced its time window with the
+// mirror-pending claim — a rate bound cannot carry a coverage guarantee).
 func shouldRunNow(markerPath string, now time.Time, interval time.Duration) bool {
 	info, err := os.Stat(markerPath)
 	if err != nil {
@@ -188,22 +243,11 @@ func markReceiveAttempt(ws workspace.Info) error {
 	return markRunAttempt(ws, receiveMarkerPath(ws))
 }
 
-// mirrorSpawnMarkerPath is the single debounce marker for the on-change mirror
-// spawn: its modification time is the last time a mirror subprocess was
-// spawned. [LAW:one-source-of-truth]
-func mirrorSpawnMarkerPath(ws workspace.Info) string {
-	return filepath.Join(ws.StorageDir, "mirror-spawn.last")
-}
-
-// shouldSpawnMirrorNow reports whether the debounce interval has elapsed since
-// the last mirror spawn.
-func shouldSpawnMirrorNow(ws workspace.Info, now time.Time, interval time.Duration) bool {
-	return shouldRunNow(mirrorSpawnMarkerPath(ws), now, interval)
-}
-
-// markMirrorSpawnAttempt records "a mirror was spawned now".
-func markMirrorSpawnAttempt(ws workspace.Info) error {
-	return markRunAttempt(ws, mirrorSpawnMarkerPath(ws))
+// remoteAbsentMarkerPath is the single marker for "this workspace was last
+// confirmed to have no git remote": its modification time is when that
+// confirmation ran. [LAW:one-source-of-truth]
+func remoteAbsentMarkerPath(ws workspace.Info) string {
+	return filepath.Join(ws.StorageDir, "remote-absent.last")
 }
 
 // workspaceHasGitRemote reports whether the workspace has at least one git remote

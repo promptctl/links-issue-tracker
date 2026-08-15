@@ -120,7 +120,7 @@ cadence = "on-change"   # default
 
 | value       | meaning                                                                 |
 | ----------- | ----------------------------------------------------------------------- |
-| `on-change` | mirror after mutating lit commands (`new`, `start`, `update`, `close`, `comment`, `rank`, …), in addition to the pre-push hook. Spawns are coalesced to at most one mirror subprocess per second (a `mirror-spawn.last` marker in the workspace's storage dir), which loses nothing: the mirror that runs pushes the current HEAD, which already includes every commit since the last one. The marker is stamped for every attempt — including one whose git-remote check failed — so a workspace with a broken remote configuration warns once per interval rather than once per mutation. The default: a mutation on a connected workspace reaches the remote without a separate push step, so "durable locally" and "durable on the remote" don't drift apart into a manual act someone has to remember. |
+| `on-change` | mirror after mutating lit commands (`new`, `start`, `update`, `close`, `comment`, `rank`, …), in addition to the pre-push hook. Spawns coalesce through a `mirror-pending` marker in the workspace's storage dir: a mutation whose fresh marker shows an already-spawned mirror has not yet begun its push simply rides along (that mirror's HEAD read is still ahead of the mutation's commit), and otherwise the mutation claims the marker and spawns the mirror itself — so a burst runs a handful of mirrors, not one per mutation, and the burst's **final** mutation is always covered rather than betting on a timing window. Every push attempt clears the marker as it starts; a mirror that finds the marker re-claimed after its push runs another cycle, so nothing waits for "the next command" to be swept out. The default: a mutation on a connected workspace reaches the remote without a separate push step, so "durable locally" and "durable on the remote" don't drift apart into a manual act someone has to remember. |
 | `on-push`   | mirror only when the managed pre-push hook runs (one push per `git push`). Opt-in, for a workspace that deliberately wants to batch outgoing network traffic instead of pushing on every mutation. |
 
 `on-change` runs the same `lit sync push` the pre-push hook runs, after the
@@ -128,9 +128,10 @@ command completes, as a non-blocking background mirror. It is best-effort: a
 push failure is surfaced on stderr and recorded as an automation trace, but
 never fails the command — the ticket change is already durable in the local
 Dolt store. Whichever cadence is chosen, a push that stays pending is not
-silent. Every push attempt — mirror or explicit — records how it ended in a
-`push-outcome.last` marker in the workspace's storage dir, and two banners
-read it:
+silent. Every push attempt — mirror or explicit, including a mirror that fails
+before its push can even start (engine open failure, spawner never exiting) —
+records how it ended in a `push-outcome.last` marker in the workspace's
+storage dir, and two banners read it:
 
 - `lit backlog`, `lit next`, and `lit show` print a `sync: N local change(s)
   not pushed …` line whenever the store reads ahead-of-remote, and lead with

@@ -23,9 +23,10 @@ import (
 //   - an ACTIVE mirror holds the lock from before its engine opens until after
 //     the engine has closed, so acquiring the lock here proves no engine write
 //     can land in the directory anymore;
-//   - a mirror that has NOT yet reached its lock attempt finds the lock held
-//     and exits by the silent coalescing path — no store open, no trace write,
-//     no file created.
+//   - a mirror that has NOT yet reached its lock attempt — including one
+//     between cycles, re-acquiring for a post-release re-check
+//     (links-sync-pgct.12) — finds the lock held and exits by the silent
+//     coalescing path: no store open, no trace write, no file created.
 //
 // The lock is deliberately never released: releasing before the directory
 // sweep would re-open the window for a late mirror, and the kernel drops the

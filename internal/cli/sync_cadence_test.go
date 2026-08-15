@@ -1,7 +1,10 @@
 package cli
 
 import (
+	"context"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"testing"
 	"time"
 
@@ -65,35 +68,43 @@ func TestShouldReceiveNowDebounce(t *testing.T) {
 	}
 }
 
-// TestShouldSpawnMirrorNowDebounce pins the mirror-spawn instance of the shared
-// debounce primitives (shouldRunNow/markRunAttempt): a missing marker allows a
-// spawn, a fresh marker blocks inside the interval, an aged one allows again —
-// and the two debounce instances are independent facts, so marking a mirror
-// spawn must not consume the receive debounce or vice versa.
-func TestShouldSpawnMirrorNowDebounce(t *testing.T) {
-	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
-	now := time.Now()
-	interval := time.Second
+// TestEnsureMirrorCoverageDebouncesRemoteAbsent pins the unconnected-workspace
+// rate bound: the first mutation on a remote-less workspace confirms the
+// absence (git subprocess) and stamps remote-absent.last; mutations inside the
+// recheck interval short-circuit before the claim — no marker churn, no git
+// call, observable as the absence marker's mtime standing still — and no
+// mirror-pending claim survives either call.
+func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	root := t.TempDir()
+	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: filepath.Join(root, ".lit")}}
+	ctx := context.Background()
 
-	if !shouldSpawnMirrorNow(ws, now, interval) {
-		t.Fatalf("missing marker should allow a mirror spawn")
+	ensureMirrorCoverage(ctx, ws)
+	info, err := os.Stat(remoteAbsentMarkerPath(ws))
+	if err != nil {
+		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
 	}
-	if err := markMirrorSpawnAttempt(ws); err != nil {
-		t.Fatalf("markMirrorSpawnAttempt error = %v", err)
+	if mirrorPendingSet(ws) {
+		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
 	}
-	if _, err := os.Stat(mirrorSpawnMarkerPath(ws)); err != nil {
-		t.Fatalf("mirror-spawn marker not created: %v", err)
+	stamped := info.ModTime()
+
+	ensureMirrorCoverage(ctx, ws)
+	info, err = os.Stat(remoteAbsentMarkerPath(ws))
+	if err != nil {
+		t.Fatalf("absence marker vanished: %v", err)
 	}
-	if shouldSpawnMirrorNow(ws, now.Add(100*time.Millisecond), interval) {
-		t.Fatalf("mirror spawn inside the debounce interval should be blocked")
+	if !info.ModTime().Equal(stamped) {
+		t.Fatal("a mutation inside the recheck interval re-ran the absence confirmation; the debounce must short-circuit it")
 	}
-	if !shouldSpawnMirrorNow(ws, now.Add(interval+time.Second), interval) {
-		t.Fatalf("mirror spawn past the debounce interval should be allowed")
-	}
-	// Independence: the mirror marker must not have consumed the receive
-	// debounce — each instance owns its own marker file.
-	if !shouldReceiveNow(ws, now, interval) {
-		t.Fatalf("marking a mirror spawn must not debounce the receive")
+	if mirrorPendingSet(ws) {
+		t.Fatal("a debounced remote-less mutation left a mirror-pending claim behind")
 	}
 }
 

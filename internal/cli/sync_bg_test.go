@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -49,7 +50,7 @@ func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
 // at once (true) without polling.
 func TestWaitForParentExitReturnsImmediatelyForNoParent(t *testing.T) {
 	calls := 0
-	got := waitForParentExit(0, func() int { calls++; return 4242 }, time.Second, time.Millisecond)
+	got := waitForParentExit(context.Background(), 0, func() int { calls++; return 4242 }, time.Second, time.Millisecond)
 	if !got {
 		t.Fatal("waitForParentExit(0, ...) must report success without waiting")
 	}
@@ -73,7 +74,7 @@ func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
 		}
 		return 1 // reparented to init: parent exited
 	}
-	if !waitForParentExit(parentPID, getppid, time.Second, time.Millisecond) {
+	if !waitForParentExit(context.Background(), parentPID, getppid, time.Second, time.Millisecond) {
 		t.Fatal("waitForParentExit must report success once getppid stops naming the parent")
 	}
 	if polls < 3 {
@@ -86,7 +87,24 @@ func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
 // the caller aborts instead of opening the store.
 func TestWaitForParentExitReportsTimeout(t *testing.T) {
 	const parentPID = 5151
-	if waitForParentExit(parentPID, func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
+	if waitForParentExit(context.Background(), parentPID, func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
 		t.Fatal("waitForParentExit must report false when the parent never exits before the timeout")
+	}
+}
+
+// TestWaitForParentExitEndsOnTeardown pins that a done context ends the wait
+// immediately (false), long before the deadline: a mirror in its SIGTERM grace
+// window must spend it releasing state, not sleeping toward a timeout it will
+// be killed before reaching.
+func TestWaitForParentExitEndsOnTeardown(t *testing.T) {
+	const parentPID = 5152
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start := time.Now()
+	if waitForParentExit(ctx, parentPID, func() int { return parentPID }, time.Minute, time.Millisecond) {
+		t.Fatal("waitForParentExit must report false when torn down mid-wait")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("teardown took %s to end the wait; it must not sleep toward the deadline", elapsed)
 	}
 }
