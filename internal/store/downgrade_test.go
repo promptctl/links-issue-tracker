@@ -36,9 +36,24 @@ func openWorkspaceForDowngrade(t *testing.T) (*Store, string) {
 // Counts via dbsnapshot.List — the package's own definition of "a snapshot
 // exists" — rather than raw dir entries, which would also count non-snapshot
 // machinery like the producer beacon file. [LAW:one-source-of-truth]
+//
+// Because List refuses producer-artifact names by design, the count alone
+// can no longer notice a Take that strands its .tmp/.reserve; the explicit
+// artifact scan keeps that cleanup invariant pinned (the raw-entry counter
+// this replaced guarded it incidentally).
 func snapshotCount(t *testing.T, doltRoot string) int {
 	t.Helper()
-	list, err := dbsnapshot.List(migrationSnapshotsDir(doltRoot))
+	dir := migrationSnapshotsDir(doltRoot)
+	entries, err := os.ReadDir(dir)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("readdir snapshots: %v", err)
+	}
+	for _, e := range entries {
+		if dbsnapshot.IsProducerArtifactName(e.Name()) {
+			t.Fatalf("stranded producer artifact in snapshots dir: %s", e.Name())
+		}
+	}
+	list, err := dbsnapshot.List(dir)
 	if err != nil {
 		t.Fatalf("list snapshots: %v", err)
 	}

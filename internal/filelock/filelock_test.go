@@ -92,3 +92,17 @@ func TestAcquire_CanceledContextSurfacesDuringRetry(t *testing.T) {
 		t.Fatalf("want context.Canceled from the retry sleep, got %v", err)
 	}
 }
+
+// TestAcquire_RejectsNonPositiveBudget pins that an impossible retry budget
+// is a loud caller bug, not a silent "clean contention" verdict on a lock
+// nobody holds.
+func TestAcquire_RejectsNonPositiveBudget(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	for _, attempts := range []int{0, -1} {
+		_, acquired, err := Acquire(context.Background(), lockPath, true, attempts, 0)
+		if acquired || err == nil {
+			t.Fatalf("maxAttempts=%d: want loud error, got acquired=%v err=%v", attempts, acquired, err)
+		}
+	}
+}

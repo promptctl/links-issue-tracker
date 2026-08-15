@@ -33,13 +33,24 @@ func ficloneOrCopy(ctx context.Context, src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer dstF.Close()
+	// Close errors are part of the copy's outcome (write-back-at-close
+	// failure means a truncated file), same as plainFileCopy.
+	// [LAW:no-silent-failure]
 	if err := unix.IoctlFileClone(int(dstF.Fd()), int(srcF.Fd())); err == nil {
 		// OpenFile's mode is filtered by umask; Chmod forces exact source perms.
-		return dstF.Chmod(info.Mode().Perm())
+		if err := dstF.Chmod(info.Mode().Perm()); err != nil {
+			_ = dstF.Close()
+			return err
+		}
+		return dstF.Close()
 	}
 	if err := copyWithContext(ctx, dstF, srcF); err != nil {
+		_ = dstF.Close()
 		return err
 	}
-	return dstF.Chmod(info.Mode().Perm())
+	if err := dstF.Chmod(info.Mode().Perm()); err != nil {
+		_ = dstF.Close()
+		return err
+	}
+	return dstF.Close()
 }

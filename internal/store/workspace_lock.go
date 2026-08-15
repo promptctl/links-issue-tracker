@@ -27,8 +27,8 @@ import (
 //
 // [LAW:dataflow-not-control-flow] Variability between shared and exclusive
 // modes lives in the (exclusive, maxAttempts, delay) arguments threaded into
-// acquireWorkspaceLock; the acquisition sequence (OpenFile, tryLockFile,
-// retry-or-error) is the same every call.
+// acquireWorkspaceLock; the acquisition sequence (filelock.Acquire's one
+// open→try→retry loop) is the same every call.
 //
 // [LAW:locality-or-seam] The lock primitive (POSIX flock(2) vs. Win32
 // LockFileEx) and its acquisition loop live in internal/filelock behind a
@@ -77,11 +77,8 @@ func WorkspaceLockPath(databasePath string) string {
 func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, false, workspaceSharedRetryAttempts, workspaceSharedRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
-		// [LAW:no-silent-failure] Wrap the original error (which may
-		// itself be an errors.Join containing close-side diagnostics
-		// from joinWithClose) instead of replacing with a fresh sentinel.
-		// errors.Is(err, ErrWorkspaceBusy) continues to detect contention;
-		// any additional diagnostics survive.
+		// Wrap the sentinel so errors.Is(err, ErrWorkspaceBusy) detects
+		// contention while the operator sees which holders to suspect.
 		return nil, fmt.Errorf("a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w", err)
 	}
 	return release, err

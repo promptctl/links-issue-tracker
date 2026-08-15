@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
 
 // [LAW:single-enforcer] All commit-lock acquisition, transient-retry, and
@@ -233,22 +235,11 @@ func transientRetryDelay(attempt int) time.Duration {
 	return delay
 }
 
+// waitWithContext delegates to filelock.SleepWithContext — one home for the
+// context-aware inter-attempt sleep — under the historical local name the
+// retry machinery passes around as a function value. [LAW:one-source-of-truth]
 func waitWithContext(ctx context.Context, duration time.Duration) error {
-	timer := time.NewTimer(duration)
-	defer func() {
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-	}()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-timer.C:
-		return nil
-	}
+	return filelock.SleepWithContext(ctx, duration)
 }
 
 func (s *Store) commitWorkingSet(ctx context.Context, message string) error {

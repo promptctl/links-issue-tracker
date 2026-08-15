@@ -602,6 +602,7 @@ func TestParseName(t *testing.T) {
 		{"1700000000000000000.reserve", false},
 		{"1700000000000000000-label.reserve", false},
 		{"1700000000000000000.tmp.condemned", false},
+		{"1700000000000000000.tmp.1755250000000000000.condemned", false},
 	}
 	for _, tc := range cases {
 		_, ok := parseName(tc.name)

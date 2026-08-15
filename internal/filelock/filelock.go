@@ -51,6 +51,12 @@ var errWouldBlock = errors.New("lock would block")
 // domain meaning (store's ErrWorkspaceBusy, a collector's silent skip) at its
 // own boundary instead of all sharing one sentinel's identity and text.
 func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, bool, error) {
+	// [LAW:no-silent-failure] A non-positive budget would skip the loop and
+	// read as clean contention on a lock nobody holds — a caller bug reported
+	// as a healthy holder. Refuse it loudly instead.
+	if maxAttempts < 1 {
+		return nil, false, fmt.Errorf("filelock: maxAttempts must be >= 1, got %d", maxAttempts)
+	}
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, false, fmt.Errorf("ensure lock dir: %w", err)
 	}
@@ -83,7 +89,7 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 		if attempt+1 == maxAttempts {
 			break
 		}
-		if waitErr := sleepWithContext(ctx, delay); waitErr != nil {
+		if waitErr := SleepWithContext(ctx, delay); waitErr != nil {
 			return nil, false, joinWithClose(waitErr, file)
 		}
 	}
@@ -103,10 +109,13 @@ func joinWithClose(primary error, file *os.File) error {
 	return primary
 }
 
-// sleepWithContext waits out delay unless ctx is done first, returning the
-// context's error so an interrupted acquisition surfaces as cancellation
-// rather than as a spurious ErrBusy.
-func sleepWithContext(ctx context.Context, delay time.Duration) error {
+// SleepWithContext waits out delay unless ctx is done first, returning the
+// context's error so an interrupted wait surfaces as cancellation rather
+// than as a spurious retry outcome. Exported as the one context-aware sleep
+// primitive — store's commit-lock retry machinery uses it too, so the
+// cancellation semantics of "sleep between attempts" have a single home.
+// [LAW:one-source-of-truth]
+func SleepWithContext(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {

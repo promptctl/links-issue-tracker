@@ -86,7 +86,7 @@ func TestTake_CloneFailureLeavesNoResidue(t *testing.T) {
 		t.Fatal(readErr)
 	}
 	for _, e := range entries {
-		if isProducerArtifactName(e.Name()) {
+		if IsProducerArtifactName(e.Name()) {
 			t.Fatalf("failed Take stranded producer artifact: %s", e.Name())
 		}
 	}

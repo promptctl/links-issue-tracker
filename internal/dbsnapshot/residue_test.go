@@ -69,7 +69,7 @@ func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if isProducerArtifactName(e.Name()) {
+		if IsProducerArtifactName(e.Name()) {
 			t.Errorf("residue survived collection: %s", e.Name())
 		}
 	}
@@ -135,11 +135,14 @@ func TestCollectOrphanedResidue_MissingDirIsNoop(t *testing.T) {
 	}
 }
 
-// TestPruneMatching_CollectsResidue pins the wiring: every producer's
-// existing retention tail (PruneMatching) is the boundary residue collection
-// rides, so an interrupted take's leftovers are reclaimed by the very next
-// take/prune cycle with no caller changes.
-func TestPruneMatching_CollectsResidue(t *testing.T) {
+// TestTake_CollectsResidueAtEntry pins the wiring: collection runs at Take's
+// entry — the one point every producer reaches on every attempt BEFORE new
+// disk is consumed — so an ENOSPC'd retry reclaims a dead predecessor's
+// corpse first, and a dead take's leftovers are gone by the time the next
+// take's own copy begins. (Wiring it downstream of a successful take, e.g.
+// in the retention prune, is unreachable in exactly the disk-full regime
+// that motivates collection.)
+func TestTake_CollectsResidueAtEntry(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
 	src := filepath.Join(root, "src")
@@ -150,29 +153,139 @@ func TestPruneMatching_CollectsResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	snapshotsDir := filepath.Join(root, "snapshots")
-	for i := 0; i < 3; i++ {
-		if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
+		t.Fatal(err)
 	}
 	tmpPath, reservePath := fabricateDeadResidue(t, snapshotsDir, "1700000000000000004")
 
-	if err := PruneMatching(snapshotsDir, 2, nil); err != nil {
+	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	if err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := os.Stat(tmpPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("prune must collect .tmp residue, stat err=%v", err)
+		t.Fatalf("Take entry must collect .tmp residue, stat err=%v", err)
 	}
 	if _, err := os.Stat(reservePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("prune must collect .reserve residue, stat err=%v", err)
+		t.Fatalf("Take entry must collect .reserve residue, stat err=%v", err)
 	}
-	list, err := List(snapshotsDir)
+	if _, err := os.Stat(snap.Path); err != nil {
+		t.Fatalf("the take itself must still succeed: %v", err)
+	}
+}
+
+// TestCollectOrphanedResidue_SparesForeignNames pins delete-narrowly: the
+// collector destroys only names whose shape lit provably minted (a parseable
+// <unix-ns>[-label] head under .tmp/.reserve, or the collector's own
+// .condemned suffix). A foreign "backup.tmp" an operator parked in the
+// directory is inert to every consumer — including the one destructive one.
+func TestCollectOrphanedResidue_SparesForeignNames(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	foreign := filepath.Join(snapshotsDir, "backup.tmp")
+	if err := os.MkdirAll(foreign, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	foreignFile := filepath.Join(snapshotsDir, "notes.reserve")
+	if err := os.WriteFile(foreignFile, []byte("mine"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	litShaped, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000006")
+
+	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("CollectOrphanedResidue: %v", err)
+	}
+
+	if _, err := os.Stat(foreign); err != nil {
+		t.Fatalf("foreign backup.tmp must be spared: %v", err)
+	}
+	if _, err := os.Stat(foreignFile); err != nil {
+		t.Fatalf("foreign notes.reserve must be spared: %v", err)
+	}
+	if _, err := os.Stat(litShaped); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lit-shaped residue must be collected, stat err=%v", err)
+	}
+}
+
+// TestCollectOrphanedResidue_ConvergesOnStampReuse pins self-healing when a
+// producer reuses the exact stamp of residue an interrupted collection left
+// behind: the fresh corpse and the old .condemned corpse coexist, and one
+// collection removes both — condemned names carry a fresh nanosecond stamp,
+// so the rename can never collide and wedge collection permanently.
+func TestCollectOrphanedResidue_ConvergesOnStampReuse(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000007")
+	oldCondemned := tmpPath + ".condemned"
+	if err := os.MkdirAll(oldCondemned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("CollectOrphanedResidue: %v", err)
+	}
+	entries, err := os.ReadDir(snapshotsDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(list) != 2 {
-		t.Fatalf("retention budget must still apply: len=%d want 2", len(list))
+	for _, e := range entries {
+		if IsProducerArtifactName(e.Name()) {
+			t.Fatalf("residue survived stamp-reuse collection: %s", e.Name())
+		}
+	}
+}
+
+// TestTake_CollectionFailureDoesNotFailTake pins the failure-domain split: an
+// undeletable corpse degrades collection (loud on stderr, retried next take)
+// but must not fail the take — the snapshot this call was asked for is still
+// mintable, and failing it would also starve retention at every producer.
+func TestTake_CollectionFailureDoesNotFailTake(t *testing.T) {
+	if os.Getuid() == 0 {
+		t.Skip("root ignores directory write permissions")
+	}
+	t.Parallel()
+	root := t.TempDir()
+	src := filepath.Join(root, "src")
+	if err := os.MkdirAll(src, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "x"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	snapshotsDir := filepath.Join(root, "snapshots")
+	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000008")
+	nested := filepath.Join(tmpPath, "nested")
+	if err := os.Chmod(nested, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
+
+	snap, err := Take(context.Background(), src, snapshotsDir, "")
+	if err != nil {
+		t.Fatalf("Take must succeed despite a collection failure: %v", err)
+	}
+	if _, err := os.Stat(snap.Path); err != nil {
+		t.Fatalf("snapshot must exist: %v", err)
+	}
+}
+
+// restoreCondemnedPerms re-opens write permission on every condemned corpse's
+// nested dir so t.TempDir cleanup can remove the tree.
+func restoreCondemnedPerms(t *testing.T, snapshotsDir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(snapshotsDir, "*.condemned"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range matches {
+		_ = os.Chmod(filepath.Join(m, "nested"), 0o755)
+	}
+	matches, err = filepath.Glob(filepath.Join(snapshotsDir, "*.tmp"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range matches {
+		_ = os.Chmod(filepath.Join(m, "nested"), 0o755)
 	}
 }
 
@@ -263,8 +376,15 @@ func TestTake_HoldsBeaconSharedForConcurrentProducers(t *testing.T) {
 			t.Errorf("release: %v", err)
 		}
 	}()
+	// Residue present while a producer is live: the entry collection's
+	// exclusive probe must skip (any of it could be the live producer's own
+	// in-flight paths), and the take itself must still proceed.
+	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000009")
 	if _, err := Take(context.Background(), src, snapshotsDir, ""); err != nil {
 		t.Fatalf("Take must coexist with another live producer's shared hold: %v", err)
+	}
+	if _, err := os.Stat(tmpPath); err != nil {
+		t.Fatalf("residue must be spared while a producer is live: %v", err)
 	}
 }
 
@@ -279,17 +399,13 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 	snapshotsDir := t.TempDir()
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000005")
 	// Strip write permission on the nested dir so unlinking its child fails.
-	// Classification renames the residue before deleting, so the undeletable
-	// dir lives at the .condemned path by the time RemoveAll hits it.
-	nested := filepath.Join(tmpPath, "nested")
-	condemnedNested := filepath.Join(tmpPath+".condemned", "nested")
-	if err := os.Chmod(nested, 0o555); err != nil {
+	// Classification renames the residue (to a uniquely-stamped .condemned
+	// name) before deleting, so the undeletable dir lives under a *.condemned
+	// path by the time RemoveAll hits it — located by glob below.
+	if err := os.Chmod(filepath.Join(tmpPath, "nested"), 0o555); err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() {
-		_ = os.Chmod(nested, 0o755)
-		_ = os.Chmod(condemnedNested, 0o755)
-	})
+	t.Cleanup(func() { restoreCondemnedPerms(t, snapshotsDir) })
 
 	err := CollectOrphanedResidue(snapshotsDir)
 	if err == nil {
@@ -299,9 +415,7 @@ func TestCollectOrphanedResidue_ErrorNamesThePath(t *testing.T) {
 		t.Fatalf("error %q must name the condemned residue", err.Error())
 	}
 	// Convergence: fixing the permission lets the next collection finish.
-	if err := os.Chmod(condemnedNested, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	restoreCondemnedPerms(t, snapshotsDir)
 	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
 		t.Fatalf("collection after fixing perms: %v", err)
 	}
