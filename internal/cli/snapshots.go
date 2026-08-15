@@ -52,9 +52,10 @@ func isUserSnapshotName(name string) bool {
 // or any other in-process mutation. Routes through store.LockCommitPath so the
 // lock primitive stays single-source.
 //
-// Reader-vs-restore exclusion is owned by the workspace-busy lock acquired in
-// store.Open / store.OpenForRead (shared) and by runSnapshotsRestore
-// (exclusive); this commit lock remains the writer-vs-writer gate only.
+// Reader-vs-rotator exclusion is owned by the workspace-busy lock: shared
+// holds in store.Open / store.OpenForRead and runSnapshotsNew's copy,
+// exclusive holds in runSnapshotsRestore and the other directory rotators.
+// This commit lock remains the writer-vs-writer gate only.
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
@@ -64,7 +65,7 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) err
 	return fn()
 }
 
-func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
+func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) (err error) {
 	fs := newCobraFlagSet("snapshots new")
 	label := fs.String("label", "", "Optional human-readable label appended to the snapshot name")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
@@ -74,6 +75,27 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 	if err != nil {
 		return err
 	}
+	// [LAW:single-enforcer] The copy below reads the Dolt directory file by
+	// file — the same kind of actor as an open Store — so it takes the same
+	// shared workspace hold every Store open takes. That contends with the
+	// exclusive holds of the directory rotators (snapshots restore, remote
+	// adopt, workspace promotion) without blocking ordinary readers; the
+	// commit lock alone never did, because rotators don't hold it during
+	// their destructive window (links-sync-pgct.14's torn-snapshot race).
+	// Acquired before the commit lock, matching the workspace→commit order
+	// of runSnapshotsRestore and store.Open.
+	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
+	if err != nil {
+		return err
+	}
+	// [LAW:no-silent-failure] Same release contract as runSnapshotsRestore: a
+	// failed release can leave the workspace stuck busy for later commands,
+	// so it surfaces via the named return alongside any snapshot error.
+	defer func() {
+		if relErr := releaseWorkspace(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	var snap dbsnapshot.Snapshot
 	if err := withCommitLock(ctx, ws, func() error {
 		s, err := dbsnapshot.Take(ws.DatabasePath, snapshotsDirFor(ws), strings.TrimSpace(*label))
