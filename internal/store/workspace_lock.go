@@ -10,11 +10,19 @@ import (
 )
 
 // [LAW:single-enforcer] Workspace-exclusivity lock acquisition lives here so
-// the contract — "no Store may be open while the Dolt directory is rotated by
-// lit snapshots restore" — is enforced at exactly one boundary. Store.Open /
-// Store.OpenForRead acquire shared holds; LockWorkspaceExclusive is the only
-// way to take an exclusive hold and is reserved for callers that swap the
-// Dolt directory wholesale.
+// the contract — "nobody may be reading the Dolt directory while it is
+// displaced or rotated wholesale" — is enforced at exactly one boundary.
+// Shared holds mark directory readers: everything that reads the directory's
+// files, whether through an engine (store opens, raw dumps) or a plain file
+// walk (the snapshot copy), via acquireWorkspaceShared in-package or
+// LockWorkspaceShared outside it. The exclusive hold marks directory
+// rotators — operations that displace, swap, or rebuild the directory itself
+// — and LockWorkspaceExclusive is the only way to take one.
+//
+// [LAW:one-source-of-truth] Neither mode's caller roster is listed here: the
+// callers of those two functions ARE the roster, and a prose copy of it
+// drifts (a three-name list written in PR #379 was wrong before the PR
+// merged — it missed lifeboat recover's heal).
 //
 // [LAW:dataflow-not-control-flow] Variability between shared and exclusive
 // modes lives in the (exclusive, maxAttempts, delay) arguments threaded into
@@ -78,19 +86,38 @@ func acquireWorkspaceShared(ctx context.Context, doltRootDir string) (func() err
 		// from joinWithClose) instead of replacing with a fresh sentinel.
 		// errors.Is(err, ErrWorkspaceBusy) continues to detect contention;
 		// any additional diagnostics survive.
-		return nil, fmt.Errorf("lit snapshots restore is rotating the Dolt directory; retry after it completes: %w", err)
+		return nil, fmt.Errorf("a lit operation is rebuilding this workspace's Dolt directory (e.g. snapshots restore, an init backlog adopt, or lifeboat recover); retry after it completes: %w", err)
 	}
 	return release, err
 }
 
-// LockWorkspaceExclusive takes an exclusive hold for the duration of an
-// operation that swaps the Dolt directory wholesale (i.e. lit snapshots
-// restore). Refuses immediately on contention with any shared holder — the
-// operator chose to run restore knowing the workspace is shared, so waiting
-// would hide the conflict instead of surfacing it.
+// LockWorkspaceShared takes the same shared hold every Store open acquires,
+// for a caller that reads the Dolt directory's files without opening a Store
+// — i.e. the `lit snapshots new` copy. The hold coexists with other shared
+// holders (ordinary readers stay unblocked) and contends with the exclusive
+// hold of every directory rotator, so a file walk can never observe a
+// directory mid-displacement. Shares acquireWorkspaceShared's brief retry so
+// a transient rotation is waited out rather than paper-cutting the caller.
 //
-// [LAW:single-enforcer] Exported so the snapshots-restore command can take the
-// hold without reconstructing the lock path; no other code should call this.
+// [LAW:single-enforcer] Reader-vs-rotator exclusion has exactly one boundary
+// — this lock, in shared mode. Before this export, the snapshot copy ran
+// under only the commit lock (a writer-vs-writer gate on a different file),
+// which an adopt's exclusive hold never contends with — the torn-snapshot
+// race of links-sync-pgct.14.
+func LockWorkspaceShared(ctx context.Context, doltRootDir string) (func() error, error) {
+	return acquireWorkspaceShared(ctx, doltRootDir)
+}
+
+// LockWorkspaceExclusive takes an exclusive hold for the duration of an
+// operation that displaces, swaps, or rebuilds the Dolt directory wholesale.
+// Refuses immediately on contention with any shared holder — a rotation was
+// requested knowing the workspace may be in use, so waiting would hide the
+// conflict instead of surfacing it.
+//
+// [LAW:single-enforcer] Exported so CLI-layer rotators can take the hold
+// without reconstructing the lock path. A caller that does not rotate the
+// directory itself has no business with this mode — readers take the shared
+// hold.
 func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() error, error) {
 	release, err := acquireWorkspaceLock(ctx, doltRootDir, true, 1, 0)
 	if errors.Is(err, ErrWorkspaceBusy) {

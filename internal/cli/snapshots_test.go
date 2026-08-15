@@ -3,8 +3,10 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -332,6 +334,133 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 	if len(rotations) != 0 {
 		t.Fatalf("restore rotated the Dolt directory despite the workspace-busy refusal: %v", rotations)
 	}
+}
+
+// TestSnapshotsNew_RefusesWhileWorkspaceExclusive pins the other direction of
+// the reader-vs-rotator contract: while a holder has the exclusive workspace
+// lock — the shape AdoptRemoteByClone's displace+clone window, snapshots
+// restore's rotation, and candidate promotion all take — `lit snapshots new`
+// must refuse with a workspace-busy error instead of walking a directory that
+// is being rewritten under it. Pre-fix, the copy ran under only the commit
+// lock (a different file the rotators never touch), so a snapshot taken
+// mid-adopt was a torn copy of whatever files DOLT_CLONE had written so far
+// (links-sync-pgct.14).
+//
+// Duration: the refusal lands only after the shared acquisition's ~5s retry
+// budget elapses — the same grace every Store open extends to a transient
+// rotation — so this test intentionally takes ~5s of wall clock.
+func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	release, err := store.LockWorkspaceExclusive(context.Background(), ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	defer func() {
+		if relErr := release(); relErr != nil {
+			t.Errorf("release exclusive: %v", relErr)
+		}
+	}()
+
+	before := rawSnapshotDirEntries(t, ws)
+
+	var stdout, stderr bytes.Buffer
+	err = Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	if err == nil {
+		t.Fatalf("snapshots new succeeded while the workspace was exclusively held; expected workspace-busy refusal\nstdout=%s", stdout.String())
+	}
+	// errors.Is is the documented contention discriminator; the message text
+	// is context guidance, not the contract.
+	if !errors.Is(err, store.ErrWorkspaceBusy) {
+		t.Fatalf("snapshots new error %v must wrap store.ErrWorkspaceBusy", err)
+	}
+
+	// "Refuses rather than copying" — the refusal happens before any snapshot
+	// artifact (final dir, .tmp clone target, .reserve sentinel) is created,
+	// so the raw directory listing is byte-identical.
+	after := rawSnapshotDirEntries(t, ws)
+	if !slices.Equal(before, after) {
+		t.Fatalf("refused snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// TestSnapshotsNew_RefusesOnPendingAdoptMarker pins that the copy honors the
+// adopt-pending condemnation the same way every store open does: a marker
+// present under the held workspace lock means the directory is a dead adopt's
+// partial residue, and snapshotting it would install garbage in the listing
+// as a "restorable" recovery point — worse, the retention prune would then
+// evict a good snapshot to keep it.
+func TestSnapshotsNew_RefusesOnPendingAdoptMarker(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	markerPath := store.AdoptPendingMarkerPath(ws.DatabasePath)
+	if err := os.WriteFile(markerPath, []byte(`{"remote":"origin","branch":"main"}`), 0o644); err != nil {
+		t.Fatalf("write adopt-pending marker: %v", err)
+	}
+	defer func() { _ = os.Remove(markerPath) }()
+
+	before := rawSnapshotDirEntries(t, ws)
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	if err == nil {
+		t.Fatalf("snapshots new succeeded on a marker-condemned workspace; expected refusal\nstdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "adopt was interrupted") {
+		t.Fatalf("error %q must carry the standard interrupted-adopt condemnation", err.Error())
+	}
+
+	after := rawSnapshotDirEntries(t, ws)
+	if !slices.Equal(before, after) {
+		t.Fatalf("refused snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// TestSnapshotsNew_RejectsPositionalArgs pins the usage contract: the
+// command's only input is --label, and a stray positional (a natural typo,
+// since sibling restore takes its argument positionally) is a usage error —
+// not a silently unlabeled snapshot the operator can't find later.
+func TestSnapshotsNew_RejectsPositionalArgs(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	before := rawSnapshotDirEntries(t, ws)
+
+	var stdout, stderr bytes.Buffer
+	err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new", "nightly-backup"})
+	if err == nil {
+		t.Fatalf("snapshots new with a positional succeeded; expected usage error\nstdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "usage: lit snapshots new") {
+		t.Fatalf("error %q must be the snapshots-new usage error", err.Error())
+	}
+
+	after := rawSnapshotDirEntries(t, ws)
+	if !slices.Equal(before, after) {
+		t.Fatalf("rejected snapshots new left artifacts behind:\nbefore=%v\nafter=%v", before, after)
+	}
+}
+
+// rawSnapshotDirEntries lists every entry name in the snapshots dir (in
+// os.ReadDir's sorted-by-filename order) with no kind filtering — unlike
+// snapshotsOnDisk it includes .tmp/.reserve residue, because tests asserting
+// "nothing was created" must see partial artifacts too.
+func rawSnapshotDirEntries(t *testing.T, ws workspace.Info) []string {
+	t.Helper()
+	entries, err := os.ReadDir(snapshotsDirFor(ws))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		t.Fatalf("read snapshots dir: %v", err)
+	}
+	names := make([]string, 0, len(entries))
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	return names
 }
 
 func TestSnapshotsRestore_RequiresName(t *testing.T) {
