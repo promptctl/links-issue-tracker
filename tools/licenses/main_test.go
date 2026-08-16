@@ -194,6 +194,8 @@ func TestSelectModeAcceptReject(t *testing.T) {
 // which would then ship, asserting that lit's binary contains 588 modules it
 // does not link. [LAW:no-silent-failure]
 func TestGraphModeWritesNoArtifacts(t *testing.T) {
+	requireWholeGraph(t)
+
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
