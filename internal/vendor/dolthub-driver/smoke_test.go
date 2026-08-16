@@ -23,22 +23,9 @@ import (
 	"testing"
 	"time"
 
-	_ "github.com/go-sql-driver/mysql"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-// runTestsAgainstMySQL can be set to true to run tests against a MySQL database using the MySQL driver.
-// This is useful to test behavior compatibility between the Dolt driver and the MySQL driver. We
-// want the Dolt driver to have the same semantics/behavior as the MySQL driver, so that customers
-// familiar with using the MySQL driver, or code already using the MySQL driver, can easily switch
-// to the Dolt driver. When this option is enabled, the MySQL database connection can be configured
-// using mysqlDsn below.
-var runTestsAgainstMySQL = false
-
-// mysqlDsn specifies the connection string for a MySQL database. Used only when the
-// runTestsAgainstMySQL variable above is enabled.
-var mysqlDsn = "root@tcp(localhost:3306)/?charset=utf8mb4&parseTime=True&loc=Local&multiStatements=true"
 
 // TestPreparedStatements tests that values can be plugged into "?" placeholders in queries.
 func TestPreparedStatements(t *testing.T) {
@@ -123,12 +110,7 @@ func TestMultiStatements(t *testing.T) {
 	// The second result set has an error
 	require.False(t, rows.NextResultSet())
 	require.NotNil(t, rows.Err())
-	// MySQL returns a slightly different error message than Dolt
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1146: table not found: doesnotexist", rows.Err().Error())
-	} else {
-		require.Equal(t, "Error 1146 (42S02): Table 'testdb.doesnotexist' doesn't exist", rows.Err().Error())
-	}
+	require.Equal(t, "Error 1146: table not found: doesnotexist", rows.Err().Error())
 
 	// The third result set should have more rows... but we can't access them after the
 	// error in the second result set. This is the same behavior as the MySQL driver
@@ -164,11 +146,7 @@ func TestMultiStatementsExecContext(t *testing.T) {
 	_, err = conn.ExecContext(ctx, "INSERT into example_table VALUES (100, 'woo'); "+
 		"INSERT into example_table VALUES (1, 2, 'too many'); SET @allStatementsExecuted=1;")
 	require.NotNil(t, err)
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1105: number of values does not match number of columns provided", err.Error())
-	} else {
-		require.Equal(t, "Error 1136 (21S01): Column count doesn't match value count at row 1", err.Error())
-	}
+	require.Equal(t, "Error 1105: number of values does not match number of columns provided", err.Error())
 
 	// Assert that the first insert statement was executed before the error occurred
 	requireResults(t, conn, "SELECT * FROM example_table ORDER BY id;",
@@ -210,11 +188,7 @@ func TestMultiStatementsQueryContext(t *testing.T) {
 	rows, err = conn.QueryContext(ctx, "SELECT * FROM no_table; SELECT 42 FROM dual;")
 	require.Nil(t, rows)
 	require.NotNil(t, err)
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1146: table not found: no_table", err.Error())
-	} else {
-		require.Equal(t, "Error 1146 (42S02): Table 'testdb.no_table' doesn't exist", err.Error())
-	}
+	require.Equal(t, "Error 1146: table not found: no_table", err.Error())
 
 	// To access the error for statements after the first statement, you must use rows.Err()
 	rows, err = conn.QueryContext(ctx, "SELECT 42 FROM dual; SELECT * FROM no_table; SET @allStatementsExecuted=1;")
@@ -225,11 +199,7 @@ func TestMultiStatementsQueryContext(t *testing.T) {
 	require.False(t, rows.Next())
 	require.False(t, rows.NextResultSet())
 	require.NotNil(t, rows.Err())
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1146: table not found: no_table", rows.Err().Error())
-	} else {
-		require.Equal(t, "Error 1146 (42S02): Table 'testdb.no_table' doesn't exist", rows.Err().Error())
-	}
+	require.Equal(t, "Error 1146: table not found: no_table", rows.Err().Error())
 	require.NoError(t, rows.Close())
 
 	// Once an error occurs, additional statements are NOT executed. This code tests that the last SET statement
@@ -269,22 +239,14 @@ func TestMultiStatementsQueryContext(t *testing.T) {
 	require.False(t, rows.Next())
 	require.False(t, rows.NextResultSet())
 	require.NotNil(t, rows.Err())
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1146: table not found: t2", rows.Err().Error())
-	} else {
-		require.Equal(t, "Error 1146 (42S02): Table 'testdb.t2' doesn't exist", rows.Err().Error())
-	}
+	require.Equal(t, "Error 1146: table not found: t2", rows.Err().Error())
 	require.NoError(t, rows.Close())
 
 	// If an error occurs before the first real query results set, the error is returned, with no rows
 	rows, err = conn.QueryContext(ctx, "set @foo='bar'; SELECT * from t2; SELECT 42 FROM dual;")
 	require.NotNil(t, err)
 	require.Nil(t, rows)
-	if !runTestsAgainstMySQL {
-		require.Equal(t, "Error 1146: table not found: t2", err.Error())
-	} else {
-		require.Equal(t, "Error 1146 (42S02): Table 'testdb.t2' doesn't exist", err.Error())
-	}
+	require.Equal(t, "Error 1146: table not found: t2", err.Error())
 }
 
 // TestMultiStatementsWithNoSpaces tests that multistatements are parsed correctly, even when
@@ -345,16 +307,14 @@ func TestMultiStatementsWithEmptyStatements(t *testing.T) {
 	require.NoError(t, rows.Err())
 	require.False(t, rows.Next())
 
-	// NOTE: The MySQL driver does not allow moving past empty statements to the next result set
-	if !runTestsAgainstMySQL {
-		require.True(t, rows.NextResultSet())
-		require.NoError(t, err)
-		require.True(t, rows.Next())
-		require.NoError(t, rows.Scan(&v))
-		require.Equal(t, 24, v)
-		require.NoError(t, rows.Err())
-		require.False(t, rows.Next())
-	}
+	// This driver allows moving past empty statements to the next result set.
+	require.True(t, rows.NextResultSet())
+	require.NoError(t, err)
+	require.True(t, rows.Next())
+	require.NoError(t, rows.Scan(&v))
+	require.Equal(t, 24, v)
+	require.NoError(t, rows.Err())
+	require.False(t, rows.Next())
 
 	require.False(t, rows.NextResultSet())
 	require.NoError(t, rows.Close())
@@ -570,16 +530,6 @@ func initializeTestDatabaseConnection(t *testing.T, clientFoundRows bool) (conn 
 	db, err := sql.Open(DoltDriverName, dsn.String())
 	require.NoError(t, err)
 	require.NoError(t, db.PingContext(ctx))
-
-	if runTestsAgainstMySQL {
-		dsn := mysqlDsn
-		if clientFoundRows {
-			dsn += "&clientFoundRows=true"
-		}
-		db, err = sql.Open("mysql", dsn)
-		require.NoError(t, err)
-		require.NoError(t, db.PingContext(ctx))
-	}
 
 	conn, err = db.Conn(ctx)
 	require.NoError(t, err)

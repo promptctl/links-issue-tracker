@@ -8,7 +8,6 @@ require (
 	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
 	github.com/dolthub/fslock v0.0.3
-	github.com/go-sql-driver/mysql v1.9.3
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148
 	github.com/google/uuid v1.6.0
 	github.com/package-url/packageurl-go v0.1.6
@@ -32,7 +31,6 @@ require (
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
 	cloud.google.com/go/storage v1.50.0 // indirect
-	filippo.io/edwards25519 v1.2.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.2 // indirect
