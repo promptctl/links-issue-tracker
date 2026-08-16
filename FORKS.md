@@ -48,6 +48,13 @@ git diff 62975ef6bf36..lit
 Keep the invariant when you rebase, or that command stops answering the question
 and this file becomes the only record — which is the state it exists to prevent.
 
+Every version and commit quoted in this file's tables and shell snippets is
+checked against `go.mod` on each `go test ./...`, in both directions:
+`tools/licenses/forks_test.go` fails if a pin moves without the prose following,
+and fails if the prose names a pin the build no longer uses. Prose is exempt
+deliberately, so read a version in a sentence as illustration and a version in a
+table as fact.
+
 ## Why forks, and not a `replace` pointed at a rewrite
 
 Because a `replace` directive cannot remove a dependency, and removing
@@ -128,11 +135,20 @@ distribute a derivative work:
   therefore nothing to propagate. If a future rebase pulls in a `NOTICE` file,
   4(d) starts applying and it must travel with our distribution.
 
-One consequence worth knowing before you read a report: because `go.mod` still
-`require`s the upstream coordinate, `tools/licenses` attributes these modules to
-`github.com/dolthub/...` while reading their license text out of a
-`promptctl/...` directory. That is not a mistake being hidden — `Module.ReplacedBy`
-exists to carry the discrepancy, and the report prints it.
+One consequence to know before you read a generated artifact: because `go.mod`
+still `require`s the upstream coordinate, `tools/licenses` attributes these
+modules to `github.com/dolthub/…` while reading their license text out of a
+`promptctl/…` directory. `LICENSE-REPORT.md`, `THIRD_PARTY_LICENSES` and the
+CycloneDX SBOM all name the upstream coordinate and say nothing about the
+substitution — verified 2026-08-15 by generating all three. Only `go run
+./tools/licenses -graph` prints it, under the heading `MODULES WHOSE SOURCE COMES
+FROM A DIFFERENT COORDINATE`.
+
+The license those artifacts report is correct: both forks are Apache-2.0 at both
+ends, so no row is wrong. What is missing is the fact that the source is patched,
+which a reader has to come here or run the graph audit to learn. CycloneDX has a
+`pedigree` field for exactly this; wiring it up is tracked as
+`links-licensing-c0ce.15`.
 
 ## Rebasing a fork onto a newer upstream
 
@@ -158,8 +174,19 @@ go mod tidy
 ```
 
 `go mod tidy` rewrites the raw SHA into a pseudo-version. Finally, update this
-file: both pin tables, and any patch whose retirement condition the rebase just
-met.
+file: both pin tables, the `git diff` snippet, and any patch whose retirement
+condition the rebase just met. `TestForkLedgerQuotesEveryCurrentPin` fails until
+you do, so this is not a step you can forget.
+
+**Watch the go-mysql-server line while you rebase Dolt.** `lit` requires that
+module only *indirectly*, and the `replace` names no old version, so the two can
+come apart without anyone editing go.mod: a rebased Dolt that wants a newer
+go-mysql-server makes `go mod tidy` raise the require line on its own, while the
+`replace` goes on substituting fork source built from the commit the fork branch
+is really based on. go.mod would then name an upstream commit the fork has never
+seen, and the `git diff` above would return upstream churn tangled with lit's
+patches. The same test catches it. The fix is to rebase the fork onto the commit
+go.mod now names — not to edit the table to match.
 
 ## Proving a rebase did not restore a copyleft import
 
@@ -182,11 +209,16 @@ reviewed exceptions. Emptying it is the last ticket of the `links-licensing-c0ce
 epic; until then, read a green `-check` as "no new license slipped in," not as
 "no copyleft is linked."
 
-Two things `-check` deliberately does not cover. It reads only the *linked* set,
-so a copyleft module that sits in the module graph without being linked passes —
-`go run ./tools/licenses -graph` is the wider audit, and it reports rather than
-gates. And it reads Go modules only; the statically linked native C libraries are
-classified separately in `tools/licenses/native.go`.
+What `-check` does *not* cover is anything outside the linked set: a copyleft
+module that sits in the module graph without being linked passes. `go run
+./tools/licenses -graph` is the wider audit over everything `go list -m all`
+resolves, and it reports rather than gates.
+
+It does cover more than Go modules, which is easy to assume otherwise: the four
+native C libraries cgo static-links (ICU, zstd, musl, compiler-rt) are invisible
+to `go list -deps`, so `tools/licenses/native.go` carries them as a curated
+inventory and `-check` gates them alongside the modules. The "158 components" it
+reports is that combined set.
 
 ## Verifying a fork change end to end
 
