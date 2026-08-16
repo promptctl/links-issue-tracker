@@ -15,7 +15,7 @@ import (
 // Under a `replace` directive the go tool reports the ORIGINAL path and
 // version alongside the REPLACEMENT's directory — verified against this
 // repo's own go.mod, where `github.com/dolthub/dolt/go@v0.40.5-...62975ef`
-// resolves to a directory belonging to github.com/brandon-fryslie/dolt/go at
+// resolves to a directory belonging to github.com/promptctl/dolt/go at
 // an entirely different version. A record that carried only Path, Version, and
 // Dir would therefore state a license for a coordinate whose source it never
 // opened, silently, with nothing in the output hinting that a substitution

@@ -169,12 +169,16 @@ require (
 	gopkg.in/yaml.v2 v2.4.0 // indirect
 )
 
-// Transient fork carrying a single patch: dolt's git-backed blobstore served a
-// ranged read by re-streaming (and re-inflating) the whole blob per read, making
-// a large sync pull/fetch O(reads x blobsize). The fork materializes each blob to
-// a local file once and serves ranges by seek. Upstream PR: dolthub/dolt#11264.
-// Drop this replace and bump the dolthub/dolt/go pin once that PR merges.
-replace github.com/dolthub/dolt/go => github.com/brandon-fryslie/dolt/go v0.40.5-0.20260630102541-e6f5f8e3a886
+// lit builds Dolt and go-mysql-server from permanent org-owned forks rather than
+// upstream, because patches that strip copyleft-licensed transitive dependencies
+// out of the linked set need somewhere to live. FORKS.md is the ledger — what
+// each fork patches, why, what would retire each patch, and how to rebase onto a
+// newer upstream without silently restoring a copyleft import. Deliberately not
+// summarized here: the summary this replaced had gone stale.
+// [LAW:one-source-of-truth]
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260816040811-3eabc076e073
+
+replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260816040904-aabd9c24450f
 
 // Locally patched copy of dolthub/driver with the unconditional
 // eventsapi.dolthub.com telemetry goroutine removed — see

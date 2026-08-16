@@ -86,8 +86,8 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		// of that directory gets reported against a coordinate whose source
 		// was never opened.
 		in := "github.com/dolthub/dolt/go\tv0.40.5-0.20260314011441-62975ef6bf36\t" +
-			"/mod/github.com/brandon-fryslie/dolt/go@v0.40.5-0.20260630102541-e6f5f8e3a886\t" +
-			"github.com/brandon-fryslie/dolt/go@v0.40.5-0.20260630102541-e6f5f8e3a886\n"
+			"/mod/github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\t" +
+			"github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\n"
 		got, err := parseModuleList(in)
 		if err != nil {
 			t.Fatalf("parseModuleList: %v", err)
@@ -98,7 +98,7 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		if !got[0].IsReplaced() {
 			t.Errorf("module reports IsReplaced()=false despite a replacement: %+v", got[0])
 		}
-		if want := "github.com/brandon-fryslie/dolt/go@v0.40.5-0.20260630102541-e6f5f8e3a886"; got[0].ReplacedBy != want {
+		if want := "github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073"; got[0].ReplacedBy != want {
 			t.Errorf("ReplacedBy = %q, want %q", got[0].ReplacedBy, want)
 		}
 	})
