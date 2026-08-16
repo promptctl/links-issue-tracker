@@ -5,9 +5,13 @@ tools/session-analysis/processed/
 __pycache__/
 .claude/*.lock
 
-# `just build` / `go build ./cmd/lit` drop the binary here
+# Building any of this module's three main packages drops its binary here.
+# All three are listed, not just the ones someone has been bitten by: an agent
+# running `go build ./tools/...` to check something is how a 13.8MB blob reached
+# a commit once already. [LAW:no-silent-failure]
 /lit
 /licenses
+/mkmanifest
 
 # tools/licenses output — regenerated at release build time
 # (links-supply-chain-w6m9.1, .2); never hand-edited or committed.
