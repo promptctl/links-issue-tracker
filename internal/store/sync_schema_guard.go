@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	drivermysql "github.com/go-sql-driver/mysql"
+	embedded "github.com/dolthub/driver"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
@@ -194,10 +194,11 @@ func (s *Store) producerVersionAtCommit(ctx context.Context, commitHash string) 
 
 // isMissingTableError reports whether a query failed because the table does not
 // exist at the queried revision (MySQL error 1146). The embedded Dolt driver
-// re-wraps engine errors into *mysql.MySQLError, so the number is matched on that
-// typed error rather than on the message text. [LAW:types-are-the-program]
+// re-wraps engine errors into its own *embedded.MySQLError, so the number is
+// matched on that typed error rather than on the message text, which varies with
+// server version and locale. [LAW:types-are-the-program]
 func isMissingTableError(err error) bool {
-	var mysqlErr *drivermysql.MySQLError
+	var mysqlErr *embedded.MySQLError
 	return errors.As(err, &mysqlErr) && mysqlErr.Number == 1146
 }
 

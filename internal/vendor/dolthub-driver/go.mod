@@ -12,10 +12,7 @@ require (
 	github.com/dolthub/dolt/go v0.40.5-0.20260313234613-4069302e7692
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe
 	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab
-	github.com/go-sql-driver/mysql v1.9.3
 	github.com/stretchr/testify v1.11.1
-	gorm.io/driver/mysql v1.5.6
-	gorm.io/gorm v1.25.10
 )
 
 require (
@@ -27,7 +24,6 @@ require (
 	cloud.google.com/go/iam v1.5.2 // indirect
 	cloud.google.com/go/monitoring v1.24.2 // indirect
 	cloud.google.com/go/storage v1.50.0 // indirect
-	filippo.io/edwards25519 v1.1.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azcore v1.21.0 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/azidentity v1.13.1 // indirect
 	github.com/Azure/azure-sdk-for-go/sdk/internal v1.11.2 // indirect
@@ -95,8 +91,6 @@ require (
 	github.com/googleapis/gax-go/v2 v2.14.2 // indirect
 	github.com/hashicorp/golang-lru v1.0.2 // indirect
 	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
-	github.com/jinzhu/inflection v1.0.0 // indirect
-	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/juju/gnuflag v1.0.0 // indirect
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect

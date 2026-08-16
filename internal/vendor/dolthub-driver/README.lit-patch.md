@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **three** independent patches. When refreshing (below), all
+This copy carries **four** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -82,6 +82,53 @@ load and returns its `DBLoadError` as the open error — without that check,
 `ErrDatabaseLocked` failure the retry path exists to catch. See lit ticket
 `links-sync-pgct.11`.
 
+### Patch 4 — own the error type; drop go-sql-driver/mysql (`errors.go`, `mysql_error.go`, `errors_test.go`, `smoke_test.go`, `gorm_test.go` deleted)
+
+Upstream's `translateError` (`errors.go`) built a
+`github.com/go-sql-driver/mysql` `*MySQLError`, and lit's
+`internal/store/sync_schema_guard.go` asserted that same type to read MySQL
+error 1146 ("table doesn't exist") — the pre-goose "no `goose_db_version`
+table → schema 0" path. So an **MPL-2.0** module was a permanent row in lit's
+SBOM in order to carry two fields across a package boundary between two
+modules lit already owns, on both ends.
+
+`mysql_error.go` defines this driver's own `MySQLError` — a server error code
+and a message, the two fields the MySQL protocol's ERR packet gives a client a
+reason to branch on, and exactly the two our producer sets and our consumer
+reads. It was written from the protocol and from those call sites, **not** from
+go-sql-driver's source, per `design-docs/clean-room-reimplementation.md`: this
+epic's default is rewrite, and a shape partly dictated by a wire protocol is
+still not ours to copy out of an MPL-2.0 file. It carries no SQL state, because
+nothing here produces one and nothing in lit reads one.
+
+`Error()` renders `Error <code>: <message>`. That is not a free choice — it is
+this driver's already-tested contract: seven assertions in `smoke_test.go`
+(e.g. `"Error 1146: table not found: doesnotexist"`) pin it, and they pass
+unchanged.
+
+Two test-only removals were needed, because a test-only requirement is still a
+line in `go.mod` and still a row an auditor reads:
+
+- **`smoke_test.go`** carried upstream's MySQL-comparison mode — a hardcoded
+  `var runTestsAgainstMySQL = false` plus `mysqlDsn`, seven
+  `if !runTestsAgainstMySQL { … } else { … }` sites, and a connection swap to
+  `sql.Open("mysql", …)`. Enabling it required editing the source *and* running
+  a MySQL server on `localhost:3306`, which this repo never provisions, so the
+  path was dead in every run. The mode is gone and the `else` arms with it;
+  every test remains and still runs against the Dolt driver.
+  [LAW:dataflow-not-control-flow] — a compile-time toggle gating whether
+  assertions run is a mode, and it is now one fixed path.
+- **`gorm_test.go` was deleted.** It was the *sole* remaining path to the
+  MPL-2.0 coordinate (`dolthub/driver.test → gorm.io/driver/mysql →
+  go-sql-driver/mysql`), and it tested GORM ORM compatibility — which upstream
+  Dolthub cares about and **lit does not use anywhere**. Keeping it would have
+  cost one MPL-2.0 row plus both `gorm.io` modules in lit's module graph to
+  protect an integration lit never exercises.
+
+On refresh, expect upstream to still have all of this. Re-apply the rewrite and
+re-drop both test dependencies; do not "restore" them because the diff looks
+lossy. See lit ticket `links-licensing-c0ce.2`.
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -108,6 +155,13 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      Run `config_load_params_test.go` to confirm the mapping holds, and lit's
      `internal/store` engine_open_contract_test.go for the end-to-end
      behavior.
+   - Patch 4: re-add `mysql_error.go`, point `translateError` at this module's
+     own `*MySQLError`, and re-drop the go-sql-driver/mysql references from
+     `errors_test.go` and `smoke_test.go` (including upstream's
+     `runTestsAgainstMySQL` mode) and delete `gorm_test.go` again. Confirm with
+     `go mod tidy && grep -rn "go-sql-driver" --include="*.go" --include=go.mod .`
+     returning no import or requirement, and that lit's
+     `internal/store` still matches error 1146 via `isMissingTableError`.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 
