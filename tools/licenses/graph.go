@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -41,7 +42,12 @@ import (
 // -m`), so there is no .Module indirection and no stdlib to skip; only the
 // main module is dropped, for the same reason the linked scan drops it — lit's
 // own code is not a third-party dependency it must account for.
-const graphModuleTemplate = `{{if not .Main}}{{.Path}}` + "\t" + `{{.Version}}` + "\t" + `{{.Dir}}` + "\t" + `{{if .Replace}}{{.Replace.Path}}@{{.Replace.Version}}{{end}}` + "\n{{end}}"
+// The replacement's version is emitted only when there is one: a filesystem
+// replacement (`replace X => ./internal/vendor/y`) has no version, and an
+// unguarded `@{{.Replace.Version}}` renders it as a trailing `@` — a coordinate
+// shape that exists nowhere, in a report whose whole job is naming coordinates
+// exactly.
+const graphModuleTemplate = `{{if not .Main}}{{.Path}}` + "\t" + `{{.Version}}` + "\t" + `{{.Dir}}` + "\t" + `{{if .Replace}}{{.Replace.Path}}{{if .Replace.Version}}@{{.Replace.Version}}{{end}}{{end}}` + "\n{{end}}"
 
 // GraphModules resolves every module in the go.mod build list — `go list -m
 // all`, the set an auditor reading go.mod/go.sum sees — with the source of
@@ -119,7 +125,7 @@ func GraphModules() ([]Module, error) {
 // changing what the repository pins is not, so the effect the download needs
 // (a populated module cache) is kept and the effect it merely causes is undone.
 // [LAW:effects-at-boundaries]
-func withGoSumPreserved(fn func() error) error {
+func withGoSumPreserved(fn func() error) (err error) {
 	out, err := exec.Command("go", "env", "GOMOD").Output()
 	if err != nil {
 		return fmt.Errorf("locate go.mod via `go env GOMOD`: %w", err)
@@ -139,23 +145,33 @@ func withGoSumPreserved(fn func() error) error {
 	}
 	existedBefore := readErr == nil
 
-	fnErr := fn()
+	// Deferred, so the restore survives every way fn can end — including a
+	// panic in the go subprocesses. An undeferred restore is only a restore on
+	// the paths you thought of, and the state it fails to undo (a go.sum
+	// carrying hundreds of spurious lines) is one an agent may well commit
+	// without noticing. Errors are JOINED rather than replaced: a failed
+	// download that also trips a failed restore must not report only the
+	// restore, or the real cause is lost exactly when it matters.
+	// [LAW:no-silent-failure]
+	defer func() {
+		after, readAfterErr := os.ReadFile(path)
+		if readAfterErr != nil && !os.IsNotExist(readAfterErr) {
+			err = errors.Join(err, fmt.Errorf("re-read %s: %w", path, readAfterErr))
+			return
+		}
+		switch {
+		case !existedBefore && readAfterErr == nil:
+			if rmErr := os.Remove(path); rmErr != nil {
+				err = errors.Join(err, fmt.Errorf("remove the %s the audit created: %w", path, rmErr))
+			}
+		case existedBefore && (readAfterErr != nil || !bytes.Equal(before, after)):
+			if wErr := os.WriteFile(path, before, 0o644); wErr != nil {
+				err = errors.Join(err, fmt.Errorf("restore %s after the audit modified it: %w", path, wErr))
+			}
+		}
+	}()
 
-	after, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		return fmt.Errorf("re-read %s: %w", path, err)
-	}
-	switch {
-	case !existedBefore && err == nil:
-		if rmErr := os.Remove(path); rmErr != nil {
-			return fmt.Errorf("remove the %s the audit created: %w", path, rmErr)
-		}
-	case existedBefore && (err != nil || !bytes.Equal(before, after)):
-		if wErr := os.WriteFile(path, before, 0o644); wErr != nil {
-			return fmt.Errorf("restore %s after the audit modified it: %w", path, wErr)
-		}
-	}
-	return fnErr
+	return fn()
 }
 
 // licenseTextDirs are directory names whose entire purpose is to hold license
@@ -184,9 +200,14 @@ var licenseNameHint = regexp.MustCompile(`(?i)licen[sc]e|copying|copyright`)
 // licenseNameHint is a 5.5 MB binary database — licenseclassifier's own corpus
 // of license texts, which is data for a license detector rather than a grant
 // binding anyone. 4 MiB clears every real text with room to spare and keeps a
-// pathological file from being read; anything skipped is REPORTED as skipped
-// rather than dropped, so the cap can never quietly hide a finding.
-// [LAW:no-silent-failure]
+// pathological file from being read.
+//
+// A file past the cap is reported AS SKIPPED rather than dropped, so the cap
+// alone never hides a finding — with one deliberate exception: a file that is
+// both oversize and machine content (that 5.5 MB .db) is dropped, because
+// isLicenseText rules it out on its extension the same way it would if the
+// classifier had read it and found nothing. The cap changes what gets read, not
+// what counts as a license. [LAW:no-silent-failure]
 const maxLicenseFileSize = 4 << 20
 
 // oversizeLicense is the License value recorded for a candidate past

@@ -85,6 +85,26 @@ func elidePerModule(rows []graphRow, limit int) []graphRow {
 	return out
 }
 
+// permitsHit reports whether a hit needs no reader, and it is deliberately
+// stricter than LicenseFilter.Permits about where a module exception reaches.
+//
+// An allowlisted license is fine at any depth — a permissive license is
+// permissive wherever it appears. An EXCEPTION is not: it records one human's
+// reading of one file, and policy.json says which file in as many words
+// ("Human-verified against the module's LICENSE"). Letting it excuse an
+// arbitrary text deeper in the tree would suppress a license nobody ever
+// looked at on the strength of having looked at a different one — and the rows
+// it would suppress first are the unclassifiable ones, which this report calls
+// the worst kind. Both current exceptions cover modules that ship only a root
+// LICENSE, so this changes no output today; it is the rule that is wrong
+// without it. [LAW:no-silent-failure]
+func permitsHit(filter LicenseFilter, module string, h LicenseHit) bool {
+	if filter.Allows(h.License) {
+		return true
+	}
+	return h.IsRootGrant() && filter.Permits(module, h.License)
+}
+
 // partitionGraph sorts every hit into the section that describes what a reader
 // must do about it, dropping everything the policy already permits.
 //
@@ -122,7 +142,7 @@ func partitionGraph(entries []GraphEntry, filter LicenseFilter) []graphSection {
 			continue
 		}
 		for _, h := range e.Hits {
-			if filter.Permits(e.Module.Path, h.License) {
+			if permitsHit(filter, e.Module.Path, h) {
 				continue
 			}
 			row := graphRow{Module: e.Module.Path, Version: e.Module.Version, Path: h.RelPath, License: h.License}
@@ -188,8 +208,11 @@ func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) e
 		reported += len(s.Rows)
 	}
 
+	// "found", not "classified": a handful of hits are files past
+	// maxLicenseFileSize that were recorded without ever being read, and a
+	// count that called those classified would overstate what the audit knows.
 	if _, err := fmt.Fprintf(w,
-		"license graph audit: %d modules in the go.mod build list, %d license texts classified, %d rows needing a reader\n",
+		"license graph audit: %d modules in the go.mod build list, %d license texts found, %d rows needing a reader\n",
 		len(entries), hits, reported); err != nil {
 		return err
 	}

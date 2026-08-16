@@ -39,7 +39,7 @@ func (m Module) IsReplaced() bool { return m.ReplacedBy != "" }
 // library packages have no .Module and are skipped, and the main module
 // itself (Module.Main) is skipped because the binary's own code isn't a
 // third-party dependency it must attribute.
-const linkedModuleTemplate = `{{if and .Module (not .Module.Main)}}{{.Module.Path}}` + "\t" + `{{.Module.Version}}` + "\t" + `{{.Module.Dir}}` + "\t" + `{{if .Module.Replace}}{{.Module.Replace.Path}}@{{.Module.Replace.Version}}{{end}}` + "\n{{end}}"
+const linkedModuleTemplate = `{{if and .Module (not .Module.Main)}}{{.Module.Path}}` + "\t" + `{{.Module.Version}}` + "\t" + `{{.Module.Dir}}` + "\t" + `{{if .Module.Replace}}{{.Module.Replace.Path}}{{if .Module.Replace.Version}}@{{.Module.Replace.Version}}{{end}}{{end}}` + "\n{{end}}"
 
 // LinkedModules resolves the set of external modules actually compiled into
 // pkg (e.g. "./cmd/lit") — the same set `go build` would link — via `go list

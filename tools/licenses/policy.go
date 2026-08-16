@@ -92,13 +92,22 @@ func (p *Policy) Filter() LicenseFilter {
 	return LicenseFilter{allowed: allowed, excepted: excepted}
 }
 
-// Permits reports whether license is acceptable for module: it is in
-// AllowedLicenses, or the (module, license) pair carries a ModuleException.
-// [LAW:types-are-the-program] the two accept shapes are enumerated here, so the
-// reject case is exactly everything that is neither — no module, including an
-// Unknown-classified one, can slip through without matching one of them.
+// Allows reports whether license is in the policy's allowlist. Separate from
+// Permits because the two accept shapes have different reach: an allowlisted
+// license is permissive wherever it turns up, whereas an exception was granted
+// after a human read one specific file. The module-graph audit needs to tell
+// those apart; the link-closure gate, where every entry is a module's own
+// grant, does not care.
+func (f LicenseFilter) Allows(license string) bool { return f.allowed[license] }
+
+// Permits reports whether license is acceptable as module's own license grant:
+// it is in AllowedLicenses, or the (module, license) pair carries a
+// ModuleException. [LAW:types-are-the-program] the two accept shapes are
+// enumerated here, so the reject case is exactly everything that is neither —
+// no module, including an Unknown-classified one, can slip through without
+// matching one of them.
 func (f LicenseFilter) Permits(module, license string) bool {
-	return f.allowed[license] || f.excepted[exKey{module, license}]
+	return f.Allows(license) || f.excepted[exKey{module, license}]
 }
 
 // CheckPolicy is the accept/reject predicate over the whole inventory: a module

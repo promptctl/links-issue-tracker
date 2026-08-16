@@ -274,6 +274,37 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 	}
 }
 
+// TestModuleExceptionsReachOnlyTheRootGrant pins that a policy exception
+// excuses the file a human actually read and nothing else.
+//
+// policy.json grants github.com/kch42/buzhash the license "Unknown" with the
+// reason "Human-verified against the module's LICENSE" — its ROOT grant. If
+// that exception also covered an unclassifiable file buried in the same
+// module's testdata, the report would drop it on the strength of a human
+// having read a different file, and the rows it would drop first are the
+// unclassifiable ones this report calls the worst kind. An allowlisted license
+// is different: permissive is permissive at any depth. [LAW:no-silent-failure]
+func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
+	policy := &Policy{
+		AllowedLicenses:  []string{"MIT"},
+		ModuleExceptions: []ModuleException{{Module: "excepted/mod", License: unclassifiedLicense}},
+	}
+	filter := policy.Filter()
+
+	if !permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: unclassifiedLicense}) {
+		t.Error("the exception must cover the module's own root grant — that is the file it was verified against")
+	}
+	if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "testdata/COPYING", License: unclassifiedLicense}) {
+		t.Error("the exception must NOT reach a nested file nobody verified")
+	}
+	if !permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "vendor/dep/LICENSE", License: "MIT"}) {
+		t.Error("an allowlisted license is permissive at any depth and needs no exception")
+	}
+	if permitsHit(filter, "other/mod", LicenseHit{RelPath: "LICENSE", License: unclassifiedLicense}) {
+		t.Error("an exception is keyed to its module and must not cover another one")
+	}
+}
+
 // TestPartitionGraphReportsReplacedModulesRegardlessOfLicense pins the one
 // section that is not about a violation: a replaced module is listed because
 // its coordinate and its source disagree, which stays true when the license is
