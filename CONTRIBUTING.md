@@ -77,6 +77,18 @@ Run it when you touch `tools/licenses` or change a dependency; CI does not.
 The install story is the same one end users follow — see
 [README.md](README.md#install).
 
+## Forked dependencies
+
+`lit` does not build against upstream Dolt or go-mysql-server. Both resolve,
+through `replace` directives in [`go.mod`](go.mod), to forks owned by the
+`promptctl` organization — removing a copyleft-licensed transitive dependency
+means changing what its importer imports, and you can only do that from inside a
+fork. Before bumping either pin, rebasing a fork, or wondering why a `replace` is
+there at all, read **[FORKS.md](FORKS.md)**: the ledger of what each fork
+patches and what would retire each patch, the Apache-2.0 notices those patches
+oblige, the rebase procedure, and the check that proves a rebase did not restore
+a copyleft import.
+
 ## Architectural-law markers
 
 Decisions in this codebase are cited inline against the architectural laws they

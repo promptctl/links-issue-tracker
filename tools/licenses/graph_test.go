@@ -313,7 +313,7 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 func TestPartitionGraphReportsReplacedModulesRegardlessOfLicense(t *testing.T) {
 	policy := &Policy{AllowedLicenses: []string{"Apache-2.0"}}
 	entries := []GraphEntry{{
-		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", ReplacedBy: "github.com/brandon-fryslie/dolt/go@v0.40.5-later"},
+		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", ReplacedBy: "github.com/promptctl/dolt/go@v0.40.5-later"},
 		Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
 	}}
 
@@ -324,7 +324,7 @@ func TestPartitionGraphReportsReplacedModulesRegardlessOfLicense(t *testing.T) {
 		if len(s.Rows) != 1 {
 			t.Fatalf("want the replaced module reported, got %+v", s.Rows)
 		}
-		if !strings.Contains(s.Rows[0].Path, "brandon-fryslie") {
+		if !strings.Contains(s.Rows[0].Path, "promptctl") {
 			t.Errorf("replacement row must name where the source came from, got %q", s.Rows[0].Path)
 		}
 		if s.Rows[0].License != "Apache-2.0" {
