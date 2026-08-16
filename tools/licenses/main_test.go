@@ -188,6 +188,45 @@ func TestSelectModeAcceptReject(t *testing.T) {
 	}
 }
 
+// TestGraphModeDispatchesToTheAuditAndWritesNothing is the cheap half of the
+// no-artifacts guarantee, and it runs on every PR.
+//
+// The property it protects is worth protecting there: every mode takes the
+// same argument list, so a dispatch mistake in mode.run would send -graph into
+// run(), which overwrites THIRD_PARTY_LICENSES and LICENSE-REPORT.md — and
+// those SHIP, asserting that lit's binary contains 588 modules it does not
+// link. Gating that behind the whole-graph download would leave the regression
+// reaching master with CI green.
+//
+// It buys its speed by running from outside any Go module, where the graph
+// resolution fails at once instead of fetching the build list. That the error
+// comes from the module-graph path is what proves the dispatch went to
+// runGraph rather than run(); that no file appears proves the mode wrote
+// nothing on the way out. [LAW:behavior-not-structure]
+func TestGraphModeDispatchesToTheAuditAndWritesNothing(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
+
+	t.Chdir(t.TempDir())
+
+	var stdout strings.Builder
+	err := modeGraph.run(litPkg, bundlePath, reportPath, sbomPath, "9.9.9", &stdout)
+	if err == nil {
+		t.Fatal("want an error: the graph audit cannot resolve a build list from outside a module")
+	}
+	if !strings.Contains(err.Error(), "not inside a Go module") {
+		t.Errorf("error came from somewhere other than the graph resolver — dispatch may not reach runGraph: %v", err)
+	}
+
+	for _, path := range []string{bundlePath, reportPath, sbomPath} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("graph mode wrote %s; it must write no artifacts", path)
+		}
+	}
+}
+
 // TestGraphModeWritesNoArtifacts pins that -graph is read-only. It shares its
 // argument list with the generating mode, so a dispatch mistake would have it
 // silently overwriting THIRD_PARTY_LICENSES with a whole-graph inventory —
