@@ -55,4 +55,12 @@ trap 'rm -f "$PROFILE"' EXIT INT TERM
 	[ "$OFFLINE" -eq 1 ] && echo '(deny network*)'
 } >"$PROFILE"
 
-exec sandbox-exec -f "$PROFILE" "$@"
+# Deliberately not `exec`: exec replaces this process, so the EXIT trap above would
+# never fire and every invocation would leak a profile into TMPDIR. Running it as a
+# child lets the trap clean up. Seatbelt reads the profile at startup and never
+# consults it again, so removing it while the child runs is safe.
+set +e
+sandbox-exec -f "$PROFILE" "$@"
+status=$?
+set -e
+exit "$status"
