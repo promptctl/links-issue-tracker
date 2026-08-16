@@ -7,6 +7,7 @@ __pycache__/
 
 # `just build` / `go build ./cmd/lit` drop the binary here
 /lit
+/licenses
 
 # tools/licenses output — regenerated at release build time
 # (links-supply-chain-w6m9.1, .2); never hand-edited or committed.

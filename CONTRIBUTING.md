@@ -54,13 +54,25 @@ after `just setup`, or run via `just`):
 ```sh
 go build ./cmd/lit    # build the lit binary
 ./scripts/install.sh  # build and install onto your PATH (wires cgo paths itself)
-go test ./...         # run the full test suite (needs the dolt CLI; see above)
+go test ./...         # run the test suite (needs the dolt CLI; see above)
 golangci-lint run     # lint against .golangci.yml before opening a PR
 go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff
 ```
 
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
+
+One group of tests is opt-out of `go test ./...` and says so when it skips: the
+whole-module-graph license audit in `tools/licenses`. Running it means
+`go mod download all`, which fetches every module the build does not need —
+several gigabytes against a cold cache — so it is gated behind an environment
+variable rather than charged to every run:
+
+```sh
+LIT_LICENSE_GRAPH_AUDIT=1 go test ./tools/licenses/
+```
+
+Run it when you touch `tools/licenses` or change a dependency; CI does not.
 
 The install story is the same one end users follow — see
 [README.md](README.md#install).

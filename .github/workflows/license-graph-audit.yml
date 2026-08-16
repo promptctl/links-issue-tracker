@@ -1,0 +1,69 @@
+name: License graph audit
+
+# The whole-module-graph license audit, run on a schedule rather than per PR.
+#
+# This is NOT a merge gate and deliberately not wired into ci.yml. Resolving the
+# graph means `go mod download all` — every module in go.mod whether or not the
+# build needs it, several gigabytes against a cold cache — while ci.yml budgets
+# under five minutes for the entire merge gate. Charging that to every pull
+# request would blow the budget to re-answer a question that only changes when a
+# dependency does.
+#
+# But it has to run SOMEWHERE, or `tools/licenses`' graph mode and its
+# acceptance tests are code nothing exercises: the whole reason the mode exists
+# is that a dependency bump can put a GPL coordinate in go.sum with every
+# existing check staying green, and a measurement nobody takes cannot notice
+# that. Weekly is matched to how often this answer moves.
+#
+# Whether any of what it reports should FAIL a build is a separate decision that
+# belongs to links-licensing-c0ce.9, not here. This job's failure means the
+# audit itself broke.
+
+on:
+  schedule:
+    # Mondays, 09:00 UTC.
+    - cron: "0 9 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          # No module cache, on purpose, and it costs nothing to say so: this
+          # job's whole point is that the audit works from a COLD cache, which
+          # is the acceptance criterion links-licensing-c0ce.1 was written
+          # against. Caching would both hide a regression in that property and
+          # push several gigabytes of modules the build never needs into a
+          # 10 GB repo-wide cache shared with every other workflow.
+          cache: false
+
+      - name: Whole-graph acceptance tests
+        env:
+          LIT_LICENSE_GRAPH_AUDIT: "1"
+        run: go test ./tools/licenses/ -run TestGraph -v -timeout 30m
+
+      # Printed into the run log so the posture is readable without checking out
+      # the repo, and so a diff between two weeks' runs is a diff a human can
+      # actually read. It reports and exits 0 — see WriteGraphReport for why.
+      - name: Report
+        run: go run ./tools/licenses -graph
+
+      # The audit restores go.sum after resolving the graph; if that ever breaks,
+      # the tree is left carrying hundreds of module hashes no build needs and
+      # `verify`'s tidy check starts failing on unrelated PRs. Catch it here,
+      # where the cause is obvious, rather than there, where it is not.
+      - name: go.sum must be untouched
+        run: |
+          set -euo pipefail
+          if ! git diff --exit-code go.mod go.sum; then
+            echo "::error::the license graph audit modified go.mod/go.sum — withGoSumPreserved is not holding." >&2
+            exit 1
+          fi

@@ -21,10 +21,16 @@
 // resolves to — the modules the compiler actually links into the shipped
 // binary — not the full go.mod graph (which includes modules only reachable
 // via other build tags, other packages in this repo, or test-only paths).
+// That wider graph is not unexamined — it is what -graph below measures — but
+// it is deliberately not what the bundle, report, and SBOM describe, because
+// those three assert what is IN the binary and must not name a module that
+// isn't.
+//
 // Reading pointer: a one-time hand-authored analysis of the full graph lives
-// in LICENSE-ANALYSIS.md / docs/license-inventory.tsv in the repo history;
-// this tool supersedes it for the linked set with a re-runnable generator
-// rather than a static document that drifts from the dependency tree.
+// in LICENSE-ANALYSIS.md / docs/license-inventory.tsv in the repo history.
+// This tool supersedes it in both scopes now — the linked set by generation,
+// the full graph by -graph — so neither number is a thing a human measured
+// once and wrote down.
 //
 // A second mode, -check, is the CI license-policy gate: it builds the same
 // inventory and fails (non-zero exit) if any linked module's classified license
@@ -32,6 +38,18 @@
 // licenses plus documented per-module exceptions. It writes no artifacts.
 // Because it shares buildEntries with generation, it checks the exact licenses
 // the report documents. [LAW:single-enforcer]
+//
+// A third mode, -graph, audits a deliberately different set: every module in
+// the go.mod build list (`go list -m all`), linked or not. The two scopes
+// answer two questions that have different right answers. What the binary
+// links decides what lit must attribute and what legally binds it; what go.mod
+// declares decides what an auditor — or a policy engine reading go.sum — will
+// see, and that set is larger and carries coordinates the compiler never
+// touches. Keeping -graph out of the shipped artifacts is the point: it must
+// never add a module to the SBOM that is not in the binary. It shares the
+// classifier and the policy with the other two modes so the word "permissive"
+// cannot come to mean two things, and it reports rather than gates — see
+// WriteGraphReport for why the measurement chose that. [LAW:single-enforcer]
 //
 // Invocation:
 //
@@ -43,6 +61,7 @@
 //	  -app-version 0.2.0
 //
 //	go run ./tools/licenses -check -pkg ./cmd/lit   # license-policy gate
+//	go run ./tools/licenses -graph                  # module-graph audit
 package main
 
 import (
@@ -78,22 +97,66 @@ func main() {
 		sbomPath   = flag.String("sbom", "", "output path for the CycloneDX SBOM (empty: skip SBOM generation)")
 		appVersion = flag.String("app-version", "", "lit version to record as the SBOM's subject component (empty: omit the version)")
 		check      = flag.Bool("check", false, "license-policy gate mode: verify every linked module's license against policy.json and exit non-zero on any violation; writes no artifacts")
+		graph      = flag.Bool("graph", false, "module-graph audit mode: classify every module `go list -m all` resolves — the set an auditor reading go.mod/go.sum sees, not just what the binary links — and report every license outside policy.json; writes no artifacts and does not gate")
 	)
 	flag.Parse()
 
-	// Two operations over one inventory: generate the compliance artifacts
-	// (default) or enforce the license policy (-check). The default stays
-	// canonical; -check is the CI gate and writes nothing. [LAW:no-mode-explosion]
-	// exactly two modes, dispatched here — not a flag threaded through one body.
-	var err error
-	if *check {
-		err = runCheck(*pkg, os.Stdout)
-	} else {
-		err = run(*pkg, *bundlePath, *reportPath, *sbomPath, *appVersion, os.Stdout)
+	op, err := selectMode(*check, *graph)
+	if err == nil {
+		err = op.run(*pkg, *bundlePath, *reportPath, *sbomPath, *appVersion, os.Stdout)
 	}
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "licenses: %v\n", err)
 		os.Exit(1)
+	}
+}
+
+// mode is the single operation this invocation performs. The command line
+// offers the modes as independent booleans for backward compatibility — CI and
+// release-validate.yml have passed `-check` since the gate was built — but two
+// booleans can both be set, and a program that silently honoured one and
+// ignored the other would do something the operator did not ask for. Collapsing
+// them into one value at the boundary makes that state unrepresentable
+// everywhere downstream. [LAW:types-are-the-program]
+type mode int
+
+const (
+	modeGenerate mode = iota // default: write bundle, report, and optionally SBOM
+	modeCheck                // -check: the CI license-policy gate over the link closure
+	modeGraph                // -graph: the module-graph audit over the whole build list
+)
+
+// selectMode is the boundary that turns the mutually-exclusive mode flags into
+// the one operation to run, failing loudly when more than one is given rather
+// than picking a winner. [LAW:parse-dont-validate] its output is a value that
+// could not have existed before the check, so nothing downstream re-examines
+// the flags or has to decide what two modes at once would mean.
+func selectMode(check, graph bool) (mode, error) {
+	// [LAW:no-silent-failure] `-check -graph` almost certainly means the
+	// operator wanted both audits and will otherwise believe they got them.
+	if check && graph {
+		return 0, fmt.Errorf("-check and -graph select different operations; run the tool once for each")
+	}
+	if check {
+		return modeCheck, nil
+	}
+	if graph {
+		return modeGraph, nil
+	}
+	return modeGenerate, nil
+}
+
+// run dispatches the selected mode. Every mode takes the same arguments and
+// ignores what it does not need, so main() holds one call rather than a branch
+// whose arms drift apart. [LAW:dataflow-not-control-flow]
+func (m mode) run(pkg, bundlePath, reportPath, sbomPath, appVersion string, stdout io.Writer) error {
+	switch m {
+	case modeCheck:
+		return runCheck(pkg, stdout)
+	case modeGraph:
+		return runGraph(stdout)
+	default:
+		return run(pkg, bundlePath, reportPath, sbomPath, appVersion, stdout)
 	}
 }
 
