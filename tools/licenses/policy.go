@@ -63,14 +63,24 @@ type Violation struct {
 // for why the license is part of the key.
 type exKey struct{ module, license string }
 
-// CheckPolicy is the accept/reject predicate over the whole inventory: a module
-// passes iff its classified license is in AllowedLicenses OR its (module,
-// license) pair has a ModuleException. Everything else is a violation. Pure and
-// order-deterministic (violations follow entries' order). [LAW:types-are-the-program]
-// the two accept shapes are enumerated here, so the reject case is exactly
-// everything that is neither — no module, including an Unknown-classified one,
-// can slip through without matching one of them.
-func CheckPolicy(entries []Entry, p *Policy) []Violation {
+// LicenseFilter is the policy's accept/reject rule with its lookup tables built:
+// the one place in this tool that decides whether a (module, license) pair is
+// acceptable. It exists as a type rather than as a loop inside CheckPolicy
+// because two callers now need that ruling — the link-closure gate, which turns
+// a rejection into a build failure, and the module-graph audit, which turns one
+// into a reported row. Extracting it means "permissive" cannot come to mean two
+// slightly different things in the two places that use the word.
+// [LAW:single-enforcer]
+type LicenseFilter struct {
+	allowed  map[string]bool
+	excepted map[exKey]bool
+}
+
+// Filter compiles the policy into its accept/reject rule once, so a caller
+// ruling on hundreds of rows does not rebuild the lookup tables per row.
+// [LAW:parse-dont-validate] the returned value is the policy already
+// interpreted; nothing downstream re-reads AllowedLicenses or ModuleExceptions.
+func (p *Policy) Filter() LicenseFilter {
 	allowed := make(map[string]bool, len(p.AllowedLicenses))
 	for _, name := range p.AllowedLicenses {
 		allowed[name] = true
@@ -79,13 +89,26 @@ func CheckPolicy(entries []Entry, p *Policy) []Violation {
 	for _, e := range p.ModuleExceptions {
 		excepted[exKey{e.Module, e.License}] = true
 	}
+	return LicenseFilter{allowed: allowed, excepted: excepted}
+}
 
+// Permits reports whether license is acceptable for module: it is in
+// AllowedLicenses, or the (module, license) pair carries a ModuleException.
+// [LAW:types-are-the-program] the two accept shapes are enumerated here, so the
+// reject case is exactly everything that is neither — no module, including an
+// Unknown-classified one, can slip through without matching one of them.
+func (f LicenseFilter) Permits(module, license string) bool {
+	return f.allowed[license] || f.excepted[exKey{module, license}]
+}
+
+// CheckPolicy is the accept/reject predicate over the whole inventory: a module
+// passes iff LicenseFilter permits its classified license. Everything else is a
+// violation. Pure and order-deterministic (violations follow entries' order).
+func CheckPolicy(entries []Entry, p *Policy) []Violation {
+	filter := p.Filter()
 	var violations []Violation
 	for _, e := range entries {
-		if allowed[e.LicenseName] {
-			continue
-		}
-		if excepted[exKey{e.Module.Path, e.LicenseName}] {
+		if filter.Permits(e.Module.Path, e.LicenseName) {
 			continue
 		}
 		violations = append(violations, Violation{Module: e.Module.Path, Version: e.Module.Version, License: e.LicenseName})

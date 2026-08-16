@@ -148,6 +148,72 @@ func TestRunUnwritableBundlePath(t *testing.T) {
 	}
 }
 
+// TestSelectModeAcceptReject is the accept/reject table for the mode flags.
+// The command line exposes the modes as independent booleans, so "both set" is
+// a shape a user can type; the boundary's job is to make sure it never becomes
+// a shape the rest of the program has to interpret. Silently honouring one and
+// ignoring the other is the failure this table forbids — an operator who asked
+// for two audits and got one would have no way to notice.
+// [LAW:parse-dont-validate]
+func TestSelectModeAcceptReject(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		check, graph bool
+		want         mode
+		wantErr      bool
+	}{
+		{name: "no flags generates the artifacts", want: modeGenerate},
+		{name: "-check runs the policy gate", check: true, want: modeCheck},
+		{name: "-graph runs the module-graph audit", graph: true, want: modeGraph},
+		{name: "-check -graph is refused, not silently resolved", check: true, graph: true, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := selectMode(tc.check, tc.graph)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("selectMode(%v, %v) = %v, want an error", tc.check, tc.graph, got)
+				}
+				if !strings.Contains(err.Error(), "-check") || !strings.Contains(err.Error(), "-graph") {
+					t.Errorf("error must name both conflicting flags, got: %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("selectMode(%v, %v): %v", tc.check, tc.graph, err)
+			}
+			if got != tc.want {
+				t.Errorf("selectMode(%v, %v) = %v, want %v", tc.check, tc.graph, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestGraphModeWritesNoArtifacts pins that -graph is read-only. It shares its
+// argument list with the generating mode, so a dispatch mistake would have it
+// silently overwriting THIRD_PARTY_LICENSES with a whole-graph inventory —
+// which would then ship, asserting that lit's binary contains 588 modules it
+// does not link. [LAW:no-silent-failure]
+func TestGraphModeWritesNoArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
+	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
+	sbomPath := filepath.Join(dir, "SBOM.cdx.json")
+
+	var stdout strings.Builder
+	if err := modeGraph.run(litPkg, bundlePath, reportPath, sbomPath, "9.9.9", &stdout); err != nil {
+		t.Fatalf("graph mode: %v", err)
+	}
+
+	for _, path := range []string{bundlePath, reportPath, sbomPath} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Errorf("graph mode wrote %s; it must write no artifacts", path)
+		}
+	}
+	if !strings.Contains(stdout.String(), "license graph audit:") {
+		t.Errorf("graph mode did not emit its report to stdout: %q", stdout.String())
+	}
+}
+
 // TestLinkedModulesDeterministic pins the "deterministic output for a fixed
 // dependency set" acceptance criterion: two independent runs against the same
 // package must resolve to byte-identical module lists.

@@ -1,0 +1,452 @@
+package main
+
+import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// writeFixture creates dir/name with content, making parent directories as
+// needed, so a test can state a module's on-disk shape as a path list.
+func writeFixture(t *testing.T, root, name, content string) {
+	t.Helper()
+	full := filepath.Join(root, name)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", name, err)
+	}
+	if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+		t.Fatalf("write %s: %v", name, err)
+	}
+}
+
+// TestScanLicenseTextsAcceptReject is the accept/reject table for what the
+// graph scan will even look at. Every shape below was taken from this
+// repository's actual module graph, not invented: the rejected names are files
+// that really appear (Oracle's SDK models a license-management API in ~90 Go
+// files, CycloneDX ships license fixtures as JSON and XML, zap has a
+// checklicense.sh), and the accepted ones include the two conventions that
+// matter — a module that NAMES the file and a module that names the FOLDER.
+//
+// The freetype shape is the reason the location route exists at all: its root
+// LICENSE is a pointer document naming licenses/gpl.txt, so a scan keyed only
+// on filenames sees no GPL anywhere in the module. [LAW:types-are-the-program]
+func TestScanLicenseTextsAcceptReject(t *testing.T) {
+	root := t.TempDir()
+
+	// Accepted by the name route.
+	writeFixture(t, root, "LICENSE", "MIT")
+	writeFixture(t, root, "COPYING.LESSER", "LGPL")
+	writeFixture(t, root, "Sun-LICENSE", "whatever")
+	writeFixture(t, root, "testdata/deep/nested/COPYING", "GPL")
+	// Accepted by the location route: names that announce nothing.
+	writeFixture(t, root, "licenses/gpl.txt", "GPL")
+	writeFixture(t, root, "licenses/ftl.txt", "FTL")
+	// Rejected: nothing about the name or the location suggests a license.
+	writeFixture(t, root, "main.go", "package main")
+	writeFixture(t, root, "README.md", "docs")
+	writeFixture(t, root, "internal/notice.txt", "not a grant")
+
+	got, err := scanLicenseTexts(root)
+	if err != nil {
+		t.Fatalf("scanLicenseTexts: %v", err)
+	}
+	found := make(map[string]bool, len(got))
+	for _, p := range got {
+		found[p] = true
+	}
+
+	for _, want := range []string{
+		"LICENSE",
+		"COPYING.LESSER",
+		"Sun-LICENSE",
+		filepath.Join("testdata", "deep", "nested", "COPYING"),
+		filepath.Join("licenses", "gpl.txt"),
+		filepath.Join("licenses", "ftl.txt"),
+	} {
+		if !found[want] {
+			t.Errorf("scan missed %s; found %v", want, got)
+		}
+	}
+	for _, reject := range []string{"main.go", "README.md", filepath.Join("internal", "notice.txt")} {
+		if found[reject] {
+			t.Errorf("scan picked up %s, which is not license-shaped by name or location", reject)
+		}
+	}
+}
+
+// TestScanLicenseTextsIsSorted pins the determinism the audit depends on:
+// filepath.WalkDir's order is lexical per directory but the result is sorted
+// explicitly, so two runs over one module produce byte-identical reports.
+func TestScanLicenseTextsIsSorted(t *testing.T) {
+	root := t.TempDir()
+	for _, n := range []string{"zzz-LICENSE", "LICENSE", "licenses/mmm.txt", "aaa-COPYING"} {
+		writeFixture(t, root, n, "x")
+	}
+	got, err := scanLicenseTexts(root)
+	if err != nil {
+		t.Fatalf("scanLicenseTexts: %v", err)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i-1] > got[i] {
+			t.Fatalf("results not sorted at %d: %v", i, got)
+		}
+	}
+}
+
+// TestIsLicenseTextAcceptReject is the accept/reject table for the second
+// filter — the one that runs after classification and decides whether a
+// candidate is recorded at all.
+//
+// The rule has to hold two things at once. An unmatched LICENSE file is the
+// most important row in the whole audit (nobody can say what it permits) and
+// must survive; an unmatched .go file whose name merely contains "license" is
+// noise and must not. Anything the classifier DID match is a license text
+// whatever it is called, which is what keeps licenses/gpl.txt — a name that
+// announces nothing — in the report.
+func TestIsLicenseTextAcceptReject(t *testing.T) {
+	cases := []struct {
+		name    string
+		relPath string
+		license string
+		want    bool
+		why     string
+	}{
+		{"matched license at root", "LICENSE", "MIT", true, "classified — always a license text"},
+		{"matched license with an unhelpful name", "licenses/gpl.txt", "GPL-2.0", true, "the classifier, not the filename, decides"},
+		{"matched license in a .go file", "embedded_license.go", "Apache-2.0", true, "a real grant can be embedded; the classifier matched it"},
+		{"unmatched grant at root", "LICENSE", unclassifiedLicense, true, "an unclassifiable grant is the worst row, never dropped"},
+		{"unmatched grant, qualified name", "SQLITE-LICENSE", unclassifiedLicense, true, "no extension — plausibly prose"},
+		{"unmatched grant, text extension", "LICENSE-link.txt", unclassifiedLicense, true, "text, plausibly prose"},
+		{"unmatched Go source", "license_type.go", unclassifiedLicense, false, "machine content, not a grant"},
+		{"unmatched shell script", "checklicense.sh", unclassifiedLicense, false, "machine content"},
+		{"unmatched CI config", ".licenserc.yml", unclassifiedLicense, false, "machine content"},
+		{"unmatched JSON fixture", "valid-license-id.json", unclassifiedLicense, false, "machine content"},
+		{"unmatched XML fixture", "valid-license-id.xml", unclassifiedLicense, false, "machine content"},
+		{"oversize binary database", "licenses/licenses.db", oversizeLicense, false, "machine content, and never read"},
+		{"oversize concatenated bundle", "Godeps/LICENSES", oversizeLicense, true, "unread, but plausibly a real bundle — must be reported as skipped"},
+		{"uppercase machine extension", "License_Type.GO", unclassifiedLicense, false, "extension matching is case-insensitive"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isLicenseText(tc.relPath, tc.license); got != tc.want {
+				t.Errorf("isLicenseText(%q, %q) = %v, want %v — %s", tc.relPath, tc.license, got, tc.want, tc.why)
+			}
+		})
+	}
+}
+
+// TestIsRootGrantSeparatesCoordinateFromTree pins the audit's central
+// distinction. A coordinate scanner reports a module's root grant; a
+// file-walking scanner reports everything else. Getting this backwards would
+// file a vendored test corpus as a real obligation and a real obligation as
+// noise.
+func TestIsRootGrantSeparatesCoordinateFromTree(t *testing.T) {
+	for _, tc := range []struct {
+		relPath string
+		want    bool
+	}{
+		{"LICENSE", true},
+		{"COPYING.LESSER", true},
+		{"licenses/gpl.txt", false},
+		{"testdata/nsz.repo.hu/libc-test/src/math/crlibm/COPYING", false},
+	} {
+		if got := (LicenseHit{RelPath: tc.relPath}).IsRootGrant(); got != tc.want {
+			t.Errorf("IsRootGrant(%q) = %v, want %v", tc.relPath, got, tc.want)
+		}
+	}
+}
+
+// TestElidePerModuleCountsWhatItHides pins the property that makes eliding
+// safe: a reader is never told less than the truth about how many rows exist,
+// only shown fewer of them. A module under the cap is untouched.
+func TestElidePerModuleCountsWhatItHides(t *testing.T) {
+	rows := []graphRow{
+		{Module: "small", Path: "LICENSE", License: "GPL-2.0"},
+		{Module: "big", Path: "a.txt", License: "AGPL-3.0"},
+		{Module: "big", Path: "b.txt", License: "GPL-1.0"},
+		{Module: "big", Path: "c.txt", License: "GPL-2.0"},
+		{Module: "big", Path: "d.txt", License: "GPL-3.0"},
+		{Module: "big", Path: "e.txt", License: "OSL-3.0"},
+		{Module: "other", Path: "LICENSE", License: "CC-BY-4.0"},
+	}
+	got := elidePerModule(rows, 3)
+
+	if len(got) != 1+3+1+1 {
+		t.Fatalf("got %d rows, want 6 (small + 3 of big + elision + other): %+v", len(got), got)
+	}
+	if got[0].Module != "small" || got[0].Path != "LICENSE" {
+		t.Errorf("a module under the cap must pass through untouched, got %+v", got[0])
+	}
+	elision := got[4]
+	if !strings.Contains(elision.Path, "2 more") {
+		t.Errorf("elision row must state how many were held back, got %q", elision.Path)
+	}
+	if elision.Module != "big" {
+		t.Errorf("elision row must name the module it summarizes, got %q", elision.Module)
+	}
+	if last := got[len(got)-1]; last.Module != "other" {
+		t.Errorf("rows after an elided module must survive, got %+v", last)
+	}
+}
+
+// TestPartitionGraphRoutesEachFinding pins where each kind of hit lands, which
+// is what the whole report means. A permitted license is reported nowhere; an
+// unclassifiable one goes to its own section whether or not it sits at the
+// root, because "we cannot say what this permits" is a different problem from
+// "this is copyleft".
+func TestPartitionGraphRoutesEachFinding(t *testing.T) {
+	policy := &Policy{AllowedLicenses: []string{"MIT", "Apache-2.0"}}
+	entries := []GraphEntry{
+		{Module: Module{Path: "clean", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
+		{Module: Module{Path: "copyleft-root", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "GPL-2.0"}}},
+		{Module: Module{Path: "corpus", Version: "v1"}, Hits: []LicenseHit{{RelPath: "testdata/COPYING", License: "GPL-2.0"}}},
+		{Module: Module{Path: "murky", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: unclassifiedLicense}}},
+		{Module: Module{Path: "bare", Version: "v1"}},
+		{Module: Module{Path: "forked", Version: "v1", ReplacedBy: "other/fork@v2"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
+	}
+
+	byTitle := make(map[string][]graphRow)
+	for _, s := range partitionGraph(entries, policy.Filter()) {
+		byTitle[s.Title] = s.Rows
+	}
+
+	wantOnly := map[string]string{
+		sectionModuleGrants: "copyleft-root",
+		sectionNestedTexts:  "corpus",
+		sectionUnclassified: "murky",
+		sectionNoLicense:    "bare",
+		sectionReplaced:     "forked",
+	}
+	for title, wantModule := range wantOnly {
+		rows := byTitle[title]
+		if len(rows) != 1 {
+			t.Errorf("%s: got %d rows, want exactly 1 (%s): %+v", title, len(rows), wantModule, rows)
+			continue
+		}
+		if rows[0].Module != wantModule {
+			t.Errorf("%s: got module %q, want %q", title, rows[0].Module, wantModule)
+		}
+	}
+
+	// The permitted module must appear in no findings section at all — a
+	// report that lists compliant modules alongside violations teaches its
+	// readers to skim.
+	for title, rows := range byTitle {
+		if title == sectionReplaced {
+			continue
+		}
+		for _, r := range rows {
+			if r.Module == "clean" {
+				t.Errorf("%s lists a policy-permitted module", title)
+			}
+		}
+	}
+}
+
+// TestPartitionGraphReportsReplacedModulesRegardlessOfLicense pins the one
+// section that is not about a violation: a replaced module is listed because
+// its coordinate and its source disagree, which stays true when the license is
+// perfectly permissive. This repo's dolt fork is Apache-2.0 at both ends and
+// must still be reported. [LAW:no-silent-failure]
+func TestPartitionGraphReportsReplacedModulesRegardlessOfLicense(t *testing.T) {
+	policy := &Policy{AllowedLicenses: []string{"Apache-2.0"}}
+	entries := []GraphEntry{{
+		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", ReplacedBy: "github.com/brandon-fryslie/dolt/go@v0.40.5-later"},
+		Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
+	}}
+
+	for _, s := range partitionGraph(entries, policy.Filter()) {
+		if s.Title != sectionReplaced {
+			continue
+		}
+		if len(s.Rows) != 1 {
+			t.Fatalf("want the replaced module reported, got %+v", s.Rows)
+		}
+		if !strings.Contains(s.Rows[0].Path, "brandon-fryslie") {
+			t.Errorf("replacement row must name where the source came from, got %q", s.Rows[0].Path)
+		}
+		if s.Rows[0].License != "Apache-2.0" {
+			t.Errorf("replacement row must carry the root grant it read, got %q", s.Rows[0].License)
+		}
+		return
+	}
+	t.Fatal("no replaced-modules section in the report")
+}
+
+// TestRootGrantLicenseNamesAmbiguity pins that a module with several root-level
+// license files is reported as ambiguous rather than having one picked for it.
+// github.com/opencontainers/go-digest is the real instance: Apache-2.0 in
+// LICENSE and CC-BY-SA-4.0 in LICENSE.docs.
+func TestRootGrantLicenseNamesAmbiguity(t *testing.T) {
+	if got := rootGrantLicense(nil); got != "(no root grant)" {
+		t.Errorf("no hits: got %q", got)
+	}
+	if got := rootGrantLicense([]LicenseHit{{RelPath: "LICENSE", License: "MIT"}}); got != "MIT" {
+		t.Errorf("single root grant: got %q, want MIT", got)
+	}
+	two := []LicenseHit{
+		{RelPath: "LICENSE", License: "Apache-2.0"},
+		{RelPath: "LICENSE.docs", License: "CC-BY-SA-4.0"},
+	}
+	if got := rootGrantLicense(two); !strings.Contains(got, "more root files") {
+		t.Errorf("two root grants must be reported as ambiguous, got %q", got)
+	}
+	// A nested hit is not a root grant and must not be mistaken for one.
+	nested := []LicenseHit{{RelPath: "licenses/gpl.txt", License: "GPL-2.0"}}
+	if got := rootGrantLicense(nested); got != "(no root grant)" {
+		t.Errorf("nested-only module: got %q, want no root grant", got)
+	}
+}
+
+// TestGraphAuditCoversWholeBuildList IS this ticket's acceptance criterion
+// (links-licensing-c0ce.1) expressed as a test, run against the real graph
+// rather than a fixture: every module `go list -m all` resolves is classified,
+// none is skipped for want of a local copy, and the known findings are present.
+//
+// The freetype assertion is the one that would have failed against a top-level
+// scan: that module's root LICENSE is a pointer document the classifier cannot
+// match, and its GPL text lives at licenses/gpl.txt — a path no license-shaped
+// filename pattern reaches.
+func TestGraphAuditCoversWholeBuildList(t *testing.T) {
+	entries, err := buildGraphEntries()
+	if err != nil {
+		t.Fatalf("buildGraphEntries: %v", err)
+	}
+	if len(entries) < 500 {
+		t.Fatalf("got %d modules; lit's graph is hundreds of modules — resolution looks broken", len(entries))
+	}
+
+	// [LAW:verifiable-goals] "no module unclassified for want of a local copy"
+	// is the acceptance criterion, so assert the directory is really there
+	// rather than trusting that `go mod download all` reported success.
+	for _, e := range entries {
+		if e.Module.Dir == "" {
+			t.Fatalf("%s@%s has no module directory — it was never fetched", e.Module.Path, e.Module.Version)
+		}
+		if _, err := os.Stat(e.Module.Dir); err != nil {
+			t.Fatalf("%s@%s: module directory unusable: %v", e.Module.Path, e.Module.Version, err)
+		}
+	}
+
+	byPath := make(map[string]GraphEntry, len(entries))
+	for _, e := range entries {
+		byPath[e.Module.Path] = e
+	}
+
+	freetype, ok := byPath["github.com/golang/freetype"]
+	if !ok {
+		t.Fatal("github.com/golang/freetype absent from the graph; this test's premise is stale")
+	}
+	var foundGPL bool
+	for _, h := range freetype.Hits {
+		if h.RelPath == filepath.Join("licenses", "gpl.txt") && h.License == "GPL-2.0" {
+			foundGPL = true
+		}
+	}
+	if !foundGPL {
+		t.Errorf("freetype's licenses/gpl.txt was not classified as GPL-2.0; hits: %+v", freetype.Hits)
+	}
+}
+
+// TestGraphAuditLeavesGoSumUntouched pins that the audit does not modify the
+// repository it audits.
+//
+// This is not tidiness. `go mod download all` fetches modules no build needs
+// and records each one's zip hash in go.sum — 330 lines against this repo,
+// which the next `go mod tidy` strips right back out, putting the audit and
+// tidy in a loop that each undoes. go.sum is also the cache key for CI's Go
+// build cache, so an audit that rewrote it would invalidate a multi-gigabyte
+// cache on every run.
+//
+// The regression this guards against is specific and was hit while building
+// this: restoring go.sum between the download and `go list` looks equivalent
+// and is not, because `go list` verifies a module against go.sum before
+// reporting its directory — so a too-eager restore leaves freshly fetched
+// modules present on disk with an empty .Dir, and the audit goes blind exactly
+// where it was supposed to be looking. [LAW:no-silent-failure]
+func TestGraphAuditLeavesGoSumUntouched(t *testing.T) {
+	const goSum = "../../go.sum"
+	before, err := os.ReadFile(goSum)
+	if err != nil {
+		t.Fatalf("read go.sum: %v", err)
+	}
+
+	mods, err := GraphModules()
+	if err != nil {
+		t.Fatalf("GraphModules: %v", err)
+	}
+
+	after, err := os.ReadFile(goSum)
+	if err != nil {
+		t.Fatalf("re-read go.sum: %v", err)
+	}
+	if !bytes.Equal(before, after) {
+		t.Errorf("the graph audit modified go.sum (%d bytes before, %d after)", len(before), len(after))
+	}
+
+	// The other half of the same invariant: preserving go.sum must not cost
+	// the audit its sight. Every module must still have resolved a directory.
+	for _, m := range mods {
+		if m.Dir == "" {
+			t.Fatalf("%s@%s resolved no directory — go.sum was restored too early", m.Path, m.Version)
+		}
+	}
+}
+
+// TestGraphModulesAreDeterministic pins the resolution half of "the same answer
+// twice", which is the audit's whole value: a number in a ticket stops being
+// something a human measured once only if the tool agrees with itself.
+//
+// It exercises GraphModules rather than the full buildGraphEntries because the
+// two places order could vary are the map parseModuleList deduplicates through
+// (covered here) and WalkDir's traversal (covered by
+// TestScanLicenseTextsIsSorted). Re-scanning 588 module trees a second time
+// would add half a minute to every CI run to re-prove what those two already
+// establish. [LAW:behavior-not-structure]
+func TestGraphModulesAreDeterministic(t *testing.T) {
+	first, err := GraphModules()
+	if err != nil {
+		t.Fatalf("GraphModules: %v", err)
+	}
+	second, err := GraphModules()
+	if err != nil {
+		t.Fatalf("GraphModules: %v", err)
+	}
+	if len(first) != len(second) {
+		t.Fatalf("module count differs across runs: %d vs %d", len(first), len(second))
+	}
+	for i := range first {
+		if first[i] != second[i] {
+			t.Fatalf("module %d differs across runs: %+v vs %+v", i, first[i], second[i])
+		}
+	}
+}
+
+// TestGraphReportRendersEverySection pins that the report names all five
+// sections even when a section is empty, so a reader can tell "this audit found
+// nothing here" from "this audit does not look here". [LAW:no-silent-failure]
+func TestGraphReportRendersEverySection(t *testing.T) {
+	policy := &Policy{AllowedLicenses: []string{"MIT"}}
+	entries := []GraphEntry{{Module: Module{Path: "clean", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}}}
+
+	var b strings.Builder
+	if err := WriteGraphReport(&b, entries, policy.Filter()); err != nil {
+		t.Fatalf("WriteGraphReport: %v", err)
+	}
+	out := b.String()
+	for _, title := range []string{
+		sectionReplaced, sectionModuleGrants, sectionNestedTexts, sectionUnclassified, sectionNoLicense,
+	} {
+		if !strings.Contains(out, title) {
+			t.Errorf("report omits the %q section entirely:\n%s", title, out)
+		}
+	}
+	if !strings.Contains(out, "none") {
+		t.Error("an empty section must say so explicitly rather than rendering blank")
+	}
+	if !strings.Contains(out, "1 modules in the go.mod build list") {
+		t.Errorf("report must state how much was measured:\n%s", out)
+	}
+}
