@@ -196,13 +196,12 @@ follows is measured, not reasoned.
 
 [`scripts/cleanroom-reach-probe.sh`](../scripts/cleanroom-reach-probe.sh) — six
 routes an agent takes to a module's source, run inside each candidate
-environment. It exits 0 only when every route is blocked, so it works as a gate
-and not just a report. Always run a control pass outside the mechanism too: a
-route that fails everywhere proves nothing about the sandbox.
+environment.
 
 ```
-scripts/cleanroom-reach-probe.sh                                          # control
-scripts/cleanroom-sandbox.sh --offline scripts/cleanroom-reach-probe.sh   # candidate
+scripts/cleanroom-reach-probe.sh                                    # control
+scripts/cleanroom-sandbox.sh --offline --deny github.com/hashicorp/golang-lru \
+    -- scripts/cleanroom-reach-probe.sh                             # candidate
 ```
 
 The six routes:
@@ -214,7 +213,34 @@ The six routes:
 5. `go mod download` into a relocated cache, which defeats a merely-emptied one
 6. `curl` of the module zip from `proxy.golang.org`, bypassing the go command
 
+**Three verdicts, not two**, and the third one is the whole reason the probe can
+be trusted. An earlier version printed only `REACHED` and `blocked`, which made
+`blocked` mean two incompatible things: *the sandbox refused me*, and *I looked in
+the wrong place and found nothing*. The second reading passes a gate with no
+isolation in place at all — and it fired in practice, because the probe was
+computing the cache path wrongly for every module without a `/vN` suffix and for
+every module with a capital letter in its path. Probing `dolthub/fslock` with no
+sandbox whatsoever reported two routes "blocked."
+
+So the verdicts are now:
+
+| Verdict | Meaning | Gate |
+|---|---|---|
+| `REACHED` | got at the source; the mechanism does not hold | exit 1 |
+| `blocked` | knew where to look and was refused — a proof | exit 0 |
+| `INCONCLUSIVE` | could not establish the route was exercised | exit 2 |
+
+`blocked` and `INCONCLUSIVE` are separated by the errno, not by a guess: `EPERM`
+is the sandbox doing its job, `ENOENT` means nothing was tested. An untested route
+fails the gate on purpose — a gate that cannot tell "closed" from "never opened"
+is worse than no gate, because it issues confident passes.
+
+Always run a control pass outside the mechanism too: a route that fails everywhere
+proves nothing about the sandbox.
+
 ### Results
+
+Measured against `github.com/hashicorp/golang-lru/v2@v2.0.7`:
 
 | Route | No isolation | Standalone repo | Seatbelt, offline | Seatbelt, network allowed |
 |---|---|---|---|---|
@@ -222,7 +248,7 @@ The six routes:
 | 2 search by name | **reached** | **reached** | blocked | blocked |
 | 3 open a source file | **reached** (6715 B) | **reached** (6715 B) | blocked | blocked |
 | 4 `go doc` | **reached** (1567 B) | blocked | blocked | blocked |
-| 5 `go mod download` refetch | **reached** | **reached** | blocked | blocked |
+| 5 `go mod download` refetch | **reached** | **reached** | blocked | **reached** (12 files) |
 | 6 `curl` the module zip | **reached** (29453 B) | **reached** | blocked | **reached** (29453 B) |
 
 **The standalone repository fails.** The epic named it as a leading candidate —
@@ -244,22 +270,32 @@ network, so route 6 stays open exactly as in the last column above.
 
 ### The mechanism that holds
 
-macOS seatbelt, via `sandbox-exec`, with the module cache denied — wrapped as
+macOS seatbelt, via `sandbox-exec`, denying **named modules** — wrapped as
 [`scripts/cleanroom-sandbox.sh`](../scripts/cleanroom-sandbox.sh):
 
 ```
-scripts/cleanroom-sandbox.sh [--offline] <command> [args...]
+scripts/cleanroom-sandbox.sh [--offline] --deny <module-path> [--deny ...] -- <cmd> [args]
 ```
 
-It generates the profile from `go env GOMODCACHE` at run time:
+It generates the profile at run time from `go env GOMODCACHE`, one pair of rules
+per denied module:
 
 ```lisp
 (version 1)
 (allow default)
-(deny file-read* (subpath "<resolved GOMODCACHE>"))
-(deny file-read* (subpath "<resolved GOPATH>/pkg/sumdb"))
+(deny file-read* (regex #"^<GOMODCACHE>/<escaped module base>(@|/)"))
+(deny file-read* (subpath "<GOMODCACHE>/cache/download/<escaped module base>"))
 (deny network*)          ; --offline only; an agent needs its own API — see below
 ```
+
+At least one `--deny` is required: a sandbox that walls off nothing is not one.
+
+Two details in those rules are load-bearing. The regex alternation `(@|/)` exists
+because `golang-lru@v1.0.2` and `golang-lru/v2@v2.0.7` are **siblings, not nested**
+— one library, two module coordinates, and a `subpath` rule on the base catches
+only the second. And the `cache/download` rule covers the retained `.zip`, which
+is the same source in another form; denying only the unpacked tree leaves the
+archive sitting there to be extracted.
 
 Beyond the six routes, six escape attempts were run inside it. All were held,
 and a control run outside the sandbox confirms each one genuinely works when
@@ -267,17 +303,31 @@ unconstrained — an escape that fails everywhere proves nothing:
 
 | Escape attempt | Outside sandbox | Inside sandbox |
 |---|---|---|
-| the APFS firmlink path, `/System/Volumes/Data/Users/…` | **reached** | held |
-| `..` traversal around the denied prefix | **reached** | held |
-| a nested `sandbox-exec` with a permissive profile | **reached** | held |
-| `cp -R` the tree out into an allowed directory | **reached** | held |
-| `git clone` the upstream repository | **reached** | held |
-| relocating `GOMODCACHE` and refetching | **reached** | held |
+| the APFS firmlink path, `/System/Volumes/Data/Users/…` | **reached** (12 files) | held |
+| `..` traversal around the denied prefix | **reached** (12 files) | held |
+| the *other* coordinate — the v1 sibling directory | **reached** (11 files) | held |
+| a nested `sandbox-exec` with a permissive profile | **reached** (12 files) | held |
+| `cp -R` the tree out into an allowed directory | **reached** (12 files) | held |
+| the retained `.zip` under `cache/download` | **reached** | held |
 
 A child process cannot widen an inherited profile, which is what kills the
-nested-`sandbox-exec` escape and most variations on it.
+nested-`sandbox-exec` escape and most variations on it. Seatbelt also matches on
+the resolved path, which is what kills the firmlink and `..` escapes.
 
-### Two traps, both found by testing
+### Three traps, all found by testing
+
+**Deny named modules, not the whole cache.** Denying all of `GOMODCACHE` looks
+like the safest possible rule and quietly breaks the stage-4 agent: the go command
+cannot even start (`go: could not create module cache: stat …: operation not
+permitted`), so the agent cannot build or test the replacement it is writing.
+That collides with this epic's own requirement that every gate be
+machine-checkable. Per-module denies keep the toolchain working — a stage-4-shaped
+module with third-party dependencies of its own builds and passes `go test` inside
+the sandbox while the original stays unreadable — and they are no weaker, because
+the escape table above was measured against exactly this narrow profile. It is
+easy to miss: a stdlib-only package still compiles under the blanket deny, so the
+first thing you try appears to work.
+
 
 **A profile must name resolved physical paths.** A rule written against a
 symlinked path silently enforces nothing — it does not error, it does not warn,
@@ -304,7 +354,8 @@ the syscall level, so an in-process `open()` is refused exactly like a spawned
 ### The residual, stated honestly
 
 An agent needs network to reach its own API, so stage 4 cannot use `--offline`.
-Without that flag route 6 reopens: `curl` pulls the module zip.
+Without that flag the two network routes reopen: `curl` pulls the module zip, and
+`go mod download` refetches into a relocated cache.
 
 That residual is acceptable, and the reason is the shape of the two failures,
 not their likelihood. An unpacked cache at a guessable path gets reached **by
@@ -359,12 +410,31 @@ Recorded so no agent re-litigates them.
 with wide expressive room and no grant of any kind. The archetype this protocol
 was written for, and the only component that runs all four stages.
 
+Note that this is **two modules, not one**: `github.com/hashicorp/golang-lru`
+v1.0.2 and `github.com/hashicorp/golang-lru/v2` v2.0.7 are separate `go.mod`
+requires, separate cache trees, and five packages in the `./cmd/lit` link closure
+(`golang-lru`, `golang-lru/simplelru`, `golang-lru/v2`, `golang-lru/v2/simplelru`,
+`golang-lru/v2/internal`). `links-licensing-c0ce.5` says "drop **both** coordinates"
+and means it. A stage-1 spec written from v2's API alone will not let stage 4
+satisfy v1's `simplelru` call sites, and the SBOM keeps an MPL row after the chain
+reports success. Spec both surfaces, or state explicitly which one is out of scope
+and why.
+
 **`go-sql-driver/mysql` (MPL-2.0) — rewrite, no chain.**
 `links-licensing-c0ce.2` writes the error type it needs without reading the
-original. lit touches this dependency at two call sites, both ours; the type is
-small and the discipline costs nearly nothing. That its shape is largely dictated
-by the MySQL wire protocol is not a license to copy it — see *What is never a
-ground*, which was written with this component in mind.
+original. The type is small and the discipline costs nearly nothing. That its
+shape is largely dictated by the MySQL wire protocol is not a license to copy
+it — see *What is never a ground*, which was written with this component in mind.
+
+The scope is **one consumer and one producer, across two modules**, and missing
+the producer breaks the code silently. `internal/store/sync_schema_guard.go`
+asserts `*mysql.MySQLError`; `internal/vendor/dolthub-driver/errors.go`
+*constructs* one in `translateError`, and the vendored driver requires the module
+in its own `go.mod` independently of the root one. Replace only the consumer and
+`errors.As` stops matching, `isMissingTableError` returns false for a genuinely
+missing table, the pre-goose "table doesn't exist → schema 0" path misreads as a
+hard query error — and nothing fails to compile while the MPL row stays in the
+graph.
 
 **`kch42/buzhash` (WTFPL) — cut.** `links-licensing-c0ce.6` deletes dolt's
 `rollingHashSplitter`, the only caller, reachable solely from a benchmark.
@@ -409,3 +479,9 @@ building bespoke.
 `sandbox-exec` and refuses to run without it, pointing at the container path
 instead. Linux stage-4 work needs the container candidate settled first, and the
 probe is what settles it.
+
+**Route 6 cannot fully separate "denied" from "offline."** A host with no network
+and a sandbox denying network look identical from inside. The probe says so in the
+verdict text rather than hiding it (`no egress (confirm via the control run)`),
+and the mandated control pass is what distinguishes them. Closing this properly
+wants egress allowlisting, above.
