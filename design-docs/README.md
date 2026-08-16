@@ -42,3 +42,8 @@ see the [README](../README.md) and the [docs](../docs/) site.
 - **[work-claims.md](work-claims.md)** — how parallel checkouts coordinate over
   one shared backlog: purely derived claims, lane granularity, and the privacy
   invariant for a synced store. *Accepted design.*
+- **[clean-room-reimplementation.md](clean-room-reimplementation.md)** — the
+  protocol for replacing a licensed dependency with code the project owns: the
+  four roles and the wall between them, what may cross each boundary, the
+  measured isolation mechanism, and the contamination rule. *Accepted design,
+  normative for the licensing epic.*
