@@ -578,6 +578,15 @@ func sanitizeLabel(label string) string {
 	return strings.Trim(clean, "-")
 }
 
+// isDoltJournalLockRel reports whether rel — a path relative to the database
+// root being copied — is a Dolt journal LOCK file: <database>/.dolt/noms/LOCK.
+// The suffix shape is the whole definition; any path of that shape under a
+// Dolt storage directory is that database's journal lock, whatever the
+// database is named.
+func isDoltJournalLockRel(rel string) bool {
+	return strings.HasSuffix(filepath.ToSlash(rel), "/.dolt/noms/LOCK")
+}
+
 // walkAndCopy creates dst as a tree-copy of src using copyFile for each
 // regular file. Directories are recreated with their source perm bits.
 // Symlinks are recreated; other special entries error out. The per-entry ctx
@@ -615,6 +624,19 @@ func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context
 			}
 			return os.Symlink(target, dstPath)
 		case d.Type().IsRegular():
+			// Dolt's journal LOCK file is the one entry the copy omits: it is
+			// contentless (the lock lives on holders' open file descriptions,
+			// never in bytes) and Dolt recreates it at every engine open, so
+			// a restored snapshot neither needs nor misses it — while on
+			// Windows the snapshot's own journal hold is a MANDATORY
+			// LockFileEx, and reading the file through a second handle here
+			// would either fail the copy outright or release the hold
+			// mid-walk, reopening the tear window the hold exists to close.
+			// (Darwin's single-syscall Clonefile fast path may still carry
+			// the file; under POSIX advisory flock that is inert.)
+			if isDoltJournalLockRel(rel) {
+				return nil
+			}
 			return copyFile(ctx, srcPath, dstPath)
 		default:
 			return fmt.Errorf("dbsnapshot: unsupported file type at %s: %v", srcPath, d.Type())

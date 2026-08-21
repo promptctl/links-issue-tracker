@@ -43,6 +43,68 @@ func chunkJournalPath(doltRoot string) string {
 	return filepath.Join(doltRoot, doltDatabaseName, ".dolt", "noms", chunks.JournalFileID)
 }
 
+// TestOpenForReadPendingMigrationUnderJournalHolder pins the classified
+// failure of the one interleaving the copy's journal hold cannot make safe
+// for readers: a read open that must MIGRATE while the hold is live resolves
+// its lazy engine into Dolt's permanent read-only fallback, and the pending
+// migration's DDL then fails. The failure must surface as the
+// retry-after-holder guidance (not the raw read-only line), and the same
+// open must succeed — applying the migration — once the holder releases.
+func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	versions, err := registryVersionsDescending()
+	if err != nil {
+		t.Fatalf("enumerate migration versions: %v", err)
+	}
+	if len(versions) < 2 {
+		t.Fatalf("registry has %d migrations; this test needs a next-lower version to land on", len(versions))
+	}
+	provider, err := newGooseProvider(st.db)
+	if err != nil {
+		t.Fatalf("newGooseProvider() error = %v", err)
+	}
+	// One migration behind: the exact state OpenForRead's auto-migrate exists
+	// to bring forward.
+	if _, err := provider.DownTo(ctx, versions[1]); err != nil {
+		t.Fatalf("DownTo(%d) error = %v", versions[1], err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	release, err := LockDoltJournalExclusive(ctx, doltRoot)
+	if err != nil {
+		t.Fatalf("LockDoltJournalExclusive() error = %v", err)
+	}
+	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		_ = reader.Close()
+		_ = release()
+		t.Fatalf("OpenForRead() with a pending migration succeeded under the journal hold; the read-only engine cannot have applied DDL")
+	}
+	if !strings.Contains(err.Error(), "pending schema migrations") {
+		_ = release()
+		t.Fatalf("OpenForRead() error = %v; want the retry-after-holder migration guidance", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release journal lock: %v", err)
+	}
+
+	healed, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenForRead() after release error = %v; want the retried open to apply the migration", err)
+	}
+	if err := healed.Close(); err != nil {
+		t.Fatalf("healed reader Close() error = %v", err)
+	}
+}
+
 // TestJournalLockHoldExcludesJournalRecovery pins the contract that closes
 // links-sync-pgct.15: while LockDoltJournalExclusive is held (as the `lit
 // snapshots new` copy holds it for its whole walk), NO concurrent open runs

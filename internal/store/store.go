@@ -2643,14 +2643,18 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 var engineOpenRetryMaxElapsed = 30 * time.Second
 
 // wrapEngineOpenContention attaches operator guidance to an engine open that
-// exhausted its retry budget against a held Dolt journal lock, preserving the
-// nbs.ErrDatabaseLocked classification for errors.Is; every other error
-// passes through untouched. [LAW:single-enforcer] The one place the raw
-// "database is locked" outcome becomes a holder-naming, actionable message —
-// the job the retired .links-engine.lock's contention wrapping used to do.
+// exhausted its retry budget against a held Dolt journal lock; every other
+// error passes through untouched. The wrap carries BOTH discriminators:
+// ErrWorkspaceBusy, the one contention sentinel every store lock stamps —
+// which is what keeps the mirror's push outcome recording a busy workspace
+// as workspace_busy rather than a failure that pages the owner (the retired
+// engine lock's wrapper carried it, so this is parity, not addition) — and
+// the underlying nbs.ErrDatabaseLocked classification.
+// [LAW:single-enforcer] The one place the raw "database is locked" outcome
+// becomes a holder-naming, actionable message.
 func wrapEngineOpenContention(err error) error {
 	if err != nil && errors.Is(err, nbs.ErrDatabaseLocked) {
-		return fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w", err)
+		return fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
 	}
 	return err
 }
