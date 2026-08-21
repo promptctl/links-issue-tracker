@@ -47,33 +47,44 @@
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
-//	workspace → engine → Dolt's own .dolt/noms/LOCK → commit → beacon
+//	workspace → Dolt's own .dolt/noms/LOCK → commit → beacon
 //
 // A holder of an inner lock never waits on an outer one. Two entries need
 // spelling out, because no lit call site shows them:
 //
-// Dolt's LOCK is acquired by the embedded driver, not by lit: a write-capable
-// engine takes it when it opens and holds it until it closes, and a Store's
-// engine opens lazily at first SQL use, so a live write Store stands at
-// "holds LOCK, takes commit per mutation" for its whole lifetime. That
-// standing hold is the trap in the natural reading of "hold Dolt's LOCK
-// during a walk": taking LOCK (opening a write engine, or locking the file
-// directly) while holding the commit lock inverts the order against every
-// live write Store and can deadlock. Take it before commit or not at all. A
-// deviation exists today and is tolerated, not copied: Store.Open's
-// long-lived engine acquires LOCK under the commit lock — that Store's
-// first SQL use is migrate, inside withCommitLock (ensureDoltDatabase's
-// transient bootstrap engines have already taken and released LOCK before
-// that, and OpenSync's engine first runs SQL outside any commit lock,
-// following the rule) — and a GC-contention retry that rotates the
-// connection mid-mutation re-acquires LOCK there too. It cannot cycle only
-// because a write engine that can open under the commit lock belongs to a
-// Store whose open the engine lock serialized before commit was reached
-// (the one write engine outside the Store lifecycle, the adopt clone's,
-// runs under the exclusive workspace hold and never takes the commit
-// lock), and read engines never wait on LOCK (they keep Dolt's read-only
-// fallback). links-locking-il18.3, which retires the engine lock as a
-// partial shadow of LOCK, owns keeping that argument true.
+// Dolt's LOCK is ordinarily acquired by the embedded driver, not by lit: an
+// engine takes it when it opens and holds it until it closes. A write
+// engine opens eagerly inside openStoreConnection — before any commit lock
+// — and refuses Dolt's read-only fallback, retrying its open boundedly, so
+// a live write Store stands at "holds LOCK, takes commit per mutation" for
+// its whole lifetime. A read engine opens lazily at first SQL and never
+// waits on LOCK (a 100ms attempt, then the read-only fallback), so it
+// contributes no wait edge wherever it opens — and the laziness is
+// deliberate: a reader that opened eagerly under a transient holder would
+// be permanently read-only, while a lazy one opens after any commit-lock
+// wait, holder gone, write-capable for auto-migration. lit acquires it
+// directly in exactly one place — the snapshot copy's
+// LockDoltJournalExclusive, which must exclude engine-lifecycle I/O without
+// opening an engine. That standing Store hold is the trap in the natural
+// reading of "hold Dolt's LOCK during a walk": taking LOCK (opening a write
+// engine, or locking the file directly) while holding the commit lock
+// inverts the order against every live write Store. Take it before commit
+// or not at all. One deviation is tolerated, not copied: a GC-contention
+// retry rotates the store's connection mid-mutation, re-acquiring LOCK
+// under the held commit lock. It cannot wedge — the re-open's wait is
+// bounded (~30s, engineOpenRetryMaxElapsed) strictly inside every
+// commit-lock waiter's ~15-minute budget, so the inverted edge always
+// breaks by the re-open failing the mutation loudly — and the bound is the
+// tolerance's whole justification; see Store.reconnect. (The one write
+// engine outside the Store lifecycle, the adopt clone's, runs under the
+// exclusive workspace hold and never takes the commit lock.)
+//
+// lit once minted a second lock for the "one write-capable engine per path"
+// fact — .links-engine.lock, taken by write opens but not by OpenForRead.
+// That partial shadow of LOCK is retired (links-locking-il18.3): every
+// engine open contends on LOCK itself with a bounded retry, and the name
+// went with the mechanism — minting a lock beside LOCK again, under any
+// name, recreates the two-representations disagreement.
 //
 // The sync-push lock sits outside the slots, outermost in practice: its
 // holder goes on to take everything else (the mirror cycle opens a full
@@ -82,14 +93,17 @@
 // inbound wait-edge cannot complete a cycle.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
-// dirname(databasePath), the position every *LockPath helper in
+// dirname(databasePath), the position every lit-minted *LockPath helper in
 // internal/store mints — so a `lit snapshots restore` that rotates the dolt
 // directory cannot move the lock out from under its acquirers. An exception
-// states its reason at the site that mints the path; there are two: the
+// states its reason at the site that mints the path; there are three: the
 // snapshot producer beacon lives inside snapshots/ with the artifacts whose
-// liveness it proves, and the adopt-pending marker (a condemnation record,
-// not a lock) lives inside the dolt root precisely so the rotation the locks
-// must survive carries the marker with the directory it describes.
+// liveness it proves; the adopt-pending marker (a condemnation record, not a
+// lock) lives inside the dolt root precisely so the rotation the locks must
+// survive carries the marker with the directory it describes; and Dolt's own
+// journal LOCK lives inside the dolt directory because it is Dolt's file,
+// guarding that directory's journal wherever the directory goes (see
+// store.DoltJournalLockPath).
 package filelock
 
 import (

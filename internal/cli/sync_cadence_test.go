@@ -40,8 +40,9 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 
 // TestShouldReceiveNowDebounce pins the receive debounce: a missing marker means
 // "never received" so a receive is allowed; a marker older than the interval
-// allows; a marker inside the interval blocks. The single-flight engine lock
-// makes an over-eager allow a harmless no-op, so the boundary errs toward allow.
+// allows; a marker inside the interval blocks. One-write-engine-per-path
+// serialization makes an over-eager allow a harmless no-op, so the boundary
+// errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	now := time.Now()

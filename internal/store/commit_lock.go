@@ -18,7 +18,7 @@ import (
 // at exactly one boundary.
 //
 // The commit lock is one slot in a multi-lock acquisition order — workspace,
-// engine, Dolt's own LOCK, commit, beacon — so deadlock reasoning lives with
+// Dolt's own LOCK, commit, beacon — so deadlock reasoning lives with
 // the declared discipline in package filelock's doc, not in a single-resource
 // story here. The lock is an flock through acquireStoreLock: the hold lives
 // on an open file description, so exclusion covers goroutines and foreign
@@ -37,9 +37,9 @@ const (
 	// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
 	// bound the total wait (~25s: five uncapped doublings then 25 more attempts
 	// at the 1s cap) for a transient online-GC contention to clear. Sized to
-	// match the engine-write lock's ~30s budget for "how long do we wait on a
-	// co-resident holder of this store" (links-sync-pgct.11): the lock bounds
-	// how long two engines can be concurrently OPEN, but this retry is what
+	// match engineOpenRetryMaxElapsed's ~30s budget for "how long do we wait
+	// on a co-resident holder of this store" (links-sync-pgct.11): that retry
+	// bounds how long two engines can contend at OPEN, but this one is what
 	// absorbs the brief settle window right after one releases — under real
 	// system load (a slower/contended CI runner, an earlier mirror's real
 	// network push taking longer) that window is not always sub-second, and a
@@ -78,8 +78,10 @@ type retrySleepFunc func(context.Context, time.Duration) error
 // connectionRotator rotates a poisoned SQL connection between retry attempts.
 // Online GC invalidates the connection that observed it, so the next attempt
 // must run on a fresh handle. [LAW:effects-at-boundaries] The retry loop stays
-// pure; the reconnect effect is injected here.
-type connectionRotator func() error
+// pure; the reconnect effect is injected here. It takes ctx because the
+// rotation opens a real engine (a bounded wait on Dolt's journal lock), and a
+// cancelled mutation must be able to abandon that wait.
+type connectionRotator func(context.Context) error
 
 type commitLockContextKey struct{}
 
@@ -188,7 +190,7 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
 			return waitErr
 		}
-		if rotateErr := rotate(); rotateErr != nil {
+		if rotateErr := rotate(ctx); rotateErr != nil {
 			return rotateErr
 		}
 	}

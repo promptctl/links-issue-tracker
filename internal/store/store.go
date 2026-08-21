@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v4"
+	"github.com/dolthub/dolt/go/store/nbs"
 	embedded "github.com/dolthub/driver"
 
 	"github.com/google/uuid"
@@ -47,7 +48,6 @@ type Store struct {
 	commitLockPath       string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
-	releaseEngineLock    func() error
 
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
@@ -248,25 +248,7 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 			err = errors.Join(err, relErr)
 		}
 	}()
-	// [LAW:single-enforcer] The engine-write lock is acquired before
-	// EnsureDatabase/openStoreConnection so no read-write embedded Dolt
-	// engine is opened by this process while another process's is still
-	// live on the same path — the invariant embedded Dolt itself enforces
-	// with a hard failure ("database is read only") the moment two try to
-	// coexist. Waiting here converts that hard failure into a bounded wait.
-	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if success {
-			return
-		}
-		if relErr := engineRelease(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	// The adopt-pending check runs HERE, after both locks are held — never
+	// The adopt-pending check runs HERE, after the lock is held — never
 	// before. A pre-lock check is a decision made about a workspace another
 	// process may still be rewriting: a caller that read "no marker", then
 	// blocked on the lock while an adopt started and died mid-clone, would
@@ -281,19 +263,17 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
+	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
-	s.releaseEngineLock = engineRelease
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
 	if err = s.withCommitLock(ctx, s.migrate); err != nil {
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
 		s.releaseWorkspaceLock = nil
-		s.releaseEngineLock = nil
 		return nil, err
 	}
 	success = true
@@ -338,7 +318,7 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	if err = requireNoPendingAdopt(doltRootDir); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
+	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return nil, err
 	}
@@ -346,6 +326,20 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
 	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
 	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		// One interleaving reaches here with the raw read-only line: this open
+		// won the commit-lock race against a journal-lock holder (a snapshot
+		// copy takes LOCK, then commit), the lazy read engine resolved under
+		// that held LOCK into Dolt's permanent read-only fallback, and a
+		// pending migration's DDL then failed. No recovery inside this hold
+		// can succeed — a re-resolved engine meets the same held LOCK, and
+		// waiting the holder out here would hold commit against the declared
+		// LOCK-before-commit order — so the correct action is the caller's:
+		// release everything (below) and retry the open after the holder
+		// finishes. Classify with that guidance. [LAW:no-silent-failure] the
+		// failure stays loud; only its actionability changes.
+		if isManifestReadOnlyError(err) {
+			err = fmt.Errorf("this read open needed to apply pending schema migrations, but another process (a snapshot copy or a live writer) is holding the store read-only; retry after it completes: %w", err)
+		}
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
@@ -357,14 +351,15 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 }
 
 // EnsureDatabase bootstraps the database for standalone callers (lit init's
-// non-adopt outcomes; tests). It takes the same workspace-shared + engine-write
-// lock pair Store.Open holds, in the same order, for the same reasons: the
-// bootstrap opens read-write embedded engines (one per path is the hard
-// invariant), and its check-then-create must be serialized against a
-// concurrent adopt's destructive window — an unlocked CREATE could land
-// between an adopt's discard and clone, or be destroyed by it. Open and
-// OpenSync do NOT call this: they already hold both locks and call
-// ensureDoltDatabase directly, so the locks are never re-entered.
+// non-adopt outcomes; tests). It takes the same workspace-shared lock
+// Store.Open holds, for the same reason: its check-then-create must be
+// serialized against a concurrent adopt's destructive window — an unlocked
+// CREATE could land between an adopt's discard and clone, or be destroyed by
+// it. The bootstrap's write-capable engines serialize against every other
+// engine on Dolt's own journal lock, which each open acquires with a bounded
+// retry (engineOpenRetryMaxElapsed). Open and OpenSync do NOT call this: they
+// already hold the workspace lock and call ensureDoltDatabase directly, so
+// the lock is never re-entered.
 // [LAW:single-enforcer] one lock discipline for every write-capable
 // bootstrap, owned at the entry points that hold it.
 func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string) (_ bool, err error) {
@@ -377,15 +372,6 @@ func EnsureDatabase(ctx context.Context, doltRootDir string, workspaceID string)
 	}
 	defer func() {
 		if relErr := release(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
-	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
-	if err != nil {
-		return false, err
-	}
-	defer func() {
-		if relErr := engineRelease(); relErr != nil {
 			err = errors.Join(err, relErr)
 		}
 	}()
@@ -445,22 +431,13 @@ func (s *Store) Close() error {
 	if errors.Is(err, context.Canceled) {
 		err = nil
 	}
-	// [LAW:dataflow-not-control-flow] The engine lock releases first (it was
-	// acquired last, after the workspace lock — see Open/OpenSync), then the
-	// workspace lock, on every Close regardless of whether the DB closed
-	// cleanly: the next opener anywhere (this process's next command, or a
-	// waiting mirror/foreground command in another process) must see this
-	// path free the instant the store's lifetime ends. errors.Join keeps
-	// every failure observable when db.Close and a release both fail; a
-	// leaked engine lock would strand every future opener on this path
-	// exactly like a leaked workspace lock strands restores.
-	if s.releaseEngineLock != nil {
-		release := s.releaseEngineLock
-		s.releaseEngineLock = nil
-		if relErr := release(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}
+	// db.Close is what releases Dolt's own journal lock (the engine holds it
+	// for its whole lifetime), so it runs before the workspace release: the
+	// next opener anywhere (this process's next command, or a waiting
+	// mirror/foreground command in another process) must see this path free
+	// the instant the store's lifetime ends. errors.Join keeps every failure
+	// observable when db.Close and the release both fail; a leaked workspace
+	// hold strands restores.
 	if s.releaseWorkspaceLock != nil {
 		release := s.releaseWorkspaceLock
 		s.releaseWorkspaceLock = nil
@@ -471,10 +448,34 @@ func (s *Store) Close() error {
 	return err
 }
 
-func openStoreConnection(doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
+// openStoreConnection builds a Store whose WRITE engine is open, not lazy:
+// the ping forces the embedded engine — and with it the acquisition of Dolt's
+// own journal lock — to happen here, at store construction, before any commit
+// lock the store's user takes. Left lazy, a write store's first SQL was
+// migrate, inside withCommitLock, which acquired the journal lock in the
+// inverted commit→LOCK order the discipline in package filelock's doc
+// forbids. [LAW:no-ambient-temporal-coupling] a write engine's (and journal
+// lock's) lifetime is the Store's lifetime by construction, not by whichever
+// query happens to run first.
+//
+// Read engines stay lazy, and that is the engineAccess enum's one branch
+// doing its job, not an optimization: a read open never waits on the journal
+// lock (a 100ms attempt, then Dolt's read-only fallback), so it contributes
+// no wait edge to the ordering — and the fallback, once taken, is permanent
+// for the engine's lifetime. An eager read ping under a transient holder (a
+// snapshot copy's walk) would mint that permanent read-only engine BEFORE
+// the commit-lock wait, and OpenForRead's auto-migrate would then fail
+// against it; opened lazily, the first SQL runs after the wait, the holder
+// is gone, and the engine comes up write-capable.
+func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
 		return nil, err
+	}
+	if access == engineWrite {
+		if err := db.PingContext(ctx); err != nil {
+			return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
+		}
 	}
 	return &Store{
 		db:             db,
@@ -493,12 +494,24 @@ func openStoreConnection(doltRootDir string, workspaceID string, access engineAc
 // connection before any subsequent query. Must be called while the commit lock
 // is held so no concurrent caller observes a torn s.db pointer.
 //
-// The new handle is opened and configured before the old one is closed; the
-// swap is safe because the pool's engine opens lazily on first use, which
-// happens only after prev.Close() below has already released the prior engine
-// — the process never holds two engines on the path.
+// The new handle is opened and configured before the old one is closed, and
+// its ENGINE opens only at the ping below — after prev.Close() has released
+// the prior engine (and its journal lock), so the process never holds two
+// engines on the path. The ping cannot ride openStoreConnection's eager-open
+// path for exactly that reason: there the engine must open before the pool is
+// handed out; here it must not open until the old engine is gone.
 // [LAW:no-ambient-temporal-coupling]
-func (s *Store) reconnect() error {
+//
+// This re-open is the ONE place Dolt's journal lock is acquired while the
+// commit lock is held — the inverted order package filelock's doc documents
+// as this site's tolerated deviation. It cannot wedge: the re-open waits at
+// most engineOpenRetryMaxElapsed (~30s) before failing the mutation loudly —
+// with wrapEngineOpenContention's holder guidance, from the ping that makes
+// the open (and its contention) surface here rather than at whichever query
+// runs next — strictly inside every commit-lock waiter's ~15-minute budget,
+// so any holder this re-open waits on either releases or outlives this
+// mutation's bounded failure, and the commit lock is released either way.
+func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)
 	if err != nil {
@@ -508,6 +521,9 @@ func (s *Store) reconnect() error {
 	s.db = next
 	if err := prev.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("close prior dolt connection after reconnect: %w", err)
+	}
+	if err := next.PingContext(ctx); err != nil {
+		return fmt.Errorf("reopen dolt: %w", wrapEngineOpenContention(err))
 	}
 	return nil
 }
@@ -2562,7 +2578,10 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 		}
 		return nil
 	}(); err != nil {
-		return false, err
+		// The bootstrap pools open their engines at first exec, so a foreign
+		// journal-lock holder surfaces here; the wrapper names the holder,
+		// every other failure passes through untouched.
+		return false, wrapEngineOpenContention(err)
 	}
 	db, err := openDoltPool(root, workspaceID, doltDatabaseName, engineWrite)
 	if err != nil {
@@ -2570,7 +2589,7 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	}
 	defer db.Close()
 	if err := ensureMasterDefaultBranch(ctx, db); err != nil {
-		return false, err
+		return false, wrapEngineOpenContention(err)
 	}
 	return created, nil
 }
@@ -2613,15 +2632,32 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 }
 
 // engineOpenRetryMaxElapsed bounds how long a write-capable engine open keeps
-// retrying while another process's engine holds the journal manifest lock.
-// Matches the engine-write flock's ~30s budget for "how long do we wait on a
-// co-resident holder of this store" (workspace_lock.go): the flock serializes
-// lit's own writers, and this retry absorbs the residue the flock cannot see —
-// the beat between another process releasing the flock (Store.Close) and its
-// OS-level journal lock actually clearing (process teardown), or a non-lit
-// dolt process holding the store. A package variable so tests can shrink the
-// budget without sleeping through the production one.
+// retrying while another engine holds Dolt's journal lock (DoltJournalLockPath).
+// This retry is the ONE wait for a co-resident write holder — a live write
+// Store in this or another process, a non-lit dolt process, or the snapshot
+// copy's LockDoltJournalExclusive hold — so its ~30s budget is the same
+// "how long do we wait on a co-resident holder of this store" number
+// doltJournalRetryAttempts and mirrorParentWaitTimeout size against. A
+// package variable so tests can shrink the budget without sleeping through
+// the production one.
 var engineOpenRetryMaxElapsed = 30 * time.Second
+
+// wrapEngineOpenContention attaches operator guidance to an engine open that
+// exhausted its retry budget against a held Dolt journal lock; every other
+// error passes through untouched. The wrap carries BOTH discriminators:
+// ErrWorkspaceBusy, the one contention sentinel every store lock stamps —
+// which is what keeps the mirror's push outcome recording a busy workspace
+// as workspace_busy rather than a failure that pages the owner (the retired
+// engine lock's wrapper carried it, so this is parity, not addition) — and
+// the underlying nbs.ErrDatabaseLocked classification.
+// [LAW:single-enforcer] The one place the raw "database is locked" outcome
+// becomes a holder-naming, actionable message.
+func wrapEngineOpenContention(err error) error {
+	if err != nil && errors.Is(err, nbs.ErrDatabaseLocked) {
+		return fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror, another lit command, or a snapshot copy in progress); retry after it completes: %w (%w)", ErrWorkspaceBusy, err)
+	}
+	return err
+}
 
 // newEngineOpenBackOff builds the per-connector retry policy for write-capable
 // engine opens. Fresh instance per connector — backoff state is per-open, and

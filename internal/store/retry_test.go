@@ -26,7 +26,7 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 }
 
 // noRotate is the rotate hook for retry tests that don't exercise reconnection.
-func noRotate() error { return nil }
+func noRotate(context.Context) error { return nil }
 
 func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	op := &fakeRetryOperation{
@@ -210,7 +210,7 @@ func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T
 	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
-		func() error { rotations++; return nil },
+		func(context.Context) error { rotations++; return nil },
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
@@ -240,7 +240,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
-		func() error { return rotateErr },
+		func(context.Context) error { return rotateErr },
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
@@ -249,6 +249,50 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 	}
 	if op.calls != 1 {
 		t.Fatalf("op.calls = %d, want 1 (no re-attempt after rotate failure)", op.calls)
+	}
+}
+
+// TestRetryTransientGCContentionCancellationEscapesBlockedRotator pins why
+// connectionRotator carries ctx at all: reconnect's rotation opens a real
+// engine, whose PingContext can wait out engineOpenRetryMaxElapsed against a
+// held journal lock, and a cancelled mutation must escape that wait rather
+// than serve it out. The rotator here blocks exactly the way that ping does —
+// until its ctx dies — so the test fails (hangs past its deadline, or returns
+// the wrong error) if the loop ever stops threading a live ctx through.
+func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.T) {
+	op := &fakeRetryOperation{
+		results: []error{
+			transientGCContentionError{err: errors.New("gc reset")},
+			nil,
+		},
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+
+	done := make(chan error, 1)
+	go func() {
+		done <- retryTransientGCContention(
+			ctx,
+			op.run,
+			func(rotateCtx context.Context) error { <-rotateCtx.Done(); return rotateCtx.Err() },
+			func(int) time.Duration { return 0 },
+			func(context.Context, time.Duration) error { return nil },
+		)
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("retryTransientGCContention() error = %v, want context.Canceled from the blocked rotator", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("retryTransientGCContention() did not return within 5s of cancellation; the rotator is not receiving the live ctx")
+	}
+	if op.calls != 1 {
+		t.Fatalf("op.calls = %d, want 1 (no re-attempt after a cancelled rotation)", op.calls)
 	}
 }
 
