@@ -4,6 +4,7 @@ import (
 	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -56,6 +57,12 @@ func parsePolicy(data []byte) (*Policy, error) {
 	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("parse embedded policy.json: %w", err)
 	}
+	// Decode reads one JSON value; a concatenated second document or paste
+	// artifact after it would otherwise be silently dropped and the gate
+	// would run against a partial read of the committed file.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("policy.json carries trailing content after the policy object; refusing a file the gate would only partially read")
+	}
 	// [LAW:no-silent-failure] an empty allowlist would make the gate reject
 	// every module — almost certainly a broken/truncated policy file, not a
 	// real intent. Refuse rather than fail the whole tree confusingly.
@@ -69,9 +76,17 @@ func parsePolicy(data []byte) (*Policy, error) {
 	// today's list is empty and a test pins that, but the pin is a policy
 	// stance, not this invariant's enforcer.
 	for _, e := range p.ModuleExceptions {
-		// TrimSpace so "complete" means non-blank: a whitespace-only reason
-		// carries no verification.
-		if strings.TrimSpace(e.Module) == "" || strings.TrimSpace(e.License) == "" || strings.TrimSpace(e.Reason) == "" {
+		// The committed file is the canonical form the gate runs against, so
+		// a padded field is rejected rather than silently trimmed — Filter
+		// keys exceptions on these exact strings, and a normalize-on-read
+		// would split the file's text from the value it produces.
+		// [LAW:one-source-of-truth]
+		for _, field := range []string{e.Module, e.License, e.Reason} {
+			if field != strings.TrimSpace(field) {
+				return nil, fmt.Errorf("policy.json module_exception %+v carries surrounding whitespace in a field; the committed text must be the exact value the gate matches", e)
+			}
+		}
+		if e.Module == "" || e.License == "" || e.Reason == "" {
 			return nil, fmt.Errorf("policy.json module_exception %+v is missing module, license, or reason; every exception must be complete and human-verified", e)
 		}
 	}

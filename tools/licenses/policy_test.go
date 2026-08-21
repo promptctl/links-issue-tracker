@@ -36,6 +36,7 @@ func TestParsePolicyRejectsIncompleteException(t *testing.T) {
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"","reason":"r"}]}`,
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":""}]}`,
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"  "}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":" example.com/m ","license":"LGPL-3.0","reason":"r"}]}`,
 	} {
 		if _, err := parsePolicy([]byte(missing)); err == nil {
 			t.Errorf("parsePolicy accepted an incomplete exception: %s", missing)
@@ -55,6 +56,21 @@ func TestParsePolicyRejectsUnknownKeys(t *testing.T) {
 	misspelled := `{"allowed_licenses":["MIT"],"module_exception":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}]}`
 	if _, err := parsePolicy([]byte(misspelled)); err == nil {
 		t.Error("parsePolicy accepted a policy with an unknown (misspelled) key")
+	}
+}
+
+// TestParsePolicyRejectsTrailingContent pins that the parse consumes the
+// whole file: a concatenated second document (a bad merge, a paste artifact)
+// would otherwise be silently dropped and the gate would run against only
+// the first value.
+func TestParsePolicyRejectsTrailingContent(t *testing.T) {
+	for _, trailing := range []string{
+		`{"allowed_licenses":["MIT"],"module_exceptions":[]}{"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[]} garbage`,
+	} {
+		if _, err := parsePolicy([]byte(trailing)); err == nil {
+			t.Errorf("parsePolicy accepted trailing content: %s", trailing)
+		}
 	}
 }
 
