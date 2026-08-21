@@ -20,12 +20,14 @@ import (
 // commitWorkingSet sequencing live here so writer serialization is enforced
 // at exactly one boundary.
 //
-// Deadlock impossibility: This system has exactly one lock type (file-based
-// commit lock). Single-resource systems cannot deadlock by lock-ordering. The
-// processCommitMutex serializes in-process acquisition, and O_CREATE|O_EXCL
-// serializes cross-process acquisition. Deadlock is only possible if the lock
-// is never released, which defer prevents for panics and PID-liveness
-// reclaims for killed processes.
+// The commit lock is one slot in a multi-lock acquisition order — workspace,
+// engine, Dolt's own LOCK, commit, beacon — so deadlock reasoning lives with
+// the declared discipline in package filelock's doc, not in a single-resource
+// story here. [LAW:one-source-of-truth] Within this file's own scope:
+// processCommitMutex serializes in-process acquisition, O_CREATE|O_EXCL
+// serializes cross-process acquisition, defer releases on panic, and
+// PID/mtime staleness reclaims after killed processes — the predating
+// mechanism links-locking-il18.2 rebuilds onto filelock.Acquire.
 
 // ErrTransientGCContention marks a failure caused by concurrent Dolt online
 // garbage collection — either the manifest going read-only mid-run or the
