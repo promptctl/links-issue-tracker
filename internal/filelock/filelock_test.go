@@ -93,6 +93,36 @@ func TestAcquire_CanceledContextSurfacesDuringRetry(t *testing.T) {
 	}
 }
 
+// TestAcquire_CanceledContextBeatsContentionAtFinalAttempt pins the outcome
+// ordering when both facts are true at once: the budget exhausted against a
+// live holder AND the context is done. A single-attempt probe never sleeps,
+// so only the post-loop check can see the cancellation — without it, a caller
+// who asked to stop would be told "healthy holder, retry", clean contention
+// dressed over an abort.
+func TestAcquire_CanceledContextBeatsContentionAtFinalAttempt(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	holder, acquired, err := Acquire(context.Background(), lockPath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("holder: acquired=%v err=%v", acquired, err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, acquired, err = Acquire(ctx, lockPath, true, 1, 0)
+	if acquired {
+		t.Fatal("acquired under a held exclusive lock")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled to beat clean contention, got err=%v", err)
+	}
+}
+
 // TestAcquire_RejectsNonPositiveBudget pins that an impossible retry budget
 // is a loud caller bug, not a silent "clean contention" verdict on a lock
 // nobody holds.

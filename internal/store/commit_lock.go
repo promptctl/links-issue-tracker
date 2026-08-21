@@ -359,7 +359,13 @@ func CommitLockPath(databasePath string) string {
 
 func commitLockPathForDolt(databasePath string) string {
 	cleaned := filepath.Clean(databasePath)
-	return filepath.Join(filepath.Dir(cleaned), ".links-commit.lock")
+	// The historical name .links-commit.lock is burned: O_EXCL-era binaries
+	// os.Remove that path on release (and on 10-minute age eviction), and an
+	// unlink under a live flock splits the lock across two inodes — the next
+	// acquirer opens a fresh inode and runs concurrently with the orphaned
+	// holder. A name no historical binary ever touches makes that split
+	// unrepresentable; do not "restore" the old spelling.
+	return filepath.Join(filepath.Dir(cleaned), ".links-commit-flock.lock")
 }
 
 // acquireCommitLockAtPath takes the exclusive commit flock, waiting out a
@@ -375,10 +381,23 @@ func commitLockPathForDolt(databasePath string) string {
 // contention exactly as it does every other store lock's.
 func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func() error, error) {
 	release, err := acquireStoreLock(ctx, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
-	if errors.Is(err, ErrWorkspaceBusy) {
-		return nil, fmt.Errorf("another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w", err)
+	if err != nil {
+		return nil, wrapCommitLockContention(err)
 	}
-	return release, err
+	return release, nil
+}
+
+// wrapCommitLockContention attaches the commit lock's operator guidance to a
+// contention outcome, preserving the errors.Is(err, ErrWorkspaceBusy)
+// discriminator; every other error — cancellation included — passes through
+// untouched. Its own unit because the guidance text must never dress a
+// non-contention failure (the exact misreport the O_EXCL-era loop's dropped
+// ctx guard allowed). [LAW:no-silent-failure]
+func wrapCommitLockContention(err error) error {
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return fmt.Errorf("another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w", err)
+	}
+	return err
 }
 
 type transientGCContentionError struct {

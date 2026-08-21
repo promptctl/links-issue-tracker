@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,6 +97,30 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	}
 	if err := probeRelease(); err != nil {
 		t.Fatalf("probe release error = %v", err)
+	}
+}
+
+// TestWrapCommitLockContention pins the commit lock's contention boundary:
+// budget exhaustion (acquireStoreLock's ErrWorkspaceBusy) gains the
+// commit-specific operator guidance with the errors.Is discriminator intact,
+// and every other failure — a cancellation above all — passes through
+// untouched, so "retry after it completes" can never dress an abort. The
+// mapping is tested directly rather than by exhausting the real ~30s budget:
+// the budget is part of the lock's declared identity, not an injectable knob,
+// and TestAcquireCommitLockNeverEvictsLiveHolderByAge already proves a live
+// holder drives this path's acquisition into contention.
+func TestWrapCommitLockContention(t *testing.T) {
+	wrapped := wrapCommitLockContention(ErrWorkspaceBusy)
+	if !errors.Is(wrapped, ErrWorkspaceBusy) {
+		t.Fatalf("wrapped contention lost the ErrWorkspaceBusy discriminator: %v", wrapped)
+	}
+	if !strings.Contains(wrapped.Error(), "another lit process is writing to this workspace") {
+		t.Fatalf("wrapped contention missing operator guidance: %v", wrapped)
+	}
+
+	cancellation := context.Canceled
+	if got := wrapCommitLockContention(cancellation); got != cancellation {
+		t.Fatalf("non-contention error must pass through untouched, got %v", got)
 	}
 }
 

@@ -169,6 +169,14 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 	if closeErr := file.Close(); closeErr != nil {
 		return nil, false, fmt.Errorf("close file lock fd: %w", closeErr)
 	}
+	// [LAW:parse-dont-validate] Cancellation and contention are different
+	// facts, and only the sleeps between attempts observe ctx — a cancellation
+	// landing at the final attempt would otherwise dress itself as clean
+	// contention, sending "another holder is busy, retry" guidance to a caller
+	// who asked to stop. Cancellation wins.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
+	}
 	return nil, false, nil
 }
 
