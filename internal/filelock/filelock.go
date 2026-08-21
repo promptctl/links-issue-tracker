@@ -34,8 +34,9 @@
 // holder (a commit-lock file backdated eleven minutes let a second process's
 // mutation walk past its running owner and exit 0). Each lock declares its
 // retry budget at its own call site, and contention travels as Acquire's
-// acquired=false value, stamped with a domain sentinel at each caller's own
-// boundary. Name allocation is not owner exclusion — a reservation nobody
+// acquired=false value, given its domain meaning at each caller's own
+// boundary — a store sentinel, a collector's deliberate silent skip, a
+// mirror's coalesce. Name allocation is not owner exclusion — a reservation nobody
 // holds across a window (the snapshot slot's os.Mkdir, the trace file's
 // O_EXCL retry) has no liveness question and stays off this primitive. Two
 // mechanisms predate the rule and are being rebuilt onto it: the commit
@@ -57,18 +58,23 @@
 // standing hold is the trap in the natural reading of "hold Dolt's LOCK
 // during a walk": taking LOCK (opening a write engine, or locking the file
 // directly) while holding the commit lock inverts the order against every
-// live Store and can deadlock. Take it before commit or not at all. One
-// deviation exists today and is tolerated, not copied: Store.Open's first
-// SQL use is migrate, inside the commit lock, so the Store's own engine
-// first acquires LOCK under commit. It cannot cycle only because every
-// write-engine open is already serialized by the engine lock before commit
-// is reached, and read engines never wait on LOCK (they keep Dolt's
-// read-only fallback). links-locking-il18.3, which retires the engine lock
-// as a partial shadow of LOCK, owns keeping that argument true.
+// live Store and can deadlock. Take it before commit or not at all. A
+// deviation exists today and is tolerated, not copied: the long-lived Store
+// engine acquires LOCK under the commit lock — its first SQL use is migrate,
+// inside withCommitLock (ensureDoltDatabase's transient bootstrap engines
+// have already taken and released LOCK before that), and a GC-contention
+// retry that rotates the connection mid-mutation re-acquires it there too.
+// It cannot cycle only because every write-engine open is already
+// serialized by the engine lock before commit is reached, and read engines
+// never wait on LOCK (they keep Dolt's read-only fallback).
+// links-locking-il18.3, which retires the engine lock as a partial shadow
+// of LOCK, owns keeping that argument true.
 //
-// The sync-push lock has no slot in the order because it is only ever probed
-// (maxAttempts 1): a lock never waited on cannot hold-and-wait, so it cannot
-// join a cycle.
+// The sync-push lock sits outside the slots, outermost in practice: its
+// holder goes on to take everything else (the mirror cycle opens a full
+// write Store), but every acquisition of it is a non-blocking probe
+// (maxAttempts 1), so no process ever waits ON it — and a lock with no
+// inbound wait-edge cannot complete a cycle.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every *LockPath helper in
