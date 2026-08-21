@@ -95,8 +95,8 @@ func elidePerModule(rows []graphRow, limit int) []graphRow {
 // arbitrary text deeper in the tree would suppress a license nobody ever
 // looked at on the strength of having looked at a different one — and the rows
 // it would suppress first are the unclassifiable ones, which this report calls
-// the worst kind. Both current exceptions cover modules that ship only a root
-// LICENSE, so this changes no output today; it is the rule that is wrong
+// the worst kind. Every current exception covers a module that ships only a
+// root LICENSE, so this changes no output today; it is the rule that is wrong
 // without it. [LAW:no-silent-failure]
 func permitsHit(filter LicenseFilter, module string, h LicenseHit) bool {
 	if filter.Allows(h.License) {

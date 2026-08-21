@@ -221,10 +221,10 @@ const canonicalApache2 = `
 `
 
 // nonStandardWTFPL is the short, profanely-worded WTFPL variant shipped by
-// github.com/kch42/buzhash — real text from this repo's own dependency tree.
-// Too different from the canonical WTFPL wording for the classifier to match
-// confidently; it is the tree's one real "Unknown" case and is what pins that
-// behavior rather than a hypothetical.
+// github.com/kch42/buzhash — real text from a former dependency (removed in
+// links-licensing-c0ce.6), kept as the fixture that pins the classifier's
+// below-threshold "Unknown" behavior against text a real module actually
+// shipped rather than a hypothetical.
 const nonStandardWTFPL = `           DO WHATEVER THE FUCK YOU WANT, PUBLIC LICENSE
    TERMS AND CONDITIONS FOR COPYING, DISTRIBUTION AND MODIFICATION
 
