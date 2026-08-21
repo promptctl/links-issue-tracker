@@ -66,10 +66,61 @@ func TestAcquire_ExclusiveProbeReportsContentionAsValue(t *testing.T) {
 	}
 }
 
-// TestAcquire_CanceledContextSurfacesDuringRetry pins that a canceled context
-// aborts the retry sleep as an error (distinct from clean contention), so an
-// interrupted process stops waiting on a lock immediately.
-func TestAcquire_CanceledContextSurfacesDuringRetry(t *testing.T) {
+// TestAcquire_EntryGateRefusesDoneContext pins the entry gate: a context that
+// is already done is refused before any attempt — free lock or held — because
+// an interrupted command must not acquire (and then hold) a lock on its way
+// down, admitting its guarded operation into the shutdown grace; and against
+// a held lock the refusal must read as cancellation, never as "healthy
+// holder, retry" contention.
+func TestAcquire_EntryGateRefusesDoneContext(t *testing.T) {
+	t.Parallel()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	// Free lock: refused, and left free for the next live caller.
+	freePath := filepath.Join(t.TempDir(), "free.lock")
+	release, acquired, err := Acquire(ctx, freePath, true, 1, 0)
+	if acquired {
+		_ = release()
+		t.Fatal("acquired a free lock under an already-canceled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("free lock: want context.Canceled, got err=%v", err)
+	}
+	release, acquired, err = Acquire(context.Background(), freePath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("free lock after refused acquire: acquired=%v err=%v", acquired, err)
+	}
+	if err := release(); err != nil {
+		t.Errorf("release: %v", err)
+	}
+
+	// Held lock: still cancellation, never clean contention.
+	heldPath := filepath.Join(t.TempDir(), "held.lock")
+	holder, acquired, err := Acquire(context.Background(), heldPath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("holder: acquired=%v err=%v", acquired, err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+	_, acquired, err = Acquire(ctx, heldPath, true, 1, 0)
+	if acquired {
+		t.Fatal("acquired under a held exclusive lock")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("held lock: want context.Canceled, got err=%v", err)
+	}
+}
+
+// TestAcquire_CancelDuringRetrySurfacesCancellation pins the mid-wait path:
+// a context live at entry (so the entry gate passes) that becomes done while
+// Acquire is retrying against a live holder surfaces as cancellation from
+// the retry sleep — an interrupted process stops waiting immediately, and is
+// never told clean contention.
+func TestAcquire_CancelDuringRetrySurfacesCancellation(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	holder, acquired, err := Acquire(context.Background(), lockPath, true, 1, 0)
@@ -82,14 +133,20 @@ func TestAcquire_CanceledContextSurfacesDuringRetry(t *testing.T) {
 		}
 	}()
 
+	// The budget (10s of 20ms attempts) far outlasts the 50ms cancel, so the
+	// cancellation deterministically lands inside a retry sleep, not at entry
+	// and not at exhaustion.
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	_, acquired, err = Acquire(ctx, lockPath, true, 5, 10*time.Millisecond)
+	go func() {
+		time.Sleep(50 * time.Millisecond)
+		cancel()
+	}()
+	_, acquired, err = Acquire(ctx, lockPath, true, 500, 20*time.Millisecond)
 	if acquired {
 		t.Fatal("acquired under a held exclusive lock")
 	}
 	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("want context.Canceled from the retry sleep, got %v", err)
+		t.Fatalf("want context.Canceled from the retry sleep, got err=%v", err)
 	}
 }
 

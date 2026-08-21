@@ -592,6 +592,17 @@ func TestParseName(t *testing.T) {
 		{"abc-def", false},
 		{"", false},
 		{"0", false},
+		// The numeric head round-trips through FormatInt: ParseInt's sign and
+		// leading-zero tolerance would otherwise admit shapes no lit producer
+		// ever mints — "+<ns>.tmp" was classified collectible and destroyed.
+		{"+1700000000000000000", false},
+		{"01700000000000000000", false},
+		// The label part must be a shape sanitizeLabel can emit: a dotted or
+		// dash-terminated label rides a digit prefix into the listing — and
+		// into the collector's destructive arm — though lit cannot mint it.
+		{"1700000000000000000-my.backup", false},
+		{"1700000000000000000-", false},
+		{"1700000000000000000--edges-", false},
 		// Producer artifacts are rejected by parseName itself so every
 		// consumer (List, Restore's validateSnapshotName) refuses them from
 		// one predicate. The labeled ".tmp" form is the regression case: its
@@ -622,5 +633,25 @@ func TestFormatName_RoundTripsThroughParseName(t *testing.T) {
 	}
 	if !parsed.Equal(created) {
 		t.Fatalf("round trip: parsed=%v want=%v", parsed, created)
+	}
+}
+
+// TestSanitizeLabel_BoundsWorstCaseMintedName pins the label cap: even a
+// wildly long label yields a snapshot name whose longest derived form — the
+// condemnation rename <name>.reserve.<ns>.condemned — fits a 255-byte
+// NAME_MAX, and the label is truncated (lossy-normalizer contract), never
+// rejected.
+func TestSanitizeLabel_BoundsWorstCaseMintedName(t *testing.T) {
+	t.Parallel()
+	name := formatName(time.Unix(0, 1700000000000000001), strings.Repeat("x", 300))
+	worst := len(name) + len(reserveSuffix) + len(".1700000000000000001") + len(condemnedSuffix)
+	if worst > 255 {
+		t.Fatalf("worst-case minted name is %d bytes, exceeds NAME_MAX 255 (name=%q)", worst, name)
+	}
+	if !strings.HasPrefix(name, "1700000000000000001-xxx") {
+		t.Fatalf("long label should truncate, not vanish: %q", name)
+	}
+	if _, ok := parseName(name); !ok {
+		t.Fatalf("truncated-label name must still parse: %q", name)
 	}
 }

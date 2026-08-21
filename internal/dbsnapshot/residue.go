@@ -35,9 +35,10 @@ import (
 // reclamation, never forfeits it. [LAW:no-ambient-temporal-coupling] no age
 // thresholds, no PID files — the discriminator is owned by the kernel. The
 // one caveat is a mixed-version window: a still-running pre-beacon binary's
-// live Take holds no beacon, so it reads as dead here; that exposure also
-// requires the commit lock's 10-minute age-break to even overlap a collector
-// with it, and it retires with the old binary.
+// live Take holds no beacon, so it reads as dead here; overlapping such a
+// Take needs only an old binary running beside a new one (its O_EXCL-era
+// commit lock and today's flock don't exclude each other), and the exposure
+// retires with the old binary.
 //
 // The exclusive window covers only classification: each dead artifact is
 // renamed to a .condemned name (an atomic, sub-millisecond severing from the

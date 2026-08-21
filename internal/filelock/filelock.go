@@ -40,11 +40,10 @@
 // file's O_EXCL retry claims a unique name and holds nothing, and the
 // snapshot slot's os.Mkdir reservation, though held across the copy window,
 // has its owner's liveness proven by the beacon it sits under — so neither
-// carries a liveness question of its own and both stay off this primitive. Two
-// mechanisms predate the rule and are being rebuilt onto it: the commit
-// lock's O_EXCL create with PID/mtime staleness (links-locking-il18.2) and
-// the mirror-pending marker's age-out (links-locking-il18.4). Copy a
-// compliant lock, not those.
+// carries a liveness question of its own and both stay off this primitive.
+// One mechanism predates the rule and is being rebuilt onto it: the
+// mirror-pending marker's age-out (links-locking-il18.4). Copy a compliant
+// lock, not that.
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
@@ -131,6 +130,14 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 	if maxAttempts < 1 {
 		return nil, false, fmt.Errorf("filelock: maxAttempts must be >= 1, got %d", maxAttempts)
 	}
+	// A caller that has already been cancelled must not take — and then hold —
+	// a lock: a SIGTERM'd command acquiring an exclusive hold on its way down
+	// would admit its guarded operation (a destructive directory rotation, say)
+	// into the interrupt grace window. Refuse before any attempt, so a done
+	// context is an error on every path, free lock included.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
+	}
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, false, fmt.Errorf("ensure lock dir: %w", err)
 	}
@@ -145,7 +152,7 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 			// [LAW:no-silent-failure] Both unlock and close failures matter
 			// (lock stuck held; FD leak) so the release contract surfaces
 			// them jointly via errors.Join instead of picking one.
-			return func() error {
+			release := func() error {
 				var unlockErr error
 				if e := unlockFile(fd); e != nil {
 					unlockErr = fmt.Errorf("release file lock: %w", e)
@@ -155,7 +162,20 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 					closeErr = fmt.Errorf("close file lock fd: %w", e)
 				}
 				return errors.Join(unlockErr, closeErr)
-			}, true, nil
+			}
+			// The acquisition spans blocking filesystem I/O (MkdirAll and
+			// OpenFile can stall arbitrarily on a network filesystem), so a
+			// cancellation that landed inside it is honored here rather than
+			// handing a hold to a caller who already asked to stop. Backing
+			// out releases the just-taken hold; the window that remains is
+			// the caller's own, governed by its operation's ctx-awareness.
+			// Like the post-loop check below, this branch has no
+			// deterministic test without an injection seam — inspection
+			// coverage, stated here.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, false, errors.Join(ctxErr, release())
+			}
+			return release, true, nil
 		}
 		if !errors.Is(err, errWouldBlock) {
 			return nil, false, joinWithClose(fmt.Errorf("lock %s: %w", lockPath, err), file)
@@ -169,6 +189,16 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 	}
 	if closeErr := file.Close(); closeErr != nil {
 		return nil, false, fmt.Errorf("close file lock fd: %w", closeErr)
+	}
+	// Cancellation and contention are different facts, and cancellation wins:
+	// a caller who asked to stop must never be sent "another holder is busy,
+	// retry" guidance. The entry gate and the retry sleeps carry the testable
+	// cases; this check is belt coverage for the one remaining window — a
+	// cancellation landing inside the final blocked attempt — which no test
+	// reaches deterministically without an injection seam, so it is
+	// deliberately covered by inspection rather than seamed for.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
 	}
 	return nil, false, nil
 }

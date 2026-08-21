@@ -44,7 +44,9 @@ func snapshotsDirFor(ws workspace.Info) string {
 // composes those — adding a new producer means adding the predicate to this
 // disjunction, in exactly one place.
 func isUserSnapshotName(name string) bool {
-	return !store.IsMigrationSnapshotName(name) && !store.IsDowngradeSnapshotName(name)
+	return !store.IsMigrationSnapshotName(name) &&
+		!store.IsDowngradeSnapshotName(name) &&
+		!store.IsReconcileSnapshotName(name)
 }
 
 // withCommitLock acquires the path-based commit lock used by Store mutations
@@ -56,12 +58,18 @@ func isUserSnapshotName(name string) bool {
 // for directory readers, exclusive for rotators — the contract and its
 // callers live at store/workspace_lock.go); this commit lock remains the
 // writer-vs-writer gate only.
-func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
+func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (err error) {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
 		return err
 	}
-	defer release()
+	// [LAW:single-enforcer] store.SettleCommitLockRelease owns how a release
+	// failure combines with fn's outcome — joined beside a failure, demoted to
+	// loud stderr after a durable success — so both withCommitLock spellings
+	// settle by one rule.
+	defer func() {
+		err = store.SettleCommitLockRelease(err, release())
+	}()
 	return fn()
 }
 
@@ -84,6 +92,17 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 		return err
 	}
 	snap, err := takeUserSnapshot(ctx, ws, strings.TrimSpace(*label))
+	// The record prints the moment it exists — before the prune, and even
+	// beside a failure that landed after the take (a lock release, the
+	// retention prune). [FRAMING:representation] the snapshot is durable and
+	// listed from the instant Take returned; a non-zero exit that hides its
+	// name sends the operator retrying into a duplicate of a snapshot they
+	// already have.
+	if snap.Name != "" {
+		if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
+			err = errors.Join(err, printErr)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -99,13 +118,9 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 	// independently by migrate() under its own budget. Without the kind
 	// filter, `lit snapshots new` could evict a recovery snapshot the
 	// migration system is depending on.
-	if err := withCommitLock(ctx, ws, func() error {
+	return withCommitLock(ctx, ws, func() error {
 		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
-	}); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path)
-	return err
+	})
 }
 
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
@@ -144,17 +159,19 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
 		return dbsnapshot.Snapshot{}, err
 	}
-	if err := withCommitLock(ctx, ws, func() error {
+	err = withCommitLock(ctx, ws, func() error {
 		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
 		if err != nil {
 			return err
 		}
 		snap = s
 		return nil
-	}); err != nil {
-		return dbsnapshot.Snapshot{}, err
-	}
-	return snap, nil
+	})
+	// snap is populated exactly when Take succeeded, so a failure that landed
+	// after the take (the commit-lock release here, the workspace release in
+	// the defer above) travels beside the record of the durable snapshot it
+	// did not undo, never in place of it. [LAW:no-silent-failure]
+	return snap, err
 }
 
 func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error {
@@ -207,20 +224,34 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 		}
 	}()
 	var rotated string
-	if err := withCommitLock(ctx, ws, func() error {
-		r, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
-		if err != nil {
-			return err
-		}
+	restored := false
+	err = withCommitLock(ctx, ws, func() error {
+		// rotated is captured even when Restore then fails: a non-empty path
+		// beside an error means the pre-restore directory was already moved
+		// aside (Restore's install step failed after its rotation step), and
+		// that path is the operator's only pointer to their displaced data.
+		r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
 		rotated = r
-		return nil
-	}); err != nil {
-		return err
+		restored = restoreErr == nil
+		return restoreErr
+	})
+	if !restored && rotated != "" {
+		err = fmt.Errorf("the pre-restore database directory was moved aside to %s before this failure and holds the workspace's data: %w", rotated, err)
 	}
-	if rotated == "" {
-		_, err = fmt.Fprintf(stdout, "restored %s\n", name)
-		return err
+	// The record prints the moment the restore is durable, even beside a
+	// failure that lands after it (the workspace release joined in the defer
+	// above). [FRAMING:representation] the snapshot was consumed and the old
+	// directory moved the instant Restore returned; an error exit that hides
+	// the record sends the operator retrying a name that now reports missing,
+	// with no pointer to the rotated-aside pre-restore directory.
+	if restored {
+		line := fmt.Sprintf("restored %s\n", name)
+		if rotated != "" {
+			line = fmt.Sprintf("restored %s rotated_to=%s\n", name, rotated)
+		}
+		if _, printErr := fmt.Fprint(stdout, line); printErr != nil {
+			err = errors.Join(err, printErr)
+		}
 	}
-	_, err = fmt.Fprintf(stdout, "restored %s rotated_to=%s\n", name, rotated)
 	return err
 }

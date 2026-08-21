@@ -439,17 +439,26 @@ func IsProducerArtifactName(name string) bool {
 }
 
 // isCollectibleResidue reports whether the collector may destroy the entry:
-// either a .condemned corpse (only ever minted by a collector under the
-// beacon's exclusive proof, so the suffix alone is lit's provenance), or a
-// .tmp/.reserve whose remaining head has exactly the <unix-ns>[-<label>]
-// shape reserveSnapshotPaths mints. A foreign "backup.tmp" an operator
-// parked in the directory fails the head check and is untouchable — every
+// a .tmp/.reserve whose remaining head has exactly the <unix-ns>[-<label>]
+// shape reserveSnapshotPaths mints, or a .condemned corpse whose full name
+// has exactly the shape condemnResidue mints from those. A foreign
+// "backup.tmp" — or a foreign "backup.condemned" — an operator parked in
+// the directory fails the shape check and is untouchable: every
 // non-collector consumer of this directory treats unrecognized names as
-// inert, and the one destructive actor must not be the exception.
+// inert, and the one destructive actor must not be the exception. The
+// suffix alone is never provenance; lit does not own the directory's
+// namespace, only the shapes it provably minted. [LAW:parse-dont-validate]
 func isCollectibleResidue(name string) bool {
-	if strings.HasSuffix(name, condemnedSuffix) {
+	if isCollectorCondemnedName(name) {
 		return true
 	}
+	return isCollectibleArtifactName(name)
+}
+
+// isCollectibleArtifactName reports whether name is a producer artifact the
+// collector may condemn: a .tmp/.reserve suffix over a head with exactly the
+// <unix-ns>[-<label>] shape reserveSnapshotPaths mints.
+func isCollectibleArtifactName(name string) bool {
 	for _, suffix := range []string{tmpSuffix, reserveSuffix} {
 		if head, ok := strings.CutSuffix(name, suffix); ok {
 			_, parses := parseName(head)
@@ -457,6 +466,24 @@ func isCollectibleResidue(name string) bool {
 		}
 	}
 	return false
+}
+
+// isCollectorCondemnedName reports whether name has exactly the shape
+// condemnResidue mints: a collectible .tmp/.reserve artifact name, then a
+// "." + positive all-digit nanosecond stamp, then ".condemned".
+func isCollectorCondemnedName(name string) bool {
+	head, ok := strings.CutSuffix(name, condemnedSuffix)
+	if !ok {
+		return false
+	}
+	dot := strings.LastIndexByte(head, '.')
+	if dot < 0 {
+		return false
+	}
+	if _, ok := parsePositiveDigits(head[dot+1:]); !ok {
+		return false
+	}
+	return isCollectibleArtifactName(head[:dot])
 }
 
 // parseName is the one predicate for "is this a snapshot name". Rejecting
@@ -469,17 +496,66 @@ func parseName(name string) (time.Time, bool) {
 	if IsProducerArtifactName(name) {
 		return time.Time{}, false
 	}
-	head := name
+	head, label, dashed := name, "", false
 	if idx := strings.IndexByte(name, '-'); idx >= 0 {
-		head = name[:idx]
+		head, label, dashed = name[:idx], name[idx+1:], true
 	}
-	ns, err := strconv.ParseInt(head, 10, 64)
-	if err != nil || ns <= 0 {
+	ns, ok := parsePositiveDigits(head)
+	if !ok {
+		return time.Time{}, false
+	}
+	if dashed && !isMintableLabel(label) {
 		return time.Time{}, false
 	}
 	return time.Unix(0, ns).UTC(), true
 }
 
+// parsePositiveDigits parses s as a positive int64 minted by
+// strconv.FormatInt — the round-trip check rejects what ParseInt would
+// tolerate but no lit producer ever writes: a sign prefix, leading zeros.
+// The sign hole was live: "+123.tmp" classified as lit-minted residue and
+// was destroyed.
+func parsePositiveDigits(s string) (int64, bool) {
+	ns, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || ns <= 0 || strconv.FormatInt(ns, 10) != s {
+		return 0, false
+	}
+	return ns, true
+}
+
+// isMintableLabel reports whether label is a shape sanitizeLabel can emit:
+// non-empty, drawn from the [A-Za-z0-9_-] alphabet, not dash-terminated at
+// either end. Deliberately no length bound — labels minted by pre-cap
+// binaries exist on disk and must stay listable and restorable, so the
+// parser accepts the union of shapes lit ever minted while maxLabelBytes
+// bounds only what it mints today.
+func isMintableLabel(label string) bool {
+	if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
+}
+
+// maxLabelBytes bounds the sanitized label so every name minted FROM a
+// snapshot name also fits a 255-byte NAME_MAX: the worst case is the
+// condemnation rename, <ns>-<label>.reserve.<ns>.condemned — 19+1 (head) +
+// 8 (".reserve") + 20 (".<ns>") + 10 (".condemned") = 58 bytes of frame, so
+// 128 label bytes leaves a wide margin. Without the cap, a killed Take with
+// a near-NAME_MAX label left residue whose condemnation rename could never
+// succeed (ENAMETOOLONG), stranding the corpse for every later collection.
+const maxLabelBytes = 128
+
+// sanitizeLabel is a lossy normalizer, not a validator: it maps illegal
+// runes to '-', trims, and truncates to maxLabelBytes, so any input yields
+// a legal (possibly empty) label rather than an error.
 func sanitizeLabel(label string) string {
 	var b strings.Builder
 	for _, r := range label {
@@ -490,7 +566,11 @@ func sanitizeLabel(label string) string {
 			b.WriteByte('-')
 		}
 	}
-	return strings.Trim(b.String(), "-")
+	clean := b.String()
+	if len(clean) > maxLabelBytes {
+		clean = clean[:maxLabelBytes]
+	}
+	return strings.Trim(clean, "-")
 }
 
 // walkAndCopy creates dst as a tree-copy of src using copyFile for each

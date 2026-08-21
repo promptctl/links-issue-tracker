@@ -20,10 +20,8 @@ const migrationSnapshotRetention = 10
 // inside runMigration *after* the snapshot guard has had a chance to take
 // the recovery snapshot. Production callers leave it nil; tests reassign it
 // to simulate a mutation failure with the snapshot already in hand, so the
-// MigrationRollbackError path is exercised.
-//
-// Modeled on commit_lock.go's commitLockPIDRunning swap-in pattern: a
-// package-level var defaulting to no-op, settable from store_test.go.
+// MigrationRollbackError path is exercised. A package-level var defaulting
+// to no-op, settable from store_test.go.
 var migrationPostSnapshotHookForTest func() error
 
 // migrationSnapshotLabel is the label prefix every migration-recovery snapshot
