@@ -130,6 +130,14 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 	if maxAttempts < 1 {
 		return nil, false, fmt.Errorf("filelock: maxAttempts must be >= 1, got %d", maxAttempts)
 	}
+	// A caller that has already been cancelled must not take — and then hold —
+	// a lock: a SIGTERM'd command acquiring an exclusive hold on its way down
+	// would admit its guarded operation (a destructive directory rotation, say)
+	// into the interrupt grace window. Refuse before any attempt, so a done
+	// context is an error on every path, free lock included.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return nil, false, ctxErr
+	}
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return nil, false, fmt.Errorf("ensure lock dir: %w", err)
 	}

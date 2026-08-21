@@ -95,10 +95,10 @@ func TestAcquire_CanceledContextSurfacesDuringRetry(t *testing.T) {
 
 // TestAcquire_CanceledContextBeatsContentionAtFinalAttempt pins the outcome
 // ordering when both facts are true at once: the budget exhausted against a
-// live holder AND the context is done. A single-attempt probe never sleeps,
-// so only the post-loop check can see the cancellation — without it, a caller
-// who asked to stop would be told "healthy holder, retry", clean contention
-// dressed over an abort.
+// live holder AND the context is done. Whichever gate reports it — the entry
+// refusal or the post-loop check that covers a cancellation landing mid-
+// attempts — a caller who asked to stop must never be told "healthy holder,
+// retry", clean contention dressed over an abort.
 func TestAcquire_CanceledContextBeatsContentionAtFinalAttempt(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
@@ -120,6 +120,35 @@ func TestAcquire_CanceledContextBeatsContentionAtFinalAttempt(t *testing.T) {
 	}
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("want context.Canceled to beat clean contention, got err=%v", err)
+	}
+}
+
+// TestAcquire_PreCanceledContextRefusesFreeLock pins the entry gate: a
+// context that is already done is refused before any attempt, even on a free
+// lock — an interrupted command must not acquire (and then hold) a lock on
+// its way down, admitting its guarded operation into the shutdown grace.
+func TestAcquire_PreCanceledContextRefusesFreeLock(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	release, acquired, err := Acquire(ctx, lockPath, true, 1, 0)
+	if acquired {
+		_ = release()
+		t.Fatal("acquired a lock under an already-canceled context")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("want context.Canceled on a free lock, got err=%v", err)
+	}
+
+	// The lock stayed free: a live caller acquires at once.
+	release, acquired, err = Acquire(context.Background(), lockPath, true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("free lock after refused acquire: acquired=%v err=%v", acquired, err)
+	}
+	if err := release(); err != nil {
+		t.Errorf("release: %v", err)
 	}
 }
 

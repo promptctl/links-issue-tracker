@@ -105,9 +105,16 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		t.Fatalf("lit new never printed its created-issue line:\n%s", stderr.String())
 	}
-	releaseSeize, err := store.LockCommitPath(context.Background(), lockPath)
+	// The seize expects a free lock (the write released it before printing the
+	// line), so a short deadline is ample — and bounds the wait if the child's
+	// receive wins the race to re-acquire, instead of queueing ~30s behind the
+	// very hold this test means to plant first.
+	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancelSeize()
+	releaseSeize, err := store.LockCommitPath(seizeCtx, lockPath)
 	if err != nil {
-		t.Fatalf("seize commit lock: %v", err)
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		t.Fatalf("seize commit lock (child's receive won the race to re-acquire?): %v", err)
 	}
 	seizeHeld := true
 	defer func() {

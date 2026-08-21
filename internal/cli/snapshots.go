@@ -90,6 +90,17 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 		return err
 	}
 	snap, err := takeUserSnapshot(ctx, ws, strings.TrimSpace(*label))
+	// The record prints the moment it exists — before the prune, and even
+	// beside a failure that landed after the take (a lock release, the
+	// retention prune). [FRAMING:representation] the snapshot is durable and
+	// listed from the instant Take returned; a non-zero exit that hides its
+	// name sends the operator retrying into a duplicate of a snapshot they
+	// already have.
+	if snap.Name != "" {
+		if _, printErr := fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path); printErr != nil {
+			err = errors.Join(err, printErr)
+		}
+	}
 	if err != nil {
 		return err
 	}
@@ -105,13 +116,9 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 	// independently by migrate() under its own budget. Without the kind
 	// filter, `lit snapshots new` could evict a recovery snapshot the
 	// migration system is depending on.
-	if err := withCommitLock(ctx, ws, func() error {
+	return withCommitLock(ctx, ws, func() error {
 		return dbsnapshot.PruneMatching(snapshotsDirFor(ws), cfg.Snapshot.RetentionBudget, isUserSnapshotName)
-	}); err != nil {
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "%s %s\n", snap.Name, snap.Path)
-	return err
+	})
 }
 
 // takeUserSnapshot brackets the Dolt-directory copy in exactly the holds the
@@ -150,17 +157,19 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
 		return dbsnapshot.Snapshot{}, err
 	}
-	if err := withCommitLock(ctx, ws, func() error {
+	err = withCommitLock(ctx, ws, func() error {
 		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
 		if err != nil {
 			return err
 		}
 		snap = s
 		return nil
-	}); err != nil {
-		return dbsnapshot.Snapshot{}, err
-	}
-	return snap, nil
+	})
+	// snap is populated exactly when Take succeeded, so a failure that landed
+	// after the take (the commit-lock release here, the workspace release in
+	// the defer above) travels beside the record of the durable snapshot it
+	// did not undo, never in place of it. [LAW:no-silent-failure]
+	return snap, err
 }
 
 func runSnapshotsList(stdout io.Writer, ws workspace.Info, args []string) error {
