@@ -180,8 +180,12 @@ func acquireStoreLock(ctx context.Context, lockPath string, exclusive bool, maxA
 // ONE HOME exception, stated here where the path is minted: the file lives
 // INSIDE the dolt directory because it is Dolt's file, and that placement is
 // correct for what it guards — a `lit snapshots restore` rotation carries the
-// lock with the journal whose integrity it protects, and every acquirer holds
-// the workspace lock, which is what serializes against the rotation itself.
+// lock with the journal whose integrity it protects, and every acquirer lit
+// controls holds the workspace lock, which is what serializes against the
+// rotation itself. A non-lit dolt process opening the store directly holds
+// this lock with no workspace hold — the same foreign holder
+// engineOpenRetryMaxElapsed budgets for — and a rotation under that holder
+// is outside lit's exclusion, as every lit-vs-non-lit interaction is.
 //
 // [LAW:one-source-of-truth] lit's retired .links-engine.lock was a partial
 // second representation of this exact fact ("one write-capable engine on this
