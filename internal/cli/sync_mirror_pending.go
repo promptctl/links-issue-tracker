@@ -69,8 +69,11 @@ const (
 	// ahead of this command's committed, closed session. No spawn needed.
 	pendingCovered mirrorPendingClaim = iota
 	// pendingClaimed: this command created (or reclaimed from residue) the
-	// marker and now owes the spawn that clears it — and is answering for it
-	// via the shared beacon hold minted with the claim.
+	// marker and now owes the spawn that clears it. The answering hold is
+	// minted with the claim, best-effort: a mint that fails (an exclusive
+	// squatter on the beacon) is loud on stderr, leaves this outcome
+	// unchanged — the spawn is still owed — and the spawned mirror's own
+	// hold failure then records the paged ending.
 	pendingClaimed
 )
 

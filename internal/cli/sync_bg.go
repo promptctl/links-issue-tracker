@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -138,17 +139,24 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	// it on any death mode. A mirror that cannot take the hold must not run:
 	// its work would be invisible to every claimant's probe, so each would
 	// spawn a redundant sibling anyway. [LAW:no-ambient-temporal-coupling]
+	// stopAnswering is the idempotent release the dying paths run BEFORE their
+	// completion effects (see the helpers); a no-op until the hold exists.
+	stopAnswering := func() {}
 	releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
 	if beaconErr != nil {
 		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err())
+			return teardownMirror(ws, ctx.Err(), stopAnswering)
 		}
-		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr))
+		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr), stopAnswering)
 	}
-	// FD hygiene only — the liveness contract is carried by the kernel's
-	// on-exit release, so a failed explicit release costs nothing but noise
-	// in a detached worker.
-	defer func() { _ = releaseBeacon() }()
+	var stopOnce sync.Once
+	stopAnswering = func() {
+		// The kernel's on-exit release carries the liveness contract; this
+		// explicit release only ends the answering earlier than exit, so its
+		// failure costs nothing but noise in a detached worker.
+		stopOnce.Do(func() { _ = releaseBeacon() })
+	}
+	defer stopAnswering()
 
 	// Wait for the spawning command's embedded engine to be released. Opening
 	// a second engine on the same path while the first is live collides on
@@ -158,11 +166,11 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	// [LAW:no-ambient-temporal-coupling]
 	if !waitForParentExit(ctx, *parentPID, os.Getppid, mirrorParentWaitTimeout, mirrorParentPollDelay) {
 		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err())
+			return teardownMirror(ws, ctx.Err(), stopAnswering)
 		}
 		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf(
 			"spawning command (pid %d) still running after %s; skipping mirror to avoid racing its engine",
-			*parentPID, mirrorParentWaitTimeout))
+			*parentPID, mirrorParentWaitTimeout), stopAnswering)
 	}
 
 	for {
@@ -170,11 +178,11 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 		// SIGTERM grace window), starting another engine cycle would fight the
 		// shutdown for its last seconds. [LAW:no-ambient-temporal-coupling]
 		if ctx.Err() != nil {
-			return teardownMirror(ws, ctx.Err())
+			return teardownMirror(ws, ctx.Err(), stopAnswering)
 		}
 		release, acquired, err := store.TryAcquireSyncPushLock(ws.DatabasePath)
 		if err != nil {
-			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("acquire sync-push lock: %w", err))
+			return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("acquire sync-push lock: %w", err), stopAnswering)
 		}
 		if !acquired {
 			// Lost the single-flight race: the holder's post-release re-check
@@ -186,7 +194,7 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 		// marker older than it existed before this cycle's entry-clear ran,
 		// so its survival means the clear is failing, not that a claim landed.
 		cycleStart := time.Now()
-		attempted := mirrorCycle(ctx, ws)
+		attempted := mirrorCycle(ctx, ws, stopAnswering)
 		// Released only after the cycle's engine has closed (mirrorCycle's
 		// deferred Close), so the lock brackets the whole session. The kernel
 		// drops the flock on process exit, so an unlock error cannot strand
@@ -231,7 +239,12 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 // process's previous cycle) remains the truthful answer to "where do things
 // stand". [FRAMING:representation] Recording the teardown as an outcome would
 // overwrite that answer with a non-event.
-func teardownMirror(ws workspace.Info, cause error) error {
+//
+// stopAnswering runs FIRST: a mirror being dismantled will never push, so it
+// must stop reading as an answerer before any teardown effect — the same
+// ordering contract completeMirrorWithoutAttempt enforces.
+func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error {
+	stopAnswering()
 	clearMirrorPending(ws)
 	recordMirrorTraceError(ws, cause)
 	return nil
@@ -243,10 +256,10 @@ func teardownMirror(ws workspace.Info, cause error) error {
 // attempt was reached; false means the failure was already completed through
 // the push-outcome seam and the caller must stop rather than loop on a broken
 // precondition.
-func mirrorCycle(ctx context.Context, ws workspace.Info) (attempted bool) {
+func mirrorCycle(ctx context.Context, ws workspace.Info, stopAnswering func()) (attempted bool) {
 	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err))
+		_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err), stopAnswering)
 		return false
 	}
 	defer syncStore.Close()
@@ -336,21 +349,26 @@ func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, t
 // mutation is already durable, so the mirror is best-effort and never reports
 // a non-zero exit.
 //
-// The dying mirror also releases the mirror-pending claim it was spawned to
-// answer — FIRST, before the completion effects, because the completion can
-// run the owner-notify hook for up to its cap and every mutation landing in
-// that window would otherwise read the claim as live coverage from a mirror
-// already known dead — worse than usual here, because a dying mirror past its
-// beacon acquisition still holds it, so a probe would truthfully answer
-// "alive" about a mirror that will never push. Releasing first bounds that
-// exposure to the inherent instant of the removal; the next mutation then re-claims and
+// The dying mirror also stops answering on the beacon and releases the
+// mirror-pending claim it was spawned to answer — both FIRST, before the
+// completion effects, because the completion can run the owner-notify hook
+// for up to its cap and every mutation landing in that window would
+// otherwise read live coverage from a mirror already known dead: a beacon
+// still held would make the probe truthfully answer "alive" about a process
+// that will never push, and a claim still present would read as covered
+// under it. Running both up front bounds that exposure to the inherent
+// instants of the release and removal; the next mutation then re-claims and
 // re-spawns at once. (The endings that run no code at all — SIGKILL, power
-// loss — drop the beacon instead, and the next claim's probe recovers the
-// marker the moment it runs.) Racing a newer
-// live claim errs toward the safe side: a claim removed early only makes some
-// mutation spawn a redundant mirror, while a claim left behind would falsely
-// read as coverage. [LAW:no-ambient-temporal-coupling]
-func completeMirrorWithoutAttempt(ctx context.Context, ws workspace.Info, cause error) error {
+// loss — drop the beacon with the process instead, and the next claim's
+// probe recovers the marker the moment it runs.) Racing a newer live claim
+// errs toward the safe side: a claim removed early only makes some mutation
+// spawn a redundant mirror, while a claim left behind would falsely read as
+// coverage. [LAW:no-ambient-temporal-coupling] [LAW:single-enforcer] the
+// stop-before-effects ordering lives here and in teardownMirror, not at the
+// call sites, so every current and future pre-attempt death gets it by
+// construction.
+func completeMirrorWithoutAttempt(ctx context.Context, ws workspace.Info, cause error, stopAnswering func()) error {
+	stopAnswering()
 	clearMirrorPending(ws)
 	completePushAttempt(ctx, ws, syncPushOutcome{}, cause)
 	recordMirrorTraceError(ws, cause)

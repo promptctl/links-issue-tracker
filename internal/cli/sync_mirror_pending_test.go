@@ -205,7 +205,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 	}
 
 	cause := errors.New("spawning command (pid 4242) still running after 30s")
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause); err != nil {
+	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
@@ -240,7 +240,7 @@ func TestCompleteMirrorWithoutAttemptCancelledSkipsOwner(t *testing.T) {
 	enableOwnerNotify(t, ws, `printf sent >> `+sink)
 
 	cause := fmt.Errorf("open sync store: %w", context.Canceled)
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause); err != nil {
+	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(ws, time.Now())
@@ -266,7 +266,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	}
 
 	cause := fmt.Errorf("open sync store: %w", store.ErrWorkspaceBusy)
-	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause); err != nil {
+	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, func() {}); err != nil {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 	rec, _, ok := lastPushOutcome(ws, time.Now())
@@ -278,6 +278,41 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	}
 	if mirrorPendingSet(ws) {
 		t.Fatal("a busy-workspace ending left its claim behind")
+	}
+}
+
+// TestCompleteMirrorWithoutAttemptStopsAnsweringFirst pins the completion
+// helpers' ordering contract: a dying mirror stops answering on the beacon
+// BEFORE any completion effect runs — most importantly before the
+// owner-notify hook, whose ~10s cap would otherwise be a window in which the
+// dead mirror still reads as a live answerer and a SIGKILLed claimant's
+// fresh residue reads as covered. The hook itself is the witness: it checks
+// for the stamp stopAnswering writes.
+func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
+	ws := notifyTestWorkspace(t)
+	dir := t.TempDir()
+	stamp := filepath.Join(dir, "stopped")
+	sink := filepath.Join(dir, "sink")
+	enableOwnerNotify(t, ws, `test -f `+stamp+` && printf yes >> `+sink+` || printf no >> `+sink)
+
+	stopAnswering := func() {
+		f, err := os.Create(stamp)
+		if err != nil {
+			t.Errorf("write stop stamp: %v", err)
+			return
+		}
+		_ = f.Close()
+	}
+	cause := errors.New("spawning command (pid 4242) still running after 30s")
+	if err := completeMirrorWithoutAttempt(context.Background(), ws, cause, stopAnswering); err != nil {
+		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
+	}
+	payload, err := os.ReadFile(sink)
+	if err != nil {
+		t.Fatalf("owner hook did not run: %v", err)
+	}
+	if string(payload) != "yes" {
+		t.Fatalf("owner hook observed the mirror still answering (payload %q); stopAnswering must run before the completion effects", payload)
 	}
 }
 
