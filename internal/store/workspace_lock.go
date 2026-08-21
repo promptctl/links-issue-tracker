@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"time"
 
@@ -208,15 +209,17 @@ const (
 
 // LockDoltJournalExclusive takes an exclusive hold on Dolt's own journal lock
 // for a caller that must exclude engine-lifecycle I/O without opening an
-// engine — i.e. the `lit snapshots new` copy. While held, every concurrent
-// engine open in every process (reads included — lit never requests a
-// read-only open; Dolt's read-only mode is purely this lock's contention
-// fallback) demotes to that fallback after its 100ms attempt and performs no
-// journal crash-recovery or close-time flush, so a file walk under this hold
-// cannot capture a torn journal. Take it AFTER the workspace lock and BEFORE
-// the commit lock, per the acquisition order in package filelock's doc —
-// taking it inside the commit lock inverts the order against every live
-// write Store.
+// engine — i.e. the `lit snapshots new` copy. While held, no concurrent
+// engine open in any process performs journal crash-recovery or close-time
+// flush, by one of two arms: a read open demotes to Dolt's read-only
+// fallback after its 100ms attempt (read-only is purely this lock's
+// contention fallback — lit never requests it), while a write-capable open
+// refuses the fallback, retries ~30s (engineOpenRetryMaxElapsed), and fails
+// with holder-naming guidance. Fallback or refusal, nothing writes, so a
+// file walk under this hold cannot capture a torn journal. Take it AFTER
+// the workspace lock and BEFORE the commit lock, per the acquisition order
+// in package filelock's doc — taking it inside the commit lock inverts the
+// order against every live write Store.
 //
 // The one lifecycle write this hold does not stop: journal.idx is opened
 // O_RDWR and truncated on every engine bootstrap with no can-write gate, so
@@ -225,7 +228,23 @@ const (
 // from the journal on the restored store's first open, where a torn journal
 // would be data loss.
 func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, DoltJournalLockPath(databasePath), true, doltJournalRetryAttempts, doltJournalRetryDelay)
+	lockPath := DoltJournalLockPath(databasePath)
+	// This helper CONTENDS on Dolt's lock; it never mints Dolt's tree. The
+	// shared acquisition path MkdirAll+O_CREATEs missing lock files — right
+	// for lit-minted locks, wrong here: on an uninitialized workspace it
+	// would fabricate <db>/links/.dolt/noms/, and the snapshot copy's
+	// database-dir stat would then bless the fabrication as a snapshotable
+	// store. Refuse instead. Stable against rotation/adopt because every
+	// caller holds the workspace lock across this check and the acquisition.
+	// [LAW:no-silent-failure] only ENOENT means uninitialized; any other
+	// stat failure is its own error, not a guessed refusal.
+	if _, statErr := os.Stat(filepath.Dir(lockPath)); statErr != nil {
+		if errors.Is(statErr, os.ErrNotExist) {
+			return nil, fmt.Errorf("repository not initialized with lit — run 'lit init' first")
+		}
+		return nil, fmt.Errorf("stat dolt journal dir: %w", statErr)
+	}
+	release, err := acquireStoreLock(ctx, lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees

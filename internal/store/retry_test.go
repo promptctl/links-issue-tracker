@@ -26,7 +26,7 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 }
 
 // noRotate is the rotate hook for retry tests that don't exercise reconnection.
-func noRotate() error { return nil }
+func noRotate(context.Context) error { return nil }
 
 func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 	op := &fakeRetryOperation{
@@ -210,7 +210,7 @@ func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T
 	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
-		func() error { rotations++; return nil },
+		func(context.Context) error { rotations++; return nil },
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)
@@ -240,7 +240,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 	err := retryTransientGCContention(
 		context.Background(),
 		op.run,
-		func() error { return rotateErr },
+		func(context.Context) error { return rotateErr },
 		func(int) time.Duration { return 0 },
 		func(context.Context, time.Duration) error { return nil },
 	)

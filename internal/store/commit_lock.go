@@ -78,8 +78,10 @@ type retrySleepFunc func(context.Context, time.Duration) error
 // connectionRotator rotates a poisoned SQL connection between retry attempts.
 // Online GC invalidates the connection that observed it, so the next attempt
 // must run on a fresh handle. [LAW:effects-at-boundaries] The retry loop stays
-// pure; the reconnect effect is injected here.
-type connectionRotator func() error
+// pure; the reconnect effect is injected here. It takes ctx because the
+// rotation opens a real engine (a bounded wait on Dolt's journal lock), and a
+// cancelled mutation must be able to abandon that wait.
+type connectionRotator func(context.Context) error
 
 type commitLockContextKey struct{}
 
@@ -188,7 +190,7 @@ func retryTransientGCContention(ctx context.Context, operation retryOperation, r
 		if waitErr := sleep(ctx, delayForAttempt(attempt)); waitErr != nil {
 			return waitErr
 		}
-		if rotateErr := rotate(); rotateErr != nil {
+		if rotateErr := rotate(ctx); rotateErr != nil {
 			return rotateErr
 		}
 	}

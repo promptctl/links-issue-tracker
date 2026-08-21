@@ -533,7 +533,7 @@ func (s *Store) compactWithinLock(ctx context.Context) error {
 		return fmt.Errorf("compact dolt store: %w", err)
 	}
 	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
-	return s.reconnect()
+	return s.reconnect(ctx)
 }
 
 func (s *Store) SyncCompact(ctx context.Context) error {

@@ -3,12 +3,37 @@ package store
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/dolthub/dolt/go/store/chunks"
 )
+
+// TestLockDoltJournalExclusiveRefusesUninitializedWorkspace pins the refusal
+// that keeps `lit snapshots new` honest on a workspace that was never
+// initialized: the journal-lock helper contends on Dolt's lock, it never
+// mints Dolt's tree. Without the refusal, the shared acquisition path's
+// MkdirAll+O_CREATE would fabricate <db>/links/.dolt/noms/LOCK, the snapshot
+// copy's database-dir stat would then pass, and a bogus empty "snapshot"
+// would be minted where the command previously failed clean.
+func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+
+	release, err := LockDoltJournalExclusive(context.Background(), doltRoot)
+	if err == nil {
+		_ = release()
+		t.Fatal("LockDoltJournalExclusive() succeeded on an uninitialized workspace; want a not-initialized refusal")
+	}
+	if !strings.Contains(err.Error(), "not initialized") {
+		t.Fatalf("LockDoltJournalExclusive() error = %v; want the not-initialized guidance", err)
+	}
+	if _, statErr := os.Stat(doltRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("the refusal fabricated %s (stat err = %v); it must create nothing", doltRoot, statErr)
+	}
+}
 
 // chunkJournalPath is dolt's chunk journal for lit's database — the file a
 // concurrent open's crash recovery truncates and fsyncs, and therefore the

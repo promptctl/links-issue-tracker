@@ -53,11 +53,16 @@
 // spelling out, because no lit call site shows them:
 //
 // Dolt's LOCK is ordinarily acquired by the embedded driver, not by lit: an
-// engine takes it when it opens (and demotes to Dolt's read-only fallback
-// when a 100ms attempt times out — so read engines never wait on it), a
-// store's engine opens eagerly inside openStoreConnection, and the engine
-// holds it until it closes, so a live write Store stands at "holds LOCK,
-// takes commit per mutation" for its whole lifetime. lit acquires it
+// engine takes it when it opens and holds it until it closes. A write
+// engine opens eagerly inside openStoreConnection — before any commit lock
+// — and refuses Dolt's read-only fallback, retrying its open boundedly, so
+// a live write Store stands at "holds LOCK, takes commit per mutation" for
+// its whole lifetime. A read engine opens lazily at first SQL and never
+// waits on LOCK (a 100ms attempt, then the read-only fallback), so it
+// contributes no wait edge wherever it opens — and the laziness is
+// deliberate: a reader that opened eagerly under a transient holder would
+// be permanently read-only, while a lazy one opens after any commit-lock
+// wait, holder gone, write-capable for auto-migration. lit acquires it
 // directly in exactly one place — the snapshot copy's
 // LockDoltJournalExclusive, which must exclude engine-lifecycle I/O without
 // opening an engine. That standing Store hold is the trap in the natural

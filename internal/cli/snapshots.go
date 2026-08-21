@@ -135,9 +135,10 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 // hold never met the commit lock — links-sync-pgct.14's torn-snapshot race),
 // engine-lifecycle exclusion (a concurrent open's journal crash-recovery
 // after an unclean kill ran truncate/fsync under the walk — even `lit
-// backlog` opens write-capable, links-sync-pgct.15's tear; holding the lock
-// forces every concurrent open into Dolt's read-only fallback, which writes
-// nothing), and writer serialization.
+// backlog` opens write-capable, links-sync-pgct.15's tear; under the hold a
+// concurrent read open demotes to Dolt's write-nothing read-only fallback
+// and a write open fails fast after its bounded retry), and writer
+// serialization.
 func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
 	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
 	if err != nil {

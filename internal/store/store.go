@@ -434,22 +434,34 @@ func (s *Store) Close() error {
 	return err
 }
 
-// openStoreConnection builds a Store around an OPEN engine, not a lazy one:
+// openStoreConnection builds a Store whose WRITE engine is open, not lazy:
 // the ping forces the embedded engine — and with it the acquisition of Dolt's
 // own journal lock — to happen here, at store construction, before any commit
 // lock the store's user takes. Left lazy, a write store's first SQL was
 // migrate, inside withCommitLock, which acquired the journal lock in the
 // inverted commit→LOCK order the discipline in package filelock's doc
-// forbids. [LAW:no-ambient-temporal-coupling] the engine's (and journal
+// forbids. [LAW:no-ambient-temporal-coupling] a write engine's (and journal
 // lock's) lifetime is the Store's lifetime by construction, not by whichever
 // query happens to run first.
+//
+// Read engines stay lazy, and that is the engineAccess enum's one branch
+// doing its job, not an optimization: a read open never waits on the journal
+// lock (a 100ms attempt, then Dolt's read-only fallback), so it contributes
+// no wait edge to the ordering — and the fallback, once taken, is permanent
+// for the engine's lifetime. An eager read ping under a transient holder (a
+// snapshot copy's walk) would mint that permanent read-only engine BEFORE
+// the commit-lock wait, and OpenForRead's auto-migrate would then fail
+// against it; opened lazily, the first SQL runs after the wait, the holder
+// is gone, and the engine comes up write-capable.
 func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID string, access engineAccess) (*Store, error) {
 	db, err := openDoltPool(doltRootDir, workspaceID, doltDatabaseName, access)
 	if err != nil {
 		return nil, err
 	}
-	if err := db.PingContext(ctx); err != nil {
-		return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
+	if access == engineWrite {
+		if err := db.PingContext(ctx); err != nil {
+			return nil, errors.Join(wrapEngineOpenContention(err), db.Close())
+		}
 	}
 	return &Store{
 		db:             db,
@@ -468,22 +480,24 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // connection before any subsequent query. Must be called while the commit lock
 // is held so no concurrent caller observes a torn s.db pointer.
 //
-// The new handle is opened and configured before the old one is closed; the
-// swap is safe because the pool's engine opens lazily on first use, which
-// happens only after prev.Close() below has already released the prior engine
-// — the process never holds two engines on the path. (This is deliberately
-// NOT the eagerly-pinged openStoreConnection path: pinging here would open
-// the new engine while the old still holds Dolt's journal lock and
-// self-collide.) [LAW:no-ambient-temporal-coupling]
+// The new handle is opened and configured before the old one is closed, and
+// its ENGINE opens only at the ping below — after prev.Close() has released
+// the prior engine (and its journal lock), so the process never holds two
+// engines on the path. The ping cannot ride openStoreConnection's eager-open
+// path for exactly that reason: there the engine must open before the pool is
+// handed out; here it must not open until the old engine is gone.
+// [LAW:no-ambient-temporal-coupling]
 //
-// That lazy re-open is the ONE place Dolt's journal lock is acquired while
-// the commit lock is held — the inverted order package filelock's doc
-// documents as this site's tolerated deviation. It cannot wedge: the re-open
-// waits at most engineOpenRetryMaxElapsed (~30s) before failing the mutation
-// loudly, strictly inside every commit-lock waiter's ~15-minute budget, so
-// any holder this re-open waits on either releases or outlives this
-// mutation's bounded failure — and the commit lock is released either way.
-func (s *Store) reconnect() error {
+// This re-open is the ONE place Dolt's journal lock is acquired while the
+// commit lock is held — the inverted order package filelock's doc documents
+// as this site's tolerated deviation. It cannot wedge: the re-open waits at
+// most engineOpenRetryMaxElapsed (~30s) before failing the mutation loudly —
+// with wrapEngineOpenContention's holder guidance, from the ping that makes
+// the open (and its contention) surface here rather than at whichever query
+// runs next — strictly inside every commit-lock waiter's ~15-minute budget,
+// so any holder this re-open waits on either releases or outlives this
+// mutation's bounded failure, and the commit lock is released either way.
+func (s *Store) reconnect(ctx context.Context) error {
 	// [LAW:dataflow-not-control-flow] Reconnect runs unconditionally on every invocation; what varies is the Store's path/identity/access, not whether the rotation occurs.
 	next, err := openDoltPool(s.doltRootDir, s.workspaceID, doltDatabaseName, s.access)
 	if err != nil {
@@ -493,6 +507,9 @@ func (s *Store) reconnect() error {
 	s.db = next
 	if err := prev.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		return fmt.Errorf("close prior dolt connection after reconnect: %w", err)
+	}
+	if err := next.PingContext(ctx); err != nil {
+		return fmt.Errorf("reopen dolt: %w", wrapEngineOpenContention(err))
 	}
 	return nil
 }
