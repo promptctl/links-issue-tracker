@@ -152,7 +152,7 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 			// [LAW:no-silent-failure] Both unlock and close failures matter
 			// (lock stuck held; FD leak) so the release contract surfaces
 			// them jointly via errors.Join instead of picking one.
-			return func() error {
+			release := func() error {
 				var unlockErr error
 				if e := unlockFile(fd); e != nil {
 					unlockErr = fmt.Errorf("release file lock: %w", e)
@@ -162,7 +162,20 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 					closeErr = fmt.Errorf("close file lock fd: %w", e)
 				}
 				return errors.Join(unlockErr, closeErr)
-			}, true, nil
+			}
+			// The acquisition spans blocking filesystem I/O (MkdirAll and
+			// OpenFile can stall arbitrarily on a network filesystem), so a
+			// cancellation that landed inside it is honored here rather than
+			// handing a hold to a caller who already asked to stop. Backing
+			// out releases the just-taken hold; the window that remains is
+			// the caller's own, governed by its operation's ctx-awareness.
+			// Like the post-loop check below, this branch has no
+			// deterministic test without an injection seam — inspection
+			// coverage, stated here.
+			if ctxErr := ctx.Err(); ctxErr != nil {
+				return nil, false, errors.Join(ctxErr, release())
+			}
+			return release, true, nil
 		}
 		if !errors.Is(err, errWouldBlock) {
 			return nil, false, joinWithClose(fmt.Errorf("lock %s: %w", lockPath, err), file)

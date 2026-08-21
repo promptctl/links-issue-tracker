@@ -55,13 +55,18 @@ const (
 	// commitLockRetryAttempts/commitLockRetryDelay bound the wait for a
 	// co-resident writer — a mutation in this or another process, or a
 	// snapshot copy quiescing writers via LockCommitPath — to release the
-	// commit lock. ~30s wall-clock cap, the same "how long do we wait on a
-	// co-resident holder of this store" budget the engine-write lock
-	// declares: long enough to outlast routine mutations and an ordinary
-	// snapshot copy, short enough that a genuinely wedged holder surfaces
-	// as a clear, actionable error rather than the unbounded
-	// wait-until-context-death the O_EXCL-era loop ran.
-	commitLockRetryAttempts = 300
+	// commit lock. Under the flock discipline the budget's only job is
+	// surfacing a genuinely WEDGED (live but stuck) holder — a dead one's
+	// hold evaporates with its process — so it sizes to the longest
+	// legitimate hold, and this lock's holder profile is dominated by
+	// takeUserSnapshot holding it across an entire snapshot copy, measured
+	// past ten minutes on large stores without reflink (the very copies the
+	// O_EXCL era's 10-minute threshold evicted mid-run). ~15min: a healthy
+	// long copy keeps concurrent writers waiting exactly as the old
+	// unbounded loop did, a wedged holder still surfaces with the sentinel
+	// instead of hanging forever, and context cancellation escapes the wait
+	// at any moment.
+	commitLockRetryAttempts = 9000
 	commitLockRetryDelay    = 100 * time.Millisecond
 )
 

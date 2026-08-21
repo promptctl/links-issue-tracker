@@ -624,3 +624,23 @@ func TestFormatName_RoundTripsThroughParseName(t *testing.T) {
 		t.Fatalf("round trip: parsed=%v want=%v", parsed, created)
 	}
 }
+
+// TestSanitizeLabel_BoundsWorstCaseMintedName pins the label cap: even a
+// wildly long label yields a snapshot name whose longest derived form — the
+// condemnation rename <name>.reserve.<ns>.condemned — fits a 255-byte
+// NAME_MAX, and the label is truncated (lossy-normalizer contract), never
+// rejected.
+func TestSanitizeLabel_BoundsWorstCaseMintedName(t *testing.T) {
+	t.Parallel()
+	name := formatName(time.Unix(0, 1700000000000000001), strings.Repeat("x", 300))
+	worst := len(name) + len(reserveSuffix) + len(".1700000000000000001") + len(condemnedSuffix)
+	if worst > 255 {
+		t.Fatalf("worst-case minted name is %d bytes, exceeds NAME_MAX 255 (name=%q)", worst, name)
+	}
+	if !strings.HasPrefix(name, "1700000000000000001-xxx") {
+		t.Fatalf("long label should truncate, not vanish: %q", name)
+	}
+	if _, ok := parseName(name); !ok {
+		t.Fatalf("truncated-label name must still parse: %q", name)
+	}
+}

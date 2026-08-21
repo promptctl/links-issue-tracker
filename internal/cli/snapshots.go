@@ -226,15 +226,19 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	var rotated string
 	restored := false
 	err = withCommitLock(ctx, ws, func() error {
-		r, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
-		if err != nil {
-			return err
-		}
+		// rotated is captured even when Restore then fails: a non-empty path
+		// beside an error means the pre-restore directory was already moved
+		// aside (Restore's install step failed after its rotation step), and
+		// that path is the operator's only pointer to their displaced data.
+		r, restoreErr := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
 		rotated = r
-		restored = true
-		return nil
+		restored = restoreErr == nil
+		return restoreErr
 	})
-	// The record prints the moment the rotation is durable, even beside a
+	if !restored && rotated != "" {
+		err = fmt.Errorf("the pre-restore database directory was moved aside to %s before this failure and holds the workspace's data: %w", rotated, err)
+	}
+	// The record prints the moment the restore is durable, even beside a
 	// failure that lands after it (the workspace release joined in the defer
 	// above). [FRAMING:representation] the snapshot was consumed and the old
 	// directory moved the instant Restore returned; an error exit that hides
