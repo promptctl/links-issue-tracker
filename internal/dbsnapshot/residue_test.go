@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
@@ -51,7 +52,7 @@ func TestCollectOrphanedResidue_RemovesDeadResidue(t *testing.T) {
 		t.Fatal(err)
 	}
 	fabricateDeadResidue(t, snapshotsDir, "1700000000000000001")
-	condemnedLeftover := filepath.Join(snapshotsDir, "1700000000000000002.tmp.condemned")
+	condemnedLeftover := filepath.Join(snapshotsDir, "1700000000000000002.tmp.1700000000000000005.condemned")
 	if err := os.MkdirAll(condemnedLeftover, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -175,35 +176,78 @@ func TestTake_CollectsResidueAtEntry(t *testing.T) {
 }
 
 // TestCollectOrphanedResidue_SparesForeignNames pins delete-narrowly: the
-// collector destroys only names whose shape lit provably minted (a parseable
-// <unix-ns>[-label] head under .tmp/.reserve, or the collector's own
-// .condemned suffix). A foreign "backup.tmp" an operator parked in the
-// directory is inert to every consumer — including the one destructive one.
+// collector destroys only names whose full shape lit provably minted (a
+// parseable <unix-ns>[-label] head under .tmp/.reserve, or the collector's
+// own <artifact>.<ns>.condemned). A foreign "backup.tmp" — or a foreign
+// "backup.condemned", since a suffix is never provenance over a directory
+// lit doesn't own — is inert to every consumer, including the one
+// destructive one.
 func TestCollectOrphanedResidue_SparesForeignNames(t *testing.T) {
 	t.Parallel()
 	snapshotsDir := t.TempDir()
-	foreign := filepath.Join(snapshotsDir, "backup.tmp")
-	if err := os.MkdirAll(foreign, 0o755); err != nil {
-		t.Fatal(err)
+	spared := []string{
+		"backup.tmp",       // foreign head under a producer suffix
+		"backup.condemned", // condemned suffix without the collector's shape
+		"backup.tmp.1700000000000000001.condemned", // collector frame around a foreign head
+		"1700000000000000006.tmp.condemned",        // stampless: no collector ever minted it
+		"+1700000000000000006.tmp",                 // signed head: ParseInt tolerance is not minting
+		"1700000000000000006.tmp.+1.condemned",     // signed collector stamp: same
+		"1700000000000000006-my.backup.tmp",        // dotted label no sanitizeLabel ever emitted
+	}
+	for _, name := range spared {
+		if err := os.MkdirAll(filepath.Join(snapshotsDir, name), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	foreignFile := filepath.Join(snapshotsDir, "notes.reserve")
 	if err := os.WriteFile(foreignFile, []byte("mine"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	litShaped, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000006")
+	litCondemned := filepath.Join(snapshotsDir, "1700000000000000007.reserve.1700000000000000002.condemned")
+	if err := os.MkdirAll(litCondemned, 0o755); err != nil {
+		t.Fatal(err)
+	}
 
 	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
 		t.Fatalf("CollectOrphanedResidue: %v", err)
 	}
 
-	if _, err := os.Stat(foreign); err != nil {
-		t.Fatalf("foreign backup.tmp must be spared: %v", err)
+	for _, name := range spared {
+		if _, err := os.Stat(filepath.Join(snapshotsDir, name)); err != nil {
+			t.Fatalf("foreign %s must be spared: %v", name, err)
+		}
 	}
 	if _, err := os.Stat(foreignFile); err != nil {
 		t.Fatalf("foreign notes.reserve must be spared: %v", err)
 	}
 	if _, err := os.Stat(litShaped); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("lit-shaped residue must be collected, stat err=%v", err)
+	}
+	if _, err := os.Stat(litCondemned); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("collector-shaped condemned corpse must be collected, stat err=%v", err)
+	}
+}
+
+// TestCollectOrphanedResidue_LongLabelResidueStillCondemnable pins the label
+// bound end-to-end: the longest label sanitizeLabel can emit still leaves the
+// condemnation rename (<name>.<ns>.condemned) inside a 255-byte NAME_MAX, so
+// a killed Take with a maximal label leaves residue the collector can rename
+// and reap rather than a corpse stranded behind ENAMETOOLONG forever.
+func TestCollectOrphanedResidue_LongLabelResidueStillCondemnable(t *testing.T) {
+	t.Parallel()
+	snapshotsDir := t.TempDir()
+	longName := formatName(time.Unix(0, 1700000000000000008), strings.Repeat("x", 300))
+	residue := filepath.Join(snapshotsDir, longName+".tmp")
+	if err := os.MkdirAll(residue, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CollectOrphanedResidue(snapshotsDir); err != nil {
+		t.Fatalf("CollectOrphanedResidue: %v", err)
+	}
+	if _, err := os.Stat(residue); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("long-label residue must be collected, stat err=%v", err)
 	}
 }
 
@@ -216,7 +260,10 @@ func TestCollectOrphanedResidue_ConvergesOnStampReuse(t *testing.T) {
 	t.Parallel()
 	snapshotsDir := t.TempDir()
 	tmpPath, _ := fabricateDeadResidue(t, snapshotsDir, "1700000000000000007")
-	oldCondemned := tmpPath + ".condemned"
+	// The corpse an interrupted collection actually leaves carries the
+	// collector's nanosecond stamp — condemnResidue always mints
+	// <artifact>.<ns>.condemned, never a bare .condemned.
+	oldCondemned := tmpPath + ".1700000000000000001.condemned"
 	if err := os.MkdirAll(oldCondemned, 0o755); err != nil {
 		t.Fatal(err)
 	}

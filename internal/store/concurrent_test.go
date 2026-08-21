@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -16,7 +15,7 @@ import (
 // mutations against the same Store all succeed without data corruption, and
 // that the commit lock is not held after all operations complete.
 //
-// This exercises the processCommitMutex + file-based commit lock to ensure
+// This exercises the flock-backed commit lock to ensure
 // concurrent mutations are serialized correctly: each CreateIssue goes through
 // withMutation, which acquires the commit lock, begins a tx, runs the mutation,
 // commits the tx, runs commitWorkingSet (re-entrant), and releases the lock.
@@ -87,9 +86,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	}
 
 	// Lock must not be held.
-	if _, err := os.Stat(st.commitLockPath); !os.IsNotExist(err) {
-		t.Fatalf("lock file exists after concurrent mutations: stat err = %v", err)
-	}
+	assertCommitLockFree(t, st.commitLockPath)
 }
 
 // TestConcurrentMutationsMixedOperations runs N goroutines performing different
@@ -258,7 +255,5 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	}
 
 	// Lock must not be held.
-	if _, err := os.Stat(st.commitLockPath); !os.IsNotExist(err) {
-		t.Fatalf("lock file exists after concurrent mixed ops: stat err = %v", err)
-	}
+	assertCommitLockFree(t, st.commitLockPath)
 }
