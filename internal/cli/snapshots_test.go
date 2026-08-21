@@ -569,3 +569,55 @@ func TestIsUserSnapshotName(t *testing.T) {
 		}
 	}
 }
+
+// TestSnapshotsNew_RecordSurvivesPruneFailure pins the durable-record rule:
+// when the take has succeeded and a post-take step (here the retention
+// prune) fails, the command exits non-zero but the snapshot's "<name> <path>"
+// record still reaches stdout — hiding it would bait the operator into
+// retaking a snapshot that already sits in the listing.
+func TestSnapshotsNew_RecordSurvivesPruneFailure(t *testing.T) {
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	// Fill the user retention budget (default 5) so the next take's prune
+	// must delete the oldest user snapshot — then make that oldest snapshot
+	// undeletable.
+	for range 5 {
+		captureRun(t, "snapshots", "new")
+	}
+	dir := snapshotsDirFor(ws)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldest := ""
+	for _, e := range entries {
+		if !e.IsDir() || !isUserSnapshotName(e.Name()) {
+			continue
+		}
+		if oldest == "" || e.Name() < oldest {
+			oldest = e.Name()
+		}
+	}
+	if oldest == "" {
+		t.Fatal("no user snapshots on disk after five takes")
+	}
+	oldestPath := filepath.Join(dir, oldest)
+	if err := os.Chmod(oldestPath, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(oldestPath, 0o755) })
+
+	var stdout, stderr bytes.Buffer
+	runErr := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"})
+	if runErr == nil {
+		t.Fatal("expected the failed retention prune to surface as an error")
+	}
+	fields := strings.Fields(stdout.String())
+	if len(fields) != 2 {
+		t.Fatalf("stdout should carry exactly the '<name> <path>' record beside the failure, got %q", stdout.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, fields[0])); err != nil {
+		t.Fatalf("printed record names a snapshot that is not on disk: %v", err)
+	}
+}

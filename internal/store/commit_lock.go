@@ -61,7 +61,8 @@ const (
 	// legitimate hold, and this lock's holder profile is dominated by
 	// takeUserSnapshot holding it across an entire snapshot copy, measured
 	// past ten minutes on large stores without reflink (the very copies the
-	// O_EXCL era's 10-minute threshold evicted mid-run). ~15min: a healthy
+	// O_EXCL era's 10-minute threshold evicted mid-run); the retention prune
+	// it also serializes is ordinarily far shorter. ~15min: a healthy
 	// long copy keeps concurrent writers waiting exactly as the old
 	// unbounded loop did, a wedged holder still surfaces with the sentinel
 	// instead of hanging forever, and context cancellation escapes the wait

@@ -105,8 +105,8 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 // commit-specific operator guidance with the errors.Is discriminator intact,
 // and every other failure — a cancellation above all — passes through
 // untouched, so "retry after it completes" can never dress an abort. The
-// mapping is tested directly rather than by exhausting the real ~30s budget:
-// the budget is part of the lock's declared identity, not an injectable knob,
+// mapping is tested directly rather than by exhausting the real ~15-minute
+// budget: the budget is part of the lock's declared identity, not a knob,
 // and TestAcquireCommitLockNeverEvictsLiveHolderByAge already proves a live
 // holder drives this path's acquisition into contention.
 func TestWrapCommitLockContention(t *testing.T) {

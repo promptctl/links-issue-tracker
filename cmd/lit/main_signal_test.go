@@ -107,8 +107,9 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	}
 	// The seize expects a free lock (the write released it before printing the
 	// line), so a short deadline is ample — and bounds the wait if the child's
-	// receive wins the race to re-acquire, instead of queueing ~30s behind the
-	// very hold this test means to plant first.
+	// receive wins the race to re-acquire, instead of queueing the commit
+	// lock's full ~15-minute budget behind the very hold this test means to
+	// plant first.
 	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSeize()
 	releaseSeize, err := store.LockCommitPath(seizeCtx, lockPath)

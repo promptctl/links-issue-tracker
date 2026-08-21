@@ -480,7 +480,7 @@ func isCollectorCondemnedName(name string) bool {
 	if dot < 0 {
 		return false
 	}
-	if ns, err := strconv.ParseInt(head[dot+1:], 10, 64); err != nil || ns <= 0 {
+	if _, ok := parsePositiveDigits(head[dot+1:]); !ok {
 		return false
 	}
 	return isCollectibleArtifactName(head[:dot])
@@ -496,15 +496,52 @@ func parseName(name string) (time.Time, bool) {
 	if IsProducerArtifactName(name) {
 		return time.Time{}, false
 	}
-	head := name
+	head, label, dashed := name, "", false
 	if idx := strings.IndexByte(name, '-'); idx >= 0 {
-		head = name[:idx]
+		head, label, dashed = name[:idx], name[idx+1:], true
 	}
-	ns, err := strconv.ParseInt(head, 10, 64)
-	if err != nil || ns <= 0 {
+	ns, ok := parsePositiveDigits(head)
+	if !ok {
+		return time.Time{}, false
+	}
+	if dashed && !isMintableLabel(label) {
 		return time.Time{}, false
 	}
 	return time.Unix(0, ns).UTC(), true
+}
+
+// parsePositiveDigits parses s as a positive int64 minted by
+// strconv.FormatInt — the round-trip check rejects what ParseInt would
+// tolerate but no lit producer ever writes: a sign prefix, leading zeros.
+// The sign hole was live: "+123.tmp" classified as lit-minted residue and
+// was destroyed.
+func parsePositiveDigits(s string) (int64, bool) {
+	ns, err := strconv.ParseInt(s, 10, 64)
+	if err != nil || ns <= 0 || strconv.FormatInt(ns, 10) != s {
+		return 0, false
+	}
+	return ns, true
+}
+
+// isMintableLabel reports whether label is a shape sanitizeLabel can emit:
+// non-empty, drawn from the [A-Za-z0-9_-] alphabet, not dash-terminated at
+// either end. Deliberately no length bound — labels minted by pre-cap
+// binaries exist on disk and must stay listable and restorable, so the
+// parser accepts the union of shapes lit ever minted while maxLabelBytes
+// bounds only what it mints today.
+func isMintableLabel(label string) bool {
+	if label == "" || label[0] == '-' || label[len(label)-1] == '-' {
+		return false
+	}
+	for i := 0; i < len(label); i++ {
+		c := label[i]
+		switch {
+		case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9', c == '_', c == '-':
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // maxLabelBytes bounds the sanitized label so every name minted FROM a
