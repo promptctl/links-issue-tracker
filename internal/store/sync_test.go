@@ -626,7 +626,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 
 	// Rotate the connection between the staged write and the Dolt commit — the
 	// exact sequence the GC-contention retry now performs.
-	if err := st.reconnect(); err != nil {
+	if err := st.reconnect(ctx); err != nil {
 		t.Fatalf("reconnect() error = %v", err)
 	}
 	if err := st.commitWorkingSetOnce(ctx, commitStamp{Message: "commit staged probe after reconnect"}); err != nil {

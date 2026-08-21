@@ -836,7 +836,7 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch, scratchBranch string) error {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
-		if reconnectErr := s.reconnect(); reconnectErr != nil {
+		if reconnectErr := s.reconnect(ctx); reconnectErr != nil {
 			return fmt.Errorf("reconcile left the store on the scratch branch and could not recover: checkout %q failed (%v); connection rotation failed: %w", dataBranch, err, reconnectErr)
 		}
 		// A fresh connection opens on the default branch, but do not rely on that —

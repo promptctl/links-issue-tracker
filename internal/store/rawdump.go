@@ -90,7 +90,7 @@ func DumpRaw(ctx context.Context, doltRootDir string, workspaceID string) (_ Raw
 	if err = requireNoPendingAdopt(doltRootDir); err != nil {
 		return RawDump{}, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID, engineRead)
+	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineRead)
 	if err != nil {
 		return RawDump{}, err
 	}

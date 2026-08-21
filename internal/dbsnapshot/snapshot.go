@@ -6,22 +6,27 @@
 //
 // Trust boundary: callers MUST NOT hold an open Dolt connection on the
 // destination directory while calling Restore. Take on a live workspace path
-// requires the caller to hold, for the whole call, the workspace SHARED lock
+// requires the caller to hold, for the whole call: the workspace SHARED lock
 // (transitively via an open Store, as the migration system does, or directly
-// via store.LockWorkspaceShared, as the CLI does) plus the commit lock — the
-// shared hold keeps a directory rotator (snapshots restore, adopt,
-// promotion/heal) from rewriting the tree mid-copy, and the commit lock keeps
-// writers from committing under the walk. Open Dolt connections are otherwise
-// fine to keep during Take. For clean recovery the migration system should
-// snapshot before the commit it's protecting. (This package cannot import
-// store, so the requirement is a documented precondition, not an acquired
-// one; PR #379's review caught the previous "Take is safe with open
-// connections" wording inviting the next caller to skip the locks.)
+// via store.LockWorkspaceShared, as the CLI does), Dolt's own journal lock
+// (transitively via the open Store's engine, which holds it for its
+// lifetime, or directly via store.LockDoltJournalExclusive), and the commit
+// lock. The shared hold keeps a directory rotator (snapshots restore, adopt,
+// promotion/heal) from rewriting the tree mid-copy; the journal hold keeps a
+// concurrent open's engine-lifecycle I/O — journal crash-recovery after an
+// unclean kill, close-time flush — from rewriting the journal under the walk
+// (links-sync-pgct.15); the commit lock keeps writers from committing under
+// it. Open Dolt connections are otherwise fine to keep during Take. For
+// clean recovery the migration system should snapshot before the commit it's
+// protecting. (This package cannot import store, so the requirement is a
+// documented precondition, not an acquired one; PR #379's review caught the
+// previous "Take is safe with open connections" wording inviting the next
+// caller to skip the locks.)
 //
 // Distinct from those store-owned preconditions, the package acquires its own
 // producer beacon (an flock inside snapshotsDir, see producerBeaconName): Take
 // holds it shared, residue collection probes it exclusive, and it is always
-// the innermost hold — after workspace, engine, and commit locks — taken by
+// the innermost hold — after the workspace, journal, and commit locks — taken by
 // code that already holds nothing else it could wait on, so it cannot extend
 // any lock cycle.
 package dbsnapshot
@@ -573,6 +578,15 @@ func sanitizeLabel(label string) string {
 	return strings.Trim(clean, "-")
 }
 
+// isDoltJournalLockRel reports whether rel — a path relative to the database
+// root being copied — is a Dolt journal LOCK file: <database>/.dolt/noms/LOCK.
+// The suffix shape is the whole definition; any path of that shape under a
+// Dolt storage directory is that database's journal lock, whatever the
+// database is named.
+func isDoltJournalLockRel(rel string) bool {
+	return strings.HasSuffix(filepath.ToSlash(rel), "/.dolt/noms/LOCK")
+}
+
 // walkAndCopy creates dst as a tree-copy of src using copyFile for each
 // regular file. Directories are recreated with their source perm bits.
 // Symlinks are recreated; other special entries error out. The per-entry ctx
@@ -610,6 +624,19 @@ func walkAndCopy(ctx context.Context, src, dst string, copyFile func(ctx context
 			}
 			return os.Symlink(target, dstPath)
 		case d.Type().IsRegular():
+			// Dolt's journal LOCK file is the one entry the copy omits: it is
+			// contentless (the lock lives on holders' open file descriptions,
+			// never in bytes) and Dolt recreates it at every engine open, so
+			// a restored snapshot neither needs nor misses it — while on
+			// Windows the snapshot's own journal hold is a MANDATORY
+			// LockFileEx, and reading the file through a second handle here
+			// would either fail the copy outright or release the hold
+			// mid-walk, reopening the tear window the hold exists to close.
+			// (Darwin's single-syscall Clonefile fast path may still carry
+			// the file; under POSIX advisory flock that is inert.)
+			if isDoltJournalLockRel(rel) {
+				return nil
+			}
 			return copyFile(ctx, srcPath, dstPath)
 		default:
 			return fmt.Errorf("dbsnapshot: unsupported file type at %s: %v", srcPath, d.Type())

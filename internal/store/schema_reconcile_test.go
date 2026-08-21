@@ -1423,7 +1423,7 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 		t.Fatalf("error %q does not name the remaining relations.created_by gap after reconcile", err)
 	}
 	// And the workspace must NOT have been stamped at v1.
-	st, err := openStoreConnection(doltRoot, "test-workspace-id", engineWrite)
+	st, err := openStoreConnection(ctx, doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}
@@ -1450,7 +1450,7 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-	seed, err := openStoreConnection(doltRoot, "test-workspace-id", engineWrite)
+	seed, err := openStoreConnection(ctx, doltRoot, "test-workspace-id", engineWrite)
 	if err != nil {
 		t.Fatalf("openStoreConnection() error = %v", err)
 	}

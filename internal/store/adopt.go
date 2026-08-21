@@ -28,7 +28,7 @@ const adoptPendingMarkerName = ".links-adopt-pending"
 
 // AdoptPendingMarkerPath returns the adopt-pending marker path for a Dolt
 // root directory. [LAW:one-source-of-truth] One naming convention, same as
-// WorkspaceLockPath/EngineLockPath; any callsite (including tests fabricating
+// WorkspaceLockPath; any callsite (including tests fabricating
 // an abandoned adopt) reads the path from this function.
 func AdoptPendingMarkerPath(databasePath string) string {
 	return filepath.Join(filepath.Clean(databasePath), adoptPendingMarkerName)

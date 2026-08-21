@@ -173,6 +173,44 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 	}
 }
 
+func TestSnapshotsNew_AcquiresDoltJournalLock(t *testing.T) {
+	// Pin the contract that closes links-sync-pgct.15 at the command level:
+	// the `snapshots new` copy serializes against engine-lifecycle I/O by
+	// holding Dolt's own journal lock. We hold that lock externally (an
+	// independent fd is indistinguishable from another process's live
+	// engine), race the command against a delayed release, and require the
+	// command to have waited — a copy that didn't contend would finish in
+	// milliseconds and could interleave with a concurrent open's journal
+	// crash-recovery, the measured tear.
+	repo, ws := initBootstrapTestRepo(t)
+	chdir(t, repo)
+
+	release, err := store.LockDoltJournalExclusive(context.Background(), ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("acquire dolt journal lock: %v", err)
+	}
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		time.Sleep(200 * time.Millisecond)
+		if err := release(); err != nil {
+			t.Errorf("release dolt journal lock: %v", err)
+		}
+	}()
+
+	start := time.Now()
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), &stdout, &stderr, []string{"snapshots", "new"}); err != nil {
+		t.Fatalf("snapshots new: %v\nstderr=%s", err, stderr.String())
+	}
+	elapsed := time.Since(start)
+	<-done
+	if elapsed < 200*time.Millisecond {
+		t.Fatalf("snapshots new completed in %v; expected it to wait out the journal-lock holder released at 200ms", elapsed)
+	}
+}
+
 func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	// Pins the contract that the commit lock lives outside the rotated dolt
 	// directory. Pre-fix: lock path was <databaseDir>/.links-commit.lock,

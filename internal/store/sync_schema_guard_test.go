@@ -182,7 +182,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	// Close before touching rootC below: rootB and rootC are test-fixture
 	// sibling directories under the same t.TempDir() parent (unlike a real
 	// workspace's uniquely-parented storage dir), so they share the
-	// engine-write lock's sibling-of-doltRootDir path (links-sync-pgct.11).
+	// sibling-of-doltRootDir workspace and commit lock paths.
 	// syncB is done with its work; hold nothing open past this point.
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("syncB.Close(): %v", err)

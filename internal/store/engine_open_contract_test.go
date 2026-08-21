@@ -106,6 +106,48 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	}
 }
 
+// TestOpenSyncContentionCarriesWorkspaceBusy pins the mirror-facing half of
+// the write-open contention contract: when OpenSync times out against a
+// foreign journal-lock holder, the error must carry ErrWorkspaceBusy — the
+// uniform contention sentinel pushOutcomeOf maps to the non-failed
+// workspace_busy outcome — alongside the ErrDatabaseLocked classification.
+// The retired engine lock's wrapper carried the sentinel; without it a
+// mirror blocked behind a healthy long-running writer records a push
+// FAILURE and pages the owner over ordinary serialization.
+func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	s, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("initial Open() error = %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	lock := fslock.New(journalLockPath(doltRoot))
+	if err := lock.TryLock(); err != nil {
+		t.Fatalf("take journal lock as foreign holder: %v", err)
+	}
+	defer func() { _ = lock.Unlock() }()
+
+	prevBudget := engineOpenRetryMaxElapsed
+	engineOpenRetryMaxElapsed = 700 * time.Millisecond
+	t.Cleanup(func() { engineOpenRetryMaxElapsed = prevBudget })
+
+	opened, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	if err == nil {
+		_ = opened.Close()
+		t.Fatalf("OpenSync() succeeded against a foreign journal-lock holder; want bounded contention")
+	}
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("OpenSync() error = %v; want the ErrWorkspaceBusy contention sentinel in the chain", err)
+	}
+	if !errors.Is(err, nbs.ErrDatabaseLocked) {
+		t.Fatalf("OpenSync() error = %v; want the nbs.ErrDatabaseLocked classification preserved alongside the sentinel", err)
+	}
+}
+
 // TestOpenForReadToleratesForeignJournalHolder pins the read-open contract the
 // write fix must NOT disturb: a read open beside a live foreign writer keeps
 // dolt's read-only fallback and serves reads — reading a store someone else is
