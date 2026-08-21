@@ -1,5 +1,5 @@
 {
-  "note": "License policy for the third-party components compiled into ./cmd/lit — Go modules AND the statically-linked native C libraries (ICU, zstd, musl, compiler-rt; see native.go). Every allowed_licenses entry is a permissive license with no copyleft obligation that conflicts with lit's MIT 'free for any purpose' guarantee. A component whose license (per tools/licenses' classifier for Go modules, or the curated license in native.go for native libs) is not in allowed_licenses must appear in module_exceptions with a reason, or the CI license-policy gate (`go run ./tools/licenses -check`, and TestDependencyLicensesArePermitted) fails. This is the single committed policy file; edit it to accept a new license class (allowed_licenses) or to record a per-module, human-verified exception (module_exceptions). See links-supply-chain-w6m9.3 and w6m9.4.",
+  "note": "License policy for the third-party components compiled into ./cmd/lit — Go modules AND the statically-linked native C libraries (ICU, zstd, musl, compiler-rt; see native.go). Every allowed_licenses entry except MPL-2.0 is a permissive license with no copyleft obligation that conflicts with lit's MIT 'free for any purpose' guarantee; MPL-2.0 (file-level copyleft) is the known residual, kept until links-licensing-c0ce.9 tightens the allowlist. A component whose license (per tools/licenses' classifier for Go modules, or the curated license in native.go for native libs) is not in allowed_licenses must appear in module_exceptions with a reason, or the CI license-policy gate (`go run ./tools/licenses -check`, and TestDependencyLicensesArePermitted) fails. This is the single committed policy file; edit it to accept a new license class (allowed_licenses) or to record a per-module, human-verified exception (module_exceptions). See links-supply-chain-w6m9.3 and w6m9.4.",
   "allowed_licenses": [
     "Apache-2.0",
     "BSD-2-Clause",
@@ -13,11 +13,5 @@
     "Unlicense",
     "WTFPL"
   ],
-  "module_exceptions": [
-    {
-      "module": "github.com/dolthub/fslock",
-      "license": "LGPL-3.0",
-      "reason": "fslock's LICENSE is LGPLv3 WITH a static-linking exception (it grants the right to link the library statically without the resulting binary inheriting LGPL obligations). The classifier matches the LGPL text and reports LGPL-3.0; the exception clause makes it permissive for lit's static linking. Human-verified against the module's LICENSE."
-    }
-  ]
+  "module_exceptions": []
 }

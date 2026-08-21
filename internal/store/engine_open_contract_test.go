@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/store/nbs"
-	"github.com/dolthub/fslock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // journalLockPath is where dolt's journaling store takes its exclusive
@@ -40,11 +40,11 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	lock := fslock.New(journalLockPath(doltRoot))
-	if err := lock.TryLock(); err != nil {
-		t.Fatalf("take journal lock as foreign holder: %v", err)
+	releaseLock, acquired, err := filelock.Acquire(ctx, journalLockPath(doltRoot), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take journal lock as foreign holder: acquired=%v err=%v", acquired, err)
 	}
-	defer func() { _ = lock.Unlock() }()
+	defer func() { _ = releaseLock() }()
 
 	prevBudget := engineOpenRetryMaxElapsed
 	engineOpenRetryMaxElapsed = 700 * time.Millisecond
@@ -83,11 +83,11 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	lock := fslock.New(journalLockPath(doltRoot))
-	if err := lock.TryLock(); err != nil {
-		t.Fatalf("take journal lock as foreign holder: %v", err)
+	releaseLock, acquired, err := filelock.Acquire(ctx, journalLockPath(doltRoot), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take journal lock as foreign holder: acquired=%v err=%v", acquired, err)
 	}
-	release := time.AfterFunc(300*time.Millisecond, func() { _ = lock.Unlock() })
+	release := time.AfterFunc(300*time.Millisecond, func() { _ = releaseLock() })
 	defer release.Stop()
 
 	reopened, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -125,11 +125,11 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	lock := fslock.New(journalLockPath(doltRoot))
-	if err := lock.TryLock(); err != nil {
-		t.Fatalf("take journal lock as foreign holder: %v", err)
+	releaseLock, acquired, err := filelock.Acquire(ctx, journalLockPath(doltRoot), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take journal lock as foreign holder: acquired=%v err=%v", acquired, err)
 	}
-	defer func() { _ = lock.Unlock() }()
+	defer func() { _ = releaseLock() }()
 
 	prevBudget := engineOpenRetryMaxElapsed
 	engineOpenRetryMaxElapsed = 700 * time.Millisecond
@@ -166,11 +166,11 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 		t.Fatalf("Close() error = %v", err)
 	}
 
-	lock := fslock.New(journalLockPath(doltRoot))
-	if err := lock.TryLock(); err != nil {
-		t.Fatalf("take journal lock as foreign holder: %v", err)
+	releaseLock, acquired, err := filelock.Acquire(ctx, journalLockPath(doltRoot), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take journal lock as foreign holder: acquired=%v err=%v", acquired, err)
 	}
-	defer func() { _ = lock.Unlock() }()
+	defer func() { _ = releaseLock() }()
 
 	reader, err := OpenForRead(ctx, doltRoot, "test-workspace-id")
 	if err != nil {

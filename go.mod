@@ -7,12 +7,12 @@ require (
 	github.com/cenkalti/backoff/v4 v4.2.1
 	github.com/dolthub/dolt/go v0.40.5-0.20260314011441-62975ef6bf36
 	github.com/dolthub/driver v0.2.1-0.20260314000741-0fe74e7ee31a
-	github.com/dolthub/fslock v0.0.3
 	github.com/google/licenseclassifier v0.0.0-20210722185704-3043a050f148
 	github.com/google/uuid v1.6.0
 	github.com/package-url/packageurl-go v0.1.6
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2
 	github.com/pressly/goose/v3 v3.27.1
+	github.com/promptctl/primitives v0.2.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.0.10
 	github.com/spf13/viper v1.21.0
@@ -114,7 +114,6 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
-	github.com/promptctl/primitives v0.1.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
@@ -172,7 +171,7 @@ require (
 // newer upstream without silently restoring a copyleft import. Deliberately not
 // summarized here: the summary this replaced had gone stale.
 // [LAW:one-source-of-truth]
-replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821060911-24c5c459fe62
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821203835-a0352e869de1
 
 replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
 

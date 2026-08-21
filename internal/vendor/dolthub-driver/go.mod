@@ -68,7 +68,6 @@ require (
 	github.com/dolthub/aws-sdk-go-ini-parser v0.0.0-20250305001723-2821c37f6c12 // indirect
 	github.com/dolthub/eventsapi_schema v0.0.0-20260310172945-37a9265ade69 // indirect
 	github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 // indirect
-	github.com/dolthub/fslock v0.0.3 // indirect
 	github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790 // indirect
 	github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 // indirect
 	github.com/dolthub/jsonpath v0.0.2-0.20240227200619-19675ab05c71 // indirect
@@ -107,7 +106,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/promptctl/primitives v0.1.0 // indirect
+	github.com/promptctl/primitives v0.2.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
@@ -165,6 +164,6 @@ replace github.com/google/flatbuffers => github.com/dolthub/flatbuffers v1.13.0-
 // forks removed (github.com/hashicorp/golang-lru, both major versions) lingers
 // in this module's own require graph. Keep the pins in step with FORKS.md when
 // the forks move.
-replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821060911-24c5c459fe62
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821203835-a0352e869de1
 
 replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69

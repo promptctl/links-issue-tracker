@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // TestWorkspaceLockSharedHoldersCoexist pins the contract that multiple

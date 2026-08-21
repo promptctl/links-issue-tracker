@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // [LAW:single-enforcer] All commit-lock acquisition, transient-retry, and
@@ -19,8 +19,8 @@ import (
 //
 // The commit lock is one slot in a multi-lock acquisition order — workspace,
 // Dolt's own LOCK, commit, beacon — so deadlock reasoning lives with
-// the declared discipline in package filelock's doc, not in a single-resource
-// story here. The lock is an flock through acquireStoreLock: the hold lives
+// the declared discipline in this package's doc (doc.go), not in a
+// single-resource story here. The lock is an flock through acquireStoreLock: the hold lives
 // on an open file description, so exclusion covers goroutines and foreign
 // processes through the one primitive, and any process death releases it —
 // no staleness heuristic exists to evict a live holder. Re-entrancy is a

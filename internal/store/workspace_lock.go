@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // [LAW:single-enforcer] Workspace-exclusivity lock acquisition lives here so
@@ -32,13 +32,14 @@ import (
 // open→try→retry loop) is the same every call.
 //
 // [LAW:locality-or-seam] The lock primitive (POSIX flock(2) vs. Win32
-// LockFileEx) and its acquisition loop live in internal/filelock behind a
-// typed seam shared with every other flock-backed coordination point (e.g.
-// dbsnapshot's snapshot-producer beacon). This file keeps only the lock
-// *meanings*: which path, which mode, which retry budget, and which
-// operator guidance wraps contention. The lock discipline itself — the one
-// primitive, the acquisition order, and where lock files live — is declared
-// in package filelock's doc; read it before adding a coordination point.
+// LockFileEx) and its acquisition loop live in
+// github.com/promptctl/primitives/filelock behind a typed seam shared with
+// every other flock-backed coordination point (e.g. dbsnapshot's
+// snapshot-producer beacon). This file keeps only the lock *meanings*:
+// which path, which mode, which retry budget, and which operator guidance
+// wraps contention. The lock discipline itself — the one primitive, the
+// acquisition order, and where lock files live — is declared in this
+// package's doc (doc.go); read it before adding a coordination point.
 
 // ErrWorkspaceBusy is the sentinel every workspace-lock contention error
 // wraps. Callers detect contention with errors.Is(err, ErrWorkspaceBusy)
@@ -172,7 +173,7 @@ const (
 // mirror-pending marker: a shared hold on the beacon, kept until the holder's
 // work is done or it dies, so "is anyone still answering" is decided by the
 // kernel — a SIGKILLed holder's hold evaporates with its process — never by
-// an age threshold (the lock discipline in package filelock's doc). Two
+// an age threshold (the lock discipline in this package's doc). Two
 // holder kinds share the one shared mode: a mirror holds from process entry
 // for its whole run, and the claimant that spawned it holds from its claim
 // until its own process exit — overlapping lifetimes, so the answering set
@@ -304,8 +305,10 @@ func acquireStoreLock(ctx context.Context, lockPath string, exclusive bool, maxA
 
 // DoltJournalLockPath returns Dolt's own journal-manifest lock path for a
 // Dolt root directory: <databasePath>/<database>/.dolt/noms/LOCK. This is not
-// a lit-minted lock — the embedded driver's fslock takes it (plain flock, the
-// same primitive internal/filelock uses) whenever an engine opens, holds it
+// a lit-minted lock — the embedded driver takes it (a kernel flock through
+// the same promptctl/primitives/filelock package lit's own locks use; the
+// dolt fork retired dolthub/fslock under links-licensing-c0ce.4) whenever
+// an engine opens, holds it
 // for the engine's lifetime, and demotes the open to Dolt's read-only
 // fallback when a 100ms attempt on it times out. Losing it is therefore the
 // one condition under which an engine performs no lifecycle writes — no
@@ -356,7 +359,7 @@ const (
 // with holder-naming guidance. Fallback or refusal, nothing writes, so a
 // file walk under this hold cannot capture a torn journal. Take it AFTER
 // the workspace lock and BEFORE the commit lock, per the acquisition order
-// in package filelock's doc — taking it inside the commit lock inverts the
+// in this package's doc (doc.go) — taking it inside the commit lock inverts the
 // order against every live write Store.
 //
 // The one lifecycle write this hold does not stop: journal.idx is opened

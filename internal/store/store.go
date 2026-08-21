@@ -453,7 +453,7 @@ func (s *Store) Close() error {
 // own journal lock — to happen here, at store construction, before any commit
 // lock the store's user takes. Left lazy, a write store's first SQL was
 // migrate, inside withCommitLock, which acquired the journal lock in the
-// inverted commit→LOCK order the discipline in package filelock's doc
+// inverted commit→LOCK order the discipline in this package's doc (doc.go)
 // forbids. [LAW:no-ambient-temporal-coupling] a write engine's (and journal
 // lock's) lifetime is the Store's lifetime by construction, not by whichever
 // query happens to run first.
@@ -503,7 +503,7 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 // [LAW:no-ambient-temporal-coupling]
 //
 // This re-open is the ONE place Dolt's journal lock is acquired while the
-// commit lock is held — the inverted order package filelock's doc documents
+// commit lock is held — the inverted order this package's doc documents
 // as this site's tolerated deviation. It cannot wedge: the re-open waits at
 // most engineOpenRetryMaxElapsed (~30s) before failing the mutation loudly —
 // with wrapEngineOpenContention's holder guidance, from the ping that makes
