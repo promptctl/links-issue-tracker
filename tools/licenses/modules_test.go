@@ -106,6 +106,28 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		}
 	})
 
+	t.Run("carries a directory replacement, which has no version", func(t *testing.T) {
+		// The other replacement shape this repo's go.mod produces: a local
+		// directory (the vendored driver), where linkedModuleTemplate emits
+		// Replace.Path bare because Replace.Version is empty. Pins frozen as
+		// illustration, per the note on the versioned case above.
+		in := "github.com/dolthub/driver\tv0.2.1-0.20260314000741-0fe74e7ee31a\t" +
+			"/repo/internal/vendor/dolthub-driver\t./internal/vendor/dolthub-driver\n"
+		got, err := parseModuleList(in)
+		if err != nil {
+			t.Fatalf("parseModuleList: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("got %d modules, want 1: %+v", len(got), got)
+		}
+		if !got[0].IsReplaced() {
+			t.Errorf("module reports IsReplaced()=false despite a directory replacement: %+v", got[0])
+		}
+		if want := "./internal/vendor/dolthub-driver"; got[0].ReplacedBy != want {
+			t.Errorf("ReplacedBy = %q, want %q", got[0].ReplacedBy, want)
+		}
+	})
+
 	t.Run("an unreplaced module is not reported as replaced", func(t *testing.T) {
 		got, err := parseModuleList("github.com/example/mod\tv1.0.0\t/mod/dir\t\n")
 		if err != nil {
