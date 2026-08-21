@@ -130,7 +130,7 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 // [LAW:single-enforcer] The copy reads the Dolt directory file by file — the
 // same kind of actor as an open Store — so it takes the same shared workspace
 // hold every Store open takes, then Dolt's own journal lock, then the commit
-// lock: the workspace→LOCK→commit order package filelock's doc declares. The
+// lock: the workspace→LOCK→commit order package store's doc declares. The
 // three holds own, in turn: rotator exclusion (an adopt/restore's exclusive
 // hold never met the commit lock — links-sync-pgct.14's torn-snapshot race),
 // engine-lifecycle exclusion (a concurrent open's journal crash-recovery

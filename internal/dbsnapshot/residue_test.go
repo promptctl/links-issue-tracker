@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // fabricateDeadResidue plants the exact on-disk shape an uncleanly killed

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- `lit` no longer links `github.com/dolthub/fslock` — the one genuinely copyleft (LGPL-3.0) module in the binary — and `tools/licenses/policy.json`'s `module_exceptions` list is empty for the first time: the license gate now runs with no excused row at all, and a test pins it staying that way. fslock's LICENSE carries a static-linking exception, so lit was already legally compliant; what it wasn't was clean to a policy engine, which reads the `LGPL-3.0` string in an SBOM row and stops, paragraph unread. The replacement is lit's own lock primitive: `internal/filelock` — written for the snapshots epic to prove producer liveness through the kernel, long before the licensing epic — moved verbatim into the shared `github.com/promptctl/primitives` module (v0.2.0) as its third package, `filelock`, keeping the kernel-liveness contract its package doc states and gaining a reusable `Lock` handle (`New`, `Lock`, `TryLock`, `LockWithTimeout`, `Unlock`, `ErrLocked`, `ErrTimeout`) whose semantics were derived from the dolt fork's nine Apache-2.0 call sites and black-box tests — never from fslock's source, per the clean-room doc's ground-2 rule. The fork's patch 4 (`FORKS.md`) swaps all ten importing files onto it with an aliased import line and a `NOTICE` comment each, no call-site edits; lit's own callers now import the published package, and the lit-specific lock discipline — one primitive, one acquisition order, one home — moves from the deleted `internal/filelock`'s doc to `internal/store`'s package doc, still one declared home. The linked component count drops 154 → 153, and a rebase that ever restores the fslock import now fails the license gate itself, not just the ledger.
+
 ## [0.5.0] - 2026-08-21
 
 ### Added

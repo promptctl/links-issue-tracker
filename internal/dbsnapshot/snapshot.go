@@ -44,7 +44,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // Snapshot is a frozen copy of a Dolt storage directory.

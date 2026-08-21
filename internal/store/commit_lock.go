@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // [LAW:single-enforcer] All commit-lock acquisition, transient-retry, and

@@ -335,8 +335,6 @@ github.com/dolthub/flatbuffers v1.13.0-dh.1 h1:OWJdaPep22N52O/0xsUevxJ6Qfw1M2txC
 github.com/dolthub/flatbuffers v1.13.0-dh.1/go.mod h1:CorYGaDmXjHz1Z7i50PYXG1Ricn31GcA2wNOTFIQAKE=
 github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2 h1:u3PMzfF8RkKd3lB9pZ2bfn0qEG+1Gms9599cr0REMww=
 github.com/dolthub/flatbuffers/v23 v23.3.3-dh.2/go.mod h1:mIEZOHnFx4ZMQeawhw9rhsj+0zwQj7adVsnBX7t+eKY=
-github.com/dolthub/fslock v0.0.3 h1:iLMpUIvJKMKm92+N1fmHVdxJP5NdyDK5bK7z7Ba2s2U=
-github.com/dolthub/fslock v0.0.3/go.mod h1:QWql+P17oAAMLnL4HGB5tiovtDuAjdDTPbuqx7bYfa0=
 github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790 h1:zxMsH7RLiG+dlZ/y0LgJHTV26XoiSJcuWq+em6t6VVc=
 github.com/dolthub/go-icu-regex v0.0.0-20250916051405-78a38d478790/go.mod h1:F3cnm+vMRK1HaU6+rNqQrOCyR03HHhR1GWG2gnPOqaE=
 github.com/dolthub/gozstd v0.0.0-20240423170813-23a2903bca63 h1:OAsXLAPL4du6tfbBgK0xXHZkOlos63RdKYS3Sgw/dfI=
@@ -738,12 +736,12 @@ github.com/prometheus/common v0.66.1 h1:h5E0h5/Y8niHc5DlaLlWLArTQI7tMrsfQjHV+d9Z
 github.com/prometheus/common v0.66.1/go.mod h1:gcaUsgf3KfRSwHY4dIMXLPV0K/Wg1oZ8+SbZk/HH/dA=
 github.com/prometheus/procfs v0.16.1 h1:hZ15bTNuirocR6u0JZ6BAHHmwS1p8B4P6MRqxtzMyRg=
 github.com/prometheus/procfs v0.16.1/go.mod h1:teAbpZRB1iIAJYREa1LsoWUXykVXA1KlTmWl8x/U+Is=
-github.com/promptctl/dolt/go v0.40.5-0.20260821060911-24c5c459fe62 h1:vd24zP4McpoaBBbqk9fZl02BfTTVDw3R80GTCeyghAU=
-github.com/promptctl/dolt/go v0.40.5-0.20260821060911-24c5c459fe62/go.mod h1:Nxyy0PeHbQ+GUDknNqE9M8iHUXhxpVTwpMQ6GggMcco=
+github.com/promptctl/dolt/go v0.40.5-0.20260821203835-a0352e869de1 h1:FGGa6Dn7iSrf6F3AdMONSGOMD9+BCOBgG9AagoRP09c=
+github.com/promptctl/dolt/go v0.40.5-0.20260821203835-a0352e869de1/go.mod h1:jpGr9LahKHFwbEw1dGsMMufpidF75ctdUY8DdGRE69g=
 github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69 h1:qub1qbK6dNacxXVnOo/hAtk+SXj/yR0myrzFhb6HSKA=
 github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69/go.mod h1:FndJ0agFCU7ot2X77VDYE0VzXSPoBahpou+wUCQ/4+s=
-github.com/promptctl/primitives v0.1.0 h1:CsdBoqLk8hbh65+/y3wcGjwByRSFmQKqjV7VJswaAck=
-github.com/promptctl/primitives v0.1.0/go.mod h1:NNM4XxY87f3gfdqwGuvRq4ySWk4mTmZOdTPpVeFANGo=
+github.com/promptctl/primitives v0.2.0 h1:UL0LQXLlCYwgPz2zz6ffEwuKx0jsfqIlex2ZrOx+2Y0=
+github.com/promptctl/primitives v0.2.0/go.mod h1:NNM4XxY87f3gfdqwGuvRq4ySWk4mTmZOdTPpVeFANGo=
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=
 github.com/rivo/uniseg v0.4.7 h1:WUdvkW8uEhrYfLC4ZzdpI2ztxP1I582+49Oc5Mq64VQ=
 github.com/rivo/uniseg v0.4.7/go.mod h1:FN3SvrM+Zdj16jyLfmOkMNblXMcoc8DfTHruCPUcx88=
@@ -1466,7 +1464,6 @@ gopkg.in/check.v1 v0.0.0-20161208181325-20d25e280405/go.mod h1:Co6ibVJAznAaIkqp8
 gopkg.in/check.v1 v1.0.0-20180628173108-788fd7840127/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20200227125254-8fa46927fb4f/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
-gopkg.in/check.v1 v1.0.0-20200902074654-038fdea0a05b/go.mod h1:Co6ibVJAznAaIkqp8huTwlJQCZ016jof/cbN4VW5Yz0=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c h1:Hei/4ADfdWqJk1ZMxUNpqntNwaWcugrBjAiHlqqRiVk=
 gopkg.in/check.v1 v1.0.0-20201130134442-10cb98267c6c/go.mod h1:JHkPIbrfpd72SG/EVd6muEfDQjcINNoR0C8j2r3qZ4Q=
 gopkg.in/errgo.v2 v2.1.0/go.mod h1:hNsd1EY+bozCKY1Ytp96fpM3vjJbqLJn88ws8XvfDNI=

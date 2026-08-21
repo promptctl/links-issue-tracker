@@ -13,11 +13,5 @@
     "Unlicense",
     "WTFPL"
   ],
-  "module_exceptions": [
-    {
-      "module": "github.com/dolthub/fslock",
-      "license": "LGPL-3.0",
-      "reason": "fslock's LICENSE is LGPLv3 WITH a static-linking exception (it grants the right to link the library statically without the resulting binary inheriting LGPL obligations). The classifier matches the LGPL text and reports LGPL-3.0; the exception clause makes it permissive for lit's static linking. Human-verified against the module's LICENSE."
-    }
-  ]
+  "module_exceptions": []
 }

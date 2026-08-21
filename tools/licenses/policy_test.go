@@ -3,9 +3,13 @@ package main
 import "testing"
 
 // TestLoadPolicyEmbedded confirms the committed policy.json parses and carries
-// the shape the gate depends on: a non-empty allowlist and the one known
-// exception (fslock). If the file is edited into malformed JSON or its
-// allowlist is emptied, the gate breaks — this catches that at test time.
+// the shape the gate depends on: a non-empty allowlist and an EMPTY exception
+// list — links-licensing-c0ce.4 deleted the last one (fslock) when the fork
+// stopped importing it, and the licensing epic's destination is that none ever
+// returns. A reappearing exception is a policy regression, not a formality:
+// it is a row an auditor stops on. If one is ever genuinely unavoidable, it
+// must carry module, license, and a human-verified reason, and this test must
+// be loosened deliberately in the same change.
 func TestLoadPolicyEmbedded(t *testing.T) {
 	p, err := LoadPolicy()
 	if err != nil {
@@ -14,15 +18,9 @@ func TestLoadPolicyEmbedded(t *testing.T) {
 	if len(p.AllowedLicenses) == 0 {
 		t.Fatal("embedded policy has no allowed_licenses")
 	}
-	// Every documented exception must carry a reason — an undocumented
-	// exception is the thing this whole policy exists to prevent.
-	if len(p.ModuleExceptions) == 0 {
-		t.Fatal("embedded policy has no module_exceptions (expected fslock)")
-	}
-	for _, e := range p.ModuleExceptions {
-		if e.Module == "" || e.License == "" || e.Reason == "" {
-			t.Errorf("exception %+v is missing module, license, or reason", e)
-		}
+	if len(p.ModuleExceptions) != 0 {
+		t.Fatalf("embedded policy carries %d module_exceptions, want none — the licensing epic emptied this list and the gate's promise is that it stays empty: %+v",
+			len(p.ModuleExceptions), p.ModuleExceptions)
 	}
 }
 

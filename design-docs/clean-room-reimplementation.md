@@ -82,8 +82,10 @@ to this ground as needing the owner's sign-off.
 before this epic existed. `internal/filelock` is the case: it was written for
 the snapshots epic (`links-snapshots-3dtv`), to prove producer liveness through
 the kernel when collecting snapshot residue. Nobody was thinking about fslock's
-license when it was built. `links-licensing-c0ce.4` substitutes it for fslock,
-and that copies nothing because there is nothing being copied from.
+license when it was built. `links-licensing-c0ce.4` substituted it for fslock,
+and that copied nothing because there was nothing being copied from. (The
+primitive now lives at `github.com/promptctl/primitives/filelock`; the move
+is recorded in that module's `PROVENANCE-ATTESTATIONS.md`.)
 
 Note what makes ground 2 legitimate: the **motivation** was independent, not
 merely the calendar. Code written last week to escape a license is a rewrite and
@@ -91,10 +93,12 @@ goes through the protocol, no matter how convenient it is to reclassify. Code
 written for an unrelated problem that happens to fit is ours already.
 
 One consequence of ground 2 worth stating plainly, because the adapter is where
-it leaks: when substituting `internal/filelock` for fslock, **do not read
-fslock's source while writing the adapter.** Derive the contended-lock semantics
-you need from dolt's call sites, which are Apache-2.0 and ours to read under the
-fork.
+it leaks: when substituting our own lock for fslock, **do not read fslock's
+source while writing the adapter.** Derive the contended-lock semantics you
+need from dolt's call sites, which are Apache-2.0 and ours to read under the
+fork. (`links-licensing-c0ce.4` kept this: the handle surface in
+`promptctl/primitives/filelock` was written from the call sites and black-box
+tests alone.)
 
 ## What is never a ground
 
@@ -442,8 +446,9 @@ Nothing copied and nothing written, so there is no attribution obligation, no
 profane license text in `THIRD_PARTY_LICENSES`, and no new code to own.
 
 **`dolthub/fslock` (LGPL-3.0) — nothing is copied, under ground 2.**
-`links-licensing-c0ce.4` substitutes `internal/filelock`. Do not read fslock's
-source while writing the adapter; derive the semantics from dolt's call sites.
+`links-licensing-c0ce.4` substituted our own pre-existing lock primitive
+(published as `github.com/promptctl/primitives/filelock`); fslock's source was
+never read, and the adapter's semantics were derived from dolt's call sites.
 
 Substituting a permissive (Apache-2.0 / MIT) third-party library for the LRU
 instead of rewriting it is **a change of plan, not an agent's call**. The default

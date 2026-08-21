@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821060911-24c5c459fe62` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821203835-a0352e869de1` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -159,6 +159,33 @@ address and size (both runs recorded on `links-licensing-c0ce.6`).
 buzhash, and the `require` line moves past that change. Until then, a rebase
 that revives `rollingHashSplitter` on a live path is a storage-format decision,
 not a conflict to resolve mechanically: stop and escalate.
+
+#### Patch 4 — replace `dolthub/fslock` with `promptctl/primitives/filelock`
+
+Ten files: `libraries/doltcore/dbfactory/git_remote.go`,
+`libraries/events/event_flush.go`, `libraries/utils/filesys/lock.go`,
+`store/blobstore/git_blobstore.go`, `store/blobstore/local.go`,
+`store/nbs/file_manifest.go`, `store/nbs/journal.go`,
+`store/nbs/journal_record.go`, `store/nbs/test/manifest_clobber.go`, and
+`cmd/dolt/commands/engine/lock_release_test.go` — this module's only
+importers of `github.com/dolthub/fslock` (LGPL-3.0 with a static-linking
+exception), the one genuinely copyleft coordinate the `lit` binary still
+linked. The replacement's `Lock` handle carries the same surface (`New`,
+`Lock`, `TryLock`, `LockWithTimeout`, `Unlock`, and the `ErrLocked` /
+`ErrTimeout` sentinels, compared by identity where upstream compares them so),
+and the import is aliased to `fslock`, so the patch is the import line plus
+each file's `NOTICE` comment — no call-site edits. The handle's contract was
+derived from these call sites and from black-box tests, never from fslock's
+source; the provenance record is the `links-licensing-c0ce.4` section of the
+primitives module's `PROVENANCE-ATTESTATIONS.md`.
+
+Landed under `links-licensing-c0ce.4`, which also removed the fslock
+exception from `tools/licenses/policy.json` — a rebase that restores the
+import therefore fails the license gate, not just this ledger.
+
+**Retire it never** — same standing as patch 2: it ends only if upstream
+itself drops the LGPL dependency, at which point the ledger entry collapses
+into a rebase.
 
 ### promptctl/go-mysql-server
 
