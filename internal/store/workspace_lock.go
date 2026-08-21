@@ -209,13 +209,16 @@ const (
 	// instant. A marker seen beside this verdict is residue to re-claim.
 	BeaconUnheld MirrorBeaconVerdict = iota
 	// BeaconAnswered: someone held the beacon at the deciding instant, and
-	// no exclusive holder stood moments earlier — the ordinary shape of
-	// claimants and the mirrors they spawned, each of whose code-running
-	// failure paths clears the marker and records a loud outcome. A marker
-	// seen beside this verdict is covered — for as long as the holder lives;
-	// a holder dying immediately after leaves residue the NEXT claim's
-	// unheld verdict recovers, the irreducible envelope (no observable state
-	// proves a future push lands).
+	// no exclusive holder stood at the shared step moments earlier —
+	// normally a shared answerer (a claimant or the mirror it spawned, each
+	// of whose code-running failure paths clears the marker and records a
+	// loud outcome), though the probe cannot exclude an exclusive holder
+	// that arrived between the steps (the function doc's residual: a
+	// one-occasion deferral the next claim's obstructed verdict recovers
+	// loudly). A marker seen beside this verdict is covered — for as long
+	// as the holder lives; a holder dying immediately after leaves residue
+	// the NEXT claim's unheld verdict recovers, the irreducible envelope
+	// (no observable state proves a future push lands).
 	BeaconAnswered
 	// BeaconObstructed: an exclusive holder — a foreign squatter, or the
 	// microsecond window of another claimant's own probe. Never covered:

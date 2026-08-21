@@ -129,9 +129,13 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	// obligation ends, instead of its stale hold covering later markers it
 	// will never clear. Only the successful-spawn path below keeps the hold:
 	// it is deliberately abandoned to process exit (the kernel's on-death
-	// release IS the liveness signal), overlapping the spawned mirror's own
-	// hold taken at that mirror's entry while this process still lives, so
-	// burst observers coalesce through the whole spawn window.
+	// release IS the liveness signal, and answerForClaim's package pin keeps
+	// the fd out of the GC's reach until then), overlapping the spawned
+	// mirror's own hold taken at that mirror's entry while this process
+	// still lives, so burst observers coalesce through the whole spawn
+	// window. The abandoned hold proves this claimant lives, not that its
+	// mirror does — a mirror SIGKILLed post-spawn reads answered until the
+	// parent exits, bounded by the post-spawn tail.
 	// [LAW:no-ambient-temporal-coupling]
 	releaseClaim := func() {
 		if ownsClaim {

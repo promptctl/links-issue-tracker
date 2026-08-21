@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -105,10 +106,14 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // is minted here, in the same function that mints the claim, so "owns the
 // claim" and "answers for it" are one state with one lifetime — the returned
 // release ends both together (via the caller's releaseClaim), and only a
-// claim whose spawn succeeded abandons the hold to process exit, where it
-// truthfully backs the mirror that is actually running. releaseAnswer is
-// always non-nil; on non-claimed returns (and on a hold that could not be
-// taken, which is loud) it is a no-op. [LAW:one-source-of-truth]
+// claim whose spawn succeeded abandons the hold to process exit. The
+// abandoned hold answers for the CLAIMANT's own remaining lifetime — it
+// proves this process lives, not that its mirror does — which bounds
+// SIGKILL-residue recovery of that mirror by the parent's exit (~26s in the
+// shipped post-spawn tail) instead of leaving it to the next mutation
+// alone. releaseAnswer is always non-nil; on non-claimed returns (and on a
+// hold that could not be taken, which is loud) it is a no-op.
+// [LAW:one-source-of-truth]
 func claimMirrorPending(ctx context.Context, ws workspace.Info, now time.Time) (claim mirrorPendingClaim, releaseAnswer func(), err error) {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return pendingClaimed, func() {}, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
@@ -162,9 +167,14 @@ func claimMirrorPending(ctx context.Context, ws workspace.Info, now time.Time) (
 	// [LAW:no-silent-failure] Both verdicts re-claim; only the marker's
 	// disappearance re-routes to covered. Refresh the claim time first so
 	// concurrent observers' re-checks bind to THIS re-spawn, then own the
-	// spawn. A marker that disappears under the refresh was just cleared by a
-	// push attempt inside an engine session — a session that, being disjoint
-	// from this command's closed one, opened after this commit: covered.
+	// spawn. A marker that disappears under the refresh was cleared by one
+	// of its two clearers: a push attempt inside an engine session (a
+	// session disjoint from this command's closed one, so opened after this
+	// commit — covered), or an unspawnable claim's release (no remote,
+	// spawn failure) — no push behind it, but that ending was just recorded
+	// through the push-outcome seam, so treating it as covered is the same
+	// loud deferral-to-next-occasion the failed spawn itself established,
+	// not a silent promise.
 	if chErr := os.Chtimes(path, now, now); chErr != nil {
 		if errors.Is(chErr, os.ErrNotExist) {
 			return pendingCovered, func() {}, nil
@@ -173,6 +183,23 @@ func claimMirrorPending(ctx context.Context, ws workspace.Info, now time.Time) (
 	}
 	return pendingClaimed, answerForClaim(ctx, ws), nil
 }
+
+// answeringHoldPins keeps every minted answering hold's release closure —
+// and through it the *os.File backing the flock — reachable until the hold
+// is explicitly released or the process exits. os.File installs a finalizer
+// that closes the fd once the File is unreachable, and closing the fd drops
+// the flock, so WITHOUT this GC root an "abandoned to process exit" hold
+// would actually end at the first garbage collection after the claiming
+// function returned — silently, mid-process, while the claim's answering
+// guarantee still depends on it. Retention after an explicit release is
+// inert (the fd is closed; nothing ever reads the slice), and the slice is
+// bounded at one entry per claim — a CLI process claims at most once.
+// [LAW:no-shared-mutable-globals] One owner: answerForClaim is the only
+// writer, and the slice's entire purpose is to be reachable.
+var (
+	answeringHoldPinsMu sync.Mutex
+	answeringHoldPins   []func() error
+)
 
 // answerForClaim mints the shared beacon hold that makes an owned claim
 // answered-for. Failure never voids the claim — the marker is already minted
@@ -187,6 +214,9 @@ func answerForClaim(ctx context.Context, ws workspace.Info) func() {
 		fmt.Fprintf(os.Stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", err)
 		return func() {}
 	}
+	answeringHoldPinsMu.Lock()
+	answeringHoldPins = append(answeringHoldPins, release)
+	answeringHoldPinsMu.Unlock()
 	return func() {
 		if relErr := release(); relErr != nil {
 			fmt.Fprintf(os.Stderr, "lit: mirror beacon answering hold not released: %v\n", relErr)

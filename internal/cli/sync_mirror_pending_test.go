@@ -16,15 +16,12 @@ import (
 )
 
 // mirrorPendingTestWorkspace builds the minimal workspace the claim protocol
-// touches: a storage dir for the marker and a database path whose sibling
-// position anchors the liveness beacon the claim probes.
+// touches: a storage dir for the marker and the database path whose sibling
+// position anchors the liveness beacon — derived by the one production
+// geometry function so the fixture cannot drift from real stores.
 func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
-	root := t.TempDir()
-	return workspace.Info{Location: workspace.Location{
-		StorageDir:   filepath.Join(root, ".lit"),
-		DatabasePath: filepath.Join(root, ".lit", "dolt"),
-	}}
+	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit"))}
 }
 
 // TestClaimMirrorPendingStateMachine pins the claim's inputs and two outputs

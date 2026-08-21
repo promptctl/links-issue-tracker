@@ -151,10 +151,17 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 	}
 	var stopOnce sync.Once
 	stopAnswering = func() {
-		// The kernel's on-exit release carries the liveness contract; this
-		// explicit release only ends the answering earlier than exit, so its
-		// failure costs nothing but noise in a detached worker.
-		stopOnce.Do(func() { _ = releaseBeacon() })
+		stopOnce.Do(func() {
+			// A failed release matters on the stop-before-effects path: the
+			// dying mirror keeps reading as a live answerer through the
+			// completion effects (the owner-notify hook's cap included) until
+			// process exit finally drops the hold. Loud, not fatal — the
+			// kernel's on-exit release remains the backstop.
+			// [LAW:no-silent-failure]
+			if relErr := releaseBeacon(); relErr != nil {
+				fmt.Fprintf(os.Stderr, "lit: mirror beacon not released (%v); concurrent claims may read this dying mirror as live until process exit\n", relErr)
+			}
+		})
 	}
 	defer stopAnswering()
 

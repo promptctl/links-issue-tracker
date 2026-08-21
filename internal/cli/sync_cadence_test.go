@@ -84,10 +84,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{
-		StorageDir:   filepath.Join(root, ".lit"),
-		DatabasePath: filepath.Join(root, ".lit", "dolt"),
-	}}
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit"))}
 	ctx := context.Background()
 
 	ensureMirrorCoverage(ctx, ws)
