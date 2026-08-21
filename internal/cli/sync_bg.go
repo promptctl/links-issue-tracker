@@ -131,6 +131,25 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 		return err
 	}
 
+	// A live mirror IS the coverage the claim protocol counts on, and its
+	// liveness is proven by the kernel: hold the beacon shared from entry —
+	// before the parent-exit wait, so mutations claiming during that wait read
+	// this mirror as alive — until the process ends, when the kernel releases
+	// it on any death mode. A mirror that cannot take the hold must not run:
+	// its work would be invisible to every claimant's probe, so each would
+	// spawn a redundant sibling anyway. [LAW:no-ambient-temporal-coupling]
+	releaseBeacon, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+	if beaconErr != nil {
+		if ctx.Err() != nil {
+			return teardownMirror(ws, ctx.Err())
+		}
+		return completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("hold mirror liveness beacon: %w", beaconErr))
+	}
+	// FD hygiene only — the liveness contract is carried by the kernel's
+	// on-exit release, so a failed explicit release costs nothing but noise
+	// in a detached worker.
+	defer func() { _ = releaseBeacon() }()
+
 	// Wait for the spawning command's embedded engine to be released. Opening
 	// a second engine on the same path while the first is live collides on
 	// Dolt's online garbage collection. If the parent outlives the timeout, the
@@ -205,8 +224,8 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 
 // teardownMirror is the ending for a mirror dismantled by its own context (the
 // SIGTERM grace window) rather than by a failure: it releases the claim so the
-// NEXT mutation re-claims and re-spawns immediately instead of waiting out the
-// staleness window, traces the ending for the audit log, and deliberately
+// NEXT mutation re-claims and re-spawns immediately without even needing its
+// beacon probe, traces the ending for the audit log, and deliberately
 // writes NO push-outcome record — the teardown attempted nothing, so the last
 // COMPLETED attempt's record (possibly a healthy "pushed" from this very
 // process's previous cycle) remains the truthful answer to "where do things
@@ -321,10 +340,13 @@ func waitForParentExit(ctx context.Context, parentPID int, getppid func() int, t
 // answer — FIRST, before the completion effects, because the completion can
 // run the owner-notify hook for up to its cap and every mutation landing in
 // that window would otherwise read the claim as live coverage from a mirror
-// already known dead. Releasing first bounds that exposure to the inherent
-// instant of the removal; the next mutation then re-claims and re-spawns at
-// once instead of waiting out the staleness window — which stays reserved for
-// the endings that run no code at all (SIGKILL, power loss). Racing a newer
+// already known dead — worse than usual here, because a dying mirror past its
+// beacon acquisition still holds it, so a probe would truthfully answer
+// "alive" about a mirror that will never push. Releasing first bounds that
+// exposure to the inherent instant of the removal; the next mutation then re-claims and
+// re-spawns at once. (The endings that run no code at all — SIGKILL, power
+// loss — drop the beacon instead, and the next claim's probe recovers the
+// marker the moment it runs.) Racing a newer
 // live claim errs toward the safe side: a claim removed early only makes some
 // mutation spawn a redundant mirror, while a claim left behind would falsely
 // read as coverage. [LAW:no-ambient-temporal-coupling]

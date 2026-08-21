@@ -16,7 +16,10 @@ import (
 func notifyTestWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
-	return workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: filepath.Join(root, ".lit")}}
+	return workspace.Info{RootDir: root, Location: workspace.Location{
+		StorageDir:   filepath.Join(root, ".lit"),
+		DatabasePath: filepath.Join(root, ".lit", "dolt"),
+	}}
 }
 
 // enableOwnerNotify opts one test back into the owner channel: the package

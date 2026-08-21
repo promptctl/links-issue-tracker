@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -24,9 +25,10 @@ import (
 // ordered. The marker is claimed by a mutating command AFTER its own session
 // closed (maybeAutoSyncAfterCommand runs post-Close) and cleared by a push
 // attempt INSIDE its engine session (performSyncPush entry). A command that
-// observes a fresh marker therefore knows the clearing session has not run —
-// and since sessions are disjoint, that session's engine open (and its HEAD
-// read) lies strictly after this command's committed, closed session.
+// observes a marker under a live beacon therefore knows the clearing session
+// has not run — and since sessions are disjoint, that session's engine open
+// (and its HEAD read) lies strictly after this command's committed, closed
+// session.
 // Covered — conditional on the covering mirror reaching its push attempt.
 // The ordering proof is about WHOSE HEAD read covers the commit, never that
 // the push lands: a mirror (an observer's borrowed one, or one this command
@@ -42,20 +44,16 @@ import (
 // a claim and the next push attempt, and failures that break the chain are
 // reported through the same pushOutcomeRecord seam as every other attempt.
 // [LAW:one-source-of-truth]
-const (
-	// mirrorPendingStaleAfter is crash recovery, not the coverage carrier: a
-	// marker older than this had its dedicated mirror die before reaching a
-	// push attempt (SIGKILL, machine crash — the loud failure paths remove or
-	// complete the marker themselves), so a claim treats it as unowned and
-	// re-spawns. Sized above the worst healthy claim-to-clear chain: the
-	// mirror's 30s parent-exit wait, a 30s engine-open budget behind a slow
-	// foreground command, and a full predecessor push cycle before the
-	// single-flight holder's post-release re-check picks the marker up. A
-	// too-early fire costs one redundant spawn (the single-flight lock and an
-	// up-to-date push make it a no-op); a crashed mirror's residue costs at
-	// most this window before the next mutation re-claims.
-	mirrorPendingStaleAfter = 5 * time.Minute
-)
+//
+// Nor does the marker carry liveness. Whether the owing mirror is still
+// coming is a separate fact with its own owner — the kernel, through the
+// mirror beacon (store.HoldMirrorBeacon / store.ProbeMirrorBeacon): every
+// live mirror holds the beacon shared for its whole run, so a claim that
+// acquires it exclusively has kernel proof the marker's mirror is gone
+// (SIGKILL, machine crash — the endings that run no code; every ending that
+// does run code removes or completes the marker itself). No threshold sized
+// by summing worst-case healthy delays, no window a loaded machine outgrows:
+// death is observed, not estimated. [LAW:no-ambient-temporal-coupling]
 
 // mirrorPendingClaim is the spawn decision derived from the marker.
 // [LAW:types-are-the-program] Two legal outcomes, named: the caller never
@@ -63,12 +61,13 @@ const (
 type mirrorPendingClaim int
 
 const (
-	// pendingCovered: a fresh marker exists, so its dedicated mirror has not
-	// cleared it — that mirror's engine session (and HEAD read) is still ahead
-	// of this command's committed, closed session. No spawn needed.
+	// pendingCovered: a marker exists and a live mirror holds the beacon, so
+	// the marker's not-yet-run clear belongs to a mirror that is still coming
+	// — its engine session (and HEAD read) is still ahead of this command's
+	// committed, closed session. No spawn needed.
 	pendingCovered mirrorPendingClaim = iota
-	// pendingClaimed: this command created (or stale-refreshed) the marker and
-	// now owes the spawn that clears it.
+	// pendingClaimed: this command created (or reclaimed from a dead mirror's
+	// residue) the marker and now owes the spawn that clears it.
 	pendingClaimed
 )
 
@@ -82,14 +81,17 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // claimMirrorPending atomically resolves "is a mirror still owed for commits
 // up to now, and if so, who spawns it". The O_EXCL create is the atomicity:
 // exactly one of two racing commands creates the marker and owns the spawn;
-// the other observes it fresh and is covered by that spawn's mirror. A marker
-// that disappears between the create attempt and the stat was just cleared by
-// a push attempt inside an engine session — a session that, being disjoint
-// from this command's closed one, opened after this commit: covered.
-// Observers never touch the marker's mtime — only a claim does — so a dead
-// mirror's residue ages into mirrorPendingStaleAfter no matter how busy the
-// workspace is, instead of being kept forever fresh by the very mutations it
-// is stranding.
+// the other observes it and is covered by that spawn's mirror — provided the
+// mirror still lives, which is the beacon probe's verdict, not a guess from
+// the marker's age. A marker whose beacon probe finds no holder is residue:
+// either its mirror died running no code (only SIGKILL-class endings leave
+// residue — every code-running ending removes or completes the marker), or
+// its spawn hasn't reached the beacon yet, in which case the re-claim below
+// costs one redundant mirror — the same double-claim the single-flight lock
+// already serializes into one push and one cheap no-op. Observers never touch
+// the marker's mtime — only a claim does — so the claim stamp keeps meaning
+// "when the owed spawn was claimed" for the holder's post-release re-check,
+// no matter how busy the workspace is.
 func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, error) {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return pendingClaimed, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
@@ -103,8 +105,8 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 			// (ensureMirrorCoverage's claimErr branch cannot release it). Remove
 			// it here, where the ownership is still known, so a close failure
 			// (close-to-open flush on network filesystems) cannot orphan a
-			// fresh marker that falsely covers mutations for the staleness
-			// window. Best-effort: if even the remove fails, the caller's
+			// fresh marker that falsely covers mutations until the next claim's
+			// probe. Best-effort: if even the remove fails, the caller's
 			// spawn-regardless mirror clears it at its push attempt's entry.
 			_ = os.Remove(path)
 			return pendingClaimed, fmt.Errorf("close mirror-pending marker: %w", closeErr)
@@ -114,32 +116,25 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 	if !errors.Is(err, os.ErrExist) {
 		return pendingClaimed, fmt.Errorf("claim mirror-pending marker: %w", err)
 	}
-	info, statErr := os.Stat(path)
-	if statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return pendingCovered, nil
-		}
-		return pendingClaimed, fmt.Errorf("stat mirror-pending marker: %w", statErr)
+	alive, probeErr := store.ProbeMirrorBeacon(ws.DatabasePath)
+	if probeErr != nil {
+		return pendingClaimed, probeErr
 	}
-	// Negative age — a marker stamped in the future — can only be a crash
-	// orphan seen across a backward clock step (an SIGKILLed claimant, then an
-	// RTC/NTP correction): claims are stamped from this machine's one clock,
-	// so no live claimant writes ahead of now. Reading it as covered would
-	// suppress every spawn until wall clock caught up; reading it as stale
-	// costs at most one redundant spawn. [LAW:no-silent-failure]
-	if age := now.Sub(info.ModTime()); age >= 0 && age < mirrorPendingStaleAfter {
+	if alive {
 		return pendingCovered, nil
 	}
-	// Crash recovery: the marker's dedicated mirror died without clearing or
-	// completing. Refresh the claim time first so concurrent observers bind to
-	// THIS re-spawn, then own the spawn. Two commands racing the same stale
-	// marker may both claim — two mirrors, serialized by the single-flight
-	// lock into one push and one cheap no-op. Harmless, and rarer than rare.
+	// Kernel-proven residue: no mirror anywhere holds the beacon, so the
+	// marker's dedicated mirror is gone (or not yet up — see above; spawning
+	// twice is the safe side). Refresh the claim time first so concurrent
+	// observers' re-checks bind to THIS re-spawn, then own the spawn. A marker
+	// that disappears under the refresh was just cleared by a push attempt
+	// inside an engine session — a session that, being disjoint from this
+	// command's closed one, opened after this commit: covered.
 	if chErr := os.Chtimes(path, now, now); chErr != nil {
 		if errors.Is(chErr, os.ErrNotExist) {
 			return pendingCovered, nil
 		}
-		return pendingClaimed, fmt.Errorf("refresh stale mirror-pending marker: %w", chErr)
+		return pendingClaimed, fmt.Errorf("refresh reclaimed mirror-pending marker: %w", chErr)
 	}
 	return pendingClaimed, nil
 }
@@ -151,16 +146,17 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 // turns out unspawnable (no remote, spawn failure) so later mutations retry
 // instead of trusting a mirror that never launched. Already-absent is a
 // normal outcome (a racing attempt cleared first); any other failure is loud
-// on stderr but never re-colors the caller's own result — a persistent
-// failure here degrades to one push attempt per staleness window, each one
-// still loudly recorded. [LAW:no-silent-failure]
+// on stderr but never re-colors the caller's own result — a persistently
+// unremovable marker degrades to one loudly-recorded push cycle per mutation,
+// since each next claim probes the beacon, finds the stopped mirror gone, and
+// re-spawns. [LAW:no-silent-failure]
 func clearMirrorPending(ws workspace.Info) {
 	if err := os.Remove(mirrorPendingMarkerPath(ws)); err != nil && !errors.Is(err, os.ErrNotExist) {
 		fmt.Fprintf(os.Stderr, "lit: mirror-pending marker not cleared: %v\n", err)
 	}
 }
 
-// mirrorPendingSet reports whether any marker exists, fresh or stale. Test
+// mirrorPendingSet reports whether any marker exists, live holder or not. Test
 // observability for the claim lifecycle; the mirror loop's own re-check is
 // recheckMirrorPending, which additionally proves the marker is a NEW claim.
 func mirrorPendingSet(ws workspace.Info) bool {
@@ -171,18 +167,18 @@ func mirrorPendingSet(ws workspace.Info) bool {
 // recheckMirrorPending is the single-flight holder's post-release verdict:
 // again=true means a claim landed after cycleStart (stamped after the cycle's
 // entry-clear ran, so its claimant may sit behind the cycle's HEAD read) and
-// the holder owes another cycle. Staleness is irrelevant here — any new claim
-// means commits may be uncovered, and cycling on a stale one recovers a
-// crashed claimant's residue for free.
+// the holder owes another cycle. Liveness is irrelevant here — any new claim
+// means commits may be uncovered, whoever claimed it, and cycling on a dead
+// claimant's residue recovers it for free.
 //
 // A non-nil error is a STOP, not a retry: a marker older than cycleStart
 // survived the cycle's own entry-clear, meaning the clear is failing (a
 // read-only storage dir whose engine and push still work), and a loop keyed on
 // bare existence would run full push cycles forever against a marker it can
 // never remove; an unreadable marker gives the loop no truthful basis either
-// way. Both endings leave the claim to the next mutation's own claim (or
-// staleness recovery), with the error surfaced by the caller rather than a
-// silent exit dropping custody. [LAW:no-silent-failure]
+// way. Both endings leave the claim to the next mutation's own claim (or its
+// beacon-probe residue recovery), with the error surfaced by the caller
+// rather than a silent exit dropping custody. [LAW:no-silent-failure]
 func recheckMirrorPending(ws workspace.Info, cycleStart time.Time) (again bool, err error) {
 	info, statErr := os.Stat(mirrorPendingMarkerPath(ws))
 	if errors.Is(statErr, os.ErrNotExist) {

@@ -355,6 +355,87 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 	}
 }
 
+// TestMirrorBeaconLivenessProof pins the beacon's whole contract in the two
+// arms the epic measured everywhere else: while any mirror holds the beacon
+// (shared, so redundant mirrors coexist), the probe answers alive — and the
+// instant the last hold is gone (release here standing in for process death;
+// flock evaporates either way), the probe answers dead by acquiring
+// exclusively. Two separate descriptors contend under flock even in one
+// process, so this proves the primitive without spawning.
+func TestMirrorBeaconLivenessProof(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "dolt")
+
+	alive, err := ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe with no holder: %v", err)
+	}
+	if alive {
+		t.Fatal("no mirror ever held the beacon; the probe must answer dead")
+	}
+
+	release1, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("first mirror hold: %v", err)
+	}
+	release2, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("second mirror hold: %v (redundant mirrors are legal and must coexist)", err)
+	}
+
+	alive, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe under live holders: %v", err)
+	}
+	if !alive {
+		t.Fatal("two mirrors hold the beacon; the probe must answer alive")
+	}
+
+	if err := release1(); err != nil {
+		t.Fatalf("release first hold: %v", err)
+	}
+	alive, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe with one holder remaining: %v", err)
+	}
+	if !alive {
+		t.Fatal("one mirror still holds the beacon; the probe must answer alive")
+	}
+
+	if err := release2(); err != nil {
+		t.Fatalf("release second hold: %v", err)
+	}
+	alive, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe after all holds dropped: %v", err)
+	}
+	if alive {
+		t.Fatal("every holder is gone; the probe must answer dead")
+	}
+
+	// The probe took (and released) an exclusive hold to answer; a mirror
+	// starting right after must still be able to take the beacon.
+	release3, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("hold after a completed probe: %v", err)
+	}
+	if err := release3(); err != nil {
+		t.Fatalf("release post-probe hold: %v", err)
+	}
+}
+
+// TestMirrorBeaconLockPathIsSiblingOfDolt fixes the beacon at the same
+// sibling-of-dolt position as the sync-push lock it accompanies, so a
+// snapshots restore that rotates the Dolt directory does not move it out from
+// under a running mirror.
+func TestMirrorBeaconLockPathIsSiblingOfDolt(t *testing.T) {
+	got := MirrorBeaconLockPath(filepath.Join("repo", ".git", "links", "dolt"))
+	want := filepath.Join("repo", ".git", "links", ".links-sync-mirror.lock")
+	if got != want {
+		t.Fatalf("MirrorBeaconLockPath() = %q, want %q", got, want)
+	}
+}
+
 func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

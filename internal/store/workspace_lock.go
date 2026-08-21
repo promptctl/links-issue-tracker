@@ -146,6 +146,73 @@ func TryAcquireSyncPushLock(databasePath string) (func() error, bool, error) {
 	return filelock.Acquire(context.Background(), SyncPushLockPath(databasePath), true, 1, 0)
 }
 
+// MirrorBeaconLockPath returns the mirror liveness beacon path, a sibling of
+// the Dolt directory at <dirname(databasePath)>/.links-sync-mirror.lock — the
+// same rotation-surviving position as the sync-push lock it accompanies.
+// [LAW:one-source-of-truth] One naming convention; holders and probers both
+// read the path from here.
+func MirrorBeaconLockPath(databasePath string) string {
+	cleaned := filepath.Clean(databasePath)
+	return filepath.Join(filepath.Dir(cleaned), ".links-sync-mirror.lock")
+}
+
+const (
+	// mirrorBeaconRetryAttempts/mirrorBeaconRetryDelay bound the mirror's
+	// shared acquisition (~1s). The only exclusive holds ever taken on the
+	// beacon are claimants' single-attempt probes, held for the microseconds
+	// between acquire and release, so contention here is momentary by
+	// construction; the budget exists so a mirror starting inside one probe's
+	// window waits it out instead of dying to that collision. Same shape as
+	// the snapshot producer beacon's Take-side budget.
+	mirrorBeaconRetryAttempts = 20
+	mirrorBeaconRetryDelay    = 50 * time.Millisecond
+)
+
+// HoldMirrorBeacon marks the calling process as a live sync mirror: a shared
+// hold on the beacon, kept for the mirror's whole run, so "is a mirror still
+// alive" is answered by the kernel — ProbeMirrorBeacon's exclusive acquisition
+// fails while any holder lives, and a SIGKILLed holder's hold evaporates with
+// its process — never by an age threshold (the lock discipline in package
+// filelock's doc). Shared because redundant mirrors are legal: racing
+// claimants may each spawn one, and every one of them is a live owner the
+// probe must count.
+func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, MirrorBeaconLockPath(databasePath), false, mirrorBeaconRetryAttempts, mirrorBeaconRetryDelay)
+	if errors.Is(err, ErrWorkspaceBusy) {
+		// Only a probe's instantaneous exclusive hold can contend, so outlasting
+		// the whole budget means something anomalous is squatting on the beacon
+		// — name it rather than hand back the bare sentinel.
+		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?): %w", MirrorBeaconLockPath(databasePath), err)
+	}
+	return release, err
+}
+
+// ProbeMirrorBeacon reports whether any live mirror currently holds the
+// beacon. The single-attempt exclusive acquisition IS the liveness question:
+// contention proves a holder lives, success proves every previous holder is
+// gone — and the hold is released immediately, because the probe takes
+// custody of nothing. [LAW:parse-dont-validate] The raw acquisition triple
+// becomes the one domain verdict callers consume; no caller re-derives
+// liveness from lock mechanics.
+func ProbeMirrorBeacon(databasePath string) (alive bool, err error) {
+	// context.Background: a single-attempt probe never sleeps, so there is no
+	// wait for a context to bound (same as the sync-push probe above).
+	release, acquired, err := filelock.Acquire(context.Background(), MirrorBeaconLockPath(databasePath), true, 1, 0)
+	if err != nil {
+		return false, fmt.Errorf("probe mirror liveness beacon: %w", err)
+	}
+	if !acquired {
+		return true, nil
+	}
+	if relErr := release(); relErr != nil {
+		// A probe hold that failed to release keeps excluding mirrors until
+		// this process exits — surface it as the probe failing, never as a
+		// clean verdict. [LAW:no-silent-failure]
+		return false, fmt.Errorf("release mirror liveness beacon probe: %w", relErr)
+	}
+	return false, nil
+}
+
 func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
 	return acquireStoreLock(ctx, WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
 }
