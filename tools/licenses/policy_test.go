@@ -59,6 +59,35 @@ func TestParsePolicyRejectsUnknownKeys(t *testing.T) {
 	}
 }
 
+// TestParsePolicyRejectsDuplicateKeys pins that a key repeated within one
+// object fails the parse: encoding/json keeps the last value, so a bad merge
+// leaving two module_exceptions keys would otherwise silently drop the row
+// the committed text still shows.
+func TestParsePolicyRejectsDuplicateKeys(t *testing.T) {
+	dup := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}],"module_exceptions":[]}`
+	if _, err := parsePolicy([]byte(dup)); err == nil {
+		t.Error("parsePolicy accepted a policy with a duplicated module_exceptions key")
+	}
+	nested := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","module":"example.com/n","license":"LGPL-3.0","reason":"r"}]}`
+	if _, err := parsePolicy([]byte(nested)); err == nil {
+		t.Error("parsePolicy accepted a policy with a duplicated key inside an exception object")
+	}
+}
+
+// TestParsePolicyRejectsMalformedAllowlistEntry pins the allowlist under the
+// same rule as exceptions: the committed text is the exact string the gate
+// matches, so a blank or padded entry never becomes a Policy.
+func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
+	for _, bad := range []string{
+		`{"allowed_licenses":["MIT",""],"module_exceptions":[]}`,
+		`{"allowed_licenses":[" MIT "],"module_exceptions":[]}`,
+	} {
+		if _, err := parsePolicy([]byte(bad)); err == nil {
+			t.Errorf("parsePolicy accepted a malformed allowlist entry: %s", bad)
+		}
+	}
+}
+
 // TestParsePolicyRejectsTrailingContent pins that the parse consumes the
 // whole file: a concatenated second document (a bad merge, a paste artifact)
 // would otherwise be silently dropped and the gate would run against only

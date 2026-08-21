@@ -175,9 +175,10 @@ linked. The replacement's `Lock` handle carries the same surface (`New`,
 `ErrTimeout` sentinels, compared by identity where upstream compares them so),
 and the import is aliased to `fslock`, so the patch is the import line plus
 each file's `NOTICE` comment — no call-site edits. The handle's contract was
-derived from these call sites and from black-box tests, never from fslock's
-source; the provenance record is the `links-licensing-c0ce.4` section of the
-primitives module's `PROVENANCE-ATTESTATIONS.md`.
+derived from the nine non-test call sites and from black-box tests — the
+test-only importer was swapped but was not derivation input — and never from
+fslock's source; the provenance record is the `links-licensing-c0ce.4`
+section of the primitives module's `PROVENANCE-ATTESTATIONS.md`.
 
 Landed under `links-licensing-c0ce.4`, which also removed the fslock
 exception from `tools/licenses/policy.json` — a rebase that restores the

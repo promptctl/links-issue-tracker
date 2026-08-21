@@ -63,11 +63,26 @@ func parsePolicy(data []byte) (*Policy, error) {
 	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
 		return nil, fmt.Errorf("policy.json carries trailing content after the policy object; refusing a file the gate would only partially read")
 	}
+	// encoding/json keeps the LAST value of a duplicated key, so a bad merge
+	// leaving two module_exceptions keys would silently drop one — the same
+	// committed-file-vs-gate's-view split the unknown-key and trailing-content
+	// guards refuse. Same fate for duplicates. [LAW:no-silent-failure]
+	if err := rejectDuplicateKeys(data); err != nil {
+		return nil, err
+	}
 	// [LAW:no-silent-failure] an empty allowlist would make the gate reject
 	// every module — almost certainly a broken/truncated policy file, not a
 	// real intent. Refuse rather than fail the whole tree confusingly.
 	if len(p.AllowedLicenses) == 0 {
 		return nil, fmt.Errorf("policy.json has no allowed_licenses; refusing to run a gate that would reject every module")
+	}
+	// The allowlist is matched by exact string the same way exceptions are,
+	// so its entries carry the same rule: the committed text is the value the
+	// gate compares, blank or padded entries refused. [LAW:one-source-of-truth]
+	for _, name := range p.AllowedLicenses {
+		if name == "" || name != strings.TrimSpace(name) {
+			return nil, fmt.Errorf("policy.json allowed_licenses entry %q is blank or carries surrounding whitespace; the committed text must be the exact license name the gate matches", name)
+		}
 	}
 	// [LAW:parse-dont-validate] An exception without a module, license, and
 	// human-verified reason is the undocumented excuse this policy exists to
@@ -91,6 +106,56 @@ func parsePolicy(data []byte) (*Policy, error) {
 		}
 	}
 	return &p, nil
+}
+
+// rejectDuplicateKeys walks the document's tokens and errors on any key
+// repeated within one object, at any depth. encoding/json's decoder accepts
+// duplicates and keeps the last value, which would let half of a bad merge
+// vanish from the gate's view while staying in the committed text.
+func rejectDuplicateKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// seen is a stack of per-object key sets; a nil entry marks an array
+	// level, whose elements are values rather than key/value pairs.
+	var seen []map[string]bool
+	expectKey := false
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("parse embedded policy.json: %w", err)
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				seen = append(seen, map[string]bool{})
+				expectKey = true
+			case '[':
+				seen = append(seen, nil)
+				expectKey = false
+			case '}', ']':
+				seen = seen[:len(seen)-1]
+				expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+			}
+		case string:
+			top := len(seen) - 1
+			if expectKey && top >= 0 && seen[top] != nil {
+				if seen[top][t] {
+					return fmt.Errorf("policy.json repeats the key %q within one object; a duplicated key silently drops one of its values from the gate's view", t)
+				}
+				seen[top][t] = true
+				expectKey = false
+			} else {
+				expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+			}
+		default:
+			// A non-string value token completes a key/value pair (or is an
+			// array element); inside an object the next token is a key again.
+			expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+		}
+	}
 }
 
 // Violation is one linked module whose classified license is neither allowed nor
