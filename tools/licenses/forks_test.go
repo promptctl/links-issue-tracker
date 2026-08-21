@@ -242,17 +242,42 @@ func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 		t.Fatalf("parse %s: %v", driverPath, err)
 	}
 
+	sumPath := strings.TrimSuffix(driverPath, ".mod") + ".sum"
+	sumData, err := os.ReadFile(sumPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", sumPath, err)
+	}
+
 	mirrored := make(map[string]module.Version)
 	for _, r := range driver.Replace {
-		if want, forked := rootForks[r.Old.Path]; forked {
-			mirrored[r.Old.Path] = r.New
-			if r.New != want {
-				t.Errorf("%s replaces %s with %s@%s, but the root go.mod pins the "+
-					"fork at %s@%s — the mirror has drifted; move it with the root "+
-					"pin (see FORKS.md)",
-					driverPath, r.Old.Path, r.New.Path, r.New.Version,
-					want.Path, want.Version)
+		want, forked := rootForks[r.Old.Path]
+		if !forked {
+			// A mirror pointing at an org fork whose upstream coordinate the
+			// root no longer forks is a leftover, not a driver-local replace.
+			if strings.HasPrefix(r.New.Path, forkOwnerPrefix) {
+				t.Errorf("%s replaces %s with %s@%s, but the root go.mod no "+
+					"longer forks that coordinate — delete the stale mirror "+
+					"(see FORKS.md)",
+					driverPath, r.Old.Path, r.New.Path, r.New.Version)
 			}
+			continue
+		}
+		mirrored[r.Old.Path] = r.New
+		if r.New != want {
+			t.Errorf("%s replaces %s with %s@%s, but the root go.mod pins the "+
+				"fork at %s@%s — the mirror has drifted; move it with the root "+
+				"pin (see FORKS.md)",
+				driverPath, r.Old.Path, r.New.Path, r.New.Version,
+				want.Path, want.Version)
+		}
+		// The pin's second derived home is the driver's lockfile: a mirror
+		// moved without `go mod tidy` in the driver leaves go.sum without the
+		// new version's hashes, and only a standalone build would notice.
+		if !strings.Contains(string(sumData), r.New.Path+" "+r.New.Version+" ") {
+			t.Errorf("%s has no hash entry for %s@%s — the mirror in go.mod "+
+				"moved without re-tidying the driver; run `go mod tidy` in "+
+				"internal/vendor/dolthub-driver",
+				sumPath, r.New.Path, r.New.Version)
 		}
 	}
 	for _, req := range driver.Require {
