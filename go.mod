@@ -97,8 +97,6 @@ require (
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.2 // indirect
-	github.com/hashicorp/golang-lru v1.0.2 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/juju/gnuflag v1.0.0 // indirect
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6 // indirect
@@ -117,6 +115,7 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
+	github.com/promptctl/primitives v0.1.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sagikazarmark/locafero v0.11.0 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
@@ -174,9 +173,9 @@ require (
 // newer upstream without silently restoring a copyleft import. Deliberately not
 // summarized here: the summary this replaced had gone stale.
 // [LAW:one-source-of-truth]
-replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260816040811-3eabc076e073
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821032720-909acdb490bd
 
-replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260816040904-aabd9c24450f
+replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
 
 // Locally patched copy of dolthub/driver with the unconditional
 // eventsapi.dolthub.com telemetry goroutine removed — see

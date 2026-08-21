@@ -15,8 +15,8 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260816040811-3eabc076e073` |
-| `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260816040904-aabd9c24450f` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821032720-909acdb490bd` |
+| `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
 The driver is the odd one out: a patched copy that lives in this repository
@@ -69,15 +69,17 @@ resolves that coordinate still returns MPL-2.0 — while our own SBOM now assert
 license the ecosystem disagrees with. The coordinate is what an auditor sees, and
 a coordinate leaves `go.mod` only when nothing imports it any more.
 
-No `lit` source file imports `golang-lru`. Its importers are exactly the two
-modules forked here, which is why both are forked and not just one — measured
-with `go list -deps ./cmd/lit`: `github.com/dolthub/go-mysql-server/sql` is the
-only importer of v1, from the single file `sql/cache.go`, and v2 comes from
+No `lit` source file ever imported `golang-lru`. Its importers were exactly the
+two modules forked here, which is why both are forked and not just one — measured
+with `go list -deps ./cmd/lit` before the removal: `github.com/dolthub/go-mysql-server/sql`
+was the only importer of v1, from the single file `sql/cache.go`, and v2 came from
 several Dolt packages (`store/nbs`, `libraries/doltcore/doltdb`,
 `libraries/doltcore/remotestorage`). The only way to stop importing a module is
 to change the files that import it, and the only way to change those files is to
-own a fork of the module they live in. The removals themselves are tracked
-separately under the `links-licensing-c0ce` epic.
+own a fork of the module they live in. Patches 1 (go-mysql-server) and 2 (dolt)
+below are those removals, landed under `links-licensing-c0ce.5`; the replacement
+they wire in is `github.com/promptctl/primitives` (MIT, clean-room provenance
+recorded in that module's `PROVENANCE.md`).
 
 ## Patch ledger
 
@@ -105,14 +107,42 @@ still stream directly, since a sequential pass needs no random access.
 merges and the `require` line moves past it. Tracked as `promptctl-deps-4aes`.
 Retiring the patch does not retire the fork.
 
+#### Patch 2 — replace `hashicorp/golang-lru/v2` with `promptctl/primitives/lru`
+
+Seven files under `go/`: `libraries/doltcore/remotestorage/map_chunk_cache.go`,
+`libraries/doltcore/doltdb/doltdb.go`, `store/nbs/store.go`,
+`store/nbs/archive_reader.go`, `store/nbs/archive_build.go`,
+`store/nbs/table_set.go`, `store/nbs/table_set_test.go`.
+
+Those were this module's only importers of `github.com/hashicorp/golang-lru/v2`
+(MPL-2.0) — six linked files and one test file. The replacement carries the same
+generic API, so the patch is the import line plus each file's `NOTICE` comment —
+no call-site edits.
+
+The same commit range adds a `replace` in the fork's own `go.mod` resolving
+`github.com/dolthub/go-mysql-server` to the promptctl fork. Inside `lit`'s build
+it is ignored (a non-main module's replaces always are); it exists so the fork
+built standalone also links the fork, and so the upstream go-mysql-server
+coordinate cannot re-record `golang-lru` as an indirect require of this module.
+It must move whenever the go-mysql-server pin above moves.
+
+**Retire it never** — this patch is the fork's reason to exist. It ends only if
+upstream itself drops the MPL-2.0 dependency, at which point the whole ledger
+entry collapses into a rebase.
+
 ### promptctl/go-mysql-server
 
-**No patches yet.** The fork was created before the work that needs it, because a
-patch has to have somewhere to land before it can be written. Branch `lit` is
-upstream `0986a7fcf0fe` plus a `README.lit-fork.md` that says so.
+#### Patch 1 — replace `hashicorp/golang-lru` with `promptctl/primitives/lruany`
 
-The first patch will remove `github.com/hashicorp/golang-lru` from `sql/cache.go`
-— that one file is the sole reason an MPL-2.0 module is linked into `lit`.
+`sql/cache.go`, the module's sole importer of `github.com/hashicorp/golang-lru`
+(MPL-2.0) and the single file that put a second MPL coordinate into the `lit`
+binary. The replacement carries the same method set, so the patch is the import
+line, the `NOTICE` comment, and one deliberate behavioral change: both
+`lru.New` call sites discarded the constructor's error, which now surfaces as a
+panic at construction — at the call that owns the bad size — instead of a
+failure at first use, far from its cause.
+
+**Retire it never** — same standing as dolt's patch 2 above.
 
 ## Apache-2.0 obligations
 
@@ -217,8 +247,9 @@ resolves, and it reports rather than gates.
 It does cover more than Go modules, which is easy to assume otherwise: the four
 native C libraries cgo static-links (ICU, zstd, musl, compiler-rt) are invisible
 to `go list -deps`, so `tools/licenses/native.go` carries them as a curated
-inventory and `-check` gates them alongside the modules. The "158 components" it
-reports is that combined set.
+inventory and `-check` gates them alongside the modules. The component count it
+reports is that combined set — linked modules plus the four native libraries —
+so it moves whenever a dependency enters or leaves the link closure.
 
 ## Verifying a fork change end to end
 

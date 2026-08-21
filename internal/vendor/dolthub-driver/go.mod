@@ -4,11 +4,14 @@ go 1.25.7
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
-	// [LAW:locality-or-seam] These two pins are what this module was vendored from
-	// and what apply if it is ever built standalone. Inside lit's actual build the
-	// top-level go.mod's replace directives (see ../../../FORKS.md) override every
-	// dolt/go and go-mysql-server reference — including these — to the promptctl
-	// forks instead.
+	// [LAW:locality-or-seam] These two pins record the vendored-from baseline —
+	// the upstream versions this module's own code was written against. They no
+	// longer govern any build: inside lit the top-level go.mod's replace
+	// directives (see ../../../FORKS.md) substitute the promptctl forks, and a
+	// standalone build of this module is governed by the mirroring replace
+	// directives at the bottom of this file. The diff-against-upstream answer
+	// for the forks lives in the root go.mod require lines and FORKS.md, not
+	// here.
 	github.com/dolthub/dolt/go v0.40.5-0.20260313234613-4069302e7692
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe
 	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab
@@ -89,8 +92,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.2 // indirect
-	github.com/hashicorp/golang-lru v1.0.2 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/juju/gnuflag v1.0.0 // indirect
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
@@ -107,6 +108,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/promptctl/primitives v0.1.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
@@ -155,3 +157,15 @@ require (
 )
 
 replace github.com/google/flatbuffers => github.com/dolthub/flatbuffers v1.13.0-dh.1
+
+// [LAW:one-source-of-truth] These mirror the top-level go.mod's fork replaces
+// (see ../../../FORKS.md). Inside lit's build they are ignored — a non-main
+// module's replace directives always are — and the top-level ones govern. They
+// exist so that this module resolved STANDALONE also builds against the forks,
+// which is what lit actually ships, and so that no copyleft coordinate the
+// forks removed (github.com/hashicorp/golang-lru, both major versions) lingers
+// in this module's own require graph. Keep the pins in step with FORKS.md when
+// the forks move.
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821032720-909acdb490bd
+
+replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
