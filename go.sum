@@ -586,10 +586,6 @@ github.com/hanwen/go-fuse/v2 v2.1.0/go.mod h1:oRyA5eK+pvJyv5otpO/DgccS8y/RvYMaO0
 github.com/hashicorp/go-uuid v0.0.0-20180228145832-27454136f036/go.mod h1:6SBZvOh/SIDV7/2o3Jml5SYk/TvGqwFJ/bN7x4byOro=
 github.com/hashicorp/golang-lru v0.5.0/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
 github.com/hashicorp/golang-lru v0.5.1/go.mod h1:/m3WP610KZHVQ1SGc6re/UDhFvYD7pJ4Ao+sR/qLZy8=
-github.com/hashicorp/golang-lru v1.0.2 h1:dV3g9Z/unq5DpblPpw+Oqcv4dU/1omnb4Ok8iPY6p1c=
-github.com/hashicorp/golang-lru v1.0.2/go.mod h1:iADmTwqILo4mZ8BN3D2Q6+9jd8WM5uGBxy+E8yxSoD4=
-github.com/hashicorp/golang-lru/v2 v2.0.7 h1:a+bsQ5rvGLjzHuww6tVxozPZFVghXaHOwFs4luLUK2k=
-github.com/hashicorp/golang-lru/v2 v2.0.7/go.mod h1:QeFd9opnmA6QUJc5vARoKUSoFhyfM2/ZepoAG6RGpeM=
 github.com/ianlancetaylor/demangle v0.0.0-20181102032728-5e5cf60278f6/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/ianlancetaylor/demangle v0.0.0-20200824232613-28f6c0f3b639/go.mod h1:aSSvb/t6k1mPoxDqO4vJh6VOCGPwU4O0C2/Eqndh1Sc=
 github.com/inconshreveable/mousetrap v1.1.0 h1:wN+x4NVGpMsO7ErUn/mUI3vEoE6Jt13X2s0bqwp9tc8=
@@ -772,10 +768,12 @@ github.com/prometheus/common v0.66.1 h1:h5E0h5/Y8niHc5DlaLlWLArTQI7tMrsfQjHV+d9Z
 github.com/prometheus/common v0.66.1/go.mod h1:gcaUsgf3KfRSwHY4dIMXLPV0K/Wg1oZ8+SbZk/HH/dA=
 github.com/prometheus/procfs v0.20.1 h1:XwbrGOIplXW/AU3YhIhLODXMJYyC1isLFfYCsTEycfc=
 github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4UlK79eF5TGGo=
-github.com/promptctl/dolt/go v0.40.5-0.20260816040811-3eabc076e073 h1:tsWWqZNSd7a40Baef5YCEXZP9iN2Pe5FXv5ax3CKilM=
-github.com/promptctl/dolt/go v0.40.5-0.20260816040811-3eabc076e073/go.mod h1:x0TL0LQX70EdjIcj+RdIxYqGAVRpZk3IXDrHG6NW9B8=
-github.com/promptctl/go-mysql-server v0.20.1-0.20260816040904-aabd9c24450f h1:KSWNL3pquFSOo9kugwhAxAAjvXNrDYU5PhHYJ48oG1U=
-github.com/promptctl/go-mysql-server v0.20.1-0.20260816040904-aabd9c24450f/go.mod h1:ZPKRptEeXSk9Ytb9LhB+8tB4BkltxuNYiYDFvIqXD/4=
+github.com/promptctl/dolt/go v0.40.5-0.20260821032720-909acdb490bd h1:c4XyvewzckdNMT5Z2PeTIZ8Wjo2UPi851SND9otsQDk=
+github.com/promptctl/dolt/go v0.40.5-0.20260821032720-909acdb490bd/go.mod h1:iY6zCL9JQAUG7yt2KF+RqR4fHjpsPxq+B7SRNtFcnLk=
+github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69 h1:qub1qbK6dNacxXVnOo/hAtk+SXj/yR0myrzFhb6HSKA=
+github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69/go.mod h1:FndJ0agFCU7ot2X77VDYE0VzXSPoBahpou+wUCQ/4+s=
+github.com/promptctl/primitives v0.1.0 h1:CsdBoqLk8hbh65+/y3wcGjwByRSFmQKqjV7VJswaAck=
+github.com/promptctl/primitives v0.1.0/go.mod h1:NNM4XxY87f3gfdqwGuvRq4ySWk4mTmZOdTPpVeFANGo=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec h1:W09IVJc94icq4NjY3clb7Lk8O1qJ8BdBEF8z0ibU0rE=
 github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec/go.mod h1:qqbHyh8v60DhA7CoWK5oRCqLrMHRGoxYCSS9EjAz6Eo=
 github.com/rivo/uniseg v0.2.0/go.mod h1:J6wj4VEh+S6ZtnVlnTBMWIodfgj8LQOQFoIToxlJtxc=

@@ -89,8 +89,6 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.6 // indirect
 	github.com/googleapis/gax-go/v2 v2.14.2 // indirect
-	github.com/hashicorp/golang-lru v1.0.2 // indirect
-	github.com/hashicorp/golang-lru/v2 v2.0.7 // indirect
 	github.com/juju/gnuflag v1.0.0 // indirect
 	github.com/kch42/buzhash v0.0.0-20160816060738-9bdec3dec7c6 // indirect
 	github.com/klauspost/compress v1.18.0 // indirect
@@ -107,6 +105,7 @@ require (
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/planetscale/vtprotobuf v0.6.1-0.20240319094008-0393e58bdf10 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/promptctl/primitives v0.1.0 // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/sergi/go-diff v1.3.1 // indirect
 	github.com/shopspring/decimal v1.4.0 // indirect
@@ -155,3 +154,15 @@ require (
 )
 
 replace github.com/google/flatbuffers => github.com/dolthub/flatbuffers v1.13.0-dh.1
+
+// [LAW:one-source-of-truth] These mirror the top-level go.mod's fork replaces
+// (see ../../../FORKS.md). Inside lit's build they are ignored — a non-main
+// module's replace directives always are — and the top-level ones govern. They
+// exist so that this module resolved STANDALONE also builds against the forks,
+// which is what lit actually ships, and so that no copyleft coordinate the
+// forks removed (github.com/hashicorp/golang-lru, both major versions) lingers
+// in this module's own require graph. Keep the pins in step with FORKS.md when
+// the forks move.
+replace github.com/dolthub/dolt/go => github.com/promptctl/dolt/go v0.40.5-0.20260821032720-909acdb490bd
+
+replace github.com/dolthub/go-mysql-server => github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69
