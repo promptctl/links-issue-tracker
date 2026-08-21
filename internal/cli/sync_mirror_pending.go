@@ -121,6 +121,17 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 		return pendingClaimed, probeErr
 	}
 	if alive {
+		// The beacon proves SOME mirror (or a racing claimant's probe — see
+		// ProbeMirrorBeacon) is alive, not that THIS marker's dedicated mirror
+		// is — and that is sufficient, not approximate: any live mirror that
+		// reaches a push attempt clears EVERY marker at entry, and its
+		// post-release re-check cycles for any claim stamped during its cycle.
+		// The uncovered remainder is a holder that dies before its next
+		// attempt (or is mid-exit past its final re-check), which no ownership
+		// granularity can close — no observable state proves a FUTURE push
+		// lands (the PR #391 round-5 decline) — and which ends in the same
+		// recovery arms as every mirror death: a recorded loud failure when
+		// code runs, this probe's re-claim at the next mutation when none does.
 		return pendingCovered, nil
 	}
 	// Kernel-proven residue: no mirror anywhere holds the beacon, so the

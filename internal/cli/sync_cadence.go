@@ -82,10 +82,10 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 
 // ensureMirrorCoverage upholds the on-change tail guarantee for the mutation
 // that just committed (links-sync-pgct.12): claim the mirror-pending marker,
-// and either a fresh marker proves an already-spawned, not-yet-cleared mirror
-// will read HEAD after this command's closed engine session (see
-// sync_mirror_pending.go for the ordering proof), or this command owns the
-// spawn. Spawn rate falls out of the claim itself — one spawn per
+// and either a marker under a live mirror beacon proves an already-spawned,
+// not-yet-cleared mirror will read HEAD after this command's closed engine
+// session (see sync_mirror_pending.go for the ordering proof), or this
+// command owns the spawn. Spawn rate falls out of the claim itself — one spawn per
 // clear-to-claim cycle, however dense the burst — replacing the fixed 1s
 // debounce whose window was exactly the stranded-tail bug.
 // [LAW:no-ambient-temporal-coupling]

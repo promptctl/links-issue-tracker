@@ -307,11 +307,12 @@ func TestRecheckMirrorPending(t *testing.T) {
 // liveness contract: a mirror that cannot take the beacon must not run —
 // invisible to every claimant's probe, its work would only draw redundant
 // siblings — and that ending flows through the same completion seam as every
-// other pre-attempt death: claim released, outcome recorded (as the
-// non-failed workspace-busy class, since the cause wraps the contention
-// sentinel), rather than a silent exit stranding custody. The test squats on
-// the beacon exclusively, which no healthy process ever does beyond a probe's
-// instant — the anomaly the mirror's bounded retry is budgeted against.
+// other pre-attempt death: claim released, outcome recorded as a FAILED
+// error, never the non-paging workspace-busy class. A persistent exclusive
+// holder is anomalous by the beacon's own contract (probes hold for
+// microseconds), and while it squats every mirror refuses to run — channel
+// degradation the FAILING banner and the owner channel must hear about, not
+// healthy engine serialization.
 func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	ws := notifyTestWorkspace(t)
 	if _, err := claimMirrorPending(ws, time.Now()); err != nil {
@@ -337,8 +338,8 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	if !ok {
 		t.Fatal("a beacon-refused mirror left no push-outcome record")
 	}
-	if rec.Decision != pushDecisionWorkspaceBusy || rec.failed() {
-		t.Fatalf("beacon contention must record the non-failed workspace_busy decision, got %+v", rec)
+	if !rec.failed() {
+		t.Fatalf("beacon contention outlasting the probe budget must record a FAILED ending (pushes are stopped and nobody else will say so), got %+v", rec)
 	}
 }
 

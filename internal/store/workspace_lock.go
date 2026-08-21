@@ -179,21 +179,32 @@ const (
 func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, error) {
 	release, err := acquireStoreLock(ctx, MirrorBeaconLockPath(databasePath), false, mirrorBeaconRetryAttempts, mirrorBeaconRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
-		// Only a probe's instantaneous exclusive hold can contend, so outlasting
-		// the whole budget means something anomalous is squatting on the beacon
-		// — name it rather than hand back the bare sentinel.
-		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?): %w", MirrorBeaconLockPath(databasePath), err)
+		// Only a probe's instantaneous exclusive hold can legitimately contend,
+		// so outlasting the whole budget means something anomalous is squatting
+		// on the beacon — and every mirror will keep refusing to run until it
+		// leaves. That is channel degradation, not the healthy one-write-engine
+		// serialization ErrWorkspaceBusy names, so the sentinel is deliberately
+		// NOT propagated: wrapping it would record the ending as the non-paging
+		// workspace_busy class and stop pushes with no FAILING banner and no
+		// owner page. [LAW:no-silent-failure]
+		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?)", MirrorBeaconLockPath(databasePath))
 	}
 	return release, err
 }
 
-// ProbeMirrorBeacon reports whether any live mirror currently holds the
-// beacon. The single-attempt exclusive acquisition IS the liveness question:
-// contention proves a holder lives, success proves every previous holder is
-// gone — and the hold is released immediately, because the probe takes
-// custody of nothing. [LAW:parse-dont-validate] The raw acquisition triple
-// becomes the one domain verdict callers consume; no caller re-derives
-// liveness from lock mechanics.
+// ProbeMirrorBeacon reports whether the beacon is currently held. Only the
+// dead direction is a pure kernel proof: success means every holder — mirror
+// or probe — is gone. Contention (alive=true) means a live mirror OR a
+// concurrent claimant's own transient probe holds the file; either way
+// someone is currently answering for the marker (a racing prober that reads
+// dead goes on to re-claim and spawn, or to release the claim loudly when
+// the spawn fails), so callers may read alive as covered — but not as "a
+// mirror process exists at this instant", and a future caller wanting that
+// stronger fact cannot get it from this probe. The hold is released
+// immediately, because the probe takes custody of nothing.
+// [LAW:parse-dont-validate] The raw acquisition triple becomes the one
+// domain verdict callers consume; no caller re-derives liveness from lock
+// mechanics.
 func ProbeMirrorBeacon(databasePath string) (alive bool, err error) {
 	// context.Background: a single-attempt probe never sleeps, so there is no
 	// wait for a context to bound (same as the sync-push probe above).

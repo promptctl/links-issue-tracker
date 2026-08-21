@@ -50,7 +50,7 @@
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
-//	workspace → Dolt's own .dolt/noms/LOCK → commit → beacon
+//	workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 //
 // A holder of an inner lock never waits on an outer one. Two entries need
 // spelling out, because no lit call site shows them:
@@ -89,21 +89,21 @@
 // went with the mechanism — minting a lock beside LOCK again, under any
 // name, recreates the two-representations disagreement.
 //
-// The sync-push lock sits outside the slots, outermost in practice: its
-// holder goes on to take everything else (the mirror cycle opens a full
-// write Store), but every acquisition of it is a non-blocking probe
-// (maxAttempts 1), so no process ever waits ON it — and a lock with no
-// inbound wait-edge cannot complete a cycle.
+// The sync-push lock sits outside the slots: its holder goes on to take
+// everything in them (the mirror cycle opens a full write Store), but every
+// acquisition of it is a non-blocking probe (maxAttempts 1), so no process
+// ever waits ON it — and a lock with no inbound wait-edge cannot complete a
+// cycle.
 //
-// The mirror liveness beacon sits outside the slots too, one step further
-// out: a mirror holds it SHARED from process entry — before the sync-push
-// lock, before any engine — for its whole run, so that acquiring it
-// exclusively is kernel proof no mirror is alive. Both acquisition shapes
-// happen holding nothing: the claimant's exclusive probe is non-blocking
-// (maxAttempts 1, released the instant it succeeds), and the mirror's own
-// shared take retries only against such a probe's microsecond window (~1s
-// budget). No inbound wait-edge from any inner holder exists, so it cannot
-// complete a cycle either.
+// The mirror liveness beacon sits outside the slots too, and is the
+// outermost acquisition in practice: a mirror holds it SHARED from process
+// entry — before the sync-push lock, before any engine — for its whole run,
+// so that acquiring it exclusively is kernel proof no mirror is alive. Both
+// acquisition shapes happen holding nothing: the claimant's exclusive probe
+// is non-blocking (maxAttempts 1, released the instant it succeeds), and
+// the mirror's own shared take retries only against such a probe's
+// microsecond window (~1s budget). No inbound wait-edge from any inner
+// holder exists, so it cannot complete a cycle either.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in
