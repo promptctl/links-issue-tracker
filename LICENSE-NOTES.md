@@ -53,8 +53,11 @@ name it in their go.mod files, which keeps `/go.mod` bookkeeping lines in
 `go.sum`. Separately, the *test suites* of Dolt and go-mysql-server use the
 driver to connect to real servers — those tests are inside packages `lit`
 imports, so Go also records the driver's source hash for `go test`
-completeness, though no `lit` build or test executes them. MPL-2.0 is
-file-level copyleft triggered by distributing the covered files; `lit`
+completeness, though no `lit` build or test executes them.
+`hashicorp/go-uuid` is quieter still: a `/go.mod` bookkeeping line only, no
+source hash, named by `colinmarc/hdfs` (Dolt's HDFS blobstore support) —
+another pre-pruning module whose whole requirement list Go records. MPL-2.0
+is file-level copyleft triggered by distributing the covered files; `lit`
 distributes none of them. MPL-2.0 is currently in the policy allowlist;
 whether the gate should also assert anything about unlinked graph rows is the
 gate ticket's decision (`links-licensing-c0ce.9`).
@@ -66,17 +69,23 @@ Tree-walking scanners flag
 which really is the GPL-2.0 text. It sits inside a vendored copy of the
 `libc-test` conformance corpus — test *inputs* the module's author uses to
 validate their libc port. The module's own license, at its root, is
-BSD-2-Clause. The corpus is not compiled into anything, `lit` does not link
-`modernc.org/libc` (it arrives in the graph through goose), and a license on
-test data imposes nothing on software that never ships or runs it.
+BSD-2-Clause. Unlike the plot-stack rows, this module does carry a full
+source hash in `go.sum` — `lit` links goose, and goose's *own test suite*
+imports `modernc.org/sqlite`, which imports libc, so Go records the source
+hash for test completeness. No libc package is in `lit`'s link closure and
+none is compiled by any `lit` build or test; the corpus itself is not
+compiled into anything, and a license on test data imposes nothing on
+software that never ships or runs it.
 
 ## `opencontainers/go-digest`: CC-BY-SA on the docs, not the code
 
 This module's root holds two license files: `LICENSE` (Apache-2.0, covering
 the code) and `LICENSE.docs` (CC-BY-SA-4.0, covering its documentation).
 Share-alike on documentation binds someone republishing those docs, which
-`lit` does not do — and the module itself is another bare `go.mod` mention
-via goose, never imported, never linked.
+`lit` does not do — and the module is the faintest kind of presence there
+is: it appears in neither `go.mod` nor either `go.sum`, and only the
+`-graph` audit's `go list -m all` resolves it, through goose's own go.mod
+requirement. Never imported, never linked, never fetched by a build.
 
 ## `google/licenseclassifier`: the detector's own corpus
 
