@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821032720-909acdb490bd` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821060911-24c5c459fe62` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -129,6 +129,34 @@ It must move whenever the go-mysql-server pin above moves.
 **Retire it never** — this patch is the fork's reason to exist. It ends only if
 upstream itself drops the MPL-2.0 dependency, at which point the whole ledger
 entry collapses into a rebase.
+
+#### Patch 3 — remove the dead rolling-hash splitter and the nbs benchmark harness
+
+Deletes `go/store/prolly/tree/node_splitter.go`'s `rollingHashSplitter` (type,
+constructor, constants, and pattern function), its benchmark in
+`node_splitter_test.go`, the whole `go/store/nbs/benchmarks/` tree, and the
+deleted files' rows in `go/utils/copyrightshdrs/main.go`'s expected-file table.
+Nothing is added: this patch is a cut, not a substitution.
+
+Both buzhash coordinates leave the module with it. `rollingHashSplitter` was
+the sole importer of `github.com/kch42/buzhash` and was reachable only from
+its own benchmark — `defaultSplitterFactory` has only ever been
+`newKeySplitter`, which hashes keys against a Weibull-modelled threshold and
+never touches buzhash. The benchmarks tree was a hand-run harness nothing in
+the module imports, and its `gen` package was the sole importer of
+`github.com/silvasur/buzhash` — the same 2016 code republished under the
+author's renamed account, at the identical pseudo-version timestamp. Both
+coordinates classify as Unknown (a hand-written, profane WTFPL variant no
+classifier matches), which is the row the licensing epic treats as the worst
+kind. No chunk boundary moves: nothing on the write path changed, verified by
+building a 200k-tuple prolly tree against the pins on both sides of this patch
+and comparing the root hash and all 2,257 chunk addresses — byte-identical
+(recorded on `links-licensing-c0ce.6`).
+
+**Retire it when** upstream itself deletes the dead rolling-hash path or drops
+buzhash, and the `require` line moves past that change. Until then, a rebase
+that revives `rollingHashSplitter` on a live path is a storage-format decision,
+not a conflict to resolve mechanically: stop and escalate.
 
 ### promptctl/go-mysql-server
 

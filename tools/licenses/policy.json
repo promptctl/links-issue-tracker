@@ -18,11 +18,6 @@
       "module": "github.com/dolthub/fslock",
       "license": "LGPL-3.0",
       "reason": "fslock's LICENSE is LGPLv3 WITH a static-linking exception (it grants the right to link the library statically without the resulting binary inheriting LGPL obligations). The classifier matches the LGPL text and reports LGPL-3.0; the exception clause makes it permissive for lit's static linking. Human-verified against the module's LICENSE."
-    },
-    {
-      "module": "github.com/kch42/buzhash",
-      "license": "Unknown",
-      "reason": "buzhash ships a non-standard, profanely-worded WTFPL variant that the classifier cannot match above its confidence threshold, so it reports Unknown. WTFPL is a permissive public-domain-equivalent license. Human-verified against the module's LICENSE; the 'Unknown' here is a classifier limitation, not an unvetted license. NOTE: this 'Unknown' string must stay equal to classify.go's unclassifiedLicense constant — TestBuzhashExceptionUsesClassifierSentinel checks that coupling."
     }
   ]
 }
