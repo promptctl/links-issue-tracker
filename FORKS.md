@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821203835-a0352e869de1` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821231005-4b80eac34485` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -188,6 +188,25 @@ import therefore fails the license gate, not just this ledger.
 itself drops the LGPL dependency, at which point the ledger entry collapses
 into a rebase.
 
+#### Patch 5 — cut the plot-rendering test code that put `gonum.org/v1/plot` in go.mod
+
+`go/store/prolly/tree/samples_test.go` loses `plotIntHistogram` and
+`plotNodeSizeDistribution` — this module's only importers of
+`gonum.org/v1/plot`, whose requirement graph carries
+`github.com/golang/freetype` (GPL-2.0 dual FTL), `github.com/ajstarks/svgo`
+(CC-BY-4.0), and three restrictively licensed font modules. The `Samples`
+statistics and the text summaries stay, and the permanently skipped
+`TestKeySplitterDistribution` harness in `node_splitter_test.go` now prints
+summaries instead of rendering PNGs. `go mod tidy` drops the whole plot stack
+from the fork's go.mod, and `lit`'s go.sum with it loses every source hash
+(`h1:`) for those modules — what remains of them is go.mod-graph bookkeeping,
+explained in [LICENSE-NOTES.md](LICENSE-NOTES.md).
+
+**Retire it when** upstream deletes its plot dependency (it serves one
+hand-run benchmark plot) and the `require` line moves past that change. A
+rebase that revives the plot import restores GPL to the fork's manifest, so
+treat a conflict here as a licensing decision, not a mechanical resolution.
+
 ### promptctl/go-mysql-server
 
 #### Patch 1 — replace `hashicorp/golang-lru` with `promptctl/primitives/lruany`
@@ -302,7 +321,8 @@ read as "no copyleft is linked." Tightening the allowlist is the gate ticket
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run
 ./tools/licenses -graph` is the wider audit over everything `go list -m all`
-resolves, and it reports rather than gates.
+resolves, and it reports rather than gates; every non-permissive row it finds
+is explained in [LICENSE-NOTES.md](LICENSE-NOTES.md).
 
 It does cover more than Go modules, which is easy to assume otherwise: the four
 native C libraries cgo static-links (ICU, zstd, musl, compiler-rt) are invisible
