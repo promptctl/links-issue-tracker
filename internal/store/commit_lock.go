@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -309,15 +310,34 @@ func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) (e
 	if err != nil {
 		return err
 	}
-	// [LAW:no-silent-failure] The deferred release must fire on panic too, and
-	// a failed release (lock stuck held, FD leak) must surface beside — never
-	// beneath — the operation's own outcome.
+	// The deferred release must fire on panic too; SettleCommitLockRelease
+	// owns how its outcome combines with the operation's.
 	defer func() {
-		if releaseErr := release(); releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-		}
+		err = SettleCommitLockRelease(err, release())
 	}()
 	return operation(lockedCtx)
+}
+
+// SettleCommitLockRelease combines a commit-locked operation's outcome with
+// its release's. A failed operation keeps the release failure joined beside
+// it for diagnosis. A succeeded operation is durable — and the hold is gone
+// even when the unlock reported an error, because closing the descriptor
+// releases an flock and a failed close self-heals at process exit — so
+// failing it retroactively would invite the operator to retry a mutation
+// that already landed (minting a duplicate issue, re-running a consumed
+// restore). The release failure is loud on stderr instead: the reconcile
+// prune's established post-durable-success demotion. [LAW:no-silent-failure]
+// loud, but not a false failure. [LAW:single-enforcer] Exported so the CLI's
+// LockCommitPath spelling settles by the same rule.
+func SettleCommitLockRelease(opErr, releaseErr error) error {
+	if releaseErr == nil {
+		return opErr
+	}
+	if opErr != nil {
+		return errors.Join(opErr, releaseErr)
+	}
+	fmt.Fprintf(os.Stderr, "lit: commit lock release failed after the operation completed (the hold is gone; nothing to redo): %v\n", releaseErr)
+	return nil
 }
 
 func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() error, error) {

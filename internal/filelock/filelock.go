@@ -177,11 +177,13 @@ func Acquire(ctx context.Context, lockPath string, exclusive bool, maxAttempts i
 	if closeErr := file.Close(); closeErr != nil {
 		return nil, false, fmt.Errorf("close file lock fd: %w", closeErr)
 	}
-	// [LAW:parse-dont-validate] Cancellation and contention are different
-	// facts, and only the sleeps between attempts observe ctx — a cancellation
-	// landing at the final attempt would otherwise dress itself as clean
-	// contention, sending "another holder is busy, retry" guidance to a caller
-	// who asked to stop. Cancellation wins.
+	// Cancellation and contention are different facts, and cancellation wins:
+	// a caller who asked to stop must never be sent "another holder is busy,
+	// retry" guidance. The entry gate and the retry sleeps carry the testable
+	// cases; this check is belt coverage for the one remaining window — a
+	// cancellation landing inside the final blocked attempt — which no test
+	// reaches deterministically without an injection seam, so it is
+	// deliberately covered by inspection rather than seamed for.
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		return nil, false, ctxErr
 	}

@@ -124,6 +124,30 @@ func TestWrapCommitLockContention(t *testing.T) {
 	}
 }
 
+// TestSettleCommitLockRelease pins the settle rule for a commit-locked
+// operation's release: a release failure joins beside an operation failure
+// for diagnosis, but after a durable success it demotes (loud on stderr,
+// nil return) — failing a mutation that already landed would invite the
+// operator to retry it into a duplicate.
+func TestSettleCommitLockRelease(t *testing.T) {
+	opErr := errors.New("operation failed")
+	relErr := errors.New("release failed")
+
+	if got := SettleCommitLockRelease(nil, nil); got != nil {
+		t.Fatalf("settle(nil, nil) = %v, want nil", got)
+	}
+	if got := SettleCommitLockRelease(opErr, nil); got != opErr {
+		t.Fatalf("settle(opErr, nil) = %v, want opErr untouched", got)
+	}
+	joined := SettleCommitLockRelease(opErr, relErr)
+	if !errors.Is(joined, opErr) || !errors.Is(joined, relErr) {
+		t.Fatalf("settle(opErr, relErr) = %v, want both joined", joined)
+	}
+	if got := SettleCommitLockRelease(nil, relErr); got != nil {
+		t.Fatalf("settle(nil, relErr) = %v, want nil — a durable success must not report as failure", got)
+	}
+}
+
 // TestWithMutationResumesAtVersioningAfterStagedCommit pins withMutation's
 // phase resume: when the staging transaction has committed and only the
 // versioning step (DOLT_COMMIT) fails transiently, the retry must re-run

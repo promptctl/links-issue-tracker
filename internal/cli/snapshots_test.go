@@ -550,3 +550,22 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 		}
 	}
 }
+
+// TestIsUserSnapshotName pins the kind partition the user retention prune
+// depends on: every system producer's stamped shape — migration, downgrade,
+// AND reconcile — is excluded, because evicting a recovery point under the
+// USER budget would silently destroy a rollback path its own producer still
+// counts on; ordinary user names (bare and labeled) stay in.
+func TestIsUserSnapshotName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"1723200000000000001":                                   true,
+		"1723200000000000001-nightly":                           true,
+		"1723200000000000001-pre-migrate-1723200000000000002":   false,
+		"1723200000000000001-lit-downgrade-1723200000000000002": false,
+		"1723200000000000001-pre-reconcile-1723200000000000002": false,
+	} {
+		if got := isUserSnapshotName(name); got != want {
+			t.Errorf("isUserSnapshotName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}

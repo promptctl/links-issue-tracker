@@ -44,7 +44,9 @@ func snapshotsDirFor(ws workspace.Info) string {
 // composes those — adding a new producer means adding the predicate to this
 // disjunction, in exactly one place.
 func isUserSnapshotName(name string) bool {
-	return !store.IsMigrationSnapshotName(name) && !store.IsDowngradeSnapshotName(name)
+	return !store.IsMigrationSnapshotName(name) &&
+		!store.IsDowngradeSnapshotName(name) &&
+		!store.IsReconcileSnapshotName(name)
 }
 
 // withCommitLock acquires the path-based commit lock used by Store mutations
@@ -61,12 +63,12 @@ func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (er
 	if err != nil {
 		return err
 	}
-	// [LAW:no-silent-failure] A failed release (lock stuck held, FD leak)
-	// surfaces beside fn's own outcome instead of being discarded.
+	// [LAW:single-enforcer] store.SettleCommitLockRelease owns how a release
+	// failure combines with fn's outcome — joined beside a failure, demoted to
+	// loud stderr after a durable success — so both withCommitLock spellings
+	// settle by one rule.
 	defer func() {
-		if releaseErr := release(); releaseErr != nil {
-			err = errors.Join(err, releaseErr)
-		}
+		err = store.SettleCommitLockRelease(err, release())
 	}()
 	return fn()
 }
@@ -222,20 +224,30 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 		}
 	}()
 	var rotated string
-	if err := withCommitLock(ctx, ws, func() error {
+	restored := false
+	err = withCommitLock(ctx, ws, func() error {
 		r, err := dbsnapshot.Restore(ws.DatabasePath, snapshotsDirFor(ws), name)
 		if err != nil {
 			return err
 		}
 		rotated = r
+		restored = true
 		return nil
-	}); err != nil {
-		return err
+	})
+	// The record prints the moment the rotation is durable, even beside a
+	// failure that lands after it (the workspace release joined in the defer
+	// above). [FRAMING:representation] the snapshot was consumed and the old
+	// directory moved the instant Restore returned; an error exit that hides
+	// the record sends the operator retrying a name that now reports missing,
+	// with no pointer to the rotated-aside pre-restore directory.
+	if restored {
+		line := fmt.Sprintf("restored %s\n", name)
+		if rotated != "" {
+			line = fmt.Sprintf("restored %s rotated_to=%s\n", name, rotated)
+		}
+		if _, printErr := fmt.Fprint(stdout, line); printErr != nil {
+			err = errors.Join(err, printErr)
+		}
 	}
-	if rotated == "" {
-		_, err = fmt.Fprintf(stdout, "restored %s\n", name)
-		return err
-	}
-	_, err = fmt.Fprintf(stdout, "restored %s rotated_to=%s\n", name, rotated)
 	return err
 }
