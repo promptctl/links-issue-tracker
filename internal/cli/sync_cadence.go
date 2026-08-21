@@ -82,10 +82,10 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 
 // ensureMirrorCoverage upholds the on-change tail guarantee for the mutation
 // that just committed (links-sync-pgct.12): claim the mirror-pending marker,
-// and either a fresh marker proves an already-spawned, not-yet-cleared mirror
-// will read HEAD after this command's closed engine session (see
-// sync_mirror_pending.go for the ordering proof), or this command owns the
-// spawn. Spawn rate falls out of the claim itself — one spawn per
+// and either a marker under a live mirror beacon proves an already-spawned,
+// not-yet-cleared mirror will read HEAD after this command's closed engine
+// session (see sync_mirror_pending.go for the ordering proof), or this
+// command owns the spawn. Spawn rate falls out of the claim itself — one spawn per
 // clear-to-claim cycle, however dense the burst — replacing the fixed 1s
 // debounce whose window was exactly the stranded-tail bug.
 // [LAW:no-ambient-temporal-coupling]
@@ -108,7 +108,7 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 		return
 	}
 	ownsClaim := false
-	claim, claimErr := claimMirrorPending(ws, time.Now())
+	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, ws, time.Now())
 	switch {
 	case claimErr != nil:
 		// Coverage state unreadable: spawning is the safe side (a redundant
@@ -123,10 +123,24 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	// An owned claim that turns out unspawnable is released BEFORE the
 	// completion effects below: the completion can run the owner-notify hook
 	// to its cap, and mutations landing during it must not read the doomed
-	// claim as live coverage. [LAW:no-ambient-temporal-coupling]
+	// claim as live coverage. Claim and answering hold share one lifetime —
+	// both minted in claimMirrorPending, both released here — so an
+	// un-claimed claimant also stops reading as an answerer the instant its
+	// obligation ends, instead of its stale hold covering later markers it
+	// will never clear. Only the successful-spawn path below keeps the hold:
+	// it is deliberately abandoned to process exit (the kernel's on-death
+	// release IS the liveness signal, and answerForClaim's package pin keeps
+	// the fd out of the GC's reach until then), overlapping the spawned
+	// mirror's own hold taken at that mirror's entry while this process
+	// still lives, so burst observers coalesce through the whole spawn
+	// window. The abandoned hold proves this claimant lives, not that its
+	// mirror does — a mirror SIGKILLed post-spawn reads answered until the
+	// parent exits, bounded by the post-spawn tail.
+	// [LAW:no-ambient-temporal-coupling]
 	releaseClaim := func() {
 		if ownsClaim {
 			clearMirrorPending(ws)
+			releaseAnswer()
 		}
 	}
 	// Cheap precondition, mirroring receiveInline's own check: a remote-less

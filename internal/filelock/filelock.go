@@ -41,13 +41,16 @@
 // snapshot slot's os.Mkdir reservation, though held across the copy window,
 // has its owner's liveness proven by the beacon it sits under — so neither
 // carries a liveness question of its own and both stay off this primitive.
-// One mechanism predates the rule and is being rebuilt onto it: the
-// mirror-pending marker's age-out (links-locking-il18.4). Copy a compliant
-// lock, not that.
+// Owned state is not owner exclusion either: the mirror-pending marker's
+// existence carries "a mirror is owed" and stays a plain file, while the
+// separate liveness question ("is that mirror still coming") rides the
+// mirror beacon's flock — one file per fact, because removing a marker an
+// old binary also deletes from under a live flock would split the lock
+// across two inodes (the commit lock's rename lesson).
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
-//	workspace → Dolt's own .dolt/noms/LOCK → commit → beacon
+//	workspace → Dolt's own .dolt/noms/LOCK → commit → snapshot producer beacon
 //
 // A holder of an inner lock never waits on an outer one. Two entries need
 // spelling out, because no lit call site shows them:
@@ -86,11 +89,25 @@
 // went with the mechanism — minting a lock beside LOCK again, under any
 // name, recreates the two-representations disagreement.
 //
-// The sync-push lock sits outside the slots, outermost in practice: its
-// holder goes on to take everything else (the mirror cycle opens a full
-// write Store), but every acquisition of it is a non-blocking probe
-// (maxAttempts 1), so no process ever waits ON it — and a lock with no
-// inbound wait-edge cannot complete a cycle.
+// The sync-push lock sits outside the slots: its holder goes on to take
+// everything in them (the mirror cycle opens a full write Store), but every
+// acquisition of it is a non-blocking probe (maxAttempts 1), so no process
+// ever waits ON it — and a lock with no inbound wait-edge cannot complete a
+// cycle.
+//
+// The mirror liveness beacon sits outside the slots too, and is the
+// outermost acquisition in practice: every answerer for the mirror-pending
+// marker holds it SHARED — the claimant from its claim until its obligation
+// ends (released together with a claim it un-claims; abandoned to process
+// exit once its mirror is spawned), and the mirror from that mirror's entry
+// (before the sync-push lock, before any engine), overlapping lifetimes —
+// so acquiring it exclusively is kernel proof nobody answers, and a
+// two-step probe (shared first, exclusive as the deciding last step)
+// further tells answerers from an exclusive squatter. Every acquisition
+// happens holding nothing: probes are non-blocking (maxAttempts 1, released
+// the instant they succeed), and the shared takes retry only against a
+// probe's microsecond window (~1s budget). No inbound wait-edge from any
+// inner holder exists, so it cannot complete a cycle either.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in
