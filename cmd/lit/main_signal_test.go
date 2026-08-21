@@ -5,7 +5,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"fmt"
+	"context"
 	"io"
 	"net"
 	"os"
@@ -53,10 +53,13 @@ func TestMain(m *testing.M) {
 // The wedge targets the sync phase specifically, not the command's own work. A
 // `lit new` write acquires and RELEASES the commit lock to commit, then prints
 // the created-issue line, then (after ap.Close) the inline receive re-acquires
-// the lock at SyncAddRemote. Grabbing the lock with a live foreign process the
+// the lock at SyncAddRemote. Taking the flock from this test process the
 // instant that line appears lands the block in the receive — the write already
 // succeeded and is durable — so a clean cancel exits 0, exactly the incident's
 // "commit present, only the sync wedged" shape, reproduced without a slow remote.
+// (The kernel excludes the child on the held flock no matter who the holder is,
+// so no foreign holder process is needed — and no eviction heuristic exists for
+// the seize to have to outrun.)
 func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -68,14 +71,6 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 
 	ws := setupWedgeWorkspace(t, self)
 	lockPath := store.CommitLockPath(ws.DatabasePath)
-
-	// A live process whose PID will own the commit lock: fresh and running, so the
-	// store cannot classify it as stale and reclaim it — the receive must wait.
-	holder := exec.Command("sleep", "300")
-	if err := holder.Start(); err != nil {
-		t.Fatalf("start lock holder: %v", err)
-	}
-	defer func() { _ = holder.Process.Kill(); _, _ = holder.Process.Wait() }()
 
 	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
 	cmd.Dir = ws.RootDir
@@ -110,9 +105,16 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		t.Fatalf("lit new never printed its created-issue line:\n%s", stderr.String())
 	}
-	if err := os.WriteFile(lockPath, []byte(fmt.Sprintf("%d\n", holder.Process.Pid)), 0o600); err != nil {
+	releaseSeize, err := store.LockCommitPath(context.Background(), lockPath)
+	if err != nil {
 		t.Fatalf("seize commit lock: %v", err)
 	}
+	seizeHeld := true
+	defer func() {
+		if seizeHeld {
+			_ = releaseSeize()
+		}
+	}()
 
 	waitCh := make(chan error, 1)
 	go func() { waitCh <- cmd.Wait() }()
@@ -148,11 +150,12 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 		t.Fatalf("process did not exit within %v of SIGTERM — the sync phase is not SIGTERM-responsive:\nstderr:\n%s", sigtermDeadline, stderr.String())
 	}
 
-	// The store was released and lit stranded no lock of its own: with the foreign
-	// holder gone, an ordinary write proceeds normally.
-	_ = holder.Process.Kill()
-	_, _ = holder.Process.Wait()
-	_ = os.Remove(lockPath)
+	// The store was released and lit stranded no hold of its own: with the
+	// seizing flock released, an ordinary write proceeds normally.
+	seizeHeld = false
+	if err := releaseSeize(); err != nil {
+		t.Fatalf("release seized commit lock: %v", err)
+	}
 	verifyOut, err := runLit(t, ws.RootDir, self, map[string]string{disableAutoSyncEnvVar: "1"},
 		"new", "--title", "after-wedge", "--topic", "demo")
 	if err != nil {

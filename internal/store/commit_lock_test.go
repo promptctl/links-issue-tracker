@@ -9,114 +9,93 @@ import (
 	"time"
 )
 
-func TestRemoveStaleCommitLockRemovesDeadOwnerImmediately(t *testing.T) {
+// TestAcquireCommitLockNeverEvictsLiveHolderByAge is the regression test for
+// the O_EXCL-era eviction bug (links-locking-il18.2): a live owner whose lock
+// file looked eleven minutes old was evicted by the mtime threshold, letting a
+// second process's mutation walk past it and exit 0. With the lock rebuilt on
+// flock, the file's age carries no meaning at all — a backdated lock file with
+// a live holder must block a second acquirer until that holder releases, and
+// nothing may remove the hold out from under it.
+func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	if err := os.WriteFile(lockPath, []byte("12345\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(lock) error = %v", err)
+	s := &Store{commitLockPath: lockPath}
+
+	holderRelease, err := acquireStoreLock(context.Background(), lockPath, true, 1, 0)
+	if err != nil {
+		t.Fatalf("holder acquisition error = %v", err)
 	}
 
-	originalProbe := commitLockPIDRunning
-	commitLockPIDRunning = func(pid int) (bool, error) {
-		if pid != 12345 {
-			t.Fatalf("pid probe = %d, want 12345", pid)
-		}
-		return false, nil
-	}
-	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
-
-	if err := removeStaleCommitLock(lockPath, 10*time.Minute); err != nil {
-		t.Fatalf("removeStaleCommitLock() error = %v", err)
-	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("lock file still exists, stat err = %v", err)
-	}
-}
-
-func TestRemoveStaleCommitLockKeepsFreshLiveOwner(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	if err := os.WriteFile(lockPath, []byte("42\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(lock) error = %v", err)
-	}
-
-	originalProbe := commitLockPIDRunning
-	commitLockPIDRunning = func(pid int) (bool, error) {
-		return true, nil
-	}
-	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
-
-	if err := removeStaleCommitLock(lockPath, 10*time.Minute); err != nil {
-		t.Fatalf("removeStaleCommitLock() error = %v", err)
-	}
-	if _, err := os.Stat(lockPath); err != nil {
-		t.Fatalf("lock file should remain for live owner, stat err = %v", err)
-	}
-}
-
-func TestRemoveStaleCommitLockKeepsFreshMalformedOwner(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	if err := os.WriteFile(lockPath, []byte("not-a-pid\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(lock) error = %v", err)
-	}
-
-	originalProbe := commitLockPIDRunning
-	commitLockPIDRunning = func(pid int) (bool, error) {
-		t.Fatalf("commitLockPIDRunning should not be called for malformed lock content")
-		return false, nil
-	}
-	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
-
-	if err := removeStaleCommitLock(lockPath, 10*time.Minute); err != nil {
-		t.Fatalf("removeStaleCommitLock() error = %v", err)
-	}
-	if _, err := os.Stat(lockPath); err != nil {
-		t.Fatalf("fresh malformed lock should remain, stat err = %v", err)
-	}
-}
-
-func TestRemoveStaleCommitLockRemovesStaleMalformedOwner(t *testing.T) {
-	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	if err := os.WriteFile(lockPath, []byte("not-a-pid\n"), 0o600); err != nil {
-		t.Fatalf("WriteFile(lock) error = %v", err)
-	}
-	staleTime := time.Now().Add(-2 * time.Hour)
-	if err := os.Chtimes(lockPath, staleTime, staleTime); err != nil {
+	// The measured bug's exact trigger: the lock file looks well past the old
+	// ten-minute staleness threshold while its owner is alive.
+	backdated := time.Now().Add(-11 * time.Minute)
+	if err := os.Chtimes(lockPath, backdated, backdated); err != nil {
 		t.Fatalf("Chtimes(lock) error = %v", err)
 	}
 
-	if err := removeStaleCommitLock(lockPath, time.Minute); err != nil {
-		t.Fatalf("removeStaleCommitLock() error = %v", err)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if _, _, err := s.acquireCommitLock(ctx); err == nil {
+		t.Fatal("acquireCommitLock() succeeded against a live holder; age-based eviction is back")
 	}
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("stale malformed lock should be removed, stat err = %v", err)
+
+	// The contender's failed attempts must not have broken the holder's hold.
+	if _, err := acquireStoreLock(context.Background(), lockPath, true, 1, 0); !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("probe after failed contender = %v, want ErrWorkspaceBusy (hold intact)", err)
+	}
+
+	if err := holderRelease(); err != nil {
+		t.Fatalf("holder release error = %v", err)
+	}
+	lockedCtx, release, err := s.acquireCommitLock(context.Background())
+	if err != nil {
+		t.Fatalf("acquireCommitLock() after holder release error = %v", err)
+	}
+	if lockedCtx.Value(commitLockContextKey{}) != true {
+		t.Fatal("acquireCommitLock() did not set commit lock context value")
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release error = %v", err)
 	}
 }
 
-func TestAcquireCommitLockReclaimsDeadOwner(t *testing.T) {
+// TestAcquireCommitLockIgnoresDeadResidue pins the other half of the flock
+// contract: a leftover lock file with no living holder — an old binary's PID
+// payload, an ancient mtime, any content at all — is not a lock. Acquisition
+// succeeds immediately with no staleness classification and no reclamation
+// step, because absence of a kernel hold IS the death certificate.
+func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	if err := os.WriteFile(lockPath, []byte("99999\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(lock) error = %v", err)
 	}
-	s := &Store{commitLockPath: lockPath}
-
-	originalProbe := commitLockPIDRunning
-	commitLockPIDRunning = func(pid int) (bool, error) {
-		return false, nil
+	ancient := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(lockPath, ancient, ancient); err != nil {
+		t.Fatalf("Chtimes(lock) error = %v", err)
 	}
-	t.Cleanup(func() { commitLockPIDRunning = originalProbe })
+	s := &Store{commitLockPath: lockPath}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
-	lockedCtx, release, err := s.acquireCommitLock(ctx)
+	_, release, err := s.acquireCommitLock(ctx)
 	if err != nil {
-		t.Fatalf("acquireCommitLock() error = %v", err)
+		t.Fatalf("acquireCommitLock() over dead residue error = %v", err)
 	}
-	if lockedCtx.Value(commitLockContextKey{}) != true {
-		t.Fatalf("acquireCommitLock() did not set commit lock context value")
+	if err := release(); err != nil {
+		t.Fatalf("release error = %v", err)
 	}
-	release()
 
-	if _, err := os.Stat(lockPath); !os.IsNotExist(err) {
-		t.Fatalf("release should remove lock file, stat err = %v", err)
+	// Release frees the hold for the next acquirer; the file itself persists
+	// (an flock release never removes the path, so it cannot delete a lock
+	// file a newer holder has already re-locked).
+	if _, err := os.Stat(lockPath); err != nil {
+		t.Fatalf("lock file should persist after release, stat err = %v", err)
+	}
+	probeRelease, err := acquireStoreLock(context.Background(), lockPath, true, 1, 0)
+	if err != nil {
+		t.Fatalf("probe after release error = %v (lock should be free)", err)
+	}
+	if err := probeRelease(); err != nil {
+		t.Fatalf("probe release error = %v", err)
 	}
 }
 

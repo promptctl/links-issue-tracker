@@ -5,12 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/filelock"
@@ -23,19 +19,18 @@ import (
 // The commit lock is one slot in a multi-lock acquisition order — workspace,
 // engine, Dolt's own LOCK, commit, beacon — so deadlock reasoning lives with
 // the declared discipline in package filelock's doc, not in a single-resource
-// story here. [LAW:one-source-of-truth] Within this file's own scope:
-// processCommitMutex serializes in-process acquisition, O_CREATE|O_EXCL
-// serializes cross-process acquisition, defer releases on panic, and
-// PID/mtime staleness reclaims after killed processes — the predating
-// mechanism links-locking-il18.2 rebuilds onto filelock.Acquire.
+// story here. The lock is an flock through acquireStoreLock: the hold lives
+// on an open file description, so exclusion covers goroutines and foreign
+// processes through the one primitive, and any process death releases it —
+// no staleness heuristic exists to evict a live holder. Re-entrancy is a
+// context marker (acquireCommitLock), so a held mutation's nested
+// commitWorkingSet never queues behind its own hold.
 
 // ErrTransientGCContention marks a failure caused by concurrent Dolt online
 // garbage collection — either the manifest going read-only mid-run or the
 // active connection being invalidated ("please reconnect"). Both are
 // recoverable by backing off, rotating the poisoned connection, and retrying.
 var ErrTransientGCContention = errors.New("transient online-gc contention")
-var processCommitMutex sync.Mutex
-var commitLockPIDRunning = isCommitLockPIDRunning
 
 const (
 	// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
@@ -55,7 +50,18 @@ const (
 	transientRetryMaxAttempts = 30
 	transientRetryBaseDelay   = 50 * time.Millisecond
 	transientRetryMaxDelay    = 1 * time.Second
-	commitLockStaleAfter      = 10 * time.Minute
+
+	// commitLockRetryAttempts/commitLockRetryDelay bound the wait for a
+	// co-resident writer — a mutation in this or another process, or a
+	// snapshot copy quiescing writers via LockCommitPath — to release the
+	// commit lock. ~30s wall-clock cap, the same "how long do we wait on a
+	// co-resident holder of this store" budget the engine-write lock
+	// declares: long enough to outlast routine mutations and an ordinary
+	// snapshot copy, short enough that a genuinely wedged holder surfaces
+	// as a clear, actionable error rather than the unbounded
+	// wait-until-context-death the O_EXCL-era loop ran.
+	commitLockRetryAttempts = 300
+	commitLockRetryDelay    = 100 * time.Millisecond
 )
 
 type retryOperation func(context.Context) error
@@ -298,18 +304,25 @@ func (s *Store) commitWorkingSetOnce(ctx context.Context, stamp commitStamp) err
 	return wrapCommitWorkingSetError(err)
 }
 
-func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) error {
+func (s *Store) withCommitLock(ctx context.Context, operation retryOperation) (err error) {
 	lockedCtx, release, err := s.acquireCommitLock(ctx)
 	if err != nil {
 		return err
 	}
-	defer release()
+	// [LAW:no-silent-failure] The deferred release must fire on panic too, and
+	// a failed release (lock stuck held, FD leak) must surface beside — never
+	// beneath — the operation's own outcome.
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+	}()
 	return operation(lockedCtx)
 }
 
-func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(), error) {
+func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() error, error) {
 	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
-		return ctx, func() {}, nil
+		return ctx, func() error { return nil }, nil
 	}
 	release, err := acquireCommitLockAtPath(ctx, s.commitLockPath)
 	if err != nil {
@@ -322,11 +335,12 @@ func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func(),
 // requiring an open Store. Callers outside the Store (e.g. `lit snapshots
 // new`/`restore`, which must operate without a Dolt SQL connection) use this
 // to quiesce concurrent mutations for the duration of a filesystem operation.
-// Returns a release function that the caller must defer.
+// Returns a release function that the caller must defer; its error reports a
+// failed unlock or FD close and must not be discarded. [LAW:no-silent-failure]
 //
 // [LAW:single-enforcer] Routes through the same acquireCommitLockAtPath
 // primitive Store uses, so writer serialization stays at one boundary.
-func LockCommitPath(ctx context.Context, lockPath string) (func(), error) {
+func LockCommitPath(ctx context.Context, lockPath string) (func() error, error) {
 	return acquireCommitLockAtPath(ctx, lockPath)
 }
 
@@ -348,131 +362,23 @@ func commitLockPathForDolt(databasePath string) string {
 	return filepath.Join(filepath.Dir(cleaned), ".links-commit.lock")
 }
 
-func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func(), error) {
-	processCommitMutex.Lock()
-	locked, err := tryAcquireFileLock(lockPath)
-	for errors.Is(err, os.ErrExist) && !locked {
-		if staleErr := removeStaleCommitLock(lockPath, commitLockStaleAfter); staleErr != nil {
-			processCommitMutex.Unlock()
-			return nil, fmt.Errorf("acquire commit lock: %w", staleErr)
-		}
-		if waitErr := waitWithContext(ctx, transientRetryBaseDelay); waitErr != nil {
-			processCommitMutex.Unlock()
-			return nil, waitErr
-		}
-		locked, err = tryAcquireFileLock(lockPath)
+// acquireCommitLockAtPath takes the exclusive commit flock, waiting out a
+// co-resident writer up to the declared budget. Liveness needs no probe: the
+// hold dies with its holder's file description, so acquisition succeeding IS
+// the proof every prior holder is gone — and nothing here can evict a live
+// one. Release unlocks the holder's own descriptor and never touches the lock
+// file's path, so releasing yours cannot free anyone else's.
+//
+// [LAW:parse-dont-validate] acquireStoreLock stamps contention with
+// ErrWorkspaceBusy; this boundary only adds the commit-specific operator
+// guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
+// contention exactly as it does every other store lock's.
+func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
+	if errors.Is(err, ErrWorkspaceBusy) {
+		return nil, fmt.Errorf("another lit process is writing to this workspace (a concurrent mutation or snapshot still running); retry after it completes: %w", err)
 	}
-	if err != nil {
-		processCommitMutex.Unlock()
-		return nil, fmt.Errorf("acquire commit lock: %w", err)
-	}
-	if !locked {
-		processCommitMutex.Unlock()
-		if ctxErr := ctx.Err(); ctxErr != nil {
-			return nil, ctxErr
-		}
-		return nil, errors.New("acquire commit lock: lock not acquired")
-	}
-	return func() {
-		_ = os.Remove(lockPath)
-		processCommitMutex.Unlock()
-	}, nil
-}
-
-func tryAcquireFileLock(path string) (bool, error) {
-	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return false, err
-	}
-	if _, err := fmt.Fprintf(file, "%d\n", os.Getpid()); err != nil {
-		_ = file.Close()
-		_ = os.Remove(path)
-		return false, err
-	}
-	if closeErr := file.Close(); closeErr != nil {
-		_ = os.Remove(path)
-		return false, closeErr
-	}
-	return true, nil
-}
-
-func removeStaleCommitLock(path string, staleAfter time.Duration) error {
-	info, err := os.Stat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	isStaleByAge := time.Since(info.ModTime()) > staleAfter
-	isStaleByOwner, err := commitLockOwnedByDeadProcess(path)
-	if err != nil {
-		return err
-	}
-	if !isStaleByAge && !isStaleByOwner {
-		return nil
-	}
-	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
-}
-
-func commitLockOwnedByDeadProcess(path string) (bool, error) {
-	// [LAW:single-enforcer] Commit-lock owner liveness classification is centralized here to keep stale-lock handling deterministic.
-	pid, hasOwnerPID, err := readCommitLockOwnerPID(path)
-	if err != nil {
-		return false, err
-	}
-	if !hasOwnerPID {
-		return false, nil
-	}
-	running, err := commitLockPIDRunning(pid)
-	if err != nil {
-		return false, err
-	}
-	return !running, nil
-}
-
-func readCommitLockOwnerPID(path string) (int, bool, error) {
-	content, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, err
-	}
-	pidText := strings.TrimSpace(string(content))
-	if pidText == "" {
-		return 0, false, nil
-	}
-	pid, err := strconv.Atoi(pidText)
-	if err != nil || pid <= 0 {
-		return 0, false, nil
-	}
-	return pid, true, nil
-}
-
-func isCommitLockPIDRunning(pid int) (bool, error) {
-	if pid <= 0 {
-		return false, nil
-	}
-	process, err := os.FindProcess(pid)
-	if err != nil {
-		return false, nil
-	}
-	err = process.Signal(syscall.Signal(0))
-	if err == nil {
-		return true, nil
-	}
-	if errors.Is(err, os.ErrProcessDone) || errors.Is(err, syscall.ESRCH) {
-		return false, nil
-	}
-	if errors.Is(err, syscall.EPERM) {
-		return true, nil
-	}
-	// Unknown probe errors are treated as running to avoid removing an active lock.
-	return true, nil
+	return release, err
 }
 
 type transientGCContentionError struct {

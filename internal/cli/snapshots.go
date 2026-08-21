@@ -56,12 +56,18 @@ func isUserSnapshotName(name string) bool {
 // for directory readers, exclusive for rotators — the contract and its
 // callers live at store/workspace_lock.go); this commit lock remains the
 // writer-vs-writer gate only.
-func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) error {
+func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (err error) {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
 		return err
 	}
-	defer release()
+	// [LAW:no-silent-failure] A failed release (lock stuck held, FD leak)
+	// surfaces beside fn's own outcome instead of being discarded.
+	defer func() {
+		if releaseErr := release(); releaseErr != nil {
+			err = errors.Join(err, releaseErr)
+		}
+	}()
 	return fn()
 }
 

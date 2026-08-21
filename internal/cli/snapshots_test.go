@@ -155,7 +155,9 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 		defer close(done)
 		time.Sleep(200 * time.Millisecond)
 		releaseTime <- time.Now()
-		release()
+		if err := release(); err != nil {
+			t.Errorf("release commit lock: %v", err)
+		}
 	}()
 
 	start := time.Now()
@@ -210,7 +212,9 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("acquire commit lock after restore: %v", err)
 	}
-	release()
+	if err := release(); err != nil {
+		t.Fatalf("release commit lock after restore: %v", err)
+	}
 }
 
 func TestDataMutations_ProduceZeroSnapshots(t *testing.T) {

@@ -40,11 +40,10 @@
 // file's O_EXCL retry claims a unique name and holds nothing, and the
 // snapshot slot's os.Mkdir reservation, though held across the copy window,
 // has its owner's liveness proven by the beacon it sits under — so neither
-// carries a liveness question of its own and both stay off this primitive. Two
-// mechanisms predate the rule and are being rebuilt onto it: the commit
-// lock's O_EXCL create with PID/mtime staleness (links-locking-il18.2) and
-// the mirror-pending marker's age-out (links-locking-il18.4). Copy a
-// compliant lock, not those.
+// carries a liveness question of its own and both stay off this primitive.
+// One mechanism predates the rule and is being rebuilt onto it: the
+// mirror-pending marker's age-out (links-locking-il18.4). Copy a compliant
+// lock, not that.
 //
 // ONE ACQUISITION ORDER, outermost to innermost:
 //
