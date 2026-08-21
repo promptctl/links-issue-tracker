@@ -18,9 +18,9 @@ import (
 // mutation a timing bet on an earlier mirror's HEAD read.
 // [LAW:no-ambient-temporal-coupling]
 //
-// The proof rides on the engine-write lock (links-sync-pgct.11): embedded Dolt
-// allows one read-write engine per path, so engine sessions are totally
-// ordered. The marker is claimed by a mutating command AFTER its own session
+// The proof rides on write-engine serialization (links-sync-pgct.11):
+// embedded Dolt allows one write-capable engine per path — each holds Dolt's
+// own journal lock for its lifetime — so engine sessions are totally ordered. The marker is claimed by a mutating command AFTER its own session
 // closed (maybeAutoSyncAfterCommand runs post-Close) and cleared by a push
 // attempt INSIDE its engine session (performSyncPush entry). A command that
 // observes a fresh marker therefore knows the clearing session has not run —

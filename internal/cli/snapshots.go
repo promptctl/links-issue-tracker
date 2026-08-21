@@ -129,14 +129,15 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 //
 // [LAW:single-enforcer] The copy reads the Dolt directory file by file — the
 // same kind of actor as an open Store — so it takes the same shared workspace
-// hold every Store open takes, acquired before the commit lock in the same
-// workspace→commit order as runSnapshotsRestore and store.Open. That contends
-// with every rotator's exclusive hold without blocking ordinary readers; the
-// commit lock alone never did, because rotators don't hold it during their
-// destructive window (links-sync-pgct.14's torn-snapshot race). The two holds
-// own rotator exclusion and writer serialization respectively; engine-lifecycle
-// I/O that holds neither (a concurrent open's journal crash-recovery after an
-// unclean kill) is a distinct, narrower exposure tracked by links-sync-pgct.15.
+// hold every Store open takes, then Dolt's own journal lock, then the commit
+// lock: the workspace→LOCK→commit order package filelock's doc declares. The
+// three holds own, in turn: rotator exclusion (an adopt/restore's exclusive
+// hold never met the commit lock — links-sync-pgct.14's torn-snapshot race),
+// engine-lifecycle exclusion (a concurrent open's journal crash-recovery
+// after an unclean kill ran truncate/fsync under the walk — even `lit
+// backlog` opens write-capable, links-sync-pgct.15's tear; holding the lock
+// forces every concurrent open into Dolt's read-only fallback, which writes
+// nothing), and writer serialization.
 func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
 	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
 	if err != nil {
@@ -159,6 +160,18 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	if err := store.PendingAdopt(ws.DatabasePath); err != nil {
 		return dbsnapshot.Snapshot{}, err
 	}
+	releaseJournal, err := store.LockDoltJournalExclusive(ctx, ws.DatabasePath)
+	if err != nil {
+		return dbsnapshot.Snapshot{}, err
+	}
+	// LIFO under the workspace release above; a failed release surfaces the
+	// same way. (The hold dies with the process regardless — kernel flock —
+	// so a reported failure here is diagnostic, not a stuck workspace.)
+	defer func() {
+		if relErr := releaseJournal(); relErr != nil {
+			err = errors.Join(err, relErr)
+		}
+	}()
 	err = withCommitLock(ctx, ws, func() error {
 		s, err := dbsnapshot.Take(ctx, ws.DatabasePath, snapshotsDirFor(ws), label)
 		if err != nil {
@@ -168,9 +181,9 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 		return nil
 	})
 	// snap is populated exactly when Take succeeded, so a failure that landed
-	// after the take (the commit-lock release here, the workspace release in
-	// the defer above) travels beside the record of the durable snapshot it
-	// did not undo, never in place of it. [LAW:no-silent-failure]
+	// after the take (the commit-lock release here, the journal or workspace
+	// releases in the defers above) travels beside the record of the durable
+	// snapshot it did not undo, never in place of it. [LAW:no-silent-failure]
 	return snap, err
 }
 

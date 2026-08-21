@@ -19,12 +19,12 @@ import (
 // workspace-busy.
 //
 // This exercises OpenForRead specifically, not Open: read-write opens do NOT
-// share this coexistence contract — links-sync-pgct.11's engine-write lock
-// deliberately makes two concurrent Open (or OpenSync) calls on the same path
-// serialize instead, since embedded Dolt permits only one read-write engine
-// per path. See TestEngineWriteLockSerializesConcurrentOpen and
-// TestEngineWriteLockSerializesOpenAgainstOpenSync in engine_lock_test.go for
-// that companion (deliberately opposite) contract.
+// share this coexistence contract — two concurrent Open (or OpenSync) calls
+// on the same path serialize on Dolt's own journal lock instead
+// (links-sync-pgct.11), since embedded Dolt permits only one write-capable
+// engine per path. See TestConcurrentOpenWaitsForLiveWriteEngine and
+// TestOpenSyncWaitsForLiveForegroundEngine in engine_serialization_test.go
+// for that companion (deliberately opposite) contract.
 func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

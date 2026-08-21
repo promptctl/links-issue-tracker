@@ -167,52 +167,70 @@ func acquireStoreLock(ctx context.Context, lockPath string, exclusive bool, maxA
 	return release, nil
 }
 
-// EngineLockPath returns the read-write-engine-exclusivity lock path for a
-// Dolt root directory, at <dirname(databasePath)>/.links-engine.lock — the
-// same sibling-of-dolt-dir position as the other locks, so it survives a lit
-// snapshots restore that rotates the Dolt directory.
+// DoltJournalLockPath returns Dolt's own journal-manifest lock path for a
+// Dolt root directory: <databasePath>/<database>/.dolt/noms/LOCK. This is not
+// a lit-minted lock — the embedded driver's fslock takes it (plain flock, the
+// same primitive internal/filelock uses) whenever an engine opens, holds it
+// for the engine's lifetime, and demotes the open to Dolt's read-only
+// fallback when a 100ms attempt on it times out. Losing it is therefore the
+// one condition under which an engine performs no lifecycle writes — no
+// journal crash-recovery truncate, no close-time manifest flush.
 //
-// [LAW:one-source-of-truth] One naming convention for the engine lock; every
-// caller reads the path from here.
-func EngineLockPath(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
-	return filepath.Join(filepath.Dir(cleaned), ".links-engine.lock")
+// ONE HOME exception, stated here where the path is minted: the file lives
+// INSIDE the dolt directory because it is Dolt's file, and that placement is
+// correct for what it guards — a `lit snapshots restore` rotation carries the
+// lock with the journal whose integrity it protects, and every acquirer holds
+// the workspace lock, which is what serializes against the rotation itself.
+//
+// [LAW:one-source-of-truth] lit's retired .links-engine.lock was a partial
+// second representation of this exact fact ("one write-capable engine on this
+// path"), taken by write opens but not by OpenForRead — the disagreement that
+// let a read command's engine run journal recovery underneath a snapshot walk
+// (links-sync-pgct.15). Code that needs the fact contends on Dolt's own lock;
+// it does not mint a shadow.
+func DoltJournalLockPath(databasePath string) string {
+	return filepath.Join(filepath.Clean(databasePath), doltDatabaseName, ".dolt", "noms", "LOCK")
 }
 
 const (
-	// engineWriteRetryDelay/engineWriteRetryAttempts bound the wait for an
-	// earlier read-write embedded Dolt engine on the same path to close
-	// before this one opens. Embedded Dolt permits only one read-write
-	// engine per path at a time — a second concurrent open does not queue,
-	// it fails outright with Dolt's raw "cannot update manifest: database is
-	// read only" (see links-sync-pgct.11: a foreground command racing a
-	// still-live on-change mirror hit exactly this). Waiting here turns that
-	// hard failure into the beat it actually takes the other holder to
-	// finish. ~30s wall-clock cap matches mirrorParentWaitTimeout's budget
+	// doltJournalRetryDelay/doltJournalRetryAttempts bound the wait for a
+	// co-resident engine holder — a live write Store in this or another
+	// process, which holds the journal lock for its whole lifetime — to
+	// close before the caller's exclusive hold is taken. ~30s wall-clock cap
+	// matches engineOpenRetryMaxElapsed and mirrorParentWaitTimeout's budget
 	// for "how long do we wait on a co-resident holder of this store" —
 	// long enough to outlast a real push, short enough that a genuinely
 	// wedged holder still surfaces as a clear, actionable error rather than
 	// hanging forever.
-	engineWriteRetryDelay    = 100 * time.Millisecond
-	engineWriteRetryAttempts = 300
+	doltJournalRetryDelay    = 100 * time.Millisecond
+	doltJournalRetryAttempts = 300
 )
 
-// acquireEngineWriteLock takes an exclusive, blocking-with-backoff hold
-// guaranteeing this process is the only one with a live read-write embedded
-// Dolt engine open on doltRootDir. Store.Open and Store.OpenSync both acquire
-// it before opening their connection and release it in Close; Store.OpenForRead
-// does not participate — a read-only open does not conflict with a concurrent
-// read-write engine, only two read-write engines conflict with each other.
-// [LAW:single-enforcer] This is the one boundary every read-write engine open
-// passes through, so "only one read-write engine per path" cannot be violated
-// by a call site racing ahead of it — no call site decides this for itself.
-func acquireEngineWriteLock(ctx context.Context, doltRootDir string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, EngineLockPath(doltRootDir), true, engineWriteRetryAttempts, engineWriteRetryDelay)
+// LockDoltJournalExclusive takes an exclusive hold on Dolt's own journal lock
+// for a caller that must exclude engine-lifecycle I/O without opening an
+// engine — i.e. the `lit snapshots new` copy. While held, every concurrent
+// engine open in every process (reads included — lit never requests a
+// read-only open; Dolt's read-only mode is purely this lock's contention
+// fallback) demotes to that fallback after its 100ms attempt and performs no
+// journal crash-recovery or close-time flush, so a file walk under this hold
+// cannot capture a torn journal. Take it AFTER the workspace lock and BEFORE
+// the commit lock, per the acquisition order in package filelock's doc —
+// taking it inside the commit lock inverts the order against every live
+// write Store.
+//
+// The one lifecycle write this hold does not stop: journal.idx is opened
+// O_RDWR and truncated on every engine bootstrap with no can-write gate, so
+// a copy can still capture a torn index. Severity downgrade, not a hole —
+// Dolt's corruptIndexRecovery truncates a torn index to zero and rebuilds it
+// from the journal on the restored store's first open, where a torn journal
+// would be data loss.
+func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, DoltJournalLockPath(databasePath), true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees
 		// which holder to blame instead of a bare sentinel string.
-		return nil, fmt.Errorf("another lit process is holding this workspace's read-write engine open (a background sync mirror or another lit command still running); retry: %w", err)
+		return nil, fmt.Errorf("another process is holding this workspace's Dolt store open (a background sync mirror or another lit command still running); retry: %w", err)
 	}
 	return release, err
 }

@@ -27,16 +27,17 @@ import (
 // waitForParentExit only knows about its OWN spawning command's PID — it has
 // no awareness that a DIFFERENT, still-running mirror (or the next
 // command's own engine) might already hold the path's one read-write engine.
-// Before links-sync-pgct.11's engine-write lock, this was a genuine,
+// Before links-sync-pgct.11's write-open serialization, this was a genuine,
 // field-measured collision (see the embedded-dolt-one-readwrite-engine-per-path
 // project memory: 6 of 15 rapid foreground commands failed this way against a
 // concurrent background writer). This test drives the same shape — several
 // `lit new` calls fired in immediate succession — end to end through the real
 // CLI binary rather than the store package directly (see
-// TestEngineWriteLockSerializesConcurrentOpen and
-// TestEngineWriteLockSerializesOpenAgainstOpenSync in
-// internal/store/engine_lock_test.go for the deterministic, non-timing-
-// dependent proof of the underlying mechanism this test complements).
+// TestConcurrentOpenWaitsForLiveWriteEngine and
+// TestOpenSyncWaitsForLiveForegroundEngine in
+// internal/store/engine_serialization_test.go for the deterministic,
+// non-timing-dependent proof of the underlying mechanism this test
+// complements).
 //
 // Timing note: because each mirror is a real subprocess (fork/exec, its own
 // engine open, a real git push), a burst run back-to-back on a local machine
@@ -178,7 +179,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 // and formats it for inclusion in a failure message. Every mirror this test's
 // foreground commands spawn writes here, so on a failure this is the one place
 // that can show what a background mirror (parent-wait, single-flight,
-// engine-lock wait, push) was actually doing when the failure happened,
+// engine-open wait, push) was actually doing when the failure happened,
 // instead of guessing from the foreground command's error alone.
 func dumpMirrorLog(root string) string {
 	path := filepath.Join(root, ".git", "links", "mirror.log")

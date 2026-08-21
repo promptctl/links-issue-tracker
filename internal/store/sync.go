@@ -124,23 +124,6 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 			err = errors.Join(err, relErr)
 		}
 	}()
-	// [LAW:single-enforcer] Same engine-write lock Store.Open acquires, and
-	// for the same reason: OpenSync is the on-change mirror's own engine
-	// open, so it is exactly the call site that must wait out an earlier
-	// foreground command's (or earlier mirror's) still-live engine instead
-	// of colliding with it. See links-sync-pgct.11.
-	engineRelease, err := acquireEngineWriteLock(ctx, doltRootDir)
-	if err != nil {
-		return nil, err
-	}
-	defer func() {
-		if success {
-			return
-		}
-		if relErr := engineRelease(); relErr != nil {
-			err = errors.Join(err, relErr)
-		}
-	}()
 	// Post-lock, same as Store.Open: a marker seen while holding the
 	// workspace lock always belongs to a dead adopt (a live one holds the
 	// lock exclusively), so this refusal can neither fire on a healthy
@@ -153,12 +136,16 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	if _, err = ensureDoltDatabase(ctx, doltRootDir, workspaceID); err != nil {
 		return nil, err
 	}
-	s, err := openStoreConnection(doltRootDir, workspaceID, engineWrite)
+	// OpenSync is the on-change mirror's own engine open, so this is exactly
+	// the call site that must wait out an earlier foreground command's (or
+	// earlier mirror's) still-live engine instead of colliding with it
+	// (links-sync-pgct.11) — the wait happens inside the eager engine open,
+	// on Dolt's own journal lock, bounded by engineOpenRetryMaxElapsed.
+	s, err := openStoreConnection(ctx, doltRootDir, workspaceID, engineWrite)
 	if err != nil {
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
-	s.releaseEngineLock = engineRelease
 	success = true
 	return s, nil
 }

@@ -6,22 +6,27 @@
 //
 // Trust boundary: callers MUST NOT hold an open Dolt connection on the
 // destination directory while calling Restore. Take on a live workspace path
-// requires the caller to hold, for the whole call, the workspace SHARED lock
+// requires the caller to hold, for the whole call: the workspace SHARED lock
 // (transitively via an open Store, as the migration system does, or directly
-// via store.LockWorkspaceShared, as the CLI does) plus the commit lock — the
-// shared hold keeps a directory rotator (snapshots restore, adopt,
-// promotion/heal) from rewriting the tree mid-copy, and the commit lock keeps
-// writers from committing under the walk. Open Dolt connections are otherwise
-// fine to keep during Take. For clean recovery the migration system should
-// snapshot before the commit it's protecting. (This package cannot import
-// store, so the requirement is a documented precondition, not an acquired
-// one; PR #379's review caught the previous "Take is safe with open
-// connections" wording inviting the next caller to skip the locks.)
+// via store.LockWorkspaceShared, as the CLI does), Dolt's own journal lock
+// (transitively via the open Store's engine, which holds it for its
+// lifetime, or directly via store.LockDoltJournalExclusive), and the commit
+// lock. The shared hold keeps a directory rotator (snapshots restore, adopt,
+// promotion/heal) from rewriting the tree mid-copy; the journal hold keeps a
+// concurrent open's engine-lifecycle I/O — journal crash-recovery after an
+// unclean kill, close-time flush — from rewriting the journal under the walk
+// (links-sync-pgct.15); the commit lock keeps writers from committing under
+// it. Open Dolt connections are otherwise fine to keep during Take. For
+// clean recovery the migration system should snapshot before the commit it's
+// protecting. (This package cannot import store, so the requirement is a
+// documented precondition, not an acquired one; PR #379's review caught the
+// previous "Take is safe with open connections" wording inviting the next
+// caller to skip the locks.)
 //
 // Distinct from those store-owned preconditions, the package acquires its own
 // producer beacon (an flock inside snapshotsDir, see producerBeaconName): Take
 // holds it shared, residue collection probes it exclusive, and it is always
-// the innermost hold — after workspace, engine, and commit locks — taken by
+// the innermost hold — after the workspace, journal, and commit locks — taken by
 // code that already holds nothing else it could wait on, so it cannot extend
 // any lock cycle.
 package dbsnapshot
