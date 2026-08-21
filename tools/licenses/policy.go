@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
 	"fmt"
@@ -46,7 +47,13 @@ func LoadPolicy() (*Policy, error) {
 // malformed policy ever exists as a Policy value. [LAW:parse-dont-validate]
 func parsePolicy(data []byte) (*Policy, error) {
 	var p Policy
-	if err := json.Unmarshal(data, &p); err != nil {
+	// The policy is a hand-edited committed file, and Unmarshal's default of
+	// ignoring unknown keys would turn a misspelled "module_exceptions" into
+	// an empty list — a silently vanished exception row. Unknown keys fail
+	// the parse instead. [LAW:no-silent-failure]
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("parse embedded policy.json: %w", err)
 	}
 	// [LAW:no-silent-failure] an empty allowlist would make the gate reject
@@ -62,7 +69,9 @@ func parsePolicy(data []byte) (*Policy, error) {
 	// today's list is empty and a test pins that, but the pin is a policy
 	// stance, not this invariant's enforcer.
 	for _, e := range p.ModuleExceptions {
-		if e.Module == "" || e.License == "" || e.Reason == "" {
+		// TrimSpace so "complete" means non-blank: a whitespace-only reason
+		// carries no verification.
+		if strings.TrimSpace(e.Module) == "" || strings.TrimSpace(e.License) == "" || strings.TrimSpace(e.Reason) == "" {
 			return nil, fmt.Errorf("policy.json module_exception %+v is missing module, license, or reason; every exception must be complete and human-verified", e)
 		}
 	}

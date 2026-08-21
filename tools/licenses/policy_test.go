@@ -35,6 +35,7 @@ func TestParsePolicyRejectsIncompleteException(t *testing.T) {
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"","license":"LGPL-3.0","reason":"r"}]}`,
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"","reason":"r"}]}`,
 		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":""}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"  "}]}`,
 	} {
 		if _, err := parsePolicy([]byte(missing)); err == nil {
 			t.Errorf("parsePolicy accepted an incomplete exception: %s", missing)
@@ -43,6 +44,17 @@ func TestParsePolicyRejectsIncompleteException(t *testing.T) {
 	complete := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"human-verified"}]}`
 	if _, err := parsePolicy([]byte(complete)); err != nil {
 		t.Errorf("parsePolicy rejected a complete exception: %v", err)
+	}
+}
+
+// TestParsePolicyRejectsUnknownKeys pins that a misspelled key in the
+// hand-edited policy fails the parse instead of silently unmarshaling into
+// an absent field — a typo'd module_exceptions would otherwise read as an
+// empty exception list while the file still carries a row.
+func TestParsePolicyRejectsUnknownKeys(t *testing.T) {
+	misspelled := `{"allowed_licenses":["MIT"],"module_exception":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}]}`
+	if _, err := parsePolicy([]byte(misspelled)); err == nil {
+		t.Error("parsePolicy accepted a policy with an unknown (misspelled) key")
 	}
 }
 
