@@ -3,9 +3,9 @@ package main
 import "testing"
 
 // TestLoadPolicyEmbedded confirms the committed policy.json parses and carries
-// the shape the gate depends on: a non-empty allowlist and the two known
-// exceptions. If the file is edited into malformed JSON or its allowlist is
-// emptied, the gate breaks — this catches that at test time.
+// the shape the gate depends on: a non-empty allowlist and the one known
+// exception (fslock). If the file is edited into malformed JSON or its
+// allowlist is emptied, the gate breaks — this catches that at test time.
 func TestLoadPolicyEmbedded(t *testing.T) {
 	p, err := LoadPolicy()
 	if err != nil {
@@ -14,36 +14,14 @@ func TestLoadPolicyEmbedded(t *testing.T) {
 	if len(p.AllowedLicenses) == 0 {
 		t.Fatal("embedded policy has no allowed_licenses")
 	}
-	// The two documented exceptions must carry a reason — an undocumented
+	// Every documented exception must carry a reason — an undocumented
 	// exception is the thing this whole policy exists to prevent.
 	if len(p.ModuleExceptions) == 0 {
-		t.Fatal("embedded policy has no module_exceptions (expected fslock + buzhash)")
+		t.Fatal("embedded policy has no module_exceptions (expected fslock)")
 	}
 	for _, e := range p.ModuleExceptions {
 		if e.Module == "" || e.License == "" || e.Reason == "" {
 			t.Errorf("exception %+v is missing module, license, or reason", e)
-		}
-	}
-}
-
-// TestBuzhashExceptionUsesClassifierSentinel makes the one cross-file coupling
-// in the policy checked at test time: policy.json's buzhash exception keys on
-// the license string "Unknown", which is classify.go's unclassifiedLicense
-// constant duplicated into a data file. If that constant is ever renamed, the
-// JSON copy would silently stop matching and buzhash would flip from permitted
-// to a violation. Asserting the constant flows into the expectation catches the
-// drift here, with a message that names the coupling — rather than only
-// surfacing as a confusing buzhash failure in TestDependencyLicensesArePermitted.
-// [LAW:one-source-of-truth] It checks only when the buzhash exception is present,
-// so dropping the dependency later does not false-fail.
-func TestBuzhashExceptionUsesClassifierSentinel(t *testing.T) {
-	p, err := LoadPolicy()
-	if err != nil {
-		t.Fatalf("LoadPolicy: %v", err)
-	}
-	for _, e := range p.ModuleExceptions {
-		if e.Module == "github.com/kch42/buzhash" && e.License != unclassifiedLicense {
-			t.Errorf("buzhash exception license = %q must equal classify.go's unclassifiedLicense = %q; policy.json duplicates that sentinel, and if they drift the exception silently stops matching", e.License, unclassifiedLicense)
 		}
 	}
 }

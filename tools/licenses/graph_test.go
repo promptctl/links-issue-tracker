@@ -277,11 +277,12 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 // TestModuleExceptionsReachOnlyTheRootGrant pins that a policy exception
 // excuses the file a human actually read and nothing else.
 //
-// policy.json grants github.com/kch42/buzhash the license "Unknown" with the
-// reason "Human-verified against the module's LICENSE" — its ROOT grant. If
-// that exception also covered an unclassifiable file buried in the same
-// module's testdata, the report would drop it on the strength of a human
-// having read a different file, and the rows it would drop first are the
+// A policy exception names one license string a human verified against one
+// file — the module's ROOT grant (as policy.json once did for kch42/buzhash's
+// unclassifiable WTFPL variant, before links-licensing-c0ce.6 removed that
+// dependency). If the exception also covered an unclassifiable file buried in
+// the same module's testdata, the report would drop it on the strength of a
+// human having read a different file, and the rows it would drop first are the
 // unclassifiable ones this report calls the worst kind. An allowlisted license
 // is different: permissive is permissive at any depth. [LAW:no-silent-failure]
 func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
