@@ -24,6 +24,28 @@ func TestLoadPolicyEmbedded(t *testing.T) {
 	}
 }
 
+// TestParsePolicyRejectsIncompleteException pins the parse boundary's rule:
+// an exception missing its module, license, or human-verified reason never
+// becomes a Policy the gate can run against. This enforcement lives in
+// parsePolicy, independent of TestLoadPolicyEmbedded's emptiness pin — a
+// future change that legitimately reintroduces an exception loosens that pin,
+// and this rule must hold without anyone remembering to re-add it.
+func TestParsePolicyRejectsIncompleteException(t *testing.T) {
+	for _, missing := range []string{
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"","license":"LGPL-3.0","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":""}]}`,
+	} {
+		if _, err := parsePolicy([]byte(missing)); err == nil {
+			t.Errorf("parsePolicy accepted an incomplete exception: %s", missing)
+		}
+	}
+	complete := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"human-verified"}]}`
+	if _, err := parsePolicy([]byte(complete)); err != nil {
+		t.Errorf("parsePolicy rejected a complete exception: %v", err)
+	}
+}
+
 // TestCheckPolicyAcceptReject is the accept/reject table for the gate predicate.
 // The two accept shapes (allowlisted license; matching (module,license)
 // exception) and everything that is neither a reject are enumerated here so the

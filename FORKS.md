@@ -290,11 +290,13 @@ policy is asserted by `TestDependencyLicensesArePermitted`, which `go test ./...
 picks up on every merge, and `-check` itself runs again in `release-validate`.
 
 What that proves today is narrower than it sounds: nothing outside the
-committed policy entered the linked set, and no more. It does not yet prove the absence of
-copyleft, because `policy.json` still allows MPL-2.0 and still carries a
-reviewed exception (fslock's). Emptying it is the last ticket of the `links-licensing-c0ce`
-epic; until then, read a green `-check` as "no new license slipped in," not as
-"no copyleft is linked."
+committed policy entered the linked set, and no more. `policy.json`'s
+`module_exceptions` list is empty (patch 4 removed the last one, fslock's, and
+`TestLoadPolicyEmbedded` pins it staying empty), so no linked module is excused
+— but `allowed_licenses` still names MPL-2.0, so a green `-check` does not yet
+read as "no copyleft is linked." Tightening the allowlist is the gate ticket
+(`links-licensing-c0ce.9`) of the licensing epic; until it lands, read a green
+`-check` as "no new license slipped in."
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run

@@ -173,7 +173,7 @@ const (
 // mirror-pending marker: a shared hold on the beacon, kept until the holder's
 // work is done or it dies, so "is anyone still answering" is decided by the
 // kernel — a SIGKILLed holder's hold evaporates with its process — never by
-// an age threshold (the lock discipline in package filelock's doc). Two
+// an age threshold (the lock discipline in this package's doc). Two
 // holder kinds share the one shared mode: a mirror holds from process entry
 // for its whole run, and the claimant that spawned it holds from its claim
 // until its own process exit — overlapping lifetimes, so the answering set
@@ -359,7 +359,7 @@ const (
 // with holder-naming guidance. Fallback or refusal, nothing writes, so a
 // file walk under this hold cannot capture a torn journal. Take it AFTER
 // the workspace lock and BEFORE the commit lock, per the acquisition order
-// in package filelock's doc — taking it inside the commit lock inverts the
+// in this package's doc (doc.go) — taking it inside the commit lock inverts the
 // order against every live write Store.
 //
 // The one lifecycle write this hold does not stop: journal.idx is opened

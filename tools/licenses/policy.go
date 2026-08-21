@@ -38,8 +38,15 @@ type ModuleException struct {
 
 // LoadPolicy parses the embedded policy.json.
 func LoadPolicy() (*Policy, error) {
+	return parsePolicy(policyJSON)
+}
+
+// parsePolicy is the one boundary that turns policy bytes into a *Policy the
+// gate may run against; the checks below are part of the parse, so no
+// malformed policy ever exists as a Policy value. [LAW:parse-dont-validate]
+func parsePolicy(data []byte) (*Policy, error) {
 	var p Policy
-	if err := json.Unmarshal(policyJSON, &p); err != nil {
+	if err := json.Unmarshal(data, &p); err != nil {
 		return nil, fmt.Errorf("parse embedded policy.json: %w", err)
 	}
 	// [LAW:no-silent-failure] an empty allowlist would make the gate reject
@@ -47,6 +54,17 @@ func LoadPolicy() (*Policy, error) {
 	// real intent. Refuse rather than fail the whole tree confusingly.
 	if len(p.AllowedLicenses) == 0 {
 		return nil, fmt.Errorf("policy.json has no allowed_licenses; refusing to run a gate that would reject every module")
+	}
+	// [LAW:parse-dont-validate] An exception without a module, license, and
+	// human-verified reason is the undocumented excuse this policy exists to
+	// prevent; the gate must never run against one. Enforced here at the one
+	// parse point, so the rule holds however the committed list changes —
+	// today's list is empty and a test pins that, but the pin is a policy
+	// stance, not this invariant's enforcer.
+	for _, e := range p.ModuleExceptions {
+		if e.Module == "" || e.License == "" || e.Reason == "" {
+			return nil, fmt.Errorf("policy.json module_exception %+v is missing module, license, or reason; every exception must be complete and human-verified", e)
+		}
 	}
 	return &p, nil
 }
