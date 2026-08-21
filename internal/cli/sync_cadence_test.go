@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -83,7 +84,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: filepath.Join(root, ".lit")}}
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit"))}
 	ctx := context.Background()
 
 	ensureMirrorCoverage(ctx, ws)
@@ -93,6 +94,17 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	}
 	if mirrorPendingSet(ws) {
 		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
+	}
+	// Claim and answering hold share one lifetime: the remote-less path
+	// released its claim above, so its beacon hold must be gone with it — a
+	// stale answering hold here would falsely cover later markers this
+	// command will never clear.
+	verdict, err := store.ProbeMirrorBeacon(ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("probe beacon after released claim: %v", err)
+	}
+	if verdict != store.BeaconUnheld {
+		t.Fatalf("an un-claimed claimant must stop answering the instant its obligation ends; want BeaconUnheld, got %v", verdict)
 	}
 	stamped := info.ModTime()
 

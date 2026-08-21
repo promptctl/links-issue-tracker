@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
 
 // TestWorkspaceLockSharedHoldersCoexist pins the contract that multiple
@@ -352,6 +354,107 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 	want := filepath.Join("repo", ".git", "links", ".links-sync-push.lock")
 	if got != want {
 		t.Fatalf("SyncPushLockPath() = %q, want %q", got, want)
+	}
+}
+
+// TestMirrorBeaconLivenessProof pins the beacon's whole contract in the
+// arms the epic measured everywhere else: while any answerer holds the
+// beacon (shared, so concurrent claimants and mirrors coexist), the probe
+// reads BeaconAnswered — and the instant the last hold is gone (release
+// here standing in for process death; flock evaporates either way), the
+// probe reads BeaconUnheld by acquiring exclusively. An exclusive holder —
+// the squatter no healthy process ever is beyond a probe's instant — reads
+// as its own BeaconObstructed verdict, never as answered: that distinction
+// is what routes a squatter into the loud spawn arm instead of a silent
+// "covered". Two separate descriptors contend under flock even in one
+// process, so this proves the primitive without spawning.
+func TestMirrorBeaconLivenessProof(t *testing.T) {
+	ctx := context.Background()
+	dbPath := filepath.Join(t.TempDir(), "dolt")
+
+	verdict, err := ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe with no holder: %v", err)
+	}
+	if verdict != BeaconUnheld {
+		t.Fatalf("nobody ever held the beacon; want BeaconUnheld, got %v", verdict)
+	}
+
+	release1, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("first shared hold: %v", err)
+	}
+	release2, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("second shared hold: %v (concurrent answerers are legal and must coexist)", err)
+	}
+
+	verdict, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe under live holders: %v", err)
+	}
+	if verdict != BeaconAnswered {
+		t.Fatalf("two answerers hold the beacon; want BeaconAnswered, got %v", verdict)
+	}
+
+	if err := release1(); err != nil {
+		t.Fatalf("release first hold: %v", err)
+	}
+	verdict, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe with one holder remaining: %v", err)
+	}
+	if verdict != BeaconAnswered {
+		t.Fatalf("one answerer still holds the beacon; want BeaconAnswered, got %v", verdict)
+	}
+
+	if err := release2(); err != nil {
+		t.Fatalf("release second hold: %v", err)
+	}
+	verdict, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe after all holds dropped: %v", err)
+	}
+	if verdict != BeaconUnheld {
+		t.Fatalf("every holder is gone; want BeaconUnheld, got %v", verdict)
+	}
+
+	// An exclusive squatter is its own verdict, not an answerer.
+	releaseSquat, acquired, err := filelock.Acquire(ctx, MirrorBeaconLockPath(dbPath), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
+	}
+	verdict, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe under exclusive squatter: %v", err)
+	}
+	if verdict != BeaconObstructed {
+		t.Fatalf("an exclusive holder must read BeaconObstructed, got %v", verdict)
+	}
+	if err := releaseSquat(); err != nil {
+		t.Fatalf("release squat: %v", err)
+	}
+
+	// The probe took (and released) holds to answer; an answerer starting
+	// right after must still be able to take the beacon.
+	release3, err := HoldMirrorBeacon(ctx, dbPath)
+	if err != nil {
+		t.Fatalf("hold after a completed probe: %v", err)
+	}
+	if err := release3(); err != nil {
+		t.Fatalf("release post-probe hold: %v", err)
+	}
+}
+
+// TestMirrorBeaconLockPathIsSiblingOfDolt fixes the beacon at the same
+// sibling-of-dolt position as the sync-push lock it accompanies, so a
+// snapshots restore that rotates the Dolt directory does not move it out from
+// under a running mirror.
+func TestMirrorBeaconLockPathIsSiblingOfDolt(t *testing.T) {
+	got := MirrorBeaconLockPath(filepath.Join("repo", ".git", "links", "dolt"))
+	want := filepath.Join("repo", ".git", "links", ".links-sync-mirror.lock")
+	if got != want {
+		t.Fatalf("MirrorBeaconLockPath() = %q, want %q", got, want)
 	}
 }
 
