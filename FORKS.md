@@ -114,9 +114,10 @@ Seven files under `go/`: `libraries/doltcore/remotestorage/map_chunk_cache.go`,
 `store/nbs/archive_reader.go`, `store/nbs/archive_build.go`,
 `store/nbs/table_set.go`, `store/nbs/table_set_test.go`.
 
-Those were the only importers of `github.com/hashicorp/golang-lru/v2` (MPL-2.0)
-in the linked set. The replacement carries the same generic API, so the patch is
-the import line plus each file's `NOTICE` comment — no call-site edits.
+Those were this module's only importers of `github.com/hashicorp/golang-lru/v2`
+(MPL-2.0) — six linked files and one test file. The replacement carries the same
+generic API, so the patch is the import line plus each file's `NOTICE` comment —
+no call-site edits.
 
 The same commit range adds a `replace` in the fork's own `go.mod` resolving
 `github.com/dolthub/go-mysql-server` to the promptctl fork. Inside `lit`'s build
