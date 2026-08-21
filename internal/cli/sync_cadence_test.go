@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -83,7 +84,10 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if out, err := exec.Command("git", "-C", root, "init").CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v\n%s", err, out)
 	}
-	ws := workspace.Info{RootDir: root, Location: workspace.Location{StorageDir: filepath.Join(root, ".lit")}}
+	ws := workspace.Info{RootDir: root, Location: workspace.Location{
+		StorageDir:   filepath.Join(root, ".lit"),
+		DatabasePath: filepath.Join(root, ".lit", "dolt"),
+	}}
 	ctx := context.Background()
 
 	ensureMirrorCoverage(ctx, ws)
@@ -93,6 +97,16 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	}
 	if mirrorPendingSet(ws) {
 		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
+	}
+	// The claimant answers for the claim it took (even one it then released):
+	// its shared beacon hold, held to process exit, is what lets racing
+	// claims during the spawn window read BeaconAnswered and coalesce.
+	verdict, err := store.ProbeMirrorBeacon(ws.DatabasePath)
+	if err != nil {
+		t.Fatalf("probe beacon after claim: %v", err)
+	}
+	if verdict != store.BeaconAnswered {
+		t.Fatalf("a claiming command must hold the beacon shared until exit; want BeaconAnswered, got %v", verdict)
 	}
 	stamped := info.ModTime()
 

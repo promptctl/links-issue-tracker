@@ -81,17 +81,19 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // claimMirrorPending atomically resolves "is a mirror still owed for commits
 // up to now, and if so, who spawns it". The O_EXCL create is the atomicity:
 // exactly one of two racing commands creates the marker and owns the spawn;
-// the other observes it and is covered by that spawn's mirror — provided the
-// mirror still lives, which is the beacon probe's verdict, not a guess from
-// the marker's age. A marker whose beacon probe finds no holder is residue:
-// either its mirror died running no code (only SIGKILL-class endings leave
-// residue — every code-running ending removes or completes the marker), or
-// its spawn hasn't reached the beacon yet, in which case the re-claim below
-// costs one redundant mirror — the same double-claim the single-flight lock
-// already serializes into one push and one cheap no-op. Observers never touch
-// the marker's mtime — only a claim does — so the claim stamp keeps meaning
-// "when the owed spawn was claimed" for the holder's post-release re-check,
-// no matter how busy the workspace is.
+// the other observes it and is covered by that spawn's mirror — provided
+// someone still answers for the marker, which is the beacon probe's verdict,
+// not a guess from the marker's age. A marker the probe finds unheld is
+// residue: the claimant (whose own shared hold spans the spawn window — see
+// ensureMirrorCoverage) and any mirror it spawned all died running no code —
+// only SIGKILL-class endings leave residue, because every code-running
+// ending removes or completes the marker. Re-claiming residue can race
+// another claimant into a double-claim — the same tolerance as ever, now
+// confined to probe-instant windows, which the single-flight lock serializes
+// into one push and one cheap no-op. Observers never touch the marker's
+// mtime — only a claim does — so the claim stamp keeps meaning "when the
+// owed spawn was claimed" for the holder's post-release re-check, no matter
+// how busy the workspace is.
 func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, error) {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
 		return pendingClaimed, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
@@ -116,31 +118,37 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 	if !errors.Is(err, os.ErrExist) {
 		return pendingClaimed, fmt.Errorf("claim mirror-pending marker: %w", err)
 	}
-	alive, probeErr := store.ProbeMirrorBeacon(ws.DatabasePath)
+	verdict, probeErr := store.ProbeMirrorBeacon(ws.DatabasePath)
 	if probeErr != nil {
 		return pendingClaimed, probeErr
 	}
-	if alive {
-		// The beacon proves SOME mirror (or a racing claimant's probe — see
-		// ProbeMirrorBeacon) is alive, not that THIS marker's dedicated mirror
-		// is — and that is sufficient, not approximate: any live mirror that
-		// reaches a push attempt clears EVERY marker at entry, and its
-		// post-release re-check cycles for any claim stamped during its cycle.
-		// The uncovered remainder is a holder that dies before its next
-		// attempt (or is mid-exit past its final re-check), which no ownership
-		// granularity can close — no observable state proves a FUTURE push
-		// lands (the PR #391 round-5 decline) — and which ends in the same
-		// recovery arms as every mirror death: a recorded loud failure when
-		// code runs, this probe's re-claim at the next mutation when none does.
+	if verdict == store.BeaconAnswered {
+		// The beacon proves SOME answerer (a claimant holding from its claim
+		// to process exit, or the mirror it spawned) is alive, not that THIS
+		// marker's dedicated mirror is — and that is sufficient, not
+		// approximate: every answerer's code-running failure path clears the
+		// marker and records a loud outcome, any live mirror that reaches a
+		// push attempt clears EVERY marker at entry, and its post-release
+		// re-check cycles for any claim stamped during its cycle. The
+		// uncovered remainder is an answerer that dies running no code, which
+		// no ownership granularity can close — no observable state proves a
+		// FUTURE push lands (the PR #391 round-5 decline) — and which ends in
+		// this probe's re-claim at the next mutation.
 		return pendingCovered, nil
 	}
-	// Kernel-proven residue: no mirror anywhere holds the beacon, so the
-	// marker's dedicated mirror is gone (or not yet up — see above; spawning
-	// twice is the safe side). Refresh the claim time first so concurrent
-	// observers' re-checks bind to THIS re-spawn, then own the spawn. A marker
-	// that disappears under the refresh was just cleared by a push attempt
-	// inside an engine session — a session that, being disjoint from this
-	// command's closed one, opened after this commit: covered.
+	// BeaconUnheld: kernel-proven residue — nobody anywhere is answering for
+	// the marker. BeaconObstructed: an exclusive holder that, by the beacon's
+	// contract, is either another claimant's microsecond probe (re-claiming
+	// costs one redundant spawn the single-flight lock absorbs) or a foreign
+	// squatter — and spawning is what routes the squatter into the loud arm:
+	// the mirror's own shared hold fails against it and records the paged
+	// FAILED ending, where reading "covered" here would stop pushes silently.
+	// [LAW:no-silent-failure] Both verdicts re-claim; only the marker's
+	// disappearance re-routes to covered. Refresh the claim time first so
+	// concurrent observers' re-checks bind to THIS re-spawn, then own the
+	// spawn. A marker that disappears under the refresh was just cleared by a
+	// push attempt inside an engine session — a session that, being disjoint
+	// from this command's closed one, opened after this commit: covered.
 	if chErr := os.Chtimes(path, now, now); chErr != nil {
 		if errors.Is(chErr, os.ErrNotExist) {
 			return pendingCovered, nil

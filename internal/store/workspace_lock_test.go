@@ -9,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/filelock"
 )
 
 // TestWorkspaceLockSharedHoldersCoexist pins the contract that multiple
@@ -355,66 +357,86 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 	}
 }
 
-// TestMirrorBeaconLivenessProof pins the beacon's whole contract in the two
-// arms the epic measured everywhere else: while any mirror holds the beacon
-// (shared, so redundant mirrors coexist), the probe answers alive — and the
-// instant the last hold is gone (release here standing in for process death;
-// flock evaporates either way), the probe answers dead by acquiring
-// exclusively. Two separate descriptors contend under flock even in one
+// TestMirrorBeaconLivenessProof pins the beacon's whole contract in the
+// arms the epic measured everywhere else: while any answerer holds the
+// beacon (shared, so concurrent claimants and mirrors coexist), the probe
+// reads BeaconAnswered — and the instant the last hold is gone (release
+// here standing in for process death; flock evaporates either way), the
+// probe reads BeaconUnheld by acquiring exclusively. An exclusive holder —
+// the squatter no healthy process ever is beyond a probe's instant — reads
+// as its own BeaconObstructed verdict, never as answered: that distinction
+// is what routes a squatter into the loud spawn arm instead of a silent
+// "covered". Two separate descriptors contend under flock even in one
 // process, so this proves the primitive without spawning.
 func TestMirrorBeaconLivenessProof(t *testing.T) {
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "dolt")
 
-	alive, err := ProbeMirrorBeacon(dbPath)
+	verdict, err := ProbeMirrorBeacon(dbPath)
 	if err != nil {
 		t.Fatalf("probe with no holder: %v", err)
 	}
-	if alive {
-		t.Fatal("no mirror ever held the beacon; the probe must answer dead")
+	if verdict != BeaconUnheld {
+		t.Fatalf("nobody ever held the beacon; want BeaconUnheld, got %v", verdict)
 	}
 
 	release1, err := HoldMirrorBeacon(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("first mirror hold: %v", err)
+		t.Fatalf("first shared hold: %v", err)
 	}
 	release2, err := HoldMirrorBeacon(ctx, dbPath)
 	if err != nil {
-		t.Fatalf("second mirror hold: %v (redundant mirrors are legal and must coexist)", err)
+		t.Fatalf("second shared hold: %v (concurrent answerers are legal and must coexist)", err)
 	}
 
-	alive, err = ProbeMirrorBeacon(dbPath)
+	verdict, err = ProbeMirrorBeacon(dbPath)
 	if err != nil {
 		t.Fatalf("probe under live holders: %v", err)
 	}
-	if !alive {
-		t.Fatal("two mirrors hold the beacon; the probe must answer alive")
+	if verdict != BeaconAnswered {
+		t.Fatalf("two answerers hold the beacon; want BeaconAnswered, got %v", verdict)
 	}
 
 	if err := release1(); err != nil {
 		t.Fatalf("release first hold: %v", err)
 	}
-	alive, err = ProbeMirrorBeacon(dbPath)
+	verdict, err = ProbeMirrorBeacon(dbPath)
 	if err != nil {
 		t.Fatalf("probe with one holder remaining: %v", err)
 	}
-	if !alive {
-		t.Fatal("one mirror still holds the beacon; the probe must answer alive")
+	if verdict != BeaconAnswered {
+		t.Fatalf("one answerer still holds the beacon; want BeaconAnswered, got %v", verdict)
 	}
 
 	if err := release2(); err != nil {
 		t.Fatalf("release second hold: %v", err)
 	}
-	alive, err = ProbeMirrorBeacon(dbPath)
+	verdict, err = ProbeMirrorBeacon(dbPath)
 	if err != nil {
 		t.Fatalf("probe after all holds dropped: %v", err)
 	}
-	if alive {
-		t.Fatal("every holder is gone; the probe must answer dead")
+	if verdict != BeaconUnheld {
+		t.Fatalf("every holder is gone; want BeaconUnheld, got %v", verdict)
 	}
 
-	// The probe took (and released) an exclusive hold to answer; a mirror
-	// starting right after must still be able to take the beacon.
+	// An exclusive squatter is its own verdict, not an answerer.
+	releaseSquat, acquired, err := filelock.Acquire(ctx, MirrorBeaconLockPath(dbPath), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
+	}
+	verdict, err = ProbeMirrorBeacon(dbPath)
+	if err != nil {
+		t.Fatalf("probe under exclusive squatter: %v", err)
+	}
+	if verdict != BeaconObstructed {
+		t.Fatalf("an exclusive holder must read BeaconObstructed, got %v", verdict)
+	}
+	if err := releaseSquat(); err != nil {
+		t.Fatalf("release squat: %v", err)
+	}
+
+	// The probe took (and released) holds to answer; an answerer starting
+	// right after must still be able to take the beacon.
 	release3, err := HoldMirrorBeacon(ctx, dbPath)
 	if err != nil {
 		t.Fatalf("hold after a completed probe: %v", err)

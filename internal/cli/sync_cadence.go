@@ -13,6 +13,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -119,6 +120,21 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 		return
 	default:
 		ownsClaim = true
+	}
+	// The claimant answers for its claim until its own death: a shared beacon
+	// hold from here to process exit, overlapping the spawned mirror's own
+	// hold (taken at the mirror's entry, while this process still lives), so
+	// concurrent claims during the spawn window read BeaconAnswered and
+	// coalesce instead of each fork/exec-ing a redundant mirror — and a
+	// claimant SIGKILLed before its mirror comes up leaves residue the next
+	// claim's BeaconUnheld verdict recovers. The release is deliberately
+	// discarded: process exit is the intended release point, and the kernel
+	// performs it on every death mode — that IS the liveness signal.
+	// [LAW:no-ambient-temporal-coupling] Failure to take the hold never skips
+	// the spawn (the mirror's own hold still answers moments later; the cost
+	// is transient false-residue reads), but it is loud.
+	if _, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath); beaconErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", beaconErr)
 	}
 	// An owned claim that turns out unspawnable is released BEFORE the
 	// completion effects below: the completion can run the owner-notify hook

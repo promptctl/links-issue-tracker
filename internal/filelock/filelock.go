@@ -96,14 +96,17 @@
 // cycle.
 //
 // The mirror liveness beacon sits outside the slots too, and is the
-// outermost acquisition in practice: a mirror holds it SHARED from process
-// entry — before the sync-push lock, before any engine — for its whole run,
-// so that acquiring it exclusively is kernel proof no mirror is alive. Both
-// acquisition shapes happen holding nothing: the claimant's exclusive probe
-// is non-blocking (maxAttempts 1, released the instant it succeeds), and
-// the mirror's own shared take retries only against such a probe's
-// microsecond window (~1s budget). No inbound wait-edge from any inner
-// holder exists, so it cannot complete a cycle either.
+// outermost acquisition in practice: every answerer for the mirror-pending
+// marker holds it SHARED — the claimant from its claim to process exit, and
+// the mirror it spawned from that mirror's entry (before the sync-push
+// lock, before any engine), overlapping lifetimes — so acquiring it
+// exclusively is kernel proof nobody answers, and a two-step probe
+// (exclusive, then shared) further tells shared answerers from an exclusive
+// squatter. Every acquisition happens holding nothing: probes are
+// non-blocking (maxAttempts 1, released the instant they succeed), and the
+// shared takes retry only against a probe's microsecond window (~1s
+// budget). No inbound wait-edge from any inner holder exists, so it cannot
+// complete a cycle either.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in

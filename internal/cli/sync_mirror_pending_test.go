@@ -91,9 +91,28 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 	}
 
 	if err := releaseBeacon(); err != nil {
-		t.Fatalf("release beacon (the mirror dies): %v", err)
+		t.Fatalf("release beacon (the answerer dies): %v", err)
 	}
-	reclaimNow := now.Add(3 * time.Second)
+
+	// An exclusive squatter must never read as covered: covered would spawn
+	// nothing and stop pushes silently, while re-claiming routes the squatter
+	// into the spawned mirror's loud beacon-hold failure.
+	releaseSquat, acquired, err := filelock.Acquire(context.Background(), store.MirrorBeaconLockPath(ws.DatabasePath), true, 1, 0)
+	if err != nil || !acquired {
+		t.Fatalf("take exclusive squat: acquired=%v err=%v", acquired, err)
+	}
+	claim, err = claimMirrorPending(ws, now.Add(3*time.Second))
+	if err != nil {
+		t.Fatalf("claimMirrorPending under exclusive squatter: %v", err)
+	}
+	if claim != pendingClaimed {
+		t.Fatal("an exclusively obstructed beacon must re-claim, never cover — a squatter would otherwise stop pushes silently")
+	}
+	if err := releaseSquat(); err != nil {
+		t.Fatalf("release squat: %v", err)
+	}
+
+	reclaimNow := now.Add(4 * time.Second)
 	claim, err = claimMirrorPending(ws, reclaimNow)
 	if err != nil {
 		t.Fatalf("claimMirrorPending on residue: %v", err)
