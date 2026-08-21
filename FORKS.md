@@ -246,8 +246,9 @@ resolves, and it reports rather than gates.
 It does cover more than Go modules, which is easy to assume otherwise: the four
 native C libraries cgo static-links (ICU, zstd, musl, compiler-rt) are invisible
 to `go list -deps`, so `tools/licenses/native.go` carries them as a curated
-inventory and `-check` gates them alongside the modules. The "158 components" it
-reports is that combined set.
+inventory and `-check` gates them alongside the modules. The component count it
+reports is that combined set — linked modules plus the four native libraries —
+so it moves whenever a dependency enters or leaves the link closure.
 
 ## Verifying a fork change end to end
 

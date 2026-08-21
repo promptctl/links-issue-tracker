@@ -4,11 +4,12 @@ go 1.25.7
 
 require (
 	github.com/cenkalti/backoff/v4 v4.2.1
-	// [LAW:locality-or-seam] These two pins are what this module was vendored from
-	// and what apply if it is ever built standalone. Inside lit's actual build the
-	// top-level go.mod's replace directives (see ../../../FORKS.md) override every
-	// dolt/go and go-mysql-server reference — including these — to the promptctl
-	// forks instead.
+	// [LAW:locality-or-seam] These two pins record what this module was vendored
+	// from — the upstream coordinates and versions, kept so "what did lit change?"
+	// stays answerable by diffing against them. They no longer govern any build:
+	// inside lit the top-level go.mod's replace directives (see ../../../FORKS.md)
+	// substitute the promptctl forks, and a standalone build of this module is
+	// governed by the mirroring replace directives at the bottom of this file.
 	github.com/dolthub/dolt/go v0.40.5-0.20260313234613-4069302e7692
 	github.com/dolthub/go-mysql-server v0.20.1-0.20260313230549-0986a7fcf0fe
 	github.com/dolthub/vitess v0.0.0-20260309181228-a99af9c518ab

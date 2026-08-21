@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"golang.org/x/mod/modfile"
+	"golang.org/x/mod/module"
 )
 
 // forkOwnerPrefix is the only account allowed to own a module lit substitutes
@@ -209,6 +210,60 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 					"the ledger is quoting a pin the build no longer uses:\n  %s",
 					i+1, tok, strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+// TestVendoredDriverMirrorsForkReplaces synchronizes the third home of the fork
+// pins. The vendored driver's go.mod mirrors the root's fork replaces so that,
+// resolved standalone, it builds against the forks and cannot re-record a
+// coordinate the forks removed (golang-lru arrived back that way once, as an
+// indirect require through the upstream go-mysql-server go.mod).
+//
+// [LAW:one-source-of-truth] the root go.mod stays the authority; the mirror is
+// a derived copy, and this test is what makes a derived copy legal — the same
+// standing the two ledger tests above give FORKS.md. Both directions are
+// checked: a fork the driver requires must be mirrored, and a mirror must match
+// the root pin exactly. Driver-local replaces for coordinates the root does not
+// fork (flatbuffers) are out of scope — those are the driver's own business.
+func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
+	rootForks := make(map[string]module.Version)
+	for _, r := range moduleReplaces(parseRootGoMod(t)) {
+		rootForks[r.Old.Path] = r.New
+	}
+
+	const driverPath = "../../internal/vendor/dolthub-driver/go.mod"
+	data, err := os.ReadFile(driverPath)
+	if err != nil {
+		t.Fatalf("read %s: %v", driverPath, err)
+	}
+	driver, err := modfile.Parse(driverPath, data, nil)
+	if err != nil {
+		t.Fatalf("parse %s: %v", driverPath, err)
+	}
+
+	mirrored := make(map[string]module.Version)
+	for _, r := range driver.Replace {
+		if want, forked := rootForks[r.Old.Path]; forked {
+			mirrored[r.Old.Path] = r.New
+			if r.New != want {
+				t.Errorf("%s replaces %s with %s@%s, but the root go.mod pins the "+
+					"fork at %s@%s — the mirror has drifted; move it with the root "+
+					"pin (see FORKS.md)",
+					driverPath, r.Old.Path, r.New.Path, r.New.Version,
+					want.Path, want.Version)
+			}
+		}
+	}
+	for _, req := range driver.Require {
+		if _, forked := rootForks[req.Mod.Path]; !forked {
+			continue
+		}
+		if _, ok := mirrored[req.Mod.Path]; !ok {
+			t.Errorf("%s requires %s, which the root go.mod builds from a fork, "+
+				"but carries no mirroring replace — resolved standalone it would "+
+				"build upstream source and can re-record coordinates the fork "+
+				"removed (see FORKS.md)", driverPath, req.Mod.Path)
 		}
 	}
 }
