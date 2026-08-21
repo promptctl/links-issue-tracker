@@ -3,9 +3,13 @@ package main
 import "testing"
 
 // TestLoadPolicyEmbedded confirms the committed policy.json parses and carries
-// the shape the gate depends on: a non-empty allowlist and the one known
-// exception (fslock). If the file is edited into malformed JSON or its
-// allowlist is emptied, the gate breaks — this catches that at test time.
+// the shape the gate depends on: a non-empty allowlist and an EMPTY exception
+// list — links-licensing-c0ce.4 deleted the last one (fslock) when the fork
+// stopped importing it, and the licensing epic's destination is that none ever
+// returns. A reappearing exception is a policy regression, not a formality:
+// it is a row an auditor stops on. If one is ever genuinely unavoidable, it
+// must carry module, license, and a human-verified reason, and this test must
+// be loosened deliberately in the same change.
 func TestLoadPolicyEmbedded(t *testing.T) {
 	p, err := LoadPolicy()
 	if err != nil {
@@ -14,14 +18,87 @@ func TestLoadPolicyEmbedded(t *testing.T) {
 	if len(p.AllowedLicenses) == 0 {
 		t.Fatal("embedded policy has no allowed_licenses")
 	}
-	// Every documented exception must carry a reason — an undocumented
-	// exception is the thing this whole policy exists to prevent.
-	if len(p.ModuleExceptions) == 0 {
-		t.Fatal("embedded policy has no module_exceptions (expected fslock)")
+	if len(p.ModuleExceptions) != 0 {
+		t.Fatalf("embedded policy carries %d module_exceptions, want none — the licensing epic emptied this list and the gate's promise is that it stays empty: %+v",
+			len(p.ModuleExceptions), p.ModuleExceptions)
 	}
-	for _, e := range p.ModuleExceptions {
-		if e.Module == "" || e.License == "" || e.Reason == "" {
-			t.Errorf("exception %+v is missing module, license, or reason", e)
+}
+
+// TestParsePolicyRejectsIncompleteException pins the parse boundary's rule:
+// an exception missing its module, license, or human-verified reason never
+// becomes a Policy the gate can run against. This enforcement lives in
+// parsePolicy, independent of TestLoadPolicyEmbedded's emptiness pin — a
+// future change that legitimately reintroduces an exception loosens that pin,
+// and this rule must hold without anyone remembering to re-add it.
+func TestParsePolicyRejectsIncompleteException(t *testing.T) {
+	for _, missing := range []string{
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"","license":"LGPL-3.0","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":""}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"  "}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":" example.com/m ","license":"LGPL-3.0","reason":"r"}]}`,
+	} {
+		if _, err := parsePolicy([]byte(missing)); err == nil {
+			t.Errorf("parsePolicy accepted an incomplete exception: %s", missing)
+		}
+	}
+	complete := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"human-verified"}]}`
+	if _, err := parsePolicy([]byte(complete)); err != nil {
+		t.Errorf("parsePolicy rejected a complete exception: %v", err)
+	}
+}
+
+// TestParsePolicyRejectsUnknownKeys pins that a misspelled key in the
+// hand-edited policy fails the parse instead of silently unmarshaling into
+// an absent field — a typo'd module_exceptions would otherwise read as an
+// empty exception list while the file still carries a row.
+func TestParsePolicyRejectsUnknownKeys(t *testing.T) {
+	misspelled := `{"allowed_licenses":["MIT"],"module_exception":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}]}`
+	if _, err := parsePolicy([]byte(misspelled)); err == nil {
+		t.Error("parsePolicy accepted a policy with an unknown (misspelled) key")
+	}
+}
+
+// TestParsePolicyRejectsDuplicateKeys pins that a key repeated within one
+// object fails the parse: encoding/json keeps the last value, so a bad merge
+// leaving two module_exceptions keys would otherwise silently drop the row
+// the committed text still shows.
+func TestParsePolicyRejectsDuplicateKeys(t *testing.T) {
+	dup := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}],"module_exceptions":[]}`
+	if _, err := parsePolicy([]byte(dup)); err == nil {
+		t.Error("parsePolicy accepted a policy with a duplicated module_exceptions key")
+	}
+	nested := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","module":"example.com/n","license":"LGPL-3.0","reason":"r"}]}`
+	if _, err := parsePolicy([]byte(nested)); err == nil {
+		t.Error("parsePolicy accepted a policy with a duplicated key inside an exception object")
+	}
+}
+
+// TestParsePolicyRejectsMalformedAllowlistEntry pins the allowlist under the
+// same rule as exceptions: the committed text is the exact string the gate
+// matches, so a blank or padded entry never becomes a Policy.
+func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
+	for _, bad := range []string{
+		`{"allowed_licenses":["MIT",""],"module_exceptions":[]}`,
+		`{"allowed_licenses":[" MIT "],"module_exceptions":[]}`,
+	} {
+		if _, err := parsePolicy([]byte(bad)); err == nil {
+			t.Errorf("parsePolicy accepted a malformed allowlist entry: %s", bad)
+		}
+	}
+}
+
+// TestParsePolicyRejectsTrailingContent pins that the parse consumes the
+// whole file: a concatenated second document (a bad merge, a paste artifact)
+// would otherwise be silently dropped and the gate would run against only
+// the first value.
+func TestParsePolicyRejectsTrailingContent(t *testing.T) {
+	for _, trailing := range []string{
+		`{"allowed_licenses":["MIT"],"module_exceptions":[]}{"module_exceptions":[{"module":"example.com/m","license":"LGPL-3.0","reason":"r"}]}`,
+		`{"allowed_licenses":["MIT"],"module_exceptions":[]} garbage`,
+	} {
+		if _, err := parsePolicy([]byte(trailing)); err == nil {
+			t.Errorf("parsePolicy accepted trailing content: %s", trailing)
 		}
 	}
 }

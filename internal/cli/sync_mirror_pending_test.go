@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // mirrorPendingTestWorkspace builds the minimal workspace the claim protocol

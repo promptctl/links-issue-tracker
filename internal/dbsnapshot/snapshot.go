@@ -11,7 +11,10 @@
 // via store.LockWorkspaceShared, as the CLI does), Dolt's own journal lock
 // (transitively via the open Store's engine, which holds it for its
 // lifetime, or directly via store.LockDoltJournalExclusive), and the commit
-// lock. The shared hold keeps a directory rotator (snapshots restore, adopt,
+// lock. That hold sequence follows lit's lock discipline — canonical in
+// package store's doc (internal/store/doc.go); this paragraph owns only
+// which holds Take's callers must bring, never the order's rationale.
+// The shared hold keeps a directory rotator (snapshots restore, adopt,
 // promotion/heal) from rewriting the tree mid-copy; the journal hold keeps a
 // concurrent open's engine-lifecycle I/O — journal crash-recovery after an
 // unclean kill, close-time flush — from rewriting the journal under the walk
@@ -44,7 +47,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/filelock"
+	"github.com/promptctl/primitives/filelock"
 )
 
 // Snapshot is a frozen copy of a Dolt storage directory.

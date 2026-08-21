@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821060911-24c5c459fe62` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821203835-a0352e869de1` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -160,6 +160,34 @@ buzhash, and the `require` line moves past that change. Until then, a rebase
 that revives `rollingHashSplitter` on a live path is a storage-format decision,
 not a conflict to resolve mechanically: stop and escalate.
 
+#### Patch 4 — replace `dolthub/fslock` with `promptctl/primitives/filelock`
+
+Ten files: `libraries/doltcore/dbfactory/git_remote.go`,
+`libraries/events/event_flush.go`, `libraries/utils/filesys/lock.go`,
+`store/blobstore/git_blobstore.go`, `store/blobstore/local.go`,
+`store/nbs/file_manifest.go`, `store/nbs/journal.go`,
+`store/nbs/journal_record.go`, `store/nbs/test/manifest_clobber.go`, and
+`cmd/dolt/commands/engine/lock_release_test.go` — this module's only
+importers of `github.com/dolthub/fslock` (LGPL-3.0 with a static-linking
+exception), the one genuinely copyleft coordinate the `lit` binary still
+linked. The replacement's `Lock` handle carries the same surface (`New`,
+`Lock`, `TryLock`, `LockWithTimeout`, `Unlock`, and the `ErrLocked` /
+`ErrTimeout` sentinels, compared by identity where upstream compares them so),
+and the import is aliased to `fslock`, so the patch is the import line plus
+each file's `NOTICE` comment — no call-site edits. The handle's contract was
+derived from the nine non-test call sites and from black-box tests — the
+test-only importer was swapped but was not derivation input — and never from
+fslock's source; the provenance record is the `links-licensing-c0ce.4`
+section of the primitives module's `PROVENANCE-ATTESTATIONS.md`.
+
+Landed under `links-licensing-c0ce.4`, which also removed the fslock
+exception from `tools/licenses/policy.json` — a rebase that restores the
+import therefore fails the license gate, not just this ledger.
+
+**Retire it never** — same standing as patch 2: it ends only if upstream
+itself drops the LGPL dependency, at which point the ledger entry collapses
+into a rebase.
+
 ### promptctl/go-mysql-server
 
 #### Patch 1 — replace `hashicorp/golang-lru` with `promptctl/primitives/lruany`
@@ -263,11 +291,13 @@ policy is asserted by `TestDependencyLicensesArePermitted`, which `go test ./...
 picks up on every merge, and `-check` itself runs again in `release-validate`.
 
 What that proves today is narrower than it sounds: nothing outside the
-committed policy entered the linked set, and no more. It does not yet prove the absence of
-copyleft, because `policy.json` still allows MPL-2.0 and still carries a
-reviewed exception (fslock's). Emptying it is the last ticket of the `links-licensing-c0ce`
-epic; until then, read a green `-check` as "no new license slipped in," not as
-"no copyleft is linked."
+committed policy entered the linked set, and no more. `policy.json`'s
+`module_exceptions` list is empty (patch 4 removed the last one, fslock's, and
+`TestLoadPolicyEmbedded` pins it staying empty), so no linked module is excused
+— but `allowed_licenses` still names MPL-2.0, so a green `-check` does not yet
+read as "no copyleft is linked." Tightening the allowlist is the gate ticket
+(`links-licensing-c0ce.9`) of the licensing epic; until it lands, read a green
+`-check` as "no new license slipped in."
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run

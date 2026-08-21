@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -38,9 +40,35 @@ type ModuleException struct {
 
 // LoadPolicy parses the embedded policy.json.
 func LoadPolicy() (*Policy, error) {
+	return parsePolicy(policyJSON)
+}
+
+// parsePolicy is the one boundary that turns policy bytes into a *Policy the
+// gate may run against; the checks below are part of the parse, so no
+// malformed policy ever exists as a Policy value. [LAW:parse-dont-validate]
+func parsePolicy(data []byte) (*Policy, error) {
 	var p Policy
-	if err := json.Unmarshal(policyJSON, &p); err != nil {
+	// The policy is a hand-edited committed file, and Unmarshal's default of
+	// ignoring unknown keys would turn a misspelled "module_exceptions" into
+	// an empty list — a silently vanished exception row. Unknown keys fail
+	// the parse instead. [LAW:no-silent-failure]
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&p); err != nil {
 		return nil, fmt.Errorf("parse embedded policy.json: %w", err)
+	}
+	// Decode reads one JSON value; a concatenated second document or paste
+	// artifact after it would otherwise be silently dropped and the gate
+	// would run against a partial read of the committed file.
+	if err := dec.Decode(&struct{}{}); !errors.Is(err, io.EOF) {
+		return nil, fmt.Errorf("policy.json carries trailing content after the policy object; refusing a file the gate would only partially read")
+	}
+	// encoding/json keeps the LAST value of a duplicated key, so a bad merge
+	// leaving two module_exceptions keys would silently drop one — the same
+	// committed-file-vs-gate's-view split the unknown-key and trailing-content
+	// guards refuse. Same fate for duplicates. [LAW:no-silent-failure]
+	if err := rejectDuplicateKeys(data); err != nil {
+		return nil, err
 	}
 	// [LAW:no-silent-failure] an empty allowlist would make the gate reject
 	// every module — almost certainly a broken/truncated policy file, not a
@@ -48,7 +76,86 @@ func LoadPolicy() (*Policy, error) {
 	if len(p.AllowedLicenses) == 0 {
 		return nil, fmt.Errorf("policy.json has no allowed_licenses; refusing to run a gate that would reject every module")
 	}
+	// The allowlist is matched by exact string the same way exceptions are,
+	// so its entries carry the same rule: the committed text is the value the
+	// gate compares, blank or padded entries refused. [LAW:one-source-of-truth]
+	for _, name := range p.AllowedLicenses {
+		if name == "" || name != strings.TrimSpace(name) {
+			return nil, fmt.Errorf("policy.json allowed_licenses entry %q is blank or carries surrounding whitespace; the committed text must be the exact license name the gate matches", name)
+		}
+	}
+	// [LAW:parse-dont-validate] An exception without a module, license, and
+	// human-verified reason is the undocumented excuse this policy exists to
+	// prevent; the gate must never run against one. Enforced here at the one
+	// parse point, so the rule holds however the committed list changes —
+	// today's list is empty and a test pins that, but the pin is a policy
+	// stance, not this invariant's enforcer.
+	for _, e := range p.ModuleExceptions {
+		// The committed file is the canonical form the gate runs against, so
+		// a padded field is rejected rather than silently trimmed — Filter
+		// keys exceptions on these exact strings, and a normalize-on-read
+		// would split the file's text from the value it produces.
+		// [LAW:one-source-of-truth]
+		for _, field := range []string{e.Module, e.License, e.Reason} {
+			if field != strings.TrimSpace(field) {
+				return nil, fmt.Errorf("policy.json module_exception %+v carries surrounding whitespace in a field; the committed text must be the exact value the gate matches", e)
+			}
+		}
+		if e.Module == "" || e.License == "" || e.Reason == "" {
+			return nil, fmt.Errorf("policy.json module_exception %+v is missing module, license, or reason; every exception must be complete and human-verified", e)
+		}
+	}
 	return &p, nil
+}
+
+// rejectDuplicateKeys walks the document's tokens and errors on any key
+// repeated within one object, at any depth. encoding/json's decoder accepts
+// duplicates and keeps the last value, which would let half of a bad merge
+// vanish from the gate's view while staying in the committed text.
+func rejectDuplicateKeys(data []byte) error {
+	dec := json.NewDecoder(bytes.NewReader(data))
+	// seen is a stack of per-object key sets; a nil entry marks an array
+	// level, whose elements are values rather than key/value pairs.
+	var seen []map[string]bool
+	expectKey := false
+	for {
+		tok, err := dec.Token()
+		if errors.Is(err, io.EOF) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("parse embedded policy.json: %w", err)
+		}
+		switch t := tok.(type) {
+		case json.Delim:
+			switch t {
+			case '{':
+				seen = append(seen, map[string]bool{})
+				expectKey = true
+			case '[':
+				seen = append(seen, nil)
+				expectKey = false
+			case '}', ']':
+				seen = seen[:len(seen)-1]
+				expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+			}
+		case string:
+			top := len(seen) - 1
+			if expectKey && top >= 0 && seen[top] != nil {
+				if seen[top][t] {
+					return fmt.Errorf("policy.json repeats the key %q within one object; a duplicated key silently drops one of its values from the gate's view", t)
+				}
+				seen[top][t] = true
+				expectKey = false
+			} else {
+				expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+			}
+		default:
+			// A non-string value token completes a key/value pair (or is an
+			// array element); inside an object the next token is a key again.
+			expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
+		}
+	}
 }
 
 // Violation is one linked module whose classified license is neither allowed nor
