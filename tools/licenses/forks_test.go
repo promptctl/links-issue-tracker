@@ -248,15 +248,23 @@ func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 		t.Fatalf("read %s: %v", sumPath, err)
 	}
 
+	// The driver's own replaces, predating the fork mirrors and owned by it
+	// alone. Everything else must be a mirror of a current root fork — a
+	// replace for a coordinate the root no longer forks is a leftover wherever
+	// it points, org account or personal.
+	driverLocalReplaces := map[string]bool{
+		"github.com/google/flatbuffers": true,
+	}
+
 	mirrored := make(map[string]module.Version)
 	for _, r := range driver.Replace {
 		want, forked := rootForks[r.Old.Path]
 		if !forked {
-			// A mirror pointing at an org fork whose upstream coordinate the
-			// root no longer forks is a leftover, not a driver-local replace.
-			if strings.HasPrefix(r.New.Path, forkOwnerPrefix) {
-				t.Errorf("%s replaces %s with %s@%s, but the root go.mod no "+
-					"longer forks that coordinate — delete the stale mirror "+
+			if !driverLocalReplaces[r.Old.Path] {
+				t.Errorf("%s replaces %s with %s@%s, but the root go.mod does "+
+					"not fork that coordinate and it is not a known driver-local "+
+					"replace — delete the stale mirror, or add it to "+
+					"driverLocalReplaces if the driver genuinely owns it "+
 					"(see FORKS.md)",
 					driverPath, r.Old.Path, r.New.Path, r.New.Version)
 			}
@@ -272,15 +280,33 @@ func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 		}
 		// The pin's second derived home is the driver's lockfile: a mirror
 		// moved without `go mod tidy` in the driver leaves go.sum without the
-		// new version's hashes, and only a standalone build would notice.
-		if !strings.Contains(string(sumData), r.New.Path+" "+r.New.Version+" ") {
-			t.Errorf("%s has no hash entry for %s@%s — the mirror in go.mod "+
-				"moved without re-tidying the driver; run `go mod tidy` in "+
-				"internal/vendor/dolthub-driver",
-				sumPath, r.New.Path, r.New.Version)
+		// new version's hashes, and only a standalone build would notice. Both
+		// lines matter — the module zip's and its go.mod's — because a partial
+		// re-tidy can write one without the other.
+		for kind, suffix := range map[string]string{"module": " ", "go.mod": "/go.mod "} {
+			if !strings.Contains(string(sumData), r.New.Path+" "+r.New.Version+suffix) {
+				t.Errorf("%s has no %s hash entry for %s@%s — the mirror in "+
+					"go.mod moved without re-tidying the driver; run "+
+					"`go mod tidy` in internal/vendor/dolthub-driver",
+					sumPath, kind, r.New.Path, r.New.Version)
+			}
 		}
 	}
+	forkTargets := make(map[string]string, len(rootForks))
+	for upstream, target := range rootForks {
+		forkTargets[target.Path] = upstream
+	}
 	for _, req := range driver.Require {
+		// The same pairing TestForkedCoordinatesStayUpstream pins for the root:
+		// require the upstream coordinate, reach the fork only through the
+		// replace — a direct require of the fork target severs the diff-against-
+		// upstream answer here exactly as it would there.
+		if upstream, isTarget := forkTargets[req.Mod.Path]; isTarget {
+			t.Errorf("%s requires %s directly, but that module is the fork "+
+				"replacement for %s; require the upstream coordinate and mirror "+
+				"the root's replace instead (see FORKS.md)",
+				driverPath, req.Mod.Path, upstream)
+		}
 		if _, forked := rootForks[req.Mod.Path]; !forked {
 			continue
 		}

@@ -84,7 +84,10 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		// paired with a directory belonging to a DIFFERENT module at a
 		// DIFFERENT version. The record must carry that, or a license read out
 		// of that directory gets reported against a coordinate whose source
-		// was never opened.
+		// was never opened. The pins below are a frozen illustration of that
+		// shape, deliberately not kept in step with go.mod — the fork-pin
+		// synchronization lives in forks_test.go, and re-quoting live pins
+		// here would just add another copy for it to chase.
 		in := "github.com/dolthub/dolt/go\tv0.40.5-0.20260314011441-62975ef6bf36\t" +
 			"/mod/github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\t" +
 			"github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\n"
