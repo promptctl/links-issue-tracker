@@ -204,13 +204,18 @@ func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, e
 type MirrorBeaconVerdict int
 
 const (
-	// BeaconUnheld: the exclusive probe acquired — kernel proof that nobody
-	// (mirror, claimant, or squatter) holds the beacon. A marker seen beside
-	// this verdict is residue to re-claim.
+	// BeaconUnheld: the deciding exclusive attempt acquired — kernel proof
+	// that nobody (mirror, claimant, or squatter) held the beacon at that
+	// instant. A marker seen beside this verdict is residue to re-claim.
 	BeaconUnheld MirrorBeaconVerdict = iota
-	// BeaconAnswered: only shared holders — claimants and the mirrors they
-	// spawned, each of whose code-running failure paths clears the marker and
-	// records a loud outcome. A marker seen beside this verdict is covered.
+	// BeaconAnswered: someone held the beacon at the deciding instant, and
+	// no exclusive holder stood moments earlier — the ordinary shape of
+	// claimants and the mirrors they spawned, each of whose code-running
+	// failure paths clears the marker and records a loud outcome. A marker
+	// seen beside this verdict is covered — for as long as the holder lives;
+	// a holder dying immediately after leaves residue the NEXT claim's
+	// unheld verdict recovers, the irreducible envelope (no observable state
+	// proves a future push lands).
 	BeaconAnswered
 	// BeaconObstructed: an exclusive holder — a foreign squatter, or the
 	// microsecond window of another claimant's own probe. Never covered:
@@ -221,33 +226,29 @@ const (
 )
 
 // ProbeMirrorBeacon parses the beacon's kernel state into a
-// MirrorBeaconVerdict via two single-attempt probes: exclusive first (only
-// acquirable when nothing is held), then shared (acquirable beside shared
-// holders, refused under an exclusive one). Each probe hold is released
-// immediately — the probe takes custody of nothing. A holder-set change
-// between the two steps can misread, but every such race lands on the
-// spawn-or-loud side (BeaconUnheld/BeaconObstructed), never on a silent
-// "covered". [LAW:parse-dont-validate] The raw acquisition triples become
-// the one domain verdict callers consume; no caller re-derives liveness
-// from lock mechanics.
+// MirrorBeaconVerdict via two single-attempt probes, shared first, exclusive
+// LAST — the order is the correctness: the final, deciding attempt is the
+// exclusive one, so its failure proves a holder exists at that instant and
+// its success is the pure nobody-holds proof, which means a holder dying
+// between the two steps produces BeaconUnheld and lands on the safe
+// re-claim-and-spawn side rather than fabricating an answerer (the steps
+// are sequential, never atomic — a verdict must not claim more than its
+// last observation). The first, shared attempt only rules out an exclusive
+// holder: its failure is BeaconObstructed. Each probe hold is released
+// immediately — the probe takes custody of nothing. Residuals, stated
+// rather than implied: an exclusive holder arriving between the steps reads
+// answered for one occasion (the next claim's shared step then reads it
+// obstructed, loudly), and two claims' probes interleaving can defer one
+// re-claim to the next mutation — both bounded by the next occasion, the
+// same envelope as every SIGKILL recovery here.
+// [LAW:parse-dont-validate] The raw acquisition triples become the one
+// domain verdict callers consume; no caller re-derives liveness from lock
+// mechanics.
 func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 	// context.Background: single-attempt probes never sleep, so there is no
 	// wait for a context to bound (same as the sync-push probe above).
 	path := MirrorBeaconLockPath(databasePath)
-	release, acquired, err := filelock.Acquire(context.Background(), path, true, 1, 0)
-	if err != nil {
-		return BeaconUnheld, fmt.Errorf("probe mirror liveness beacon: %w", err)
-	}
-	if acquired {
-		if relErr := release(); relErr != nil {
-			// A probe hold that failed to release keeps excluding mirrors
-			// until this process exits — surface it as the probe failing,
-			// never as a clean verdict. [LAW:no-silent-failure]
-			return BeaconUnheld, fmt.Errorf("release mirror liveness beacon probe: %w", relErr)
-		}
-		return BeaconUnheld, nil
-	}
-	release, acquired, err = filelock.Acquire(context.Background(), path, false, 1, 0)
+	release, acquired, err := filelock.Acquire(context.Background(), path, false, 1, 0)
 	if err != nil {
 		return BeaconUnheld, fmt.Errorf("probe mirror liveness beacon (shared step): %w", err)
 	}
@@ -255,12 +256,25 @@ func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 		return BeaconObstructed, nil
 	}
 	if relErr := release(); relErr != nil {
-		// A stuck SHARED probe hold is milder (it excludes nothing shared)
-		// but still a leak that falsifies later exclusive probes from other
-		// processes; same loud contract. [LAW:no-silent-failure]
+		// A stuck SHARED probe hold excludes no answerer but falsifies later
+		// exclusive probes from other processes; surface it as the probe
+		// failing, never as a clean verdict. [LAW:no-silent-failure]
 		return BeaconUnheld, fmt.Errorf("release mirror liveness beacon probe (shared step): %w", relErr)
 	}
-	return BeaconAnswered, nil
+	release, acquired, err = filelock.Acquire(context.Background(), path, true, 1, 0)
+	if err != nil {
+		return BeaconUnheld, fmt.Errorf("probe mirror liveness beacon: %w", err)
+	}
+	if !acquired {
+		return BeaconAnswered, nil
+	}
+	if relErr := release(); relErr != nil {
+		// A stuck EXCLUSIVE probe hold blocks every answerer until this
+		// process exits — the loud contract doubly applies.
+		// [LAW:no-silent-failure]
+		return BeaconUnheld, fmt.Errorf("release mirror liveness beacon probe: %w", relErr)
+	}
+	return BeaconUnheld, nil
 }
 
 func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {

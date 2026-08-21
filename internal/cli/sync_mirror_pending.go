@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -61,13 +62,15 @@ import (
 type mirrorPendingClaim int
 
 const (
-	// pendingCovered: a marker exists and a live mirror holds the beacon, so
-	// the marker's not-yet-run clear belongs to a mirror that is still coming
-	// — its engine session (and HEAD read) is still ahead of this command's
-	// committed, closed session. No spawn needed.
+	// pendingCovered: a marker exists and a live answerer — a claimant
+	// holding from its claim, or the mirror it spawned — holds the beacon,
+	// so the marker's not-yet-run clear belongs to a chain that is still
+	// coming: the eventual mirror's engine session (and HEAD read) is still
+	// ahead of this command's committed, closed session. No spawn needed.
 	pendingCovered mirrorPendingClaim = iota
-	// pendingClaimed: this command created (or reclaimed from a dead mirror's
-	// residue) the marker and now owes the spawn that clears it.
+	// pendingClaimed: this command created (or reclaimed from residue) the
+	// marker and now owes the spawn that clears it — and is answering for it
+	// via the shared beacon hold minted with the claim.
 	pendingClaimed
 )
 
@@ -94,9 +97,18 @@ func mirrorPendingMarkerPath(ws workspace.Info) string {
 // mtime — only a claim does — so the claim stamp keeps meaning "when the
 // owed spawn was claimed" for the holder's post-release re-check, no matter
 // how busy the workspace is.
-func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, error) {
+//
+// A CLAIMED return also carries the answering hold: the shared beacon hold
+// is minted here, in the same function that mints the claim, so "owns the
+// claim" and "answers for it" are one state with one lifetime — the returned
+// release ends both together (via the caller's releaseClaim), and only a
+// claim whose spawn succeeded abandons the hold to process exit, where it
+// truthfully backs the mirror that is actually running. releaseAnswer is
+// always non-nil; on non-claimed returns (and on a hold that could not be
+// taken, which is loud) it is a no-op. [LAW:one-source-of-truth]
+func claimMirrorPending(ctx context.Context, ws workspace.Info, now time.Time) (claim mirrorPendingClaim, releaseAnswer func(), err error) {
 	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
-		return pendingClaimed, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
+		return pendingClaimed, func() {}, fmt.Errorf("ensure storage dir for mirror-pending marker: %w", err)
 	}
 	path := mirrorPendingMarkerPath(ws)
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
@@ -111,30 +123,31 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 			// probe. Best-effort: if even the remove fails, the caller's
 			// spawn-regardless mirror clears it at its push attempt's entry.
 			_ = os.Remove(path)
-			return pendingClaimed, fmt.Errorf("close mirror-pending marker: %w", closeErr)
+			return pendingClaimed, func() {}, fmt.Errorf("close mirror-pending marker: %w", closeErr)
 		}
-		return pendingClaimed, nil
+		return pendingClaimed, answerForClaim(ctx, ws), nil
 	}
 	if !errors.Is(err, os.ErrExist) {
-		return pendingClaimed, fmt.Errorf("claim mirror-pending marker: %w", err)
+		return pendingClaimed, func() {}, fmt.Errorf("claim mirror-pending marker: %w", err)
 	}
 	verdict, probeErr := store.ProbeMirrorBeacon(ws.DatabasePath)
 	if probeErr != nil {
-		return pendingClaimed, probeErr
+		return pendingClaimed, func() {}, probeErr
 	}
 	if verdict == store.BeaconAnswered {
-		// The beacon proves SOME answerer (a claimant holding from its claim
-		// to process exit, or the mirror it spawned) is alive, not that THIS
-		// marker's dedicated mirror is — and that is sufficient, not
-		// approximate: every answerer's code-running failure path clears the
-		// marker and records a loud outcome, any live mirror that reaches a
-		// push attempt clears EVERY marker at entry, and its post-release
+		// The beacon proves SOME answerer (a claimant holding from its claim,
+		// or the mirror it spawned) was alive at the probe's deciding instant,
+		// not that THIS marker's dedicated mirror is — and that is sufficient,
+		// not approximate: every answerer's code-running failure path clears
+		// the marker and records a loud outcome, any live mirror that reaches
+		// a push attempt clears EVERY marker at entry, and its post-release
 		// re-check cycles for any claim stamped during its cycle. The
-		// uncovered remainder is an answerer that dies running no code, which
-		// no ownership granularity can close — no observable state proves a
-		// FUTURE push lands (the PR #391 round-5 decline) — and which ends in
-		// this probe's re-claim at the next mutation.
-		return pendingCovered, nil
+		// uncovered remainder is an answerer that dies running no code after
+		// that instant, which no ownership granularity can close — no
+		// observable state proves a FUTURE push lands (the PR #391 round-5
+		// decline) — and which ends in this probe's re-claim at the next
+		// mutation.
+		return pendingCovered, func() {}, nil
 	}
 	// BeaconUnheld: kernel-proven residue — nobody anywhere is answering for
 	// the marker. BeaconObstructed: an exclusive holder that, by the beacon's
@@ -151,11 +164,31 @@ func claimMirrorPending(ws workspace.Info, now time.Time) (mirrorPendingClaim, e
 	// from this command's closed one, opened after this commit: covered.
 	if chErr := os.Chtimes(path, now, now); chErr != nil {
 		if errors.Is(chErr, os.ErrNotExist) {
-			return pendingCovered, nil
+			return pendingCovered, func() {}, nil
 		}
-		return pendingClaimed, fmt.Errorf("refresh reclaimed mirror-pending marker: %w", chErr)
+		return pendingClaimed, func() {}, fmt.Errorf("refresh reclaimed mirror-pending marker: %w", chErr)
 	}
-	return pendingClaimed, nil
+	return pendingClaimed, answerForClaim(ctx, ws), nil
+}
+
+// answerForClaim mints the shared beacon hold that makes an owned claim
+// answered-for. Failure never voids the claim — the marker is already minted
+// and the spawned mirror's own hold lands moments later; the cost is racing
+// claims transiently reading unheld and spawning redundant mirrors — but it
+// is loud. [LAW:no-silent-failure] The returned release reports its own
+// failure to stderr rather than silently stranding a hold whose presence
+// falsifies later probes.
+func answerForClaim(ctx context.Context, ws workspace.Info) func() {
+	release, err := store.HoldMirrorBeacon(ctx, ws.DatabasePath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", err)
+		return func() {}
+	}
+	return func() {
+		if relErr := release(); relErr != nil {
+			fmt.Fprintf(os.Stderr, "lit: mirror beacon answering hold not released: %v\n", relErr)
+		}
+	}
 }
 
 // clearMirrorPending removes the marker. Two meanings, one operation, both

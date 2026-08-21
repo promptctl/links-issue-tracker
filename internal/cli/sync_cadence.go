@@ -13,7 +13,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
-	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -109,7 +108,7 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 		return
 	}
 	ownsClaim := false
-	claim, claimErr := claimMirrorPending(ws, time.Now())
+	claim, releaseAnswer, claimErr := claimMirrorPending(ctx, ws, time.Now())
 	switch {
 	case claimErr != nil:
 		// Coverage state unreadable: spawning is the safe side (a redundant
@@ -121,28 +120,23 @@ func ensureMirrorCoverage(ctx context.Context, ws workspace.Info) {
 	default:
 		ownsClaim = true
 	}
-	// The claimant answers for its claim until its own death: a shared beacon
-	// hold from here to process exit, overlapping the spawned mirror's own
-	// hold (taken at the mirror's entry, while this process still lives), so
-	// concurrent claims during the spawn window read BeaconAnswered and
-	// coalesce instead of each fork/exec-ing a redundant mirror — and a
-	// claimant SIGKILLed before its mirror comes up leaves residue the next
-	// claim's BeaconUnheld verdict recovers. The release is deliberately
-	// discarded: process exit is the intended release point, and the kernel
-	// performs it on every death mode — that IS the liveness signal.
-	// [LAW:no-ambient-temporal-coupling] Failure to take the hold never skips
-	// the spawn (the mirror's own hold still answers moments later; the cost
-	// is transient false-residue reads), but it is loud.
-	if _, beaconErr := store.HoldMirrorBeacon(ctx, ws.DatabasePath); beaconErr != nil {
-		fmt.Fprintf(os.Stderr, "lit: mirror beacon not held by claimant (%v); racing claims may spawn redundant mirrors\n", beaconErr)
-	}
 	// An owned claim that turns out unspawnable is released BEFORE the
 	// completion effects below: the completion can run the owner-notify hook
 	// to its cap, and mutations landing during it must not read the doomed
-	// claim as live coverage. [LAW:no-ambient-temporal-coupling]
+	// claim as live coverage. Claim and answering hold share one lifetime —
+	// both minted in claimMirrorPending, both released here — so an
+	// un-claimed claimant also stops reading as an answerer the instant its
+	// obligation ends, instead of its stale hold covering later markers it
+	// will never clear. Only the successful-spawn path below keeps the hold:
+	// it is deliberately abandoned to process exit (the kernel's on-death
+	// release IS the liveness signal), overlapping the spawned mirror's own
+	// hold taken at that mirror's entry while this process still lives, so
+	// burst observers coalesce through the whole spawn window.
+	// [LAW:no-ambient-temporal-coupling]
 	releaseClaim := func() {
 		if ownsClaim {
 			clearMirrorPending(ws)
+			releaseAnswer()
 		}
 	}
 	// Cheap precondition, mirroring receiveInline's own check: a remote-less

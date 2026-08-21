@@ -98,15 +98,16 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if mirrorPendingSet(ws) {
 		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
 	}
-	// The claimant answers for the claim it took (even one it then released):
-	// its shared beacon hold, held to process exit, is what lets racing
-	// claims during the spawn window read BeaconAnswered and coalesce.
+	// Claim and answering hold share one lifetime: the remote-less path
+	// released its claim above, so its beacon hold must be gone with it — a
+	// stale answering hold here would falsely cover later markers this
+	// command will never clear.
 	verdict, err := store.ProbeMirrorBeacon(ws.DatabasePath)
 	if err != nil {
-		t.Fatalf("probe beacon after claim: %v", err)
+		t.Fatalf("probe beacon after released claim: %v", err)
 	}
-	if verdict != store.BeaconAnswered {
-		t.Fatalf("a claiming command must hold the beacon shared until exit; want BeaconAnswered, got %v", verdict)
+	if verdict != store.BeaconUnheld {
+		t.Fatalf("an un-claimed claimant must stop answering the instant its obligation ends; want BeaconUnheld, got %v", verdict)
 	}
 	stamped := info.ModTime()
 
