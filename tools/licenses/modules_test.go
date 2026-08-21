@@ -84,7 +84,10 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		// paired with a directory belonging to a DIFFERENT module at a
 		// DIFFERENT version. The record must carry that, or a license read out
 		// of that directory gets reported against a coordinate whose source
-		// was never opened.
+		// was never opened. The pins below are a frozen illustration of that
+		// shape, deliberately not kept in step with go.mod — the fork-pin
+		// synchronization lives in forks_test.go, and re-quoting live pins
+		// here would just add another copy for it to chase.
 		in := "github.com/dolthub/dolt/go\tv0.40.5-0.20260314011441-62975ef6bf36\t" +
 			"/mod/github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\t" +
 			"github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073\n"
@@ -99,6 +102,28 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 			t.Errorf("module reports IsReplaced()=false despite a replacement: %+v", got[0])
 		}
 		if want := "github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073"; got[0].ReplacedBy != want {
+			t.Errorf("ReplacedBy = %q, want %q", got[0].ReplacedBy, want)
+		}
+	})
+
+	t.Run("carries a directory replacement, which has no version", func(t *testing.T) {
+		// The other replacement shape this repo's go.mod produces: a local
+		// directory (the vendored driver), where linkedModuleTemplate emits
+		// Replace.Path bare because Replace.Version is empty. Pins frozen as
+		// illustration, per the note on the versioned case above.
+		in := "github.com/dolthub/driver\tv0.2.1-0.20260314000741-0fe74e7ee31a\t" +
+			"/repo/internal/vendor/dolthub-driver\t./internal/vendor/dolthub-driver\n"
+		got, err := parseModuleList(in)
+		if err != nil {
+			t.Fatalf("parseModuleList: %v", err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("got %d modules, want 1: %+v", len(got), got)
+		}
+		if !got[0].IsReplaced() {
+			t.Errorf("module reports IsReplaced()=false despite a directory replacement: %+v", got[0])
+		}
+		if want := "./internal/vendor/dolthub-driver"; got[0].ReplacedBy != want {
 			t.Errorf("ReplacedBy = %q, want %q", got[0].ReplacedBy, want)
 		}
 	})
