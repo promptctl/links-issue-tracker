@@ -148,10 +148,12 @@ the module imports, and its `gen` package was the sole importer of
 author's renamed account, at the identical pseudo-version timestamp. Both
 coordinates classify as Unknown (a hand-written, profane WTFPL variant no
 classifier matches), which is the row the licensing epic treats as the worst
-kind. No chunk boundary moves: nothing on the write path changed, verified by
-building a 200k-tuple prolly tree against the pins on both sides of this patch
-and comparing the root hash and all 2,257 chunk addresses — byte-identical
-(recorded on `links-licensing-c0ce.6`).
+kind. No chunk boundary moves: nothing on the write path changed, verified
+twice against the pins on both sides of this patch — a 200k-tuple prolly tree
+built under each yields the identical root hash and identical 2,257 chunk
+addresses, and enumerating every chunk of a real pre-existing lit workspace
+store (56,933 across newgen and oldgen) under each is byte-identical in
+address and size (both runs recorded on `links-licensing-c0ce.6`).
 
 **Retire it when** upstream itself deletes the dead rolling-hash path or drops
 buzhash, and the `require` line moves past that change. Until then, a rebase
@@ -262,8 +264,8 @@ picks up on every merge, and `-check` itself runs again in `release-validate`.
 
 What that proves today is narrower than it sounds: nothing outside the
 committed policy entered the linked set, and no more. It does not yet prove the absence of
-copyleft, because `policy.json` still allows MPL-2.0 and still carries two
-reviewed exceptions. Emptying it is the last ticket of the `links-licensing-c0ce`
+copyleft, because `policy.json` still allows MPL-2.0 and still carries a
+reviewed exception (fslock's). Emptying it is the last ticket of the `links-licensing-c0ce`
 epic; until then, read a green `-check` as "no new license slipped in," not as
 "no copyleft is linked."
 
