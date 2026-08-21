@@ -326,6 +326,20 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	// Auto-migrate stale schemas so read paths don't fail on missing columns/tables.
 	// Unlike Open, this does NOT call EnsureDatabase — the DB must already exist.
 	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+		// One interleaving reaches here with the raw read-only line: this open
+		// won the commit-lock race against a journal-lock holder (a snapshot
+		// copy takes LOCK, then commit), the lazy read engine resolved under
+		// that held LOCK into Dolt's permanent read-only fallback, and a
+		// pending migration's DDL then failed. No recovery inside this hold
+		// can succeed — a re-resolved engine meets the same held LOCK, and
+		// waiting the holder out here would hold commit against the declared
+		// LOCK-before-commit order — so the correct action is the caller's:
+		// release everything (below) and retry the open after the holder
+		// finishes. Classify with that guidance. [LAW:no-silent-failure] the
+		// failure stays loud; only its actionability changes.
+		if isManifestReadOnlyError(err) {
+			err = fmt.Errorf("this read open needed to apply pending schema migrations, but another process (a snapshot copy or a live writer) is holding the store read-only; retry after it completes: %w", err)
+		}
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
