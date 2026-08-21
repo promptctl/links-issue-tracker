@@ -35,7 +35,9 @@ import (
 // typed seam shared with every other flock-backed coordination point (e.g.
 // dbsnapshot's snapshot-producer beacon). This file keeps only the lock
 // *meanings*: which path, which mode, which retry budget, and which
-// operator guidance wraps contention.
+// operator guidance wraps contention. The lock discipline itself — the one
+// primitive, the acquisition order, and where lock files live — is declared
+// in package filelock's doc; read it before adding a coordination point.
 
 // ErrWorkspaceBusy is the sentinel every workspace-lock contention error
 // wraps. Callers detect contention with errors.Is(err, ErrWorkspaceBusy)
