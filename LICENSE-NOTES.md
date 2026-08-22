@@ -19,8 +19,9 @@ binary is what the `-check` gate covers. A module that is merely *named* in
 some other module's `go.mod` gets only a `<version>/go.mod` hash line — Go
 records it to make version selection reproducible, but never fetches its
 source for a build. The second kind is bookkeeping, not a dependency: no
-code from it is compiled, linked, tested, or shipped. Nearly every finding
-below is the second kind.
+code from it is compiled, linked, tested, or shipped. Each section below
+names which shape its module takes — and whatever the shape, none of them
+places a line of the flagged code in the shipped binary.
 
 ## The GPL row: `github.com/golang/freetype`
 
