@@ -26,15 +26,27 @@ type wireBOM struct {
 		} `json:"component"`
 	} `json:"metadata"`
 	Components []struct {
-		Type     string `json:"type"`
-		Name     string `json:"name"`
-		Version  string `json:"version"`
-		PURL     string `json:"purl"`
-		Licenses []struct {
+		Type        string `json:"type"`
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+		PURL        string `json:"purl"`
+		Licenses    []struct {
 			License struct {
-				ID   string `json:"id"`
-				Name string `json:"name"`
+				ID              string `json:"id"`
+				Name            string `json:"name"`
+				Acknowledgement string `json:"acknowledgement"`
 			} `json:"license"`
+			// CycloneDX's sibling arm for a compound SPDX grant. Decoded here
+			// so a test can prove which arm a license landed in: a scanner
+			// reading one arm sees nothing at all of a value filed in the
+			// other, so "it serialized" is not the contract — "it serialized
+			// where SPDX-aware consumers look" is.
+			Expression string `json:"expression"`
+			// Set on a row lit concluded rather than read off a notice, so a
+			// consumer can tell an election from a contradiction of whatever
+			// grant it resolves for the coordinate on its own.
+			Acknowledgement string `json:"acknowledgement"`
 		} `json:"licenses"`
 	} `json:"components"`
 }
@@ -121,6 +133,9 @@ func TestWriteSBOMComponentFields(t *testing.T) {
 	if dolt.Licenses[0].License.ID != "" {
 		t.Errorf("dolt license.id = %q, want empty (name, not id, is used)", dolt.Licenses[0].License.ID)
 	}
+	if dolt.Licenses[0].Expression != "" {
+		t.Errorf("dolt license expression = %q, want empty — a single SPDX id belongs in license.name, not the expression arm", dolt.Licenses[0].Expression)
+	}
 
 	ali := bom.Components[byName["github.com/aliyun/aliyun-oss-go-sdk"]]
 	if ali.PURL != "pkg:golang/github.com/aliyun/aliyun-oss-go-sdk@v3.0.2%2Bincompatible" {
@@ -130,6 +145,76 @@ func TestWriteSBOMComponentFields(t *testing.T) {
 	mystery := bom.Components[byName["example.com/mystery"]]
 	if len(mystery.Licenses) != 0 {
 		t.Errorf("unclassified module got licenses %+v, want none (no fabricated Unknown)", mystery.Licenses)
+	}
+}
+
+// TestSBOMLicenseArmsAreExclusive pins CycloneDX 1.6's `oneOf` on each element
+// of licenses[]: a choice carries EITHER a `license` object OR an `expression`
+// string, never both and never neither. The schema enforces this, but
+// cyclonedx-cli only runs on the release path — by design, to keep an external
+// pinned-binary download off the PR critical path — so a change that populated
+// both arms would first surface at tag-cut time, after the ephemeral-tag build.
+// Decoding into generic maps rather than wireBOM is what makes the check real:
+// a hand-written struct cannot tell an absent `license` key from a zero-valued
+// one, which is exactly the distinction the invariant is about.
+// [LAW:verifiable-goals] this is the offline proof of the document shape the
+// release validator would otherwise be the first to see.
+func TestSBOMLicenseArmsAreExclusive(t *testing.T) {
+	entries, err := buildEntries(litPkg)
+	if err != nil {
+		t.Fatalf("buildEntries(%s): %v", litPkg, err)
+	}
+	var buf bytes.Buffer
+	if err := WriteSBOM(&buf, entries, "9.9.9"); err != nil {
+		t.Fatalf("WriteSBOM: %v", err)
+	}
+	var doc struct {
+		Components []map[string]any `json:"components"`
+	}
+	if err := json.Unmarshal(buf.Bytes(), &doc); err != nil {
+		t.Fatalf("emitted SBOM is not valid JSON: %v", err)
+	}
+
+	checked := 0
+	for _, c := range doc.Components {
+		raw, ok := c["licenses"]
+		if !ok {
+			continue
+		}
+		choices, ok := raw.([]any)
+		if !ok {
+			t.Fatalf("component %v: licenses is %T, want an array", c["name"], raw)
+		}
+		if len(choices) != 1 {
+			t.Errorf("component %v: %d license choices, want exactly 1", c["name"], len(choices))
+		}
+		for _, ch := range choices {
+			choice, ok := ch.(map[string]any)
+			if !ok {
+				t.Fatalf("component %v: license choice is %T, want an object", c["name"], ch)
+			}
+			_, hasLicense := choice["license"]
+			_, hasExpression := choice["expression"]
+			if hasLicense == hasExpression {
+				t.Errorf("component %v: license choice has license=%v expression=%v, want exactly one arm: %v",
+					c["name"], hasLicense, hasExpression, choice)
+			}
+			// The acknowledgement is arm-dependent in the same `oneOf`, and
+			// getting it wrong is invisible to any struct-shaped test. The name
+			// arm permits NO key but `license` (additionalProperties: false), so
+			// an acknowledgement hoisted to choice level there is schema-invalid
+			// even though it round-trips through Go without complaint; on the
+			// expression arm the same key is legal. Key presence in the raw map
+			// is the only way to state that difference.
+			if _, ackAtChoiceLevel := choice["acknowledgement"]; hasLicense && ackAtChoiceLevel {
+				t.Errorf("component %v: acknowledgement sits beside `license`, which CycloneDX 1.6 forbids — it belongs inside the license object: %v",
+					c["name"], choice)
+			}
+			checked++
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no license choices found in the SBOM; the invariant went unchecked")
 	}
 }
 
