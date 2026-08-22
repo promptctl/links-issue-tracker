@@ -87,6 +87,27 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 			t.Errorf("%s license expression = %q, want %q", tc.name, got, tc.expression)
 		}
 	}
+
+	// The two rows lit concluded rather than read off a notice must say so in
+	// the field CycloneDX defines for it. zstd is the sharp case: upstream
+	// declares BSD-3-Clause OR GPL-2.0-only, so a scanner resolving zstd 1.5.6
+	// on its own and finding lit's single BSD-3-Clause row needs to see this
+	// marked as an election, not read it as a contradiction of the dual grant.
+	for _, tc := range []struct{ name, want string }{
+		{"zstd", "concluded"},        // elected one arm of a dual license
+		{"compiler-rt", "concluded"}, // expression composed from the ported sources' headers
+		{"icu", ""},                  // upstream's own grant, reported as-is
+		{"musl", ""},
+	} {
+		c := bom.Components[byName[tc.name]]
+		got := c.Licenses[0].Acknowledgement
+		if got == "" {
+			got = c.Licenses[0].License.Acknowledgement
+		}
+		if got != tc.want {
+			t.Errorf("%s license acknowledgement = %q, want %q", tc.name, got, tc.want)
+		}
+	}
 }
 
 // TestLicenseChoiceArms is the accept/reject table for the one decision that
@@ -106,7 +127,7 @@ func TestLicenseChoiceArms(t *testing.T) {
 		{"BSD-3-Clause OR GPL-2.0-only", "", "BSD-3-Clause OR GPL-2.0-only"},
 		{"Apache-2.0 WITH LLVM-exception", "", "Apache-2.0 WITH LLVM-exception"},
 	} {
-		got := licenseChoice(tc.in)
+		got := licenseChoice(tc.in, "")
 		name := ""
 		if got.License != nil {
 			name = got.License.Name
@@ -174,6 +195,15 @@ func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 		t.Fatalf("WriteBundle: %v", err)
 	}
 	for _, n := range nativeLibs {
+		// The empty note is checked explicitly, not left to the Contains below.
+		// "Note: "+"" is just "Note: ", which any other lib's note satisfies —
+		// so a native lib added without one would sail through this loop while
+		// nothing in THIRD_PARTY_LICENSES documented it. Every curated native
+		// lib carries a note; that is the inventory's contract, asserted here.
+		if n.note == "" {
+			t.Errorf("native lib %s has no note; every curated native lib must disclose what its notice covers", n.name)
+			continue
+		}
 		if !strings.Contains(bundle.String(), "Note: "+n.note) {
 			t.Errorf("THIRD_PARTY_LICENSES is missing %s's note", n.name)
 		}

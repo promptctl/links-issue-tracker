@@ -47,6 +47,9 @@ type nativeLib struct {
 	license string
 	text    string
 	note    string
+	// acknowledgement is acknowledgementConcluded for a lib whose license row
+	// lit arrived at rather than read off the notice — see Entry.Acknowledgement.
+	acknowledgement string
 }
 
 // nativeLibs is the curated native-library inventory. Versions are pinned to the
@@ -87,13 +90,15 @@ type nativeLib struct {
 // so they carry notes, and the notes ship in all three artifacts.
 var nativeLibs = []nativeLib{
 	{name: "icu", version: "75.1", license: "Unicode-3.0", text: icuLicenseText,
-		note: "ICU 75.1 is Unicode-3.0; its LICENSE at release-75-1 is byte-identical to the embedded copy. That file's Third-Party Software Licenses section carries further notices for components included within the ICU libraries — the pre-57 ICU License and the BSD-licensed cjdict.txt word-break data among them — and the embedded copy reproduces each verbatim. The three GNU GPL blocks the same file lists cover aclocal.m4, config.guess and install-sh: autotools build scripts, not code in any linked library."},
+		note: "ICU 75.1 is Unicode-3.0; its LICENSE at release-75-1 is byte-identical to the embedded copy. That file's Third-Party Software Licenses section carries further notices for components included within the ICU libraries — the pre-57 ICU License and the BSD-licensed cjdict.txt word-break data among them — and the embedded copy reproduces each verbatim. The two GNU GPL blocks the same file lists cover aclocal.m4 and config.guess, and the install-sh block beside them is MIT/X11: autotools build scripts, not code in any linked library."},
 	{name: "zstd", version: "1.5.6", license: "BSD-3-Clause", text: zstdLicenseText,
-		note: "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
+		acknowledgement: acknowledgementConcluded,
+		note:            "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText,
 		note: "musl's COPYRIGHT is upstream's own grant for the library as a whole: MIT, with portions derived from third-party works under terms upstream states are compatible with that MIT license — the TRE regular-expression code (2-clause BSD), the ARM and AArch64 memcpy/memset routines, and David Burren's DES implementation (BSD) among them. The embedded COPYRIGHT reproduces every one of those notices verbatim, so the attribution each requires travels with the binary."},
 	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,
-		note: "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception. Routines ported from pre-relicense LLVM sources are dual-licensed (University of Illinois/NCSA OR MIT) at the user's election; lit elects and distributes those under MIT, which the expression's MIT arm covers, so no NCSA grant is claimed. The embedded notice carries the full text of every license named here."},
+		acknowledgement: acknowledgementConcluded,
+		note:            "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception. Routines ported from pre-relicense LLVM sources are dual-licensed (University of Illinois/NCSA OR MIT) at the user's election; lit elects and distributes those under MIT, which the expression's MIT arm covers, so no NCSA grant is claimed. The embedded notice carries the full text of every license named here."},
 }
 
 // nativeEntries renders the curated native libraries as Entry values so the
@@ -106,11 +111,12 @@ func nativeEntries() []Entry {
 	entries := make([]Entry, 0, len(nativeLibs))
 	for _, n := range nativeLibs {
 		entries = append(entries, Entry{
-			Module:      Module{Path: n.name, Version: n.version},
-			LicenseName: n.license,
-			Text:        n.text,
-			Note:        n.note,
-			PackageURL:  genericPURL(n.name, n.version),
+			Module:          Module{Path: n.name, Version: n.version},
+			LicenseName:     n.license,
+			Text:            n.text,
+			Note:            n.note,
+			Acknowledgement: n.acknowledgement,
+			PackageURL:      genericPURL(n.name, n.version),
 		})
 	}
 	return entries
