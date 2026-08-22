@@ -314,17 +314,21 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 // hard rule at the graph audit's ruling site: a license this tool could not
 // read is not permitted by ANY policy, however that policy was written.
 //
-// The policies built here are the most permissive ones that can be expressed —
-// each allowlists a sentinel outright AND grants the module a root-grant
-// exception for it. parsePolicy refuses such a FILE, so both are assembled as
-// values, which is the case that matters: the ban lives at the rulings (Allows,
-// Permits) rather than in Filter's table-building, precisely so it holds for a
-// LicenseFilter nobody parsed a file to get. The second half of each iteration
-// makes that concrete by skipping Filter altogether and populating the
-// unexported tables directly — the shape a future in-package caller could write
-// by accident, and the one an earlier draft of this change did not cover while
-// three documents claimed it did. Every ruling below must be a reject.
-// [LAW:single-enforcer]
+// The policy built here is the most permissive one that can be expressed — it
+// allowlists a sentinel outright AND grants the module a root-grant exception
+// for it. parsePolicy refuses such a FILE, so it is assembled as a value, and
+// that is the case that matters: Filter copies a policy's entries verbatim, so
+// the sentinel really is a live key in both of the returned filter's tables.
+// The ban lives at the rulings (Allows, Permits) instead, which is what makes
+// it hold here rather than depending on the file having been read through the
+// parse.
+//
+// An earlier draft of this test also built a filter by hand to cover "a
+// LicenseFilter nobody parsed a file to get". Round 2 of review pointed out
+// that once Filter stopped dropping keys, the hand-built value was identical
+// to policy.Filter() and the two halves could never disagree — a second
+// assertion that could only ever repeat the first. The single filter below IS
+// the adversarial state. [LAW:single-enforcer]
 func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
 		policy := &Policy{
@@ -333,20 +337,18 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 				{Module: "excepted/mod", License: sentinel, Reason: "a reason nobody could have had"},
 			},
 		}
-		handBuilt := LicenseFilter{
-			allowed:  map[string]bool{"MIT": true, sentinel: true},
-			excepted: map[exKey]bool{{module: "excepted/mod", license: sentinel}: true},
+		filter := policy.Filter()
+		if !filter.allowed[sentinel] || !filter.excepted[exKey{module: "excepted/mod", license: sentinel}] {
+			t.Fatalf("%q: the fixture is meant to put the sentinel in BOTH tables; if Filter has started dropping it, this test is no longer testing the rulings", sentinel)
 		}
-		for name, filter := range map[string]LicenseFilter{"Filter()": policy.Filter(), "hand-built": handBuilt} {
-			if filter.Allows(sentinel) {
-				t.Errorf("%s %q: allowlisting a sentinel must not make it allowed — it names no grant", name, sentinel)
-			}
-			if filter.Permits("excepted/mod", sentinel) {
-				t.Errorf("%s %q: an exception must not reach a sentinel — it records a reading of a license that could not be read", name, sentinel)
-			}
-			if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: sentinel}) {
-				t.Errorf("%s %q: the graph audit must report a sentinel at a module's root, never suppress it", name, sentinel)
-			}
+		if filter.Allows(sentinel) {
+			t.Errorf("%q: allowlisting a sentinel must not make it allowed — it names no grant", sentinel)
+		}
+		if filter.Permits("excepted/mod", sentinel) {
+			t.Errorf("%q: an exception must not reach a sentinel — it records a reading of a license that could not be read", sentinel)
+		}
+		if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: sentinel}) {
+			t.Errorf("%q: the graph audit must report a sentinel at a module's root, never suppress it", sentinel)
 		}
 	}
 }

@@ -15,9 +15,14 @@ name: License graph audit
 # existing check staying green, and a measurement nobody takes cannot notice
 # that. Weekly is matched to how often this answer moves.
 #
-# Whether any of what it reports should FAIL a build is a separate decision that
-# belongs to links-licensing-c0ce.9, not here. This job's failure means the
-# audit itself broke.
+# Whether any of what it reports should FAIL a build was settled by
+# links-licensing-c0ce.9, and the answer is no: 140 of the 148 nested rows are
+# github.com/google/licenseclassifier's own reference corpus, present because
+# tools/licenses imports it, so a gate wired to this output would fail on master
+# for reasons that are entirely noise and be switched off within a month. This
+# job reports and exits 0. Every row it finds outside the policy has a written
+# verdict in LICENSE-NOTES.md; that document, not a build failure, is where the
+# audit is answered. This job's failure means the audit itself broke.
 
 on:
   schedule:

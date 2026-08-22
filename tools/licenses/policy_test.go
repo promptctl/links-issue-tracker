@@ -77,6 +77,34 @@ func TestParsePolicyRejectsDuplicateKeys(t *testing.T) {
 	}
 }
 
+// TestParsePolicyRejectsCaseVariantKeys pins the hole round 2 of review found
+// in the two guards above, which between them looked airtight and were not.
+//
+// encoding/json resolves an object key to a struct field case-INSENSITIVELY as
+// a fallback, so "ALLOWED_LICENSES" is not an unknown field and
+// DisallowUnknownFields never fires on it; rejectDuplicateKeys compared raw key
+// text, so it saw two different strings and no duplicate. A committed
+// policy.json could therefore show a reader `"module_exceptions": []` while the
+// gate ran against a `"MODULE_EXCEPTIONS"` holding a live exception — the exact
+// committed-text-versus-gate's-view split those guards exist to refuse,
+// arriving through the one spelling neither of them checked.
+func TestParsePolicyRejectsCaseVariantKeys(t *testing.T) {
+	for _, tc := range []struct{ why, doc string }{
+		{
+			"a case-variant allowed_licenses would decide what the gate permits",
+			`{"allowed_licenses":["MIT"],"ALLOWED_LICENSES":["GPL-3.0"],"module_exceptions":[]}`,
+		},
+		{
+			"a case-variant module_exceptions would carry a live exception past an empty-looking one",
+			`{"allowed_licenses":["MIT"],"module_exceptions":[],"MODULE_EXCEPTIONS":[{"module":"example.com/evil","license":"GPL-3.0","reason":"reads fine"}]}`,
+		},
+	} {
+		if _, err := parsePolicy([]byte(tc.doc)); err == nil {
+			t.Errorf("parsePolicy accepted a case-variant duplicate key — %s: %s", tc.why, tc.doc)
+		}
+	}
+}
+
 // TestParsePolicyRejectsMalformedAllowlistEntry pins the allowlist under the
 // same rule as exceptions: the committed text is the exact string the gate
 // matches, so a blank or padded entry never becomes a Policy.
@@ -220,9 +248,17 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 // documented exception (.4), MPL-2.0 sat in allowed_licenses to cover golang-lru
 // and go-sql-driver/mysql (.5, .2), and the Unknown sentinel was kch42/buzhash's
 // unclassifiable WTFPL variant, also on an exception (.6). Three of the four
-// therefore USED to pass this gate. links-licensing-c0ce.9 closed both routes —
-// the allowlist entry is gone and the sentinel has no exception path — so a row
-// that stops failing means one of them was re-opened. [LAW:verifiable-goals]
+// therefore USED to pass this gate, and links-licensing-c0ce.9 closed both
+// routes: the allowlist entry is gone and the sentinel has no exception path.
+//
+// Be exact about what a row here can detect, rather than claiming the table
+// catches every reopening. MPL-2.0 is the sharp one — it goes green the moment
+// someone puts MPL-2.0 back in allowed_licenses, and nothing else need change
+// for that to happen. The LGPL-3.0 and Unknown rows require a policy.json edit
+// that parsePolicy separately refuses (an Unknown exception does not load at
+// all; a copyleft allowlist entry is vetoed by classifier type), so those two
+// are a second line of defence and would report as a load failure first.
+// [LAW:verifiable-goals]
 func TestGateRejectsADeniedLicense(t *testing.T) {
 	entries, err := buildEntries(litPkg)
 	if err != nil {
@@ -258,10 +294,10 @@ func TestGateRejectsADeniedLicense(t *testing.T) {
 }
 
 // TestParsePolicyRefusesASentinelLicense pins that the committed file can never
-// STATE the rule links-licensing-c0ce.9 removed. Filter already drops a sentinel
-// from both lookup tables, so a policy naming one would be inert — and an inert
-// rule in a hand-edited compliance file is worse than a rejected one, because
-// the next reader believes it. [LAW:no-silent-failure]
+// STATE a rule it does not have. The rulings refuse a sentinel whatever the
+// lookup tables hold, so a policy naming one would be inert — and an inert rule
+// in a hand-edited compliance file is worse than a rejected one, because the
+// next reader believes it. [LAW:no-silent-failure]
 // It asserts the DIAGNOSTIC, not merely that some error came back, and that is
 // load-bearing rather than fussy. oversizeLicense is literally "Skipped
 // (oversize)", so a bare error check on that row is satisfied by the
@@ -343,13 +379,47 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 		return []byte(`{"allowed_licenses":[` + strings.Join(quoted, ",") + `],"module_exceptions":[]}`)
 	}
 
+	// Several of these rules refuse overlapping inputs, so "it errored" pins
+	// almost nothing: the OR ban and the parenthesis rule are both refusable
+	// by the arm-shape and character rules standing behind them, and a row
+	// that only checks for a non-nil error stays green when the rule it names
+	// is deleted. Round 1 of review found exactly that for the parenthesis
+	// rule; round 2 found it for the OR ban, this change's headline. So every
+	// row names the phrase its own rule produces, and a mutation that removes
+	// the rule changes the diagnostic and fails the row even when something
+	// else still refuses the input. [LAW:verifiable-goals]
+	t.Run("refused with the right diagnostic", func(t *testing.T) {
+		for _, tc := range []struct {
+			why     string
+			want    string
+			entries []string
+		}{
+			{"an OR means a dual license reached policy with its election unmade", "an election went unmade", []string{"MIT", "MIT OR GPL-2.0-only"}},
+			{"an OR is refused even when both arms are separately allowlisted", "an election went unmade", []string{"MIT", "Apache-2.0", "MIT OR Apache-2.0"}},
+			{"parentheses group an OR, whatever they contain", "is parenthesized", []string{"MIT", "Apache-2.0", "(MIT AND Apache-2.0)"}},
+			{"a single-arm parenthesized entry is refusable by nothing else", "is parenthesized", []string{"MIT", "(MIT)"}},
+			{"a bare operator is not a license name", "where an identifier belongs", []string{"MIT", "WITH"}},
+			{"a sentinel wearing an exception is still a sentinel", "no verdict", []string{"MIT", unclassifiedLicense + " WITH some-exception"}},
+			{"an invisible character parses clean and then never matches", "which no SPDX identifier", []string{"MIT", "MIT​"}},
+			{"a full-width parenthesis is not the ASCII one the paren rule sees", "which no SPDX identifier", []string{"MIT", "（MIT）"}},
+			{"a duplicated entry makes the printed count a lie", "repeats", []string{"MIT", "MIT"}},
+			{"a copyleft license may not be allowlisted at all", "which the classifier types as", []string{"MIT", "GPL-3.0"}},
+			{"nor reached through an AND-arm", "which the classifier types as", []string{"MIT", "MPL-2.0", "MIT AND MPL-2.0"}},
+		} {
+			_, err := parsePolicy(policy(tc.entries...))
+			if err == nil {
+				t.Errorf("parsePolicy accepted %v — %s", tc.entries, tc.why)
+			} else if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("parsePolicy refused %v for the wrong reason (want %q) — %s: %v", tc.entries, tc.want, tc.why, err)
+			}
+		}
+	})
+
 	t.Run("refused", func(t *testing.T) {
 		for _, tc := range []struct {
 			why     string
 			entries []string
 		}{
-			{"an OR means a dual license reached policy with its election unmade", []string{"MIT", "MIT OR GPL-2.0-only"}},
-			{"an OR is refused even when both arms are separately allowlisted", []string{"MIT", "Apache-2.0", "MIT OR Apache-2.0"}},
 			{"an AND-arm that is not itself allowlisted is a grant nobody vetted", []string{"MIT", "MIT AND GPL-2.0-only"}},
 			{"a WITH does not exempt the arm's base identifier from the rule", []string{"MIT", "MIT AND Apache-2.0 WITH LLVM-exception"}},
 			{"an arm the parser cannot decompose is one the gate cannot rule on", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 LLVM-exception"}},
@@ -363,7 +433,6 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			// whole package green while a parenthesized entry could reach the
 			// committed compliance file. A single-arm "(MIT)" is refusable by
 			// nothing else. [LAW:verifiable-goals]
-			{"parentheses group an OR and are refused even with one arm", []string{"MIT", "(MIT)"}},
 			{"a lowercase operator is not an identifier token", []string{"MIT", "MIT or GPL-2.0-only"}},
 			// This row is the only one that isolates the operator-case rule.
 			// Every other lowercase spelling is caught downstream anyway — a

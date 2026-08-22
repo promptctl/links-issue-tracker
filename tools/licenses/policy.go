@@ -9,6 +9,8 @@ import (
 	"io"
 	"sort"
 	"strings"
+
+	lc "github.com/google/licenseclassifier"
 )
 
 //go:embed policy.json
@@ -102,13 +104,10 @@ func parsePolicy(data []byte) (*Policy, error) {
 		// An exception records a human having READ a license and found it
 		// permissive. A sentinel is this tool reporting there was nothing
 		// legible to read, so an exception naming one claims a reading that
-		// cannot have happened. Filter drops it from the lookup table
-		// regardless (see licenseSentinels); refusing it here keeps the
-		// committed file from stating a rule that has no effect.
-		// [LAW:no-silent-failure]
-		if licenseSentinels[e.License] {
-			return nil, fmt.Errorf("policy.json module_exception for %s names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license has no exception path — remove the dependency instead", e.Module, e.License)
-		}
+		// cannot have happened — refused by refuseSentinel inside the call
+		// below, which is also where a sentinel hiding as an arm base gets
+		// caught. [LAW:no-silent-failure]
+		//
 		// The expression rules are about this FILE, not about the allowlist,
 		// so they hold on an exception's license too. Without this the OR ban
 		// had a door beside it: an exception reading "BSD-3-Clause OR
@@ -140,24 +139,34 @@ func checkAllowedLicenses(allowed []string) error {
 		if name == "" || name != strings.TrimSpace(name) {
 			return fmt.Errorf("policy.json allowed_licenses entry %q is blank or carries surrounding whitespace; the committed text must be the exact license name the gate matches", name)
 		}
-		// Allowlisting a sentinel says "whatever we could not identify is
-		// fine" — the precise inverse of a policy. Same reasoning as the
-		// exception guard above, and the same reason it is refused rather
-		// than ignored.
-		if licenseSentinels[name] {
-			return fmt.Errorf("policy.json allowed_licenses names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license is the one row an auditor cannot evaluate at all, and it has no allowlist path", name)
+		// A repeated entry is a merge artifact, and this change made the
+		// LENGTH of this list load-bearing in two places that are read as
+		// facts: -check's green line prints it, and the note's re-measure
+		// procedure says the distinct licenses in LICENSE-REPORT.md's summary
+		// are exactly these entries. A duplicate makes both statements false
+		// while changing nothing about what the gate permits, which is the
+		// quietest kind of wrong. [LAW:no-silent-failure]
+		if set[name] {
+			return fmt.Errorf("policy.json allowed_licenses repeats %q; the list's length is printed as a fact by -check and read as one by its note, so a duplicate makes both wrong while permitting nothing new", name)
 		}
 		set[name] = true
 	}
 	for _, name := range allowed {
-		// The vetting rule below is the allowlist's alone: an expression entry
-		// here permits the COMBINATION, so each arm has to be independently
-		// acceptable. An exception's license is not a permission at all — it
-		// names one module's grant a human read — so it gets the shape rules
-		// and not this one.
+		// The two rules below are the allowlist's alone. An entry here is a
+		// PERMISSION, so its arms have to be independently acceptable and its
+		// license has to be one this repository will actually accept. An
+		// exception's license is not a permission — it names one module's
+		// grant that a human read, and naming a license the allowlist refuses
+		// is the only reason to write one — so it gets the shape rules from
+		// parseLicenseExpression and neither of these.
 		bases, err := parseLicenseExpression("policy.json allowed_licenses entry", name)
 		if err != nil {
 			return err
+		}
+		for _, base := range bases {
+			if err := refuseCopyleftAllowlistEntry(name, base); err != nil {
+				return err
+			}
 		}
 		if len(bases) == 1 {
 			continue
@@ -169,6 +178,37 @@ func checkAllowedLicenses(allowed []string) error {
 		}
 	}
 	return nil
+}
+
+// copyleftLicenseTypes are the licenseclassifier taxonomy buckets an
+// allowlist entry may never fall in. GPL and LGPL classify "restricted",
+// MPL and EPL "reciprocal", AGPL "FORBIDDEN" — between them, every license
+// this repository's licensing epic exists to keep out of the linked set.
+//
+// It is used as a VETO and never as the authority, and the difference is the
+// whole reason this is safe to gate on. The taxonomy is Google's corporate
+// policy rather than a copyleft test — it calls WTFPL "FORBIDDEN", though
+// WTFPL is about as permissive as a license gets — and it has no opinion at
+// all about several licenses this repository legitimately ships: measured
+// against the committed list, Unicode-3.0 comes back "" and so does any
+// compound expression. A positive rule ("must classify permissive") would
+// therefore reject policy.json itself. Refusing only these three buckets
+// fails exactly on the licenses nobody here would defend, and never on a
+// license the classifier simply does not know.
+var copyleftLicenseTypes = map[string]bool{"restricted": true, "reciprocal": true, "FORBIDDEN": true}
+
+// refuseCopyleftAllowlistEntry turns "every entry is permissive" from a claim
+// the note makes into a rule the parse enforces. Before it, the only thing
+// standing between allowed_licenses and a GPL entry was a reader — which is
+// precisely the sentence this file's note spends a paragraph saying not to
+// trust, about a different array.
+func refuseCopyleftAllowlistEntry(entry, base string) error {
+	kind := lc.LicenseType(base)
+	if !copyleftLicenseTypes[kind] {
+		return nil
+	}
+	return fmt.Errorf("policy.json allowed_licenses entry %q grants under %q, which the classifier types as %q; this list is permissive-only and adding a copyleft license to it is not the way past a red gate — remove the dependency instead",
+		entry, base, kind)
 }
 
 // parseLicenseExpression reads one license-valued field of policy.json as an
@@ -200,6 +240,13 @@ func checkAllowedLicenses(allowed []string) error {
 //     The gate matches by exact string and will not rule on an expression it
 //     had to guess the meaning of. [LAW:no-silent-failure]
 func parseLicenseExpression(where, name string) ([]string, error) {
+	// Ahead of every shape rule, because the sentinel's own spelling is
+	// "Skipped (oversize)" and the parenthesis rule below would otherwise
+	// answer it with advice about grouping ORs. The diagnostic a hand-edited
+	// compliance file gives back is part of what the file is for.
+	if err := refuseSentinel(where, name); err != nil {
+		return nil, err
+	}
 	fields := strings.Fields(name)
 	if strings.Join(fields, " ") != name {
 		return nil, fmt.Errorf("%s %q carries repeated, tabbed, or wrapped whitespace; the gate matches this file byte for byte, so this would parse here and then be reported as a non-allowlisted license naming a string the file appears to carry", where, name)
@@ -207,15 +254,33 @@ func parseLicenseExpression(where, name string) ([]string, error) {
 	if strings.ContainsAny(name, "()") {
 		return nil, fmt.Errorf("%s %q is parenthesized; SPDX parentheses group an OR, and an elected license reaches this file as a single identifier", where, name)
 	}
+	// SPDX identifiers are drawn from letters, digits, `.`, `-` and `+`, and
+	// an expression joins them with single spaces. Anything else is refused
+	// for the same reason the whitespace rule above refuses a tab: it is
+	// invisible or near-invisible in an editor, it survives every check that
+	// tokenizes rather than compares, and the gate then reports a
+	// non-allowlisted license naming a string the file appears to carry. A
+	// zero-width space inside "MIT", or a full-width parenthesis, are the two
+	// shapes that got here. [LAW:one-source-of-truth]
+	for _, r := range name {
+		if !isSPDXRune(r) {
+			return nil, fmt.Errorf("%s %q carries the character %q (U+%04X), which no SPDX identifier or expression contains; the gate compares this file byte for byte and would report the entry as non-allowlisted while it looks correct on screen", where, name, r, r)
+		}
+	}
 	var arms [][]string
 	arm := []string{}
 	for _, field := range fields {
-		// [LAW:one-source-of-truth] spdxOperators is the SBOM's arm
-		// discriminator (sbom.go); recognizing operators from that one set
-		// keeps the gate and the rendered document from disagreeing about
-		// which tokens are operators at all. What each does with the answer
-		// still differs, and should: the SBOM asks "is this an expression",
-		// this asks "is it a combination".
+		// [LAW:one-source-of-truth] the operator SET is spdxOperators, the
+		// SBOM's arm discriminator (sbom.go), so a token added there is an
+		// operator here too and neither file keeps its own list.
+		//
+		// Only the set is shared, and the two LOOKUPS differ on purpose:
+		// sbom.go tests the raw token because it must render whatever string
+		// it is handed, while this upper-cases first in order to CATCH a
+		// non-canonical spelling and refuse it two cases below. They also
+		// answer different questions — the SBOM asks "is this an expression",
+		// this asks "is it a combination" — which is why "Apache-2.0 WITH
+		// LLVM-exception" is an expression there and a single arm here.
 		canonical := strings.ToUpper(field)
 		switch {
 		case !spdxOperators[canonical]:
@@ -235,16 +300,54 @@ func parseLicenseExpression(where, name string) ([]string, error) {
 
 	bases := make([]string, 0, len(arms))
 	for _, arm := range arms {
+		var base string
 		switch {
 		case len(arm) == 1:
-			bases = append(bases, arm[0])
+			base = arm[0]
 		case len(arm) == 3 && arm[1] == "WITH":
-			bases = append(bases, arm[0])
+			base = arm[0]
 		default:
 			return nil, fmt.Errorf("%s %q has an arm %q that is neither an SPDX identifier nor an identifier WITH an exception; the gate matches this file by exact string and will not rule on an expression it cannot decompose", where, name, strings.Join(arm, " "))
 		}
+		// Shape was checked by token COUNT, which says nothing about what the
+		// tokens are. Two values pass that count and are not licenses: a bare
+		// operator ("WITH" alone is one token, so it read as an identifier),
+		// and a sentinel wearing an exception ("Unknown WITH some-exception"
+		// is three tokens with WITH in the middle, and the whole-string
+		// sentinel check above never sees the decomposed base).
+		if spdxOperators[base] {
+			return nil, fmt.Errorf("%s %q uses the SPDX operator %q where an identifier belongs; an operator is not a license name", where, name, base)
+		}
+		if err := refuseSentinel(where, base); err != nil {
+			return nil, err
+		}
+		bases = append(bases, base)
 	}
 	return bases, nil
+}
+
+// isSPDXRune reports whether r may appear in an SPDX identifier or in the
+// expression syntax joining identifiers. Deliberately a closed set rather
+// than a unicode category test: the values this refuses are the ones that
+// LOOK right in an editor, so "is it printable" is the wrong question.
+func isSPDXRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return r == '.' || r == '-' || r == '+' || r == ' '
+}
+
+// refuseSentinel rejects one of this tool's own no-verdict markers wherever a
+// license name is expected. [LAW:one-source-of-truth] both fields of
+// policy.json and every decomposed arm reach it here, so the rule is stated
+// once — an earlier draft spelled it separately for allowed_licenses and for
+// module_exceptions and still missed the arm.
+func refuseSentinel(where, name string) error {
+	if !licenseSentinels[name] {
+		return nil
+	}
+	return fmt.Errorf("%s names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license is the one row an auditor cannot evaluate at all, and it has neither an allowlist nor an exception path — remove the dependency instead", where, name)
 }
 
 // rejectDuplicateKeys walks the document's tokens and errors on any key
@@ -281,10 +384,23 @@ func rejectDuplicateKeys(data []byte) error {
 		case string:
 			top := len(seen) - 1
 			if expectKey && top >= 0 && seen[top] != nil {
-				if seen[top][t] {
-					return fmt.Errorf("policy.json repeats the key %q within one object; a duplicated key silently drops one of its values from the gate's view", t)
+				// Compared case-INSENSITIVELY, because that is how the
+				// decoder above resolves a key to a struct field:
+				// encoding/json falls back to a case-insensitive match, so
+				// "ALLOWED_LICENSES" is not an unknown field and
+				// DisallowUnknownFields never fires on it. Two spellings that
+				// differ only in case are therefore one field to the decoder
+				// and two distinct strings here — which is exactly the gap
+				// this walk exists to close. Left case-sensitive, a policy
+				// could carry a visible `"module_exceptions": []` beside a
+				// `"MODULE_EXCEPTIONS"` holding a live exception, and the
+				// gate would run on the second while a reader saw the first.
+				// [LAW:no-silent-failure]
+				key := strings.ToLower(t)
+				if seen[top][key] {
+					return fmt.Errorf("policy.json repeats the key %q within one object (compared case-insensitively, as encoding/json resolves field names); a duplicated key silently drops one of its values from the gate's view", t)
 				}
-				seen[top][t] = true
+				seen[top][key] = true
 				expectKey = false
 			} else {
 				expectKey = len(seen) > 0 && seen[len(seen)-1] != nil
@@ -334,9 +450,16 @@ type LicenseFilter struct {
 // has no verdict here" — isLicenseText (graph.go) and partitionGraph's
 // unclassified case (graph_report.go) both read it rather than re-listing the
 // two constants, which is how they used to be written. A third sentinel added
-// to this map is therefore barred from the policy, kept as a license hit
-// whatever the file is named, and filed under the report's unclassified
-// section, all without a second edit to remember.
+// to this map is therefore barred from the policy, judged by isLicenseText
+// under the rule for a file nobody could read rather than the rule for a
+// recognised grant, and filed under the report's unclassified section — all
+// without a second edit to remember.
+//
+// Note which way that middle one runs: membership here makes a hit LESS
+// automatically kept, not more. isLicenseText keeps anything the classifier
+// recognised whatever the file is called, and gates everything else on the
+// extension, because an unreadable `.go` fixture is machine content while an
+// unreadable `COPYING` is the worst row in the audit.
 var licenseSentinels = map[string]bool{unclassifiedLicense: true, oversizeLicense: true}
 
 // Filter compiles the policy into its accept/reject rule once, so a caller
@@ -441,7 +564,7 @@ func runCheck(pkg string, stdout io.Writer) error {
 		// pressure, documenting their way past it with a persuasive reason.
 		// Pointing them at an exception as the ordinary next step is how that
 		// happens. An "Unknown" row has no such step at all.
-		b.WriteString("Resolve by removing the dependency, or — if the license is genuinely permissive and something lit ships now carries it — adding it to allowed_licenses in tools/licenses/policy.json. A module reported as \"Unknown\" carries neither route: nobody can say what its license permits, so it must go.")
+		b.WriteString("Resolve by removing the dependency, or — if the license is genuinely permissive and something lit ships now carries it — adding it to allowed_licenses in tools/licenses/policy.json. If that license is a compound expression, add each of its AND-arms on its own line too, or the file stops loading at all and takes -check, -graph and artifact generation down with it. A module reported as \"Unknown\" carries neither route: nobody can say what its license permits, so it must go.")
 		return fmt.Errorf("%s", b.String())
 	}
 	// The green line says what the gate proved, and it must not advertise the
@@ -451,7 +574,7 @@ func runCheck(pkg string, stdout io.Writer) error {
 	// than the word "excepted" so that a reader learns the array is empty from
 	// the gate's own output — the guarantee FORKS.md says a green -check
 	// carries — instead of having to go and check.
-	fmt.Fprintf(stdout, "license policy OK: all %d components are under one of the %d allowlisted licenses, with %d module exceptions in force\n",
+	fmt.Fprintf(stdout, "license policy OK: all %d components cleared the policy's %d allowlisted licenses and %d module exceptions\n",
 		len(entries), len(policy.AllowedLicenses), len(policy.ModuleExceptions))
 	return nil
 }

@@ -328,10 +328,21 @@ guarantee does not depend on the file having been read through the parse. A
 module whose license nobody can read fails this gate,
 which is the row it would be easiest to talk past.
 
-Read it as narrowly as it is written, though: `-check` rules on each linked
-module's own license grant, the file a coordinate scanner reports. A copyleft
-text sitting deeper inside a linked module's tree is a different question, and
-`-graph` below is where it gets answered.
+Read it as narrowly as it is written, though, on both axes.
+
+`-check` rules on each linked module's own license grant — the file a
+coordinate scanner reports. A copyleft text sitting deeper inside a linked
+module's tree is a different question, and `-graph` below is where it gets
+answered.
+
+And it rules on the linked set of **the platform it runs on**. `go list -deps`
+resolves a platform-dependent set, so "every module linked into the binary" is
+a claim about *a* binary: linux/amd64 links 154 components where darwin links
+153 (`github.com/klauspost/cpuid/v2`). Both were checked for this change, and
+CI runs Linux, which is the platform the release artifacts are built for — but
+a rebase that reinstates an import behind a build tag for a third platform is
+not covered by a green run on either of these two. Run `-check` with `GOOS` set
+if a patch touches platform-specific code.
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run
