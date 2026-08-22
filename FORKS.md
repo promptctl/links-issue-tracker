@@ -314,9 +314,15 @@ the same policy is asserted by `TestDependencyLicensesArePermitted`, which
 
 A green `-check` now says the whole thing it appears to say: **every module
 linked into the binary is under a permissive license, and every one of them was
-identified.** Both halves took work to earn. `module_exceptions` is empty (patch
-4 removed the last one, fslock's, and `TestLoadPolicyEmbedded` pins it staying
-empty), so no linked module is excused by anything. `allowed_licenses` names
+identified.** Both halves took work to earn, and the first rests on an empty
+array rather than on a rule. `module_exceptions` is empty (patch 4 removed the
+last one, fslock's, and `TestLoadPolicyEmbedded` pins it staying empty), so no
+linked module is excused by anything — and note that an exception is the one
+accept shape carrying no permissiveness rule at all, deliberately, since naming
+a license the allowlist refuses is the only reason to write one. fslock's
+exception named an LGPL. So re-opening that array does not merely add a row: it
+weakens this paragraph, which is a second reason it is the owner's call.
+`allowed_licenses` names
 nine permissive licenses and nothing else — `links-licensing-c0ce.9` deleted
 MPL-2.0, WTFPL and ISC once measurement showed nothing linked carried any of
 them, so there is no longer a copyleft license sitting in the list for the gate
@@ -341,8 +347,25 @@ a claim about *a* binary: linux/amd64 links 154 components where darwin links
 153 (`github.com/klauspost/cpuid/v2`). Both were checked for this change, and
 CI runs Linux, which is the platform the release artifacts are built for — but
 a rebase that reinstates an import behind a build tag for a third platform is
-not covered by a green run on either of these two. Run `-check` with `GOOS` set
-if a patch touches platform-specific code.
+not covered by a green run on either of these two.
+
+To check another platform, build the tool natively and then set the target on
+the run — and set `CGO_ENABLED` with it:
+
+```sh
+go build -o /tmp/lic ./tools/licenses
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 /tmp/lic -check -pkg ./cmd/lit
+```
+
+Both halves matter. `GOOS=linux go run ./tools/licenses` cross-*builds* the
+tool and dies with `exec format error`, because the tool takes its target from
+the environment rather than a flag. And cross-compiling defaults `CGO_ENABLED`
+to 0, which resolves a module set that is neither platform's — it drops
+`github.com/dolthub/go-icu-regex`, which darwin links, and adds
+`github.com/klauspost/cpuid/v2`, which darwin does not — and then prints a
+green line with a component count that happens to match darwin's exactly. A
+verification step whose whole purpose is catching a reinstated import must not
+have a mode that quietly gates the wrong set.
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run

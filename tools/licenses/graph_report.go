@@ -62,13 +62,20 @@ const (
 //
 // What three rows is chosen against is the elision itself: a module whose run
 // exceeds the cap has its remainder replaced by a count, so anything after the
-// third row of that module is no longer readable in place. Today the only runs
-// long enough are the classifier corpus's (nested, and unclassified) and
-// gonum's four unclassified THIRD_PARTY_LICENSES entries — the latter already
-// elided before this change and not caused by it. Every row about lit's own
-// obligations is its module's first or second and is printed. Raising the cap
-// is the right response if that stops being true; it is not a claim that can
-// be left to age.
+// third row of that module is no longer readable in place. Measured on this
+// branch, two runs already exceed it — the classifier corpus's (nested, and
+// unclassified) and gonum's four unclassified THIRD_PARTY_LICENSES entries,
+// the latter already elided before the allowlist change and not caused by it.
+//
+// One run sits exactly ON the cap and is worth naming rather than rounding
+// off: github.com/apache/thrift contributes three unclassified rows
+// (contrib/fb303/LICENSE, debian/copyright, lib/dart/LICENSE), and thrift is
+// LINKED — Apache-2.0, in LICENSE-REPORT.md. So an unidentifiable license file
+// inside the link closure is printed only because its module has exactly three
+// such files, and one more would replace it with a count. That is one file
+// away from the audit eliding a row of the kind this section calls worse than
+// a known copyleft one. Raise the cap when it happens; do not read the current
+// output as evidence that it cannot.
 const rowsPerModule = 3
 
 // elidePerModule caps each module's run of rows at rowsPerModule, replacing
@@ -206,11 +213,17 @@ func rootGrantLicense(hits []LicenseHit) string {
 // suite, the unchosen half of a dual license — while the genuine obligations
 // number a handful. A gate wired to fail on all of it would fail on master on
 // the day it landed, for reasons that are mostly noise, and a gate that cries
-// wolf gets switched off within a month. Deciding WHICH of these rows a gate
-// should fail on is what the written finding this report feeds exists to
-// settle. [LAW:verifiable-goals] done here means the graph is measured by a
-// re-runnable tool instead of by hand; it does not mean the build now enforces
-// what the measurement found.
+// wolf gets switched off within a month.
+//
+// That is settled now rather than pending, and this comment used to defer it
+// to a ticket that has since decided it: links-licensing-c0ce.9's answer is
+// that graph mode never gates. The number behind the answer is above, at
+// rowsPerModule — 140 of the 148 nested rows are one dependency's reference
+// corpus. What stands in for a gate is a written verdict per row, in
+// LICENSE-NOTES.md, which FORKS.md points at and which this report's sections
+// are shaped to feed. [LAW:verifiable-goals] done here means the graph is
+// measured by a re-runnable tool instead of by hand, and every row it finds is
+// answered in prose — not that the build enforces what the measurement found.
 func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) error {
 	hits := 0
 	for _, e := range entries {

@@ -108,14 +108,37 @@ func TestParsePolicyRejectsCaseVariantKeys(t *testing.T) {
 // TestParsePolicyRejectsMalformedAllowlistEntry pins the allowlist under the
 // same rule as exceptions: the committed text is the exact string the gate
 // matches, so a blank or padded entry never becomes a Policy.
+//
+// The diagnostic is asserted, not merely the error: parseLicenseExpression's
+// character and whitespace rules refuse both of these inputs on their own, so
+// a bare error check leaves this rule deletable with the suite green while a
+// padded entry starts being answered with advice about wrapped whitespace.
 func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
+	const want = "is blank or carries surrounding whitespace"
 	for _, bad := range []string{
 		`{"allowed_licenses":["MIT",""],"module_exceptions":[]}`,
 		`{"allowed_licenses":[" MIT "],"module_exceptions":[]}`,
 	} {
-		if _, err := parsePolicy([]byte(bad)); err == nil {
+		_, err := parsePolicy([]byte(bad))
+		if err == nil {
 			t.Errorf("parsePolicy accepted a malformed allowlist entry: %s", bad)
+		} else if !strings.Contains(err.Error(), want) {
+			t.Errorf("parsePolicy refused %s for the wrong reason (want %q): %v", bad, want, err)
 		}
+	}
+}
+
+// TestParsePolicyRejectsDuplicateException pins that two exception rows for one
+// (module, license) pair never load. Filter keys exceptions on exactly that
+// pair, so the second collapses onto the first and is invisible to the gate
+// while -check's green line still counts it — and two human-verified reasons
+// for one grant is a question in its own right.
+func TestParsePolicyRejectsDuplicateException(t *testing.T) {
+	dup := `{"allowed_licenses":["MIT"],"module_exceptions":[` +
+		`{"module":"example.com/m","license":"LGPL-3.0","reason":"first reading"},` +
+		`{"module":"example.com/m","license":"LGPL-3.0","reason":"second reading"}]}`
+	if _, err := parsePolicy([]byte(dup)); err == nil {
+		t.Error("parsePolicy accepted two module_exceptions for one (module, license) pair")
 	}
 }
 
@@ -252,13 +275,18 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 // routes: the allowlist entry is gone and the sentinel has no exception path.
 //
 // Be exact about what a row here can detect, rather than claiming the table
-// catches every reopening. MPL-2.0 is the sharp one — it goes green the moment
-// someone puts MPL-2.0 back in allowed_licenses, and nothing else need change
-// for that to happen. The LGPL-3.0 and Unknown rows require a policy.json edit
-// that parsePolicy separately refuses (an Unknown exception does not load at
-// all; a copyleft allowlist entry is vetoed by classifier type), so those two
-// are a second line of defence and would report as a load failure first.
-// [LAW:verifiable-goals]
+// catches every reopening — and note that the answer changed under this test's
+// feet. When these rows were written, MPL-2.0 was the sharp one: put it back in
+// allowed_licenses and this row goes green with nothing else changing. The
+// copyleft veto added in the SAME commit made that edit a load failure too, so
+// all four rows are now a second line of defence: each needs a policy.json edit
+// that parsePolicy independently refuses, and the refusal surfaces as a failure
+// to load rather than as a violation here.
+//
+// That does not make the table pointless — it is the only thing asserting the
+// gate REJECTS rather than merely that the policy is well-formed, and it runs
+// against the real inventory — but "a row that stops failing means a route was
+// re-opened" was true when written and is not now. [LAW:verifiable-goals]
 func TestGateRejectsADeniedLicense(t *testing.T) {
 	entries, err := buildEntries(litPkg)
 	if err != nil {
@@ -404,7 +432,28 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			{"a full-width parenthesis is not the ASCII one the paren rule sees", "which no SPDX identifier", []string{"MIT", "（MIT）"}},
 			{"a duplicated entry makes the printed count a lie", "repeats", []string{"MIT", "MIT"}},
 			{"a copyleft license may not be allowlisted at all", "which the classifier types as", []string{"MIT", "GPL-3.0"}},
-			{"nor reached through an AND-arm", "which the classifier types as", []string{"MIT", "MPL-2.0", "MIT AND MPL-2.0"}},
+			// The current SPDX spelling, which the classifier's corpus
+			// predates: LicenseType("GPL-3.0-only") is "" and only the
+			// deprecated "GPL-3.0" types restricted. Without the spelling
+			// normalization this row is accepted outright — and native.go
+			// already writes the modern form, so it is the spelling that would
+			// actually arrive.
+			{"the modern spelling of a copyleft license is the same license", "which the classifier types as", []string{"MIT", "GPL-3.0-only"}},
+			{"and the or-later form of it", "which the classifier types as", []string{"MIT", "AGPL-3.0-or-later"}},
+			// The WITH half of an arm, which is not a formality: Commons-Clause
+			// is an SPDX exception that removes the right to sell, so this is a
+			// narrowed grant wearing a permissive base. Isolates the exception
+			// half of the veto — the BASE half cannot be isolated at all, because
+			// a compound's bases must each be present as their own entry and are
+			// vetted there first. See checkAllowedLicenses.
+			{"an exception can narrow a grant, so it is vetted too", "which the classifier types as", []string{"MIT", "Apache-2.0", "Apache-2.0 WITH Commons-Clause"}},
+			{"a sentinel in the exception half is still a sentinel", "no verdict", []string{"MIT", "MIT WITH " + unclassifiedLicense}},
+			// WITH is the only operator that can reach the exception slot —
+			// AND and OR split the expression into arms before the arm shape
+			// is read, so "MIT WITH AND" is refused as an undecomposable arm
+			// rather than as an operator in the wrong place.
+			{"an operator in the exception half is not an exception", "where an identifier belongs", []string{"MIT", "MIT WITH WITH"}},
+			{"a non-breaking space is named as the character it is", "which no SPDX identifier", []string{"MIT", "MIT AND\u00a0Apache-2.0"}},
 		} {
 			_, err := parsePolicy(policy(tc.entries...))
 			if err == nil {
