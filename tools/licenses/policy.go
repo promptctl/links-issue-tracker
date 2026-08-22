@@ -109,6 +109,19 @@ func parsePolicy(data []byte) (*Policy, error) {
 		if licenseSentinels[e.License] {
 			return nil, fmt.Errorf("policy.json module_exception for %s names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license has no exception path — remove the dependency instead", e.Module, e.License)
 		}
+		// The expression rules are about this FILE, not about the allowlist,
+		// so they hold on an exception's license too. Without this the OR ban
+		// had a door beside it: an exception reading "BSD-3-Clause OR
+		// GPL-2.0-only" — zstd's own un-elected upstream grant, and exactly
+		// the un-made election the ban exists to refuse — parsed clean and
+		// became a live key in Filter's exception table, while the identical
+		// string in allowed_licenses was rejected. What does NOT apply here is
+		// the AND-arm vetting rule: an exception is not a permission granted
+		// to a license, it is one module's grant a human read, so requiring
+		// its arms to be allowlisted would contradict its whole purpose.
+		if _, err := parseLicenseExpression("policy.json module_exception license", e.License); err != nil {
+			return nil, err
+		}
 	}
 	return &p, nil
 }
@@ -137,85 +150,101 @@ func checkAllowedLicenses(allowed []string) error {
 		set[name] = true
 	}
 	for _, name := range allowed {
-		if err := checkAllowedExpression(name, set); err != nil {
+		// The vetting rule below is the allowlist's alone: an expression entry
+		// here permits the COMBINATION, so each arm has to be independently
+		// acceptable. An exception's license is not a permission at all — it
+		// names one module's grant a human read — so it gets the shape rules
+		// and not this one.
+		bases, err := parseLicenseExpression("policy.json allowed_licenses entry", name)
+		if err != nil {
 			return err
+		}
+		if len(bases) == 1 {
+			continue
+		}
+		for _, base := range bases {
+			if !set[base] {
+				return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each one must be independently acceptable — add %q on its own line or drop the expression", name, base, base)
+			}
 		}
 	}
 	return nil
 }
 
-// checkAllowedExpression enforces the two rules an allowlist entry that is an
-// SPDX EXPRESSION rather than a bare identifier must satisfy. They exist
-// because matching is by exact string and nothing downstream ever parses an
-// entry: an expression allowlists the whole COMBINATION without the gate
-// looking at its arms, so "MIT AND Apache-2.0 WITH LLVM-exception" passes on
-// the strength of a human having checked both arms separately — and on exactly
-// the same strength, so would "MIT OR GPL-2.0-only".
+// parseLicenseExpression reads one license-valued field of policy.json as an
+// SPDX expression and returns the base identifier of each of its AND-arms —
+// the identifiers the expression grants under, with any WITH-exception
+// stripped, since an exception only ever WIDENS a grant. A single-element
+// result means the field is not a combination at all.
 //
-//   - Every AND-arm's base identifier must be independently allowlisted. An
-//     AND grants under all of its arms at once, so the combination is
-//     acceptable only if each arm is. The WITH-exception is not part of the
-//     base, because an exception only ever WIDENS a grant: "Apache-2.0"
-//     satisfies the arm "Apache-2.0 WITH LLVM-exception". A single-identifier
-//     entry — with or without a WITH — is itself the thing that was vetted and
-//     has no arms to check; this rule is about combinations, not about
-//     decomposing every entry in the file.
-//   - An OR is refused outright. lit resolves a dual license to the ELECTED
-//     arm before policy ever sees it, recording one identifier plus
-//     acknowledgement "concluded" (zstd, native.go). An OR reaching this file
-//     means an election went unmade, which is the ambiguity the shipped
-//     artifacts exist to remove — not something to allowlist around. Refusing
-//     OR is also why parentheses are refused: in SPDX they exist to group ORs,
+// Everything it refuses is a way for the committed text and the value the gate
+// actually matches to come apart, which is this file's recurring failure mode:
+//
+//   - Whitespace that is not single spaces. The arms are read through
+//     strings.Fields, which collapses runs of spaces, tabs and newlines, while
+//     Filter matches the entry BYTE for byte. Re-wrapping or re-indenting an
+//     entry would otherwise pass this parse and every test, then fail the gate
+//     naming a string the file visibly appears to carry. Same reasoning as the
+//     padded-entry refusal in checkAllowedLicenses: a normalize-on-read splits
+//     the file's text from the value it produces. [LAW:one-source-of-truth]
+//   - An OR. lit resolves a dual license to the ELECTED arm before policy ever
+//     sees it, recording one identifier plus acknowledgement "concluded"
+//     (zstd, native.go). An OR reaching this file means an election went
+//     unmade, which is the ambiguity the shipped artifacts exist to remove.
+//   - Parentheses, for the same reason: in SPDX they exist to group an OR,
 //     since grouping ANDs changes nothing.
-func checkAllowedExpression(name string, allowed map[string]bool) error {
-	if strings.ContainsAny(name, "()") {
-		return fmt.Errorf("policy.json allowed_licenses entry %q is parenthesized; SPDX parentheses group an OR, and an elected license reaches this file as a single identifier", name)
+//   - An operator spelled in any case but its canonical upper. SPDX operators
+//     are uppercase, and a lowercase "or" read as an identifier token would
+//     slip a dual license past the OR ban while three documents say it cannot.
+//   - An arm that is neither an identifier nor "<identifier> WITH <exception>".
+//     The gate matches by exact string and will not rule on an expression it
+//     had to guess the meaning of. [LAW:no-silent-failure]
+func parseLicenseExpression(where, name string) ([]string, error) {
+	fields := strings.Fields(name)
+	if strings.Join(fields, " ") != name {
+		return nil, fmt.Errorf("%s %q carries repeated, tabbed, or wrapped whitespace; the gate matches this file byte for byte, so this would parse here and then be reported as a non-allowlisted license naming a string the file appears to carry", where, name)
 	}
-	// SPDX identifiers never contain spaces, so whole space-delimited tokens
-	// are the operators and nothing else can be mistaken for one — "XOR-1.0"
-	// is one field, not an OR. [LAW:one-source-of-truth] same token rule the
-	// SBOM's arm discriminator uses (spdxOperators, sbom.go).
+	if strings.ContainsAny(name, "()") {
+		return nil, fmt.Errorf("%s %q is parenthesized; SPDX parentheses group an OR, and an elected license reaches this file as a single identifier", where, name)
+	}
 	var arms [][]string
 	arm := []string{}
-	for _, field := range strings.Fields(name) {
-		switch field {
-		case "OR":
-			return fmt.Errorf("policy.json allowed_licenses entry %q carries an OR; a dual license is resolved to its elected arm before the gate sees it (recorded as one identifier plus acknowledgement %q), so an OR here means an election went unmade", name, acknowledgementConcluded)
-		case "AND":
+	for _, field := range fields {
+		// [LAW:one-source-of-truth] spdxOperators is the SBOM's arm
+		// discriminator (sbom.go); recognizing operators from that one set
+		// keeps the gate and the rendered document from disagreeing about
+		// which tokens are operators at all. What each does with the answer
+		// still differs, and should: the SBOM asks "is this an expression",
+		// this asks "is it a combination".
+		canonical := strings.ToUpper(field)
+		switch {
+		case !spdxOperators[canonical]:
+			arm = append(arm, field)
+		case field != canonical:
+			return nil, fmt.Errorf("%s %q spells the SPDX operator %q in other than its canonical upper case; SPDX operators are uppercase, and a lowercase one read as an identifier would carry a dual license straight past the OR refusal below", where, name, field)
+		case canonical == "OR":
+			return nil, fmt.Errorf("%s %q carries an OR; a dual license is resolved to its elected arm before the gate sees it (recorded as one identifier plus acknowledgement %q), so an OR here means an election went unmade", where, name, acknowledgementConcluded)
+		case canonical == "AND":
 			arms = append(arms, arm)
 			arm = nil
-		default:
+		default: // WITH binds to the arm it widens.
 			arm = append(arm, field)
 		}
 	}
 	arms = append(arms, arm)
-	if len(arms) == 1 {
-		return nil
-	}
-	for _, arm := range arms {
-		base, err := expressionArmBase(name, arm)
-		if err != nil {
-			return err
-		}
-		if !allowed[base] {
-			return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each one must be independently acceptable — add %q on its own line or drop the expression", name, base, base)
-		}
-	}
-	return nil
-}
 
-// expressionArmBase returns the identifier an AND-arm grants under: the arm
-// itself, or the identifier a WITH-exception widens. Any other shape is an
-// expression this file cannot rule on, and the gate refuses to run against a
-// policy whose meaning it had to guess. [LAW:no-silent-failure]
-func expressionArmBase(expr string, arm []string) (string, error) {
-	switch {
-	case len(arm) == 1:
-		return arm[0], nil
-	case len(arm) == 3 && arm[1] == "WITH":
-		return arm[0], nil
+	bases := make([]string, 0, len(arms))
+	for _, arm := range arms {
+		switch {
+		case len(arm) == 1:
+			bases = append(bases, arm[0])
+		case len(arm) == 3 && arm[1] == "WITH":
+			bases = append(bases, arm[0])
+		default:
+			return nil, fmt.Errorf("%s %q has an arm %q that is neither an SPDX identifier nor an identifier WITH an exception; the gate matches this file by exact string and will not rule on an expression it cannot decompose", where, name, strings.Join(arm, " "))
+		}
 	}
-	return "", fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm %q that is neither an SPDX identifier nor an identifier WITH an exception; the gate matches this file by exact string and will not rule on an expression it cannot decompose", expr, strings.Join(arm, " "))
+	return bases, nil
 }
 
 // rejectDuplicateKeys walks the document's tokens and errors on any key
@@ -299,9 +328,15 @@ type LicenseFilter struct {
 // where the file was too large to have been read at all. Neither names a
 // grant, so neither can be allowlisted or excepted — an unidentifiable license
 // is the single row an auditor cannot evaluate, and a policy that waves one
-// through has stopped being a policy. [LAW:one-source-of-truth] the ban is
-// stated once over both sentinels rather than as a special case for "Unknown"
-// that the next sentinel added would silently escape.
+// through has stopped being a policy.
+//
+// [LAW:one-source-of-truth] this is the package's ONE enumeration of "the tool
+// has no verdict here" — isLicenseText (graph.go) and partitionGraph's
+// unclassified case (graph_report.go) both read it rather than re-listing the
+// two constants, which is how they used to be written. A third sentinel added
+// to this map is therefore barred from the policy, kept as a license hit
+// whatever the file is named, and filed under the report's unclassified
+// section, all without a second edit to remember.
 var licenseSentinels = map[string]bool{unclassifiedLicense: true, oversizeLicense: true}
 
 // Filter compiles the policy into its accept/reject rule once, so a caller
@@ -309,27 +344,20 @@ var licenseSentinels = map[string]bool{unclassifiedLicense: true, oversizeLicens
 // [LAW:parse-dont-validate] the returned value is the policy already
 // interpreted; nothing downstream re-reads AllowedLicenses or ModuleExceptions.
 //
-// This is also where a sentinel is barred from ever becoming a key, and it is
-// the right place because it is the ONLY constructor of a LicenseFilter and
-// the filter's tables are unexported: "an unclassifiable module has no path
-// through the gate" is therefore a property of the type, not a guard each
-// ruling site (CheckPolicy, permitsHit) has to remember to repeat. parsePolicy
-// refuses a committed file that names a sentinel, so the drop here is not a
-// silent one — it holds the same line for a Policy assembled in code, which is
-// how the tests and the graph audit build one. [LAW:types-are-the-program]
+// It copies the policy's entries verbatim, sentinels included. Dropping them
+// here was the first shape of the sentinel ban and it was the wrong one: it
+// would have let a Policy value and the LicenseFilter built from it disagree
+// about what the file says, silently — the same committed-text-versus-gate's-
+// view split that the unknown-key, trailing-content, and duplicate-key guards
+// in parsePolicy all exist to refuse. The ban belongs where the ruling
+// happens; see Allows and Permits.
 func (p *Policy) Filter() LicenseFilter {
 	allowed := make(map[string]bool, len(p.AllowedLicenses))
 	for _, name := range p.AllowedLicenses {
-		if licenseSentinels[name] {
-			continue
-		}
 		allowed[name] = true
 	}
 	excepted := make(map[exKey]bool, len(p.ModuleExceptions))
 	for _, e := range p.ModuleExceptions {
-		if licenseSentinels[e.License] {
-			continue
-		}
 		excepted[exKey{e.Module, e.License}] = true
 	}
 	return LicenseFilter{allowed: allowed, excepted: excepted}
@@ -341,18 +369,29 @@ func (p *Policy) Filter() LicenseFilter {
 // after a human read one specific file. The module-graph audit needs to tell
 // those apart; the link-closure gate, where every entry is a module's own
 // grant, does not care.
-func (f LicenseFilter) Allows(license string) bool { return f.allowed[license] }
+//
+// A sentinel is refused ahead of the lookup, and both rulings carry the same
+// refusal rather than sharing one, because both are entry points: permitsHit
+// (graph_report.go) calls Allows directly. Stating it at the rulings — rather
+// than by omitting the key when the tables are built — is what makes "no
+// policy permits an unreadable license" true of every LicenseFilter, including
+// one a future caller assembles as a struct literal in this package, instead
+// of true only of the ones Filter produced. [LAW:single-enforcer]
+func (f LicenseFilter) Allows(license string) bool {
+	return !licenseSentinels[license] && f.allowed[license]
+}
 
 // Permits reports whether license is acceptable as module's own license grant:
 // it is in AllowedLicenses, or the (module, license) pair carries a
 // ModuleException. [LAW:types-are-the-program] the two accept shapes are
 // enumerated here, so the reject case is exactly everything that is neither.
 // A module the classifier could not read is not one of the two and cannot be
-// made into one: Filter never admits a sentinel to either table, so there is
-// no policy anyone can write that lets an Unknown row pass — see
-// licenseSentinels for why that is a hard failure rather than a documentable
-// exception.
+// made into one — see licenseSentinels for why that is a hard failure rather
+// than a documentable exception.
 func (f LicenseFilter) Permits(module, license string) bool {
+	if licenseSentinels[license] {
+		return false
+	}
 	return f.Allows(license) || f.excepted[exKey{module, license}]
 }
 
@@ -405,6 +444,14 @@ func runCheck(pkg string, stdout io.Writer) error {
 		b.WriteString("Resolve by removing the dependency, or — if the license is genuinely permissive and something lit ships now carries it — adding it to allowed_licenses in tools/licenses/policy.json. A module reported as \"Unknown\" carries neither route: nobody can say what its license permits, so it must go.")
 		return fmt.Errorf("%s", b.String())
 	}
-	fmt.Fprintf(stdout, "license policy OK: all %d components are under an allowlisted or explicitly excepted license\n", len(entries))
+	// The green line says what the gate proved, and it must not advertise the
+	// route the red line above stopped offering: this is the string a release
+	// run prints into a log an auditor reads, and it is the only place that
+	// audience hears from the gate at all. It names the exception count rather
+	// than the word "excepted" so that a reader learns the array is empty from
+	// the gate's own output — the guarantee FORKS.md says a green -check
+	// carries — instead of having to go and check.
+	fmt.Fprintf(stdout, "license policy OK: all %d components are under one of the %d allowlisted licenses, with %d module exceptions in force\n",
+		len(entries), len(policy.AllowedLicenses), len(policy.ModuleExceptions))
 	return nil
 }

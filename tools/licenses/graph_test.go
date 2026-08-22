@@ -314,13 +314,17 @@ func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 // hard rule at the graph audit's ruling site: a license this tool could not
 // read is not permitted by ANY policy, however that policy was written.
 //
-// The policy built here is the most permissive one that can be expressed — it
-// allowlists both sentinels outright AND grants the module a root-grant
-// exception for each. parsePolicy would refuse such a file outright; the point
-// of assembling it as a value is that Filter has to hold the line for a Policy
-// that never went through the parse, which is exactly how this test, the graph
-// audit, and any future caller build one. Every ruling below must still be a
-// reject. [LAW:types-are-the-program]
+// The policies built here are the most permissive ones that can be expressed —
+// each allowlists a sentinel outright AND grants the module a root-grant
+// exception for it. parsePolicy refuses such a FILE, so both are assembled as
+// values, which is the case that matters: the ban lives at the rulings (Allows,
+// Permits) rather than in Filter's table-building, precisely so it holds for a
+// LicenseFilter nobody parsed a file to get. The second half of each iteration
+// makes that concrete by skipping Filter altogether and populating the
+// unexported tables directly — the shape a future in-package caller could write
+// by accident, and the one an earlier draft of this change did not cover while
+// three documents claimed it did. Every ruling below must be a reject.
+// [LAW:single-enforcer]
 func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
 		policy := &Policy{
@@ -329,16 +333,20 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 				{Module: "excepted/mod", License: sentinel, Reason: "a reason nobody could have had"},
 			},
 		}
-		filter := policy.Filter()
-
-		if filter.Allows(sentinel) {
-			t.Errorf("%q: allowlisting a sentinel must not make it allowed — it names no grant", sentinel)
+		handBuilt := LicenseFilter{
+			allowed:  map[string]bool{"MIT": true, sentinel: true},
+			excepted: map[exKey]bool{{module: "excepted/mod", license: sentinel}: true},
 		}
-		if filter.Permits("excepted/mod", sentinel) {
-			t.Errorf("%q: an exception must not reach a sentinel — it records a reading of a license that could not be read", sentinel)
-		}
-		if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: sentinel}) {
-			t.Errorf("%q: the graph audit must report a sentinel at a module's root, never suppress it", sentinel)
+		for name, filter := range map[string]LicenseFilter{"Filter()": policy.Filter(), "hand-built": handBuilt} {
+			if filter.Allows(sentinel) {
+				t.Errorf("%s %q: allowlisting a sentinel must not make it allowed — it names no grant", name, sentinel)
+			}
+			if filter.Permits("excepted/mod", sentinel) {
+				t.Errorf("%s %q: an exception must not reach a sentinel — it records a reading of a license that could not be read", name, sentinel)
+			}
+			if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: sentinel}) {
+				t.Errorf("%s %q: the graph audit must report a sentinel at a module's root, never suppress it", name, sentinel)
+			}
 		}
 	}
 }

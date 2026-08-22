@@ -78,6 +78,51 @@ is the right behaviour for a document whose job is to show an auditor what is
 there and then say why it is fine. The owner's decision on that ticket was that
 graph mode keeps reporting and never gates.
 
+## The ISC and WTFPL rows: what the allowlist was hiding
+
+Three rows entered this report for the first time when
+`links-licensing-c0ce.9` deleted ISC, MPL-2.0, and WTFPL from
+`policy.json`'s allowlist. Nothing about the modules changed. The audit drops
+any hit whose license the policy permits *at any depth*, so an allowlist entry
+naming a license no linked component carries was quietly suppressing rows
+elsewhere in the graph — which is a second, less obvious reason an unearned
+entry is worth deleting.
+
+**`github.com/coder/websocket` — ISC, and not in `go.sum` at all.** Its
+`LICENSE.txt` carries the ISC grant verbatim ("Permission to use, copy,
+modify, and distribute this software for any purpose with or without fee is
+hereby granted…"). This is the thinnest shape a row in this report can have:
+the coordinate is version-selected into the build list by some other module's
+`go.mod`, `go mod why` answers "main module does not need module
+github.com/coder/websocket", and `go.sum` carries neither an `h1:` line nor
+even a `/go.mod` line for it. Go has never fetched it for a build; `-graph`
+sees it only because that mode downloads the entire build list on purpose.
+
+**`github.com/davecgh/go-spew` — ISC.** Its `LICENSE` names ISC on its first
+line. It does carry an `h1:` source hash, and the path is the test-file shape
+this document's opening describes: `internal/config` imports `spf13/viper`,
+*viper's own test files* import `stretchr/testify/assert`, and testify imports
+`go-spew/spew`. No `lit` build or test executes it, it is in no `lit`
+package's import closure, and it appears in no row of `LICENSE-REPORT.md`.
+
+ISC is permissive and notice-only — the OpenBSD phrasing of substantially the
+grant BSD-2-Clause makes — and asks nothing beyond attribution of code that
+ships. Neither module ships.
+
+**`github.com/BurntSushi/xgb` — WTFPL, nested.** `xgbgen/COPYING` is the
+WTFPL v2 text verbatim. It covers the module's own code generator, not its
+root grant: `xgb`'s root `LICENSE` is a BSD-style notice ("Copyright (c) 2009
+The XGB Authors… Redistribution and use in source and binary forms…"), which
+is why the module appears under nested texts and not under module grants. A
+coordinate scanner never reports it; no `lit` build imports the module.
+
+None of the three is a candidate for re-adding to the allowlist, and the
+reason generalizes. An allowlist entry permits its license **everywhere it
+appears in the link closure**, so putting ISC back to silence two graph rows
+would also pre-authorize any future *linked* dependency under ISC with nobody
+looking — the standing invitation `policy.json`'s note now warns about. These
+rows are supposed to be visible, and this is where they get answered.
+
 ## `modernc.org/libc`: a GPL file inside test data
 
 Tree-walking scanners flag
@@ -129,9 +174,15 @@ changed a verdict above.
 
 Both appear only because `policy.json`'s allowlist does not name them —
 `go-gl/glfw` vendors its C library's Zlib license, and gonum carries a Boost
-license in a third-party directory. Both are uncontested permissive licenses;
-adding them to the allowlist is a policy decision that belongs to the gate
-ticket, not a dependency problem.
+license in a third-party directory. Both are uncontested permissive licenses,
+and both are nested texts, so a coordinate scanner reports neither.
+
+They stay out of the allowlist, and `links-licensing-c0ce.9` settled that
+question in the direction of removal rather than addition: the list now names
+only licenses something `lit` actually links, and nothing links either of
+these. Adding them would widen the gate for every future dependency in
+exchange for suppressing four rows of a report that exists to show rows. Same
+reasoning as the ISC and WTFPL section above.
 
 ## Modules with no license file
 

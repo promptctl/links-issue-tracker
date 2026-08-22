@@ -125,7 +125,7 @@ func goModulePURL(modulePath, version string) string {
 // THIRD_PARTY_LICENSES and LICENSE-REPORT.md, so nothing is hidden.
 // [LAW:no-silent-failure]
 func componentLicenses(name, acknowledgement string) *cdx.Licenses {
-	if name == "" || name == unclassifiedLicense {
+	if name == "" || licenseSentinels[name] {
 		return nil
 	}
 	licenses := cdx.Licenses{licenseChoice(name, acknowledgement)}

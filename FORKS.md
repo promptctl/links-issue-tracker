@@ -322,8 +322,10 @@ MPL-2.0, WTFPL and ISC once measurement showed nothing linked carried any of
 them, so there is no longer a copyleft license sitting in the list for the gate
 to wave through. And the
 classifier's `Unknown` verdict is a hard failure with no route around it: not an
-allowlist entry, not an exception, refused at the parse and dropped again when
-the filter is built. A module whose license nobody can read fails this gate,
+allowlist entry, not an exception. A policy naming it is refused at the parse,
+and every ruling refuses it again regardless of what the policy says, so the
+guarantee does not depend on the file having been read through the parse. A
+module whose license nobody can read fails this gate,
 which is the row it would be easiest to talk past.
 
 Read it as narrowly as it is written, though: `-check` rules on each linked

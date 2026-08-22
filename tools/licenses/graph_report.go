@@ -47,13 +47,28 @@ const (
 //
 // It exists because of a specific, measured shape in this repository's graph:
 // github.com/google/licenseclassifier — a license DETECTOR, whose payload is a
-// reference corpus of every SPDX text — contributes 137 of the 144
+// reference corpus of every SPDX text — contributes 140 of the 148
 // non-permissive nested rows, including AGPL-3.0 and every GPL variant. Printed
-// in full it buries the seven rows that are actually about lit under a wall of
+// in full it buries the eight rows that are actually about lit under a wall of
 // a dependency's test data, and a report nobody can read is a report nobody
-// reads. Three rows is enough to show what a module's contribution looks like;
-// every genuine finding in this graph contributes one or two and so is never
-// elided. The remainder is COUNTED, never dropped. [LAW:no-silent-failure]
+// reads. The remainder is COUNTED, never dropped. [LAW:no-silent-failure]
+//
+// Re-measure when the allowlist changes, because the allowlist decides what
+// this section can even contain: permitsHit drops an allowlisted license at
+// ANY depth, so links-licensing-c0ce.9's removal of ISC, MPL-2.0 and WTFPL
+// un-suppressed the classifier corpus's copies of those texts and moved both
+// numbers (137 of 144 → 140 of 148) in the same commit that changed the
+// policy. The counts above are re-measured on that branch.
+//
+// What three rows is chosen against is the elision itself: a module whose run
+// exceeds the cap has its remainder replaced by a count, so anything after the
+// third row of that module is no longer readable in place. Today the only runs
+// long enough are the classifier corpus's (nested, and unclassified) and
+// gonum's four unclassified THIRD_PARTY_LICENSES entries — the latter already
+// elided before this change and not caused by it. Every row about lit's own
+// obligations is its module's first or second and is printed. Raising the cap
+// is the right response if that stops being true; it is not a claim that can
+// be left to age.
 const rowsPerModule = 3
 
 // elidePerModule caps each module's run of rows at rowsPerModule, replacing
@@ -147,7 +162,7 @@ func partitionGraph(entries []GraphEntry, filter LicenseFilter) []graphSection {
 			}
 			row := graphRow{Module: e.Module.Path, Version: e.Module.Version, Path: h.RelPath, License: h.License}
 			switch {
-			case h.License == unclassifiedLicense || h.License == oversizeLicense:
+			case licenseSentinels[h.License]:
 				sections[unclassified].Rows = append(sections[unclassified].Rows, row)
 			case h.IsRootGrant():
 				sections[grants].Rows = append(sections[grants].Rows, row)

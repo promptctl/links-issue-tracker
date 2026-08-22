@@ -200,7 +200,13 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 		for _, v := range violations {
 			t.Errorf("non-allowlisted license: %s@%s is %s", v.Module, v.Version, v.License)
 		}
-		t.Fatalf("%d module(s) violate the license policy; allowlist the license in policy.json if permissive, or record a documented exception", len(violations))
+		// Says the same thing runCheck's failure says, because this is the
+		// message a developer actually meets: `go test ./...` runs on every
+		// PR and release-validate's -check does not. Telling them here to
+		// "record a documented exception" would send them to write one that
+		// parsePolicy then refuses on its own separate grounds — a second,
+		// unrelated-looking failure produced by obeying the first message.
+		t.Fatalf("%d module(s) violate the license policy; remove the dependency, or add its license to allowed_licenses in tools/licenses/policy.json if something lit ships now carries it. module_exceptions is empty by design and an \"Unknown\" row has neither route", len(violations))
 	}
 }
 
@@ -256,16 +262,68 @@ func TestGateRejectsADeniedLicense(t *testing.T) {
 // from both lookup tables, so a policy naming one would be inert — and an inert
 // rule in a hand-edited compliance file is worse than a rejected one, because
 // the next reader believes it. [LAW:no-silent-failure]
+// It asserts the DIAGNOSTIC, not merely that some error came back, and that is
+// load-bearing rather than fussy. oversizeLicense is literally "Skipped
+// (oversize)", so a bare error check on that row is satisfied by the
+// parenthesis rule and pins nothing at all about the sentinel — delete the
+// sentinel guard and the row stays green while the file's diagnostic silently
+// becomes "is parenthesized; SPDX parentheses group an OR", which is nonsense
+// advice for this input. Naming the phrase makes the row fail for the reason
+// it exists.
 func TestParsePolicyRefusesASentinelLicense(t *testing.T) {
+	const want = "not a license but this tool's marker for having no verdict"
 	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
 		allowlisted := `{"allowed_licenses":["MIT","` + sentinel + `"],"module_exceptions":[]}`
-		if _, err := parsePolicy([]byte(allowlisted)); err == nil {
+		_, err := parsePolicy([]byte(allowlisted))
+		if err == nil {
 			t.Errorf("parsePolicy allowlisted the sentinel %q; it names no grant and cannot be permitted", sentinel)
+		} else if !strings.Contains(err.Error(), want) {
+			t.Errorf("allowlisted sentinel %q was refused for the wrong reason: %v", sentinel, err)
 		}
+
 		excepted := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"` + sentinel + `","reason":"human-verified"}]}`
-		if _, err := parsePolicy([]byte(excepted)); err == nil {
+		_, err = parsePolicy([]byte(excepted))
+		if err == nil {
 			t.Errorf("parsePolicy accepted an exception for the sentinel %q; there was no license text to have verified", sentinel)
+		} else if !strings.Contains(err.Error(), want) {
+			t.Errorf("excepted sentinel %q was refused for the wrong reason: %v", sentinel, err)
 		}
+	}
+}
+
+// TestParsePolicyExpressionRulesReachExceptions pins that the expression rules
+// are about this FILE and not about the allowlist alone. They had a door beside
+// them until links-licensing-c0ce.9's review: parsePolicy checked allowlist
+// entries and walked straight past module_exceptions, so "BSD-3-Clause OR
+// GPL-2.0-only" — zstd's own un-elected upstream grant, the exact un-made
+// election the OR ban exists to refuse — parsed clean and became a live key in
+// Filter's exception table, while the identical string one field away was
+// rejected.
+//
+// The AND-arm vetting rule deliberately does NOT reach here, and the last case
+// pins that too: an exception is not a permission granted to a license, it is
+// one module's grant that a human read, so requiring its arms to be
+// allowlisted would contradict the only reason exceptions exist.
+func TestParsePolicyExpressionRulesReachExceptions(t *testing.T) {
+	exception := func(license string) []byte {
+		return []byte(`{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"example.com/m","license":"` + license + `","reason":"human-verified"}]}`)
+	}
+	for _, tc := range []struct {
+		license string
+		why     string
+	}{
+		{"BSD-3-Clause OR GPL-2.0-only", "an un-elected dual license is refused whichever field it sits in"},
+		{"MIT or GPL-2.0-only", "a lowercase operator does not smuggle one past the OR ban"},
+		{"(MIT AND Apache-2.0)", "parentheses group an OR and have no place in either field"},
+		{"MIT  AND  Apache-2.0", "collapsed whitespace would certify a string the gate can never match"},
+		{"Apache-2.0 LLVM-exception", "an arm the parser cannot decompose is one the gate cannot rule on"},
+	} {
+		if _, err := parsePolicy(exception(tc.license)); err == nil {
+			t.Errorf("parsePolicy accepted the exception license %q — %s", tc.license, tc.why)
+		}
+	}
+	if _, err := parsePolicy(exception("LGPL-3.0 AND Apache-2.0")); err != nil {
+		t.Errorf("parsePolicy refused a well-formed exception whose arms are not allowlisted: %v — an exception's whole purpose is to name a license the allowlist does not carry", err)
 	}
 }
 
@@ -292,11 +350,33 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 		}{
 			{"an OR means a dual license reached policy with its election unmade", []string{"MIT", "MIT OR GPL-2.0-only"}},
 			{"an OR is refused even when both arms are separately allowlisted", []string{"MIT", "Apache-2.0", "MIT OR Apache-2.0"}},
-			{"parentheses exist to group an OR", []string{"MIT", "Apache-2.0", "(MIT AND Apache-2.0)"}},
 			{"an AND-arm that is not itself allowlisted is a grant nobody vetted", []string{"MIT", "MIT AND GPL-2.0-only"}},
 			{"a WITH does not exempt the arm's base identifier from the rule", []string{"MIT", "MIT AND Apache-2.0 WITH LLVM-exception"}},
 			{"an arm the parser cannot decompose is one the gate cannot rule on", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 LLVM-exception"}},
 			{"a dangling operator is not an expression", []string{"MIT", "MIT AND"}},
+
+			// Each row below fails ONLY if its own rule is present. The paren
+			// rule had no such row until this review: "(MIT AND Apache-2.0)"
+			// decomposes to the arms "(MIT" and "Apache-2.0)", neither of them
+			// allowlisted, so it was refused by the AND-arm rule with or
+			// without the parenthesis guard — deleting the guard left the
+			// whole package green while a parenthesized entry could reach the
+			// committed compliance file. A single-arm "(MIT)" is refusable by
+			// nothing else. [LAW:verifiable-goals]
+			{"parentheses group an OR and are refused even with one arm", []string{"MIT", "(MIT)"}},
+			{"a lowercase operator is not an identifier token", []string{"MIT", "MIT or GPL-2.0-only"}},
+			// This row is the only one that isolates the operator-case rule.
+			// Every other lowercase spelling is caught downstream anyway — a
+			// non-canonical OR still reaches the OR ban, and a non-canonical
+			// WITH still fails the arm shape — so with both arms allowlisted
+			// and the operator an AND, the case rule is the last thing left
+			// standing between this entry and acceptance. Mutation-checked:
+			// remove that rule and this row, and only this row, goes green.
+			{"a mixed-case AND is malformed SPDX even when both arms are allowlisted", []string{"MIT", "Apache-2.0", "MIT And Apache-2.0"}},
+			{"an arm shape is checked even when the entry is not a combination", []string{"Apache-2.0 LLVM-exception"}},
+			{"a lone WITH is not an identifier", []string{"MIT", "Apache-2.0 WITH"}},
+			{"a missing operator between two identifiers is not an expression", []string{"MIT", "Apache-2.0", "MIT Apache-2.0"}},
+			{"whitespace is matched byte for byte, so a doubled space is a different string", []string{"MIT", "Apache-2.0", "MIT AND  Apache-2.0 WITH LLVM-exception"}},
 		} {
 			if _, err := parsePolicy(policy(tc.entries...)); err == nil {
 				t.Errorf("parsePolicy accepted %v — %s", tc.entries, tc.why)
