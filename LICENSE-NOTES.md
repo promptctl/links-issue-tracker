@@ -11,19 +11,24 @@ counterpart is `go run ./tools/licenses -graph`, which classifies every
 module in the build list on demand; this file explains the rows that report
 cannot explain by itself.
 
-One distinction carries most of this document. A module whose *source* is
-compiled or tested gets a full source hash in `go.sum` (an `h1:` line) and
-appears in the link-closure gate. A module that is merely *named* in some
-other module's `go.mod` gets only a `<version>/go.mod` hash line — Go records
-it to make version selection reproducible, but never fetches its source for a
-build. The second kind is bookkeeping, not a dependency: no code from it is
-compiled, linked, tested, or shipped. Nearly every finding below is the
-second kind.
+One distinction carries most of this document. A module in the build-and-test
+closure — its packages imported by something `lit` builds, or by the *test
+files* of a dependency in that closure — gets a full source hash in `go.sum`
+(an `h1:` line); the narrower set actually compiled and linked into the
+binary is what the `-check` gate covers. A module that is merely *named* in
+some other module's `go.mod` gets only a `<version>/go.mod` hash line — Go
+records it to make version selection reproducible, but never fetches its
+source for a build. The second kind is bookkeeping, not a dependency: no
+code from it is compiled, linked, tested, or shipped. Nearly every finding
+below is the second kind.
 
 ## The GPL row: `github.com/golang/freetype`
 
-The one GPL text a scanner finds is freetype's `licenses/gpl.txt` — the
-module is dual-licensed, FreeType License or GPL-2.0. Nothing in `lit` or its
+The one GPL text that is part of a module's *own license grant* is
+freetype's `licenses/gpl.txt` — the module is dual-licensed, FreeType
+License or GPL-2.0. (The graph holds two other GPL texts, both data rather
+than grants: libc's vendored test corpus and the license classifier's
+reference corpus, each explained in its own section below.) Nothing in `lit` or its
 forks imports it, and no freetype source carries an `h1:` hash in either
 `go.sum`. It is named in the graph by a chain of dev-dependency metadata in
 modules that predate Go 1.17's graph pruning: Dolt needs
@@ -44,7 +49,7 @@ the plot library — one hand-run benchmark chart — is removed in the fork
 (patch 5 in [FORKS.md](FORKS.md)), which is why none of this stack has source
 hashes any more.
 
-## The MPL rows: `go-sql-driver/mysql` and `hashicorp/go-uuid`
+## The MPL rows: `go-sql-driver/mysql`, `hashicorp/go-uuid`, `hashicorp/golang-lru`
 
 Nothing `lit` builds or ships links either module; `lit`'s own former use of
 the mysql driver was removed outright. The mysql coordinate stays visible in
@@ -56,7 +61,11 @@ imports, so Go also records the driver's source hash for `go test`
 completeness, though no `lit` build or test executes them.
 `hashicorp/go-uuid` is quieter still: a `/go.mod` bookkeeping line only, no
 source hash, named by `colinmarc/hdfs` (Dolt's HDFS blobstore support) —
-another pre-pruning module whose whole requirement list Go records. MPL-2.0
+another pre-pruning module whose whole requirement list Go records.
+`hashicorp/golang-lru` — whose linked use both forks removed outright — has
+the same shape: two `/go.mod`-only lines (v0.5.0 and v0.5.1), named by
+old `google.golang.org/api` and `go.opencensus.io` go.mods from the same
+pre-pruning era, with no source hash anywhere. MPL-2.0
 is file-level copyleft triggered by distributing the covered files; `lit`
 distributes none of them. MPL-2.0 is currently in the policy allowlist;
 whether the gate should also assert anything about unlinked graph rows is the
@@ -119,7 +128,10 @@ ticket, not a dependency problem.
 
 ## Modules with no license file
 
-Three graph-only modules (`chzyer/logex`, `dolthub/sqllogictest/go`,
-`gobwas/pool`) ship no license text at all, so no attribution can be
-generated from their source. None is linked into any build; all three are
-version-selection residue of the kind described at the top.
+Three modules (`chzyer/logex`, `dolthub/sqllogictest/go`, `gobwas/pool`)
+ship no license text at all, so no attribution can be generated from their
+source. None is linked into any build. Two are the `/go.mod`-only
+bookkeeping kind described at the top (`chzyer/logex`, `gobwas/pool`);
+`dolthub/sqllogictest/go` is fainter still — like go-digest above, it
+appears in neither `go.mod` nor either `go.sum` and only the `-graph`
+audit's `go list -m all` resolves it.

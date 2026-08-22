@@ -199,8 +199,10 @@ statistics and the text summaries stay, and the permanently skipped
 `TestKeySplitterDistribution` harness in `node_splitter_test.go` now prints
 summaries instead of rendering PNGs. `go mod tidy` drops the whole plot stack
 from the fork's go.mod, and `lit`'s go.sum with it loses every source hash
-(`h1:`) for those modules — what remains of them is go.mod-graph bookkeeping,
-explained in [LICENSE-NOTES.md](LICENSE-NOTES.md).
+(`h1:`) for those modules — two coordinates (`git.sr.ht/~sbinet/gg`,
+`github.com/go-pdf/fpdf`) leave both go.sums entirely, and what remains of
+the rest is go.mod-graph bookkeeping, explained in
+[LICENSE-NOTES.md](LICENSE-NOTES.md).
 
 **Retire it when** upstream deletes its plot dependency (it serves one
 hand-run benchmark plot) and the `require` line moves past that change. A
