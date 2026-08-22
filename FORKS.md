@@ -305,21 +305,71 @@ go run ./tools/licenses -check
 ```
 
 This classifies every module linked into `./cmd/lit` and exits non-zero on any
-license that is neither in `tools/licenses/policy.json`'s `allowed_licenses` nor
-carried by a reviewed entry in its `module_exceptions`. A rebase that reinstates
-an import the fork had removed brings that module's license back into the linked
-set, and the gate fails on it. You do not have to remember to run it: the same
-policy is asserted by `TestDependencyLicensesArePermitted`, which `go test ./...`
-picks up on every merge, and `-check` itself runs again in `release-validate`.
+license outside `tools/licenses/policy.json`'s `allowed_licenses`. A rebase that
+reinstates an import the fork had removed brings that module's license back into
+the linked set, and the gate fails on it. You do not have to remember to run it:
+the same policy is asserted by `TestDependencyLicensesArePermitted`, which
+`go test ./...` picks up on every merge, and `-check` itself runs again in
+`release-validate`.
 
-What that proves today is narrower than it sounds: nothing outside the
-committed policy entered the linked set, and no more. `policy.json`'s
-`module_exceptions` list is empty (patch 4 removed the last one, fslock's, and
-`TestLoadPolicyEmbedded` pins it staying empty), so no linked module is excused
-— but `allowed_licenses` still names MPL-2.0, so a green `-check` does not yet
-read as "no copyleft is linked." Tightening the allowlist is the gate ticket
-(`links-licensing-c0ce.9`) of the licensing epic; until it lands, read a green
-`-check` as "no new license slipped in."
+A green `-check` now says the whole thing it appears to say: **every module
+linked into the binary is under a permissive license, and every one of them was
+identified.** Both halves took work to earn, and the first rests on an empty
+array rather than on a rule. `module_exceptions` is empty (patch 4 removed the
+last one, fslock's, and `TestLoadPolicyEmbedded` pins it staying empty), so no
+linked module is excused by anything — and note that an exception is the one
+accept shape carrying no permissiveness rule at all, deliberately, since naming
+a license the allowlist refuses is the only reason to write one. fslock's
+exception named an LGPL. So re-opening that array does not merely add a row: it
+weakens this paragraph, which is a second reason it is the owner's call.
+`allowed_licenses` names
+ten permissive licenses and nothing else — nine that linked components
+actually carry, plus `Apache-2.0 WITH LLVM-exception`, which nothing carries
+bare and which is there only because compiler-rt's expression names it as an
+arm. `links-licensing-c0ce.9` deleted MPL-2.0, WTFPL and ISC once measurement
+showed nothing linked carried any of them, so there is no longer a copyleft
+license sitting in the list for the gate to wave through — and one cannot be
+added quietly, since the parse refuses an entry the license classifier types
+as restricted, reciprocal or forbidden. And the
+classifier's `Unknown` verdict is a hard failure with no route around it: not an
+allowlist entry, not an exception. A policy naming it is refused at the parse,
+and every ruling refuses it again regardless of what the policy says, so the
+guarantee does not depend on the file having been read through the parse. A
+module whose license nobody can read fails this gate,
+which is the row it would be easiest to talk past.
+
+Read it as narrowly as it is written, though, on both axes.
+
+`-check` rules on each linked module's own license grant — the file a
+coordinate scanner reports. A copyleft text sitting deeper inside a linked
+module's tree is a different question, and `-graph` below is where it gets
+answered.
+
+And it rules on the linked set of **the platform it runs on**. `go list -deps`
+resolves a platform-dependent set, so "every module linked into the binary" is
+a claim about *a* binary: linux/amd64 links 154 components where darwin links
+153 (`github.com/klauspost/cpuid/v2`). Both were checked for this change, and
+CI runs Linux, which is the platform the release artifacts are built for — but
+a rebase that reinstates an import behind a build tag for a third platform is
+not covered by a green run on either of these two.
+
+To check another platform, build the tool natively and then set the target on
+the run — and set `CGO_ENABLED` with it:
+
+```sh
+go build -o /tmp/lic ./tools/licenses
+CGO_ENABLED=1 GOOS=linux GOARCH=amd64 /tmp/lic -check -pkg ./cmd/lit
+```
+
+Both halves matter. `GOOS=linux go run ./tools/licenses` cross-*builds* the
+tool and dies with `exec format error`, because the tool takes its target from
+the environment rather than a flag. And cross-compiling defaults `CGO_ENABLED`
+to 0, which resolves a module set that is neither platform's — it drops
+`github.com/dolthub/go-icu-regex`, which darwin links, and adds
+`github.com/klauspost/cpuid/v2`, which darwin does not — and then prints a
+green line with a component count that happens to match darwin's exactly. A
+verification step whose whole purpose is catching a reinstated import must not
+have a mode that quietly gates the wrong set.
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run
