@@ -27,9 +27,10 @@ places a line of the flagged code in the shipped binary.
 
 The one GPL text that is part of a module's *own license grant* is
 freetype's `licenses/gpl.txt` — the module is dual-licensed, FreeType
-License or GPL-2.0. (The graph holds two other GPL texts, both data rather
-than grants: libc's vendored test corpus and the license classifier's
-reference corpus, each explained in its own section below.) Nothing in `lit` or its
+License or GPL-2.0. (GPL text appears in two other places, both data rather
+than grants: one copy in libc's vendored test corpus, and several — every
+GPL and LGPL version — in the license classifier's reference corpus, each
+explained in its own section below.) Nothing in `lit` or its
 forks imports it, and no freetype source carries an `h1:` hash in either
 `go.sum`. It is named in the graph by a chain of dev-dependency metadata in
 modules that predate Go 1.17's graph pruning: Dolt needs
