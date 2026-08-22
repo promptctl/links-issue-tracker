@@ -26,11 +26,12 @@ type wireBOM struct {
 		} `json:"component"`
 	} `json:"metadata"`
 	Components []struct {
-		Type     string `json:"type"`
-		Name     string `json:"name"`
-		Version  string `json:"version"`
-		PURL     string `json:"purl"`
-		Licenses []struct {
+		Type        string `json:"type"`
+		Name        string `json:"name"`
+		Version     string `json:"version"`
+		Description string `json:"description"`
+		PURL        string `json:"purl"`
+		Licenses    []struct {
 			License struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`

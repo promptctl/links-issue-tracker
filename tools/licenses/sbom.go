@@ -68,11 +68,16 @@ func buildSBOM(entries []Entry, appVersion, serialNumber string, timestamp time.
 	components := make([]cdx.Component, 0, len(entries))
 	for _, e := range entries {
 		components = append(components, cdx.Component{
-			Type:       cdx.ComponentTypeLibrary,
-			Name:       e.Module.Path,
-			Version:    e.Module.Version,
-			PackageURL: e.PackageURL,
-			Licenses:   componentLicenses(e.LicenseName),
+			Type:    cdx.ComponentTypeLibrary,
+			Name:    e.Module.Path,
+			Version: e.Module.Version,
+			// A curated note (dual-license election, compound-expression
+			// provenance) rides as the component description so the SBOM
+			// explains its own license claim; empty for classified Go modules
+			// and omitted from the JSON. [LAW:dataflow-not-control-flow]
+			Description: e.Note,
+			PackageURL:  e.PackageURL,
+			Licenses:    componentLicenses(e.LicenseName),
 		})
 	}
 

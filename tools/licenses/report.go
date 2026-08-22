@@ -23,11 +23,30 @@ func WriteReport(w io.Writer, entries []Entry) error {
 		return err
 	}
 	counts := make(map[string]int, len(entries))
+	var noted []Entry
 	for _, e := range entries {
 		if _, err := fmt.Fprintf(w, "| %s | %s | %s |\n", e.Module.Path, versionCell(e.Module.Version), e.LicenseName); err != nil {
 			return fmt.Errorf("write report row for %s: %w", e.Module.Path, err)
 		}
 		counts[e.LicenseName]++
+		if e.Note != "" {
+			noted = append(noted, e)
+		}
+	}
+
+	// Notes sit directly under the table they annotate: the dual-license
+	// elections and compound-expression provenance a License cell alone can't
+	// carry (Entry.Note). Rendering them here is what makes an election visible
+	// to a reader of the shipped report, not only to a reader of our source.
+	if len(noted) > 0 {
+		if _, err := fmt.Fprintf(w, "\n## Notes\n\n"); err != nil {
+			return err
+		}
+		for _, e := range noted {
+			if _, err := fmt.Fprintf(w, "- **%s %s** — %s\n", e.Module.Path, versionCell(e.Module.Version), e.Note); err != nil {
+				return fmt.Errorf("write note for %s: %w", e.Module.Path, err)
+			}
+		}
 	}
 
 	if _, err := fmt.Fprintf(w, "\n## Summary\n\n| License | Count |\n|---|---|\n"); err != nil {

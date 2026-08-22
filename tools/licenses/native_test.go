@@ -30,11 +30,15 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 	// A UNIQUE substring per lib, so each embedded text is independently
 	// verified: "MIT license" alone would match musl's COPYRIGHT and let
 	// compiler-rt's distinct "The MIT License (Expat)" go unchecked.
+	// compiler-rt's notice is checked twice because its expression is a
+	// compound (MIT AND Apache-2.0 WITH LLVM-exception): the Zig MIT text and
+	// the LLVM license text must BOTH ship, or the attribution is short one arm.
 	for _, want := range []string{
 		"UNICODE LICENSE V3",          // icu
 		"Zstandard",                   // zstd
 		"musl as a whole is licensed", // musl
-		"The MIT License (Expat)",     // compiler-rt (zig)
+		"The MIT License (Expat)",     // compiler-rt (zig's own license)
+		"The LLVM Project is under the Apache License v2.0 with LLVM Exceptions", // compiler-rt (ported LLVM routines)
 	} {
 		if !strings.Contains(bundle.String(), want) {
 			t.Errorf("bundle missing native notice text %q", want)
@@ -52,7 +56,7 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		{"icu", "75.1", "Unicode-3.0"},
 		{"zstd", "1.5.6", "BSD-3-Clause"},
 		{"musl", "1.2.5", "MIT"},
-		{"compiler-rt", "0.14.0", "MIT"},
+		{"compiler-rt", "0.14.0", "MIT AND Apache-2.0 WITH LLVM-exception"},
 	} {
 		i, ok := byName[tc.name]
 		if !ok {
@@ -68,6 +72,50 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		}
 		if len(c.Licenses) != 1 || c.Licenses[0].License.Name != tc.license {
 			t.Errorf("%s licenses = %+v, want name %s", tc.name, c.Licenses, tc.license)
+		}
+	}
+}
+
+// TestNativeNotesSurfaceInReportAndSBOM is links-licensing-c0ce.8's acceptance
+// criterion for the curated notes: zstd's dual-license election and
+// compiler-rt's compound-expression provenance must be readable in the shipped
+// artifacts themselves — LICENSE-REPORT.md's Notes section and the SBOM
+// component's description — not only in native.go, which ships to nobody.
+func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
+	entries := nativeEntries()
+
+	var report bytes.Buffer
+	if err := WriteReport(&report, entries); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	if !strings.Contains(report.String(), "## Notes") {
+		t.Error("report missing the Notes section")
+	}
+	for _, want := range []string{
+		"lit elects and distributes under BSD-3-Clause",            // zstd election
+		"ported from LLVM compiler-rt sources licensed Apache-2.0", // compiler-rt provenance
+	} {
+		if !strings.Contains(report.String(), want) {
+			t.Errorf("report notes missing %q", want)
+		}
+	}
+
+	bom := decodeSBOM(t, entries, "")
+	descriptions := map[string]string{}
+	for _, c := range bom.Components {
+		descriptions[c.Name] = c.Description
+	}
+	if !strings.Contains(descriptions["zstd"], "BSD-3-Clause OR GPL-2.0-only") {
+		t.Errorf("zstd SBOM description does not state the dual-license election: %q", descriptions["zstd"])
+	}
+	if !strings.Contains(descriptions["compiler-rt"], "Apache-2.0 WITH LLVM-exception") {
+		t.Errorf("compiler-rt SBOM description does not state the ported-LLVM provenance: %q", descriptions["compiler-rt"])
+	}
+	// Libs without a curated note stay description-free — the note is curated
+	// information, never boilerplate.
+	for _, name := range []string{"icu", "musl"} {
+		if descriptions[name] != "" {
+			t.Errorf("%s has an unexpected SBOM description %q", name, descriptions[name])
 		}
 	}
 }

@@ -17,8 +17,11 @@ import (
 
 // License texts are embedded because, unlike Go modules, there is no module
 // directory to read them from at generation time. Each is the verbatim upstream
-// notice, fetched from the pinned upstream tag. [LAW:one-source-of-truth] the
-// embedded bytes are the one copy that ships in THIRD_PARTY_LICENSES.
+// notice, fetched from the pinned upstream tag; compiler-rt's file concatenates
+// two such notices (Zig's LICENSE and LLVM compiler-rt's LICENSE.TXT) because
+// the component genuinely carries material under both — see its entry below.
+// [LAW:one-source-of-truth] the embedded bytes are the one copy that ships in
+// THIRD_PARTY_LICENSES.
 //
 //go:embed native/ICU-LICENSE
 var icuLicenseText string
@@ -33,25 +36,43 @@ var muslLicenseText string
 var compilerRTLicenseText string
 
 // nativeLib is one statically-linked native C library: its name, version, the
-// SPDX license we distribute it under, and the verbatim notice text.
+// SPDX expression we distribute it under, the verbatim notice text, and a note
+// carrying whatever a reader of the shipped artifacts needs to accept the
+// license claim without consulting our source — a dual-license election, or the
+// provenance behind a compound expression. The note travels into
+// LICENSE-REPORT.md and the SBOM (Entry.Note), never only into a Go comment.
 type nativeLib struct {
 	name    string
 	version string
 	license string
 	text    string
+	note    string
 }
 
 // nativeLibs is the curated native-library inventory. Versions are pinned to the
 // release toolchain: ICU to build/Dockerfile.release's ICU_MAJOR.ICU_MINOR;
 // zstd to the version gozstd vendors (its zstd.h ZSTD_VERSION_* — 1.5.6);
 // musl and compiler-rt to what zig 0.14.0 (Dockerfile ZIG_VERSION) bundles for
-// the fully-static linux/musl targets. zstd is dual BSD-3-Clause/GPLv2 upstream;
-// we elect BSD-3-Clause. ICU 75.1 carries the Unicode License v3.
+// the fully-static linux/musl targets. ICU 75.1 carries the Unicode License v3
+// (its LICENSE at release-75-1 is byte-identical to the embedded copy), and
+// zig 0.14.0's bundled musl source identifies itself as 1.2.5
+// (src/internal/version.h) with a COPYRIGHT byte-identical to ours.
+//
+// compiler-rt here is not LLVM's compiler-rt: it is Zig's own implementation of
+// the builtins (lib/compiler_rt/*.zig in the zig tarball), MIT-licensed as part
+// of Zig — but its files cite routines ported from llvm-project compiler-rt
+// sources whose headers at the cited commits read "Apache-2.0 WITH
+// LLVM-exception" (fp_add_impl.inc@02d85149, divdf3.c/divsf3.c@d674d96b,
+// clear_cache.c@cf54cae2, os_version_check.c@llvmorg-13.0.0; others cite the
+// pre-relicense dual MIT/NCSA era). The compound expression states both;
+// flatly asserting MIT would misstate the ported material's grant.
 var nativeLibs = []nativeLib{
 	{name: "icu", version: "75.1", license: "Unicode-3.0", text: icuLicenseText},
-	{name: "zstd", version: "1.5.6", license: "BSD-3-Clause", text: zstdLicenseText},
+	{name: "zstd", version: "1.5.6", license: "BSD-3-Clause", text: zstdLicenseText,
+		note: "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText},
-	{name: "compiler-rt", version: "0.14.0", license: "MIT", text: compilerRTLicenseText},
+	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,
+		note: "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception."},
 }
 
 // nativeEntries renders the curated native libraries as Entry values so the
@@ -67,6 +88,7 @@ func nativeEntries() []Entry {
 			Module:      Module{Path: n.name, Version: n.version},
 			LicenseName: n.license,
 			Text:        n.text,
+			Note:        n.note,
 			PackageURL:  genericPURL(n.name, n.version),
 		})
 	}

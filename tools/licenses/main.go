@@ -87,6 +87,12 @@ type Entry struct {
 	Confidence  float64
 	Text        string
 	PackageURL  string
+	// Note is reader-facing context the license name alone doesn't carry — a
+	// dual-license election, or the provenance behind a compound expression.
+	// Curated per native lib (native.go); empty for classified Go modules. It
+	// renders in LICENSE-REPORT.md's Notes section and as the SBOM component's
+	// description, so the shipped artifacts explain themselves.
+	Note string
 }
 
 func main() {
