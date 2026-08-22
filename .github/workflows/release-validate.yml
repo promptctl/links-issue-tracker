@@ -433,8 +433,12 @@ jobs:
           grep -q 'Zstandard' "$workdir/THIRD_PARTY_LICENSES"
           grep -q '| musl | 1.2.5 | MIT |' "$workdir/LICENSE-REPORT.md"
           grep -q 'musl as a whole is licensed under the following standard MIT license' "$workdir/THIRD_PARTY_LICENSES"
-          grep -q '| compiler-rt | 0.14.0 | MIT |' "$workdir/LICENSE-REPORT.md"
+          # compiler-rt's row is a compound SPDX expression, not a bare id: the
+          # component is MIT as part of Zig AND carries routines ported from
+          # Apache-licensed LLVM sources. Both notices ship, so both are checked.
+          grep -q '| compiler-rt | 0.14.0 | MIT AND Apache-2.0 WITH LLVM-exception |' "$workdir/LICENSE-REPORT.md"
           grep -q 'The MIT License (Expat)' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q 'The LLVM Project is under the Apache License v2.0 with LLVM Exceptions' "$workdir/THIRD_PARTY_LICENSES"
           echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt)"
 
       # Stage the CycloneDX SBOM as a standalone, versioned release asset —

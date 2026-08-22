@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -118,18 +119,49 @@ func goModulePURL(modulePath, version string) string {
 }
 
 // componentLicenses renders a classified license name as a CycloneDX license
-// choice, or nil when the module's license could not be classified. It uses
-// the `name` field, never `id`: the 1.6 schema constrains license.id to the
-// SPDX id enum, so a classifier output that isn't an exact SPDX id (or the
-// unclassifiedLicense sentinel) placed in `id` would fail validation — the
-// exact check this SBOM must pass. An unclassified module contributes a
-// component with no license rather than a fabricated one; the full text and
-// the "Unknown" row still travel in THIRD_PARTY_LICENSES and LICENSE-REPORT.md,
-// so nothing is hidden. [LAW:no-silent-failure]
+// choice, or nil when the module's license could not be classified. An
+// unclassified module contributes a component with no license rather than a
+// fabricated one; the full text and the "Unknown" row still travel in
+// THIRD_PARTY_LICENSES and LICENSE-REPORT.md, so nothing is hidden.
+// [LAW:no-silent-failure]
 func componentLicenses(name string) *cdx.Licenses {
 	if name == "" || name == unclassifiedLicense {
 		return nil
 	}
-	licenses := cdx.Licenses{{License: &cdx.License{Name: name}}}
+	licenses := cdx.Licenses{licenseChoice(name)}
 	return &licenses
+}
+
+// spdxOperators are the three operators of the SPDX license-expression
+// grammar. A license value is compound exactly when one of them appears as a
+// whole space-delimited token: SPDX identifiers never contain a space, so an
+// operator can only ever stand as its own field. Matching tokens rather than
+// substrings is what keeps an identifier that merely spells an operator inside
+// itself — GPL-2.0-or-later, Apache-2.0 — on the single-name arm by
+// construction rather than by luck. That matters because LicenseName is not a
+// curated set: it also carries whatever licenseclassifier returns for every Go
+// module in the link closure.
+var spdxOperators = map[string]bool{"AND": true, "OR": true, "WITH": true}
+
+// licenseChoice maps one license value onto the CycloneDX arm that represents
+// it. CycloneDX models the two shapes as a sum — a single named license, or an
+// SPDX expression — and this is the one place lit's license strings are mapped
+// onto it, so no renderer re-derives which arm a value belongs in.
+// [LAW:parse-dont-validate] the returned LicenseChoice is the proof: a caller
+// holding one cannot ask the question again.
+//
+// The `name` field is used, never `id`: the 1.6 schema constrains license.id to
+// the SPDX id enum, so a classifier output that isn't an exact SPDX id placed
+// in `id` would fail the very validation this SBOM must pass. An expression has
+// no such constraint — `expression` is where the schema puts compound grants,
+// and a compound left in `name` reads to a scanner as one license literally
+// named with an AND in it.
+func licenseChoice(name string) cdx.LicenseChoice {
+	// [LAW:dataflow-not-control-flow] the one branch is CycloneDX's own sum
+	// type, which is the entire point of the discriminator — not a special
+	// case carved into the renderer.
+	if slices.ContainsFunc(strings.Fields(name), func(field string) bool { return spdxOperators[field] }) {
+		return cdx.LicenseChoice{Expression: name}
+	}
+	return cdx.LicenseChoice{License: &cdx.License{Name: name}}
 }

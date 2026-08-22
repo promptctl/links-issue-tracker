@@ -64,15 +64,19 @@ type nativeLib struct {
 // sources whose headers at the cited commits read "Apache-2.0 WITH
 // LLVM-exception" (fp_add_impl.inc@02d85149, divdf3.c/divsf3.c@d674d96b,
 // clear_cache.c@cf54cae2, os_version_check.c@llvmorg-13.0.0; others cite the
-// pre-relicense dual MIT/NCSA era). The compound expression states both;
-// flatly asserting MIT would misstate the ported material's grant.
+// pre-relicense era, when compiler_rt was dual licensed under the University of
+// Illinois/NCSA license and MIT with the choice left to the user — lit elects
+// MIT for those, which is why the expression carries two arms and not an NCSA
+// third). The compound expression names both grants lit actually distributes
+// under; flatly asserting MIT alone would misstate the Apache-licensed ported
+// material, and adding NCSA would claim a grant lit declined.
 var nativeLibs = []nativeLib{
 	{name: "icu", version: "75.1", license: "Unicode-3.0", text: icuLicenseText},
 	{name: "zstd", version: "1.5.6", license: "BSD-3-Clause", text: zstdLicenseText,
 		note: "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText},
 	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,
-		note: "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception."},
+		note: "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception. Routines ported from pre-relicense LLVM sources are dual-licensed (University of Illinois/NCSA OR MIT) at the user's election; lit elects and distributes those under MIT, which the expression's MIT arm covers, so no NCSA grant is claimed. The embedded notice carries the full text of every license named here."},
 }
 
 // nativeEntries renders the curated native libraries as Entry values so the

@@ -52,11 +52,17 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 	for i, c := range bom.Components {
 		byName[c.Name] = i
 	}
-	for _, tc := range []struct{ name, version, license string }{
-		{"icu", "75.1", "Unicode-3.0"},
-		{"zstd", "1.5.6", "BSD-3-Clause"},
-		{"musl", "1.2.5", "MIT"},
-		{"compiler-rt", "0.14.0", "MIT AND Apache-2.0 WITH LLVM-exception"},
+	// The license columns are the two CycloneDX arms, asserted together for
+	// every row: a single SPDX id belongs in license.name, a compound grant in
+	// the sibling expression field. Both are pinned because a value in the
+	// wrong arm is invisible to a scanner reading the other one — compiler-rt's
+	// compound left in license.name reads as one license literally named with
+	// an AND in it, and an SPDX-aware policy engine sees no grant at all.
+	for _, tc := range []struct{ name, version, licenseName, expression string }{
+		{"icu", "75.1", "Unicode-3.0", ""},
+		{"zstd", "1.5.6", "BSD-3-Clause", ""},
+		{"musl", "1.2.5", "MIT", ""},
+		{"compiler-rt", "0.14.0", "", "MIT AND Apache-2.0 WITH LLVM-exception"},
 	} {
 		i, ok := byName[tc.name]
 		if !ok {
@@ -70,8 +76,44 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		if c.PURL != "pkg:generic/"+tc.name+"@"+tc.version {
 			t.Errorf("%s purl = %q, want pkg:generic/%s@%s", tc.name, c.PURL, tc.name, tc.version)
 		}
-		if len(c.Licenses) != 1 || c.Licenses[0].License.Name != tc.license {
-			t.Errorf("%s licenses = %+v, want name %s", tc.name, c.Licenses, tc.license)
+		if len(c.Licenses) != 1 {
+			t.Errorf("%s licenses = %+v, want exactly one entry", tc.name, c.Licenses)
+			continue
+		}
+		if got := c.Licenses[0].License.Name; got != tc.licenseName {
+			t.Errorf("%s license.name = %q, want %q", tc.name, got, tc.licenseName)
+		}
+		if got := c.Licenses[0].Expression; got != tc.expression {
+			t.Errorf("%s license expression = %q, want %q", tc.name, got, tc.expression)
+		}
+	}
+}
+
+// TestLicenseChoiceArms is the accept/reject table for the one decision that
+// decides whether a compound grant is machine-readable: which CycloneDX arm a
+// license value lands in. The rows that matter are the near-misses — an
+// identifier that spells an operator inside itself must stay a name, or a
+// substring check would quietly file GPL-2.0-or-later as an expression and
+// every SPDX-aware consumer would stop seeing it. LicenseName is not a curated
+// set; it carries whatever licenseclassifier returns for every linked module.
+func TestLicenseChoiceArms(t *testing.T) {
+	for _, tc := range []struct{ in, wantName, wantExpression string }{
+		{"MIT", "MIT", ""},
+		{"Unicode-3.0", "Unicode-3.0", ""},
+		{"BSD-3-Clause", "BSD-3-Clause", ""},
+		{"GPL-2.0-or-later", "GPL-2.0-or-later", ""},
+		{"MIT AND Apache-2.0 WITH LLVM-exception", "", "MIT AND Apache-2.0 WITH LLVM-exception"},
+		{"BSD-3-Clause OR GPL-2.0-only", "", "BSD-3-Clause OR GPL-2.0-only"},
+		{"Apache-2.0 WITH LLVM-exception", "", "Apache-2.0 WITH LLVM-exception"},
+	} {
+		got := licenseChoice(tc.in)
+		name := ""
+		if got.License != nil {
+			name = got.License.Name
+		}
+		if name != tc.wantName || got.Expression != tc.wantExpression {
+			t.Errorf("licenseChoice(%q) = name %q / expression %q, want name %q / expression %q",
+				tc.in, name, got.Expression, tc.wantName, tc.wantExpression)
 		}
 	}
 }
@@ -94,6 +136,7 @@ func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 	for _, want := range []string{
 		"lit elects and distributes under BSD-3-Clause",            // zstd election
 		"ported from LLVM compiler-rt sources licensed Apache-2.0", // compiler-rt provenance
+		"lit elects and distributes those under MIT",               // compiler-rt's pre-relicense NCSA/MIT election
 	} {
 		if !strings.Contains(report.String(), want) {
 			t.Errorf("report notes missing %q", want)

@@ -36,6 +36,12 @@ type wireBOM struct {
 				ID   string `json:"id"`
 				Name string `json:"name"`
 			} `json:"license"`
+			// CycloneDX's sibling arm for a compound SPDX grant. Decoded here
+			// so a test can prove which arm a license landed in: a scanner
+			// reading one arm sees nothing at all of a value filed in the
+			// other, so "it serialized" is not the contract — "it serialized
+			// where SPDX-aware consumers look" is.
+			Expression string `json:"expression"`
 		} `json:"licenses"`
 	} `json:"components"`
 }
@@ -121,6 +127,9 @@ func TestWriteSBOMComponentFields(t *testing.T) {
 	}
 	if dolt.Licenses[0].License.ID != "" {
 		t.Errorf("dolt license.id = %q, want empty (name, not id, is used)", dolt.Licenses[0].License.ID)
+	}
+	if dolt.Licenses[0].Expression != "" {
+		t.Errorf("dolt license expression = %q, want empty — a single SPDX id belongs in license.name, not the expression arm", dolt.Licenses[0].Expression)
 	}
 
 	ali := bom.Components[byName["github.com/aliyun/aliyun-oss-go-sdk"]]
