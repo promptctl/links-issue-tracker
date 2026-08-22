@@ -323,10 +323,14 @@ a license the allowlist refuses is the only reason to write one. fslock's
 exception named an LGPL. So re-opening that array does not merely add a row: it
 weakens this paragraph, which is a second reason it is the owner's call.
 `allowed_licenses` names
-nine permissive licenses and nothing else — `links-licensing-c0ce.9` deleted
-MPL-2.0, WTFPL and ISC once measurement showed nothing linked carried any of
-them, so there is no longer a copyleft license sitting in the list for the gate
-to wave through. And the
+ten permissive licenses and nothing else — nine that linked components
+actually carry, plus `Apache-2.0 WITH LLVM-exception`, which nothing carries
+bare and which is there only because compiler-rt's expression names it as an
+arm. `links-licensing-c0ce.9` deleted MPL-2.0, WTFPL and ISC once measurement
+showed nothing linked carried any of them, so there is no longer a copyleft
+license sitting in the list for the gate to wave through — and one cannot be
+added quietly, since the parse refuses an entry the license classifier types
+as restricted, reciprocal or forbidden. And the
 classifier's `Unknown` verdict is a hard failure with no route around it: not an
 allowlist entry, not an exception. A policy naming it is refused at the parse,
 and every ruling refuses it again regardless of what the policy says, so the

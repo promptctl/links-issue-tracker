@@ -106,7 +106,7 @@ func parsePolicy(data []byte) (*Policy, error) {
 		// character, and an exception keyed on a path nothing can equal is an
 		// exception that silently excuses nothing. [LAW:no-silent-failure]
 		for _, r := range e.Module {
-			if !isSPDXRune(r) && r != '/' && r != '@' && r != '_' && r != '~' {
+			if !isModulePathRune(r) {
 				return nil, fmt.Errorf("policy.json module_exception names the module %q, which carries the character %q (U+%04X); the gate compares this against `go list` output byte for byte, so the exception would silently excuse nothing", e.Module, r, r)
 			}
 		}
@@ -169,8 +169,14 @@ func checkAllowedLicenses(allowed []string) error {
 		// are exactly these entries. A duplicate makes both statements false
 		// while changing nothing about what the gate permits, which is the
 		// quietest kind of wrong. [LAW:no-silent-failure]
-		if set[name] {
-			return fmt.Errorf("policy.json allowed_licenses repeats %q; the list's length is printed as a fact by -check and read as one by its note, so a duplicate makes both wrong while permitting nothing new", name)
+		for existing := range set {
+			if !asciiEqualFold(existing, name) {
+				continue
+			}
+			if existing == name {
+				return fmt.Errorf("policy.json allowed_licenses repeats %q; the list's length is printed as a fact by -check and read as one by its note, so a duplicate makes both wrong while permitting nothing new", name)
+			}
+			return fmt.Errorf("policy.json allowed_licenses carries both %q and %q, which differ only in case; at most one of them is a license the classifier emits, so the other is an inert row inflating that same count", existing, name)
 		}
 		set[name] = true
 	}
@@ -192,12 +198,15 @@ func checkAllowedLicenses(allowed []string) error {
 		// types it FORBIDDEN, so "Apache-2.0 WITH Commons-Clause" is a
 		// narrowed grant wearing a permissive base.
 		//
-		// Applying this to an AND-arm's base is, today, unreachable by any
-		// input the rule below does not already refuse: a compound's arms must
-		// each be present as their own entry, and each entry is vetted here in
-		// its own right. That redundancy is deliberate rather than dead — the
-		// two rules answer different questions, and only this one still holds
-		// if the AND-arm requirement is ever relaxed.
+		// This reaches an AND-arm as well as a whole entry, and that is not
+		// redundant with the arm rule below even though every arm must also
+		// appear as its own entry: the entries are walked in file order, so a
+		// compound listed before the arm it needs is vetted here FIRST and
+		// reports the copyleft rather than the missing entry. The two rules
+		// also answer different questions, and only this one still holds if
+		// the arm requirement is ever relaxed. (An earlier version of this
+		// comment called the arm path unreachable. It is reachable, and the
+		// claim was checkable by reading twelve lines.)
 		for _, arm := range arms {
 			for _, identifier := range []string{arm.base, arm.exception} {
 				if identifier == "" {
@@ -208,27 +217,28 @@ func checkAllowedLicenses(allowed []string) error {
 				}
 			}
 		}
-		// An arm is satisfied by its own full text, or by its base identifier
-		// alone. Both, rather than the base alone, and there is a real edge
-		// behind the "both": requiring only the base forced an allowlist that
-		// already carried the NARROWER "Apache-2.0 WITH LLVM-exception" to add
-		// bare "Apache-2.0" as well — the widening this file's note regrets,
-		// demanded by the rule meant to prevent unvetted grants. It also gave
-		// one string two opposite verdicts, since a lone "X WITH Y" entry was
-		// exempted from the rule entirely by a len(arms)==1 carve-out and the
-		// identical arm inside an AND was refused.
+		// Every arm must be present as its own FULL TEXT. Not "full text or
+		// bare base", which is what this was for one commit: accepting the
+		// base for a WITH-arm was justified by "the base is the wider grant
+		// and therefore never unsafe", and that is the retracted premise
+		// wearing different clothes. An exception can NARROW — Commons-Clause
+		// removes the right to sell — so `Apache-2.0` does not stand in for
+		// `Apache-2.0 WITH <something that takes rights away>`. The copyleft
+		// veto catches the exceptions the classifier types, and types most of
+		// them as nothing; the rule cannot lean on it.
 		//
-		// With both forms accepted the carve-out is unnecessary: a single-arm
-		// entry satisfies itself, so the rule applies uniformly. The base form
-		// stays acceptable because it is the wider grant and therefore never
-		// unsafe as an ALLOWLIST answer — it just permits more than the
-		// expression needed, which the note tells the editor to weigh.
+		// Requiring the full text also removes the len(arms)==1 carve-out,
+		// because a single-arm entry now satisfies itself, and removes a
+		// remediation that offered two options which were the same string for
+		// every arm without a WITH — which is every arm in this file but one.
+		// The cost is one extra allowlist entry for compiler-rt's Apache arm,
+		// and that entry is exact: it permits that string and nothing else.
 		for _, arm := range arms {
-			if set[armText(arm)] || set[arm.base] {
+			if set[armText(arm)] {
 				continue
 			}
-			return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each one must be independently acceptable — add %q on its own line, or %q if you mean to permit that license generally, or drop the expression",
-				name, armText(arm), armText(arm), arm.base)
+			return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each arm must appear in this list exactly as the expression spells it — add %q on its own line, or drop the expression",
+				name, armText(arm), armText(arm))
 		}
 	}
 	return nil
@@ -251,8 +261,9 @@ func checkAllowedLicenses(allowed []string) error {
 // and only the negative form is usable.
 //
 // And its coverage has holes that spelling normalization does not close.
-// Measured against the pinned corpus (153 license names): twelve of them type
-// as nothing at all — Beerware, CPAL-1.0, EUPL-1.0, EUPL-1.1,
+// Measured against the pinned corpus — 149 license names, counted as the
+// `.txt` files in its licenses/ directory that are not `.header.txt` — twelve
+// type as nothing at all — Beerware, CPAL-1.0, EUPL-1.0, EUPL-1.1,
 // GUST-Font-License, LGPLLR, LPPL-1.3c, OFL-1.1, OpenVision, SISSL, SISSL-1.2
 // and eGenix. Classify emits those exact strings, several are plainly
 // reciprocal, and this veto would not stop one of them being allowlisted.
@@ -364,8 +375,6 @@ func armText(a licenseArm) string {
 //   - An arm that is neither an identifier nor "<identifier> WITH <exception>".
 //     The gate matches by exact string and will not rule on an expression it
 //     had to guess the meaning of. [LAW:no-silent-failure]
-//
-
 func parseLicenseExpression(where, name string) ([]licenseArm, error) {
 	// Ahead of every shape rule, because the sentinel's own spelling is
 	// "Skipped (oversize)" and the parenthesis rule below would otherwise
@@ -469,6 +478,48 @@ func parseLicenseExpression(where, name string) ([]licenseArm, error) {
 	return parsed, nil
 }
 
+// isModulePathRune reports whether r may appear in a Go module path. A
+// separate alphabet from isSPDXRune on purpose: that one permits a SPACE,
+// because a space separates the arms of an expression, and no module path
+// contains one. Reusing it here admitted exactly the dead exception keys the
+// check exists to refuse — the guard and its own comment disagreed.
+//
+// The set is what `go list` can print: letters, digits, and the punctuation
+// module paths carry (`.`, `-`, `_`, `~`, `+`, and `/` between elements).
+// Notably NOT `@`: a module_exception names a path, never a path@version.
+func isModulePathRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune(".-_~+/", r)
+}
+
+// asciiEqualFold compares two strings case-insensitively over ASCII ONLY.
+// strings.EqualFold folds across Unicode, which would make a homoglyph of a
+// sentinel match it and then be reported with the sentinel's diagnostic — a
+// sentence that is false about the input, in a file whose job is to say true
+// things about what it was given. The character rule refuses such an input on
+// its own terms, further down; this comparison must not answer for it first.
+func asciiEqualFold(a, b string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := 0; i < len(a); i++ {
+		x, y := a[i], b[i]
+		if 'A' <= x && x <= 'Z' {
+			x += 'a' - 'A'
+		}
+		if 'A' <= y && y <= 'Z' {
+			y += 'a' - 'A'
+		}
+		if x != y {
+			return false
+		}
+	}
+	return true
+}
+
 // isSPDXRune reports whether r may appear in an SPDX identifier or in the
 // expression syntax joining identifiers. Deliberately a closed set rather
 // than a unicode category test: the values this refuses are the ones that
@@ -493,14 +544,14 @@ func refuseSentinel(where, name string) error {
 	// carrying an entry that permits nothing while reading as though it does.
 	// (Inert is not harmless. An entry that cannot match anything is a
 	// statement to the next reader about what this repository accepts.)
-	match := ""
+	matched := false
 	for sentinel := range licenseSentinels {
-		if strings.EqualFold(name, sentinel) {
-			match = sentinel
+		if asciiEqualFold(name, sentinel) {
+			matched = true
 			break
 		}
 	}
-	if match == "" {
+	if !matched {
 		return nil
 	}
 	return fmt.Errorf("%s names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license is the one row an auditor cannot evaluate at all, and it has neither an allowlist nor an exception path — remove the dependency instead", where, name)
@@ -745,7 +796,7 @@ func runCheck(pkg string, stdout io.Writer) error {
 		// pressure, documenting their way past it with a persuasive reason.
 		// Pointing them at an exception as the ordinary next step is how that
 		// happens. An "Unknown" row has no such step at all.
-		b.WriteString("Resolve by removing the dependency, or — if the license is genuinely permissive and something lit ships now carries it — adding it to allowed_licenses in tools/licenses/policy.json. If that license is a compound expression, add each AND-arm's BASE identifier on its own line too — the bare identifier, with any WITH-exception dropped — or the file stops loading at all and takes -check and -graph down with it. A module reported as \"Unknown\" carries neither route: nobody can say what its license permits, so it must go.")
+		b.WriteString("Resolve by removing the dependency, or — if the license is genuinely permissive and something lit ships now carries it — adding it to allowed_licenses in tools/licenses/policy.json. If that license is a compound expression, add each of its AND-arms on its own line too, spelled exactly as the expression spells it (a WITH-exception included, not dropped), or the file stops loading at all and takes -check and -graph down with it. A module reported as \"Unknown\" carries neither route: nobody can say what its license permits, so it must go.")
 		return fmt.Errorf("%s", b.String())
 	}
 	// The green line says what the gate proved, and it must not advertise the

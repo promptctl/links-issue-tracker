@@ -128,11 +128,6 @@ func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
 	}
 }
 
-// TestParsePolicyRejectsDuplicateException pins that two exception rows for one
-// (module, license) pair never load. Filter keys exceptions on exactly that
-// pair, so the second collapses onto the first and is invisible to the gate
-// while -check's green line still counts it — and two human-verified reasons
-// for one grant is a question in its own right.
 // TestParsePolicyRejectsMalformedModulePath pins the module half of an
 // exception under the same rule as the license half. The path is matched byte
 // for byte against `go list` output, TrimSpace sees neither an interior
@@ -140,7 +135,12 @@ func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
 // nothing can equal excuses nothing while reading as though it does.
 func TestParsePolicyRejectsMalformedModulePath(t *testing.T) {
 	const want = "carries the character"
-	for _, path := range []string{"example.com/m\u200bx", "example.com/（m）"} {
+	// The space and the @ are the two that mattered: this guard originally
+	// reused isSPDXRune, whose alphabet PERMITS a space because a space
+	// separates the arms of an expression, and additionally whitelisted @ —
+	// so it admitted exactly the dead keys its own comment claimed to refuse.
+	// A module_exception names a path, never a path@version.
+	for _, path := range []string{"example.com/m\u200bx", "example.com/（m）", "example.com/m x", "example.com/m@v1.0.0"} {
 		doc := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"` + path + `","license":"LGPL-3.0","reason":"human-verified"}]}`
 		_, err := parsePolicy([]byte(doc))
 		if err == nil {
@@ -156,6 +156,11 @@ func TestParsePolicyRejectsMalformedModulePath(t *testing.T) {
 	}
 }
 
+// TestParsePolicyRejectsDuplicateException pins that two exception rows for one
+// (module, license) pair never load. Filter keys exceptions on exactly that
+// pair, so the second collapses onto the first and is invisible to the gate
+// while -check's green line still counts it — and two human-verified reasons
+// for one grant is a question in its own right.
 func TestParsePolicyRejectsDuplicateException(t *testing.T) {
 	dup := `{"allowed_licenses":["MIT"],"module_exceptions":[` +
 		`{"module":"example.com/m","license":"LGPL-3.0","reason":"first reading"},` +
@@ -296,9 +301,12 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 // dolt test file (links-licensing-c0ce.7), LGPL-3.0 was fslock's and rode a
 // documented exception (.4), MPL-2.0 sat in allowed_licenses to cover golang-lru
 // and go-sql-driver/mysql (.5, .2), and the Unknown sentinel was kch42/buzhash's
-// unclassifiable WTFPL variant, also on an exception (.6). Three of the four
-// therefore USED to pass this gate, and links-licensing-c0ce.9 closed both
-// routes: the allowlist entry is gone and the sentinel has no exception path.
+// unclassifiable WTFPL variant, also on an exception (.6). Exactly ONE of the
+// four passed this gate in the state links-licensing-c0ce.9 changed — MPL-2.0,
+// on the allowlist. LGPL-3.0 and the unclassifiable one had each passed
+// EARLIER in the epic, on exceptions .4 and .6 deleted along with the
+// dependencies behind them. .9 closed what was left: the allowlist entry is
+// gone and the sentinel has no exception path.
 //
 // Be exact about what a row here can detect, rather than claiming the table
 // catches every reopening — and note that the answer changed under this test's
@@ -463,6 +471,11 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			// inert, and therefore a statement to the next reader about what
 			// this repository accepts that is not true.
 			{"a lower-cased sentinel is still the sentinel", "no verdict", []string{"MIT", "unknown"}},
+			// Not a duplicate by byte comparison, which is why the rule folds
+			// case: at most one of the two is a name the classifier emits, so
+			// the other can never match anything and exists only to inflate a
+			// count -check prints as a fact.
+			{"two entries differing only in case", "differ only in case", []string{"MIT", "mit"}},
 			{"a copyleft license may not be allowlisted at all", "which the classifier types as", []string{"MIT", "GPL-3.0"}},
 			// The current SPDX spelling, which the classifier's corpus
 			// predates: LicenseType("GPL-3.0-only") is "" and only the
@@ -508,8 +521,8 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			why     string
 			entries []string
 		}{
-			{"an AND-arm that is not itself allowlisted is a grant nobody vetted", []string{"MIT", "MIT AND GPL-2.0-only"}},
-			{"a WITH does not exempt the arm's base identifier from the rule", []string{"MIT", "MIT AND Apache-2.0 WITH LLVM-exception"}},
+			{"an AND-arm that is not itself allowlisted is a grant nobody vetted", []string{"MIT", "MIT AND Unicode-3.0"}},
+			{"a WITH-arm is not satisfied by its bare base, because an exception can narrow", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 WITH LLVM-exception"}},
 			{"an arm the parser cannot decompose is one the gate cannot rule on", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 LLVM-exception"}},
 			{"a dangling operator is not an expression", []string{"MIT", "MIT AND"}},
 
@@ -546,7 +559,7 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			why     string
 			entries []string
 		}{
-			{"the committed expression, with both arms independently present", []string{"MIT", "Apache-2.0", "MIT AND Apache-2.0 WITH LLVM-exception"}},
+			{"the committed expression, with each arm present exactly as the expression spells it", []string{"MIT", "Apache-2.0", "Apache-2.0 WITH LLVM-exception", "MIT AND Apache-2.0 WITH LLVM-exception"}},
 			{"a bare identifier has no arms to check", []string{"MIT"}},
 			{"a single arm IS the vetted entry, so a lone WITH needs no base", []string{"Apache-2.0 WITH LLVM-exception"}},
 			{"an identifier that merely contains an operator's letters is one token", []string{"XOR-1.0", "WITHERED-2.0"}},

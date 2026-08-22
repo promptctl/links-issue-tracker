@@ -222,8 +222,11 @@ func rootGrantLicense(hits []LicenseHit) string {
 // corpus. What stands in for a gate is a written verdict per row, in
 // LICENSE-NOTES.md, which FORKS.md points at and which this report's sections
 // are shaped to feed. [LAW:verifiable-goals] done here means the graph is
-// measured by a re-runnable tool instead of by hand, and every row it finds is
-// answered in prose — not that the build enforces what the measurement found.
+// measured by a re-runnable tool instead of by hand, and its rows are answered
+// in prose — per row for the module grants and the nested texts, and per SHAPE
+// for the unclassified section, which is a standing list of fifty-odd rows
+// nobody enumerates. Not that the build enforces what the measurement found,
+// and not that every individual row has its own paragraph.
 func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) error {
 	hits := 0
 	for _, e := range entries {
