@@ -69,9 +69,14 @@ the same shape: two `/go.mod`-only lines (v0.5.0 and v0.5.1), named by
 old `google.golang.org/api` and `go.opencensus.io` go.mods from the same
 pre-pruning era, with no source hash anywhere. MPL-2.0
 is file-level copyleft triggered by distributing the covered files; `lit`
-distributes none of them. MPL-2.0 is currently in the policy allowlist;
-whether the gate should also assert anything about unlinked graph rows is the
-gate ticket's decision (`links-licensing-c0ce.9`).
+distributes none of them. MPL-2.0 is no longer in the policy allowlist —
+`links-licensing-c0ce.9` deleted it once measurement showed nothing linked
+carried it. That changes nothing about `-check`, which rules on the link
+closure and none of these rows are in it; what it changes is that a graph row
+classifying MPL-2.0 is now reported instead of filtered out as permitted, which
+is the right behaviour for a document whose job is to show an auditor what is
+there and then say why it is fine. The owner's decision on that ticket was that
+graph mode keeps reporting and never gates.
 
 ## `modernc.org/libc`: a GPL file inside test data
 

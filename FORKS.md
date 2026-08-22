@@ -305,21 +305,31 @@ go run ./tools/licenses -check
 ```
 
 This classifies every module linked into `./cmd/lit` and exits non-zero on any
-license that is neither in `tools/licenses/policy.json`'s `allowed_licenses` nor
-carried by a reviewed entry in its `module_exceptions`. A rebase that reinstates
-an import the fork had removed brings that module's license back into the linked
-set, and the gate fails on it. You do not have to remember to run it: the same
-policy is asserted by `TestDependencyLicensesArePermitted`, which `go test ./...`
-picks up on every merge, and `-check` itself runs again in `release-validate`.
+license outside `tools/licenses/policy.json`'s `allowed_licenses`. A rebase that
+reinstates an import the fork had removed brings that module's license back into
+the linked set, and the gate fails on it. You do not have to remember to run it:
+the same policy is asserted by `TestDependencyLicensesArePermitted`, which
+`go test ./...` picks up on every merge, and `-check` itself runs again in
+`release-validate`.
 
-What that proves today is narrower than it sounds: nothing outside the
-committed policy entered the linked set, and no more. `policy.json`'s
-`module_exceptions` list is empty (patch 4 removed the last one, fslock's, and
-`TestLoadPolicyEmbedded` pins it staying empty), so no linked module is excused
-— but `allowed_licenses` still names MPL-2.0, so a green `-check` does not yet
-read as "no copyleft is linked." Tightening the allowlist is the gate ticket
-(`links-licensing-c0ce.9`) of the licensing epic; until it lands, read a green
-`-check` as "no new license slipped in."
+A green `-check` now says the whole thing it appears to say: **every module
+linked into the binary is under a permissive license, and every one of them was
+identified.** Both halves took work to earn. `module_exceptions` is empty (patch
+4 removed the last one, fslock's, and `TestLoadPolicyEmbedded` pins it staying
+empty), so no linked module is excused by anything. `allowed_licenses` names
+nine permissive licenses and nothing else — `links-licensing-c0ce.9` deleted
+MPL-2.0, WTFPL and ISC once measurement showed nothing linked carried any of
+them, so there is no longer a copyleft license sitting in the list for the gate
+to wave through. And the
+classifier's `Unknown` verdict is a hard failure with no route around it: not an
+allowlist entry, not an exception, refused at the parse and dropped again when
+the filter is built. A module whose license nobody can read fails this gate,
+which is the row it would be easiest to talk past.
+
+Read it as narrowly as it is written, though: `-check` rules on each linked
+module's own license grant, the file a coordinate scanner reports. A copyleft
+text sitting deeper inside a linked module's tree is a different question, and
+`-graph` below is where it gets answered.
 
 What `-check` does *not* cover is anything outside the linked set: a copyleft
 module that sits in the module graph without being linked passes. `go run

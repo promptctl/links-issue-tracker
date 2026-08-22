@@ -278,31 +278,68 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 // excuses the file a human actually read and nothing else.
 //
 // A policy exception names one license string a human verified against one
-// file — the module's ROOT grant (as policy.json once did for kch42/buzhash's
-// unclassifiable WTFPL variant, before links-licensing-c0ce.6 removed that
-// dependency). If the exception also covered an unclassifiable file buried in
+// file — the module's ROOT grant (as policy.json once did for fslock's
+// LGPL-with-static-linking-exception, before links-licensing-c0ce.4 removed
+// that dependency). If the exception also covered a copyleft file buried in
 // the same module's testdata, the report would drop it on the strength of a
-// human having read a different file, and the rows it would drop first are the
-// unclassifiable ones this report calls the worst kind. An allowlisted license
-// is different: permissive is permissive at any depth. [LAW:no-silent-failure]
+// human having read a different file. An allowlisted license is different:
+// permissive is permissive at any depth. [LAW:no-silent-failure]
+//
+// The excepted license here is LGPL-3.0 rather than the classifier's Unknown
+// sentinel, which is what this test used while kch42/buzhash's unclassifiable
+// WTFPL variant rode an exception. That is no longer a shape a policy can
+// express — see TestSentinelLicensesHaveNoPathThroughAnyFilter.
 func TestModuleExceptionsReachOnlyTheRootGrant(t *testing.T) {
 	policy := &Policy{
 		AllowedLicenses:  []string{"MIT"},
-		ModuleExceptions: []ModuleException{{Module: "excepted/mod", License: unclassifiedLicense}},
+		ModuleExceptions: []ModuleException{{Module: "excepted/mod", License: "LGPL-3.0"}},
 	}
 	filter := policy.Filter()
 
-	if !permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: unclassifiedLicense}) {
+	if !permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: "LGPL-3.0"}) {
 		t.Error("the exception must cover the module's own root grant — that is the file it was verified against")
 	}
-	if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "testdata/COPYING", License: unclassifiedLicense}) {
+	if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "testdata/COPYING", License: "LGPL-3.0"}) {
 		t.Error("the exception must NOT reach a nested file nobody verified")
 	}
 	if !permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "vendor/dep/LICENSE", License: "MIT"}) {
 		t.Error("an allowlisted license is permissive at any depth and needs no exception")
 	}
-	if permitsHit(filter, "other/mod", LicenseHit{RelPath: "LICENSE", License: unclassifiedLicense}) {
+	if permitsHit(filter, "other/mod", LicenseHit{RelPath: "LICENSE", License: "LGPL-3.0"}) {
 		t.Error("an exception is keyed to its module and must not cover another one")
+	}
+}
+
+// TestSentinelLicensesHaveNoPathThroughAnyFilter pins links-licensing-c0ce.9's
+// hard rule at the graph audit's ruling site: a license this tool could not
+// read is not permitted by ANY policy, however that policy was written.
+//
+// The policy built here is the most permissive one that can be expressed — it
+// allowlists both sentinels outright AND grants the module a root-grant
+// exception for each. parsePolicy would refuse such a file outright; the point
+// of assembling it as a value is that Filter has to hold the line for a Policy
+// that never went through the parse, which is exactly how this test, the graph
+// audit, and any future caller build one. Every ruling below must still be a
+// reject. [LAW:types-are-the-program]
+func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
+	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
+		policy := &Policy{
+			AllowedLicenses: []string{"MIT", sentinel},
+			ModuleExceptions: []ModuleException{
+				{Module: "excepted/mod", License: sentinel, Reason: "a reason nobody could have had"},
+			},
+		}
+		filter := policy.Filter()
+
+		if filter.Allows(sentinel) {
+			t.Errorf("%q: allowlisting a sentinel must not make it allowed — it names no grant", sentinel)
+		}
+		if filter.Permits("excepted/mod", sentinel) {
+			t.Errorf("%q: an exception must not reach a sentinel — it records a reading of a license that could not be read", sentinel)
+		}
+		if permitsHit(filter, "excepted/mod", LicenseHit{RelPath: "LICENSE", License: sentinel}) {
+			t.Errorf("%q: the graph audit must report a sentinel at a module's root, never suppress it", sentinel)
+		}
 	}
 }
 
