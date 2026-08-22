@@ -199,6 +199,17 @@ func TestSBOMLicenseArmsAreExclusive(t *testing.T) {
 				t.Errorf("component %v: license choice has license=%v expression=%v, want exactly one arm: %v",
 					c["name"], hasLicense, hasExpression, choice)
 			}
+			// The acknowledgement is arm-dependent in the same `oneOf`, and
+			// getting it wrong is invisible to any struct-shaped test. The name
+			// arm permits NO key but `license` (additionalProperties: false), so
+			// an acknowledgement hoisted to choice level there is schema-invalid
+			// even though it round-trips through Go without complaint; on the
+			// expression arm the same key is legal. Key presence in the raw map
+			// is the only way to state that difference.
+			if _, ackAtChoiceLevel := choice["acknowledgement"]; hasLicense && ackAtChoiceLevel {
+				t.Errorf("component %v: acknowledgement sits beside `license`, which CycloneDX 1.6 forbids — it belongs inside the license object: %v",
+					c["name"], choice)
+			}
 			checked++
 		}
 	}

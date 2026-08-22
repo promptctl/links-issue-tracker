@@ -189,8 +189,13 @@ var spdxOperators = map[string]bool{"AND": true, "OR": true, "WITH": true}
 func licenseChoice(name, acknowledgement string) cdx.LicenseChoice {
 	// [LAW:dataflow-not-control-flow] the one branch is CycloneDX's own sum
 	// type, which is the entire point of the discriminator — not a special
-	// case carved into the renderer. Both arms carry the acknowledgement; the
-	// schema hangs the field off each of them, in different shapes.
+	// case carved into the renderer. Both arms carry the acknowledgement, but
+	// on DIFFERENT fields that are not interchangeable: the 1.6 schema's name
+	// arm is additionalProperties:false permitting `license` and nothing else,
+	// so an acknowledgement hoisted beside `license` is schema-invalid, while
+	// on the expression arm it is a permitted sibling of `expression`. Do not
+	// unify the two onto ackPtr — it compiles, it round-trips, and it fails
+	// validation at tag-cut.
 	if slices.ContainsFunc(strings.Fields(name), func(field string) bool { return spdxOperators[field] }) {
 		return cdx.LicenseChoice{Expression: name, Acknowledgement: ackPtr(acknowledgement)}
 	}

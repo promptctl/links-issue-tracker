@@ -99,13 +99,24 @@ func TestNativeLibsInSBOMAndBundle(t *testing.T) {
 		{"icu", ""},                  // upstream's own grant, reported as-is
 		{"musl", ""},
 	} {
-		c := bom.Components[byName[tc.name]]
-		got := c.Licenses[0].Acknowledgement
-		if got == "" {
-			got = c.Licenses[0].License.Acknowledgement
+		choice := bom.Components[byName[tc.name]].Licenses[0]
+		// Read the field the arm dictates, never "whichever of the two is
+		// set". The two are not interchangeable: CycloneDX 1.6's name arm is
+		// additionalProperties:false with `license` as its ONLY permitted key,
+		// so an acknowledgement beside a license object is schema-invalid,
+		// while on the expression arm it is a permitted sibling. An
+		// OR-of-both read is satisfied by either placement, so it stays green
+		// through precisely the refactor that breaks the document — and
+		// cyclonedx-cli, the thing that would catch it, runs only at tag-cut.
+		got, where := choice.License.Acknowledgement, "license.acknowledgement"
+		if choice.Expression != "" {
+			got, where = choice.Acknowledgement, "the expression arm's sibling acknowledgement"
+		} else if choice.Acknowledgement != "" {
+			t.Errorf("%s: acknowledgement %q sits beside `license`, where CycloneDX 1.6 permits no key but `license`; it belongs inside the license object",
+				tc.name, choice.Acknowledgement)
 		}
 		if got != tc.want {
-			t.Errorf("%s license acknowledgement = %q, want %q", tc.name, got, tc.want)
+			t.Errorf("%s %s = %q, want %q", tc.name, where, got, tc.want)
 		}
 	}
 }
