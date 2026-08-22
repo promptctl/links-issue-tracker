@@ -134,13 +134,21 @@ func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
 // zero-width space nor a full-width character, and an exception keyed on a path
 // nothing can equal excuses nothing while reading as though it does.
 func TestParsePolicyRejectsMalformedModulePath(t *testing.T) {
-	const want = "carries the character"
-	// The space and the @ are the two that mattered: this guard originally
-	// reused isSPDXRune, whose alphabet PERMITS a space because a space
-	// separates the arms of an expression, and additionally whitelisted @ —
-	// so it admitted exactly the dead keys its own comment claimed to refuse.
-	// A module_exception names a path, never a path@version.
-	for _, path := range []string{"example.com/m\u200bx", "example.com/（m）", "example.com/m x", "example.com/m@v1.0.0"} {
+	const want = "not a valid module path"
+	// The first four are character defects, and the space and the @ are the two
+	// that mattered: the guard originally reused isSPDXRune, whose alphabet
+	// PERMITS a space because a space separates the arms of an expression, and
+	// additionally whitelisted @ — so it admitted exactly the dead keys its own
+	// comment claimed to refuse. A module_exception names a path, never a
+	// path@version.
+	//
+	// The rest are STRUCTURAL, and are the reason the rune filter was replaced
+	// by module.CheckPath outright: every one of them is fine character by
+	// character and none is a path `go list` can print.
+	for _, path := range []string{
+		"example.com/m\u200bx", "example.com/（m）", "example.com/m x", "example.com/m@v1.0.0",
+		"example.com//m", "example.com/m/", "nodot/m", "example.com/../m", "example.com/.hidden",
+	} {
 		doc := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"` + path + `","license":"LGPL-3.0","reason":"human-verified"}]}`
 		_, err := parsePolicy([]byte(doc))
 		if err == nil {
@@ -288,7 +296,7 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 		// unrelated-looking failure. For a copyleft license an exception WOULD
 		// parse; it is simply the wrong answer, and this message says which
 		// answer is right rather than leaving the choice open.
-		t.Fatalf("%d module(s) violate the license policy; remove the dependency, or add its license to allowed_licenses in tools/licenses/policy.json if something lit ships now carries it. module_exceptions is empty by design and an \"Unknown\" row has neither route", len(violations))
+		t.Fatalf("%d module(s) violate the license policy; remove the dependency, or — if the license is genuinely permissive and something lit ships now carries it — add it to allowed_licenses in tools/licenses/policy.json. A copyleft license is refused there by the parse, module_exceptions is empty by design, and an \"Unknown\" row has no route at all", len(violations))
 	}
 }
 
@@ -484,6 +492,11 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			// already writes the modern form, so it is the spelling that would
 			// actually arrive.
 			{"the modern spelling of a copyleft license is the same license", "which the classifier types as", []string{"MIT", "GPL-3.0-only"}},
+			// The lookup is exact, and every copyleft family the veto exists
+			// to catch is spelled in capitals, so upper-casing the identifier
+			// lands it on the corpus spelling. Without that step this row is
+			// accepted and the veto is one shift-key from useless.
+			{"a lower-cased copyleft identifier is the same license", "which the classifier types as", []string{"MIT", "gpl-3.0"}},
 			{"and the or-later form of it", "which the classifier types as", []string{"MIT", "AGPL-3.0-or-later"}},
 			// The WITH half of an arm, which is not a formality: Commons-Clause
 			// is an SPDX exception that removes the right to sell, so this is a

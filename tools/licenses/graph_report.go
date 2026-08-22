@@ -63,9 +63,11 @@ const (
 // What three rows is chosen against is the elision itself: a module whose run
 // exceeds the cap has its remainder replaced by a count, so anything after the
 // third row of that module is no longer readable in place. Measured on this
-// branch, two runs already exceed it — the classifier corpus's (nested, and
-// unclassified) and gonum's four unclassified THIRD_PARTY_LICENSES entries,
-// the latter already elided before the allowlist change and not caused by it.
+// branch, THREE runs already exceed it — the classifier corpus twice (nested,
+// +137; unclassified, +28) and gonum once (unclassified, +1). gonum's three
+// printed rows are THIRD_PARTY_LICENSES entries and the elided fourth is not,
+// since nothing in that directory sorts after W3C-TestSuite-LICENSE; it was
+// already elided before the allowlist change and is not caused by it.
 //
 // One run sits exactly ON the cap and is worth naming rather than rounding
 // off: github.com/apache/thrift contributes three unclassified rows
@@ -223,10 +225,11 @@ func rootGrantLicense(hits []LicenseHit) string {
 // LICENSE-NOTES.md, which FORKS.md points at and which this report's sections
 // are shaped to feed. [LAW:verifiable-goals] done here means the graph is
 // measured by a re-runnable tool instead of by hand, and its rows are answered
-// in prose — per row for the module grants and the nested texts, and per SHAPE
-// for the unclassified section, which is a standing list of fifty-odd rows
-// nobody enumerates. Not that the build enforces what the measurement found,
-// and not that every individual row has its own paragraph.
+// in prose — per row for the module grants and for the handful of nested texts
+// that are about lit, and per SHAPE for the two standing blocks nobody
+// enumerates: the unclassified section, and the 140 of 148 nested rows that are
+// one dependency's reference corpus. Not that the build enforces what the
+// measurement found, and not that every individual row has its own paragraph.
 func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) error {
 	hits := 0
 	for _, e := range entries {
@@ -280,11 +283,17 @@ func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) e
 // with the link-closure gate, so "permissive" means exactly one thing across
 // the two modes. [LAW:single-enforcer] [LAW:effects-at-boundaries]
 func runGraph(stdout io.Writer) error {
-	entries, err := buildGraphEntries()
+	// Policy first, entries second, and the order is not incidental:
+	// buildGraphEntries resolves and downloads the ENTIRE build list — 3.4 GB
+	// against a cold cache, which is what the weekly audit runs on — while
+	// LoadPolicy is a parse of an embedded file. Reversed, a typo in
+	// policy.json costs several minutes of downloading before a free check
+	// reports it. [LAW:effects-at-boundaries]
+	policy, err := LoadPolicy()
 	if err != nil {
 		return err
 	}
-	policy, err := LoadPolicy()
+	entries, err := buildGraphEntries()
 	if err != nil {
 		return err
 	}

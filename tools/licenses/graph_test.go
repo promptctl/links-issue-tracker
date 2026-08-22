@@ -337,6 +337,15 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 				{Module: "excepted/mod", License: sentinel, Reason: "a reason nobody could have had"},
 			},
 		}
+		// The rulings must agree with the parse about WHAT THE SENTINEL IS.
+		// They disagreed for a commit — refuseSentinel folded ASCII case while
+		// Allows did an exact map lookup — so a filter holding "unknown"
+		// permitted it, under a doc paragraph promising the ban holds for
+		// every LicenseFilter.
+		folded := LicenseFilter{allowed: map[string]bool{strings.ToLower(sentinel): true}}
+		if folded.Allows(strings.ToLower(sentinel)) {
+			t.Errorf("%q: a case variant of the sentinel is permitted by Allows, though the parse calls that spelling the sentinel", sentinel)
+		}
 		filter := policy.Filter()
 		if !filter.allowed[sentinel] || !filter.excepted[exKey{module: "excepted/mod", license: sentinel}] {
 			t.Fatalf("%q: the fixture is meant to put the sentinel in BOTH tables; if Filter has started dropping it, this test is no longer testing the rulings", sentinel)

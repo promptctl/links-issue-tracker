@@ -64,8 +64,11 @@ jobs:
   # It runs in PARALLEL with `validate` (the ~35-min cross-build), so a clean
   # tree adds no latency; only `publish` waits on it. CGO_ENABLED=1 is REQUIRED,
   # not cosmetic: `go list -deps ./cmd/lit` resolves a DIFFERENT set with cgo off
-  # — gozstd and go-icu-regex (the cgo-linked deps) drop out — so the gate must
-  # see the same set the release actually links. It needs no ICU/zstd C
+  # — measured on linux/amd64, github.com/dolthub/go-icu-regex drops out and the
+  # count lands on 153, which is exactly darwin's count, so a cgo-off run looks
+  # entirely right while gating a set neither platform links. (gozstd stays
+  # either way; an earlier version of this comment named it too and was wrong.)
+  # The gate must see the same set the release actually links. It needs no ICU/zstd C
   # toolchain: `go list` resolves imports without compiling them.
   # [LAW:single-enforcer] one predicate (CheckPolicy over policy.json), reused by
   # the PR test and this gate.
