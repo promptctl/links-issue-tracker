@@ -80,13 +80,22 @@ graph mode keeps reporting and never gates.
 
 ## The ISC and WTFPL rows: what the allowlist was hiding
 
-Three rows entered this report for the first time when
-`links-licensing-c0ce.9` deleted ISC, MPL-2.0, and WTFPL from
-`policy.json`'s allowlist. Nothing about the modules changed. The audit drops
-any hit whose license the policy permits *at any depth*, so an allowlist entry
-naming a license no linked component carries was quietly suppressing rows
-elsewhere in the graph — which is a second, less obvious reason an unearned
-entry is worth deleting.
+**Nine** rows entered this report when `links-licensing-c0ce.9` deleted ISC,
+MPL-2.0, and WTFPL from `policy.json`'s allowlist: the audit's trailer moves
+from 206 rows needing a reader to 215. Five are module grants (the section
+above went from four rows to nine) and four are nested texts — one in
+`BurntSushi/xgb`, and three reference copies inside the license classifier's
+own corpus, which is why they are invisible in the printed output and sit
+inside that module's elided run.
+
+Nothing about any of the modules changed. The audit drops any hit whose
+license the policy permits *at any depth*, so an allowlist entry naming a
+license no linked component carries was quietly suppressing rows elsewhere in
+the graph — a second, less obvious reason an unearned entry is worth deleting.
+
+Four of the nine are MPL-2.0: the three coordinates covered in their own
+section above, plus the corpus's reference copy. The remaining five are two
+licenses, and they get their verdicts here:
 
 **`github.com/coder/websocket` — ISC, and not in `go.sum` at all.** Its
 `LICENSE.txt` carries the ISC grant verbatim ("Permission to use, copy,
@@ -180,8 +189,14 @@ and both are nested texts, so a coordinate scanner reports neither.
 They stay out of the allowlist, and `links-licensing-c0ce.9` settled that
 question in the direction of removal rather than addition: the list now names
 only licenses something `lit` actually links, and nothing links either of
-these. Adding them would widen the gate for every future dependency in
-exchange for suppressing four rows of a report that exists to show rows. Same
+these. Adding both was measured rather than estimated: it takes the audit
+from 215 rows needing a reader to 209. So the trade is widening the gate for
+every future dependency in exchange for suppressing **six** rows of a report
+that exists to show rows.
+
+Six, not the four visible above — allowlisting a license suppresses it at any
+depth, so the classifier corpus's own `Zlib.txt` and `BSL-1.0.txt` go with
+them, silently, from inside an already-elided run. Same mechanism and the same
 reasoning as the ISC and WTFPL section above.
 
 ## Modules with no license file

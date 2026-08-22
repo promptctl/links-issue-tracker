@@ -353,6 +353,37 @@ func TestSentinelLicensesHaveNoPathThroughAnyFilter(t *testing.T) {
 	}
 }
 
+// TestPartitionGraphFilesBothSentinelsAsUnclassified pins the routing half of
+// links-licensing-c0ce.9's one-source-of-truth refactor: partitionGraph reads
+// licenseSentinels rather than re-listing the two constants, and BOTH of them
+// must land in the unclassified section rather than under module grants.
+//
+// The oversize half was pinned by nothing until round 4 of review — delete it
+// from the map and every test stayed green while "Skipped (oversize)" started
+// being reported as a module's own license GRANT, which is a row that reads as
+// a legal finding about a file the tool declined to open.
+func TestPartitionGraphFilesBothSentinelsAsUnclassified(t *testing.T) {
+	filter := (&Policy{AllowedLicenses: []string{"MIT"}}).Filter()
+	for _, sentinel := range []string{unclassifiedLicense, oversizeLicense} {
+		sections := partitionGraph([]GraphEntry{{
+			Module: Module{Path: "murky/mod", Version: "v1"},
+			Hits:   []LicenseHit{{RelPath: "LICENSE", License: sentinel}},
+		}}, filter)
+		var found string
+		for _, sec := range sections {
+			for _, r := range sec.Rows {
+				if r.License == sentinel {
+					found = sec.Title
+				}
+			}
+		}
+		if found != sectionUnclassified {
+			t.Errorf("%q at a module root was filed under %q, want %q — a sentinel is the tool having no verdict, never a grant",
+				sentinel, found, sectionUnclassified)
+		}
+	}
+}
+
 // TestPartitionGraphReportsReplacedModulesRegardlessOfLicense pins the one
 // section that is not about a violation: a replaced module is listed because
 // its coordinate and its source disagree, which stays true when the license is

@@ -133,6 +133,29 @@ func TestParsePolicyRejectsMalformedAllowlistEntry(t *testing.T) {
 // pair, so the second collapses onto the first and is invisible to the gate
 // while -check's green line still counts it — and two human-verified reasons
 // for one grant is a question in its own right.
+// TestParsePolicyRejectsMalformedModulePath pins the module half of an
+// exception under the same rule as the license half. The path is matched byte
+// for byte against `go list` output, TrimSpace sees neither an interior
+// zero-width space nor a full-width character, and an exception keyed on a path
+// nothing can equal excuses nothing while reading as though it does.
+func TestParsePolicyRejectsMalformedModulePath(t *testing.T) {
+	const want = "carries the character"
+	for _, path := range []string{"example.com/m\u200bx", "example.com/（m）"} {
+		doc := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"` + path + `","license":"LGPL-3.0","reason":"human-verified"}]}`
+		_, err := parsePolicy([]byte(doc))
+		if err == nil {
+			t.Errorf("parsePolicy accepted the module path %q, which nothing `go list` prints can equal", path)
+		} else if !strings.Contains(err.Error(), want) {
+			t.Errorf("parsePolicy refused %q for the wrong reason (want %q): %v", path, want, err)
+		}
+	}
+	// A real module path, with every character a path legitimately carries.
+	ok := `{"allowed_licenses":["MIT"],"module_exceptions":[{"module":"gopkg.in/yaml.v3","license":"LGPL-3.0","reason":"human-verified"}]}`
+	if _, err := parsePolicy([]byte(ok)); err != nil {
+		t.Errorf("parsePolicy rejected an ordinary module path: %v", err)
+	}
+}
+
 func TestParsePolicyRejectsDuplicateException(t *testing.T) {
 	dup := `{"allowed_licenses":["MIT"],"module_exceptions":[` +
 		`{"module":"example.com/m","license":"LGPL-3.0","reason":"first reading"},` +
@@ -253,10 +276,13 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 		}
 		// Says the same thing runCheck's failure says, because this is the
 		// message a developer actually meets: `go test ./...` runs on every
-		// PR and release-validate's -check does not. Telling them here to
-		// "record a documented exception" would send them to write one that
-		// parsePolicy then refuses on its own separate grounds — a second,
-		// unrelated-looking failure produced by obeying the first message.
+		// PR and release-validate's -check does not. The old wording pointed
+		// at module_exceptions, which policy.json now spends a paragraph
+		// asking nobody to reopen — and for the Unknown case it pointed at a
+		// route the parse refuses outright, so obeying it produced a second,
+		// unrelated-looking failure. For a copyleft license an exception WOULD
+		// parse; it is simply the wrong answer, and this message says which
+		// answer is right rather than leaving the choice open.
 		t.Fatalf("%d module(s) violate the license policy; remove the dependency, or add its license to allowed_licenses in tools/licenses/policy.json if something lit ships now carries it. module_exceptions is empty by design and an \"Unknown\" row has neither route", len(violations))
 	}
 }
@@ -431,6 +457,12 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			{"an invisible character parses clean and then never matches", "which no SPDX identifier", []string{"MIT", "MIT​"}},
 			{"a full-width parenthesis is not the ASCII one the paren rule sees", "which no SPDX identifier", []string{"MIT", "（MIT）"}},
 			{"a duplicated entry makes the printed count a lie", "repeats", []string{"MIT", "MIT"}},
+			// The sentinel spellings are ours, so a case variant means the
+			// sentinel and nothing else. Accepted as a plain identifier it
+			// becomes an entry that can never match a classified license —
+			// inert, and therefore a statement to the next reader about what
+			// this repository accepts that is not true.
+			{"a lower-cased sentinel is still the sentinel", "no verdict", []string{"MIT", "unknown"}},
 			{"a copyleft license may not be allowlisted at all", "which the classifier types as", []string{"MIT", "GPL-3.0"}},
 			// The current SPDX spelling, which the classifier's corpus
 			// predates: LicenseType("GPL-3.0-only") is "" and only the
@@ -448,6 +480,13 @@ func TestParsePolicyExpressionRules(t *testing.T) {
 			// vetted there first. See checkAllowedLicenses.
 			{"an exception can narrow a grant, so it is vetted too", "which the classifier types as", []string{"MIT", "Apache-2.0", "Apache-2.0 WITH Commons-Clause"}},
 			{"a sentinel in the exception half is still a sentinel", "no verdict", []string{"MIT", "MIT WITH " + unclassifiedLicense}},
+			// Pins the arm-shape rule's `arm[1] == "WITH"` half specifically.
+			// Without it a three-token arm is accepted and its MIDDLE token
+			// silently discarded, so "MIT AND Apache-2.0" — an expression with
+			// its operator mistyped — would read as the arm "MIT" plus a
+			// dropped "AND". Mutation-checked: delete that half of the
+			// condition and this row, and only this row, goes green.
+			{"a three-token arm whose middle token is not WITH is not an arm", "neither an SPDX identifier", []string{"MIT", "Apache-2.0", "Apache-2.0 AND2 LLVM-exception"}},
 			// WITH is the only operator that can reach the exception slot —
 			// AND and OR split the expression into arms before the arm shape
 			// is read, so "MIT WITH AND" is refused as an undecomposable arm

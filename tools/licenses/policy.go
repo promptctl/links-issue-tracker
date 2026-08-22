@@ -99,6 +99,17 @@ func parsePolicy(data []byte) (*Policy, error) {
 				return nil, fmt.Errorf("policy.json module_exception %+v carries surrounding whitespace in a field; the committed text must be the exact value the gate matches", e)
 			}
 		}
+		// The module path is matched byte for byte against `go list`'s output
+		// exactly as the license is matched against the classifier's, so the
+		// character rule that protects one protects the other. TrimSpace above
+		// sees neither an interior zero-width space nor a full-width
+		// character, and an exception keyed on a path nothing can equal is an
+		// exception that silently excuses nothing. [LAW:no-silent-failure]
+		for _, r := range e.Module {
+			if !isSPDXRune(r) && r != '/' && r != '@' && r != '_' && r != '~' {
+				return nil, fmt.Errorf("policy.json module_exception names the module %q, which carries the character %q (U+%04X); the gate compares this against `go list` output byte for byte, so the exception would silently excuse nothing", e.Module, r, r)
+			}
+		}
 		if e.Module == "" || e.License == "" || e.Reason == "" {
 			return nil, fmt.Errorf("policy.json module_exception %+v is missing module, license, or reason; every exception must be complete and human-verified", e)
 		}
@@ -197,13 +208,27 @@ func checkAllowedLicenses(allowed []string) error {
 				}
 			}
 		}
-		if len(arms) == 1 {
-			continue
-		}
+		// An arm is satisfied by its own full text, or by its base identifier
+		// alone. Both, rather than the base alone, and there is a real edge
+		// behind the "both": requiring only the base forced an allowlist that
+		// already carried the NARROWER "Apache-2.0 WITH LLVM-exception" to add
+		// bare "Apache-2.0" as well — the widening this file's note regrets,
+		// demanded by the rule meant to prevent unvetted grants. It also gave
+		// one string two opposite verdicts, since a lone "X WITH Y" entry was
+		// exempted from the rule entirely by a len(arms)==1 carve-out and the
+		// identical arm inside an AND was refused.
+		//
+		// With both forms accepted the carve-out is unnecessary: a single-arm
+		// entry satisfies itself, so the rule applies uniformly. The base form
+		// stays acceptable because it is the wider grant and therefore never
+		// unsafe as an ALLOWLIST answer — it just permits more than the
+		// expression needed, which the note tells the editor to weigh.
 		for _, arm := range arms {
-			if !set[arm.base] {
-				return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each one must be independently acceptable — add %q on its own line (the base identifier alone, with any WITH-exception dropped) or drop the expression", name, arm.base, arm.base)
+			if set[armText(arm)] || set[arm.base] {
+				continue
 			}
+			return fmt.Errorf("policy.json allowed_licenses entry %q has an AND-arm granting under %q, which is not itself allowlisted; an AND grants under every arm at once, so each one must be independently acceptable — add %q on its own line, or %q if you mean to permit that license generally, or drop the expression",
+				name, armText(arm), armText(arm), arm.base)
 		}
 	}
 	return nil
@@ -225,14 +250,25 @@ func checkAllowedLicenses(allowed []string) error {
 // positive rule ("must classify permissive") would reject policy.json itself,
 // and only the negative form is usable.
 //
-// And its coverage has holes that are NOT closed by spelling normalization.
-// EUPL-1.1, CPAL-1.0, SISSL, LPPL-1.3c and LGPLLR are files in the
-// classifier's own corpus, so Classify emits those exact strings, and
-// LicenseType returns "" for every one of them — several are plainly
-// reciprocal. This veto would not stop any of them being allowlisted. It
-// catches what nobody here would defend and it is not a proof; the rule that
-// this list is permissive-only still needs a reader, which is why the note
-// says so in prose as well.
+// And its coverage has holes that spelling normalization does not close.
+// Measured against the pinned corpus (153 license names): twelve of them type
+// as nothing at all — Beerware, CPAL-1.0, EUPL-1.0, EUPL-1.1,
+// GUST-Font-License, LGPLLR, LPPL-1.3c, OFL-1.1, OpenVision, SISSL, SISSL-1.2
+// and eGenix. Classify emits those exact strings, several are plainly
+// reciprocal, and this veto would not stop one of them being allowlisted.
+// Count them by walking that licenses/ directory rather than trusting this
+// list; an earlier version of this comment named five, by hand, and was
+// wrong.
+//
+// The modern source-available licenses — BUSL-1.1, SSPL-1.0, Elastic-2.0 —
+// are a different case and a reassuring one. They are absent from the 2021
+// corpus entirely, so Classify can never emit them: a dependency that
+// relicenses to one classifies as Unknown and meets the hard failure, not
+// this veto. The gate stops it, by the other rule.
+//
+// So: this catches what nobody here would defend, and it is not a proof. The
+// rule that this list is permissive-only still needs a reader, which is why
+// the note says so in prose as well.
 var copyleftLicenseTypes = map[string]bool{"restricted": true, "reciprocal": true, "FORBIDDEN": true}
 
 // spdxDeprecatedSpelling maps a current SPDX identifier onto the deprecated
@@ -268,17 +304,43 @@ func refuseCopyleftAllowlistEntry(entry, identifier string) error {
 		if !copyleftLicenseTypes[kind] {
 			continue
 		}
-		return fmt.Errorf("policy.json allowed_licenses entry %q involves %q, which the classifier types as %q; this list is permissive-only and adding a copyleft license to it is not the way past a red gate — remove the dependency instead",
-			entry, identifier, kind)
+		// Names the spelling actually consulted, not the one written, when
+		// the two differ: reporting `"GPL-3.0-only" types "restricted"` would
+		// assert a verdict the classifier does not return for that string,
+		// and an editor checking the claim would find it false.
+		via := ""
+		if spelling != identifier {
+			via = fmt.Sprintf(" (via its deprecated spelling %q, which is what the classifier's corpus is named after)", spelling)
+		}
+		return fmt.Errorf("policy.json allowed_licenses entry %q involves %q, which the classifier types as %q%s; this list is permissive-only and adding a copyleft license to it is not the way past a red gate — remove the dependency instead",
+			entry, identifier, kind, via)
 	}
 	return nil
 }
 
+// licenseArm is one AND-arm of a license expression, decomposed into the
+// identifier it grants under and the SPDX exception attached to it (empty
+// when there is none). Both are carried because both must be vetted: an
+// earlier draft returned bases alone on the premise that "a WITH-exception
+// only widens a grant", and that premise is false — Commons-Clause is an
+// SPDX exception that REMOVES the right to sell, and the classifier types it
+// FORBIDDEN. An unexamined right-hand token is a second license riding in on
+// the first.
+type licenseArm struct{ base, exception string }
+
+// armText renders an arm back to the exact string a policy entry would spell
+// it as, so an arm can be looked up in the allowlist by its own full text.
+func armText(a licenseArm) string {
+	if a.exception == "" {
+		return a.base
+	}
+	return a.base + " WITH " + a.exception
+}
+
 // parseLicenseExpression reads one license-valued field of policy.json as an
-// SPDX expression and returns the base identifier of each of its AND-arms —
-// the identifiers the expression grants under, with any WITH-exception
-// stripped, since an exception only ever WIDENS a grant. A single-element
-// result means the field is not a combination at all.
+// SPDX expression and returns its AND-arms, each decomposed into the identifier
+// it grants under and the exception attached to it. A single-element result
+// means the field is not a combination at all.
 //
 // Everything it refuses is a way for the committed text and the value the gate
 // actually matches to come apart, which is this file's recurring failure mode:
@@ -303,15 +365,6 @@ func refuseCopyleftAllowlistEntry(entry, identifier string) error {
 //     The gate matches by exact string and will not rule on an expression it
 //     had to guess the meaning of. [LAW:no-silent-failure]
 //
-// licenseArm is one AND-arm of a license expression, decomposed into the
-// identifier it grants under and the SPDX exception attached to it (empty
-// when there is none). Both are carried because both must be vetted: an
-// earlier draft returned bases alone on the premise that "a WITH-exception
-// only widens a grant", and that premise is false — Commons-Clause is an
-// SPDX exception that REMOVES the right to sell, and the classifier types it
-// FORBIDDEN. An unexamined right-hand token is a second license riding in on
-// the first.
-type licenseArm struct{ base, exception string }
 
 func parseLicenseExpression(where, name string) ([]licenseArm, error) {
 	// Ahead of every shape rule, because the sentinel's own spelling is
@@ -434,7 +487,20 @@ func isSPDXRune(r rune) bool {
 // once — an earlier draft spelled it separately for allowed_licenses and for
 // module_exceptions and still missed the arm.
 func refuseSentinel(where, name string) error {
-	if !licenseSentinels[name] {
+	// Compared case-INSENSITIVELY, because these two spellings are ours: a
+	// policy naming "unknown" means the sentinel and nothing else, and
+	// accepting it as an ordinary identifier would leave a compliance file
+	// carrying an entry that permits nothing while reading as though it does.
+	// (Inert is not harmless. An entry that cannot match anything is a
+	// statement to the next reader about what this repository accepts.)
+	match := ""
+	for sentinel := range licenseSentinels {
+		if strings.EqualFold(name, sentinel) {
+			match = sentinel
+			break
+		}
+	}
+	if match == "" {
 		return nil
 	}
 	return fmt.Errorf("%s names %q, which is not a license but this tool's marker for having no verdict on one; an unidentifiable license is the one row an auditor cannot evaluate at all, and it has neither an allowlist nor an exception path — remove the dependency instead", where, name)
