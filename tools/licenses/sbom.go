@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"io"
+	"slices"
 	"strings"
 	"time"
 
@@ -68,11 +69,16 @@ func buildSBOM(entries []Entry, appVersion, serialNumber string, timestamp time.
 	components := make([]cdx.Component, 0, len(entries))
 	for _, e := range entries {
 		components = append(components, cdx.Component{
-			Type:       cdx.ComponentTypeLibrary,
-			Name:       e.Module.Path,
-			Version:    e.Module.Version,
-			PackageURL: e.PackageURL,
-			Licenses:   componentLicenses(e.LicenseName),
+			Type:    cdx.ComponentTypeLibrary,
+			Name:    e.Module.Path,
+			Version: e.Module.Version,
+			// A curated note (dual-license election, compound-expression
+			// provenance) rides as the component description so the SBOM
+			// explains its own license claim; empty for classified Go modules
+			// and omitted from the JSON. [LAW:dataflow-not-control-flow]
+			Description: e.Note,
+			PackageURL:  e.PackageURL,
+			Licenses:    componentLicenses(e.LicenseName, e.Acknowledgement),
 		})
 	}
 
@@ -113,18 +119,88 @@ func goModulePURL(modulePath, version string) string {
 }
 
 // componentLicenses renders a classified license name as a CycloneDX license
-// choice, or nil when the module's license could not be classified. It uses
-// the `name` field, never `id`: the 1.6 schema constrains license.id to the
-// SPDX id enum, so a classifier output that isn't an exact SPDX id (or the
-// unclassifiedLicense sentinel) placed in `id` would fail validation — the
-// exact check this SBOM must pass. An unclassified module contributes a
-// component with no license rather than a fabricated one; the full text and
-// the "Unknown" row still travel in THIRD_PARTY_LICENSES and LICENSE-REPORT.md,
-// so nothing is hidden. [LAW:no-silent-failure]
-func componentLicenses(name string) *cdx.Licenses {
+// choice, or nil when the module's license could not be classified. An
+// unclassified module contributes a component with no license rather than a
+// fabricated one; the full text and the "Unknown" row still travel in
+// THIRD_PARTY_LICENSES and LICENSE-REPORT.md, so nothing is hidden.
+// [LAW:no-silent-failure]
+func componentLicenses(name, acknowledgement string) *cdx.Licenses {
 	if name == "" || name == unclassifiedLicense {
 		return nil
 	}
-	licenses := cdx.Licenses{{License: &cdx.License{Name: name}}}
+	licenses := cdx.Licenses{licenseChoice(name, acknowledgement)}
 	return &licenses
+}
+
+// acknowledgementConcluded marks a license row lit ARRIVED AT rather than one
+// it read off a license file — zstd, where upstream offers BSD-3-Clause OR
+// GPL-2.0-only and lit elected the first, and compiler-rt, whose expression was
+// composed from the ported LLVM sources' own headers. CycloneDX defines the
+// field for exactly this, and without it lit's single BSD-3-Clause row reads to
+// a scanner that independently resolves zstd 1.5.6 as a contradiction of the
+// dual grant rather than as a choice between its arms. Rows left unset make no
+// claim either way: for the classified Go modules lit never established that
+// the LICENSE file it read is upstream's authoritative declaration, and
+// asserting `declared` across all of them would be a stronger statement than
+// the classifier earns.
+const acknowledgementConcluded = "concluded"
+
+// ackPtr is the pointer form LicenseChoice's field wants — nil when the row
+// makes no acknowledgement claim, which omitempty then drops from the JSON.
+// [LAW:dataflow-not-control-flow] the unstated case is a value this returns,
+// so licenseChoice sets the field unconditionally instead of branching on
+// whether to set it.
+func ackPtr(acknowledgement string) *cdx.LicenseAcknowledgement {
+	if acknowledgement == "" {
+		return nil
+	}
+	ack := cdx.LicenseAcknowledgement(acknowledgement)
+	return &ack
+}
+
+// spdxOperators are the three operators of the SPDX license-expression
+// grammar. A license value is compound exactly when one of them appears as a
+// whole space-delimited token: SPDX identifiers never contain a space, so an
+// operator can only ever stand as its own field. Matching tokens rather than
+// substrings is what keeps an identifier that merely spells an operator inside
+// itself — GPL-2.0-or-later, Apache-2.0 — on the single-name arm by
+// construction rather than by luck. That matters because LicenseName is not a
+// curated set: it also carries whatever licenseclassifier returns for every Go
+// module in the link closure.
+var spdxOperators = map[string]bool{"AND": true, "OR": true, "WITH": true}
+
+// licenseChoice maps one license value onto the CycloneDX arm that represents
+// it. CycloneDX models the two shapes as a sum — a single named license, or an
+// SPDX expression — and this is the one place lit's license strings are mapped
+// onto it, so no renderer re-derives which arm a value belongs in.
+// [LAW:parse-dont-validate] the returned LicenseChoice is the proof of WHICH
+// ARM, and of nothing else: it does not establish that an expression-valued
+// string is well-formed SPDX, and no caller should read it that way. Grammar
+// conformance of the four curated strings in native.go is held by review plus
+// the exact-match against policy.json's allowlist, which a typo would have to
+// be replicated into before the gate would pass.
+//
+// The `name` field is used, never `id`: the 1.6 schema constrains license.id to
+// the SPDX id enum, so a classifier output that isn't an exact SPDX id placed
+// in `id` would fail the very validation this SBOM must pass. An expression has
+// no such constraint — `expression` is where the schema puts compound grants,
+// and a compound left in `name` reads to a scanner as one license literally
+// named with an AND in it.
+func licenseChoice(name, acknowledgement string) cdx.LicenseChoice {
+	// [LAW:dataflow-not-control-flow] the one branch is CycloneDX's own sum
+	// type, which is the entire point of the discriminator — not a special
+	// case carved into the renderer. Both arms carry the acknowledgement, but
+	// on DIFFERENT fields that are not interchangeable: the 1.6 schema's name
+	// arm is additionalProperties:false permitting `license` and nothing else,
+	// so an acknowledgement hoisted beside `license` is schema-invalid, while
+	// on the expression arm it is a permitted sibling of `expression`. Do not
+	// unify the two onto ackPtr — it compiles, it round-trips, and it fails
+	// validation at tag-cut.
+	if slices.ContainsFunc(strings.Fields(name), func(field string) bool { return spdxOperators[field] }) {
+		return cdx.LicenseChoice{Expression: name, Acknowledgement: ackPtr(acknowledgement)}
+	}
+	return cdx.LicenseChoice{License: &cdx.License{
+		Name:            name,
+		Acknowledgement: cdx.LicenseAcknowledgement(acknowledgement),
+	}}
 }

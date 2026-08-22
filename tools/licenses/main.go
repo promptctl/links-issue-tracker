@@ -87,6 +87,20 @@ type Entry struct {
 	Confidence  float64
 	Text        string
 	PackageURL  string
+	// Note is reader-facing context the license name alone doesn't carry — a
+	// dual-license election, or the provenance behind a compound expression.
+	// Curated per native lib (native.go); empty for classified Go modules. It
+	// renders in LICENSE-REPORT.md's Notes section and as the SBOM component's
+	// description, so the shipped artifacts explain themselves.
+	Note string
+	// Acknowledgement records WHOSE license claim this row is: acknowledgementConcluded
+	// for one lit arrived at — an election out of a dual grant, or an expression
+	// composed from the ported sources' own headers — and empty for a row that
+	// merely reports what a license file says. It is the machine-readable half
+	// of Note: prose in a description explains an election to a person, while a
+	// policy engine that independently resolves the coordinate needs a field to
+	// tell a considered choice from a contradiction. Consumed by the SBOM only.
+	Acknowledgement string
 }
 
 func main() {
