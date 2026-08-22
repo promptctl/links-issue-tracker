@@ -147,8 +147,12 @@ var spdxOperators = map[string]bool{"AND": true, "OR": true, "WITH": true}
 // it. CycloneDX models the two shapes as a sum — a single named license, or an
 // SPDX expression — and this is the one place lit's license strings are mapped
 // onto it, so no renderer re-derives which arm a value belongs in.
-// [LAW:parse-dont-validate] the returned LicenseChoice is the proof: a caller
-// holding one cannot ask the question again.
+// [LAW:parse-dont-validate] the returned LicenseChoice is the proof of WHICH
+// ARM, and of nothing else: it does not establish that an expression-valued
+// string is well-formed SPDX, and no caller should read it that way. Grammar
+// conformance of the four curated strings in native.go is held by review plus
+// the exact-match against policy.json's allowlist, which a typo would have to
+// be replicated into before the gate would pass.
 //
 // The `name` field is used, never `id`: the 1.6 schema constrains license.id to
 // the SPDX id enum, so a classifier output that isn't an exact SPDX id placed

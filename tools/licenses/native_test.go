@@ -154,12 +154,45 @@ func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 	if !strings.Contains(descriptions["compiler-rt"], "Apache-2.0 WITH LLVM-exception") {
 		t.Errorf("compiler-rt SBOM description does not state the ported-LLVM provenance: %q", descriptions["compiler-rt"])
 	}
-	// Libs without a curated note stay description-free — the note is curated
-	// information, never boilerplate.
-	for _, name := range []string{"icu", "musl"} {
-		if descriptions[name] != "" {
-			t.Errorf("%s has an unexpected SBOM description %q", name, descriptions[name])
+	// ICU and musl keep a single SPDX identifier while bundling third-party
+	// material of their own, so each must disclose what its notice folds in —
+	// otherwise a reader who fingerprints TRE inside musl, or reads the GPL
+	// blocks in ICU's LICENSE, has no document from us.
+	if !strings.Contains(descriptions["musl"], "2-clause BSD") {
+		t.Errorf("musl SBOM description does not disclose its third-party components: %q", descriptions["musl"])
+	}
+	if !strings.Contains(descriptions["icu"], "autotools build scripts") {
+		t.Errorf("icu SBOM description does not account for the GPL blocks in its LICENSE: %q", descriptions["icu"])
+	}
+
+	// Every note must reach the attribution bundle too. That is the file which
+	// legally accompanies the binary, and it is where an election matters most:
+	// compiler-rt's verbatim text tells the recipient they may choose either
+	// license, so without the note nothing there says which one lit chose.
+	var bundle bytes.Buffer
+	if err := WriteBundle(&bundle, entries); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	for _, n := range nativeLibs {
+		if !strings.Contains(bundle.String(), "Note: "+n.note) {
+			t.Errorf("THIRD_PARTY_LICENSES is missing %s's note", n.name)
 		}
+	}
+}
+
+// TestBundleOmitsEmptyNote pins the other half of noteLine's contract: an entry
+// with no curated note renders no note line at all. Every one of the ~149 Go
+// modules is note-free, so a regression here would stamp a bare "Note:" onto
+// each of their sections in the shipped attribution file.
+func TestBundleOmitsEmptyNote(t *testing.T) {
+	var bundle bytes.Buffer
+	if err := WriteBundle(&bundle, []Entry{
+		{Module: Module{Path: "example.com/plain", Version: "v1.0.0"}, LicenseName: "MIT", Text: "MIT text"},
+	}); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	if strings.Contains(bundle.String(), "Note:") {
+		t.Errorf("note-free entry emitted a Note line:\n%s", bundle.String())
 	}
 }
 
