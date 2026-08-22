@@ -194,7 +194,8 @@ into a rebase.
 `plotNodeSizeDistribution` — this module's only importers of
 `gonum.org/v1/plot`, whose requirement graph carries
 `github.com/golang/freetype` (GPL-2.0 dual FTL), `github.com/ajstarks/svgo`
-(CC-BY-4.0), and three restrictively licensed font modules. The `Samples`
+(CC-BY-4.0), and four go-fonts font modules (OFL-1.1 twice, one GUST
+license, and DejaVu's unclassifiable Bitstream-derived terms). The `Samples`
 statistics and the text summaries stay, and the permanently skipped
 `TestKeySplitterDistribution` harness in `node_splitter_test.go` now prints
 summaries instead of rendering PNGs. `go mod tidy` drops the whole plot stack

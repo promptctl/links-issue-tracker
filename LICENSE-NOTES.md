@@ -53,8 +53,8 @@ hashes any more.
 
 ## The MPL rows: `go-sql-driver/mysql`, `hashicorp/go-uuid`, `hashicorp/golang-lru`
 
-Nothing `lit` builds or ships links either module; `lit`'s own former use of
-the mysql driver was removed outright. The mysql coordinate stays visible in
+Nothing `lit` builds or ships links any of these modules; `lit`'s own former
+use of the mysql driver was removed outright. The mysql coordinate stays visible in
 two ways. Seven upstream modules (goose, the AWS SDK, gocloud, and others)
 name it in their go.mod files, which keeps `/go.mod` bookkeeping lines in
 `go.sum`. Separately, the *test suites* of Dolt and go-mysql-server use the
