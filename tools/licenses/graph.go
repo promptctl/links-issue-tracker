@@ -341,7 +341,7 @@ var machineContentExts = map[string]bool{
 // most important row in this audit (nobody can say what it permits) and must
 // never be discarded merely for being unmatched.
 func isLicenseText(relPath, license string) bool {
-	if license != unclassifiedLicense && license != oversizeLicense {
+	if !licenseSentinels[license] {
 		return true
 	}
 	return !machineContentExts[strings.ToLower(filepath.Ext(relPath))]

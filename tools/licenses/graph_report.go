@@ -47,13 +47,37 @@ const (
 //
 // It exists because of a specific, measured shape in this repository's graph:
 // github.com/google/licenseclassifier — a license DETECTOR, whose payload is a
-// reference corpus of every SPDX text — contributes 137 of the 144
+// reference corpus of every SPDX text — contributes 140 of the 148
 // non-permissive nested rows, including AGPL-3.0 and every GPL variant. Printed
-// in full it buries the seven rows that are actually about lit under a wall of
+// in full it buries the eight rows that are actually about lit under a wall of
 // a dependency's test data, and a report nobody can read is a report nobody
-// reads. Three rows is enough to show what a module's contribution looks like;
-// every genuine finding in this graph contributes one or two and so is never
-// elided. The remainder is COUNTED, never dropped. [LAW:no-silent-failure]
+// reads. The remainder is COUNTED, never dropped. [LAW:no-silent-failure]
+//
+// Re-measure when the allowlist changes, because the allowlist decides what
+// this section can even contain: permitsHit drops an allowlisted license at
+// ANY depth, so links-licensing-c0ce.9's removal of ISC, MPL-2.0 and WTFPL
+// un-suppressed the classifier corpus's copies of those texts and moved both
+// numbers (137 of 144 → 140 of 148) in the same commit that changed the
+// policy. The counts above are re-measured on that branch.
+//
+// What three rows is chosen against is the elision itself: a module whose run
+// exceeds the cap has its remainder replaced by a count, so anything after the
+// third row of that module is no longer readable in place. Measured on this
+// branch, THREE runs already exceed it — the classifier corpus twice (nested,
+// +137; unclassified, +28) and gonum once (unclassified, +1). gonum's three
+// printed rows are THIRD_PARTY_LICENSES entries and the elided fourth is not,
+// since nothing in that directory sorts after W3C-TestSuite-LICENSE; it was
+// already elided before the allowlist change and is not caused by it.
+//
+// One run sits exactly ON the cap and is worth naming rather than rounding
+// off: github.com/apache/thrift contributes three unclassified rows
+// (contrib/fb303/LICENSE, debian/copyright, lib/dart/LICENSE), and thrift is
+// LINKED — Apache-2.0, in LICENSE-REPORT.md. So an unidentifiable license file
+// inside the link closure is printed only because its module has exactly three
+// such files, and one more would replace it with a count. That is one file
+// away from the audit eliding a row of the kind this section calls worse than
+// a known copyleft one. Raise the cap when it happens; do not read the current
+// output as evidence that it cannot.
 const rowsPerModule = 3
 
 // elidePerModule caps each module's run of rows at rowsPerModule, replacing
@@ -147,7 +171,7 @@ func partitionGraph(entries []GraphEntry, filter LicenseFilter) []graphSection {
 			}
 			row := graphRow{Module: e.Module.Path, Version: e.Module.Version, Path: h.RelPath, License: h.License}
 			switch {
-			case h.License == unclassifiedLicense || h.License == oversizeLicense:
+			case licenseSentinels[h.License]:
 				sections[unclassified].Rows = append(sections[unclassified].Rows, row)
 			case h.IsRootGrant():
 				sections[grants].Rows = append(sections[grants].Rows, row)
@@ -191,11 +215,21 @@ func rootGrantLicense(hits []LicenseHit) string {
 // suite, the unchosen half of a dual license — while the genuine obligations
 // number a handful. A gate wired to fail on all of it would fail on master on
 // the day it landed, for reasons that are mostly noise, and a gate that cries
-// wolf gets switched off within a month. Deciding WHICH of these rows a gate
-// should fail on is what the written finding this report feeds exists to
-// settle. [LAW:verifiable-goals] done here means the graph is measured by a
-// re-runnable tool instead of by hand; it does not mean the build now enforces
-// what the measurement found.
+// wolf gets switched off within a month.
+//
+// That is settled now rather than pending, and this comment used to defer it
+// to a ticket that has since decided it: links-licensing-c0ce.9's answer is
+// that graph mode never gates. The number behind the answer is above, at
+// rowsPerModule — 140 of the 148 nested rows are one dependency's reference
+// corpus. What stands in for a gate is a written verdict per row, in
+// LICENSE-NOTES.md, which FORKS.md points at and which this report's sections
+// are shaped to feed. [LAW:verifiable-goals] done here means the graph is
+// measured by a re-runnable tool instead of by hand, and its rows are answered
+// in prose — per row for the module grants and for the handful of nested texts
+// that are about lit, and per SHAPE for the two standing blocks nobody
+// enumerates: the unclassified section, and the 140 of 148 nested rows that are
+// one dependency's reference corpus. Not that the build enforces what the
+// measurement found, and not that every individual row has its own paragraph.
 func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) error {
 	hits := 0
 	for _, e := range entries {
@@ -249,11 +283,17 @@ func WriteGraphReport(w io.Writer, entries []GraphEntry, filter LicenseFilter) e
 // with the link-closure gate, so "permissive" means exactly one thing across
 // the two modes. [LAW:single-enforcer] [LAW:effects-at-boundaries]
 func runGraph(stdout io.Writer) error {
-	entries, err := buildGraphEntries()
+	// Policy first, entries second, and the order is not incidental:
+	// buildGraphEntries resolves and downloads the ENTIRE build list — 3.4 GB
+	// against a cold cache, which is what the weekly audit runs on — while
+	// LoadPolicy is a parse of an embedded file. Reversed, a typo in
+	// policy.json costs several minutes of downloading before a free check
+	// reports it. [LAW:effects-at-boundaries]
+	policy, err := LoadPolicy()
 	if err != nil {
 		return err
 	}
-	policy, err := LoadPolicy()
+	entries, err := buildGraphEntries()
 	if err != nil {
 		return err
 	}

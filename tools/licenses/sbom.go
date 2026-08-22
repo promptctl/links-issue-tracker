@@ -124,6 +124,16 @@ func goModulePURL(modulePath, version string) string {
 // fabricated one; the full text and the "Unknown" row still travel in
 // THIRD_PARTY_LICENSES and LICENSE-REPORT.md, so nothing is hidden.
 // [LAW:no-silent-failure]
+//
+// It tests unclassifiedLicense specifically and NOT the licenseSentinels set,
+// which is the opposite of what the policy rules do, because the domains
+// differ: Entry.LicenseName is written in exactly two places — Classify, which
+// returns a corpus name or unclassifiedLicense, and native.go's four curated
+// literals. oversizeLicense is produced only by the graph scanner, into
+// LicenseHit, and never becomes an Entry. Widening this condition to the set
+// read as tidier and added a branch nothing can reach; it was the one rule in
+// this package whose mutation survived the whole suite, which is how it was
+// caught.
 func componentLicenses(name, acknowledgement string) *cdx.Licenses {
 	if name == "" || name == unclassifiedLicense {
 		return nil
