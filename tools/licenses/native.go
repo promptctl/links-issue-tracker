@@ -212,11 +212,12 @@ var nativeLibs = []nativeLib{
 		// about the license ICU actually ships under. Everything the classifier
 		// DOES find here is somebody else's notice.
 		evidence: []armEvidence{{token: "Unicode-3.0", phrase: "UNICODE LICENSE V3"}},
-		// Two of ICU's sections classify as nothing and so appear in neither
-		// list: the pre-57 "ICU License - ICU 1.8.1 to ICU 57.1" and the Time
-		// Zone Database's public-domain dedication. The record can only speak
-		// about what the corpus can match, which is why the note carries the
-		// rest in prose.
+		// Three of ICU's sections classify as nothing and so appear in neither
+		// list: the pre-57 "ICU License - ICU 1.8.1 to ICU 57.1", the Time Zone
+		// Database's public-domain dedication, and the install-sh block, whose
+		// 1991 M.I.T. text is the MIT/X11 grant the note names. The record can
+		// only speak about what the corpus can match, which is why the note
+		// carries the rest in prose.
 		findings: []noticeFinding{
 			{identifier: "BSD-3-Clause", count: 5, role: roleBundled,
 				covers: "the cjdict.txt Chinese/Japanese break dictionary, which carries three such notices (Google Inc., the TaBE Project, and the Computer Systems and Communication Lab at Academia Sinica); the burmesedict.txt break dictionary; and the bundled Google double-conversion sources — data and code ICU compiles into its libraries and its data blob"},
@@ -225,10 +226,12 @@ var nativeLibs = []nativeLib{
 			{identifier: "BSD-2-Clause-NetBSD", count: 1, role: roleBundled,
 				covers: "that same single laodict.txt notice, which the classifier matches twice — once as BSD-2-Clause and once as its NetBSD variant — rather than a second body of material"},
 			// The one place a copyleft identifier is allowed to stand, and the
-			// attribution is by bytes: classifying lines 435-470 and 470-500 in
-			// isolation returns exactly one GPL-3.0 each, and classifying
-			// everything before line 435 returns none at all. So these two hits
-			// ARE the autotools blocks rather than merely near them.
+			// attribution is by bytes rather than by proximity to a heading:
+			// classifying lines 435-470 and 470-500 in isolation returns exactly
+			// one GPL-3.0 each, while everything before line 435 and everything
+			// after line 500 returns none at all. So these two hits ARE the
+			// aclocal.m4 and config.guess blocks, and nothing else in the notice
+			// contributes a third.
 			{identifier: "GPL-3.0", count: 2, role: roleUnlinked,
 				covers: "the aclocal.m4 and config.guess autotools scripts, which ICU4C's own build runs and which are not compiled into any library lit links"},
 		}},
