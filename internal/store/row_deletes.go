@@ -1,0 +1,93 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
+
+// The per-table row deletes, and the primary-key types that address them.
+//
+// They live apart from both of their callers on purpose. Two layers need them —
+// the ordinary CRUD commands (RemoveRelation, RemoveLabel, DeleteComment) and
+// the reconcile replay's delta — and a primitive shared by two layers belongs
+// under both rather than inside whichever one happened to need it first.
+// Holding them in export_delta.go made the CRUD commands reach UP into the
+// diff layer for a statement that has nothing to do with diffing.
+// [LAW:one-way-deps] everything here depends on the schema and nothing above it,
+// so all four callers depend downhill.
+//
+// This is also why the deletes do not simply sit beside the insert*Tx helpers
+// in import_export.go, which would be the tidier-looking arrangement: the two
+// halves are not at the same depth. Deleting a row needs its key and nothing
+// else, while inserting one needs the normalized whole-row projection
+// (issueRowValues, and through it the storage layer's status and retention
+// normalizations). Symmetry of naming is not a reason to give them the same
+// home when their dependencies differ. [LAW:decomposition]
+
+// relationKey is a relations row's primary key. A relation also carries
+// created_at/created_by OUTSIDE that key, so two relations can share a key and
+// still differ — which is why the delta compares whole VALUES and only deletes
+// by key. [LAW:types-are-the-program] the key type is exactly the schema's
+// PRIMARY KEY (src_id, dst_id, type), so a partial key cannot be built.
+type relationKey struct {
+	srcID string
+	dstID string
+	kind  model.RelationType
+}
+
+// labelKey is a labels row's primary key (issue_id, label).
+type labelKey struct {
+	issueID string
+	name    string
+}
+
+// Each delete below is the ONE place its table's DELETE statement lives — the
+// delta path and the ordinary CRUD commands both route through these, the same
+// way every restore/replay INSERT routes through one insert*Tx. They return the
+// affected row count because the CRUD callers need it to tell "removed" from
+// "there was nothing there"; the delta ignores it, having already decided from
+// the diff that the row is present. [LAW:single-enforcer]
+
+// Deleting an issue takes its relations, comments, labels, events and event
+// changes with it — the schema's ON DELETE CASCADE — which is exactly what
+// cascadeSurvivors accounts for.
+func deleteIssueTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM issues WHERE id = ?`, fmt.Sprintf("issue %s", id), id)
+}
+
+func deleteRelationRowTx(ctx context.Context, tx *sql.Tx, key relationKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`,
+		fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.kind),
+		key.srcID, key.dstID, string(key.kind))
+}
+
+func deleteCommentTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM comments WHERE id = ?`, fmt.Sprintf("comment %s", id), id)
+}
+
+func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`,
+		fmt.Sprintf("label %s:%s", key.issueID, key.name), key.issueID, key.name)
+}
+
+// Deleting an event takes its issue_event_changes rows with it.
+func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
+}
+
+// execDelete runs one delete and reports how many rows it removed, naming the
+// target in any error so a failure says which row it was. [LAW:no-silent-failure]
+func execDelete(ctx context.Context, tx *sql.Tx, stmt, subject string, args ...any) (int64, error) {
+	res, err := tx.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete %s: %w", subject, err)
+	}
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete %s: rows affected: %w", subject, err)
+	}
+	return affected, nil
+}

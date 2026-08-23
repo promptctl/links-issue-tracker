@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"reflect"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -20,22 +19,9 @@ import (
 // nothing here takes "the previous export" from a caller's belief — spineWriter
 // owns that state and seeds it from a real read.
 
-// relationKey is a relations row's primary key. A relation also carries
-// created_at/created_by OUTSIDE that key, so two relations can share a key and
-// still differ — which is why every diff below compares whole VALUES and only
-// deletes by key. [LAW:types-are-the-program] the key type is exactly the
-// schema's PRIMARY KEY (src_id, dst_id, type), so a partial key cannot be built.
-type relationKey struct {
-	srcID string
-	dstID string
-	kind  model.RelationType
-}
-
-// labelKey is a labels row's primary key (issue_id, label).
-type labelKey struct {
-	issueID string
-	name    string
-}
+// The row deletes this file addresses, and the primary-key types that address
+// them, live in row_deletes.go — under both this layer and the CRUD commands
+// that share them. [LAW:one-way-deps]
 
 // tableDelta is the change to one table: the keys whose current row must go,
 // and the rows that must land. A row whose value changed under a stable key
@@ -263,52 +249,4 @@ func applyTableDelta[K comparable, R any](
 		}
 	}
 	return nil
-}
-
-// Each delete below is the ONE place its table's DELETE statement lives —
-// the delta path and the ordinary CRUD commands both route through these, the
-// same way every INSERT routes through one insert*Tx. They return the affected
-// row count because the CRUD callers need it to tell "removed" from "there was
-// nothing there"; the delta ignores it, having already decided from the diff
-// that the row is present. [LAW:single-enforcer]
-
-// Deleting an issue takes its relations, comments, labels, events and event
-// changes with it — the schema's ON DELETE CASCADE — which is exactly what
-// cascadeSurvivors accounts for.
-func deleteIssueTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM issues WHERE id = ?`, fmt.Sprintf("issue %s", id), id)
-}
-
-func deleteRelationRowTx(ctx context.Context, tx *sql.Tx, key relationKey) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`,
-		fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.kind),
-		key.srcID, key.dstID, string(key.kind))
-}
-
-func deleteCommentTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM comments WHERE id = ?`, fmt.Sprintf("comment %s", id), id)
-}
-
-func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`,
-		fmt.Sprintf("label %s:%s", key.issueID, key.name), key.issueID, key.name)
-}
-
-// Deleting an event takes its issue_event_changes rows with it.
-func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
-	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
-}
-
-// execDelete runs one delete and reports how many rows it removed, naming the
-// target in any error so a failure says which row it was. [LAW:no-silent-failure]
-func execDelete(ctx context.Context, tx *sql.Tx, stmt, subject string, args ...any) (int64, error) {
-	res, err := tx.ExecContext(ctx, stmt, args...)
-	if err != nil {
-		return 0, fmt.Errorf("delete %s: %w", subject, err)
-	}
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return 0, fmt.Errorf("delete %s: rows affected: %w", subject, err)
-	}
-	return affected, nil
 }

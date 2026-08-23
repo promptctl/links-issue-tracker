@@ -44,9 +44,12 @@ const (
 // and holds a fixed handful of exports whatever the chain's length. The
 // materializing shape would additionally retain scaleFoldedCommits projected
 // exports at roughly 450 KiB each — some 220 MiB — for growth over 300 MiB.
-// 160 MiB sits with near-double headroom above the streamed cost and well
-// under half the materialized one, so ordinary variance cannot fail it and a
-// reintroduced materialization cannot pass it.
+// 160 MiB sits between the two with margin on both sides: about 1.9x the
+// streamed cost, so ordinary variance cannot fail it, and about 0.53x the
+// materializing one, so a reintroduced materialization cannot pass it. Both
+// ratios are given as numbers rather than as adjectives because this paragraph
+// is the arithmetic anyone moving the budget will check it against, and a
+// margin described loosely is one they would have to re-derive to trust.
 const scaleHeapGrowthBudget = 160 << 20 // 160 MiB
 
 // scaleWallClockBudget bounds how long the combine may take. Unlike the memory
