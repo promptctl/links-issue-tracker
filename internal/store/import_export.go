@@ -148,7 +148,7 @@ func (s *Store) ReplaceFromExport(ctx context.Context, export model.Export) erro
 // replaceFromExport clears the live tables and rewrites them from an export
 // under the ordinary self-retrying mutation pipeline. Restore uses the default
 // message; the reconcile's scratch-branch replay does NOT come through here —
-// it uses replayExportOnScratch, whose transient failures must bubble to the
+// it uses replayDeltaOnScratch, whose transient failures must bubble to the
 // scratch-rebuilding outer retry instead of self-rotating the connection.
 // [LAW:single-enforcer] One import body (writeExportTx); the stamp and the
 // retry policy are the only per-caller values.
@@ -158,72 +158,93 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, stam
 	})
 }
 
-// writeExportTx is the single body that clears the live tables and rewrites
-// them from an export inside one transaction — shared by the self-retrying
-// replaceFromExport and the reconcile's single-attempt scratch replay.
-// [LAW:single-enforcer]
+// writeExportTx clears the live tables and rewrites them from an export inside
+// one transaction — the path for a caller who does NOT know what the tables
+// currently hold (a restore) and so must establish the state wholesale.
+//
+// It is the degenerate case of applyExportDelta, not a second import body: the
+// clear makes the live state provably empty, and the transition from empty to
+// export is a delta with nothing to remove and everything to add. Every INSERT
+// therefore still lives in exactly one place, shared with the reconcile's
+// incremental replay. [LAW:single-enforcer] [LAW:one-source-of-truth]
+//
+// The clear must not name issue_events or issue_event_changes: both cascade
+// from issues (ON DELETE CASCADE), so clearing issues already removes them, and
+// re-listing them here would be a second, drift-prone statement of a fact the
+// schema owns.
 func writeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
 	for _, table := range []string{"labels", "comments", "relations", "issues"} {
 		if _, err := tx.ExecContext(ctx, "DELETE FROM "+table); err != nil {
 			return fmt.Errorf("clear %s: %w", table, err)
 		}
 	}
-	for _, issue := range export.Issues {
-		var closedAt any
-		if value := issue.ClosedAtValue(); value != nil {
-			closedAt = value.Format(time.RFC3339Nano)
-		}
-		// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
-		// decision; the import path inherits it instead of inventing its own
-		// default for containers.
-		status := statusForStorage(issue)
-		// Legacy exports may carry priorities outside the canonical
-		// {normal, urgent} range. model.CanonicalPriority — the same
-		// authority the live parse gate rejects against — coerces any such
-		// value so the CHECK constraint can never reject a restore, without
-		// the import path inventing its own notion of the domain.
-		// [LAW:single-enforcer]
-		priority := model.CanonicalPriority(int(issue.Priority))
-		archivedCol, deletedCol := retentionColumns(issue)
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
-				VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-			issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()), archivedCol, deletedCol); err != nil {
-			return fmt.Errorf("restore issue %s: %w", issue.ID, err)
-		}
+	return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
+}
+
+// insertIssueTx writes one issues row, normalizing the three columns whose
+// canonical form the storage layer owns rather than the caller: the
+// container-vs-leaf status, the priority domain, and the topic slug. Each
+// normalization is a PURE function of the issue, which is what lets a diff
+// computed over export values stay faithful to the normalized rows on disk —
+// equal inputs normalize equally, so an unchanged row is never missed.
+// [LAW:single-enforcer] the issues column list lives here and nowhere else.
+func insertIssueTx(ctx context.Context, tx *sql.Tx, issue model.Issue) error {
+	var closedAt any
+	if value := issue.ClosedAtValue(); value != nil {
+		closedAt = value.Format(time.RFC3339Nano)
 	}
-	for _, relation := range export.Relations {
-		// [LAW:one-source-of-truth] Restore each exported edge through
-		// insertRelationTx so the relations INSERT lives only there.
-		if err := insertRelationTx(ctx, tx, relation); err != nil {
-			return fmt.Errorf("restore relation %s->%s: %w", relation.SrcID, relation.DstID, err)
-		}
+	// [LAW:single-enforcer] statusForStorage owns the container-vs-leaf
+	// decision; the import path inherits it instead of inventing its own
+	// default for containers.
+	status := statusForStorage(issue)
+	// Legacy exports may carry priorities outside the canonical
+	// {normal, urgent} range. model.CanonicalPriority — the same
+	// authority the live parse gate rejects against — coerces any such
+	// value so the CHECK constraint can never reject a restore, without
+	// the import path inventing its own notion of the domain.
+	// [LAW:single-enforcer]
+	priority := model.CanonicalPriority(int(issue.Priority))
+	archivedCol, deletedCol := retentionColumns(issue)
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()), archivedCol, deletedCol); err != nil {
+		return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 	}
-	for _, comment := range export.Comments {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
-			comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
-			return fmt.Errorf("restore comment %s: %w", comment.ID, err)
-		}
+	return nil
+}
+
+func insertCommentTx(ctx context.Context, tx *sql.Tx, comment model.Comment) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO comments(id, issue_id, body, created_at, created_by) VALUES (?, ?, ?, ?, ?)`,
+		comment.ID, comment.IssueID, comment.Body, comment.CreatedAt.Format(time.RFC3339Nano), comment.CreatedBy); err != nil {
+		return fmt.Errorf("restore comment %s: %w", comment.ID, err)
 	}
-	for _, label := range export.Labels {
-		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
-			label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
-			return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
-		}
+	return nil
+}
+
+func insertLabelTx(ctx context.Context, tx *sql.Tx, label model.Label) error {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`,
+		label.IssueID, label.Name, label.CreatedAt.Format(time.RFC3339Nano), label.CreatedBy); err != nil {
+		return fmt.Errorf("restore label %s:%s: %w", label.IssueID, label.Name, err)
 	}
-	for _, event := range export.Events {
-		var actionArg any
-		if event.Action != "" {
-			actionArg = event.Action
-		}
-		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-			event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
-			return fmt.Errorf("restore issue event %s: %w", event.ID, err)
-		}
-		for _, change := range event.Changes {
-			if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
-				event.ID, change.Field, nullableString(change.From), nullableString(change.To)); err != nil {
-				return fmt.Errorf("restore issue event change %s.%s: %w", event.ID, change.Field, err)
-			}
+	return nil
+}
+
+// insertEventTx writes an event together with its field changes: the nested
+// rows are part of the event's value, so they land and leave with it (their
+// table cascades from issue_events).
+func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) error {
+	var actionArg any
+	if event.Action != "" {
+		actionArg = event.Action
+	}
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
+		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+		return fmt.Errorf("restore issue event %s: %w", event.ID, err)
+	}
+	for _, change := range event.Changes {
+		if _, err := tx.ExecContext(ctx, `INSERT INTO issue_event_changes(event_id, field, from_value, to_value) VALUES (?, ?, ?, ?)`,
+			event.ID, change.Field, nullableString(change.From), nullableString(change.To)); err != nil {
+			return fmt.Errorf("restore issue event change %s.%s: %w", event.ID, change.Field, err)
 		}
 	}
 	return nil

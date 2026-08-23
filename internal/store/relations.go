@@ -310,7 +310,7 @@ func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Rel
 // [LAW:one-source-of-truth] The relations INSERT statement lives only here.
 func insertRelationTx(ctx context.Context, tx *sql.Tx, rel model.Relation) error {
 	if _, err := tx.ExecContext(ctx, `INSERT INTO relations(src_id, dst_id, type, created_at, created_by) VALUES (?, ?, ?, ?, ?)`, rel.SrcID, rel.DstID, rel.Type, rel.CreatedAt.Format(time.RFC3339Nano), rel.CreatedBy); err != nil {
-		return fmt.Errorf("insert relation: %w", err)
+		return fmt.Errorf("insert relation %s->%s (%s): %w", rel.SrcID, rel.DstID, rel.Type, err)
 	}
 	return nil
 }

@@ -74,6 +74,37 @@ func reconcileScratchName() string {
 	return fmt.Sprintf("%s-%d-%d", reconcileScratchPrefix, os.Getpid(), time.Now().UnixNano())
 }
 
+// reconcileScratch is the PAIR of throwaway branches a provenance replay runs
+// on, and the reason it is a pair is the single most load-bearing fact about
+// the replay's cost.
+//
+// Reading the backlog at a historical commit is a DOLT_RESET --hard, which
+// moves whichever branch it runs on. A replay that reads and writes on ONE
+// branch therefore cannot interleave: every read must finish before the first
+// write, because the first write's branch would be reset out from under the
+// spine. That forced the old shape — project every folded commit up front and
+// carry all of them in memory across the read/write boundary, O(chain × backlog).
+//
+// Two branches dissolve the conflict. History is read on `read`, which is reset
+// freely and never carries anything worth keeping; the replayed spine
+// accumulates on `spine`, which nothing ever resets. Dolt keeps a working set
+// per branch, so an uncommitted read on one is invisible to the other, and the
+// replay can stream one step at a time. [LAW:decomposition] two roles that were
+// sawing across each other now have one part each.
+type reconcileScratch struct {
+	spine string
+	read  string
+}
+
+// newReconcileScratch derives this run's branch pair from one unique base name,
+// so both stay under reconcileScratchPrefix and are therefore covered by the
+// same startup sweep and the same cleanup. [LAW:one-source-of-truth] one name
+// generator, one prefix, one sweep.
+func newReconcileScratch() reconcileScratch {
+	base := reconcileScratchName()
+	return reconcileScratch{spine: base + "-spine", read: base + "-read"}
+}
+
 // reconcileSnapshotLabel is the label prefix every reconcile-recovery snapshot
 // carries, disjoint from the migration and downgrade labels so the three
 // producers' snapshots roll off under independent retention budgets and never
@@ -415,13 +446,13 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 			// two-way union; combineFromAnchors is the only difference from the shared path.
 			// [LAW:dataflow-not-control-flow] the handling value selects the export producer,
 			// not a duplicated engine.
-			return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratchBranch string) error {
-				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratchBranch, plan.localHead, plan.remoteHead)
+			return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+				return s.combineFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
 			})
 		}
 
-		return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratchBranch string) error {
-			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratchBranch, plan.localHead, plan.remoteHead, baseCommit)
+		return s.replayUnderGuard(ctx, trimmedRemote, trimmedBranch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+			return s.reconcileFromAnchors(ctx, &result, settle, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead, baseCommit)
 		})
 	})
 	if err != nil {
@@ -440,12 +471,12 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 // [LAW:single-enforcer] the mutation envelope is written once; the body is the only variable.
 // [LAW:no-ambient-temporal-coupling] the schema-ahead read reuses the captured remoteHead, so
 // no concurrent fetch can shift the decision between guard and replay.
-func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch string) error) error {
+func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead string, body func(ctx context.Context, guard *snapshotGuard, scratchBranch reconcileScratch) error) error {
 	if err := s.guardCommitSchemaAhead(ctx, remote, branch, remoteHead); err != nil {
 		return err
 	}
 	s.sweepStaleReconcileScratch(ctx)
-	scratchBranch := reconcileScratchName()
+	scratchBranch := newReconcileScratch()
 	guard := newSnapshotGuard(s.doltRootDir, migrationSnapshotsDir(s.doltRootDir), formatReconcileSnapshotLabel(time.Now()))
 	return retryTransientGCContention(ctx, func(ctx context.Context) error {
 		return body(ctx, guard, scratchBranch)
@@ -464,13 +495,13 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch, scratchBranch, localHead, remoteHead, baseCommit string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratchBranch, localHead, func() error {
-		base, err := s.exportAtCommit(ctx, baseCommit)
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
+	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+		base, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
 		if err != nil {
 			return err
 		}
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, localHead, remoteHead, base, reconcileCommitMessage, SyncReconcileLinearized)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, base, reconcileCommitMessage, SyncReconcileLinearized)
 	})
 }
 
@@ -480,11 +511,11 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 // held for the agent). It reuses the identical scratch lifecycle and safe-replay — the only
 // difference from the shared path is the empty base and the labels — so nothing is dropped
 // and no side is picked. [LAW:one-source-of-truth] one merge-and-replay tail, two producers.
-func (s *Store) combineFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch, scratchBranch, localHead, remoteHead string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratchBranch, localHead, func() error {
+func (s *Store) combineFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, localHead, remoteHead, model.Export{}, combineCommitMessage, SyncReconcileCombined)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, model.Export{}, combineCommitMessage, SyncReconcileCombined)
 	})
 }
 
@@ -550,52 +581,73 @@ func readFoldedChain(ctx context.Context, db *sql.DB, remoteHead, localHead stri
 
 // replayStep is one forward commit of the provenance replay: the projected
 // backlog content to land, under the folded commit's own stamp. Steps whose
-// projection equals the spine's prior state land nothing — Dolt's empty-diff
-// skip is the arbiter of "this commit changed nothing here" (a migration or
-// bookkeeping commit), so no parallel equality check exists in Go.
-// [LAW:one-source-of-truth]
+// projection equals the spine's prior state land nothing — a migration or
+// bookkeeping commit that touched no issue writes no rows and Dolt's
+// empty-diff skip drops the commit.
+//
+// Two authorities meet here and must not be confused. The Go-side diff
+// (diffExports) decides which ROWS to write; Dolt decides whether a COMMIT
+// exists. The diff never suppresses a commit and never reports how many
+// landed — commitReplayAndAdvance reads that count back off the spine Dolt
+// actually built — so "did this folded commit change anything" still has
+// exactly one answer, and it is Dolt's. [LAW:one-source-of-truth]
 type replayStep struct {
 	export model.Export
 	stamp  commitStamp
 }
 
-// buildFoldSteps materializes the provenance replay: for each folded commit,
-// the backlog AS OF that commit merged against theirs over base — the folded
-// side's history as it lands on the spine, so each replayed commit's diff is
-// that commit's own change in union terms. The merge's Provisional export makes
-// every step total (an on-both prose divergence carries the deterministic
-// tiebreak value mid-chain; the settled truth still lands in the terminal
-// marker), and the newest step reuses finalProvisional — the provisional of the
-// merge the caller already ran — rather than re-reading and re-merging the
-// local head. [LAW:effects-at-boundaries] all reads happen here, before any
-// replay commit, because reading a commit resets the one scratch branch the
-// replay then builds on; the steps carry the materialized exports across that
-// boundary. That makes the replay O(chain × backlog) in memory and writes — a
-// deliberate trade at divergence scale, tracked for streaming/bounding as
-// links-sync-pgct.13 before large histories make it bite.
-func (s *Store) buildFoldSteps(ctx context.Context, chain []foldedCommit, base, theirs, finalProvisional model.Export) ([]replayStep, error) {
-	steps := make([]replayStep, 0, len(chain))
-	for i, c := range chain {
-		var projected model.Export
-		if i == len(chain)-1 {
-			projected = finalProvisional
-		} else {
-			at, err := s.exportAtCommit(ctx, c.hash)
-			if err != nil {
-				return nil, err
-			}
-			projected = merge.ThreeWay(base, at, theirs).Provisional()
-		}
-		steps = append(steps, replayStep{
-			export: projected,
-			stamp:  commitStamp{Message: c.message, Date: c.date, Author: c.author},
-		})
-	}
-	return steps, nil
+// foldStepper produces the provenance replay's steps ON DEMAND: step i is the
+// backlog AS OF the i-th folded commit merged against theirs over base — the
+// folded side's history as it lands on the spine, so each replayed commit's
+// diff is that commit's own change in union terms. The merge's Provisional
+// export makes every step total (an on-both prose divergence carries the
+// deterministic tiebreak value mid-chain; the settled truth still lands in the
+// terminal marker).
+//
+// Producing steps one at a time rather than returning a slice is the whole
+// memory fix: the replay holds ONE projected export at a time instead of the
+// chain's worth, so peak memory tracks the backlog and no longer the product of
+// backlog and chain length. That is only expressible because the read lands on
+// the scratch pair's read branch (see reconcileScratch), leaving the spine the
+// writer is building untouched.
+//
+// [LAW:effects-at-boundaries] the read is the only effect; the projection is
+// merge.ThreeWay, unchanged and pure. [LAW:one-source-of-truth] the merge policy
+// stays in the merge package — nothing here re-derives what a commit changed.
+type foldStepper struct {
+	store      *Store
+	readBranch string
+	chain      []foldedCommit
+	base       model.Export
+	theirs     model.Export
 }
 
-// replayExportOnScratch lands one export as one commit on the reconcile scratch
-// branch: stage (one tx through writeExportTx), then version (one DOLT_COMMIT
+// len reports how many provenance steps the replay will attempt. Dolt decides
+// how many actually LAND — an empty diff commits nothing — and the caller reads
+// that count back off the spine.
+func (f foldStepper) len() int { return len(f.chain) }
+
+// step projects the i-th folded commit. Every step reads its own commit,
+// including the newest: it costs one export read to keep the loop uniform, and
+// the alternative — special-casing the last step to reuse the caller's
+// already-merged export — buys nothing once the steps are streamed and would
+// reintroduce a branch whose two arms must be proven equal by argument rather
+// than by construction. [LAW:dataflow-not-control-flow] the same operations run
+// on every iteration; only the commit differs.
+func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
+	c := f.chain[i]
+	at, err := f.store.exportAtCommit(ctx, f.readBranch, c.hash)
+	if err != nil {
+		return replayStep{}, err
+	}
+	return replayStep{
+		export: merge.ThreeWay(f.base, at, f.theirs).Provisional(),
+		stamp:  commitStamp{Message: c.message, Date: c.date, Author: c.author},
+	}, nil
+}
+
+// replayDeltaOnScratch lands one step as one commit on the reconcile spine
+// branch: stage (one tx applying the delta), then version (one DOLT_COMMIT
 // via commitWorkingSetOnce) — a SINGLE attempt, deliberately without
 // withStampedMutation's self-rotating transient retry. The session's
 // current-branch is per-connection state, and the retry's rotate
@@ -604,21 +656,23 @@ func (s *Store) buildFoldSteps(ctx context.Context, chain []foldedCommit, base, 
 // silently breaking the guarantee that the data branch moves only by the one
 // atomic reset. Instead a transient failure bubbles raw to replayUnderGuard's
 // outer retryTransientGCContention, whose next attempt re-enters
-// runOnReconcileScratch and re-checkouts the scratch branch as its FIRST op —
-// the whole spine is rebuilt from the fixed anchors on the fresh connection.
+// runOnReconcileScratch and re-creates BOTH scratch branches as its FIRST op —
+// the whole spine is rebuilt from the fixed anchors on the fresh connection,
+// which also re-seeds the spine writer from a fresh read, so no delta can ever
+// be applied against a predecessor a dead connection believed in.
 // [LAW:no-ambient-temporal-coupling] scratch-session recovery has exactly one
 // owner: the outer scratch-rebuilding retry, never a branch-blind inner one.
 // [LAW:single-enforcer] the commit lock still wraps it (re-entrant under the
-// reconcile's held lock), and the write body is the same writeExportTx the
-// ordinary pipeline uses.
-func (s *Store) replayExportOnScratch(ctx context.Context, export model.Export, stamp commitStamp) error {
+// reconcile's held lock), and the write body is the same applyExportDelta the
+// ordinary import pipeline bottoms out in.
+func (s *Store) replayDeltaOnScratch(ctx context.Context, delta exportDelta, stamp commitStamp) error {
 	return s.withCommitLock(ctx, func(ctx context.Context) error {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return fmt.Errorf("begin %s tx: %w", stamp.Message, err)
 		}
 		defer tx.Rollback()
-		if err := writeExportTx(ctx, tx, export); err != nil {
+		if err := applyExportDelta(ctx, tx, delta); err != nil {
 			return err
 		}
 		if err := tx.Commit(); err != nil {
@@ -626,6 +680,61 @@ func (s *Store) replayExportOnScratch(ctx context.Context, export model.Export, 
 		}
 		return s.commitWorkingSetOnce(ctx, stamp)
 	})
+}
+
+// spineWriter lands successive projected exports on the replay's spine branch,
+// each written as the DIFFERENCE from the one it landed before — so a folded
+// commit that touched one issue costs one issue's worth of SQL instead of a
+// wholesale rewrite of every table.
+//
+// A delta is only correct relative to what the tables actually hold, and that
+// makes "the previous export" the dangerous kind of precondition: pass the
+// wrong one and the tables silently disagree with the history, with no error
+// and nothing to point at. So it is not a parameter. The writer OWNS the
+// landed state — seeded in newSpineWriter from a real read of the spine, then
+// advanced only by a landing that succeeded. A caller cannot supply a stale or
+// invented predecessor because a caller never supplies one at all.
+// [LAW:types-are-the-program] the unrepresentable state is the whole point.
+type spineWriter struct {
+	store  *Store
+	branch string
+	// landed is what the spine branch holds right now: read at construction,
+	// replaced only after replayDeltaOnScratch reports success, so a failed
+	// landing leaves it describing the state that is still really there.
+	landed model.Export
+}
+
+// newSpineWriter switches to the spine branch and seeds the writer by EXPORTING
+// what is actually there, rather than assuming it equals the remote-head export
+// the caller already read. The two should be identical — the spine was just
+// reset and lifted to that head — but "should be" is the assumption that turns
+// a delta into corruption, and one export read is a trivial price for deleting
+// it. [FRAMING:representation] seed from the territory, not from the map.
+func (s *Store) newSpineWriter(ctx context.Context, branch string) (*spineWriter, error) {
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", branch); err != nil {
+		return nil, fmt.Errorf("switch to reconcile spine branch %q: %w", branch, err)
+	}
+	landed, err := s.Export(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("read reconcile spine base state: %w", err)
+	}
+	return &spineWriter{store: s, branch: branch, landed: landed}, nil
+}
+
+// land commits next onto the spine under stamp. It switches to the spine branch
+// first because the caller is expected to have just read history on the read
+// branch; the switch is unconditional so that no landing depends on which
+// branch a previous operation happened to leave the session on.
+// [LAW:no-ambient-temporal-coupling]
+func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitStamp) error {
+	if err := execProcedureDiscard(ctx, w.store.db, "DOLT_CHECKOUT", w.branch); err != nil {
+		return fmt.Errorf("switch to reconcile spine branch %q: %w", w.branch, err)
+	}
+	if err := w.store.replayDeltaOnScratch(ctx, diffExports(w.landed, next), stamp); err != nil {
+		return err
+	}
+	w.landed = next
+	return nil
 }
 
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
@@ -638,12 +747,12 @@ func (s *Store) replayExportOnScratch(ctx context.Context, export model.Export, 
 // labels — the safety-critical replay is written once.
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/message/state are values, not
 // a branch duplicated through the replay.
-func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch, localHead, remoteHead string, base model.Export, message string, settledState SyncReconcileState) error {
-	ours, err := s.exportAtCommit(ctx, localHead)
+func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, base model.Export, message string, settledState SyncReconcileState) error {
+	ours, err := s.exportAtCommit(ctx, scratch.read, localHead)
 	if err != nil {
 		return err
 	}
-	theirs, err := s.exportAtCommit(ctx, remoteHead)
+	theirs, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
 	if err != nil {
 		return err
 	}
@@ -668,11 +777,8 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult,
 	if err != nil {
 		return err
 	}
-	steps, err := s.buildFoldSteps(ctx, chain, base, theirs, merged.Provisional())
-	if err != nil {
-		return err
-	}
-	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, message, export, steps)
+	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
+	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
 	if err != nil {
 		return err
 	}
@@ -691,13 +797,17 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult,
 // runs happens on the scratch branch, so the data branch never leaves localHead until
 // body advances it with one atomic reset. [LAW:single-enforcer] the scratch lifecycle
 // is written once, shared by the three-way reconcile and the take-one resolver.
-func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch, scratchBranch, localHead string, body func() error) (err error) {
-	// -B recreates the branch if a prior retry of this same run left it behind.
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", scratchBranch, localHead); err != nil {
-		return fmt.Errorf("create reconcile scratch branch: %w", err)
+func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch, localHead string, body func() error) (err error) {
+	// -B recreates each branch if a prior retry of this same run left it behind.
+	// Both start at localHead; the spine is immediately reset to the remote head
+	// by the replay, and the read branch is reset per commit read.
+	for _, branch := range []string{scratch.spine, scratch.read} {
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", branch, localHead); err != nil {
+			return fmt.Errorf("create reconcile scratch branch %q: %w", branch, err)
+		}
 	}
 	defer func() {
-		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, scratchBranch); cleanupErr != nil && err == nil {
+		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, scratch); cleanupErr != nil && err == nil {
 			err = cleanupErr
 		}
 	}()
@@ -705,15 +815,22 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch, scratchBr
 }
 
 // commitReplayAndAdvance is the snapshot-guarded safe-replay every mutating reconcile
-// shares: on the scratch branch it adopts remoteHead as the base, LIFTS it to this
+// shares: on the spine branch it adopts remoteHead as the base, LIFTS it to this
 // binary's schema, replays the folded side's provenance steps as individual forward
 // commits, settles with the marker commit carrying export under message, snapshots the
 // pre-mutation data branch, then advances the data branch to that finished commit with
-// one atomic reset. The caller has already computed export and steps — a field-aware
-// three-way merge or a wholesale take-one — so this owns only the replay, identically
-// for both. It returns how many provenance steps actually landed (Dolt drops the
-// empty-diff ones), read back off the spine it built. [LAW:single-enforcer] the
-// safety-critical replay is written once.
+// one atomic reset. The caller has already decided export and supplied a stepper — a
+// field-aware three-way merge or a wholesale take-one — so this owns only the replay,
+// identically for both. It returns how many provenance steps actually landed (Dolt
+// drops the empty-diff ones), read back off the spine it built. [LAW:single-enforcer]
+// the safety-critical replay is written once.
+//
+// The loop reads one step and lands it before reading the next, which is what keeps
+// the replay bounded: the stepper reads history on the scratch pair's read branch
+// while the writer accumulates the spine on the other, so no projected export outlives
+// the commit it produced. Both halves address their branch by name on every operation,
+// so the interleaving never depends on call order to keep a destructive reset off the
+// spine.
 //
 // The marker commit is unconditional (allow-empty): the operation that produced this
 // history must be named IN the history even when the folded side's last state already
@@ -722,14 +839,17 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch, scratchBr
 // the agent's prose resolutions). The steps before it carry the folded side's
 // provenance; the marker carries the reconcile's.
 //
-// The lift is required when remoteHead is older-schema: replaceFromExport writes this
+// The lift is required when remoteHead is older-schema: the replay writes this
 // binary's columns, which the remote commit's table may not yet have; lifting first
 // (reusing the migration chain) lands the schema DDL with the first landing commit,
 // still only on the scratch branch — the data branch never holds a half-migrated
 // intermediate because it is untouched until the single atomic reset.
 // [LAW:no-ambient-temporal-coupling] no observer sees a half-built state; it lives
 // only on the scratch branch.
-func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch, remoteHead, message string, export model.Export, steps []replayStep) (int, error) {
+func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, remoteHead, message string, export model.Export, stepper foldStepper) (int, error) {
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", scratch.spine); err != nil {
+		return 0, fmt.Errorf("switch to reconcile spine branch %q: %w", scratch.spine, err)
+	}
 	if err := s.resetAndLift(ctx, remoteHead); err != nil {
 		return 0, fmt.Errorf("adopt remote head %q on scratch: %w", remoteHead, err)
 	}
@@ -738,8 +858,8 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	// head — so the first provenance step's diff is purely its folded commit's
 	// change, never schema work that was not its own. Committed via the
 	// single-attempt commitWorkingSetOnce for the same reason every commit
-	// below goes through replayExportOnScratch: a self-rotating retry would
-	// resume on the data branch (see replayExportOnScratch).
+	// below goes through replayDeltaOnScratch: a self-rotating retry would
+	// resume on the data branch (see replayDeltaOnScratch).
 	if err := s.commitWorkingSetOnce(ctx, commitStamp{Message: reconcileLiftCommitMessage}); err != nil {
 		return 0, fmt.Errorf("commit schema lift of %q: %w", remoteHead, err)
 	}
@@ -747,12 +867,27 @@ func (s *Store) commitReplayAndAdvance(ctx context.Context, guard *snapshotGuard
 	if err != nil {
 		return 0, fmt.Errorf("read lifted base: %w", err)
 	}
-	for _, step := range steps {
-		if err := s.replayExportOnScratch(ctx, step.export, step.stamp); err != nil {
+	// The writer is constructed AFTER the lift commit, so the state it seeds
+	// itself with is the spine's real starting content — the remote head at this
+	// binary's schema — and every step below is written as the difference from
+	// what the step before it actually landed.
+	writer, err := s.newSpineWriter(ctx, scratch.spine)
+	if err != nil {
+		return 0, err
+	}
+	// Read one step, land one step: the projected export for commit i is
+	// produced, written, and released before commit i+1 is read, so the replay's
+	// peak memory is a fixed handful of exports whatever the chain's length.
+	for i := 0; i < stepper.len(); i++ {
+		step, err := stepper.step(ctx, i)
+		if err != nil {
+			return 0, err
+		}
+		if err := writer.land(ctx, step.export, step.stamp); err != nil {
 			return 0, fmt.Errorf("replay folded commit %q: %w", step.stamp.Message, err)
 		}
 	}
-	if err := s.replayExportOnScratch(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
+	if err := writer.land(ctx, export, commitStamp{Message: message, AllowEmpty: true}); err != nil {
 		return 0, err
 	}
 	replayedCommit, err := readDoltHead(ctx, s.db)
@@ -833,7 +968,7 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // force-recreates the name and it is never pushed), so it is surfaced but not
 // promoted. [LAW:no-silent-failure] recoverable failures recover loudly;
 // unrecoverable ones fail the operation.
-func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch, scratchBranch string) error {
+func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch) error {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
 		if reconnectErr := s.reconnect(ctx); reconnectErr != nil {
@@ -849,8 +984,10 @@ func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch, scratch
 		}
 		return nil
 	}
-	if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", scratchBranch); err != nil {
-		fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch %q: %v\n", scratchBranch, err)
+	for _, branch := range []string{scratch.spine, scratch.read} {
+		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", branch); err != nil {
+			fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch %q: %v\n", branch, err)
+		}
 	}
 	return nil
 }
@@ -911,11 +1048,21 @@ func (s *Store) resetAndLift(ctx context.Context, commit string) error {
 	return nil
 }
 
-// exportAtCommit resets the (scratch) branch to a commit, lifts it to the
-// current schema, and exports it. Reading at a revision this way reuses the one
-// canonical export path; it is safe because the caller runs it only on the
-// scratch branch, never the data branch. [LAW:single-enforcer]
-func (s *Store) exportAtCommit(ctx context.Context, commit string) (model.Export, error) {
+// exportAtCommit switches to the reconcile's READ branch, resets it to a
+// commit, lifts it to the current schema, and exports it. Reading at a revision
+// this way reuses the one canonical export path. [LAW:single-enforcer]
+//
+// Taking the branch as a parameter and switching to it here — rather than
+// inheriting whatever branch the session happens to be on — is what makes the
+// destructive reset safe to interleave with spine writes: the reset can only
+// ever land on the branch named for being reset, never on the data branch and
+// never on the spine the replay is accumulating.
+// [LAW:no-ambient-temporal-coupling] the branch a reset lands on is an argument,
+// not a consequence of call order.
+func (s *Store) exportAtCommit(ctx context.Context, readBranch, commit string) (model.Export, error) {
+	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", readBranch); err != nil {
+		return model.Export{}, fmt.Errorf("switch to reconcile read branch %q: %w", readBranch, err)
+	}
 	if err := s.resetAndLift(ctx, commit); err != nil {
 		return model.Export{}, fmt.Errorf("read export at %q: %w", commit, err)
 	}
