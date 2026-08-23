@@ -280,7 +280,19 @@ func buildEntries(pkg string) ([]Entry, error) {
 	// gate — sees the complete set of what ships, from one function. Appending
 	// (rather than a separate list threaded through each renderer) is the
 	// single-enforcer choice: no consumer can forget them. [LAW:single-enforcer]
-	return append(entries, nativeEntries()...), nil
+	//
+	// The same classifier that read the Go modules' license files reads the
+	// native libraries' embedded notices, and a curated license literal that
+	// the notice bytes contradict fails here — before any artifact is written
+	// and before the gate rules on anything. A false license claim in
+	// THIRD_PARTY_LICENSES is the failure this tool exists to prevent, so it
+	// stops the build for the same reason an unfindable module license does.
+	// [LAW:no-silent-failure]
+	native, err := nativeEntries(classifier)
+	if err != nil {
+		return nil, err
+	}
+	return append(entries, native...), nil
 }
 
 // writeFile creates path, runs write against it, syncs it to durable storage,
