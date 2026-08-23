@@ -788,16 +788,34 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult,
 	return nil
 }
 
-// runOnReconcileScratch force-creates this run's unique scratch branch at localHead,
-// runs body on it, and — whatever body returns — returns the session to the data
-// branch and drops the scratch branch. Cleanup recovers a failed switch-back by
+// runOnReconcileScratch force-creates this run's scratch branch pair at localHead,
+// runs body on them, and — whatever body returns — returns the session to the data
+// branch and drops both. Cleanup recovers a failed switch-back by
 // rotating the connection; only if THAT also fails is the store left unusable, and
 // then the failure is promoted to body's result (when it would not otherwise mask a
 // durable error) rather than swallowed. [LAW:no-silent-failure] Every operation body
-// runs happens on the scratch branch, so the data branch never leaves localHead until
+// runs happens on a scratch branch, so the data branch never leaves localHead until
 // body advances it with one atomic reset. [LAW:single-enforcer] the scratch lifecycle
 // is written once, shared by the three-way reconcile and the take-one resolver.
+//
+// Creating two branches is two statements where there was one, so the cleanup has
+// to be armed BEFORE the first of them rather than after the last. Registered
+// after, a failure creating the second branch would return past the defer and
+// strand the first — a branch this attempt made and nothing in this attempt
+// removes, left for some later reconcile's sweep to notice. The single-branch
+// version it replaced could not reach that state, and reintroducing it would be
+// the same partial-state hazard the rest of this file is built to avoid.
+// [LAW:no-ambient-temporal-coupling] the cleanup covers whatever exists when it
+// runs, so it never depends on how far creation got.
 func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch, localHead string, body func() error) (err error) {
+	// created names only the branches that exist, so cleanup deletes exactly
+	// those and never warns about one that was never made.
+	var created []string
+	defer func() {
+		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, created); cleanupErr != nil && err == nil {
+			err = cleanupErr
+		}
+	}()
 	// -B recreates each branch if a prior retry of this same run left it behind.
 	// Both start at localHead; the spine is immediately reset to the remote head
 	// by the replay, and the read branch is reset per commit read.
@@ -805,12 +823,8 @@ func (s *Store) runOnReconcileScratch(ctx context.Context, dataBranch string, sc
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", "-B", branch, localHead); err != nil {
 			return fmt.Errorf("create reconcile scratch branch %q: %w", branch, err)
 		}
+		created = append(created, branch)
 	}
-	defer func() {
-		if cleanupErr := s.cleanupReconcileScratch(ctx, dataBranch, scratch); cleanupErr != nil && err == nil {
-			err = cleanupErr
-		}
-	}()
 	return body()
 }
 
@@ -968,7 +982,7 @@ func countCommitsInRange(ctx context.Context, db *sql.DB, exclusiveBase, head st
 // force-recreates the name and it is never pushed), so it is surfaced but not
 // promoted. [LAW:no-silent-failure] recoverable failures recover loudly;
 // unrecoverable ones fail the operation.
-func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, scratch reconcileScratch) error {
+func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, createdBranches []string) error {
 	if err := execProcedureDiscard(ctx, s.db, "DOLT_CHECKOUT", dataBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: reconcile could not return to data branch %q (%v); rotating connection to recover\n", dataBranch, err)
 		if reconnectErr := s.reconnect(ctx); reconnectErr != nil {
@@ -984,7 +998,7 @@ func (s *Store) cleanupReconcileScratch(ctx context.Context, dataBranch string, 
 		}
 		return nil
 	}
-	for _, branch := range []string{scratch.spine, scratch.read} {
+	for _, branch := range createdBranches {
 		if err := execProcedureDiscard(ctx, s.db, "DOLT_BRANCH", "-D", branch); err != nil {
 			fmt.Fprintf(os.Stderr, "lit: reconcile cleanup could not delete scratch branch %q: %v\n", branch, err)
 		}

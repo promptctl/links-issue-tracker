@@ -355,13 +355,12 @@ func rejectBlocksCycle(ctx context.Context, tx *sql.Tx, dependent, dependency st
 func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType model.RelationType) error {
 	srcID, dstID = relType.CanonicalEndpoints(srcID, dstID)
 	return s.withMutation(ctx, "remove relation", func(ctx context.Context, tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`, srcID, dstID, string(relType))
+		// [LAW:single-enforcer] the relations DELETE lives in deleteRelationRowTx,
+		// shared with the reconcile replay's delta, exactly as the INSERT lives
+		// only in insertRelationTx.
+		affected, err := deleteRelationRowTx(ctx, tx, relationKey{srcID: srcID, dstID: dstID, kind: relType})
 		if err != nil {
-			return fmt.Errorf("delete relation: %w", err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected: %w", err)
+			return err
 		}
 		if affected == 0 {
 			return NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}

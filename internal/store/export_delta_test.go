@@ -69,7 +69,10 @@ func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
 	restamped := relation
 	restamped.CreatedBy = "second"
 
-	issues := []model.Issue{{ID: "a"}, {ID: "b"}}
+	issues := []model.Issue{
+		hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask}, model.StateOpen),
+		hydratedIssue(t, model.Issue{ID: "b", IssueType: model.TypeTask}, model.StateOpen),
+	}
 	prev := model.Export{Issues: issues, Relations: []model.Relation{relation}}
 	next := model.Export{Issues: issues, Relations: []model.Relation{restamped}}
 
@@ -93,10 +96,10 @@ func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
 // rows differ, ignoring what the delete drags away, would leave those rows
 // missing with no error anywhere.
 func TestExportDeltaReinsertsChildrenOfARewrittenIssue(t *testing.T) {
-	touched := model.Issue{ID: "touched", Title: "before"}
+	touched := hydratedIssue(t, model.Issue{ID: "touched", IssueType: model.TypeTask, Title: "before"}, model.StateOpen)
 	retitled := touched
 	retitled.Title = "after"
-	untouched := model.Issue{ID: "untouched"}
+	untouched := hydratedIssue(t, model.Issue{ID: "untouched", IssueType: model.TypeTask}, model.StateOpen)
 
 	comment := model.Comment{ID: "c1", IssueID: "touched", Body: "unchanged"}
 	label := model.Label{IssueID: "touched", Name: "keep"}
@@ -145,7 +148,10 @@ func TestExportDeltaReinsertsChildrenOfARewrittenIssue(t *testing.T) {
 // failing to say so.
 func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 	export := model.Export{
-		Issues:    []model.Issue{{ID: "a", Title: "t"}, {ID: "b"}},
+		Issues: []model.Issue{
+			hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t"}, model.StateOpen),
+			hydratedIssue(t, model.Issue{ID: "b", IssueType: model.TypeTask}, model.StateOpen),
+		},
 		Relations: []model.Relation{{SrcID: "a", DstID: "b", Type: model.RelBlocks}},
 		Comments:  []model.Comment{{ID: "c", IssueID: "a"}},
 		Labels:    []model.Label{{IssueID: "a", Name: "l"}},
@@ -156,17 +162,107 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 	}
 }
 
+// The next two tests are the ones that can SEE the regression finding 1 named.
+// The equivalence test above pins correctness only — a delta that rewrites the
+// whole backlog every step is perfectly correct and perfectly useless — and the
+// scale fixture is a flat backlog edited lane-wise, so neither a label nor a
+// container ever moves in it. Minimality needs its own subject: not "did the
+// tables end up right" but "how little did we write to get there". Both compare
+// the persisted ROW where a whole-model.Issue diff compared a hydrated VIEW,
+// which is the distinction issueRowValues exists to draw.
+
+// TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves pins the first half
+// of that view: Export denormalizes an issue's labels onto model.Issue, so
+// adding a label moves the issue value while no issues COLUMN moves. Diffing the
+// value rewrote the issue — and every child table being ON DELETE CASCADE, that
+// rewrite dragged its comments and its surviving labels through a needless
+// delete-and-reinsert.
+func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
+	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: []string{"keep"}}, model.StateOpen)
+	after := before
+	after.Labels = []string{"keep", "urgent"}
+
+	kept := model.Label{IssueID: "a", Name: "keep"}
+	added := model.Label{IssueID: "a", Name: "urgent"}
+	// Both hang off issue "a", so both are rows the cascade would take if the
+	// issue's row were rewritten — which is what makes asserting them untouched
+	// mean something rather than merely being true of an empty table.
+	comment := model.Comment{ID: "c", IssueID: "a", Body: "untouched"}
+	event := model.IssueEvent{ID: "e", IssueID: "a"}
+
+	prev := model.Export{
+		Issues:   []model.Issue{before},
+		Labels:   []model.Label{kept},
+		Comments: []model.Comment{comment},
+		Events:   []model.IssueEvent{event},
+	}
+	next := prev
+	next.Issues = []model.Issue{after}
+	next.Labels = []model.Label{kept, added}
+
+	got := diffExports(prev, next)
+	if !got.issues.empty() {
+		t.Fatalf("issues delta = remove %v add %v, want no work: a label is not an issues column", got.issues.remove, got.issues.add)
+	}
+	if len(got.labels.remove) != 0 || len(got.labels.add) != 1 || got.labels.add[0] != added {
+		t.Fatalf("labels delta = remove %v add %v, want exactly %v added", got.labels.remove, got.labels.add, added)
+	}
+	// The cascade an issue rewrite would have dragged. Its emptiness is what
+	// makes the delta proportional to the change instead of to the backlog.
+	if !got.comments.empty() || !got.events.empty() {
+		t.Fatalf("cascade tables = comments %+v events %+v, want no work: the issue row never moved", got.comments, got.events)
+	}
+}
+
+// TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses pins the second half. A
+// container's state is composed from its children (model.HydrateAllOf), so
+// closing one child moves the EPIC's value too — while the epic's row holds a
+// NULL status and no closed_at and does not move at all. Diffing values rewrote
+// the epic on every child transition, which on a real backlog is exactly the
+// shape of change a folded commit makes.
+func TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses(t *testing.T) {
+	openChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateOpen)
+	closedChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateClosed)
+
+	epic := model.Issue{ID: "epic", IssueType: model.TypeEpic, Title: "e"}
+	comment := model.Comment{ID: "c1", IssueID: "epic", Body: "untouched"}
+
+	prev := model.Export{
+		Issues:   []model.Issue{hydratedEpic(t, epic, openChild), openChild},
+		Comments: []model.Comment{comment},
+	}
+	next := model.Export{
+		Issues:   []model.Issue{hydratedEpic(t, epic, closedChild), closedChild},
+		Comments: []model.Comment{comment},
+	}
+
+	got := diffExports(prev, next)
+	if len(got.issues.remove) != 1 || got.issues.remove[0] != "child" {
+		t.Fatalf("issue removals = %v, want [child]: an epic's row is invariant to its children", got.issues.remove)
+	}
+	if len(got.issues.add) != 1 || got.issues.add[0].ID != "child" {
+		t.Fatalf("issue additions = %v, want the child only", got.issues.add)
+	}
+	// Hanging off the EPIC, not the child: it survives only if the epic's row
+	// was left in place, so this is where a container rewrite would show up.
+	if !got.comments.empty() {
+		t.Fatalf("comments delta = %+v, want no work: nothing cascaded, because the epic's row never moved", got.comments)
+	}
+}
+
 // TestExportDeltaDropsARemovedIssueWithoutResurrectingItsChildren checks the
 // deletion direction: the issue goes, and nothing that hung off it is queued
 // for re-insertion (which would fail the foreign key) or for deletion (which
 // the cascade already did).
 func TestExportDeltaDropsARemovedIssueWithoutResurrectingItsChildren(t *testing.T) {
+	gone := hydratedIssue(t, model.Issue{ID: "gone", IssueType: model.TypeTask}, model.StateOpen)
+	stays := hydratedIssue(t, model.Issue{ID: "stays", IssueType: model.TypeTask}, model.StateOpen)
 	prev := model.Export{
-		Issues:   []model.Issue{{ID: "gone"}, {ID: "stays"}},
+		Issues:   []model.Issue{gone, stays},
 		Comments: []model.Comment{{ID: "c", IssueID: "gone"}},
 		Events:   []model.IssueEvent{{ID: "e", IssueID: "gone"}},
 	}
-	next := model.Export{Issues: []model.Issue{{ID: "stays"}}}
+	next := model.Export{Issues: []model.Issue{stays}}
 
 	got := diffExports(prev, next)
 	if len(got.issues.remove) != 1 || got.issues.remove[0] != "gone" {
@@ -178,6 +274,41 @@ func TestExportDeltaDropsARemovedIssueWithoutResurrectingItsChildren(t *testing.
 	if !got.comments.empty() || !got.events.empty() {
 		t.Fatalf("children delta = comments %+v events %+v, want no work: the cascade owns them", got.comments, got.events)
 	}
+}
+
+// A model.Issue can be SPELLED as a bare literal but not READ as one: its
+// lifecycle is unexported and hydration-only, so every accessor issueRowValues
+// reaches through — statusForStorage, ClosedAtValue, ResolutionValue — panics on
+// an issue that never crossed a hydrator. That panic is the loud failure arm of
+// the model's hydration boundary, not a gap to soften here
+// [LAW:parse-dont-validate]: a fixture must cross the same boundary the store's
+// read path crosses, because every issue the delta ever sees comes from Export.
+//
+// Leaf and container are two constructions, not one with a flag: a leaf hydrates
+// from its own status, a container from its children. The model cuts there
+// (HydrateStatus vs HydrateAllOf) and so do these, so no call site has to pass an
+// argument that means nothing to it. [LAW:decomposition]
+
+// hydratedIssue returns a leaf issue carrying the given state.
+func hydratedIssue(t *testing.T, issue model.Issue, state model.State) model.Issue {
+	t.Helper()
+	hydrated, err := model.HydrateStatus(issue, model.StatusView{Value: state})
+	if err != nil {
+		t.Fatalf("HydrateStatus(%s): %v", issue.ID, err)
+	}
+	return hydrated
+}
+
+// hydratedEpic returns a container issue whose lifecycle is composed from the
+// given children — the shape that makes an epic's VALUE move whenever any child
+// moves, while its persisted row stands still.
+func hydratedEpic(t *testing.T, issue model.Issue, children ...model.Issue) model.Issue {
+	t.Helper()
+	hydrated, err := model.HydrateAllOf(issue, children)
+	if err != nil {
+		t.Fatalf("HydrateAllOf(%s): %v", issue.ID, err)
+	}
+	return hydrated
 }
 
 // deltaScenarioState is one backlog state in the sequence the equivalence test

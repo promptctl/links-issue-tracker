@@ -55,18 +55,28 @@ func (d tableDelta[K, R]) empty() bool {
 }
 
 // diffTable computes the transition from the rows currently live to the rows
-// wanted, comparing whole values so a change in a non-key column is caught, and
-// keying deletions so the row can be addressed in SQL.
+// wanted, comparing each row's PERSISTED projection so a change in a non-key
+// column is caught, and keying deletions so the row can be addressed in SQL.
 //
 // It walks the input SLICES rather than the index maps so the emitted order is
 // the caller's order rather than Go's randomized map order — a deterministic
 // delta is a reviewable one, and identical inputs must produce an identical
 // statement sequence. [LAW:no-ambient-temporal-coupling]
 //
-// reflect.DeepEqual is the comparison on purpose: it is TOTAL over the row
-// struct, so a column added to the schema and the model is compared without
+// Two decisions carry the comparison, and they pull in opposite directions.
+//
+// `persisted` narrows WHAT is compared to what the table stores. For most
+// tables the model type is the row and the projection is the identity
+// (wholeRow); for issues it is issueRowValues, because model.Issue is a
+// hydrated view that also carries labels from another table and, for a
+// container, a lifecycle derived from its children. Comparing those made every
+// label edit and every child status change look like a row change and dragged
+// the issue's whole cascade through a needless rewrite.
+//
+// reflect.DeepEqual then makes the comparison TOTAL over whatever the
+// projection yields, so a column added to the projection is compared without
 // anyone remembering to extend a hand-written field list. Its failure direction
-// is also the safe one — two values that are semantically equal but structurally
+// is the safe one — two values that are semantically equal but structurally
 // distinct (say, equal instants in different time.Location) are reported as
 // changed, which costs a redundant rewrite of that one row and never a missed
 // one. [LAW:types-are-the-program]
@@ -79,7 +89,7 @@ func (d tableDelta[K, R]) empty() bool {
 // export arrives as `wanted` against an empty `live`, where the add loop walks
 // the slice and every duplicate still reaches the INSERT and still fails
 // loudly. [LAW:no-silent-failure]
-func diffTable[K comparable, R any](live, wanted []R, key func(R) K) tableDelta[K, R] {
+func diffTable[K comparable, R any](live, wanted []R, key func(R) K, persisted func(R) any) tableDelta[K, R] {
 	liveByKey := make(map[K]R, len(live))
 	for _, row := range live {
 		liveByKey[key(row)] = row
@@ -91,17 +101,24 @@ func diffTable[K comparable, R any](live, wanted []R, key func(R) K) tableDelta[
 	var delta tableDelta[K, R]
 	for _, row := range live {
 		k := key(row)
-		if want, ok := wantedByKey[k]; !ok || !reflect.DeepEqual(row, want) {
+		if want, ok := wantedByKey[k]; !ok || !reflect.DeepEqual(persisted(row), persisted(want)) {
 			delta.remove = append(delta.remove, k)
 		}
 	}
 	for _, row := range wanted {
-		if have, ok := liveByKey[key(row)]; !ok || !reflect.DeepEqual(have, row) {
+		if have, ok := liveByKey[key(row)]; !ok || !reflect.DeepEqual(persisted(have), persisted(row)) {
 			delta.add = append(delta.add, row)
 		}
 	}
 	return delta
 }
+
+// wholeRow is the projection for the tables whose model type IS their row —
+// relations, comments, labels, and events all carry exactly their persisted
+// columns (an event's Changes included, since those are its child rows). Only
+// issues needs a narrower projection, because only model.Issue is a hydrated
+// view carrying fields no issues column holds.
+func wholeRow[R any](row R) any { return row }
 
 // exportDelta is the whole transition, one tableDelta per table, in the order
 // the foreign keys demand: issues exist before anything references them.
@@ -139,35 +156,44 @@ func (d exportDelta) empty() bool {
 func diffExports(prev, next model.Export) exportDelta {
 	survivors := cascadeSurvivors(prev.Issues, next.Issues)
 	return exportDelta{
-		issues: diffTable(prev.Issues, next.Issues, func(i model.Issue) string { return i.ID }),
+		issues: diffTable(prev.Issues, next.Issues,
+			func(i model.Issue) string { return i.ID },
+			func(i model.Issue) any { return issueRowValues(i) }),
 		relations: diffTable(
 			// A relation cascades away if EITHER endpoint does.
 			filterRows(prev.Relations, func(r model.Relation) bool { return survivors[r.SrcID] && survivors[r.DstID] }),
 			next.Relations,
 			func(r model.Relation) relationKey {
 				return relationKey{srcID: r.SrcID, dstID: r.DstID, kind: r.Type}
-			}),
+			}, wholeRow),
 		comments: diffTable(
 			filterRows(prev.Comments, func(c model.Comment) bool { return survivors[c.IssueID] }),
 			next.Comments,
-			func(c model.Comment) string { return c.ID }),
+			func(c model.Comment) string { return c.ID }, wholeRow),
 		labels: diffTable(
 			filterRows(prev.Labels, func(l model.Label) bool { return survivors[l.IssueID] }),
 			next.Labels,
-			func(l model.Label) labelKey { return labelKey{issueID: l.IssueID, name: l.Name} }),
+			func(l model.Label) labelKey { return labelKey{issueID: l.IssueID, name: l.Name} }, wholeRow),
 		events: diffTable(
 			filterRows(prev.Events, func(e model.IssueEvent) bool { return survivors[e.IssueID] }),
 			next.Events,
-			func(e model.IssueEvent) string { return e.ID }),
+			func(e model.IssueEvent) string { return e.ID }, wholeRow),
 	}
 }
 
 // cascadeSurvivors names the issue ids whose row this delta will NOT delete —
-// present in both exports with an identical row. Every other id is either gone
-// from next or changed, and both cases are expressed as a DELETE (which takes
-// the issue's children with it) followed by an INSERT, so that no UPDATE
-// statement restating the issues column list has to exist and drift.
-// [LAW:one-source-of-truth] the column list lives once, in the INSERT.
+// present in both exports with an identical persisted row. Every other id is
+// either gone from next or changed, and both cases are expressed as a DELETE
+// (which takes the issue's children with it) followed by an INSERT, so that no
+// UPDATE statement restating the issues column list has to exist and drift.
+//
+// It must decide survival by exactly the rule the issues diff uses, or the two
+// disagree and the cascade accounting is wrong in one direction or the other:
+// an issue the diff deletes but this calls a survivor leaves its children
+// unrestored, and an issue this calls dead but the diff keeps loses them
+// outright. Both share issueRowValues for that reason — the persisted row, not
+// the hydrated model.Issue, whose Labels and container lifecycle belong to
+// other tables and other rows entirely. [LAW:single-enforcer]
 func cascadeSurvivors(prev, next []model.Issue) map[string]bool {
 	nextByID := make(map[string]model.Issue, len(next))
 	for _, issue := range next {
@@ -175,7 +201,7 @@ func cascadeSurvivors(prev, next []model.Issue) map[string]bool {
 	}
 	survivors := make(map[string]bool, len(prev))
 	for _, issue := range prev {
-		if want, ok := nextByID[issue.ID]; ok && reflect.DeepEqual(issue, want) {
+		if want, ok := nextByID[issue.ID]; ok && reflect.DeepEqual(issueRowValues(issue), issueRowValues(want)) {
 			survivors[issue.ID] = true
 		}
 	}
@@ -219,11 +245,15 @@ func applyTableDelta[K comparable, R any](
 	ctx context.Context,
 	tx *sql.Tx,
 	delta tableDelta[K, R],
-	remove func(context.Context, *sql.Tx, K) error,
+	remove func(context.Context, *sql.Tx, K) (int64, error),
 	add func(context.Context, *sql.Tx, R) error,
 ) error {
 	for _, key := range delta.remove {
-		if err := remove(ctx, tx, key); err != nil {
+		// The row count is the CRUD callers' concern: the diff already
+		// established this key is present, so a zero here would be a bug the
+		// next step's constraint or the equivalence test surfaces, not a
+		// condition to branch on. [LAW:dataflow-not-control-flow]
+		if _, err := remove(ctx, tx, key); err != nil {
 			return err
 		}
 	}
@@ -235,42 +265,50 @@ func applyTableDelta[K comparable, R any](
 	return nil
 }
 
+// Each delete below is the ONE place its table's DELETE statement lives —
+// the delta path and the ordinary CRUD commands both route through these, the
+// same way every INSERT routes through one insert*Tx. They return the affected
+// row count because the CRUD callers need it to tell "removed" from "there was
+// nothing there"; the delta ignores it, having already decided from the diff
+// that the row is present. [LAW:single-enforcer]
+
 // Deleting an issue takes its relations, comments, labels, events and event
 // changes with it — the schema's ON DELETE CASCADE — which is exactly what
 // cascadeSurvivors accounts for.
-func deleteIssueTx(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM issues WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("delete issue %s: %w", id, err)
-	}
-	return nil
+func deleteIssueTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM issues WHERE id = ?`, fmt.Sprintf("issue %s", id), id)
 }
 
-func deleteRelationRowTx(ctx context.Context, tx *sql.Tx, key relationKey) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`,
-		key.srcID, key.dstID, key.kind); err != nil {
-		return fmt.Errorf("delete relation %s->%s (%s): %w", key.srcID, key.dstID, key.kind, err)
-	}
-	return nil
+func deleteRelationRowTx(ctx context.Context, tx *sql.Tx, key relationKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM relations WHERE src_id = ? AND dst_id = ? AND type = ?`,
+		fmt.Sprintf("relation %s->%s (%s)", key.srcID, key.dstID, key.kind),
+		key.srcID, key.dstID, string(key.kind))
 }
 
-func deleteCommentTx(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM comments WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("delete comment %s: %w", id, err)
-	}
-	return nil
+func deleteCommentTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM comments WHERE id = ?`, fmt.Sprintf("comment %s", id), id)
 }
 
-func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, key.issueID, key.name); err != nil {
-		return fmt.Errorf("delete label %s:%s: %w", key.issueID, key.name, err)
-	}
-	return nil
+func deleteLabelTx(ctx context.Context, tx *sql.Tx, key labelKey) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`,
+		fmt.Sprintf("label %s:%s", key.issueID, key.name), key.issueID, key.name)
 }
 
 // Deleting an event takes its issue_event_changes rows with it.
-func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) error {
-	if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE id = ?`, id); err != nil {
-		return fmt.Errorf("delete issue event %s: %w", id, err)
+func deleteEventTx(ctx context.Context, tx *sql.Tx, id string) (int64, error) {
+	return execDelete(ctx, tx, `DELETE FROM issue_events WHERE id = ?`, fmt.Sprintf("issue event %s", id), id)
+}
+
+// execDelete runs one delete and reports how many rows it removed, naming the
+// target in any error so a failure says which row it was. [LAW:no-silent-failure]
+func execDelete(ctx context.Context, tx *sql.Tx, stmt, subject string, args ...any) (int64, error) {
+	res, err := tx.ExecContext(ctx, stmt, args...)
+	if err != nil {
+		return 0, fmt.Errorf("delete %s: %w", subject, err)
 	}
-	return nil
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return 0, fmt.Errorf("delete %s: rows affected: %w", subject, err)
+	}
+	return affected, nil
 }

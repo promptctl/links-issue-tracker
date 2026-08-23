@@ -1274,8 +1274,9 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 			return err
 		}
 		deleted.CreatedAt = t
-		if _, err := tx.ExecContext(ctx, `DELETE FROM comments WHERE id = ?`, id); err != nil {
-			return fmt.Errorf("delete comment: %w", err)
+		// [LAW:single-enforcer] one comments DELETE, shared with the replay's delta.
+		if _, err := deleteCommentTx(ctx, tx, id); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {

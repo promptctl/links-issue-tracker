@@ -181,14 +181,44 @@ func writeExportTx(ctx context.Context, tx *sql.Tx, export model.Export) error {
 	return applyExportDelta(ctx, tx, diffExports(model.Export{}, export))
 }
 
-// insertIssueTx writes one issues row, normalizing the three columns whose
-// canonical form the storage layer owns rather than the caller: the
-// container-vs-leaf status, the priority domain, and the topic slug. Each
-// normalization is a PURE function of the issue, which is what lets a diff
-// computed over export values stay faithful to the normalized rows on disk —
+// insertIssueStmt is the restore/replay INSERT, kept beside issueRowValues so
+// the column list and the value tuple that fills it are read and edited
+// together — they must agree positionally, and separating them is how they
+// stop agreeing.
+//
+// This is the whole-row writer, used by a restore and by the reconcile replay.
+// It is NOT the only INSERT into issues: CreateIssue (store.go) writes a
+// creation-time row with a narrower column list of its own. A schema change
+// that adds a column has to be carried to both.
+const insertIssueStmt = `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+
+// issueRowValues is the issues row an export issue becomes: every persisted
+// column, in insertIssueStmt's order, with the three normalizations the storage
+// layer owns rather than the caller — the container-vs-leaf status, the
+// priority domain, and the topic slug.
+//
+// It exists as its own function because it has two consumers, and the second
+// one is why the first is written this way. insertIssueTx binds it. The
+// reconcile's delta COMPARES it, to decide whether an issue's row actually
+// changed — and comparing this tuple is not the same as comparing the
+// model.Issue it came from. A hydrated Issue carries `Labels`, denormalized
+// from the labels table, and for a container a lifecycle composed from every
+// child; neither is an issues column. Diffing whole Issue values therefore
+// called a row "changed" whenever a label moved or any child of an epic did,
+// and rewrote that issue and everything ON DELETE CASCADE takes with it.
+//
+// Deriving the comparison from the writer keeps the property that motivated
+// comparing whole values in the first place — nothing is compared by a
+// hand-maintained field list that a new column could fall out of — while
+// making the subject the row rather than the view of it. Add a column and it
+// enters the write and the diff in the same edit, because they are the same
+// tuple. [LAW:one-source-of-truth]
+//
+// Each normalization is a PURE function of the issue, which is what lets a
+// comparison over export values stay faithful to the normalized rows on disk:
 // equal inputs normalize equally, so an unchanged row is never missed.
-// [LAW:single-enforcer] the issues column list lives here and nowhere else.
-func insertIssueTx(ctx context.Context, tx *sql.Tx, issue model.Issue) error {
+func issueRowValues(issue model.Issue) []any {
 	var closedAt any
 	if value := issue.ClosedAtValue(); value != nil {
 		closedAt = value.Format(time.RFC3339Nano)
@@ -205,9 +235,17 @@ func insertIssueTx(ctx context.Context, tx *sql.Tx, issue model.Issue) error {
 	// [LAW:single-enforcer]
 	priority := model.CanonicalPriority(int(issue.Priority))
 	archivedCol, deletedCol := retentionColumns(issue)
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issues(id, title, description, agent_prompt, status, priority, issue_type, topic, assignee, item_rank, lane, created_at, updated_at, closed_at, resolution, redirect_target, archived_at, deleted_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, COALESCE(NULLIF(?, ''), 'misc'), ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority, issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane, issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt, nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()), archivedCol, deletedCol); err != nil {
+	return []any{
+		issue.ID, issue.Title, issue.Description, nullableString(issue.Prompt), status, priority,
+		issue.IssueType, issueid.NormalizeSlug(issue.Topic), issue.AssigneeValue(), issue.Rank, issue.Lane,
+		issue.CreatedAt.Format(time.RFC3339Nano), issue.UpdatedAt.Format(time.RFC3339Nano), closedAt,
+		nullableResolution(issue.ResolutionValue()), nullableStringPtr(issue.RedirectTargetValue()),
+		archivedCol, deletedCol,
+	}
+}
+
+func insertIssueTx(ctx context.Context, tx *sql.Tx, issue model.Issue) error {
+	if _, err := tx.ExecContext(ctx, insertIssueStmt, issueRowValues(issue)...); err != nil {
 		return fmt.Errorf("restore issue %s: %w", issue.ID, err)
 	}
 	return nil

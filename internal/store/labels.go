@@ -52,13 +52,10 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 		return nil, err
 	}
 	if err := s.withMutation(ctx, "remove label", func(ctx context.Context, tx *sql.Tx) error {
-		res, err := tx.ExecContext(ctx, `DELETE FROM labels WHERE issue_id = ? AND label = ?`, issueID, label)
+		// [LAW:single-enforcer] one labels DELETE, shared with the replay's delta.
+		affected, err := deleteLabelTx(ctx, tx, labelKey{issueID: issueID, name: label})
 		if err != nil {
-			return fmt.Errorf("delete label: %w", err)
-		}
-		affected, err := res.RowsAffected()
-		if err != nil {
-			return fmt.Errorf("rows affected: %w", err)
+			return err
 		}
 		if affected == 0 {
 			return NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}
