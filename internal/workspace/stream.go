@@ -92,68 +92,109 @@ func ReadStream(privateGitDir string) (StreamID, error) {
 // is the write half of the pair: only a mutating command reaches it, which is
 // what makes the token appear on a checkout's first mutation and not before.
 //
-// [LAW:dataflow-not-control-flow] The steps do not vary with whether a token
-// already exists. A candidate is minted every time, the exclusive create is
-// attempted every time, and the file is read back every time; only the VALUE
-// differs — the candidate wins on a fresh checkout and is discarded on every
-// later call. Structuring it as "check, then maybe mint" would both branch the
-// mechanics and open the check-then-act race below.
+// The read-first step is a fast path, NOT the write-once enforcement — that
+// distinction is the whole reason this is safe. Two commands starting together
+// in a fresh checkout both read "absent" and both go on to publish; correctness
+// comes from publishStreamToken's atomic link, which exactly one of them wins.
+// The fast path only keeps the temp-file write and its fsync on a checkout's
+// genuine first mutation instead of on every mutating command forever after.
 //
-// [LAW:single-enforcer] Write-once is enforced by the kernel through O_EXCL, not
-// by this process reading before it writes. Two mutating commands starting
-// together in one checkout would both observe "absent" under a read-first
-// design and both write, and the second would silently replace an identity the
-// first had already stamped onto events. With O_EXCL exactly one create can
-// succeed; the loser is not an error case but the ordinary path on every call
-// after the first, and it adopts the winner's token by reading it back.
+// [LAW:one-source-of-truth] The final read is what every caller returns, so the
+// FILE decides this checkout's identity — never the token this process happened
+// to mint. A loser that returned its own unpublished candidate would stamp work
+// with an identity no other command in the checkout agrees with.
 func EnsureStream(privateGitDir string) (StreamID, error) {
-	path := filepath.Join(privateGitDir, streamTokenFile)
-	candidate, err := newStreamToken()
+	existing, err := ReadStream(privateGitDir)
 	if err != nil {
 		return StreamID{}, err
 	}
-	if err := createStreamToken(path, candidate); err != nil {
+	if existing.Present() {
+		return existing, nil
+	}
+	if err := publishStreamToken(privateGitDir); err != nil {
 		return StreamID{}, err
 	}
-	// The file, never this process, is the authority on what the token IS: the
-	// candidate above is only a proposal, and reading back is what makes the
-	// winner's value the one every caller sees. [LAW:one-source-of-truth]
 	minted, err := ReadStream(privateGitDir)
 	if err != nil {
 		return StreamID{}, err
 	}
 	if !minted.Present() {
-		// Reachable only if something removed the file between the create above
+		// Reachable only if something removed the file between the publish above
 		// and this read. Returning the absent StreamID would hand a mutating
 		// command an identity-less pair that reads exactly like a never-mutated
 		// checkout, so the anomaly stops here instead. [LAW:no-silent-failure]
-		return StreamID{}, fmt.Errorf("stream id %q vanished immediately after it was written", path)
+		return StreamID{}, fmt.Errorf("stream id %q vanished immediately after it was written",
+			filepath.Join(privateGitDir, streamTokenFile))
 	}
 	return minted, nil
 }
 
-// createStreamToken writes a token only if the file does not yet exist. An
-// already-existing file is a SUCCESSFUL outcome, not a failure — it is what
-// every call after a checkout's first one looks like — so it is absorbed here,
-// while every other write failure surfaces.
-func createStreamToken(path string, token string) error {
-	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+// publishStreamToken mints a token and installs it write-once, in a way that
+// makes the token file COMPLETE the instant it becomes visible.
+//
+// [LAW:no-ambient-temporal-coupling] Creating the destination and filling it are
+// two moments, and every reader that arrives between them sees a file that
+// exists and holds nothing. Creating the file at its final path first — an
+// O_EXCL open followed by a write — publishes that empty moment to every other
+// process, and the consequences are not hypothetical: a concurrent command
+// reads the empty file and rejects it as malformed, and a process killed in
+// that window leaves an empty file that can never be replaced, permanently
+// failing every later read AND write for the checkout. So the token is written
+// to a temp file, completed there, and only then given its real name.
+//
+// [LAW:single-enforcer] os.Link is what enforces write-once, and it is chosen
+// over os.Rename deliberately: rename would silently REPLACE an existing
+// identity, while link fails with EEXIST and leaves the incumbent alone. An
+// already-published token is therefore a successful outcome here, not a
+// failure — it is what every racing caller but one sees.
+func publishStreamToken(privateGitDir string) error {
+	token, err := newStreamToken()
+	if err != nil {
+		return err
+	}
+	// Created in the destination directory because a link cannot cross a
+	// filesystem, and a temp dir elsewhere would put one there.
+	temp, err := os.CreateTemp(privateGitDir, streamTokenFile+".tmp-*")
+	if err != nil {
+		return fmt.Errorf("create temporary stream id in %q: %w", privateGitDir, err)
+	}
+	tempPath := temp.Name()
+	// Removed whether this call wins or loses the race, and on every error path.
+	defer os.Remove(tempPath)
+
+	// The token is written with a trailing newline so the file reads correctly
+	// when a person cats it while debugging; parseStreamToken trims it back off.
+	if _, err := temp.WriteString(token + "\n"); err != nil {
+		temp.Close()
+		return fmt.Errorf("write temporary stream id %q: %w", tempPath, err)
+	}
+	// CreateTemp opens at 0600; the token is not a secret and every other file
+	// in the git directory is world-readable, so the mode is set explicitly
+	// rather than left to differ from its neighbors by accident.
+	if err := temp.Chmod(0o644); err != nil {
+		temp.Close()
+		return fmt.Errorf("set mode on temporary stream id %q: %w", tempPath, err)
+	}
+	// Synced before the link so a crash cannot leave the published name pointing
+	// at unwritten bytes. The directory entry is deliberately NOT synced: losing
+	// it to a crash means the token is simply absent and the next mutation mints
+	// one, which is the safe failure, whereas losing the CONTENT would resurrect
+	// exactly the permanently-empty file this design exists to make impossible.
+	if err := temp.Sync(); err != nil {
+		temp.Close()
+		return fmt.Errorf("sync temporary stream id %q: %w", tempPath, err)
+	}
+	if err := temp.Close(); err != nil {
+		return fmt.Errorf("close temporary stream id %q: %w", tempPath, err)
+	}
+
+	path := filepath.Join(privateGitDir, streamTokenFile)
+	err = os.Link(tempPath, path)
 	if errors.Is(err, os.ErrExist) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("create stream id %q: %w", path, err)
-	}
-	// The token is written with a trailing newline so the file reads correctly
-	// when a person cats it while debugging; parseStreamToken trims it back off.
-	if _, err := file.WriteString(token + "\n"); err != nil {
-		// Closed on the error path too — the deferred-close idiom would discard
-		// this write error, which is the one that matters here.
-		file.Close()
-		return fmt.Errorf("write stream id %q: %w", path, err)
-	}
-	if err := file.Close(); err != nil {
-		return fmt.Errorf("close stream id %q: %w", path, err)
+		return fmt.Errorf("publish stream id %q: %w", path, err)
 	}
 	return nil
 }
@@ -182,17 +223,33 @@ func newStreamToken() (string, error) {
 // forward as an identity that would attribute work to a checkout that never
 // existed. The token is never decoded back into bytes (it is a discriminator,
 // not a payload), so its length and alphabet are the whole of its contract.
+//
+// A damaged token fails every command in the checkout, read and write alike,
+// so the error carries its own remedy — the file is the only state involved and
+// deleting it restores a working checkout. It is deliberately NOT self-healed:
+// quietly minting a replacement would give a second identity to a checkout
+// whose first may already be attached to work, turning a loud, one-line fix
+// into silently split attribution. [LAW:no-silent-failure]
 func parseStreamToken(path string, raw string) (StreamID, error) {
 	token := strings.TrimSpace(raw)
 	if len(token) != streamTokenLen {
-		return StreamID{}, fmt.Errorf("stream id %q is malformed: expected %d characters, found %d", path, streamTokenLen, len(token))
+		return StreamID{}, malformedStreamToken(path,
+			fmt.Sprintf("expected %d characters, found %d", streamTokenLen, len(token)))
 	}
 	for _, char := range token {
 		isLowerLetter := char >= 'a' && char <= 'z'
 		isBase32Digit := char >= '2' && char <= '7'
 		if !isLowerLetter && !isBase32Digit {
-			return StreamID{}, fmt.Errorf("stream id %q is malformed: character %q is outside the token alphabet", path, char)
+			return StreamID{}, malformedStreamToken(path,
+				fmt.Sprintf("character %q is outside the token alphabet", char))
 		}
 	}
 	return StreamID{value: token}, nil
+}
+
+// malformedStreamToken states the damage and the fix in one message.
+// [LAW:single-enforcer] Every rejection is phrased here, so no rejection can
+// describe the damage without also telling the operator how to recover.
+func malformedStreamToken(path string, detail string) error {
+	return fmt.Errorf("stream id %q is malformed: %s; delete the file to mint a fresh identity for this checkout (work already recorded under the old identity keeps it, and any lane this checkout held is released)", path, detail)
 }

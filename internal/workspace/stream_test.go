@@ -373,3 +373,117 @@ func TestTokenCarriesNothingIdentifying(t *testing.T) {
 		t.Fatalf("token %q has length %d, want %d", token, len(token), streamTokenLen)
 	}
 }
+
+// TestPublishNeverReplacesAnExistingIdentity is the regression guard for the
+// defect this file's publish path was rewritten to fix. The atomic install must
+// use a primitive that REFUSES an existing destination: os.Rename would publish
+// just as atomically and silently overwrite the incumbent, handing a checkout a
+// second identity while its first is already attached to work. Calling publish
+// directly (rather than through EnsureStream, whose read-first fast path would
+// return before publishing) is what puts the write-once primitive itself under
+// test.
+func TestPublishNeverReplacesAnExistingIdentity(t *testing.T) {
+	dir := t.TempDir()
+	if err := publishStreamToken(dir); err != nil {
+		t.Fatalf("publishStreamToken() error = %v", err)
+	}
+	incumbent, err := ReadStream(dir)
+	if err != nil {
+		t.Fatalf("ReadStream() error = %v", err)
+	}
+	if !incumbent.Present() {
+		t.Fatal("publish produced no token")
+	}
+
+	for range 5 {
+		if err := publishStreamToken(dir); err != nil {
+			t.Fatalf("republishing over an existing identity must succeed quietly: %v", err)
+		}
+		after, err := ReadStream(dir)
+		if err != nil {
+			t.Fatalf("ReadStream() error = %v", err)
+		}
+		if after.Value() != incumbent.Value() {
+			t.Fatalf("an existing identity was replaced: %q became %q", incumbent.Value(), after.Value())
+		}
+	}
+}
+
+// TestPublishedTokenIsCompleteAndLeavesNoLitter pins both halves of the atomic
+// install: the token file parses the moment it exists (it is linked into place
+// already complete, never created empty and filled afterwards), and the temp
+// file it was staged in is gone — on the losing path as well as the winning one,
+// since every mutating command in a fresh checkout stages one.
+func TestPublishedTokenIsCompleteAndLeavesNoLitter(t *testing.T) {
+	dir := t.TempDir()
+	for round := range 3 {
+		if err := publishStreamToken(dir); err != nil {
+			t.Fatalf("round %d: publishStreamToken() error = %v", round, err)
+		}
+		if _, err := ReadStream(dir); err != nil {
+			t.Fatalf("round %d: published token does not parse: %v", round, err)
+		}
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatalf("ReadDir error = %v", err)
+		}
+		var names []string
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		if len(names) != 1 || names[0] != streamTokenFile {
+			t.Fatalf("round %d: expected only %q in the directory, found %v", round, streamTokenFile, names)
+		}
+	}
+}
+
+// TestDamagedTokenErrorNamesItsRemedy holds the error message to a standard the
+// situation earns: a damaged token fails every command in the checkout, read and
+// write alike, so an error that only reports the damage strands the operator.
+// It must also not self-heal — see parseStreamToken.
+func TestDamagedTokenErrorNamesItsRemedy(t *testing.T) {
+	dir := t.TempDir()
+	tokenPath := filepath.Join(dir, streamTokenFile)
+	if err := os.WriteFile(tokenPath, nil, 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	_, err := EnsureStream(dir)
+	if err == nil {
+		t.Fatal("a damaged token must fail loudly")
+	}
+	message := err.Error()
+	for _, want := range []string{tokenPath, "delete"} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("error must tell the operator how to recover; %q missing from: %s", want, message)
+		}
+	}
+	// Not self-healed: the damaged file is still there, and no identity was
+	// silently minted to paper over it.
+	payload, err := os.ReadFile(tokenPath)
+	if err != nil {
+		t.Fatalf("ReadFile error = %v", err)
+	}
+	if len(payload) != 0 {
+		t.Fatalf("a damaged token must not be silently replaced; file now holds %q", payload)
+	}
+}
+
+// TestEnsureAdoptsAnExistingIdentity states the property the read-first fast
+// path must preserve: the file, not this process, decides the identity.
+func TestEnsureAdoptsAnExistingIdentity(t *testing.T) {
+	dir := t.TempDir()
+	first, err := EnsureStream(dir)
+	if err != nil {
+		t.Fatalf("EnsureStream() error = %v", err)
+	}
+	for range 10 {
+		again, err := EnsureStream(dir)
+		if err != nil {
+			t.Fatalf("EnsureStream() error = %v", err)
+		}
+		if again.Value() != first.Value() {
+			t.Fatalf("identity changed across calls: %q became %q", first.Value(), again.Value())
+		}
+	}
+}
