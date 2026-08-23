@@ -140,11 +140,14 @@ func (d exportDelta) empty() bool {
 //
 // [LAW:effects-at-boundaries] pure: the SQL lives in applyExportDelta.
 func diffExports(prev, next model.Export) exportDelta {
-	survivors := cascadeSurvivors(prev.Issues, next.Issues)
+	// The issues diff is computed FIRST because the child diffs are derived from
+	// its answer, not from a second opinion about the same question.
+	issues := diffTable(prev.Issues, next.Issues,
+		func(i model.Issue) string { return i.ID },
+		func(i model.Issue) any { return issueRowValues(i) })
+	survivors := cascadeSurvivors(prev.Issues, issues.remove)
 	return exportDelta{
-		issues: diffTable(prev.Issues, next.Issues,
-			func(i model.Issue) string { return i.ID },
-			func(i model.Issue) any { return issueRowValues(i) }),
+		issues: issues,
 		relations: diffTable(
 			// A relation cascades away if EITHER endpoint does.
 			filterRows(prev.Relations, func(r model.Relation) bool { return survivors[r.SrcID] && survivors[r.DstID] }),
@@ -168,26 +171,29 @@ func diffExports(prev, next model.Export) exportDelta {
 }
 
 // cascadeSurvivors names the issue ids whose row this delta will NOT delete —
-// present in both exports with an identical persisted row. Every other id is
-// either gone from next or changed, and both cases are expressed as a DELETE
+// every prev id the issues diff did not queue for removal. An issue that is
+// gone from next, or whose persisted row changed, is expressed as a DELETE
 // (which takes the issue's children with it) followed by an INSERT, so that no
 // UPDATE statement restating the issues column list has to exist and drift.
 //
-// It must decide survival by exactly the rule the issues diff uses, or the two
-// disagree and the cascade accounting is wrong in one direction or the other:
-// an issue the diff deletes but this calls a survivor leaves its children
-// unrestored, and an issue this calls dead but the diff keeps loses them
-// outright. Both share issueRowValues for that reason — the persisted row, not
-// the hydrated model.Issue, whose Labels and container lifecycle belong to
-// other tables and other rows entirely. [LAW:single-enforcer]
-func cascadeSurvivors(prev, next []model.Issue) map[string]bool {
-	nextByID := make(map[string]model.Issue, len(next))
-	for _, issue := range next {
-		nextByID[issue.ID] = issue
+// Survival is READ OFF the issues diff rather than recomputed from the two
+// exports. The cascade accounting is only correct if survival is decided by
+// exactly the rule the diff used — an issue the diff deletes but this calls a
+// survivor leaves its children unrestored, and one this calls dead but the diff
+// keeps loses them outright — and the way to guarantee two answers agree is to
+// have one answer. Taking the complement of `removed` means there is no second
+// comparison to keep in step, no second place a future change to the equality
+// mechanism would have to be mirrored, and nothing a test has to police.
+// [LAW:single-enforcer] [LAW:types-are-the-program] the disagreement is not
+// caught here, it is unrepresentable.
+func cascadeSurvivors(prev []model.Issue, removed []string) map[string]bool {
+	doomed := make(map[string]bool, len(removed))
+	for _, id := range removed {
+		doomed[id] = true
 	}
 	survivors := make(map[string]bool, len(prev))
 	for _, issue := range prev {
-		if want, ok := nextByID[issue.ID]; ok && reflect.DeepEqual(issueRowValues(issue), issueRowValues(want)) {
+		if !doomed[issue.ID] {
 			survivors[issue.ID] = true
 		}
 	}

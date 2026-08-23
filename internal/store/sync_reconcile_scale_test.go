@@ -21,7 +21,24 @@ import (
 const (
 	scaleBacklogIssues = 1000
 	scaleFoldedCommits = 500
+	// scaleEditedIssues concentrates the chain's edits onto a SUBSET of the
+	// backlog so that every edited issue is touched more than once — here
+	// exactly twice. Spreading one edit per issue would leave the fold's
+	// last-write-wins ordering untested at this scale: a replay that dropped
+	// every edit to a row but the first, or replayed steps out of order, would
+	// still produce the expected final lane if no row is ever written twice.
+	// The backlog and the chain keep the ticket's floor; only which rows the
+	// edits land on changes, so the memory and time this test bounds are
+	// unaffected — one row is written per step either way.
+	scaleEditedIssues = scaleFoldedCommits / 2
 )
+
+// scaleEditTarget is the issue edit i lands on. It exists so the chain that
+// PERFORMS the edits and the assertion that PREDICTS their result derive the
+// mapping from one place instead of restating it. Written twice, the two agree
+// only by coincidence, and a change to the distribution that missed one would
+// leave the test asserting its own bug. [LAW:one-source-of-truth]
+func scaleEditTarget(i int) string { return scaleIssueID(i % scaleEditedIssues) }
 
 // scaleHeapGrowthBudget bounds how much RETAINED heap the combine may add over
 // what the process already held before it started. This is the ticket's real
@@ -157,11 +174,14 @@ func assertCombinedBacklogContents(t *testing.T, ctx context.Context, st *Store,
 	if len(byID) != issues {
 		t.Errorf("combined backlog holds %d issues, want %d (both sides planted the same ids, so the union is one backlog)", len(byID), issues)
 	}
-	// Each edit i set lane-i on issue i%issues; the LAST edit to touch an issue
-	// is the lane that must survive the fold.
-	wantLane := make(map[string]string, issues)
+	// Each edit i set lane-i on scaleEditTarget(i), and the edits deliberately
+	// overlap, so every edited issue was written more than once and the LAST
+	// edit to touch it is the lane that must survive the fold. Building the
+	// expectation by replaying the same mapping in the same order is what makes
+	// this an ordering assertion rather than a set-membership one.
+	wantLane := make(map[string]string, scaleEditedIssues)
 	for i := 0; i < commits; i++ {
-		wantLane[scaleIssueID(i%issues)] = fmt.Sprintf("lane-%d", i)
+		wantLane[scaleEditTarget(i)] = fmt.Sprintf("lane-%d", i)
 	}
 	for id, lane := range wantLane {
 		issue, ok := byID[id]
@@ -221,7 +241,7 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 	}()
 	plantScaleBacklog(t, ctx, stB, issues)
 	for i := 0; i < commits; i++ {
-		if _, err := stB.Apply(ctx, scaleIssueID(i%issues), Change{Fields: UpdateIssueInput{Lane: strptr(fmt.Sprintf("lane-%d", i))}}); err != nil {
+		if _, err := stB.Apply(ctx, scaleEditTarget(i), Change{Fields: UpdateIssueInput{Lane: strptr(fmt.Sprintf("lane-%d", i))}}); err != nil {
 			t.Fatalf("Apply(B edit %d): %v", i, err)
 		}
 	}
