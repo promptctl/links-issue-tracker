@@ -645,7 +645,7 @@ func TestSBOMPropertyNamesAreUnique(t *testing.T) {
 	// costs a `go list -deps` plus 149 license classifications (~2s) to reach
 	// the same four.
 	checked := 0
-	for _, c := range decodeSBOM(t, nativeEntries(), "9.9.9").Components {
+	for _, c := range decodeSBOM(t, verifiedNativeEntries(t), "9.9.9").Components {
 		seen := map[string]int{}
 		for _, p := range c.Properties {
 			seen[p.Name]++

@@ -6,15 +6,35 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+
+	lc "github.com/google/licenseclassifier"
 )
+
+// verifiedNativeEntries is nativeEntries with the classifier construction and
+// error handling its callers would otherwise each repeat. Every test that wants
+// the native Entry values goes through the real verification on the way, so a
+// curated license literal drifting from its notice text fails the whole native
+// suite rather than only the one test aimed at it.
+func verifiedNativeEntries(t *testing.T) []Entry {
+	t.Helper()
+	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
+	if err != nil {
+		t.Fatalf("build license classifier: %v", err)
+	}
+	entries, err := nativeEntries(classifier)
+	if err != nil {
+		t.Fatalf("nativeEntries: %v", err)
+	}
+	return entries
+}
 
 // TestNativeLibsInSBOMAndBundle is this ticket's acceptance criterion: the SBOM
 // and the attribution bundle both list ICU, zstd, and musl (and compiler-rt)
 // with a license and a version, and the bundle carries their notice text. It
-// renders from nativeEntries() — the exact Entry values buildEntries appends to
+// renders from nativeEntries — the exact Entry values buildEntries appends to
 // the Go inventory — so it checks precisely what the generated artifacts contain.
 func TestNativeLibsInSBOMAndBundle(t *testing.T) {
-	entries := nativeEntries()
+	entries := verifiedNativeEntries(t)
 
 	// Bundle: each native lib's name/version section plus its verbatim notice.
 	var bundle bytes.Buffer
@@ -162,7 +182,7 @@ func TestLicenseChoiceArms(t *testing.T) {
 // reach a reader of the shipped document. What changed is which field carries
 // it, because CycloneDX defines description as what the component IS.
 func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
-	entries := nativeEntries()
+	entries := verifiedNativeEntries(t)
 
 	var report bytes.Buffer
 	if err := WriteReport(&report, entries); err != nil {
@@ -255,7 +275,7 @@ func TestNativeLibsPassPolicy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
 	}
-	if v := CheckPolicy(nativeEntries(), policy); len(v) != 0 {
+	if v := CheckPolicy(verifiedNativeEntries(t), policy); len(v) != 0 {
 		t.Errorf("native libs violate policy (allowlist their license in policy.json): %+v", v)
 	}
 }
@@ -340,7 +360,7 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 // its description "carries the licensing note" while naming a note that does
 // not exist.
 func TestNativeDescriptionsSayWhatTheComponentIs(t *testing.T) {
-	byName := componentsByName(decodeSBOM(t, nativeEntries(), ""))
+	byName := componentsByName(decodeSBOM(t, verifiedNativeEntries(t), ""))
 
 	for _, n := range nativeLibs {
 		c, ok := byName[n.name]
@@ -408,5 +428,236 @@ func TestNativeDescriptionsMakeNoPlatformClaim(t *testing.T) {
 					n.name, platform, n.description)
 			}
 		}
+	}
+}
+
+// nativeLibNamed returns the curated record for name. The value is a copy, but
+// its slices share the package record's backing arrays, so a test mutating it
+// goes through withFindings/withEvidence rather than writing through an index.
+func nativeLibNamed(t *testing.T, name string) nativeLib {
+	t.Helper()
+	for _, n := range nativeLibs {
+		if n.name == name {
+			return n
+		}
+	}
+	t.Fatalf("no native lib named %q", name)
+	return nativeLib{}
+}
+
+// withFindings returns a copy of n whose findings are edit applied to a FRESH
+// copy of n's own. The copy is the point: an in-place write would corrupt the
+// package-level record for every test that runs after, and the corruption would
+// surface as an unrelated failure somewhere else in the suite.
+func withFindings(n nativeLib, edit func([]noticeFinding) []noticeFinding) nativeLib {
+	n.findings = edit(append([]noticeFinding(nil), n.findings...))
+	return n
+}
+
+// withEvidence is withFindings for the evidence list, and for the same reason.
+func withEvidence(n nativeLib, edit func([]armEvidence) []armEvidence) nativeLib {
+	n.evidence = edit(append([]armEvidence(nil), n.evidence...))
+	return n
+}
+
+// TestVerifyNoticeCatchesEachWayTheRecordCanLie is the mutation proof for the
+// rule that gives the four curated license literals teeth. Every row breaks
+// exactly ONE guarantee in an otherwise-correct record and names the diagnostic
+// that must fire, because a check whose rows all pass for the same reason
+// proves only that the check is not empty. A row asserting merely "some error"
+// would stay green if half these rules were deleted.
+//
+// The first row is the scenario the ticket was written from: zstd relicenses,
+// a maintainer writes the new identifier into native.go and adds it to
+// allowed_licenses, and every rule in policy.go passes it because the
+// classifier's taxonomy has no opinion about a 2021-corpus-absent license.
+// What stops it is not a bigger taxonomy — it is that the notice bytes still
+// say BSD-3-Clause and now nothing in the record matches them.
+func TestVerifyNoticeCatchesEachWayTheRecordCanLie(t *testing.T) {
+	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
+	if err != nil {
+		t.Fatalf("build license classifier: %v", err)
+	}
+	icu, zstd, compilerRT := nativeLibNamed(t, "icu"), nativeLibNamed(t, "zstd"), nativeLibNamed(t, "compiler-rt")
+
+	relicensed := zstd
+	relicensed.license = "BUSL-1.1"
+
+	blankCovers := withFindings(zstd, func(f []noticeFinding) []noticeFinding {
+		f[0].covers = "   "
+		return f
+	})
+	zeroCount := withFindings(zstd, func(f []noticeFinding) []noticeFinding {
+		f[0].count = 0
+		return f
+	})
+	duplicated := withFindings(zstd, func(f []noticeFinding) []noticeFinding {
+		return append(f, f[0])
+	})
+	bundledArm := withFindings(zstd, func(f []noticeFinding) []noticeFinding {
+		f[0].role = roleBundled
+		return f
+	})
+	stale := withFindings(zstd, func(f []noticeFinding) []noticeFinding {
+		return append(f, noticeFinding{identifier: "ISC", count: 1, role: roleBundled, covers: "nothing at all"})
+	})
+	redundantEvidence := withEvidence(zstd, func(e []armEvidence) []armEvidence {
+		return append(e, armEvidence{token: "BSD-3-Clause", phrase: "BSD License"})
+	})
+	strayEvidence := withEvidence(zstd, func(e []armEvidence) []armEvidence {
+		return append(e, armEvidence{token: "MIT", phrase: "BSD License"})
+	})
+
+	textGainedALicense := withFindings(icu, func(f []noticeFinding) []noticeFinding {
+		out := f[:0]
+		for _, x := range f {
+			if x.identifier != "GPL-3.0" {
+				out = append(out, x)
+			}
+		}
+		return out
+	})
+	countDrift := withFindings(icu, func(f []noticeFinding) []noticeFinding {
+		for i := range f {
+			if f[i].identifier == "BSD-3-Clause" {
+				f[i].count = 4
+			}
+		}
+		return f
+	})
+	copyleftCalledBundled := withFindings(icu, func(f []noticeFinding) []noticeFinding {
+		for i := range f {
+			if f[i].identifier == "GPL-3.0" {
+				f[i].role = roleBundled
+			}
+		}
+		return f
+	})
+	phraseNotInText := withEvidence(icu, func(e []armEvidence) []armEvidence {
+		e[0].phrase = "UNICODE LICENSE V9"
+		return e
+	})
+
+	droppedException := withEvidence(compilerRT, func([]armEvidence) []armEvidence { return nil })
+
+	for _, tc := range []struct {
+		name string
+		lib  nativeLib
+		want []string
+	}{
+		{"a relicense the notice bytes do not support", relicensed, []string{
+			`nothing corroborates its "BUSL-1.1"`,
+			`declares "BSD-3-Clause" as a grant lit distributes under, but it is not an arm`,
+		}},
+		{"the text gained a license nobody declared", textGainedALicense, []string{
+			`the classifier finds "GPL-3.0" in the embedded notice text 2 times, and this record says nothing about it`,
+		}},
+		{"the text gained material of a kind already present", countDrift, []string{
+			`declares "BSD-3-Clause" 4 times, but the classifier finds it 5 times`,
+		}},
+		{"a declaration the text no longer supports", stale, []string{
+			`declares "ISC", which the classifier no longer finds`,
+		}},
+		{"copyleft laundered as bundled material", copyleftCalledBundled, []string{
+			`declares "GPL-3.0" as material bundled into the shipped library`,
+			`types it "restricted"`,
+			`a component to remove`,
+		}},
+		{"an arm demoted to bundled material", bundledArm, []string{
+			`declares "BSD-3-Clause" as bundled third-party material while the curated license`,
+		}},
+		{"an exception nothing vouches for", droppedException, []string{
+			`nothing corroborates its "LLVM-exception"`,
+		}},
+		{"evidence quoting a phrase the text does not carry", phraseNotInText, []string{
+			`quotes "UNICODE LICENSE V9", which does not appear in the embedded notice text`,
+		}},
+		{"evidence duplicating what a finding already proves", redundantEvidence, []string{
+			`carries evidence for "BSD-3-Clause", which a roleGranted finding already corroborates`,
+		}},
+		{"evidence for a token that is not an arm", strayEvidence, []string{
+			`carries evidence for "MIT", which is not a half of any arm`,
+		}},
+		{"a finding that names no material", blankCovers, []string{
+			`declares "BSD-3-Clause" without naming the material it licenses`,
+		}},
+		{"a finding claiming zero occurrences", zeroCount, []string{
+			`declares "BSD-3-Clause" with a count of 0`,
+		}},
+		{"the same identifier declared twice", duplicated, []string{
+			`declares "BSD-3-Clause" twice`,
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.lib.verifyNotice(classifier)
+			if err == nil {
+				t.Fatalf("verifyNotice accepted a record that %s", tc.name)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(err.Error(), want) {
+					t.Errorf("diagnostic does not say %q; got:\n%v", want, err)
+				}
+			}
+		})
+	}
+}
+
+// TestVerifyNoticeAcceptsTheCuratedRecords is the other half of the mutation
+// proof: every rule above must be satisfiable, and satisfied today by the four
+// records as committed. Without it a rule that rejects everything — including
+// correct input — would look identical to a rule that works.
+func TestVerifyNoticeAcceptsTheCuratedRecords(t *testing.T) {
+	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
+	if err != nil {
+		t.Fatalf("build license classifier: %v", err)
+	}
+	for _, n := range nativeLibs {
+		if err := n.verifyNotice(classifier); err != nil {
+			t.Errorf("%v", err)
+		}
+	}
+}
+
+// TestVerifyNoticeFailureCarriesTheRemedy pins the tail of the diagnostic,
+// because the remedy is doing work the rule cannot: this gate fires almost only
+// on a version bump, at the exact moment the cheapest-looking fix is to
+// reconcile the numbers and move on — which would discard the only signal that
+// the text changed at all.
+func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
+	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
+	if err != nil {
+		t.Fatalf("build license classifier: %v", err)
+	}
+	lying := nativeLibNamed(t, "zstd")
+	lying.license = "BUSL-1.1"
+	err = lying.verifyNotice(classifier)
+	if err == nil {
+		t.Fatal("verifyNotice accepted a relicensed record")
+	}
+	if !strings.Contains(err.Error(), nativeNoticeRemedy) {
+		t.Errorf("diagnostic omits the remedy; got:\n%v", err)
+	}
+}
+
+// TestBuildEntriesRefusesALyingNativeRecord is the wiring proof. The rule is
+// only worth having if the GATE runs it: verifyNotice passing in a unit test
+// while `go run ./tools/licenses -check` never calls it would leave the four
+// literals exactly as unchecked as before. It swaps the package record for a
+// lying one and drives the real inventory build, which is the single function
+// both -check and artifact generation go through.
+func TestBuildEntriesRefusesALyingNativeRecord(t *testing.T) {
+	original := nativeLibs
+	t.Cleanup(func() { nativeLibs = original })
+
+	lying := nativeLibNamed(t, "zstd")
+	lying.license = "BUSL-1.1"
+	nativeLibs = []nativeLib{lying}
+
+	entries, err := buildEntries(litPkg)
+	if err == nil {
+		t.Fatalf("buildEntries returned %d entries for a native record the notice text contradicts", len(entries))
+	}
+	if !strings.Contains(err.Error(), `nothing corroborates its "BUSL-1.1"`) {
+		t.Errorf("buildEntries failed for the wrong reason: %v", err)
 	}
 }

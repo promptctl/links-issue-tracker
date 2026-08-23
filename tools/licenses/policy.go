@@ -276,13 +276,29 @@ func checkAllowedLicenses(allowed []string) error {
 // sentinel, so a dependency relicensing to one classifies Unknown and meets
 // the hard failure. The gate stops it, by the other rule.
 //
-// For a NATIVE library it does not. native.go's four license strings are
-// hand-authored literals that never pass through Classify, so if zstd
-// relicensed to BUSL-1.1 a maintainer would write that string there, add it
-// here, and every rule in this file would let it through — LicenseType
-// returns "" for it. Half the gated inventory is curated rather than
-// classified, and for that half "permissive-only" rests on the reader,
-// entirely. Do not read this veto as covering native.go.
+// For a NATIVE library it still does not, and the reason is unchanged:
+// native.go's four license strings are hand-authored literals that never pass
+// through Classify, so a BUSL-1.1 written there and added here meets no rule
+// in this file — LicenseType returns "" for it. Do not read this veto as
+// covering native.go.
+//
+// What has changed is what stands behind those literals. verifyNotice
+// (native.go) reconciles each curated license against the licenses the
+// classifier finds in that library's own embedded notice bytes, in both
+// directions, and buildEntries fails before any artifact is written when they
+// disagree. So the BUSL-1.1 scenario is caught — not here, and not by a wider
+// taxonomy, but because the notice text still says BSD-3-Clause and a record
+// claiming otherwise no longer reconciles.
+//
+// Be exact about the residue, because an overstated backstop is the thing this
+// comment exists to avoid. If zstd GENUINELY relicensed and its notice text
+// changed to match, verifyNotice would accept the new record — correctly, since
+// its job is to make the string answer to the bytes — and this veto would still
+// have no opinion about BUSL-1.1. The hole is narrowed to a real relicense
+// carried out faithfully, not closed. Widening the taxonomy by hand is not the
+// fix: a hand-listed table of licenses outside the pinned corpus would be a
+// second and unmeasured source of truth about what is copyleft, which is
+// exactly what the paragraphs above refuse to become.
 //
 // So: this catches what nobody here would defend, and it is not a proof. The
 // rule that this list is permissive-only still needs a reader, which is why
@@ -311,40 +327,63 @@ func spdxDeprecatedSpelling(id string) string {
 	return strings.TrimSuffix(id, "+")
 }
 
+// copyleftType looks identifier up in the classifier's taxonomy across every
+// spelling that lookup answers to, and reports the copyleft bucket it lands in
+// together with the spelling that produced it. Two empty strings mean no
+// spelling of identifier types as copyleft.
+//
+// Upper-cased as well as written, because LicenseType is an exact lookup and
+// every copyleft family this exists to catch is spelled in capitals — GPL,
+// LGPL, AGPL, MPL, EPL, CDDL, OSL. So "gpl-3.0" upper-cases onto the corpus
+// spelling and is caught, where before it walked past a check three documents
+// describe as what makes quiet re-addition impossible. Upper-casing a
+// permissive identifier ("Apache-2.0" -> "APACHE-2.0") simply misses, which
+// costs nothing: this lookup only ever needs to catch.
+//
+// It is its own function because two rules now ask this question and only one
+// of them is about allowed_licenses: verifyNotice (native.go) asks it of an
+// identifier the classifier found inside a native library's notice text, where
+// the answer decides whether that material may be called bundled. One
+// definition, so "the classifier calls this copyleft" cannot come to mean two
+// slightly different things on either side of the package.
+// [LAW:one-source-of-truth] [LAW:single-enforcer]
+func copyleftType(identifier string) (kind, spelling string) {
+	upper := strings.ToUpper(identifier)
+	for _, s := range []string{
+		identifier, spdxDeprecatedSpelling(identifier),
+		upper, spdxDeprecatedSpelling(upper),
+	} {
+		if k := lc.LicenseType(s); copyleftLicenseTypes[k] {
+			return k, s
+		}
+	}
+	return "", ""
+}
+
+// copyleftVia renders the parenthetical naming the spelling copyleftType
+// actually consulted, empty when that is the identifier as written. Reporting
+// `"GPL-3.0-only" types "restricted"` would assert a verdict the classifier
+// does not return for that string, and an editor checking the claim would find
+// it false.
+func copyleftVia(identifier, spelling string) string {
+	if spelling == identifier {
+		return ""
+	}
+	return fmt.Sprintf(" (via its deprecated spelling %q, which is what the classifier's corpus is named after)", spelling)
+}
+
 // refuseCopyleftAllowlistEntry turns "every entry is permissive" from a claim
 // the note makes into a rule the parse enforces, as far as it reaches. Before
 // it, the only thing standing between allowed_licenses and a GPL entry was a
 // reader — which is precisely what this file's note spends a paragraph saying
 // not to trust, about a different array.
 func refuseCopyleftAllowlistEntry(entry, identifier string) error {
-	// Upper-cased as well as written, because LicenseType is an exact lookup
-	// and every copyleft family this exists to catch is spelled in capitals —
-	// GPL, LGPL, AGPL, MPL, EPL, CDDL, OSL. So "gpl-3.0" upper-cases onto the
-	// corpus spelling and is refused, where before it walked past a check
-	// three documents describe as what makes quiet re-addition impossible.
-	// Upper-casing a permissive identifier ("Apache-2.0" -> "APACHE-2.0")
-	// simply misses, which costs nothing: this rule only ever needs to catch.
-	upper := strings.ToUpper(identifier)
-	for _, spelling := range []string{
-		identifier, spdxDeprecatedSpelling(identifier),
-		upper, spdxDeprecatedSpelling(upper),
-	} {
-		kind := lc.LicenseType(spelling)
-		if !copyleftLicenseTypes[kind] {
-			continue
-		}
-		// Names the spelling actually consulted, not the one written, when
-		// the two differ: reporting `"GPL-3.0-only" types "restricted"` would
-		// assert a verdict the classifier does not return for that string,
-		// and an editor checking the claim would find it false.
-		via := ""
-		if spelling != identifier {
-			via = fmt.Sprintf(" (via its deprecated spelling %q, which is what the classifier's corpus is named after)", spelling)
-		}
-		return fmt.Errorf("policy.json allowed_licenses entry %q involves %q, which the classifier types as %q%s; entries in that bucket are refused here, and for a copyleft license the answer is to remove the dependency rather than widen this list. If you believe the classification is wrong for this license — its %q bucket is a corporate policy rather than a copyleft test, and it calls WTFPL forbidden — that is an owner decision, not an implementer's",
-			entry, identifier, kind, via, kind)
+	kind, spelling := copyleftType(identifier)
+	if kind == "" {
+		return nil
 	}
-	return nil
+	return fmt.Errorf("policy.json allowed_licenses entry %q involves %q, which the classifier types as %q%s; entries in that bucket are refused here, and for a copyleft license the answer is to remove the dependency rather than widen this list. If you believe the classification is wrong for this license — its %q bucket is a corporate policy rather than a copyleft test, and it calls WTFPL forbidden — that is an owner decision, not an implementer's",
+		entry, identifier, kind, copyleftVia(identifier, spelling), kind)
 }
 
 // licenseArm is one AND-arm of a license expression, decomposed into the
