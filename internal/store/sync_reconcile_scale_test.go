@@ -73,9 +73,18 @@ const scaleHeapGrowthBudget = 160 << 20 // 160 MiB
 // bound this is NOT a claim that the cost stopped scaling: reading the backlog
 // at each folded commit is still one full export per commit, so time remains
 // proportional to chain × backlog. What changed is the constant — the replay no
-// longer rewrites every table for every step — and the budget is set with
-// enough headroom for a loaded CI runner while still failing loudly if the
-// wholesale per-step rewrite comes back.
+// longer rewrites every table for every step.
+//
+// It is a blowup ceiling and deliberately NOT a regression detector. The
+// arithmetic says it cannot be both: the entire pre-change shape — materialized
+// exports and wholesale rewrite together — measured 26.1s at 102 commits over 400
+// issues, which projects to about 5.3 minutes at this scale, comfortably inside
+// this budget. So passing here is no evidence the per-step rewrite stayed gone,
+// and the bound is not tightened toward that number to make it so: the minimality
+// tests already own that rule, and they assert how LITTLE each step writes, which
+// is the thing a wall-clock number can only ever proxy for. What this bound
+// catches is a genuine blowup — an unbounded fold, a step that wedged. One rule,
+// one enforcer. [LAW:single-enforcer]
 const scaleWallClockBudget = 10 * time.Minute
 
 // TestSyncReconcileCombineIsBoundedOnALargeFoldedChain is the acceptance test
@@ -128,7 +137,7 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 			growth>>20, scaleHeapGrowthBudget>>20)
 	}
 	if elapsed > scaleWallClockBudget {
-		t.Errorf("combine took %s, over the %s budget: the replay is likely rewriting every table per folded commit again instead of writing each step's difference",
+		t.Errorf("combine took %s, over the %s budget: this bound is loose enough that a return of the per-step rewrite alone would not reach it, so the fold is not merely slower than it should be — look for an unbounded replay or a step that wedged",
 			elapsed.Round(time.Second), scaleWallClockBudget)
 	}
 
