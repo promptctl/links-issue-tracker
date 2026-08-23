@@ -287,7 +287,8 @@ Where each artifact says it, as of `links-licensing-c0ce.15` — verified
   to consult.
 
 `go run ./tools/licenses -graph` still prints the same fact under `MODULES WHOSE
-SOURCE COMES FROM A DIFFERENT COORDINATE`; it is no longer the only place.
+SOURCE COMES FROM SOMEWHERE OTHER THAN THE COORDINATE NAMING THEM`; it is no
+longer the only place.
 
 The license those artifacts report was always correct — both forks are
 Apache-2.0 at both ends, so no row was ever wrong. What was missing, and is no

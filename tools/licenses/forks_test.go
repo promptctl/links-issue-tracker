@@ -92,6 +92,18 @@ func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
 			out = append(out, r)
 		}
 	}
+	// Every caller states a property over this slice — org ownership, ledger
+	// coverage, the vendored mirror — and every one of those properties is
+	// vacuously true of an empty slice. Since the classification moved from
+	// `New.Version != ""` to parseReplacement's path comparison, a fork
+	// misfiled as ReplacedByVersion would empty this set and turn three green
+	// tests into three tests of nothing. Fail here instead, once, where the
+	// reason is legible. [LAW:verifiable-goals]
+	if len(out) == 0 {
+		t.Fatalf("go.mod declares %d replace directive(s) but parseReplacement classified none of them as a fork; "+
+			"the fork-contract tests below would all pass without examining anything. If lit genuinely stopped "+
+			"forking, delete them — they have no subject. Otherwise a fork is being misclassified.", len(f.Replace))
+	}
 	return out
 }
 
@@ -229,6 +241,66 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 					"the ledger is quoting a pin the build no longer uses:\n  %s",
 					i+1, tok, strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+// collapseWhitespace folds every run of whitespace into a single space, so a
+// sentence in the ledger can be matched against a constant no matter where
+// markdown's line wrapping happened to break it. The ledger's quotation of the
+// heading below spans two lines today and would span one after any reflow;
+// without this, a reflow alone would fail the check that follows.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestForkLedgerQuotesTheGraphSectionTitle binds the one sentence in FORKS.md
+// that quotes the graph audit's own heading to the constant that prints it.
+//
+// The ledger read "MODULES WHOSE SOURCE COMES FROM A DIFFERENT COORDINATE" for
+// exactly as long as sectionReplaced did. Renaming the constant — a version pin
+// substitutes the SAME coordinate, so the old title was false for a shape the
+// section now holds — left the ledger quoting a heading no run of the tool
+// emits, and nothing failed.
+//
+// [FRAMING:representation] a quotation is a copy, and a copy a human must
+// remember to redraw is one that has already begun to lie. This gives that copy
+// the same standing the two pin tests above give the ledger's tables.
+func TestForkLedgerQuotesTheGraphSectionTitle(t *testing.T) {
+	if ledger := collapseWhitespace(readForkLedger(t)); !strings.Contains(ledger, sectionReplaced) {
+		t.Errorf("FORKS.md does not quote the graph audit's replaced-modules heading %q — "+
+			"the ledger tells a reader which section of `licenses -graph` prints this fact, "+
+			"so renaming the heading means re-quoting it there in the same change", sectionReplaced)
+	}
+}
+
+// TestForkLedgerNamesEverySubstitution backs a promise the SHIPPED artifacts
+// make. LICENSE-REPORT.md's legend and each substituted section of
+// THIRD_PARTY_LICENSES send a recipient to FORKS.md for what the substitution
+// changes and why — for every substituted row, whatever its kind.
+//
+// TestForkLedgerQuotesEveryCurrentPin above governs forks alone, so without
+// this a directory or version-pin replacement could be added to go.mod,
+// disclosed correctly in all three artifacts, and point every reader at a
+// document that never mentions it — a dangling pointer inside a compliance
+// artifact, which is the same defect class as an undisclosed substitution.
+func TestForkLedgerNamesEverySubstitution(t *testing.T) {
+	f := parseRootGoMod(t)
+	ledger := readForkLedger(t)
+	for _, r := range f.Replace {
+		replacement, err := parseReplacement(r.Old.Path, r.New.Path, r.New.Version)
+		if err != nil {
+			t.Fatalf("go.mod replaces %s with a target parseReplacement refuses (%s => %s %s): %v",
+				r.Old.Path, r.Old.Path, r.New.Path, r.New.Version, err)
+		}
+		if replacement.Kind == NotReplaced {
+			continue
+		}
+		if !strings.Contains(ledger, r.New.Path) {
+			t.Errorf("go.mod builds %s from %s, and the shipped artifacts tell every reader of that "+
+				"row to see FORKS.md — but FORKS.md never names %s. Document the substitution there, "+
+				"or the report and the bundle are pointing at a page that does not answer them.",
+				r.Old.Path, r.New.Path, r.New.Path)
 		}
 	}
 }

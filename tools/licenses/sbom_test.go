@@ -354,7 +354,7 @@ func TestSBOMEndToEndCoversDolt(t *testing.T) {
 	t.Fatalf("github.com/dolthub/dolt/go not found among %d SBOM components", len(bom.Components))
 }
 
-// replacementEntries covers both `replace` shapes plus an unreplaced control,
+// replacementEntries covers all three `replace` shapes plus an unreplaced control,
 // so a disclosure test can prove not only that a substitution is stated but
 // that an ordinary module stays silent about one it does not have. It carries
 // every field the three renderers read — purl for the SBOM, text for the bundle
