@@ -74,19 +74,21 @@ func readForkLedger(t *testing.T) string {
 // weaker spelling of one rule, free to disagree with the one the artifacts are
 // rendered from. [LAW:single-enforcer]
 //
-// Parsing go.mod's own targets through it also means these tests fail loudly if
-// a replace is ever written in a shape parseReplacement refuses, instead of
-// that shape first surfacing in a generated artifact.
+// The error arm is a guard, not a gate: modfile.Parse rejects a versioned
+// directory target and a version-less module target one line earlier, so
+// parseReplacement is unlikely to be the first to complain. It is checked
+// rather than discarded because a value quietly dropped on the floor is how the
+// two spellings would drift apart again.
 func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
 	t.Helper()
 	var out []*modfile.Replace
 	for _, r := range f.Replace {
-		replacement, err := parseReplacement(r.New.Path, r.New.Version)
+		replacement, err := parseReplacement(r.Old.Path, r.New.Path, r.New.Version)
 		if err != nil {
 			t.Fatalf("go.mod replaces %s with a target parseReplacement refuses (%s => %s %s): %v",
 				r.Old.Path, r.Old.Path, r.New.Path, r.New.Version, err)
 		}
-		if replacement.Kind == ReplacedByModule {
+		if replacement.Kind == ReplacedByFork {
 			out = append(out, r)
 		}
 	}

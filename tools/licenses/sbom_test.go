@@ -3,9 +3,12 @@ package main
 import (
 	"bytes"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/mod/modfile"
 )
 
 // wireBOM is a consumer's-eye view of the encoded SBOM: only the fields a
@@ -367,7 +370,7 @@ var replacementEntries = []Entry{
 			Path:    "github.com/dolthub/dolt/go",
 			Version: "v0.40.5",
 			Replacement: Replacement{
-				Kind:    ReplacedByModule,
+				Kind:    ReplacedByFork,
 				Path:    "github.com/promptctl/dolt/go",
 				Version: "v0.40.5-later",
 			},
@@ -470,6 +473,32 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 		}
 	})
 
+	t.Run("a version pin is disclosed but is never called a fork", func(t *testing.T) {
+		// `replace x => x v1.2.3` substitutes the same module at another
+		// version. It is a real substitution and must be disclosed, but it is
+		// NOT a fork — a descendants entry here would have the document assert
+		// that a component descends from itself, which is what the separate
+		// kind exists to prevent. Asserting the kind alone is not enough: the
+		// wrong pedigree is emitted by the renderer, not by the parser.
+		pinned := componentPedigree(Replacement{
+			Kind:    ReplacedByVersion,
+			Path:    "github.com/spf13/viper",
+			Version: "v1.19.0",
+		})
+		if pinned == nil {
+			t.Fatal("a version pin got no pedigree; the substitution would ship undisclosed")
+		}
+		if pinned.Descendants != nil {
+			t.Errorf("a version pin got descendants %+v, want none — the module did not fork, and a descendant naming the same path asserts it descends from itself", *pinned.Descendants)
+		}
+		if !strings.Contains(pinned.Notes, "no fork is involved") {
+			t.Errorf("version-pin notes do not disclaim a fork: %q", pinned.Notes)
+		}
+		if !strings.Contains(pinned.Notes, "v1.19.0") {
+			t.Errorf("version-pin notes do not name the substituted version: %q", pinned.Notes)
+		}
+	})
+
 	t.Run("an unreplaced module carries no pedigree at all", func(t *testing.T) {
 		// Asserted on the raw JSON, because the decoded struct cannot tell an
 		// absent `pedigree` key from a zero-valued one — and a pedigree object
@@ -514,6 +543,7 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 	}
 	byName := componentsByName(decodeSBOM(t, entries, "9.9.9"))
 
+	goModForks := forkPURLsFromGoMod(t)
 	replaced := 0
 	for _, e := range entries {
 		c, ok := byName[e.Module.Path]
@@ -535,15 +565,25 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 		// A module replacement must additionally hand the reader the coordinate
 		// to fetch. Checking the kind here rather than the module's name is what
 		// keeps this from needing an edit when a fork is added or retired.
-		if e.Module.Replacement.Kind == ReplacedByModule {
+		if e.Module.Replacement.Kind == ReplacedByFork {
 			if len(c.Pedigree.Descendants) != 1 {
-				t.Errorf("%s is replaced by the module %s but has %d descendants, want 1",
+				t.Errorf("%s is replaced by the fork %s but has %d descendants, want 1",
 					e.Module.Path, e.Module.Replacement, len(c.Pedigree.Descendants))
 				continue
 			}
-			want := goModulePURL(e.Module.Replacement.Path, e.Module.Replacement.Version)
+			// Compared against go.mod's OWN replace directive, read here with
+			// modfile, rather than against the Replacement the SBOM was built
+			// from. Deriving the expectation from the same value production
+			// used makes the assertion an identity: it holds even if
+			// moduleFields and parseReplacement between them mis-split every
+			// coordinate, because both sides would be wrong together.
+			want, ok := goModForks[e.Module.Path]
+			if !ok {
+				t.Errorf("%s is replaced in the linked set but go.mod declares no fork for it", e.Module.Path)
+				continue
+			}
 			if got := c.Pedigree.Descendants[0].PURL; got != want {
-				t.Errorf("%s descendant purl = %q, want %q", e.Module.Path, got, want)
+				t.Errorf("%s descendant purl = %q, want %q (from go.mod)", e.Module.Path, got, want)
 			}
 		}
 	}
@@ -577,12 +617,12 @@ func TestSBOMPedigreeRefusesAnUnknownKind(t *testing.T) {
 // promptctl:lit:license-note carrying a contradictory value would ship in the
 // document while every other test stayed green.
 func TestSBOMPropertyNamesAreUnique(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	// Driven from the curated native inventory rather than a real build. Only
+	// those four components can populate Properties at all, and buildEntries
+	// costs a `go list -deps` plus 149 license classifications (~2s) to reach
+	// the same four.
 	checked := 0
-	for _, c := range decodeSBOM(t, entries, "9.9.9").Components {
+	for _, c := range decodeSBOM(t, nativeEntries(), "9.9.9").Components {
 		seen := map[string]int{}
 		for _, p := range c.Properties {
 			seen[p.Name]++
@@ -597,4 +637,40 @@ func TestSBOMPropertyNamesAreUnique(t *testing.T) {
 	if checked == 0 {
 		t.Fatal("no properties found in the SBOM; the uniqueness invariant went unchecked")
 	}
+}
+
+// forkPURLsFromGoMod reads the repository's own go.mod and returns, for every
+// replaced module path, the purl of the coordinate go.mod substitutes it with.
+//
+// It exists so the real-build pedigree guard can compare the SBOM against an
+// INDEPENDENT reading of the same fact. `go list` and modfile are two different
+// paths to the replace directives, so a defect anywhere between the go list
+// template and parseReplacement shows up as a disagreement rather than
+// cancelling out.
+func forkPURLsFromGoMod(t *testing.T) map[string]string {
+	t.Helper()
+	f, err := modfile.Parse(forkGoModPath, mustReadFile(t, forkGoModPath), nil)
+	if err != nil {
+		t.Fatalf("parse %s: %v", forkGoModPath, err)
+	}
+	out := map[string]string{}
+	for _, r := range f.Replace {
+		if r.New.Version == "" || r.New.Path == r.Old.Path {
+			continue // a directory target or a version pin: no fork purl to expect
+		}
+		out[r.Old.Path] = goModulePURL(r.New.Path, r.New.Version)
+	}
+	return out
+}
+
+// forkGoModPath is the repository root go.mod, relative to this package.
+const forkGoModPath = "../../go.mod"
+
+func mustReadFile(t *testing.T, path string) []byte {
+	t.Helper()
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read %s: %v", path, err)
+	}
+	return data
 }

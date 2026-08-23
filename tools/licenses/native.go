@@ -112,11 +112,14 @@ var nativeLibs = []nativeLib{
 		acknowledgement: acknowledgementConcluded,
 		note:            "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText,
-		// No platform clause: one SBOM is generated per release and ships in the
-		// darwin and windows archives too, under a preamble asserting every
-		// component listed is compiled into this binary. A description saying
-		// "linked into lit's Linux builds" would be a false sentence in two of
-		// the three archives carrying it.
+		// No platform clause. The curated inventory is generated ONCE per
+		// release and rendered into artifacts that are not platform-specific:
+		// LICENSE-REPORT.md ships inside every archive .goreleaser.yml builds —
+		// darwin and windows included — under a preamble asserting the
+		// components listed are compiled into this binary, and the SBOM ships
+		// as a single standalone asset covering all of them. A description
+		// reading "linked into lit's Linux builds" is therefore a false
+		// sentence in the copies a darwin or windows recipient opens.
 		description: "musl libc: a lightweight implementation of the C standard library.",
 		note:        "musl's COPYRIGHT is upstream's own grant for the library as a whole: MIT, with portions derived from third-party works under terms upstream states are compatible with that MIT license — the TRE regular-expression code (2-clause BSD), the ARM and AArch64 memcpy/memset routines, and David Burren's DES implementation (BSD) among them. What ships is that COPYRIGHT verbatim: upstream's own attribution document, a component-by-component list of who holds each copyright, and not a reproduction of the third-party license texts — for TRE it says outright that the text lives in the source files."},
 	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,

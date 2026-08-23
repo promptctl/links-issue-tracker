@@ -147,16 +147,24 @@ func componentProperties(note string) *[]cdx.Property {
 	return &properties
 }
 
-// pedigreeNoteModule explains a module-shaped substitution in the words the
+// pedigreeNoteFork explains a fork-shaped substitution in the words the
 // structured fields cannot. `descendants` states a genealogy — that a fork of
 // this component exists — and nothing more; it does not say that the fork is
 // what lit actually compiled, which is the whole fact this ticket exists to
 // disclose.
-const pedigreeNoteModule = "lit's go.mod requires this coordinate, but a replace directive substitutes its source: " +
+const pedigreeNoteFork = "lit's go.mod requires this coordinate, but a replace directive substitutes its source: " +
 	"the code compiled into lit came from the fork recorded under descendants, not from the version and purl above. " +
 	"Both coordinates resolve publicly; the fork is the one to fetch when diffing against a lit build. " +
 	"The modifications and the reasons for them are catalogued in FORKS.md, in lit's source repository at " +
 	litModulePath + "."
+
+// pedigreeNoteVersion covers `replace x => x v1.2.3`, where the substitute is
+// the SAME module at another version. It records NO descendant: the component
+// did not fork, and a descendants entry whose purl differs from the component's
+// only in its version would assert that the module descends from itself.
+const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the version above, but a replace directive " +
+	"substitutes the same module at version %s, which is the code compiled into lit. The module path is unchanged " +
+	"and no fork is involved, so no descendant component is recorded."
 
 // pedigreeNoteDirectory is the directory-shaped counterpart. It must state why
 // there is no component recorded beside it: an absent descendants list is
@@ -182,6 +190,11 @@ const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a repl
 // coordinate. So identity answers "what does lit depend on" and the pedigree
 // answers "what did lit compile", and the document states both.
 //
+// A fork — and ONLY a fork — earns a descendants entry. `replace x => x v1.2.3`
+// substitutes the same module at another version, which is a substitution worth
+// disclosing but not a genealogy; recording it as a descendant would have the
+// document assert that a component descends from itself.
+//
 // Given that identity, the fork belongs in `descendants` and NOT in
 // `ancestors`, and the difference is a true statement versus a false one.
 // CycloneDX defines descendants as the forks of an original component, which is
@@ -200,14 +213,16 @@ func componentPedigree(r Replacement) *cdx.Pedigree {
 	switch r.Kind {
 	case NotReplaced:
 		return nil
-	case ReplacedByModule:
+	case ReplacedByFork:
 		descendants := []cdx.Component{{
 			Type:       cdx.ComponentTypeLibrary,
 			Name:       r.Path,
 			Version:    r.Version,
 			PackageURL: goModulePURL(r.Path, r.Version),
 		}}
-		return &cdx.Pedigree{Descendants: &descendants, Notes: pedigreeNoteModule}
+		return &cdx.Pedigree{Descendants: &descendants, Notes: pedigreeNoteFork}
+	case ReplacedByVersion:
+		return &cdx.Pedigree{Notes: fmt.Sprintf(pedigreeNoteVersion, r.Version)}
 	case ReplacedByDirectory:
 		return &cdx.Pedigree{Notes: fmt.Sprintf(pedigreeNoteDirectory, r.Path)}
 	default:

@@ -37,23 +37,35 @@ type Module struct {
 // than the coordinate it is named by.
 func (m Module) IsReplaced() bool { return m.Replacement.Kind != NotReplaced }
 
-// ReplacementKind discriminates the three ways a module's source can relate to
-// the coordinate naming it. They are not three shades of one thing: each admits
+// ReplacementKind discriminates the four ways a module's source can relate to
+// the coordinate naming it. They are not four shades of one thing: each admits
 // a different set of facts, and a renderer that cannot tell them apart will
-// state something untrue about one of them. A module replacement has a
-// resolvable coordinate — path AND version — that the SBOM can hand a reader to
-// fetch and diff. A directory replacement has no coordinate at all; its source
-// exists only inside this repository, so an SBOM that invented a purl for it
-// would name something nobody else can resolve. [LAW:types-are-the-program]
+// state something untrue about one of them.
+//
+//   - A FORK has a resolvable coordinate at a DIFFERENT path — one the SBOM can
+//     hand a reader to fetch and diff, and one it may honestly call a fork.
+//   - A VERSION PIN (`replace x => x v1.2.3`, the ordinary way to force a
+//     version) points at the SAME path. It is emphatically NOT a fork, and
+//     calling it one in a pedigree would claim a component descends from
+//     itself.
+//   - A DIRECTORY replacement has no coordinate at all, so an SBOM that
+//     invented a purl for it would name something nobody else can resolve.
+//
+// [LAW:types-are-the-program]
 type ReplacementKind int
 
 const (
 	// NotReplaced: the module's source is the coordinate that names it.
 	NotReplaced ReplacementKind = iota
-	// ReplacedByModule: the source came from a different published module
+	// ReplacedByFork: the source came from a DIFFERENT published module
 	// coordinate (`replace x => y v1.2.3`) — lit's forks of dolt and
 	// go-mysql-server.
-	ReplacedByModule
+	ReplacedByFork
+	// ReplacedByVersion: the source came from the SAME module path at another
+	// version (`replace x => x v1.2.3`). lit's go.mod has none today; the kind
+	// exists because the artifacts must not describe one as a fork if it ever
+	// does.
+	ReplacedByVersion
 	// ReplacedByDirectory: the source came from a filesystem path
 	// (`replace x => ./dir`) — lit's patched copy of dolthub/driver.
 	ReplacedByDirectory
@@ -61,10 +73,12 @@ const (
 
 // Replacement is where a module's source actually came from. Path and Version
 // are meaningful exactly as Kind says: empty for NotReplaced, a module path
-// plus its version for ReplacedByModule, and a filesystem path with NO version
-// for ReplacedByDirectory. parseReplacement is the only constructor, so no
-// consumer has to re-derive which shape it is holding from whether a version
-// happens to be present.
+// plus its version for ReplacedByFork and ReplacedByVersion, and a filesystem
+// path with NO version for ReplacedByDirectory. parseReplacement is the only
+// constructor, so no consumer has to re-derive which shape it is holding from
+// whether a version happens to be present — or from whether the path matches
+// the module being replaced, which is what separates a fork from a version pin
+// and which the Replacement alone can no longer tell you.
 type Replacement struct {
 	Kind    ReplacementKind
 	Path    string
@@ -85,7 +99,7 @@ func (r Replacement) String() string {
 	switch r.Kind {
 	case NotReplaced:
 		return ""
-	case ReplacedByModule:
+	case ReplacedByFork, ReplacedByVersion:
 		return r.Path + "@" + r.Version
 	case ReplacedByDirectory:
 		return r.Path
@@ -134,7 +148,7 @@ const unhandledReplacementKind = "licenses: ReplacementKind %d (path %q) reached
 // what makes a target that is NEITHER — the shape a future go release or a
 // malformed template would produce — fail rather than get filed under whichever
 // arm it fell through to.
-func parseReplacement(path, version string) (Replacement, error) {
+func parseReplacement(modulePath, path, version string) (Replacement, error) {
 	// One call each, so the verdict an arm branches on and the reason its error
 	// quotes cannot disagree. [LAW:one-source-of-truth]
 	pathErr := module.CheckPath(path)
@@ -154,9 +168,19 @@ func parseReplacement(path, version string) (Replacement, error) {
 	case isDirectory:
 		return Replacement{}, fmt.Errorf("replacement path %q is a filesystem path but carries version %q; go.mod permits a version only on a module target", path, version)
 	case !isModulePath:
-		return Replacement{}, fmt.Errorf("replacement path %q carries version %q but is not a valid module path: %w", path, version, pathErr)
+		// Reaching here means the path is neither a directory (the arm above
+		// excluded that) nor a module path, so the message names both halves
+		// rather than only the one it tested.
+		return Replacement{}, fmt.Errorf("replacement path %q carries version %q but is neither a module path nor a filesystem path: %w", path, version, pathErr)
+	case path == modulePath:
+		// `replace x => x v1.2.3` — the ordinary way to force a version. The
+		// source really did come from somewhere other than the required
+		// version, so it is still a substitution the artifacts must disclose,
+		// but it is the SAME module and calling it a fork would have the SBOM
+		// assert that a component descends from itself.
+		return Replacement{Kind: ReplacedByVersion, Path: path, Version: version}, nil
 	default:
-		return Replacement{Kind: ReplacedByModule, Path: path, Version: version}, nil
+		return Replacement{Kind: ReplacedByFork, Path: path, Version: version}, nil
 	}
 }
 
@@ -225,7 +249,7 @@ func parseModuleList(output string) ([]Module, error) {
 		if len(parts) != 5 {
 			return nil, fmt.Errorf("malformed go list output line (want 5 tab-separated fields): %q", line)
 		}
-		replacement, err := parseReplacement(parts[3], parts[4])
+		replacement, err := parseReplacement(parts[0], parts[3], parts[4])
 		if err != nil {
 			return nil, fmt.Errorf("go list line %q: %w", line, err)
 		}

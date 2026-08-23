@@ -62,14 +62,36 @@ func sourceLine(r Replacement) string {
 	switch r.Kind {
 	case NotReplaced:
 		return ""
-	case ReplacedByModule:
-		return headerLine("Source", r.String()+" (a go.mod replace directive substitutes this coordinate's source with that fork; see FORKS.md in lit's source repository)")
+	case ReplacedByFork:
+		return headerLine("Source", r.String()+sourceSuffixFork)
+	case ReplacedByVersion:
+		return headerLine("Source", r.String()+sourceSuffixVersion)
 	case ReplacedByDirectory:
-		return headerLine("Source", r.String()+" (a go.mod replace directive substitutes this coordinate's source with that patched copy inside lit's own repository; no published coordinate identifies it — see FORKS.md in lit's source repository)")
+		return headerLine("Source", r.String()+sourceSuffixDirectory)
 	default:
 		panic(fmt.Sprintf(unhandledReplacementKind, r.Kind, r.Path))
 	}
 }
+
+// The parenthetical each Source line carries. They are named constants for the
+// same reason their SBOM counterparts (pedigreeNoteFork and friends) are: the
+// two documents describe one fact, and a bare literal buried in a switch arm is
+// the easy thing to reword until they disagree.
+//
+// The subject is stated as "the module named above" rather than "this
+// coordinate", because the coordinate nearest the reader's eye is the
+// SUBSTITUTE printed immediately to the left — so a deictic there reads as
+// saying the fork's source was replaced by itself, the reverse of the truth.
+//
+// The directory wording claims no containment. modfile.IsDirectoryPath accepts
+// `../sibling` and absolute paths as readily as `./internal/...`, so a line
+// asserting the copy sits "inside lit's own repository" would be false for a
+// sibling checkout or /opt/src — a claim the format cannot back.
+const (
+	sourceSuffixFork      = " (a go.mod replace directive substitutes the source of the module named above with that fork; see FORKS.md in lit's source repository)"
+	sourceSuffixVersion   = " (a go.mod replace directive substitutes the source of the module named above with the same module at that version; no fork is involved)"
+	sourceSuffixDirectory = " (a go.mod replace directive substitutes the source of the module named above with that patched local directory; no published coordinate identifies it — see FORKS.md in lit's source repository)"
+)
 
 // noteLine renders a curated note as its own header line. An entry without a
 // note yields the empty string, which concatenates into the header as nothing

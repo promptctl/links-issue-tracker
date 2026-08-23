@@ -23,9 +23,11 @@ func WriteReport(w io.Writer, entries []Entry) error {
 	// column" is false on the four native-library rows, whose first column is a
 	// bare name (`icu`, `musl`) naming no module at all. And "names another
 	// coordinate" is false for a directory replacement, whose cell holds a
-	// repo-relative path that is deliberately NOT a coordinate — the very
-	// distinction Replacement was introduced to keep.
-	if _, err := fmt.Fprintf(w, "The Source column names where a component's source came from when that is not the component named in the first column. It reads `-` for every component built from its own named source, and otherwise holds either a module coordinate or a repository-relative path, depending on what lit's `go.mod` substitutes with its `replace` directive — see FORKS.md in lit's source repository for what those substitutions change and why.\n\n"); err != nil {
+	// directory path that is deliberately NOT a coordinate — the very
+	// distinction Replacement was introduced to keep. "repository-relative" is
+	// wrong too: modfile.IsDirectoryPath accepts `../sibling` and absolute
+	// paths, neither of which is inside this repository.
+	if _, err := fmt.Fprintf(w, "The Source column names where a component's source came from when that is not the component named in the first column. It reads `-` for every component built from its own named source, and otherwise holds either a module coordinate or a local directory path, depending on what lit's `go.mod` substitutes with its `replace` directive — see FORKS.md in lit's source repository for what those substitutions change and why.\n\n"); err != nil {
 		return err
 	}
 

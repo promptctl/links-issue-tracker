@@ -124,7 +124,7 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 		// so a parse that produced the right String() from the wrong split would
 		// still emit a wrong purl.
 		want := Replacement{
-			Kind:    ReplacedByModule,
+			Kind:    ReplacedByFork,
 			Path:    "github.com/promptctl/dolt/go",
 			Version: "v0.40.5-0.20260816040811-3eabc076e073",
 		}
@@ -194,6 +194,7 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 // another's input if its condition were widened, so a check for non-nil alone
 // would stay green through exactly that mistake.
 func TestParseReplacementRefusesShapesGoDoesNotProduce(t *testing.T) {
+	const modulePath = "github.com/dolthub/dolt/go"
 	for _, tc := range []struct {
 		name        string
 		path        string
@@ -233,17 +234,17 @@ func TestParseReplacementRefusesShapesGoDoesNotProduce(t *testing.T) {
 			name:        "a bare name with a version",
 			path:        "notamodule",
 			version:     "v1.2.3",
-			wantMessage: "is not a valid module path",
+			wantMessage: "neither a module path nor a filesystem path",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := parseReplacement(tc.path, tc.version)
+			got, err := parseReplacement(modulePath, tc.path, tc.version)
 			if err == nil {
-				t.Fatalf("parseReplacement(%q, %q) = %#v, want an error", tc.path, tc.version, got)
+				t.Fatalf("parseReplacement(%q, %q, %q) = %#v, want an error", modulePath, tc.path, tc.version, got)
 			}
 			if !strings.Contains(err.Error(), tc.wantMessage) {
-				t.Errorf("parseReplacement(%q, %q) error = %q, want it to mention %q",
-					tc.path, tc.version, err, tc.wantMessage)
+				t.Errorf("parseReplacement(%q, %q, %q) error = %q, want it to mention %q",
+					modulePath, tc.path, tc.version, err, tc.wantMessage)
 			}
 		})
 	}
@@ -280,4 +281,40 @@ func TestReplacementStringRefusesAnUnknownKind(t *testing.T) {
 	}()
 
 	_ = unknown.String()
+}
+
+// TestParseReplacementSeparatesAForkFromAVersionPin pins the distinction that
+// keeps the SBOM from asserting a component descends from itself.
+//
+// `replace x => x v1.2.3` is the ordinary way to force a version, and it
+// reaches this parser looking exactly like a fork except that the replacement
+// path equals the module being replaced. Before the kinds were split, that
+// produced a pedigree.descendants entry naming the same module — a claim that
+// x is a fork of x, in a structured field, about a go.mod idiom anyone might
+// add tomorrow. lit's go.mod has no such replace today, which is precisely why
+// the rule needs a test rather than a reader.
+func TestParseReplacementSeparatesAForkFromAVersionPin(t *testing.T) {
+	const modulePath = "github.com/spf13/viper"
+
+	pin, err := parseReplacement(modulePath, modulePath, "v1.19.0")
+	if err != nil {
+		t.Fatalf("parseReplacement for a version pin: %v", err)
+	}
+	if pin.Kind != ReplacedByVersion {
+		t.Errorf("`replace x => x v1.19.0` parsed as kind %d, want ReplacedByVersion (%d)", pin.Kind, ReplacedByVersion)
+	}
+
+	fork, err := parseReplacement(modulePath, "github.com/promptctl/viper", "v1.19.0")
+	if err != nil {
+		t.Fatalf("parseReplacement for a fork: %v", err)
+	}
+	if fork.Kind != ReplacedByFork {
+		t.Errorf("a different path parsed as kind %d, want ReplacedByFork (%d)", fork.Kind, ReplacedByFork)
+	}
+
+	// Both still render as a coordinate — the difference is what the artifacts
+	// are allowed to CLAIM about it, not how it is spelled.
+	if pin.String() != modulePath+"@v1.19.0" {
+		t.Errorf("version pin renders as %q, want the substitute coordinate", pin.String())
+	}
 }

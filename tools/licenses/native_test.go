@@ -384,15 +384,19 @@ func TestGoModulesCarryNoDescriptionOrNote(t *testing.T) {
 }
 
 // TestNativeDescriptionsMakeNoPlatformClaim pins the rule musl's description was
-// corrected to obey. ONE SBOM is generated per release and staged as a single
-// asset covering every archive, under a report preamble asserting that the
-// components listed are compiled into this binary — so a description scoped to
-// one platform ("linked into lit's fully-static Linux builds") is a false
-// sentence in the darwin and windows copies of the same document.
+// corrected to obey. The curated inventory is generated once per release and
+// rendered into artifacts that are not platform-specific — LICENSE-REPORT.md
+// ships inside EVERY archive goreleaser builds, under a preamble asserting the
+// components listed are compiled into this binary, and the SBOM is a single
+// standalone asset covering every platform. A description scoped to one of them
+// ("linked into lit's fully-static Linux builds") is a false sentence in the
+// copies a darwin or windows recipient opens.
 //
 // The check is deliberately a keyword scan, because the mistake it catches is a
 // keyword: a maintainer adds a platform name to a description that ships
-// everywhere. Describing WHAT a component is never requires naming an operating
+// everywhere. (The first version of this comment justified the rule by saying
+// the SBOM ships inside every archive. It does not ship in any archive — it is
+// staged separately — and the rule survives on the report, which does.) Describing WHAT a component is never requires naming an operating
 // system; if a future component genuinely needs that qualification, it belongs
 // in the note, which is about lit's use of the component rather than about the
 // component itself.
