@@ -72,13 +72,14 @@ func buildSBOM(entries []Entry, appVersion, serialNumber string, timestamp time.
 			Type:    cdx.ComponentTypeLibrary,
 			Name:    e.Module.Path,
 			Version: e.Module.Version,
-			// A curated note (dual-license election, compound-expression
-			// provenance) rides as the component description so the SBOM
-			// explains its own license claim; empty for classified Go modules
-			// and omitted from the JSON. [LAW:dataflow-not-control-flow]
-			Description: e.Note,
+			// What the component IS, which is what CycloneDX defines this field
+			// to hold. The curated licensing note is a different kind of claim
+			// and travels in Properties below; see licenseNoteProperty.
+			Description: e.Description,
 			PackageURL:  e.PackageURL,
 			Licenses:    componentLicenses(e.LicenseName, e.Acknowledgement),
+			Properties:  componentProperties(e.Note),
+			Pedigree:    componentPedigree(e.Module.Replacement),
 		})
 	}
 
@@ -116,6 +117,124 @@ func goModulePURL(modulePath, version string) string {
 		namespace, name = "", modulePath
 	}
 	return packageurl.NewPackageURL(packageurl.TypeGolang, namespace, name, version, nil, "").ToString()
+}
+
+// licenseNoteProperty is the namespaced name under which a curated licensing
+// note travels in the SBOM. It is deliberately NOT component.description:
+// CycloneDX defines description as what the component IS, and four sentences
+// explaining a dual-license election are not that. The distinction is not
+// pedantry — merge and dedup tooling treats description as identity metadata,
+// so a note filed there is a note that can be matched against, truncated, or
+// overwritten as though it named the component.
+//
+// The name is namespaced to this project because CycloneDX property names are a
+// flat global space with no schema behind them; an unprefixed "license-note"
+// would collide with anyone else's. Nothing is lost by moving the note out of
+// description: it still ships verbatim in LICENSE-REPORT.md's Notes section and
+// in THIRD_PARTY_LICENSES, which are the documents a human actually reads.
+const licenseNoteProperty = "promptctl:lit:license-note"
+
+// componentProperties renders a curated note as the component's property list,
+// or nil when there is no note — which omitempty then drops from the JSON
+// entirely, so the 149 note-free Go modules emit no empty array.
+// [LAW:dataflow-not-control-flow] the absence is a value this returns, so
+// buildSBOM sets the field unconditionally rather than branching around it.
+func componentProperties(note string) *[]cdx.Property {
+	if note == "" {
+		return nil
+	}
+	properties := []cdx.Property{{Name: licenseNoteProperty, Value: note}}
+	return &properties
+}
+
+// pedigreeNoteFork explains a fork-shaped substitution in the words the
+// structured fields cannot. `descendants` states a genealogy — that a fork of
+// this component exists — and nothing more; it does not say that the fork is
+// what lit actually compiled, which is the whole fact this ticket exists to
+// disclose.
+const pedigreeNoteFork = "lit's go.mod requires this coordinate, but a replace directive substitutes its source: " +
+	"the code compiled into lit came from the fork recorded under descendants, not from the version and purl above. " +
+	"Both coordinates resolve publicly; the fork is the one to fetch when diffing against a lit build. " +
+	"The modifications and the reasons for them are catalogued in FORKS.md, in lit's source repository at " +
+	litModulePath + "."
+
+// pedigreeNoteVersion covers `replace x => x v1.2.3`, where the substitute is
+// the SAME module at another version. It records NO descendant: the component
+// did not fork, and a descendants entry whose purl differs from the component's
+// only in its version would assert that the module descends from itself.
+const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the version above, but a replace directive " +
+	"substitutes the same module at version %s, which is the code compiled into lit. The module path is unchanged " +
+	"and no fork is involved, so no descendant component is recorded."
+
+// pedigreeNoteDirectory is the directory-shaped counterpart. It must state why
+// there is no component recorded beside it: an absent descendants list is
+// otherwise indistinguishable from an omission, and a reader who takes it for
+// one learns the opposite of the truth — that nothing was substituted.
+// It also claims no containment. modfile.IsDirectoryPath accepts `../sibling`
+// and absolute paths as readily as `./internal/...`, so "carried inside lit's
+// own repository" — which this string said until bundle.go was corrected and
+// this twin was not — is false for a sibling checkout or /opt/src. Two
+// renderers stating one fact is exactly how one of them comes to state it
+// wrongly. [LAW:one-source-of-truth]
+const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
+	"a patched local directory. The code compiled into lit came from there, not from the version " +
+	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source, " +
+	"and a purl invented for it would name something no consumer could resolve. What the patch changes, and why, is in " +
+	"FORKS.md, in lit's source repository at " + litModulePath + "."
+
+// componentPedigree records that a component's source came from somewhere other
+// than the coordinate naming it — CycloneDX's field for exactly the fidelity
+// gap FORKS.md documents, where three components' license rows are all correct
+// while the artifacts describe source the binary does not contain.
+//
+// The component keeps its go.mod identity rather than being renamed to the
+// substitute. That is the load-bearing choice here, and it is not the fork
+// idiom CycloneDX's own prose sketches (component = the fork, ancestor = the
+// original). Renaming would break two things that matter more: the invariant
+// that the SBOM and LICENSE-REPORT.md provably describe ONE inventory (see
+// main.go), since every other artifact keys on the go.mod path; and purl-based
+// vulnerability matching, because no advisory feed carries the fork's
+// coordinate. So identity answers "what does lit depend on" and the pedigree
+// answers "what did lit compile", and the document states both.
+//
+// A fork — and ONLY a fork — earns a descendants entry. `replace x => x v1.2.3`
+// substitutes the same module at another version, which is a substitution worth
+// disclosing but not a genealogy; recording it as a descendant would have the
+// document assert that a component descends from itself.
+//
+// Given that identity, the fork belongs in `descendants` and NOT in
+// `ancestors`, and the difference is a true statement versus a false one.
+// CycloneDX defines descendants as the forks of an original component, which is
+// exactly what github.com/promptctl/dolt/go is with respect to the coordinate
+// this component names. Filing it under ancestors — "the component this one was
+// derived from" — would assert that dolthub/dolt derives from promptctl's fork,
+// reversing the real genealogy in a structured field a machine reads without
+// the notes beside it. Shipping a true-sounding claim in a field that means
+// something else is the defect this ticket was opened to remove, not one to
+// re-commit while removing it.
+//
+// [LAW:dataflow-not-control-flow] the single switch is the domain's own
+// discriminator — the three shapes admit different facts, and each arm says
+// exactly what its shape knows — not a special case carved into the renderer.
+func componentPedigree(r Replacement) *cdx.Pedigree {
+	switch r.Kind {
+	case NotReplaced:
+		return nil
+	case ReplacedByFork:
+		descendants := []cdx.Component{{
+			Type:       cdx.ComponentTypeLibrary,
+			Name:       r.Path,
+			Version:    r.Version,
+			PackageURL: goModulePURL(r.Path, r.Version),
+		}}
+		return &cdx.Pedigree{Descendants: &descendants, Notes: pedigreeNoteFork}
+	case ReplacedByVersion:
+		return &cdx.Pedigree{Notes: fmt.Sprintf(pedigreeNoteVersion, r.Version)}
+	case ReplacedByDirectory:
+		return &cdx.Pedigree{Notes: fmt.Sprintf(pedigreeNoteDirectory, r.Path)}
+	default:
+		panic(fmt.Sprintf(unhandledReplacementKind, r.Kind, r.Path))
+	}
 }
 
 // componentLicenses renders a classified license name as a CycloneDX license
