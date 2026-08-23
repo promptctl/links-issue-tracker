@@ -85,9 +85,14 @@ func reconcileScratchName() string {
 // spine. That forced the old shape — project every folded commit up front and
 // carry all of them in memory across the read/write boundary, O(chain × backlog).
 //
-// Two branches dissolve the conflict. History is read on `read`, which is reset
-// freely and never carries anything worth keeping; the replayed spine
-// accumulates on `spine`, which nothing ever resets. Dolt keeps a working set
+// Two branches dissolve the conflict, and what separates them is not WHETHER
+// each is reset but when and how often. History is read on `read`, which is
+// reset once per folded commit, continuously, throughout the replay — which is
+// why nothing on it can be worth keeping. The replayed spine accumulates on
+// `spine`, which is reset exactly once, by commitReplayAndAdvance, to adopt the
+// remote head as the replay's starting point; that happens before any
+// provenance commit lands, so there is no accumulated history for it to
+// destroy, and afterwards the spine only ever advances by commit. Dolt keeps a working set
 // per branch, so an uncommitted read on one is invisible to the other, and the
 // replay can stream one step at a time. [LAW:decomposition] two roles that were
 // sawing across each other now have one part each.

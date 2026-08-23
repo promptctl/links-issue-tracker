@@ -44,12 +44,27 @@ type labelKey struct {
 	name    string
 }
 
-// Each delete below is the ONE place its table's DELETE statement lives — the
-// delta path and the ordinary CRUD commands both route through these, the same
-// way every restore/replay INSERT routes through one insert*Tx. They return the
-// affected row count because the CRUD callers need it to tell "removed" from
-// "there was nothing there"; the delta ignores it, having already decided from
-// the diff that the row is present. [LAW:single-enforcer]
+// Each delete below is the one place its table's BY-KEY, SINGLE-ROW delete
+// lives — the delta path and the ordinary CRUD commands both route through
+// these, the same way the restore/replay whole-row INSERTs route through one
+// insert*Tx each.
+//
+// That is deliberately narrower than "the only DELETE against this table," and
+// the difference is a real one rather than an exception being excused. These
+// address exactly one row by its full primary key. The other deletes in the
+// package answer a different question — they remove a SET matched by a partial
+// predicate — so they are separate statements on purpose, not strays that
+// escaped consolidation: setSingleValuedEdgeTx (relations.go, every edge of a
+// type from one source), ClearParent (relations.go, the parent edge by src and
+// type), replaceLabelsTx (labels.go, every label on an issue), and the
+// self-edge sweep in import_export.go. Consolidating those into a by-key helper
+// would mean looking up the rows first in order to delete them one at a time,
+// which is slower and no clearer. [LAW:single-enforcer] applies per operation,
+// not per table.
+//
+// They return the affected row count because the CRUD callers need it to tell
+// "removed" from "there was nothing there"; the delta ignores it, having
+// already decided from the diff that the row is present.
 
 // Deleting an issue takes its relations, comments, labels, events and event
 // changes with it — the schema's ON DELETE CASCADE — which is exactly what

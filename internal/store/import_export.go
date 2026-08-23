@@ -164,9 +164,12 @@ func (s *Store) replaceFromExport(ctx context.Context, export model.Export, stam
 //
 // It is the degenerate case of applyExportDelta, not a second import body: the
 // clear makes the live state provably empty, and the transition from empty to
-// export is a delta with nothing to remove and everything to add. Every INSERT
-// therefore still lives in exactly one place, shared with the reconcile's
-// incremental replay. [LAW:single-enforcer] [LAW:one-source-of-truth]
+// export is a delta with nothing to remove and everything to add. The whole-row
+// INSERTs therefore still live in exactly one place each, shared with the
+// reconcile's incremental replay — sole ownership of the restore-and-replay
+// path, not of the tables: CreateIssue, AddComment and AddLabel keep their own
+// creation-time statements with their own narrower column lists.
+// [LAW:single-enforcer] [LAW:one-source-of-truth]
 //
 // The clear must not name issue_events or issue_event_changes: both cascade
 // from issues (ON DELETE CASCADE), so clearing issues already removes them, and
