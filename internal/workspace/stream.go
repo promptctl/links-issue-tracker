@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 )
 
 // streamTokenFile is the write-once file holding a checkout's stream id, and it
@@ -205,29 +204,26 @@ func publishStreamToken(privateGitDir string) error {
 		return nil
 	}
 	if err != nil {
-		return publishFailure(path, privateGitDir, err)
+		// The requirement is stated on EVERY failure rather than on a matched
+		// errno family, because it is true of every failure: this step needs a
+		// hard link, so naming that is never wrong, while classifying the errno
+		// would be wrong exactly where it matters most. On Windows — which lit
+		// ships a binary for, and where FAT is most likely to be met — Go's
+		// syscall.EPERM and friends are invented values, and a real
+		// ERROR_NOT_SUPPORTED from CreateHardLink matches none of them
+		// (syscall.Errno.Is maps Win32 codes onto os.ErrExist/ErrPermission/
+		// ErrNotExist and nothing else). A classifier would therefore go quiet
+		// on the one platform whose operator most needs the explanation.
+		// Enumerating per-platform codes we cannot execute here would only move
+		// the gap. [LAW:no-silent-failure]
+		//
+		// Not a fallback to a weaker publish: an implementation that is atomic
+		// on some filesystems and racy on others leaves nobody able to say what
+		// guarantee a checkout has, and the racy one is what this path exists to
+		// eliminate.
+		return fmt.Errorf("publish stream id %q: %w; this step requires the checkout's git directory (%s) to support hard links, which is how the identity is installed atomically — a filesystem without them (FAT family, some network mounts) fails here every time", path, err, privateGitDir)
 	}
 	return nil
-}
-
-// publishFailure names the one cause a caller cannot guess from the raw errno.
-// Publishing needs a primitive that is atomic AND refuses an existing
-// destination, and hard links are the portable one — but a filesystem that does
-// not support them (FAT/exFAT, some network mounts) rejects every attempt, so
-// every mutating command in that checkout fails forever with nothing but "link:
-// operation not permitted" to go on. [LAW:no-silent-failure] The remedy is to
-// say which capability is missing and where, not to fall back to a weaker
-// publish: an implementation that is atomic on some filesystems and racy on
-// others would leave nobody able to say what guarantee a given checkout has,
-// and the racy one is precisely what this path was rewritten to eliminate.
-func publishFailure(path string, privateGitDir string, err error) error {
-	unsupported := []error{syscall.EPERM, syscall.EOPNOTSUPP, syscall.ENOSYS, syscall.EXDEV}
-	for _, candidate := range unsupported {
-		if errors.Is(err, candidate) {
-			return fmt.Errorf("publish stream id %q: %w; this checkout's git directory (%s) is on a filesystem that does not support hard links, which lit requires to install the identity atomically", path, err, privateGitDir)
-		}
-	}
-	return fmt.Errorf("publish stream id %q: %w", path, err)
 }
 
 // newStreamToken mints a fresh opaque token. The bytes come from crypto/rand

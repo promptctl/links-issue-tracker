@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -177,5 +178,53 @@ func TestReadAdoptsTheIdentityAWriteMinted(t *testing.T) {
 		if got := openStream(t, repo, AccessRead); got.Value() != minted.Value() {
 			t.Fatalf("read-mode open saw %q, want the minted %q", got.Value(), minted.Value())
 		}
+	}
+}
+
+// TestFailedIdentityResolutionReleasesTheStore covers the abort path in Open:
+// when identity resolution fails after the store is already open, the store
+// must be closed, because Store.Close is also what releases the workspace lock.
+// A leak there is invisible at the failure and resurfaces later as an
+// unexplained "workspace busy" with nothing pointing back here.
+//
+// The proof is behavioral rather than an assertion about the error value: the
+// checkout is repaired and opened again, which can only succeed if the failed
+// open released what it held. [LAW:behavior-not-structure]
+func TestFailedIdentityResolutionReleasesTheStore(t *testing.T) {
+	repo := gitRepo(t)
+	if minted := openStream(t, repo, AccessWrite); !minted.Present() {
+		t.Fatal("write-mode open minted nothing")
+	}
+	ws, err := workspace.Resolve(repo)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	// The workspace package owns this filename; naming it here couples the two,
+	// but the coupling fails loudly rather than silently — a rename makes the
+	// damaged-token open below succeed, and this test fails.
+	tokenPath := filepath.Join(ws.PrivateGitDir, "lit-stream")
+	if _, err := os.Stat(tokenPath); err != nil {
+		t.Fatalf("expected a minted token at %s: %v", tokenPath, err)
+	}
+	if err := os.WriteFile(tokenPath, []byte("not a token"), 0o644); err != nil {
+		t.Fatalf("WriteFile error = %v", err)
+	}
+
+	ap, err := Open(context.Background(), repo, AccessWrite)
+	if err == nil {
+		ap.Close()
+		t.Fatal("Open must fail when the checkout's identity is damaged")
+	}
+	if !strings.Contains(err.Error(), "malformed") {
+		t.Fatalf("Open error = %q, want the malformed-token diagnosis", err)
+	}
+
+	// Repairing the checkout must make it usable again. If the aborted open had
+	// leaked the store, this second open would fail on the still-held lock.
+	if err := os.Remove(tokenPath); err != nil {
+		t.Fatalf("Remove error = %v", err)
+	}
+	if got := openStream(t, repo, AccessWrite); !got.Present() {
+		t.Fatal("a repaired checkout must open and mint a fresh identity")
 	}
 }
