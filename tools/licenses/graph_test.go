@@ -233,7 +233,7 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 		{Module: Module{Path: "corpus", Version: "v1"}, Hits: []LicenseHit{{RelPath: "testdata/COPYING", License: "GPL-2.0"}}},
 		{Module: Module{Path: "murky", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: unclassifiedLicense}}},
 		{Module: Module{Path: "bare", Version: "v1"}},
-		{Module: Module{Path: "forked", Version: "v1", ReplacedBy: "other/fork@v2"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
+		{Module: Module{Path: "forked", Version: "v1", Replacement: Replacement{Kind: ReplacedByModule, Path: "other/fork", Version: "v2"}}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
 	}
 
 	byTitle := make(map[string][]graphRow)
@@ -401,7 +401,7 @@ func TestPartitionGraphFilesBothSentinelsAsUnclassified(t *testing.T) {
 func TestPartitionGraphReportsReplacedModulesRegardlessOfLicense(t *testing.T) {
 	policy := &Policy{AllowedLicenses: []string{"Apache-2.0"}}
 	entries := []GraphEntry{{
-		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", ReplacedBy: "github.com/promptctl/dolt/go@v0.40.5-later"},
+		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", Replacement: Replacement{Kind: ReplacedByModule, Path: "github.com/promptctl/dolt/go", Version: "v0.40.5-later"}},
 		Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
 	}}
 

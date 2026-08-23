@@ -18,10 +18,13 @@ func TestWriteReport(t *testing.T) {
 	}
 	out := buf.String()
 
+	// Rows are pinned to their full width, trailing `|` included. An
+	// unterminated prefix stays green when a column is added or removed, which
+	// is how the Source column's own rendering once went unverified.
 	for _, want := range []string{
-		"| github.com/a/a | v1.0.0 | MIT |",
-		"| github.com/b/b | v2.0.0 | Apache-2.0 |",
-		"| github.com/c/c | v3.0.0 | MIT |",
+		"| github.com/a/a | v1.0.0 | MIT | - |",
+		"| github.com/b/b | v2.0.0 | Apache-2.0 | - |",
+		"| github.com/c/c | v3.0.0 | MIT | - |",
 		"| Apache-2.0 | 1 |",
 		"| MIT | 2 |",
 		"3 third-party components",
@@ -43,8 +46,70 @@ func TestWriteReportEmptyVersionRendersPlaceholder(t *testing.T) {
 	if err := WriteReport(&buf, entries); err != nil {
 		t.Fatalf("WriteReport: %v", err)
 	}
-	if want := "| github.com/a/a | - | MIT |"; !strings.Contains(buf.String(), want) {
+	if want := "| github.com/a/a | - | MIT | - |"; !strings.Contains(buf.String(), want) {
 		t.Errorf("output missing %q\n%s", want, buf.String())
+	}
+}
+
+// TestWriteReportSourceColumnNamesTheReplacement is links-licensing-c0ce.15's
+// acceptance criterion for the human-readable half: LICENSE-REPORT.md must say,
+// on the row itself, that a component's source came from a coordinate other
+// than the one the Module column names.
+//
+// The three rows are the three shapes, and each is pinned to its full width so
+// a column silently dropped or reordered fails here. The module and directory
+// rows carry DISTINCT source values rather than both reading "-", which is what
+// keeps this from passing if the Source cell were wired to the Version column's
+// placeholder or to a constant.
+func TestWriteReportSourceColumnNamesTheReplacement(t *testing.T) {
+	entries := []Entry{
+		{
+			Module: Module{
+				Path:    "github.com/dolthub/dolt/go",
+				Version: "v0.40.5",
+				Replacement: Replacement{
+					Kind:    ReplacedByModule,
+					Path:    "github.com/promptctl/dolt/go",
+					Version: "v0.40.5-later",
+				},
+			},
+			LicenseName: "Apache-2.0",
+		},
+		{
+			Module: Module{
+				Path:        "github.com/dolthub/driver",
+				Version:     "v0.2.1",
+				Replacement: Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"},
+			},
+			LicenseName: "Apache-2.0",
+		},
+		{Module: Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"}, LicenseName: "Apache-2.0"},
+	}
+
+	var buf strings.Builder
+	if err := WriteReport(&buf, entries); err != nil {
+		t.Fatalf("WriteReport: %v", err)
+	}
+	out := buf.String()
+
+	for _, want := range []string{
+		"| github.com/dolthub/dolt/go | v0.40.5 | Apache-2.0 | github.com/promptctl/dolt/go@v0.40.5-later |",
+		"| github.com/dolthub/driver | v0.2.1 | Apache-2.0 | ./internal/vendor/dolthub-driver |",
+		"| github.com/spf13/cobra | v1.8.0 | Apache-2.0 | - |",
+		// The header must gain the column too, or every row's fourth cell is
+		// markdown a renderer drops on the floor.
+		"| Module | Version | License | Source |",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("report missing %q\n%s", want, out)
+		}
+	}
+
+	// A reader meeting a bare coordinate in the Source column has to be told
+	// what the column means; without the legend the substitution is disclosed
+	// but not explained.
+	if !strings.Contains(out, "The Source column names where a component's source actually came from") {
+		t.Errorf("report has a Source column but no legend explaining it\n%s", out)
 	}
 }
 

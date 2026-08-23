@@ -153,8 +153,14 @@ func TestLicenseChoiceArms(t *testing.T) {
 // TestNativeNotesSurfaceInReportAndSBOM is links-licensing-c0ce.8's acceptance
 // criterion for the curated notes: zstd's dual-license election and
 // compiler-rt's compound-expression provenance must be readable in the shipped
-// artifacts themselves — LICENSE-REPORT.md's Notes section and the SBOM
-// component's description — not only in native.go, which ships to nobody.
+// artifacts themselves — LICENSE-REPORT.md's Notes section and the SBOM — not
+// only in native.go, which ships to nobody.
+//
+// The SBOM half of that criterion is asserted against the note's home as of
+// links-licensing-c0ce.15, which is a namespaced property rather than
+// component.description. The criterion itself did not change: the note must
+// reach a reader of the shipped document. What changed is which field carries
+// it, because CycloneDX defines description as what the component IS.
 func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 	entries := nativeEntries()
 
@@ -176,25 +182,29 @@ func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
 	}
 
 	bom := decodeSBOM(t, entries, "")
-	descriptions := map[string]string{}
+	notes := map[string]string{}
 	for _, c := range bom.Components {
-		descriptions[c.Name] = c.Description
+		note, ok := c.property(licenseNoteProperty)
+		if !ok {
+			t.Errorf("native component %s carries no %s property; its curated note reaches no reader of the SBOM", c.Name, licenseNoteProperty)
+		}
+		notes[c.Name] = note
 	}
-	if !strings.Contains(descriptions["zstd"], "BSD-3-Clause OR GPL-2.0-only") {
-		t.Errorf("zstd SBOM description does not state the dual-license election: %q", descriptions["zstd"])
+	if !strings.Contains(notes["zstd"], "BSD-3-Clause OR GPL-2.0-only") {
+		t.Errorf("zstd SBOM note does not state the dual-license election: %q", notes["zstd"])
 	}
-	if !strings.Contains(descriptions["compiler-rt"], "Apache-2.0 WITH LLVM-exception") {
-		t.Errorf("compiler-rt SBOM description does not state the ported-LLVM provenance: %q", descriptions["compiler-rt"])
+	if !strings.Contains(notes["compiler-rt"], "Apache-2.0 WITH LLVM-exception") {
+		t.Errorf("compiler-rt SBOM note does not state the ported-LLVM provenance: %q", notes["compiler-rt"])
 	}
 	// ICU and musl keep a single SPDX identifier while bundling third-party
 	// material of their own, so each must disclose what its notice folds in —
 	// otherwise a reader who fingerprints TRE inside musl, or reads the GPL
 	// blocks in ICU's LICENSE, has no document from us.
-	if !strings.Contains(descriptions["musl"], "2-clause BSD") {
-		t.Errorf("musl SBOM description does not disclose its third-party components: %q", descriptions["musl"])
+	if !strings.Contains(notes["musl"], "2-clause BSD") {
+		t.Errorf("musl SBOM note does not disclose its third-party components: %q", notes["musl"])
 	}
-	if !strings.Contains(descriptions["icu"], "autotools build scripts") {
-		t.Errorf("icu SBOM description does not account for the GPL blocks in its LICENSE: %q", descriptions["icu"])
+	if !strings.Contains(notes["icu"], "autotools build scripts") {
+		t.Errorf("icu SBOM note does not account for the GPL blocks in its LICENSE: %q", notes["icu"])
 	}
 
 	// Every note must reach the attribution bundle too. That is the file which
@@ -307,5 +317,65 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 	}
 	if got != zig {
 		t.Errorf("native.go compiler-rt version = %q, but build/Dockerfile.release pins ZIG_VERSION %q; update native.go (and re-confirm the bundled musl version) when zig changes", got, zig)
+	}
+}
+
+// TestNativeDescriptionsSayWhatTheComponentIs pins the split
+// links-licensing-c0ce.15 made between the two claims a native component
+// carries. Before it, the curated licensing note rode in component.description,
+// which CycloneDX defines as what the component IS — a true statement in a field
+// that does not mean what the statement says, and one merge and dedup tooling
+// treats as identity metadata.
+//
+// The assertion that matters is the LAST one in the loop. Restoring
+// `Description: e.Note` in buildSBOM would leave every other check here green:
+// the descriptions would still be non-empty and would still round-trip to the
+// wire. Only a check that the two fields hold DIFFERENT claims fails, which is
+// what makes this test isolate that one rule rather than co-sign the others.
+func TestNativeDescriptionsSayWhatTheComponentIs(t *testing.T) {
+	bom := decodeSBOM(t, nativeEntries(), "")
+	byName := map[string]wireComponent{}
+	for _, c := range bom.Components {
+		byName[c.Name] = c
+	}
+
+	for _, n := range nativeLibs {
+		c, ok := byName[n.name]
+		if !ok {
+			t.Errorf("native lib %s produced no SBOM component", n.name)
+			continue
+		}
+		// A native lib's name is a bare string, not a resolvable coordinate, so
+		// a reader of the SBOM alone has nothing else telling them what "musl"
+		// or "compiler-rt" are. That is the gap description exists to close, and
+		// an empty one leaves it open.
+		if n.description == "" {
+			t.Errorf("native lib %s has no description; the SBOM would name it without saying what it is", n.name)
+			continue
+		}
+		if c.Description != n.description {
+			t.Errorf("%s component.description = %q, want the curated description %q", n.name, c.Description, n.description)
+		}
+		if strings.Contains(c.Description, n.note) {
+			t.Errorf("%s component.description carries the licensing note; CycloneDX defines description as what the component IS, and the note belongs in the %s property: %q",
+				n.name, licenseNoteProperty, c.Description)
+		}
+	}
+}
+
+// TestGoModulesCarryNoDescriptionOrNote pins the other half of the split: only
+// the curated native inventory has either field. A Go module's description and
+// note are both empty, so its component omits description and properties
+// entirely rather than emitting a fabricated sentence about a module lit never
+// described. [LAW:no-silent-failure] the absence is real, not filled in.
+func TestGoModulesCarryNoDescriptionOrNote(t *testing.T) {
+	bom := decodeSBOM(t, synthEntries, "")
+	for _, c := range bom.Components {
+		if c.Description != "" {
+			t.Errorf("Go module %s carries description %q; lit holds no description for a Go module that it did not invent", c.Name, c.Description)
+		}
+		if _, ok := c.property(licenseNoteProperty); ok {
+			t.Errorf("Go module %s carries a %s property; only the curated native inventory has notes", c.Name, licenseNoteProperty)
+		}
 	}
 }

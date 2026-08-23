@@ -430,7 +430,16 @@ jobs:
           # notice could vanish entirely and the unanchored grep would still
           # pass on compiler-rt's copy. The point of this line is that the
           # license TEXT rides along, not just the row.
-          grep -A 8 '^github.com/dolthub/dolt/go ' "$workdir/THIRD_PARTY_LICENSES" | grep -q 'Apache License'
+          #
+          # The window counts the bundle section's HEADER lines, and that header
+          # grows: links-licensing-c0ce.15 added a `Source:` line to replaced
+          # modules, of which dolt is one, leaving the previous -A 8 passing with
+          # two lines to spare. This job does not run on pull requests, so a
+          # window that goes one line short fails at tag-cut and nowhere earlier.
+          # 12 keeps slack for another header line without reaching anywhere near
+          # the next section — the Apache text between them is ~200 lines, so the
+          # anchoring this check exists for is untouched.
+          grep -A 12 '^github.com/dolthub/dolt/go ' "$workdir/THIRD_PARTY_LICENSES" | grep -q 'Apache License'
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 |' "$workdir/LICENSE-REPORT.md"
           # links-supply-chain-w6m9.4: the statically-linked native C libraries
           # must ride the SAME shipped bundle, with their notice text — not just

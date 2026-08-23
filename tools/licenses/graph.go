@@ -37,17 +37,14 @@ import (
 // So a hit carries the path it was found at, and root-versus-nested is derived
 // from that path rather than stored beside it. [LAW:one-source-of-truth]
 
-// graphModuleTemplate emits one tab-separated line per module in the build
+// graphModuleTemplate emits one moduleFields record per module in the build
 // list. Unlike linkedModuleTemplate this iterates modules directly (`go list
-// -m`), so there is no .Module indirection and no stdlib to skip; only the
-// main module is dropped, for the same reason the linked scan drops it — lit's
-// own code is not a third-party dependency it must account for.
-// The replacement's version is emitted only when there is one: a filesystem
-// replacement (`replace X => ./internal/vendor/y`) has no version, and an
-// unguarded `@{{.Replace.Version}}` renders it as a trailing `@` — a coordinate
-// shape that exists nowhere, in a report whose whole job is naming coordinates
-// exactly.
-const graphModuleTemplate = `{{if not .Main}}{{.Path}}` + "\t" + `{{.Version}}` + "\t" + `{{.Dir}}` + "\t" + `{{if .Replace}}{{.Replace.Path}}{{if .Replace.Version}}@{{.Replace.Version}}{{end}}{{end}}` + "\n{{end}}"
+// -m`), so dot is already a module and no `with` is needed, and there is no
+// stdlib to skip; only the main module is dropped, for the same reason the
+// linked scan drops it — lit's own code is not a third-party dependency it must
+// account for. The record layout itself is moduleFields (modules.go), shared
+// with the linked scan because parseModuleList reads both.
+const graphModuleTemplate = `{{if not .Main}}` + moduleFields + `{{end}}`
 
 // GraphModules resolves every module in the go.mod build list — `go list -m
 // all`, the set an auditor reading go.mod/go.sum sees — with the source of

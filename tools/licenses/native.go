@@ -35,18 +35,27 @@ var muslLicenseText string
 //go:embed native/compiler-rt-LICENSE
 var compilerRTLicenseText string
 
-// nativeLib is one statically-linked native C library: its name, version, the
-// SPDX expression we distribute it under, the verbatim notice text, and a note
-// carrying whatever a reader of the shipped artifacts needs to accept the
-// license claim without consulting our source — a dual-license election, or the
-// provenance behind a compound expression. The note travels into
-// LICENSE-REPORT.md and the SBOM (Entry.Note), never only into a Go comment.
+// nativeLib is one statically-linked native C library: its name, version, a
+// one-line statement of what it IS, the SPDX expression we distribute it under,
+// the verbatim notice text, and a note carrying whatever a reader of the shipped
+// artifacts needs to accept the license claim without consulting our source — a
+// dual-license election, or the provenance behind a compound expression.
+//
+// description and note are two different kinds of claim and are kept apart
+// deliberately. A Go module's name is a resolvable coordinate that identifies
+// it; "icu" and "musl" are bare strings, so a reader of the SBOM alone has
+// nothing telling them what those components are — which is what description
+// answers. The note answers a different question, about the licence, and rides
+// as a namespaced property (licenseNoteProperty) rather than in description,
+// where CycloneDX's own definition does not fit it. Both travel into
+// LICENSE-REPORT.md and the SBOM, never only into a Go comment.
 type nativeLib struct {
-	name    string
-	version string
-	license string
-	text    string
-	note    string
+	name        string
+	version     string
+	description string
+	license     string
+	text        string
+	note        string
 	// acknowledgement is acknowledgementConcluded for a lib whose license row
 	// lit arrived at rather than read off the notice — see Entry.Acknowledgement.
 	acknowledgement string
@@ -90,13 +99,17 @@ type nativeLib struct {
 // so they carry notes, and the notes ship in all three artifacts.
 var nativeLibs = []nativeLib{
 	{name: "icu", version: "75.1", license: "Unicode-3.0", text: icuLicenseText,
-		note: "ICU 75.1 is Unicode-3.0; its LICENSE at release-75-1 is byte-identical to the embedded copy. That file's Third-Party Software Licenses section carries further notices for components included within the ICU libraries — the pre-57 ICU License and the BSD-licensed cjdict.txt word-break data among them — and the embedded copy reproduces each verbatim. The two GNU GPL blocks the same file lists cover aclocal.m4 and config.guess, and the install-sh block beside them is MIT/X11: autotools build scripts, not code in any linked library."},
+		description: "International Components for Unicode: the C/C++ libraries providing Unicode text handling, collation, and regular-expression support.",
+		note:        "ICU 75.1 is Unicode-3.0; its LICENSE at release-75-1 is byte-identical to the embedded copy. That file's Third-Party Software Licenses section carries further notices for components included within the ICU libraries — the pre-57 ICU License and the BSD-licensed cjdict.txt word-break data among them — and the embedded copy reproduces each verbatim. The two GNU GPL blocks the same file lists cover aclocal.m4 and config.guess, and the install-sh block beside them is MIT/X11: autotools build scripts, not code in any linked library."},
 	{name: "zstd", version: "1.5.6", license: "BSD-3-Clause", text: zstdLicenseText,
+		description:     "Zstandard: a fast lossless data-compression library.",
 		acknowledgement: acknowledgementConcluded,
 		note:            "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText,
-		note: "musl's COPYRIGHT is upstream's own grant for the library as a whole: MIT, with portions derived from third-party works under terms upstream states are compatible with that MIT license — the TRE regular-expression code (2-clause BSD), the ARM and AArch64 memcpy/memset routines, and David Burren's DES implementation (BSD) among them. What ships is that COPYRIGHT verbatim: upstream's own attribution document, a component-by-component list of who holds each copyright, and not a reproduction of the third-party license texts — for TRE it says outright that the text lives in the source files."},
+		description: "musl libc: a lightweight implementation of the C standard library, linked into lit's fully-static Linux builds.",
+		note:        "musl's COPYRIGHT is upstream's own grant for the library as a whole: MIT, with portions derived from third-party works under terms upstream states are compatible with that MIT license — the TRE regular-expression code (2-clause BSD), the ARM and AArch64 memcpy/memset routines, and David Burren's DES implementation (BSD) among them. What ships is that COPYRIGHT verbatim: upstream's own attribution document, a component-by-component list of who holds each copyright, and not a reproduction of the third-party license texts — for TRE it says outright that the text lives in the source files."},
 	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,
+		description:     "Zig's implementation of the compiler-rt builtins: the low-level runtime routines a compiler emits calls to, such as integer division and floating-point arithmetic on targets lacking hardware support.",
 		acknowledgement: acknowledgementConcluded,
 		note:            "Zig 0.14.0's implementation of the compiler-rt builtins, versioned by the Zig toolchain that bundles it: MIT as part of Zig, and it includes routines ported from LLVM compiler-rt sources licensed Apache-2.0 WITH LLVM-exception. Routines ported from pre-relicense LLVM sources are dual-licensed (University of Illinois/NCSA OR MIT) at the user's election; lit elects and distributes those under MIT, which the expression's MIT arm covers, so no NCSA grant is claimed. The embedded notice carries the full text of every license named here."},
 }
@@ -114,6 +127,7 @@ func nativeEntries() []Entry {
 			Module:          Module{Path: n.name, Version: n.version},
 			LicenseName:     n.license,
 			Text:            n.text,
+			Description:     n.description,
 			Note:            n.note,
 			Acknowledgement: n.acknowledgement,
 			PackageURL:      genericPURL(n.name, n.version),

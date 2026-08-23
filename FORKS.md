@@ -248,17 +248,40 @@ distribute a derivative work:
 One consequence to know before you read a generated artifact: because `go.mod`
 still `require`s the upstream coordinate, `tools/licenses` attributes these
 modules to `github.com/dolthub/…` while reading their license text out of a
-`promptctl/…` directory. `LICENSE-REPORT.md`, `THIRD_PARTY_LICENSES` and the
-CycloneDX SBOM all name the upstream coordinate and say nothing about the
-substitution — verified 2026-08-15 by generating all three. Only `go run
-./tools/licenses -graph` prints it, under the heading `MODULES WHOSE SOURCE COMES
-FROM A DIFFERENT COORDINATE`.
+`promptctl/…` directory. Each component therefore keeps its upstream identity —
+name, version and purl — in every artifact, and **declares the substitution
+alongside it**. That split is deliberate: the identity answers *what does `lit`
+depend on*, which is what `go.mod` says and what every advisory feed matches a
+purl against, while the substitution answers *what did `lit` actually compile*.
+Renaming the component to the fork would have collapsed the two questions into
+one wrong answer and orphaned the coordinate every vulnerability scanner keys on.
 
-The license those artifacts report is correct: both forks are Apache-2.0 at both
-ends, so no row is wrong. What is missing is the fact that the source is patched,
-which a reader has to come here or run the graph audit to learn. CycloneDX has a
-`pedigree` field for exactly this; wiring it up is tracked as
-`links-licensing-c0ce.15`.
+Where each artifact says it, as of `links-licensing-c0ce.15` — verified
+2026-08-22 by generating all three:
+
+- **`SBOM.cdx.json`** — the component carries a CycloneDX `pedigree`. For the
+  two forks that is a `pedigree.ancestors` entry naming
+  `github.com/promptctl/…` with its own version and a resolvable purl, plus
+  `pedigree.notes` saying in words that the compiled code came from the ancestor
+  and not from the component's own purl. The vendored driver is the other shape:
+  `replace github.com/dolthub/driver => ./internal/vendor/dolthub-driver` has no
+  published coordinate, so it gets notes naming the directory and stating why no
+  ancestor is recorded — an unexplained empty `ancestors` reads as an omission,
+  which is the opposite of the truth.
+- **`LICENSE-REPORT.md`** — a `Source` column on every row. It reads `-` when the
+  source is the module the first column names, and names the substitute
+  otherwise. Three of the rows name a substitute today.
+- **`THIRD_PARTY_LICENSES`** — a `Source:` line directly under the module header
+  of each substituted section. This is the file that legally accompanies the
+  binary and it has no index, so a recipient has nothing but the section itself
+  to consult.
+
+`go run ./tools/licenses -graph` still prints the same fact under `MODULES WHOSE
+SOURCE COMES FROM A DIFFERENT COORDINATE`; it is no longer the only place.
+
+The license those artifacts report was always correct — both forks are
+Apache-2.0 at both ends, so no row was ever wrong. What was missing, and is no
+longer, was the fact that the source is patched.
 
 ## Rebasing a fork onto a newer upstream
 

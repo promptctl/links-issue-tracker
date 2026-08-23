@@ -156,7 +156,7 @@ func partitionGraph(entries []GraphEntry, filter LicenseFilter) []graphSection {
 		if e.Module.IsReplaced() {
 			sections[replaced].Rows = append(sections[replaced].Rows, graphRow{
 				Module: e.Module.Path, Version: e.Module.Version,
-				Path: "source read from " + e.Module.ReplacedBy, License: rootGrantLicense(e.Hits),
+				Path: "source read from " + e.Module.Replacement.String(), License: rootGrantLicense(e.Hits),
 			})
 		}
 		if len(e.Hits) == 0 {

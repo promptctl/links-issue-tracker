@@ -50,3 +50,62 @@ func TestWriteBundleDeterministic(t *testing.T) {
 		t.Errorf("WriteBundle is not deterministic for a fixed input:\n%s\n---\n%s", first.String(), second.String())
 	}
 }
+
+// TestWriteBundleSourceLine covers the third shipped artifact's half of
+// links-licensing-c0ce.15. THIRD_PARTY_LICENSES is the file that legally
+// accompanies the binary, and it is flat text with no index — so a recipient
+// who wants to know whether a section's coordinate is really where the source
+// came from has nothing to consult but the section itself.
+//
+// The unreplaced case is asserted as an ABSENCE of the whole line, not merely
+// as a different value. A "Source: -" placeholder would be the report's
+// convention imported into a document that has no columns to keep aligned, and
+// it would put a line reading like a claim on 150 sections that make none.
+func TestWriteBundleSourceLine(t *testing.T) {
+	entries := []Entry{
+		{
+			Module: Module{
+				Path:    "github.com/dolthub/dolt/go",
+				Version: "v0.40.5",
+				Replacement: Replacement{
+					Kind:    ReplacedByModule,
+					Path:    "github.com/promptctl/dolt/go",
+					Version: "v0.40.5-later",
+				},
+			},
+			LicenseName: "Apache-2.0", Text: "Apache text\n",
+		},
+		{
+			Module: Module{
+				Path:        "github.com/dolthub/driver",
+				Version:     "v0.2.1",
+				Replacement: Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"},
+			},
+			LicenseName: "Apache-2.0", Text: "Apache text\n",
+		},
+		{Module: Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"}, LicenseName: "Apache-2.0", Text: "Apache text\n"},
+	}
+
+	var buf strings.Builder
+	if err := WriteBundle(&buf, entries); err != nil {
+		t.Fatalf("WriteBundle: %v", err)
+	}
+	out := buf.String()
+
+	// The Source line must sit directly under the coordinate it qualifies, so
+	// the two are pinned together as one block rather than as two independent
+	// substring hits that could land in different sections.
+	for _, want := range []string{
+		"github.com/dolthub/dolt/go v0.40.5\nSource: github.com/promptctl/dolt/go@v0.40.5-later (lit's go.mod substitutes this coordinate's source with a replace directive; see FORKS.md)\nLicense: Apache-2.0\n",
+		"github.com/dolthub/driver v0.2.1\nSource: ./internal/vendor/dolthub-driver (lit's go.mod substitutes this coordinate's source with a replace directive; see FORKS.md)\nLicense: Apache-2.0\n",
+		"github.com/spf13/cobra v1.8.0\nLicense: Apache-2.0\n",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("bundle missing block %q\n%s", want, out)
+		}
+	}
+
+	if got, want := strings.Count(out, "Source: "), 2; got != want {
+		t.Errorf("bundle carries %d Source lines, want %d — only replaced sections may claim one", got, want)
+	}
+}
