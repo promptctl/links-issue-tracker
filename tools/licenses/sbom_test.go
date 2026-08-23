@@ -3,12 +3,9 @@ package main
 import (
 	"bytes"
 	"encoding/json"
-	"os"
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/mod/modfile"
 )
 
 // wireBOM is a consumer's-eye view of the encoded SBOM: only the fields a
@@ -672,31 +669,18 @@ func TestSBOMPropertyNamesAreUnique(t *testing.T) {
 // INDEPENDENT reading of the same fact. `go list` and modfile are two different
 // paths to the replace directives, so a defect anywhere between the go list
 // template and parseReplacement shows up as a disagreement rather than
-// cancelling out.
+// cancelling out. The go.mod read itself goes through forks_test.go's
+// parseRootGoMod: "independent of go list" is the point, and a second private
+// copy of "how to read this repo's go.mod" would not add independence, only
+// drift. [LAW:one-source-of-truth]
 func forkPURLsFromGoMod(t *testing.T) map[string]string {
 	t.Helper()
-	f, err := modfile.Parse(forkGoModPath, mustReadFile(t, forkGoModPath), nil)
-	if err != nil {
-		t.Fatalf("parse %s: %v", forkGoModPath, err)
-	}
 	out := map[string]string{}
-	for _, r := range f.Replace {
+	for _, r := range parseRootGoMod(t).Replace {
 		if r.New.Version == "" || r.New.Path == r.Old.Path {
 			continue // a directory target or a version pin: no fork purl to expect
 		}
 		out[r.Old.Path] = goModulePURL(r.New.Path, r.New.Version)
 	}
 	return out
-}
-
-// forkGoModPath is the repository root go.mod, relative to this package.
-const forkGoModPath = "../../go.mod"
-
-func mustReadFile(t *testing.T, path string) []byte {
-	t.Helper()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	return data
 }

@@ -138,18 +138,30 @@ func archiveFiles(t *testing.T) map[string]bool {
 	}
 	var cfg struct {
 		Archives []struct {
+			ID    string   `yaml:"id"`
 			Files []string `yaml:"files"`
 		} `yaml:"archives"`
 	}
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
 		t.Fatalf("parse .goreleaser.yml: %v", err)
 	}
-	if len(cfg.Archives) == 0 {
-		t.Fatal(".goreleaser.yml declares no archives")
+	// Selected by id, not by position. There is one archives entry today, so
+	// [0] is correct today — and would silently start validating a different
+	// archive's file list the moment a second entry were added ahead of it,
+	// passing or failing on data that has nothing to do with what lit ships.
+	// [LAW:types-are-the-program] the name identifies the archive; its index
+	// is an accident of the file.
+	const archiveID = "lit"
+	for _, a := range cfg.Archives {
+		if a.ID != archiveID {
+			continue
+		}
+		out := map[string]bool{}
+		for _, f := range a.Files {
+			out[f] = true
+		}
+		return out
 	}
-	out := map[string]bool{}
-	for _, f := range cfg.Archives[0].Files {
-		out[f] = true
-	}
-	return out
+	t.Fatalf(".goreleaser.yml declares no archive with id %q", archiveID)
+	return nil
 }

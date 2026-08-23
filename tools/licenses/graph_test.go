@@ -628,3 +628,29 @@ func TestGraphReportRendersEverySection(t *testing.T) {
 		t.Errorf("report must state how much was measured:\n%s", out)
 	}
 }
+
+// TestReplacedSectionTitleFitsEveryShapeItHolds pins prose against the data it
+// describes. partitionGraph routes ALL substituted shapes into sectionReplaced,
+// including a version pin (`replace x => x v1.2.3`) whose replacement path is
+// identical to the module's own — so a heading promising "A DIFFERENT
+// COORDINATE", which this one said until links-licensing-c0ce.15 widened what
+// lands beneath it, is false for every row of that kind.
+//
+// A section title is not decoration: it is the sentence a reader applies to
+// every row under it, and the graph audit exists to be read by someone deciding
+// what to worry about.
+func TestReplacedSectionTitleFitsEveryShapeItHolds(t *testing.T) {
+	for _, forbidden := range []string{"A DIFFERENT COORDINATE", "ANOTHER MODULE", "A DIFFERENT MODULE"} {
+		if strings.Contains(sectionReplaced, forbidden) {
+			t.Errorf("replaced-section title claims %q, but a version pin routes into this section with the SAME coordinate: %q",
+				forbidden, sectionReplaced)
+		}
+	}
+	// The note beneath it must account for the shapes too, or the heading is
+	// merely vague rather than accurate.
+	for _, want := range []string{"fork", "same module", "local directory"} {
+		if !strings.Contains(strings.ToLower(noteReplaced), want) {
+			t.Errorf("replaced-section note does not account for the %q shape: %q", want, noteReplaced)
+		}
+	}
+}

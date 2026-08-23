@@ -179,7 +179,8 @@ const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the versio
 const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
 	"a patched local directory. The code compiled into lit came from there, not from the version " +
 	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source, " +
-	"and a purl invented for it would name something no consumer could resolve."
+	"and a purl invented for it would name something no consumer could resolve. What the patch changes, and why, is in " +
+	"FORKS.md, in lit's source repository at " + litModulePath + "."
 
 // componentPedigree records that a component's source came from somewhere other
 // than the coordinate naming it — CycloneDX's field for exactly the fidelity

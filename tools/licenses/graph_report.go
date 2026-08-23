@@ -29,13 +29,13 @@ type graphSection struct {
 // the same names the report prints — a renamed section cannot pass a test that
 // still expects the old title. [LAW:one-source-of-truth]
 const (
-	sectionReplaced     = "MODULES WHOSE SOURCE COMES FROM A DIFFERENT COORDINATE"
+	sectionReplaced     = "MODULES WHOSE SOURCE COMES FROM SOMEWHERE OTHER THAN THE COORDINATE NAMING THEM"
 	sectionModuleGrants = "MODULE GRANTS OUTSIDE THE POLICY"
 	sectionNestedTexts  = "NESTED LICENSE TEXTS OUTSIDE THE POLICY"
 	sectionUnclassified = "LICENSE FILES THE CLASSIFIER COULD NOT IDENTIFY"
 	sectionNoLicense    = "MODULES SHIPPING NO LICENSE FILE AT ALL"
 
-	noteReplaced     = "A `replace` directive is in effect, so the go tool reports the ORIGINAL path and\nversion against the REPLACEMENT's directory. Every license below was read out of\nthe replacement's files and is listed under the original's name — which is also\nwhat a scanner resolving that coordinate will disagree with. Listed whether or\nnot the license is permissive, because the divergence is the finding."
+	noteReplaced     = "A `replace` directive is in effect, so the go tool reports the ORIGINAL path and\nversion against the REPLACEMENT's directory. Every license below was read out of\nthe replacement's files and is listed under the original's name — which is also\nwhat a scanner resolving that coordinate will disagree with. The Source column\nnames where the files came from: another module (a fork), the SAME module at a\ndifferent version, or a local directory. Listed whether or not the license is\npermissive, because the divergence is the finding."
 	noteModuleGrants = "A module's own license grant, at its root. This is what a scanner that resolves\nmodule@version against a license database reports, and it is where a real\nobligation on this repository would appear."
 	noteNestedTexts  = "License texts found deeper in a module's tree. This is what a file-walking\nscanner (FOSSA, Black Duck, most corporate SBOM pipelines) flags. Vendored test\ncorpora and dual-license option files land here and bind nobody — read the path\nbefore reading the license."
 	noteUnclassified = "No SPDX license matched above the classifier's confidence threshold, so nobody\ncan say what these permit without reading them. Under an audit that asks for no\nquestions, an unclassifiable grant is a worse row than a known copyleft one."

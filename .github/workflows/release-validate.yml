@@ -422,7 +422,7 @@ jobs:
             echo "expected exactly one linux/amd64 archive, found ${#archives[@]}: ${archives[*]}" >&2
             exit 1
           fi
-          tar -xzf "${archives[0]}" -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md
+          tar -xzf "${archives[0]}" -C "$workdir" THIRD_PARTY_LICENSES LICENSE-REPORT.md FORKS.md
           grep -q 'github.com/dolthub/dolt/go' "$workdir/THIRD_PARTY_LICENSES"
           # Anchored to dolt's own section on purpose. A bare `Apache License`
           # match over the whole bundle stopped being evidence about dolt the
@@ -466,9 +466,21 @@ jobs:
           # Apache-2.0 |` matches whether or not a Source column exists.
           # [LAW:verifiable-goals]
           grep -q '| Module | Version | License | Source |' "$workdir/LICENSE-REPORT.md"
+          # All THREE substitutions go.mod declares, not just the first: the two
+          # forks and the vendored directory. Asserting one of three leaves a
+          # regression that drops the other two entirely invisible here.
           grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 | github.com/promptctl/dolt/go@' "$workdir/LICENSE-REPORT.md"
+          grep -q '| github.com/dolthub/go-mysql-server | .* | Apache-2.0 | github.com/promptctl/go-mysql-server@' "$workdir/LICENSE-REPORT.md"
+          grep -q '| github.com/dolthub/driver | .* | Apache-2.0 | ./internal/vendor/dolthub-driver |' "$workdir/LICENSE-REPORT.md"
           grep -q '^Source: github.com/promptctl/dolt/go@' "$workdir/THIRD_PARTY_LICENSES"
-          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt), and disclosing the fork dolt is built from"
+          grep -q '^Source: github.com/promptctl/go-mysql-server@' "$workdir/THIRD_PARTY_LICENSES"
+          grep -q '^Source: ./internal/vendor/dolthub-driver ' "$workdir/THIRD_PARTY_LICENSES"
+          # Both artifacts above tell a recipient to "see FORKS.md". The tar
+          # above would have failed already if it were missing, but assert it
+          # explicitly so the reason a future removal breaks this job is legible
+          # rather than a bare tar error. [FRAMING:representation]
+          test -s "$workdir/FORKS.md"
+          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt), disclosing all three replace substitutions, and shipping the FORKS.md they cite"
 
       # Stage the CycloneDX SBOM as a standalone, versioned release asset —
       # modeled on release-manifest.json, NOT on the in-archive license bundle:
@@ -568,7 +580,20 @@ jobs:
               and ($d[0].version | type) == "string"
               and ($d[0].version | length) > 0
           ' "$SBOM" >/dev/null
-          echo "OK: $SBOM validates as CycloneDX and lists github.com/dolthub/dolt at $(jq -r '.components[] | select(.name=="github.com/dolthub/dolt/go") | .version' "$SBOM")"
+          # links-licensing-c0ce.15: dolt being LISTED is not the claim this
+          # SBOM makes about dolt. It is built from the promptctl fork, and the
+          # pedigree is the only place the document says so — a regression that
+          # dropped it leaves every assertion above green while the SBOM once
+          # again describes a component the binary does not contain.
+          # [LAW:verifiable-goals]
+          jq -e '
+            ([.components[] | select(.name == "github.com/dolthub/dolt/go")][0].pedigree) as $p
+            | ($p.notes | type) == "string"
+              and ($p.notes | length) > 0
+              and ($p.descendants | length) == 1
+              and ($p.descendants[0].purl | startswith("pkg:golang/github.com/promptctl/dolt/go@"))
+          ' "$SBOM" >/dev/null
+          echo "OK: $SBOM validates as CycloneDX, lists github.com/dolthub/dolt at $(jq -r '.components[] | select(.name=="github.com/dolthub/dolt/go") | .version' "$SBOM"), and discloses the promptctl fork it was built from"
 
       # The linux artifacts must be fully static musl binaries: no PT_INTERP,
       # no NEEDED, and they must EXECUTE on both a glibc host (this runner) and

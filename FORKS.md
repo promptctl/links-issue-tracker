@@ -276,9 +276,11 @@ Where each artifact says it, as of `links-licensing-c0ce.15` — verified
   derived from" — would assert that `dolthub/dolt` derives from our fork,
   reversing the real genealogy inside a structured field that machines read
   without the notes beside it.
-- **`LICENSE-REPORT.md`** — a `Source` column on every row. It reads `-` when the
-  source is the module the first column names, and names the substitute
-  otherwise. Three of the rows name a substitute today.
+- **`LICENSE-REPORT.md`** — a `Source` column on every row. It reads `-` for
+  every component built from its own named source, and names the substitute
+  otherwise. Three of the rows name a substitute today. (Deliberately not "the
+  module the first column names": four rows are native C libraries whose first
+  column is a bare name like `icu`, naming no module at all.)
 - **`THIRD_PARTY_LICENSES`** — a `Source:` line directly under the module header
   of each substituted section. This is the file that legally accompanies the
   binary and it has no index, so a recipient has nothing but the section itself
