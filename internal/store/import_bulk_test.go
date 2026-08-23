@@ -46,10 +46,6 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 	}
 }
 
-// BulkApply's creates use the same rank placement as ImportTree's (RankTop,
-// the CreateIssueInput zero value) — both are `lit import --path <file>`,
-// so a create lands the same place in the ranked order regardless of which
-// format the file is.
 // TestBulkApplyCreatesLandInFileOrder pins the batch half of the placement
 // contract: a multi-document import with no placement named anywhere lands in
 // the order the file lists, because every creation surface reaches the default
