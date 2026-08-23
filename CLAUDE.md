@@ -32,3 +32,8 @@ promotes the changelog.
 
 For the promotion steps, the CI mechanism, and the versioning policy, see
 [RELEASING.md](RELEASING.md) — the single home for the release procedure.
+
+## Workflows run to their end
+
+Never end a workflow prematurely, and never dictate counter to the workflow in a
+handoff.
