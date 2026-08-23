@@ -306,14 +306,17 @@ func unsupportedOutputFlagError() error {
 	return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
 }
 
-// rankPlacement translates the CLI's --bottom boolean into the domain
-// placement value at the boundary, so the default (no flag) surfaces fresh
-// work at the top.
-func rankPlacement(bottom bool) store.RankPlacement {
-	if bottom {
-		return store.RankBottom
+// rankPlacement translates the CLI's --top boolean into the domain placement
+// value at the boundary. The unflagged arm names no placement of its own — it
+// hands back the zero value, so the CLI cannot state a default that drifts
+// from the one store.RankPlacement defines for every other creation surface.
+// [LAW:one-source-of-truth]
+func rankPlacement(top bool) store.RankPlacement {
+	if top {
+		return store.RankTop
 	}
-	return store.RankTop
+	var unflagged store.RankPlacement
+	return unflagged
 }
 
 func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -328,7 +331,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
 	lane := fs.String("lane", "", "Lane key partitioning an epic's children into parallel rank-ordered sub-sequences; shared lane serializes, distinct lane parallelizes")
-	bottom := fs.Bool("bottom", false, "Rank the new issue at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
+	top := fs.Bool("top", false, "Promote the new issue to the top of the order (the default appends it to the bottom of its frame)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -342,7 +345,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	}
 	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
 		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
-		Placement: rankPlacement(*bottom),
+		Placement: rankPlacement(*top),
 		Prefix:    ap.Workspace.IssuePrefix.Value(),
 	})
 	if err != nil {
@@ -375,14 +378,14 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
-	bottom := fs.Bool("bottom", false, "Rank the follow-up at the bottom of the order instead of the top (the default surfaces fresh work at the top)")
+	top := fs.Bool("top", false, "Promote the follow-up to the top of the order (the default appends it to the bottom of its frame)")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	parentID := strings.TrimSpace(*on)
 	titleValue := strings.TrimSpace(*title)
 	if parentID == "" || titleValue == "" {
-		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--bottom]"}
+		return UsageError{Message: "usage: lit followup --on <id> --title <text> [--description <text>] [--topic <slug>] [--type <task|feature|bug|chore|epic>] [--priority <0|1>] [--assignee <user>] [--labels <csv>] [--top]"}
 	}
 	parent, err := ap.Store.GetIssue(ctx, parentID)
 	if err != nil {
@@ -414,7 +417,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		Priority:    priorityValue,
 		Assignee:    strings.TrimSpace(*assignee),
 		Labels:      splitCSV(*labels),
-		Placement:   rankPlacement(*bottom),
+		Placement:   rankPlacement(*top),
 		Prefix:      ap.Workspace.IssuePrefix.Value(),
 	})
 	if err != nil {

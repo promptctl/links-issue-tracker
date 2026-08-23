@@ -91,14 +91,23 @@ type SyncState struct {
 }
 
 // RankPlacement selects where a newly created issue lands in the rank order.
-// Its zero value is RankTop, so the product default — fresh work surfaces at
-// the top — is also the type default: a CreateIssueInput that says nothing
-// about placement gets top.
+// Its zero value is RankBottom, so the product default — filing work records
+// it without promoting it — is also the type default: a CreateIssueInput that
+// says nothing about placement gets bottom. That is the whole enforcement
+// mechanism behind "one default across every creation surface": every creation
+// path (interactive, followup, both import formats) reaches the default by
+// saying nothing, so no path can drift from another without someone typing a
+// placement it does not mean. [LAW:one-source-of-truth]
+//
+// A rank that sorts after everything also sorts after every frame-mate, and a
+// child's rank is only ever compared against its siblings' (composite rank is
+// keyed on the containing epic's rank first), so bottom-of-order is
+// bottom-of-frame with no frame-scoped machinery.
 type RankPlacement int
 
 const (
-	RankTop    RankPlacement = iota // sorts before all existing items (default)
-	RankBottom                      // sorts after all existing items
+	RankBottom RankPlacement = iota // sorts after all existing items (default)
+	RankTop                         // sorts before all existing items
 )
 
 type CreateIssueInput struct {
@@ -122,8 +131,8 @@ type CreateIssueInput struct {
 	Lane     string
 	Labels   []string
 	// Placement decides where the new issue lands in the rank order. Zero value
-	// (RankTop) surfaces fresh work at the top; callers that author an ordered
-	// batch (e.g. preserving creation order) pass RankBottom.
+	// (RankBottom) appends, so an authored batch keeps its order for free;
+	// callers promoting a ticket to the front of the agenda pass RankTop.
 	Placement RankPlacement
 	// Prefix is the workspace's cosmetic ID prefix (e.g., "links" → "links-foo-abc1").
 	// Sourced from workspace config at the call site. Not persisted as derived state.
