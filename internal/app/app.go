@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"fmt"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
@@ -83,11 +84,14 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 	// failure to open is not that.
 	stream, err := contract.resolveStream(ws.PrivateGitDir)
 	if err != nil {
-		// The store is closed because no App is returned to close it, and the
-		// identity failure is what surfaces: a close error here would replace
-		// the diagnosis with a symptom of the abort. [LAW:no-silent-failure]
-		_ = st.Close()
-		return nil, err
+		// The store must be closed because no App is returned to close it, and
+		// Store.Close is also what releases the workspace lock — a release that
+		// fails here strands the lock and resurfaces later as an unexplained
+		// "workspace busy". Joined rather than discarded so the identity failure
+		// and a stranded lock are both visible; this is the close-on-abort
+		// pattern internal/store/store.go already uses for the same reason.
+		// [LAW:no-silent-failure]
+		return nil, errors.Join(err, st.Close())
 	}
 	return &App{Workspace: ws, Store: st, Stream: stream}, nil
 }

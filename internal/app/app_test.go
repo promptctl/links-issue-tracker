@@ -3,8 +3,11 @@ package app
 import (
 	"context"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func gitRepo(t *testing.T) string {
@@ -86,6 +89,93 @@ func TestOpenRejectsUnknownMode(t *testing.T) {
 		}
 		if !strings.Contains(err.Error(), "invalid access mode") {
 			t.Fatalf("Open(%q) error = %q, want invalid-mode error", mode, err)
+		}
+	}
+}
+
+// gitRepoWithWorktree returns an initialized repo and a linked worktree of it.
+// The worktree is the honest fixture for "a checkout that has never mutated":
+// it shares the primary's store, so the database exists, while its own private
+// git directory is untouched.
+func gitRepoWithWorktree(t *testing.T) (string, string) {
+	t.Helper()
+	repo := gitRepo(t)
+	commit := exec.Command("git", "-c", "user.name=T", "-c", "user.email=t@e", "commit", "--allow-empty", "-m", "init")
+	commit.Dir = repo
+	if out, err := commit.CombinedOutput(); err != nil {
+		t.Fatalf("git commit: %v\n%s", err, out)
+	}
+	// Bootstraps the database, which the read mode below requires to exist.
+	ap, err := Open(context.Background(), repo, AccessWrite)
+	if err != nil {
+		t.Fatalf("Open(AccessWrite) error = %v", err)
+	}
+	if err := ap.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	linked := filepath.Join(t.TempDir(), "linked")
+	add := exec.Command("git", "worktree", "add", linked)
+	add.Dir = repo
+	if out, err := add.CombinedOutput(); err != nil {
+		t.Fatalf("git worktree add: %v\n%s", err, out)
+	}
+	return repo, linked
+}
+
+func openStream(t *testing.T, dir string, mode AccessMode) workspace.StreamID {
+	t.Helper()
+	ap, err := Open(context.Background(), dir, mode)
+	if err != nil {
+		t.Fatalf("Open(%v) error = %v", mode, err)
+	}
+	defer ap.Close()
+	return ap.Stream
+}
+
+// TestAccessModeSelectsIdentityContract pins the pairing that accessContracts
+// exists to guarantee: the mode that may write the store is the same mode that
+// may mint an identity. Swapping the two resolveStream entries in that map is
+// the regression this catches — write mode would stop minting and read mode
+// would start. [LAW:behavior-not-structure] Asserted through App.Stream alone,
+// never by inspecting the token file, so the test states the contract rather
+// than the storage.
+func TestAccessModeSelectsIdentityContract(t *testing.T) {
+	repo, linked := gitRepoWithWorktree(t)
+
+	if got := openStream(t, repo, AccessWrite); !got.Present() {
+		t.Fatal("a write-mode open must mint this checkout's identity")
+	}
+	if got := openStream(t, linked, AccessRead); got.Present() {
+		t.Fatalf("a read-mode open in a never-mutated checkout must mint nothing; got %q", got.Value())
+	}
+	// The proof that the read above created nothing: a second read still finds
+	// no identity. Had the first one minted, this would report one.
+	if got := openStream(t, linked, AccessRead); got.Present() {
+		t.Fatalf("the first read-mode open minted an identity; second read found %q", got.Value())
+	}
+	// And the worktree gets its own identity once it actually mutates.
+	worktreeID := openStream(t, linked, AccessWrite)
+	if !worktreeID.Present() {
+		t.Fatal("a write-mode open in the worktree must mint an identity")
+	}
+	if worktreeID.Value() == openStream(t, repo, AccessRead).Value() {
+		t.Fatalf("the worktree and the primary must not share an identity; both %q", worktreeID.Value())
+	}
+}
+
+// TestReadAdoptsTheIdentityAWriteMinted states what makes a fresh session
+// inherit its checkout's stream: the identity comes off disk, so a read-mode
+// command sees exactly what an earlier write-mode command minted.
+func TestReadAdoptsTheIdentityAWriteMinted(t *testing.T) {
+	repo := gitRepo(t)
+	minted := openStream(t, repo, AccessWrite)
+	if !minted.Present() {
+		t.Fatal("write-mode open minted nothing")
+	}
+	for range 3 {
+		if got := openStream(t, repo, AccessRead); got.Value() != minted.Value() {
+			t.Fatalf("read-mode open saw %q, want the minted %q", got.Value(), minted.Value())
 		}
 	}
 }

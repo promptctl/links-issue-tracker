@@ -343,9 +343,25 @@ func TestMintedTokensAreAlwaysAcceptedByTheParser(t *testing.T) {
 // information-free, it proves the obvious leaks (the checkout's own path, the
 // user running it) are absent, which is what a future change to the minting
 // scheme would most plausibly break.
+// minLeakProbeLen is the shortest secret this test will assert is absent from a
+// token. A token is 13 characters over a 32-symbol alphabet, so a short string
+// turns up inside one by pure chance often enough to matter: a 2-character
+// secret has roughly 12/32^2 ≈ 1.2% odds per run, which would fail the build
+// about one run in eighty while the code leaked nothing at all. At six
+// characters the odds are about 8/32^6 ≈ 1e-8 and the assertion means what it
+// says. Anything shorter is reported as unprobeable rather than quietly dropped.
+const minLeakProbeLen = 6
+
 func TestTokenCarriesNothingIdentifying(t *testing.T) {
-	repo := litRepoWithCommit(t)
-	info, err := Resolve(repo)
+	// Named deliberately: `t.TempDir()` ends in "001", which is too short to
+	// probe AND contains digits outside the token alphabet, so a leak check
+	// against it could never fail and would only look like coverage.
+	root := filepath.Join(t.TempDir(), "streamsecret")
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatalf("MkdirAll error = %v", err)
+	}
+	run(t, root, "git", "init")
+	info, err := Resolve(root)
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -355,6 +371,9 @@ func TestTokenCarriesNothingIdentifying(t *testing.T) {
 	}
 
 	token := id.Value()
+	if len(token) != streamTokenLen {
+		t.Fatalf("token %q has length %d, want %d", token, len(token), streamTokenLen)
+	}
 	leaks := map[string]string{
 		"repository path": info.RootDir,
 		"repository name": filepath.Base(info.RootDir),
@@ -362,15 +381,50 @@ func TestTokenCarriesNothingIdentifying(t *testing.T) {
 		"home directory":  os.Getenv("HOME"),
 	}
 	for label, secret := range leaks {
-		if secret == "" {
+		if len(secret) < minLeakProbeLen {
+			t.Logf("not probed: %s (%q) is shorter than %d characters", label, secret, minLeakProbeLen)
 			continue
 		}
 		if strings.Contains(strings.ToLower(token), strings.ToLower(secret)) {
 			t.Fatalf("token %q leaks the %s (%q) into the shared database", token, label, secret)
 		}
 	}
-	if len(token) != streamTokenLen {
-		t.Fatalf("token %q has length %d, want %d", token, len(token), streamTokenLen)
+}
+
+// TestTokensShareNoCommonSubstring catches the leak the named-secret probe
+// above cannot: an implementation that mixes ANY environment-derived material
+// into the token — a path fragment, a hostname, a machine id — without this
+// test needing to know what that material is. Every token minted on one machine
+// would then share it, so the assertion is simply that independently minted
+// tokens have no run of characters in common. Random tokens collide on a
+// 4-character run with probability around 10/32^4 ≈ 1e-5 per pair, and
+// requiring the run to be shared by ALL of them drives that to nothing.
+func TestTokensShareNoCommonSubstring(t *testing.T) {
+	const (
+		samples = 40
+		runLen  = 4
+	)
+	tokens := make([]string, samples)
+	for i := range tokens {
+		token, err := newStreamToken()
+		if err != nil {
+			t.Fatalf("newStreamToken() error = %v", err)
+		}
+		tokens[i] = token
+	}
+
+	for start := 0; start+runLen <= len(tokens[0]); start++ {
+		candidate := tokens[0][start : start+runLen]
+		shared := true
+		for _, token := range tokens[1:] {
+			if !strings.Contains(token, candidate) {
+				shared = false
+				break
+			}
+		}
+		if shared {
+			t.Fatalf("every minted token contains %q — the token is carrying something constant about this machine", candidate)
+		}
 	}
 }
 

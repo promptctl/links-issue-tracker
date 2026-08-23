@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 )
 
 // streamTokenFile is the write-once file holding a checkout's stream id, and it
@@ -160,6 +161,16 @@ func publishStreamToken(privateGitDir string) error {
 	}
 	tempPath := temp.Name()
 	// Removed whether this call wins or loses the race, and on every error path.
+	// A process killed outright leaves its staged file behind, which is accepted
+	// rather than reaped: the reaper would have to delete exactly the file a
+	// CONCURRENT first-mutation has staged and is about to link, turning a
+	// harmless orphan into a failed command, and an age threshold to avoid that
+	// buys a tunable time constant to clean up files that barely occur. The read
+	// -first path in EnsureStream means this function runs only while a checkout
+	// has no identity at all, so the litter is bounded by kills inside one
+	// checkout's first mutation, in a directory where git leaves index.lock under
+	// the same conditions. Only the exact token name is ever read, so a leftover
+	// staged file cannot be mistaken for an identity.
 	defer os.Remove(tempPath)
 
 	// The token is written with a trailing newline so the file reads correctly
@@ -194,9 +205,29 @@ func publishStreamToken(privateGitDir string) error {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("publish stream id %q: %w", path, err)
+		return publishFailure(path, privateGitDir, err)
 	}
 	return nil
+}
+
+// publishFailure names the one cause a caller cannot guess from the raw errno.
+// Publishing needs a primitive that is atomic AND refuses an existing
+// destination, and hard links are the portable one — but a filesystem that does
+// not support them (FAT/exFAT, some network mounts) rejects every attempt, so
+// every mutating command in that checkout fails forever with nothing but "link:
+// operation not permitted" to go on. [LAW:no-silent-failure] The remedy is to
+// say which capability is missing and where, not to fall back to a weaker
+// publish: an implementation that is atomic on some filesystems and racy on
+// others would leave nobody able to say what guarantee a given checkout has,
+// and the racy one is precisely what this path was rewritten to eliminate.
+func publishFailure(path string, privateGitDir string, err error) error {
+	unsupported := []error{syscall.EPERM, syscall.EOPNOTSUPP, syscall.ENOSYS, syscall.EXDEV}
+	for _, candidate := range unsupported {
+		if errors.Is(err, candidate) {
+			return fmt.Errorf("publish stream id %q: %w; this checkout's git directory (%s) is on a filesystem that does not support hard links, which lit requires to install the identity atomically", path, err, privateGitDir)
+		}
+	}
+	return fmt.Errorf("publish stream id %q: %w", path, err)
 }
 
 // newStreamToken mints a fresh opaque token. The bytes come from crypto/rand
