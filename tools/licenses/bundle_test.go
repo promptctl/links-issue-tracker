@@ -79,6 +79,9 @@ func TestWriteBundleSourceLine(t *testing.T) {
 		// identifies the source, or the line invites a reader to go looking for
 		// a coordinate that does not exist.
 		"github.com/dolthub/driver v0.2.1\nSource: ./internal/vendor/dolthub-driver" + sourceSuffixDirectory + "\nLicense: Apache-2.0\n",
+		// A version pin is disclosed like any other substitution, and its
+		// parenthetical is the one that must NOT say "fork".
+		"github.com/spf13/viper v1.18.0\nSource: github.com/spf13/viper@v1.19.0" + sourceSuffixVersion + "\nLicense: Apache-2.0\n",
 		"github.com/spf13/cobra v1.8.0\nLicense: Apache-2.0\n",
 	} {
 		if !strings.Contains(out, want) {
@@ -86,7 +89,7 @@ func TestWriteBundleSourceLine(t *testing.T) {
 		}
 	}
 
-	if got, want := strings.Count(out, "Source: "), 2; got != want {
+	if got, want := strings.Count(out, "Source: "), 3; got != want {
 		t.Errorf("bundle carries %d Source lines, want %d — only replaced sections may claim one", got, want)
 	}
 }

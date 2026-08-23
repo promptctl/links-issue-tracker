@@ -457,7 +457,18 @@ jobs:
           grep -q '| compiler-rt | 0.14.0 | MIT AND Apache-2.0 WITH LLVM-exception |' "$workdir/LICENSE-REPORT.md"
           grep -q 'The MIT License (Expat)' "$workdir/THIRD_PARTY_LICENSES"
           grep -q 'The LLVM Project is under the Apache License v2.0 with LLVM Exceptions' "$workdir/THIRD_PARTY_LICENSES"
-          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt)"
+          # links-licensing-c0ce.15: the archive must also DISCLOSE that three
+          # of its components were built from somewhere other than the
+          # coordinate naming them. Without these lines the gate is satisfied by
+          # an archive that names dolt correctly and says nothing about the
+          # fork — which is the exact defect that ticket removed, and the greps
+          # above cannot see it: `| github.com/dolthub/dolt/go | .* |
+          # Apache-2.0 |` matches whether or not a Source column exists.
+          # [LAW:verifiable-goals]
+          grep -q '| Module | Version | License | Source |' "$workdir/LICENSE-REPORT.md"
+          grep -q '| github.com/dolthub/dolt/go | .* | Apache-2.0 | github.com/promptctl/dolt/go@' "$workdir/LICENSE-REPORT.md"
+          grep -q '^Source: github.com/promptctl/dolt/go@' "$workdir/THIRD_PARTY_LICENSES"
+          echo "OK: archive carries THIRD_PARTY_LICENSES + LICENSE-REPORT.md, covering dolt (Go) and all four native libs (icu, zstd, musl, compiler-rt), and disclosing the fork dolt is built from"
 
       # Stage the CycloneDX SBOM as a standalone, versioned release asset —
       # modeled on release-manifest.json, NOT on the in-archive license bundle:

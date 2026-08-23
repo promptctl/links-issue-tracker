@@ -390,6 +390,24 @@ var replacementEntries = []Entry{
 		Text:        "Apache text\n",
 	},
 	{
+		// `replace x => x v1.19.0`: a substitution that must be disclosed and
+		// must never be called a fork. It rides in the shared fixture so the
+		// bundle and report render it for real, rather than the rule being
+		// checked only against the constants in isolation.
+		Module: Module{
+			Path:    "github.com/spf13/viper",
+			Version: "v1.18.0",
+			Replacement: Replacement{
+				Kind:    ReplacedByVersion,
+				Path:    "github.com/spf13/viper",
+				Version: "v1.19.0",
+			},
+		},
+		LicenseName: "Apache-2.0",
+		PackageURL:  goModulePURL("github.com/spf13/viper", "v1.18.0"),
+		Text:        "Apache text\n",
+	},
+	{
 		Module:      Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"},
 		LicenseName: "Apache-2.0",
 		PackageURL:  goModulePURL("github.com/spf13/cobra", "v1.8.0"),
@@ -470,6 +488,14 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 		// opposite of the truth: that nothing was substituted.
 		if !strings.Contains(c.Pedigree.Notes, "No descendant component is recorded") {
 			t.Errorf("pedigree notes do not explain the absent component: %q", c.Pedigree.Notes)
+		}
+		// The same containment claim bundle.go was corrected to drop. A replace
+		// target may be ../sibling or absolute, so the SBOM may not say the
+		// copy sits inside this repository either.
+		for _, claim := range []string{"inside lit's own repository", "repository-relative"} {
+			if strings.Contains(c.Pedigree.Notes, claim) {
+				t.Errorf("pedigree notes claim %q, which a ../sibling or absolute replace target would falsify: %q", claim, c.Pedigree.Notes)
+			}
 		}
 	})
 

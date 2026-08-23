@@ -56,7 +56,7 @@ func TestWriteReportEmptyVersionRendersPlaceholder(t *testing.T) {
 // on the row itself, that a component's source came from a coordinate other
 // than the one the Module column names.
 //
-// The three rows are the three shapes, and each is pinned to its full width so
+// The rows are the four shapes, and each is pinned to its full width so
 // a column silently dropped or reordered fails here. The module and directory
 // rows carry DISTINCT source values rather than both reading "-", which is what
 // keeps this from passing if the Source cell were wired to the Version column's
@@ -73,6 +73,9 @@ func TestWriteReportSourceColumnNamesTheReplacement(t *testing.T) {
 	for _, want := range []string{
 		"| github.com/dolthub/dolt/go | v0.40.5 | Apache-2.0 | github.com/promptctl/dolt/go@v0.40.5-later |",
 		"| github.com/dolthub/driver | v0.2.1 | Apache-2.0 | ./internal/vendor/dolthub-driver |",
+		// A version pin renders its coordinate like any other substitution; what
+		// differs is only what the artifacts may CLAIM about it.
+		"| github.com/spf13/viper | v1.18.0 | Apache-2.0 | github.com/spf13/viper@v1.19.0 |",
 		"| github.com/spf13/cobra | v1.8.0 | Apache-2.0 | - |",
 		// The header must gain the column too, or every row's fourth cell is
 		// markdown a renderer drops on the floor.

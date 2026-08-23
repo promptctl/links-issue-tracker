@@ -170,10 +170,16 @@ const pedigreeNoteVersion = "lit's go.mod requires this coordinate at the versio
 // there is no component recorded beside it: an absent descendants list is
 // otherwise indistinguishable from an omission, and a reader who takes it for
 // one learns the opposite of the truth — that nothing was substituted.
+// It also claims no containment. modfile.IsDirectoryPath accepts `../sibling`
+// and absolute paths as readily as `./internal/...`, so "carried inside lit's
+// own repository" — which this string said until bundle.go was corrected and
+// this twin was not — is false for a sibling checkout or /opt/src. Two
+// renderers stating one fact is exactly how one of them comes to state it
+// wrongly. [LAW:one-source-of-truth]
 const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
-	"a patched copy carried inside lit's own repository. The code compiled into lit came from there, not from the version " +
-	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source: it is " +
-	"versioned only as part of lit itself, and a purl invented for it would name something no consumer could resolve."
+	"a patched local directory. The code compiled into lit came from there, not from the version " +
+	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source, " +
+	"and a purl invented for it would name something no consumer could resolve."
 
 // componentPedigree records that a component's source came from somewhere other
 // than the coordinate naming it — CycloneDX's field for exactly the fidelity
