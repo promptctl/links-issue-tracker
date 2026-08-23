@@ -931,7 +931,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // discriminator each subtest carries: the replay's first commit is the lift
 // (committed directly via commitWorkingSetOnce — the earliest point a
 // rotation could strand the session off the scratch branch), and its second
-// is the first provenance step (a replayExportOnScratch commit — pinning the
+// is the first provenance step (a replayDeltaOnScratch commit — pinning the
 // per-step single-attempt contract, not just the lift's).
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
 	for _, tc := range []struct {

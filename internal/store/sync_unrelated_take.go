@@ -9,7 +9,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
@@ -212,8 +211,8 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 		// included: a replay below an ahead remote's schema would drop the newer fields and
 		// regress the shared remote on push (the 2026-07-08 incident shape).
 		// [LAW:single-enforcer] the same replayUnderGuard that wraps the three-way reconcile.
-		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratchBranch string) error {
-			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratchBranch, plan.localHead, plan.remoteHead)
+		return s.replayUnderGuard(ctx, remote, branch, plan.remoteHead, func(ctx context.Context, guard *snapshotGuard, scratch reconcileScratch) error {
+			return s.takeLocalOntoRemoteHead(ctx, result, guard, plan.dataBranch, scratch, plan.localHead, plan.remoteHead)
 		})
 	default:
 		// SyncResolveUnrelated already rejected an invalid value at its boundary, so this
@@ -262,13 +261,13 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult,
 // three-way reconcile uses: scratch branch, snapshot-first, one atomic data-branch
 // advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
 // lifecycle, shared with the field-aware path.
-func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, dataBranch, scratchBranch, localHead, remoteHead string) error {
-	return s.runOnReconcileScratch(ctx, dataBranch, scratchBranch, localHead, func() error {
-		local, err := s.exportAtCommit(ctx, localHead)
+func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
+		local, err := s.exportAtCommit(ctx, scratch.read, localHead)
 		if err != nil {
 			return err
 		}
-		theirs, err := s.exportAtCommit(ctx, remoteHead)
+		theirs, err := s.exportAtCommit(ctx, scratch.read, remoteHead)
 		if err != nil {
 			return err
 		}
@@ -279,11 +278,8 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconci
 		// The no-base union projection combine uses; only the terminal export
 		// differs — the take settles on local's content, not the union.
 		// [LAW:dataflow-not-control-flow]
-		steps, err := s.buildFoldSteps(ctx, chain, model.Export{}, theirs, merge.ThreeWay(model.Export{}, local, theirs).Provisional())
-		if err != nil {
-			return err
-		}
-		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, remoteHead, takeLocalCommitMessage, local, steps)
+		stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: model.Export{}, theirs: theirs}
+		replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, takeLocalCommitMessage, local, stepper)
 		if err != nil {
 			return err
 		}
