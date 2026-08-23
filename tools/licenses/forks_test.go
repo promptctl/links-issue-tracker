@@ -63,15 +63,46 @@ func readForkLedger(t *testing.T) string {
 }
 
 // moduleReplaces returns the replace directives that substitute one module
-// coordinate for another — the forks. modfile leaves New.Version empty for a
-// directory replacement (internal/vendor/dolthub-driver), so the discriminator
-// is already in the parsed type and needs no path-shape guess.
-func moduleReplaces(f *modfile.File) []*modfile.Replace {
+// coordinate for another — the forks — as opposed to the directory replacement
+// (internal/vendor/dolthub-driver), which these fork-contract tests do not
+// govern.
+//
+// It asks parseReplacement rather than testing New.Version itself. That
+// function owns the module-versus-directory question for this package, and it
+// treats an empty version as necessary but NOT sufficient evidence of a
+// directory; a local copy here reading only the version would be a second,
+// weaker spelling of one rule, free to disagree with the one the artifacts are
+// rendered from. [LAW:single-enforcer]
+//
+// The error arm is a guard, not a gate: modfile.Parse rejects a versioned
+// directory target and a version-less module target one line earlier, so
+// parseReplacement is unlikely to be the first to complain. It is checked
+// rather than discarded because a value quietly dropped on the floor is how the
+// two spellings would drift apart again.
+func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
+	t.Helper()
 	var out []*modfile.Replace
 	for _, r := range f.Replace {
-		if r.New.Version != "" {
+		replacement, err := parseReplacement(r.Old.Path, r.New.Path, r.New.Version)
+		if err != nil {
+			t.Fatalf("go.mod replaces %s with a target parseReplacement refuses (%s => %s %s): %v",
+				r.Old.Path, r.Old.Path, r.New.Path, r.New.Version, err)
+		}
+		if replacement.Kind == ReplacedByFork {
 			out = append(out, r)
 		}
+	}
+	// Every caller states a property over this slice — org ownership, ledger
+	// coverage, the vendored mirror — and every one of those properties is
+	// vacuously true of an empty slice. Since the classification moved from
+	// `New.Version != ""` to parseReplacement's path comparison, a fork
+	// misfiled as ReplacedByVersion would empty this set and turn three green
+	// tests into three tests of nothing. Fail here instead, once, where the
+	// reason is legible. [LAW:verifiable-goals]
+	if len(out) == 0 {
+		t.Fatalf("go.mod declares %d replace directive(s) but parseReplacement classified none of them as a fork; "+
+			"the fork-contract tests below would all pass without examining anything. If lit genuinely stopped "+
+			"forking, delete them — they have no subject. Otherwise a fork is being misclassified.", len(f.Replace))
 	}
 	return out
 }
@@ -92,7 +123,7 @@ func requiredVersions(f *modfile.File) map[string]string {
 // repointing any of them outside the org fails. [LAW:one-source-of-truth] — the
 // set of forks lives in go.mod, and this file keeps no second copy of it.
 func TestForkReplacementsAreOrgOwned(t *testing.T) {
-	for _, r := range moduleReplaces(parseRootGoMod(t)) {
+	for _, r := range moduleReplaces(t, parseRootGoMod(t)) {
 		if !strings.HasPrefix(r.New.Path, forkOwnerPrefix) {
 			t.Errorf("go.mod replaces %s with %s@%s, which is not under %s — "+
 				"a fork lit builds from must be owned by the organization, not by "+
@@ -149,7 +180,7 @@ func TestForkLedgerQuotesEveryCurrentPin(t *testing.T) {
 	ledger := readForkLedger(t)
 	required := requiredVersions(f)
 
-	for _, r := range moduleReplaces(f) {
+	for _, r := range moduleReplaces(t, f) {
 		quoted := map[string]string{
 			"the upstream module path": r.Old.Path,
 			"the fork pin it builds":   r.New.Version,
@@ -196,7 +227,7 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 	for _, r := range f.Require {
 		record(r.Mod.Version)
 	}
-	for _, r := range moduleReplaces(f) {
+	for _, r := range moduleReplaces(t, f) {
 		record(r.New.Version)
 	}
 
@@ -210,6 +241,66 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 					"the ledger is quoting a pin the build no longer uses:\n  %s",
 					i+1, tok, strings.TrimSpace(line))
 			}
+		}
+	}
+}
+
+// collapseWhitespace folds every run of whitespace into a single space, so a
+// sentence in the ledger can be matched against a constant no matter where
+// markdown's line wrapping happened to break it. The ledger's quotation of the
+// heading below spans two lines today and would span one after any reflow;
+// without this, a reflow alone would fail the check that follows.
+func collapseWhitespace(s string) string {
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// TestForkLedgerQuotesTheGraphSectionTitle binds the one sentence in FORKS.md
+// that quotes the graph audit's own heading to the constant that prints it.
+//
+// The ledger read "MODULES WHOSE SOURCE COMES FROM A DIFFERENT COORDINATE" for
+// exactly as long as sectionReplaced did. Renaming the constant — a version pin
+// substitutes the SAME coordinate, so the old title was false for a shape the
+// section now holds — left the ledger quoting a heading no run of the tool
+// emits, and nothing failed.
+//
+// [FRAMING:representation] a quotation is a copy, and a copy a human must
+// remember to redraw is one that has already begun to lie. This gives that copy
+// the same standing the two pin tests above give the ledger's tables.
+func TestForkLedgerQuotesTheGraphSectionTitle(t *testing.T) {
+	if ledger := collapseWhitespace(readForkLedger(t)); !strings.Contains(ledger, sectionReplaced) {
+		t.Errorf("FORKS.md does not quote the graph audit's replaced-modules heading %q — "+
+			"the ledger tells a reader which section of `licenses -graph` prints this fact, "+
+			"so renaming the heading means re-quoting it there in the same change", sectionReplaced)
+	}
+}
+
+// TestForkLedgerNamesEverySubstitution backs a promise the SHIPPED artifacts
+// make. LICENSE-REPORT.md's legend and each substituted section of
+// THIRD_PARTY_LICENSES send a recipient to FORKS.md for what the substitution
+// changes and why — for every substituted row, whatever its kind.
+//
+// TestForkLedgerQuotesEveryCurrentPin above governs forks alone, so without
+// this a directory or version-pin replacement could be added to go.mod,
+// disclosed correctly in all three artifacts, and point every reader at a
+// document that never mentions it — a dangling pointer inside a compliance
+// artifact, which is the same defect class as an undisclosed substitution.
+func TestForkLedgerNamesEverySubstitution(t *testing.T) {
+	f := parseRootGoMod(t)
+	ledger := readForkLedger(t)
+	for _, r := range f.Replace {
+		replacement, err := parseReplacement(r.Old.Path, r.New.Path, r.New.Version)
+		if err != nil {
+			t.Fatalf("go.mod replaces %s with a target parseReplacement refuses (%s => %s %s): %v",
+				r.Old.Path, r.Old.Path, r.New.Path, r.New.Version, err)
+		}
+		if replacement.Kind == NotReplaced {
+			continue
+		}
+		if !strings.Contains(ledger, r.New.Path) {
+			t.Errorf("go.mod builds %s from %s, and the shipped artifacts tell every reader of that "+
+				"row to see FORKS.md — but FORKS.md never names %s. Document the substitution there, "+
+				"or the report and the bundle are pointing at a page that does not answer them.",
+				r.Old.Path, r.New.Path, r.New.Path)
 		}
 	}
 }
@@ -228,7 +319,7 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 // fork (flatbuffers) are out of scope — those are the driver's own business.
 func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 	rootForks := make(map[string]module.Version)
-	for _, r := range moduleReplaces(parseRootGoMod(t)) {
+	for _, r := range moduleReplaces(t, parseRootGoMod(t)) {
 		rootForks[r.Old.Path] = r.New
 	}
 

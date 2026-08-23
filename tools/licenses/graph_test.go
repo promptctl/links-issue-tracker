@@ -233,7 +233,7 @@ func TestPartitionGraphRoutesEachFinding(t *testing.T) {
 		{Module: Module{Path: "corpus", Version: "v1"}, Hits: []LicenseHit{{RelPath: "testdata/COPYING", License: "GPL-2.0"}}},
 		{Module: Module{Path: "murky", Version: "v1"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: unclassifiedLicense}}},
 		{Module: Module{Path: "bare", Version: "v1"}},
-		{Module: Module{Path: "forked", Version: "v1", ReplacedBy: "other/fork@v2"}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
+		{Module: Module{Path: "forked", Version: "v1", Replacement: Replacement{Kind: ReplacedByFork, Path: "other/fork", Version: "v2"}}, Hits: []LicenseHit{{RelPath: "LICENSE", License: "MIT"}}},
 	}
 
 	byTitle := make(map[string][]graphRow)
@@ -398,25 +398,49 @@ func TestPartitionGraphFilesBothSentinelsAsUnclassified(t *testing.T) {
 // its coordinate and its source disagree, which stays true when the license is
 // perfectly permissive. This repo's dolt fork is Apache-2.0 at both ends and
 // must still be reported. [LAW:no-silent-failure]
+//
+// Every substituted shape is routed, not just the fork. Replacement is a
+// four-variant sum and the audit renders it through Replacement.String(), so a
+// table exercising one variant proves nothing about the other three — and the
+// directory and version-pin shapes are exactly the ones whose rendering differs
+// (no version to append; a coordinate identical to the module's own path).
 func TestPartitionGraphReportsReplacedModulesRegardlessOfLicense(t *testing.T) {
 	policy := &Policy{AllowedLicenses: []string{"Apache-2.0"}}
-	entries := []GraphEntry{{
-		Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", ReplacedBy: "github.com/promptctl/dolt/go@v0.40.5-later"},
-		Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
-	}}
+	entries := []GraphEntry{
+		{
+			Module: Module{Path: "github.com/dolthub/dolt/go", Version: "v0.40.5", Replacement: Replacement{Kind: ReplacedByFork, Path: "github.com/promptctl/dolt/go", Version: "v0.40.5-later"}},
+			Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
+		},
+		{
+			Module: Module{Path: "github.com/dolthub/driver", Version: "v0.2.1", Replacement: Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"}},
+			Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
+		},
+		{
+			Module: Module{Path: "github.com/spf13/viper", Version: "v1.18.0", Replacement: Replacement{Kind: ReplacedByVersion, Path: "github.com/spf13/viper", Version: "v1.19.0"}},
+			Hits:   []LicenseHit{{RelPath: "LICENSE", License: "Apache-2.0"}},
+		},
+	}
+
+	want := map[string]string{
+		"github.com/dolthub/dolt/go": "source read from github.com/promptctl/dolt/go@v0.40.5-later",
+		"github.com/dolthub/driver":  "source read from ./internal/vendor/dolthub-driver",
+		"github.com/spf13/viper":     "source read from github.com/spf13/viper@v1.19.0",
+	}
 
 	for _, s := range partitionGraph(entries, policy.Filter()) {
 		if s.Title != sectionReplaced {
 			continue
 		}
-		if len(s.Rows) != 1 {
-			t.Fatalf("want the replaced module reported, got %+v", s.Rows)
+		if len(s.Rows) != len(want) {
+			t.Fatalf("want every replaced module reported (%d), got %+v", len(want), s.Rows)
 		}
-		if !strings.Contains(s.Rows[0].Path, "promptctl") {
-			t.Errorf("replacement row must name where the source came from, got %q", s.Rows[0].Path)
-		}
-		if s.Rows[0].License != "Apache-2.0" {
-			t.Errorf("replacement row must carry the root grant it read, got %q", s.Rows[0].License)
+		for _, row := range s.Rows {
+			if got := want[row.Module]; got != row.Path {
+				t.Errorf("%s replacement row = %q, want %q", row.Module, row.Path, got)
+			}
+			if row.License != "Apache-2.0" {
+				t.Errorf("%s replacement row must carry the root grant it read, got %q", row.Module, row.License)
+			}
 		}
 		return
 	}
@@ -602,5 +626,31 @@ func TestGraphReportRendersEverySection(t *testing.T) {
 	}
 	if !strings.Contains(out, "1 modules in the go.mod build list") {
 		t.Errorf("report must state how much was measured:\n%s", out)
+	}
+}
+
+// TestReplacedSectionTitleFitsEveryShapeItHolds pins prose against the data it
+// describes. partitionGraph routes ALL substituted shapes into sectionReplaced,
+// including a version pin (`replace x => x v1.2.3`) whose replacement path is
+// identical to the module's own — so a heading promising "A DIFFERENT
+// COORDINATE", which this one said until links-licensing-c0ce.15 widened what
+// lands beneath it, is false for every row of that kind.
+//
+// A section title is not decoration: it is the sentence a reader applies to
+// every row under it, and the graph audit exists to be read by someone deciding
+// what to worry about.
+func TestReplacedSectionTitleFitsEveryShapeItHolds(t *testing.T) {
+	for _, forbidden := range []string{"A DIFFERENT COORDINATE", "ANOTHER MODULE", "A DIFFERENT MODULE"} {
+		if strings.Contains(sectionReplaced, forbidden) {
+			t.Errorf("replaced-section title claims %q, but a version pin routes into this section with the SAME coordinate: %q",
+				forbidden, sectionReplaced)
+		}
+	}
+	// The note beneath it must account for the shapes too, or the heading is
+	// merely vague rather than accurate.
+	for _, want := range []string{"fork", "same module", "local directory"} {
+		if !strings.Contains(strings.ToLower(noteReplaced), want) {
+			t.Errorf("replaced-section note does not account for the %q shape: %q", want, noteReplaced)
+		}
 	}
 }

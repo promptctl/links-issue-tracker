@@ -179,6 +179,14 @@ archives:
       # scripts/install.sh's validator enforces holds for these too.
       - THIRD_PARTY_LICENSES
       - LICENSE-REPORT.md
+      # The fork ledger, because the two files above now POINT at it: three of
+      # their rows disclose that a component was built from a coordinate other
+      # than the one naming it, and each says "see FORKS.md" for what the
+      # substitution changes and why. A recipient working from the archive had
+      # no way to follow that pointer — the compliance artifacts cited a
+      # document the release did not carry. [FRAMING:representation] the map
+      # names the territory, so the territory ships.
+      - FORKS.md
 
 checksum:
   # Default name: checksums.txt. mkmanifest reads this exact file.
