@@ -47,8 +47,14 @@ var compilerRTLicenseText string
 // nothing telling them what those components are — which is what description
 // answers. The note answers a different question, about the licence, and rides
 // as a namespaced property (licenseNoteProperty) rather than in description,
-// where CycloneDX's own definition does not fit it. Both travel into
-// LICENSE-REPORT.md and the SBOM, never only into a Go comment.
+// where CycloneDX's own definition does not fit it.
+//
+// They also ship to different places, which is worth knowing before shortening
+// either. The note travels into all three artifacts — LICENSE-REPORT.md's Notes
+// section, THIRD_PARTY_LICENSES, and the SBOM property — and is never only a Go
+// comment. The description reaches the SBOM alone (see Entry.Description); no
+// renderer of the report or the bundle reads it, because those two identify a
+// component by the header they already print.
 type nativeLib struct {
 	name        string
 	version     string
@@ -106,7 +112,12 @@ var nativeLibs = []nativeLib{
 		acknowledgement: acknowledgementConcluded,
 		note:            "zstd is dual-licensed upstream (BSD-3-Clause OR GPL-2.0-only) at the user's election; lit elects and distributes under BSD-3-Clause."},
 	{name: "musl", version: "1.2.5", license: "MIT", text: muslLicenseText,
-		description: "musl libc: a lightweight implementation of the C standard library, linked into lit's fully-static Linux builds.",
+		// No platform clause: one SBOM is generated per release and ships in the
+		// darwin and windows archives too, under a preamble asserting every
+		// component listed is compiled into this binary. A description saying
+		// "linked into lit's Linux builds" would be a false sentence in two of
+		// the three archives carrying it.
+		description: "musl libc: a lightweight implementation of the C standard library.",
 		note:        "musl's COPYRIGHT is upstream's own grant for the library as a whole: MIT, with portions derived from third-party works under terms upstream states are compatible with that MIT license — the TRE regular-expression code (2-clause BSD), the ARM and AArch64 memcpy/memset routines, and David Burren's DES implementation (BSD) among them. What ships is that COPYRIGHT verbatim: upstream's own attribution document, a component-by-component list of who holds each copyright, and not a reproduction of the third-party license texts — for TRE it says outright that the text lives in the source files."},
 	{name: "compiler-rt", version: "0.14.0", license: "MIT AND Apache-2.0 WITH LLVM-exception", text: compilerRTLicenseText,
 		description:     "Zig's implementation of the compiler-rt builtins: the low-level runtime routines a compiler emits calls to, such as integer division and floating-point arithmetic on targets lacking hardware support.",

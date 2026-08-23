@@ -260,14 +260,22 @@ Where each artifact says it, as of `links-licensing-c0ce.15` — verified
 2026-08-22 by generating all three:
 
 - **`SBOM.cdx.json`** — the component carries a CycloneDX `pedigree`. For the
-  two forks that is a `pedigree.ancestors` entry naming
+  two forks that is a `pedigree.descendants` entry naming
   `github.com/promptctl/…` with its own version and a resolvable purl, plus
-  `pedigree.notes` saying in words that the compiled code came from the ancestor
+  `pedigree.notes` saying in words that the compiled code came from that fork
   and not from the component's own purl. The vendored driver is the other shape:
   `replace github.com/dolthub/driver => ./internal/vendor/dolthub-driver` has no
   published coordinate, so it gets notes naming the directory and stating why no
-  ancestor is recorded — an unexplained empty `ancestors` reads as an omission,
-  which is the opposite of the truth.
+  component is recorded beside it — an unexplained empty list reads as an
+  omission, which is the opposite of the truth.
+
+  The fork goes under `descendants`, **not** `ancestors`, and the difference is
+  a true statement against a false one. CycloneDX defines descendants as the
+  forks of a component, which `promptctl/dolt` is with respect to
+  `dolthub/dolt`. Filing it under `ancestors` — "the component this one was
+  derived from" — would assert that `dolthub/dolt` derives from our fork,
+  reversing the real genealogy inside a structured field that machines read
+  without the notes beside it.
 - **`LICENSE-REPORT.md`** — a `Source` column on every row. It reads `-` when the
   source is the module the first column names, and names the substitute
   otherwise. Three of the rows name a substitute today.

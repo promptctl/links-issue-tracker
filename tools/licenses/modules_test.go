@@ -117,10 +117,10 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 			t.Fatalf("got %d modules, want 1: %+v", len(got), got)
 		}
 		if !got[0].IsReplaced() {
-			t.Errorf("module reports IsReplaced()=false despite a replacement: %+v", got[0])
+			t.Errorf("module reports IsReplaced()=false despite a replacement: %+v (kind %d)", got[0], got[0].Replacement.Kind)
 		}
 		// The parts are asserted individually, not just the rendered string: the
-		// SBOM's ancestor component needs path and version as separate fields,
+		// SBOM's descendant component needs path and version as separate fields,
 		// so a parse that produced the right String() from the wrong split would
 		// still emit a wrong purl.
 		want := Replacement{
@@ -129,7 +129,7 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 			Version: "v0.40.5-0.20260816040811-3eabc076e073",
 		}
 		if got[0].Replacement != want {
-			t.Errorf("Replacement = %+v, want %+v", got[0].Replacement, want)
+			t.Errorf("Replacement = %#v, want %#v", got[0].Replacement, want)
 		}
 		if s, wantStr := got[0].Replacement.String(), "github.com/promptctl/dolt/go@v0.40.5-0.20260816040811-3eabc076e073"; s != wantStr {
 			t.Errorf("Replacement.String() = %q, want %q", s, wantStr)
@@ -151,14 +151,14 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 			t.Fatalf("got %d modules, want 1: %+v", len(got), got)
 		}
 		if !got[0].IsReplaced() {
-			t.Errorf("module reports IsReplaced()=false despite a directory replacement: %+v", got[0])
+			t.Errorf("module reports IsReplaced()=false despite a directory replacement: %+v (kind %d)", got[0], got[0].Replacement.Kind)
 		}
-		// Kind is what the SBOM switches on to decide whether an ancestor
+		// Kind is what the SBOM switches on to decide whether a descendant
 		// component can exist at all, so the DIRECTORY shape must be
 		// distinguishable from the module shape here, not merely non-empty.
 		want := Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"}
 		if got[0].Replacement != want {
-			t.Errorf("Replacement = %+v, want %+v", got[0].Replacement, want)
+			t.Errorf("Replacement = %#v, want %#v", got[0].Replacement, want)
 		}
 		if s, wantStr := got[0].Replacement.String(), "./internal/vendor/dolthub-driver"; s != wantStr {
 			t.Errorf("Replacement.String() = %q, want %q — a directory has no version to append", s, wantStr)
@@ -171,10 +171,10 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 			t.Fatalf("parseModuleList: %v", err)
 		}
 		if got[0].IsReplaced() {
-			t.Errorf("unreplaced module reports IsReplaced()=true: %+v", got[0])
+			t.Errorf("unreplaced module reports IsReplaced()=true: %+v (kind %d)", got[0], got[0].Replacement.Kind)
 		}
 		if want := (Replacement{}); got[0].Replacement != want {
-			t.Errorf("Replacement = %+v, want the zero value", got[0].Replacement)
+			t.Errorf("Replacement = %#v, want the zero value", got[0].Replacement)
 		}
 	})
 }
@@ -190,9 +190,9 @@ func TestParseModuleListAcceptReject(t *testing.T) {
 // coordinate that is published and resolvable.
 //
 // Each case asserts the error MESSAGE, not merely that an error occurred:
-// parseReplacement has four refusing arms, and a test that only checked for
-// non-nil would stay green if one arm's condition were widened to swallow
-// another's input.
+// parseReplacement refuses from five arms, several of which would accept
+// another's input if its condition were widened, so a check for non-nil alone
+// would stay green through exactly that mistake.
 func TestParseReplacementRefusesShapesGoDoesNotProduce(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -216,13 +216,30 @@ func TestParseReplacementRefusesShapesGoDoesNotProduce(t *testing.T) {
 			name:        "directory path carrying a version",
 			path:        "./internal/vendor/dolthub-driver",
 			version:     "v1.2.3",
+			wantMessage: "is a filesystem path but carries version",
+		},
+		{
+			// Neither a module coordinate nor a directory target. Treating "not
+			// a module path" as proof of a directory would file this under
+			// ReplacedByDirectory, and its pedigree would then tell a reader
+			// that no published coordinate identifies the source — about a
+			// string that identifies nothing at all.
+			name:        "path that is neither a module nor a directory",
+			path:        "internal/vendor/dolthub-driver",
+			version:     "",
+			wantMessage: "neither a module path nor a filesystem path",
+		},
+		{
+			name:        "a bare name with a version",
+			path:        "notamodule",
+			version:     "v1.2.3",
 			wantMessage: "is not a valid module path",
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := parseReplacement(tc.path, tc.version)
 			if err == nil {
-				t.Fatalf("parseReplacement(%q, %q) = %+v, want an error", tc.path, tc.version, got)
+				t.Fatalf("parseReplacement(%q, %q) = %#v, want an error", tc.path, tc.version, got)
 			}
 			if !strings.Contains(err.Error(), tc.wantMessage) {
 				t.Errorf("parseReplacement(%q, %q) error = %q, want it to mention %q",
@@ -230,4 +247,37 @@ func TestParseReplacementRefusesShapesGoDoesNotProduce(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestReplacementStringRefusesAnUnknownKind pins the loud arm every renderer
+// shares. Go has no switch exhaustiveness check and this repo runs no linter
+// that adds one, so a fourth ReplacementKind would otherwise fall through a
+// `default` and render as NOT REPLACED — which is not a cosmetic bug but the
+// silent non-disclosure this whole package exists to prevent, reintroduced for
+// the new shape and shipped in a compliance artifact.
+//
+// Before this arm was made loud, `default: return r.Path` was the one mutation
+// in the package that survived the entire suite.
+func TestReplacementStringRefusesAnUnknownKind(t *testing.T) {
+	unknown := Replacement{Kind: ReplacementKind(99), Path: "github.com/example/whatever"}
+
+	defer func() {
+		r := recover()
+		if r == nil {
+			t.Fatal("String() returned normally for an unhandled ReplacementKind; a new shape would render as not-replaced")
+		}
+		msg, ok := r.(string)
+		if !ok {
+			t.Fatalf("panic value is %T, want a string", r)
+		}
+		// The message must name the kind and point at the fix, because the only
+		// reader who ever sees it is someone mid-way through adding a shape.
+		for _, want := range []string{"ReplacementKind 99", "teach every renderer"} {
+			if !strings.Contains(msg, want) {
+				t.Errorf("panic message %q does not mention %q", msg, want)
+			}
+		}
+	}()
+
+	_ = unknown.String()
 }

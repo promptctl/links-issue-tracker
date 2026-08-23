@@ -62,29 +62,7 @@ func TestWriteBundleDeterministic(t *testing.T) {
 // convention imported into a document that has no columns to keep aligned, and
 // it would put a line reading like a claim on 150 sections that make none.
 func TestWriteBundleSourceLine(t *testing.T) {
-	entries := []Entry{
-		{
-			Module: Module{
-				Path:    "github.com/dolthub/dolt/go",
-				Version: "v0.40.5",
-				Replacement: Replacement{
-					Kind:    ReplacedByModule,
-					Path:    "github.com/promptctl/dolt/go",
-					Version: "v0.40.5-later",
-				},
-			},
-			LicenseName: "Apache-2.0", Text: "Apache text\n",
-		},
-		{
-			Module: Module{
-				Path:        "github.com/dolthub/driver",
-				Version:     "v0.2.1",
-				Replacement: Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"},
-			},
-			LicenseName: "Apache-2.0", Text: "Apache text\n",
-		},
-		{Module: Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"}, LicenseName: "Apache-2.0", Text: "Apache text\n"},
-	}
+	entries := replacementEntries
 
 	var buf strings.Builder
 	if err := WriteBundle(&buf, entries); err != nil {
@@ -96,8 +74,11 @@ func TestWriteBundleSourceLine(t *testing.T) {
 	// the two are pinned together as one block rather than as two independent
 	// substring hits that could land in different sections.
 	for _, want := range []string{
-		"github.com/dolthub/dolt/go v0.40.5\nSource: github.com/promptctl/dolt/go@v0.40.5-later (lit's go.mod substitutes this coordinate's source with a replace directive; see FORKS.md)\nLicense: Apache-2.0\n",
-		"github.com/dolthub/driver v0.2.1\nSource: ./internal/vendor/dolthub-driver (lit's go.mod substitutes this coordinate's source with a replace directive; see FORKS.md)\nLicense: Apache-2.0\n",
+		"github.com/dolthub/dolt/go v0.40.5\nSource: github.com/promptctl/dolt/go@v0.40.5-later (a go.mod replace directive substitutes this coordinate's source with that fork; see FORKS.md in lit's source repository)\nLicense: Apache-2.0\n",
+		// The directory shape must additionally say that nothing published
+		// identifies the source, or the line invites a reader to go looking for
+		// a coordinate that does not exist.
+		"github.com/dolthub/driver v0.2.1\nSource: ./internal/vendor/dolthub-driver (a go.mod replace directive substitutes this coordinate's source with that patched copy inside lit's own repository; no published coordinate identifies it — see FORKS.md in lit's source repository)\nLicense: Apache-2.0\n",
 		"github.com/spf13/cobra v1.8.0\nLicense: Apache-2.0\n",
 	} {
 		if !strings.Contains(out, want) {

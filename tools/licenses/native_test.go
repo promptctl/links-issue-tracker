@@ -327,17 +327,20 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 // that does not mean what the statement says, and one merge and dedup tooling
 // treats as identity metadata.
 //
-// The assertion that matters is the LAST one in the loop. Restoring
-// `Description: e.Note` in buildSBOM would leave every other check here green:
-// the descriptions would still be non-empty and would still round-trip to the
-// wire. Only a check that the two fields hold DIFFERENT claims fails, which is
-// what makes this test isolate that one rule rather than co-sign the others.
+// Two assertions in the loop catch a restored `Description: e.Note`, and they
+// catch different things. The equality check fails because the description is
+// no longer the curated one; the separation check below it fails because the
+// description IS the note. Only the second still fires if someone "fixes" the
+// first by copying the note into the description field as well, which is why
+// both are here and why neither is redundant.
+//
+// The separation check is guarded on a non-empty note. `strings.Contains(x, "")`
+// is true for every x, so an unguarded form would fire spuriously against the
+// first native lib that legitimately needs no licensing note — reporting that
+// its description "carries the licensing note" while naming a note that does
+// not exist.
 func TestNativeDescriptionsSayWhatTheComponentIs(t *testing.T) {
-	bom := decodeSBOM(t, nativeEntries(), "")
-	byName := map[string]wireComponent{}
-	for _, c := range bom.Components {
-		byName[c.Name] = c
-	}
+	byName := componentsByName(decodeSBOM(t, nativeEntries(), ""))
 
 	for _, n := range nativeLibs {
 		c, ok := byName[n.name]
@@ -356,7 +359,7 @@ func TestNativeDescriptionsSayWhatTheComponentIs(t *testing.T) {
 		if c.Description != n.description {
 			t.Errorf("%s component.description = %q, want the curated description %q", n.name, c.Description, n.description)
 		}
-		if strings.Contains(c.Description, n.note) {
+		if n.note != "" && strings.Contains(c.Description, n.note) {
 			t.Errorf("%s component.description carries the licensing note; CycloneDX defines description as what the component IS, and the note belongs in the %s property: %q",
 				n.name, licenseNoteProperty, c.Description)
 		}
@@ -376,6 +379,30 @@ func TestGoModulesCarryNoDescriptionOrNote(t *testing.T) {
 		}
 		if _, ok := c.property(licenseNoteProperty); ok {
 			t.Errorf("Go module %s carries a %s property; only the curated native inventory has notes", c.Name, licenseNoteProperty)
+		}
+	}
+}
+
+// TestNativeDescriptionsMakeNoPlatformClaim pins the rule musl's description was
+// corrected to obey. ONE SBOM is generated per release and staged as a single
+// asset covering every archive, under a report preamble asserting that the
+// components listed are compiled into this binary — so a description scoped to
+// one platform ("linked into lit's fully-static Linux builds") is a false
+// sentence in the darwin and windows copies of the same document.
+//
+// The check is deliberately a keyword scan, because the mistake it catches is a
+// keyword: a maintainer adds a platform name to a description that ships
+// everywhere. Describing WHAT a component is never requires naming an operating
+// system; if a future component genuinely needs that qualification, it belongs
+// in the note, which is about lit's use of the component rather than about the
+// component itself.
+func TestNativeDescriptionsMakeNoPlatformClaim(t *testing.T) {
+	for _, n := range nativeLibs {
+		for _, platform := range []string{"Linux", "linux", "darwin", "Darwin", "macOS", "Windows", "windows"} {
+			if strings.Contains(n.description, platform) {
+				t.Errorf("native lib %s describes itself in terms of %q, but one SBOM ships in every platform's archive: %q",
+					n.name, platform, n.description)
+			}
 		}
 	}
 }

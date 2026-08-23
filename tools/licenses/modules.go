@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/mod/module"
 )
 
@@ -77,20 +78,38 @@ type Replacement struct {
 // differently. [LAW:one-source-of-truth]
 //
 // [LAW:dataflow-not-control-flow] the switch is the domain's own discriminator,
-// and it is exhaustive rather than falling through to r.Path for anything that
-// is not a module. An unreplaced value renders as nothing because it HAS no
-// source to name — not because its Path happens to be empty, which is an
+// and every kind is named. An unreplaced value renders as nothing because it HAS
+// no source to name — not because its Path happens to be empty, which is an
 // invariant of how it was built rather than one the type holds.
 func (r Replacement) String() string {
 	switch r.Kind {
+	case NotReplaced:
+		return ""
 	case ReplacedByModule:
 		return r.Path + "@" + r.Version
 	case ReplacedByDirectory:
 		return r.Path
 	default:
-		return ""
+		panic(fmt.Sprintf(unhandledReplacementKind, r.Kind, r.Path))
 	}
 }
+
+// unhandledReplacementKind is what every renderer says about a kind nobody
+// taught it. Go's switch has no exhaustiveness check and this repo runs no
+// linter that supplies one (.golangci.yml enables depguard alone), so a fourth
+// shape added to ReplacementKind would otherwise reach a `default` arm and
+// render as NOT REPLACED — silently restoring, for the new shape, the very
+// undisclosed substitution this package exists to prevent. That failure would
+// surface as a shipped compliance artifact that is quietly wrong, which is the
+// worst place for it.
+//
+// It is a panic rather than an error because these renderers have no failure
+// arm to return through, and because the only way to reach it is to edit the
+// enum: a build-time generator that dies loudly during a release is the correct
+// outcome, and an unreachable-in-production branch is exactly what a panic is
+// for. The message is a single const so the three renderers cannot describe the
+// same condition differently. [LAW:no-silent-failure] [LAW:one-source-of-truth]
+const unhandledReplacementKind = "licenses: ReplacementKind %d (path %q) reached a renderer that does not handle it; teach every renderer the new replacement shape before shipping it"
 
 // parseReplacement turns `go list`'s two replacement columns into the shape
 // they encode, refusing every combination the go tool does not produce.
@@ -106,11 +125,21 @@ func (r Replacement) String() string {
 // version — the silent outcome would be an SBOM pedigree stating "no published
 // coordinate identifies this source" about a coordinate that is published, i.e.
 // a false claim in a shipped compliance artifact. [LAW:no-silent-failure]
+//
+// Each arm proves its own shape with the go tool's own rule rather than by
+// complement: modfile.IsDirectoryPath is the predicate the go command itself
+// uses to decide that a replacement target is a directory, and module.CheckPath
+// is the one that decides a string is a module coordinate. Asking both, instead
+// of treating "not a module path" as sufficient evidence of a directory, is
+// what makes a target that is NEITHER — the shape a future go release or a
+// malformed template would produce — fail rather than get filed under whichever
+// arm it fell through to.
 func parseReplacement(path, version string) (Replacement, error) {
-	// One call, so the verdict the arms branch on and the reason the error
+	// One call each, so the verdict an arm branches on and the reason its error
 	// quotes cannot disagree. [LAW:one-source-of-truth]
 	pathErr := module.CheckPath(path)
 	isModulePath := pathErr == nil
+	isDirectory := modfile.IsDirectoryPath(path)
 	switch {
 	case path == "" && version == "":
 		return Replacement{}, nil
@@ -118,8 +147,12 @@ func parseReplacement(path, version string) (Replacement, error) {
 		return Replacement{}, fmt.Errorf("replacement version %q with no replacement path", version)
 	case version == "" && isModulePath:
 		return Replacement{}, fmt.Errorf("replacement path %q is a module path but carries no version; go.mod permits a version-less target only for a filesystem path", path)
+	case version == "" && !isDirectory:
+		return Replacement{}, fmt.Errorf("replacement path %q carries no version but is neither a module path nor a filesystem path (go.mod requires a directory target to begin with ./, ../ or /): %w", path, pathErr)
 	case version == "":
 		return Replacement{Kind: ReplacedByDirectory, Path: path}, nil
+	case isDirectory:
+		return Replacement{}, fmt.Errorf("replacement path %q is a filesystem path but carries version %q; go.mod permits a version only on a module target", path, version)
 	case !isModulePath:
 		return Replacement{}, fmt.Errorf("replacement path %q carries version %q but is not a valid module path: %w", path, version, pathErr)
 	default:
@@ -132,9 +165,15 @@ func parseReplacement(path, version string) (Replacement, error) {
 // `go list` invocations in this package emit it — the linked-package scan below
 // and the build-list scan in graph.go — so the column count and order have ONE
 // spelling. They had two until the replacement's path and version were split
-// apart, and updating one producer without the other is a silent misparse, not
-// a compile error: every column shifts by one and a module Dir read out of the
-// replacement column resolves to nothing. [LAW:one-source-of-truth]
+// apart.
+//
+// A diverging column COUNT would at least fail loudly, at parseModuleList's
+// arity guard. The divergence worth fearing is a same-count REORDER, which no
+// guard can see: swap two columns in one producer and a module Dir gets read
+// out of the replacement column, so the scan reports "no license file found"
+// for a directory that was never opened — a failure that names the wrong cause
+// in the wrong place. One layout is what makes that unrepresentable rather than
+// merely unlikely. [LAW:one-source-of-truth]
 //
 // The replacement's path and version are two SEPARATE fields rather than one
 // joined with an "@". Joining them here would only force parseReplacement to

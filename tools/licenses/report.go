@@ -18,7 +18,14 @@ func WriteReport(w io.Writer, entries []Entry) error {
 	if _, err := fmt.Fprintf(w, "%d third-party components (Go modules and statically-linked native libraries) are compiled into this binary. Full license texts accompany this report in THIRD_PARTY_LICENSES.\n\n", len(entries)); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(w, "The Source column names where a component's source actually came from. It reads `-` when that is the module named in the first column, and names another coordinate when lit's `go.mod` substitutes one with a `replace` directive — see FORKS.md for what those substitutions change and why.\n\n"); err != nil {
+	// The legend must be true of EVERY row it describes, which rules out the
+	// two obvious phrasings. "`-` means the source is the module in the first
+	// column" is false on the four native-library rows, whose first column is a
+	// bare name (`icu`, `musl`) naming no module at all. And "names another
+	// coordinate" is false for a directory replacement, whose cell holds a
+	// repo-relative path that is deliberately NOT a coordinate — the very
+	// distinction Replacement was introduced to keep.
+	if _, err := fmt.Fprintf(w, "The Source column names where a component's source came from when that is not the component named in the first column. It reads `-` for every component built from its own named source, and otherwise holds either a module coordinate or a repository-relative path, depending on what lit's `go.mod` substitutes with its `replace` directive — see FORKS.md in lit's source repository for what those substitutions change and why.\n\n"); err != nil {
 		return err
 	}
 

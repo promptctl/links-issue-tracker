@@ -148,22 +148,23 @@ func componentProperties(note string) *[]cdx.Property {
 }
 
 // pedigreeNoteModule explains a module-shaped substitution in the words the
-// structured fields cannot. CycloneDX's ancestors list says "derived from"; it
-// does not say that the derivation is why the component's own purl resolves to
-// source lit never compiled, and that is the whole fact this ticket exists to
+// structured fields cannot. `descendants` states a genealogy — that a fork of
+// this component exists — and nothing more; it does not say that the fork is
+// what lit actually compiled, which is the whole fact this ticket exists to
 // disclose.
 const pedigreeNoteModule = "lit's go.mod requires this coordinate, but a replace directive substitutes its source: " +
-	"the code compiled into lit came from the ancestor recorded here, not from the version and purl above. " +
-	"Both coordinates resolve publicly; the ancestor is the one to fetch when diffing against a lit build. " +
-	"The modifications and the reasons for them are catalogued in FORKS.md in lit's repository."
+	"the code compiled into lit came from the fork recorded under descendants, not from the version and purl above. " +
+	"Both coordinates resolve publicly; the fork is the one to fetch when diffing against a lit build. " +
+	"The modifications and the reasons for them are catalogued in FORKS.md, in lit's source repository at " +
+	litModulePath + "."
 
 // pedigreeNoteDirectory is the directory-shaped counterpart. It must state why
-// there is no ancestor component: an absent ancestors list is otherwise
-// indistinguishable from an omission, and a reader who reads it as an omission
-// learns the opposite of the truth — that nothing was substituted.
+// there is no component recorded beside it: an absent descendants list is
+// otherwise indistinguishable from an omission, and a reader who takes it for
+// one learns the opposite of the truth — that nothing was substituted.
 const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a replace directive substitutes its source with %s, " +
 	"a patched copy carried inside lit's own repository. The code compiled into lit came from there, not from the version " +
-	"and purl above. No ancestor component is recorded because no published coordinate identifies the patched source: it is " +
+	"and purl above. No descendant component is recorded because no published coordinate identifies the patched source: it is " +
 	"versioned only as part of lit itself, and a purl invented for it would name something no consumer could resolve."
 
 // componentPedigree records that a component's source came from somewhere other
@@ -181,23 +182,36 @@ const pedigreeNoteDirectory = "lit's go.mod requires this coordinate, but a repl
 // coordinate. So identity answers "what does lit depend on" and the pedigree
 // answers "what did lit compile", and the document states both.
 //
+// Given that identity, the fork belongs in `descendants` and NOT in
+// `ancestors`, and the difference is a true statement versus a false one.
+// CycloneDX defines descendants as the forks of an original component, which is
+// exactly what github.com/promptctl/dolt/go is with respect to the coordinate
+// this component names. Filing it under ancestors — "the component this one was
+// derived from" — would assert that dolthub/dolt derives from promptctl's fork,
+// reversing the real genealogy in a structured field a machine reads without
+// the notes beside it. Shipping a true-sounding claim in a field that means
+// something else is the defect this ticket was opened to remove, not one to
+// re-commit while removing it.
+//
 // [LAW:dataflow-not-control-flow] the single switch is the domain's own
 // discriminator — the three shapes admit different facts, and each arm says
 // exactly what its shape knows — not a special case carved into the renderer.
 func componentPedigree(r Replacement) *cdx.Pedigree {
 	switch r.Kind {
+	case NotReplaced:
+		return nil
 	case ReplacedByModule:
-		ancestors := []cdx.Component{{
+		descendants := []cdx.Component{{
 			Type:       cdx.ComponentTypeLibrary,
 			Name:       r.Path,
 			Version:    r.Version,
 			PackageURL: goModulePURL(r.Path, r.Version),
 		}}
-		return &cdx.Pedigree{Ancestors: &ancestors, Notes: pedigreeNoteModule}
+		return &cdx.Pedigree{Descendants: &descendants, Notes: pedigreeNoteModule}
 	case ReplacedByDirectory:
 		return &cdx.Pedigree{Notes: fmt.Sprintf(pedigreeNoteDirectory, r.Path)}
 	default:
-		return nil
+		panic(fmt.Sprintf(unhandledReplacementKind, r.Kind, r.Path))
 	}
 }
 

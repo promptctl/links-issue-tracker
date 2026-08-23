@@ -58,23 +58,24 @@ type wireComponent struct {
 	} `json:"licenses"`
 	// The curated licensing note's home, as of the split that took it out of
 	// description. Decoded as the flat name/value list CycloneDX defines rather
-	// than as a map, because a map would silently collapse a duplicate name and
-	// "exactly one property" is part of what these tests assert.
+	// than as a map, because a map would silently collapse a duplicate name —
+	// and TestSBOMPropertyNamesAreUnique below asserts there is exactly one, an
+	// assertion a map decode would make unwritable.
 	Properties []struct {
 		Name  string `json:"name"`
 		Value string `json:"value"`
 	} `json:"properties"`
 	// Where the source came from when a `replace` directive means it is not the
-	// coordinate above. An ancestor is decoded as a full component rather than
-	// a bare name so a test can prove it is RESOLVABLE — carrying the purl a
+	// coordinate above. The fork is decoded as a full component rather than a
+	// bare name so a test can prove it is RESOLVABLE — carrying the purl a
 	// reader would actually fetch — and not merely present.
 	Pedigree struct {
-		Ancestors []struct {
+		Descendants []struct {
 			Type    string `json:"type"`
 			Name    string `json:"name"`
 			Version string `json:"version"`
 			PURL    string `json:"purl"`
-		} `json:"ancestors"`
+		} `json:"descendants"`
 		Notes string `json:"notes"`
 	} `json:"pedigree"`
 }
@@ -354,8 +355,12 @@ func TestSBOMEndToEndCoversDolt(t *testing.T) {
 }
 
 // replacementEntries covers both `replace` shapes plus an unreplaced control,
-// so a pedigree test can prove not only that a substitution is disclosed but
-// that an ordinary module stays silent about one it does not have.
+// so a disclosure test can prove not only that a substitution is stated but
+// that an ordinary module stays silent about one it does not have. It carries
+// every field the three renderers read — purl for the SBOM, text for the bundle
+// — because all three assert against THIS inventory; three near-identical
+// fixtures would let one drift and quietly stop testing the same thing.
+// [LAW:one-source-of-truth]
 var replacementEntries = []Entry{
 	{
 		Module: Module{
@@ -369,6 +374,7 @@ var replacementEntries = []Entry{
 		},
 		LicenseName: "Apache-2.0",
 		PackageURL:  goModulePURL("github.com/dolthub/dolt/go", "v0.40.5"),
+		Text:        "Apache text\n",
 	},
 	{
 		Module: Module{
@@ -378,12 +384,25 @@ var replacementEntries = []Entry{
 		},
 		LicenseName: "Apache-2.0",
 		PackageURL:  goModulePURL("github.com/dolthub/driver", "v0.2.1"),
+		Text:        "Apache text\n",
 	},
 	{
 		Module:      Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"},
 		LicenseName: "Apache-2.0",
 		PackageURL:  goModulePURL("github.com/spf13/cobra", "v1.8.0"),
+		Text:        "Apache text\n",
 	},
+}
+
+// componentsByName indexes a decoded SBOM's components. Every test that looks a
+// component up needs it, and each open-coded copy is another place to forget
+// that a duplicate name would silently overwrite an earlier entry.
+func componentsByName(bom wireBOM) map[string]wireComponent {
+	byName := make(map[string]wireComponent, len(bom.Components))
+	for _, c := range bom.Components {
+		byName[c.Name] = c
+	}
+	return byName
 }
 
 // TestSBOMPedigreeRecordsBothReplacementShapes is links-licensing-c0ce.15's
@@ -393,19 +412,20 @@ var replacementEntries = []Entry{
 //
 // The two shapes render DIFFERENTLY on purpose, and the difference is the point
 // rather than an inconsistency to tidy away. A module replacement has a
-// resolvable coordinate, so it earns an ancestor component carrying the purl a
+// resolvable coordinate, so it earns a descendant component carrying the purl a
 // reader can fetch and diff. A directory replacement has none — its source
 // exists only inside lit's own repository — so inventing a purl for it would
 // name something no consumer could resolve, and the note has to say why the
-// ancestor is missing instead of leaving the absence to be read as an omission.
+// component is missing instead of leaving the absence to be read as an omission.
+//
+// The fork goes under `descendants`, never `ancestors`: CycloneDX defines
+// descendants as the forks OF this component, which promptctl/dolt is, while
+// ancestors would assert that dolthub/dolt derives from promptctl's fork and
+// reverse the real genealogy in a field machines read without the notes.
 func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
-	bom := decodeSBOM(t, replacementEntries, "1.2.3")
-	byName := map[string]wireComponent{}
-	for _, c := range bom.Components {
-		byName[c.Name] = c
-	}
+	byName := componentsByName(decodeSBOM(t, replacementEntries, "1.2.3"))
 
-	t.Run("module replacement carries a resolvable ancestor", func(t *testing.T) {
+	t.Run("module replacement carries a resolvable descendant", func(t *testing.T) {
 		c := byName["github.com/dolthub/dolt/go"]
 		// The component keeps its go.mod identity. That is load-bearing: every
 		// other artifact keys on the go.mod path, and renaming the component to
@@ -414,39 +434,39 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 		if c.PURL != "pkg:golang/github.com/dolthub/dolt/go@v0.40.5" {
 			t.Errorf("replaced component purl = %q, want the go.mod coordinate's purl", c.PURL)
 		}
-		if len(c.Pedigree.Ancestors) != 1 {
-			t.Fatalf("pedigree.ancestors = %+v, want exactly one ancestor", c.Pedigree.Ancestors)
+		if len(c.Pedigree.Descendants) != 1 {
+			t.Fatalf("pedigree.descendants = %+v, want exactly one fork", c.Pedigree.Descendants)
 		}
-		a := c.Pedigree.Ancestors[0]
-		if a.Name != "github.com/promptctl/dolt/go" || a.Version != "v0.40.5-later" {
-			t.Errorf("ancestor = %s@%s, want github.com/promptctl/dolt/go@v0.40.5-later", a.Name, a.Version)
+		d := c.Pedigree.Descendants[0]
+		if d.Name != "github.com/promptctl/dolt/go" || d.Version != "v0.40.5-later" {
+			t.Errorf("descendant = %s@%s, want github.com/promptctl/dolt/go@v0.40.5-later", d.Name, d.Version)
 		}
-		// The purl is what makes the ancestor actionable rather than decorative:
-		// it is the string a reader pastes to fetch the source lit compiled.
-		if want := "pkg:golang/github.com/promptctl/dolt/go@v0.40.5-later"; a.PURL != want {
-			t.Errorf("ancestor purl = %q, want %q", a.PURL, want)
+		// The purl is what makes the entry actionable rather than decorative: it
+		// is the string a reader pastes to fetch the source lit compiled.
+		if want := "pkg:golang/github.com/promptctl/dolt/go@v0.40.5-later"; d.PURL != want {
+			t.Errorf("descendant purl = %q, want %q", d.PURL, want)
 		}
-		if a.Type != "library" {
-			t.Errorf("ancestor type = %q, want library — CycloneDX requires a type on every component", a.Type)
+		if d.Type != "library" {
+			t.Errorf("descendant type = %q, want library — CycloneDX requires a type on every component", d.Type)
 		}
 		if c.Pedigree.Notes == "" {
-			t.Error("pedigree carries no notes; ancestors alone do not say that the component's own purl resolves to source lit never compiled")
+			t.Error("pedigree carries no notes; a descendants list states a genealogy and not the fact that the fork is what lit compiled")
 		}
 	})
 
-	t.Run("directory replacement names the path and says why there is no ancestor", func(t *testing.T) {
+	t.Run("directory replacement names the path and says why there is no component beside it", func(t *testing.T) {
 		c := byName["github.com/dolthub/driver"]
-		if len(c.Pedigree.Ancestors) != 0 {
-			t.Errorf("directory replacement got ancestors %+v, want none — no published coordinate identifies the patched source", c.Pedigree.Ancestors)
+		if len(c.Pedigree.Descendants) != 0 {
+			t.Errorf("directory replacement got descendants %+v, want none — no published coordinate identifies the patched source", c.Pedigree.Descendants)
 		}
 		if !strings.Contains(c.Pedigree.Notes, "./internal/vendor/dolthub-driver") {
 			t.Errorf("pedigree notes do not name the directory the source came from: %q", c.Pedigree.Notes)
 		}
-		// Without this sentence an absent ancestors list is indistinguishable
+		// Without this sentence an absent descendants list is indistinguishable
 		// from an omission, and a reader who takes it for one concludes the
 		// opposite of the truth: that nothing was substituted.
-		if !strings.Contains(c.Pedigree.Notes, "No ancestor component is recorded") {
-			t.Errorf("pedigree notes do not explain the absent ancestor: %q", c.Pedigree.Notes)
+		if !strings.Contains(c.Pedigree.Notes, "No descendant component is recorded") {
+			t.Errorf("pedigree notes do not explain the absent component: %q", c.Pedigree.Notes)
 		}
 	})
 
@@ -492,11 +512,7 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 	if err != nil {
 		t.Fatalf("buildEntries(%s): %v", litPkg, err)
 	}
-	bom := decodeSBOM(t, entries, "9.9.9")
-	byName := map[string]wireComponent{}
-	for _, c := range bom.Components {
-		byName[c.Name] = c
-	}
+	byName := componentsByName(decodeSBOM(t, entries, "9.9.9"))
 
 	replaced := 0
 	for _, e := range entries {
@@ -506,7 +522,7 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 			continue
 		}
 		if !e.Module.IsReplaced() {
-			if c.Pedigree.Notes != "" || len(c.Pedigree.Ancestors) > 0 {
+			if c.Pedigree.Notes != "" || len(c.Pedigree.Descendants) > 0 {
 				t.Errorf("%s is not replaced but carries a pedigree: %+v", e.Module.Path, c.Pedigree)
 			}
 			continue
@@ -520,14 +536,14 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 		// to fetch. Checking the kind here rather than the module's name is what
 		// keeps this from needing an edit when a fork is added or retired.
 		if e.Module.Replacement.Kind == ReplacedByModule {
-			if len(c.Pedigree.Ancestors) != 1 {
-				t.Errorf("%s is replaced by the module %s but has %d ancestors, want 1",
-					e.Module.Path, e.Module.Replacement, len(c.Pedigree.Ancestors))
+			if len(c.Pedigree.Descendants) != 1 {
+				t.Errorf("%s is replaced by the module %s but has %d descendants, want 1",
+					e.Module.Path, e.Module.Replacement, len(c.Pedigree.Descendants))
 				continue
 			}
 			want := goModulePURL(e.Module.Replacement.Path, e.Module.Replacement.Version)
-			if got := c.Pedigree.Ancestors[0].PURL; got != want {
-				t.Errorf("%s ancestor purl = %q, want %q", e.Module.Path, got, want)
+			if got := c.Pedigree.Descendants[0].PURL; got != want {
+				t.Errorf("%s descendant purl = %q, want %q", e.Module.Path, got, want)
 			}
 		}
 	}
@@ -538,5 +554,47 @@ func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
 	// whole ticket is about. [LAW:no-silent-failure]
 	if replaced == 0 {
 		t.Fatal("no replaced modules found in the linked set; the disclosure went unverified")
+	}
+}
+
+// TestSBOMPedigreeRefusesAnUnknownKind is componentPedigree's half of the
+// exhaustiveness guarantee. String()'s arm is tested next door; this one
+// matters independently because a pedigree silently omitted is a component that
+// ships as if it were upstream — the exact defect this ticket removed.
+func TestSBOMPedigreeRefusesAnUnknownKind(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("componentPedigree returned normally for an unhandled ReplacementKind; the substitution would go undisclosed")
+		}
+	}()
+	_ = componentPedigree(Replacement{Kind: ReplacementKind(99), Path: "github.com/example/whatever"})
+}
+
+// TestSBOMPropertyNamesAreUnique pins what wireComponent's list-shaped decode of
+// `properties` exists to make assertable. CycloneDX permits repeated property
+// names, and every reader in this package — c.property(), and any consumer
+// keying a map off the name — takes the FIRST match, so a second
+// promptctl:lit:license-note carrying a contradictory value would ship in the
+// document while every other test stayed green.
+func TestSBOMPropertyNamesAreUnique(t *testing.T) {
+	entries, err := buildEntries(litPkg)
+	if err != nil {
+		t.Fatalf("buildEntries(%s): %v", litPkg, err)
+	}
+	checked := 0
+	for _, c := range decodeSBOM(t, entries, "9.9.9").Components {
+		seen := map[string]int{}
+		for _, p := range c.Properties {
+			seen[p.Name]++
+			checked++
+		}
+		for name, n := range seen {
+			if n != 1 {
+				t.Errorf("component %s carries %d properties named %q; readers take the first and the rest ship unread", c.Name, n, name)
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no properties found in the SBOM; the uniqueness invariant went unchecked")
 	}
 }

@@ -97,11 +97,15 @@ func GraphModules() ([]Module, error) {
 
 	mods, err := parseModuleList(listed)
 	if err != nil {
-		// parseModuleList rejects a record with an empty Dir. Reaching that
-		// here means a module survived `go mod download all` without landing
-		// in the cache, so name the likely cause instead of leaving a bare
-		// "incomplete module record". [LAW:no-silent-failure]
-		return nil, fmt.Errorf("resolve module graph (an empty module directory means `go mod download all` did not fetch it): %w", err)
+		// parseModuleList rejects several distinct shapes — an empty Dir, a
+		// wrong field count, a replacement whose path and version disagree — so
+		// this wrap names the scope and lets the wrapped error name the cause.
+		// It used to assert the empty-Dir cause outright, which was right when
+		// that was the only way to get here and became misdirection the moment
+		// parseReplacement added failure modes of its own: an operator told to
+		// check `go mod download all` would go looking in the wrong place.
+		// [LAW:no-silent-failure] the loud error must also point somewhere true.
+		return nil, fmt.Errorf("resolve module graph (an empty module directory means `go mod download all` did not fetch it; other causes are named by the error itself): %w", err)
 	}
 	return mods, nil
 }

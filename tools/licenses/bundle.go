@@ -51,26 +51,44 @@ func WriteBundle(w io.Writer, entries []Entry) error {
 // describes that component. This file is the one that legally accompanies the
 // binary, so it is the worst of the three artifacts in which to name a
 // coordinate whose source the recipient would not get if they fetched it.
-// [LAW:dataflow-not-control-flow] the unreplaced case is the empty string,
-// which concatenates into the header as nothing at all, so WriteBundle keeps
-// its single unconditional Fprintf.
+//
+// The two replacement shapes say different things, for the same reason the SBOM
+// pedigree does: a module target is a coordinate the recipient can fetch, and a
+// directory target is not published anywhere, so a line that named it without
+// saying so would invite a reader to go looking for something that does not
+// exist. [LAW:one-source-of-truth] the wording differs from the SBOM's notes
+// because the media differ, but neither may state what the other denies.
 func sourceLine(r Replacement) string {
-	if r.Kind == NotReplaced {
+	switch r.Kind {
+	case NotReplaced:
 		return ""
+	case ReplacedByModule:
+		return headerLine("Source", r.String()+" (a go.mod replace directive substitutes this coordinate's source with that fork; see FORKS.md in lit's source repository)")
+	case ReplacedByDirectory:
+		return headerLine("Source", r.String()+" (a go.mod replace directive substitutes this coordinate's source with that patched copy inside lit's own repository; no published coordinate identifies it — see FORKS.md in lit's source repository)")
+	default:
+		panic(fmt.Sprintf(unhandledReplacementKind, r.Kind, r.Path))
 	}
-	return "Source: " + r.String() + " (lit's go.mod substitutes this coordinate's source with a replace directive; see FORKS.md)\n"
 }
 
-// noteLine renders a curated note as its own header line, terminated so it
-// slots between the license line and the closing rule. An entry without a note
-// yields the empty string, which concatenates into the header as nothing at
-// all. [LAW:dataflow-not-control-flow] the caller formats every section with
-// one unconditional Fprintf; the presence of a note is a value flowing through
-// it, not a branch around it — which is what keeps 149 note-free Go modules
-// from each emitting a bare "Note:" line.
-func noteLine(note string) string {
-	if note == "" {
+// noteLine renders a curated note as its own header line. An entry without a
+// note yields the empty string, which concatenates into the header as nothing
+// at all — which is what keeps 149 note-free Go modules from each emitting a
+// bare "Note:" line.
+func noteLine(note string) string { return headerLine("Note", note) }
+
+// headerLine is the one renderer of a labelled, optional line in a bundle
+// section's header, terminated so it slots between the lines around it. Both
+// callers had their own copy of "empty means emit nothing, otherwise label,
+// colon, space, value, newline" until the second one arrived and made the
+// duplication visible. [LAW:one-source-of-truth]
+//
+// [LAW:dataflow-not-control-flow] absence is a value this returns, so
+// WriteBundle formats every section with ONE unconditional Fprintf rather than
+// branching around the lines a given section happens to lack.
+func headerLine(label, value string) string {
+	if value == "" {
 		return ""
 	}
-	return "Note: " + note + "\n"
+	return label + ": " + value + "\n"
 }

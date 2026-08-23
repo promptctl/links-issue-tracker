@@ -63,13 +63,30 @@ func readForkLedger(t *testing.T) string {
 }
 
 // moduleReplaces returns the replace directives that substitute one module
-// coordinate for another — the forks. modfile leaves New.Version empty for a
-// directory replacement (internal/vendor/dolthub-driver), so the discriminator
-// is already in the parsed type and needs no path-shape guess.
-func moduleReplaces(f *modfile.File) []*modfile.Replace {
+// coordinate for another — the forks — as opposed to the directory replacement
+// (internal/vendor/dolthub-driver), which these fork-contract tests do not
+// govern.
+//
+// It asks parseReplacement rather than testing New.Version itself. That
+// function owns the module-versus-directory question for this package, and it
+// treats an empty version as necessary but NOT sufficient evidence of a
+// directory; a local copy here reading only the version would be a second,
+// weaker spelling of one rule, free to disagree with the one the artifacts are
+// rendered from. [LAW:single-enforcer]
+//
+// Parsing go.mod's own targets through it also means these tests fail loudly if
+// a replace is ever written in a shape parseReplacement refuses, instead of
+// that shape first surfacing in a generated artifact.
+func moduleReplaces(t *testing.T, f *modfile.File) []*modfile.Replace {
+	t.Helper()
 	var out []*modfile.Replace
 	for _, r := range f.Replace {
-		if r.New.Version != "" {
+		replacement, err := parseReplacement(r.New.Path, r.New.Version)
+		if err != nil {
+			t.Fatalf("go.mod replaces %s with a target parseReplacement refuses (%s => %s %s): %v",
+				r.Old.Path, r.Old.Path, r.New.Path, r.New.Version, err)
+		}
+		if replacement.Kind == ReplacedByModule {
 			out = append(out, r)
 		}
 	}
@@ -92,7 +109,7 @@ func requiredVersions(f *modfile.File) map[string]string {
 // repointing any of them outside the org fails. [LAW:one-source-of-truth] — the
 // set of forks lives in go.mod, and this file keeps no second copy of it.
 func TestForkReplacementsAreOrgOwned(t *testing.T) {
-	for _, r := range moduleReplaces(parseRootGoMod(t)) {
+	for _, r := range moduleReplaces(t, parseRootGoMod(t)) {
 		if !strings.HasPrefix(r.New.Path, forkOwnerPrefix) {
 			t.Errorf("go.mod replaces %s with %s@%s, which is not under %s — "+
 				"a fork lit builds from must be owned by the organization, not by "+
@@ -149,7 +166,7 @@ func TestForkLedgerQuotesEveryCurrentPin(t *testing.T) {
 	ledger := readForkLedger(t)
 	required := requiredVersions(f)
 
-	for _, r := range moduleReplaces(f) {
+	for _, r := range moduleReplaces(t, f) {
 		quoted := map[string]string{
 			"the upstream module path": r.Old.Path,
 			"the fork pin it builds":   r.New.Version,
@@ -196,7 +213,7 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 	for _, r := range f.Require {
 		record(r.Mod.Version)
 	}
-	for _, r := range moduleReplaces(f) {
+	for _, r := range moduleReplaces(t, f) {
 		record(r.New.Version)
 	}
 
@@ -228,7 +245,7 @@ func TestForkLedgerQuotesNothingStale(t *testing.T) {
 // fork (flatbuffers) are out of scope — those are the driver's own business.
 func TestVendoredDriverMirrorsForkReplaces(t *testing.T) {
 	rootForks := make(map[string]module.Version)
-	for _, r := range moduleReplaces(parseRootGoMod(t)) {
+	for _, r := range moduleReplaces(t, parseRootGoMod(t)) {
 		rootForks[r.Old.Path] = r.New
 	}
 

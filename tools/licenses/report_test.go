@@ -62,29 +62,7 @@ func TestWriteReportEmptyVersionRendersPlaceholder(t *testing.T) {
 // keeps this from passing if the Source cell were wired to the Version column's
 // placeholder or to a constant.
 func TestWriteReportSourceColumnNamesTheReplacement(t *testing.T) {
-	entries := []Entry{
-		{
-			Module: Module{
-				Path:    "github.com/dolthub/dolt/go",
-				Version: "v0.40.5",
-				Replacement: Replacement{
-					Kind:    ReplacedByModule,
-					Path:    "github.com/promptctl/dolt/go",
-					Version: "v0.40.5-later",
-				},
-			},
-			LicenseName: "Apache-2.0",
-		},
-		{
-			Module: Module{
-				Path:        "github.com/dolthub/driver",
-				Version:     "v0.2.1",
-				Replacement: Replacement{Kind: ReplacedByDirectory, Path: "./internal/vendor/dolthub-driver"},
-			},
-			LicenseName: "Apache-2.0",
-		},
-		{Module: Module{Path: "github.com/spf13/cobra", Version: "v1.8.0"}, LicenseName: "Apache-2.0"},
-	}
+	entries := replacementEntries
 
 	var buf strings.Builder
 	if err := WriteReport(&buf, entries); err != nil {
@@ -108,7 +86,7 @@ func TestWriteReportSourceColumnNamesTheReplacement(t *testing.T) {
 	// A reader meeting a bare coordinate in the Source column has to be told
 	// what the column means; without the legend the substitution is disclosed
 	// but not explained.
-	if !strings.Contains(out, "The Source column names where a component's source actually came from") {
+	if !strings.Contains(out, "The Source column names where a component's source came from when that is not the component named in the first column") {
 		t.Errorf("report has a Source column but no legend explaining it\n%s", out)
 	}
 }
