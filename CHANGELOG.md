@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- New tickets land at the bottom of their frame instead of ranking to the top, and `--bottom` on `lit new` and `lit followup` is replaced by `--top`. Every filed ticket used to displace whatever the backlog had already decided to do next, which made filing work an implicit claim on the project's attention that nobody meant to make — and made half the multi-user rank fight a fight nobody picked, since two people each ranking their own work to top were not stating a priority at all. Filing now records work; promoting it is a separate act, and `--top` stays for the tickets that mean it. **The flip is one value, not four.** The default is the zero value of the placement type, and all four creation surfaces — interactive `lit new`, `lit followup`, and both of `lit import`'s file formats — reach it by naming no placement, so `lit import` required no code change and the paths cannot drift without someone typing a placement they do not mean. **Bottom of order is bottom of frame with no frame-scoped machinery**, because composite rank is keyed on the containing epic's rank before the item's own: a child's rank is only ever compared against its siblings', so a rank that sorts after everything sorts after every frame-mate and can never move the epic around it. `lit rank <id> --top|--bottom` is a move rather than a placement and is unchanged. `--bottom` at creation is removed rather than accepted as a no-op — it now names the default, and a flag that quietly means nothing is worse than the loud unknown-flag error you get instead. Existing tickets' ranks are untouched: this changes where new work lands, not the backlog you already have. (links-claims-1ihf.9)
+
 ## [0.7.0] - 2026-08-23
 
 ### Changed

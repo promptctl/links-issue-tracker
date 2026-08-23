@@ -50,7 +50,12 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 // the CreateIssueInput zero value) — both are `lit import --path <file>`,
 // so a create lands the same place in the ranked order regardless of which
 // format the file is.
-func TestBulkApplyCreatesUseTopPlacementLikeImportTree(t *testing.T) {
+// TestBulkApplyCreatesLandInFileOrder pins the batch half of the placement
+// contract: a multi-document import with no placement named anywhere lands in
+// the order the file lists, because every creation surface reaches the default
+// by saying nothing. ImportTree gets the same treatment from the same zero
+// value.
+func TestBulkApplyCreatesLandInFileOrder(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := func(s string) *string { return &s }
@@ -79,8 +84,8 @@ func TestBulkApplyCreatesUseTopPlacementLikeImportTree(t *testing.T) {
 	if first.Rank == "" || second.Rank == "" {
 		t.Fatalf("missing rank: first=%#v second=%#v", first, second)
 	}
-	if !(second.Rank < first.Rank) {
-		t.Fatalf("second.Rank = %q, first.Rank = %q; want second < first (RankTop places each new create above the one before it)", second.Rank, first.Rank)
+	if !(first.Rank < second.Rank) {
+		t.Fatalf("first.Rank = %q, second.Rank = %q; want first < second (the default appends each create after the one before it, so the batch keeps file order)", first.Rank, second.Rank)
 	}
 }
 

@@ -39,8 +39,10 @@ Two things to notice:
 - The command **prints the new ticket's ID**. Use the printed ID in every later command;
   IDs are generated, not guessable.
 
-By default the new ticket ranks at the **top** of the queue — fresh work surfaces first.
-Pass `--bottom` when you're filing a batch in order and want creation order preserved.
+By default the new ticket appends to the **bottom** of the queue: filing work records it,
+and promoting it is a separate, deliberate act. So a batch you file in order stays in that
+order, and nothing you jot down quietly displaces what you'd already decided to do next.
+Pass `--top` for a ticket that genuinely belongs at the front, or `lit rank <id> --top` later.
 
 ## 3. See what's workable
 
