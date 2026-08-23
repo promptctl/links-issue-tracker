@@ -1274,8 +1274,9 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 			return err
 		}
 		deleted.CreatedAt = t
-		if _, err := tx.ExecContext(ctx, `DELETE FROM comments WHERE id = ?`, id); err != nil {
-			return fmt.Errorf("delete comment: %w", err)
+		// [LAW:single-enforcer] one comments DELETE, shared with the replay's delta.
+		if _, err := deleteCommentTx(ctx, tx, id); err != nil {
+			return err
 		}
 		return nil
 	}); err != nil {
@@ -2022,7 +2023,16 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 	if whereClause != "" {
 		q += " WHERE " + whereClause
 	}
-	q += " ORDER BY e.created_at ASC, e.id ASC"
+	// c.field is in the sort because this is the one place event reads are made
+	// deterministic. The export delta compares whole model.IssueEvent values,
+	// Changes slice included, so two reads of an event nothing touched have to
+	// come back identical or the delta deletes and reinserts it to express no
+	// change at all. A join promises no order among the rows sharing an event_id,
+	// and issue_event_changes' PRIMARY KEY (event_id, field) is what makes field a
+	// TOTAL order over them rather than merely a tighter one. Enforcing it here
+	// rather than in the comparison is deliberate: every consumer of this read
+	// gets the guarantee, and none of them grows its own. [LAW:single-enforcer]
+	q += " ORDER BY e.created_at ASC, e.id ASC, c.field ASC"
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
