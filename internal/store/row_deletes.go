@@ -51,12 +51,14 @@ type labelKey struct {
 // Three of the five have two callers, and that is what made sharing them worth
 // doing: relations, comments and labels are each deleted both by the replay's
 // delta and by an ordinary CRUD command (RemoveRelation, DeleteComment,
-// RemoveLabel). The other two have only the delta. For issues that is
-// structural rather than an omission waiting to be filled — ordinary deletion
-// is the soft DeletedAt stamp, so no CRUD path hard-deletes an issue row at all
-// — and events are only ever written and rewritten wholesale with their issue.
-// Looking for a CRUD caller of deleteIssueTx or deleteEventTx will turn up
-// nothing, and nothing is the correct answer.
+// RemoveLabel). The other two have only the delta, and in both cases that is
+// structural rather than an omission waiting to be filled. Ordinary issue
+// deletion is the soft DeletedAt stamp, so no CRUD path hard-deletes an issue
+// row at all. Event history is append-only from the CRUD side: events ARE
+// inserted one at a time as things happen (store.go), but nothing outside this
+// delta removes one by id — an event goes away only when its issue's row does,
+// via the cascade. Looking for a CRUD caller of deleteIssueTx or deleteEventTx
+// will turn up nothing, and nothing is the correct answer.
 //
 // That is deliberately narrower than "the only DELETE against this table," and
 // the difference is a real one rather than an exception being excused. These
