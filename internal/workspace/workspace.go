@@ -35,6 +35,15 @@ type Info struct {
 	RootDir     string
 	WorkspaceID string
 	IssuePrefix PrefixSpec
+	// PrivateGitDir is this CHECKOUT's own git directory, and it lives on Info
+	// rather than on the embedded Location for a reason that is easy to get
+	// backwards: Location is per-REPOSITORY geometry, identical from every
+	// worktree, and LocationFromStorageDir reconstructs a whole Location from a
+	// storage-dir string alone — which cannot possibly know which worktree a
+	// caller is standing in. A per-checkout path put there would be silently
+	// wrong in every reconstructed Location. Info is resolved from a cwd, so it
+	// is the type that legitimately knows. [LAW:types-are-the-program]
+	PrivateGitDir string
 }
 
 // Location is the on-disk geometry of a lit store — every path derived from a
@@ -143,6 +152,14 @@ func Resolve(cwd string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	// Resolved here as pure geometry — the path only. Minting the token that
+	// lives in it is deliberately NOT done here: Resolve runs for read-only
+	// commands too, and a checkout that has only ever been read must carry no
+	// identity. The mint hangs off the access mode instead, in app.Open.
+	privateGitDir, err := resolvePrivateGitDir(cwd)
+	if err != nil {
+		return Info{}, err
+	}
 	// [LAW:effects-at-boundaries] deriveLocation is pure geometry; store
 	// creation is the one mutation, gathered here where the write is intended.
 	if err := os.MkdirAll(loc.StorageDir, 0o755); err != nil {
@@ -153,10 +170,11 @@ func Resolve(cwd string) (Info, error) {
 		return Info{}, err
 	}
 	return Info{
-		Location:    loc,
-		RootDir:     rootDir,
-		WorkspaceID: cfg.WorkspaceID,
-		IssuePrefix: prefix,
+		Location:      loc,
+		RootDir:       rootDir,
+		WorkspaceID:   cfg.WorkspaceID,
+		IssuePrefix:   prefix,
+		PrivateGitDir: privateGitDir,
 	}, nil
 }
 
@@ -183,12 +201,9 @@ func deriveLocation(cwd string) (Location, error) {
 	if err != nil {
 		return Location{}, classifyGitError(fmt.Sprintf("git rev-parse --git-common-dir in %q", cwd), err)
 	}
-	if !filepath.IsAbs(gitCommonDir) {
-		absCwd, err := filepath.Abs(cwd)
-		if err != nil {
-			return Location{}, fmt.Errorf("resolve absolute cwd: %w", err)
-		}
-		gitCommonDir = filepath.Join(absCwd, gitCommonDir)
+	gitCommonDir, err = anchorGitPath(cwd, gitCommonDir)
+	if err != nil {
+		return Location{}, err
 	}
 	// [LAW:one-source-of-truth] A store's identity is its physical directory, not
 	// the path string a caller happened to hold. filepath.Abs makes a path
@@ -206,6 +221,57 @@ func deriveLocation(cwd string) (Location, error) {
 	}
 	gitCommonDir = filepath.Clean(canonicalCommonDir)
 	return LocationFromStorageDir(filepath.Join(gitCommonDir, "links")), nil
+}
+
+// anchorGitPath makes a path git printed absolute. Every `rev-parse` query that
+// answers with a path answers RELATIVE TO THE INVOCATION CWD (e.g. "../.git" from
+// a subdirectory, ".git/worktrees/feature" from a linked worktree), so the cwd
+// git was run in is the only correct anchor — anchoring to the repository
+// toplevel instead was a real defect that climbed out of the repo and resolved a
+// subdirectory invocation to the wrong store. Anchoring by hand rather than
+// asking git for absolute paths keeps this working on every git version: the
+// --path-format=absolute flag that would do it is recent, and older git rejects
+// it with a misleading "not a git repository".
+//
+// [LAW:single-enforcer] Both path-answering queries — deriveLocation's
+// --git-common-dir and resolvePrivateGitDir's --git-dir — anchor through here,
+// so the two cannot drift into resolving the same git output differently.
+func anchorGitPath(cwd string, gitPath string) (string, error) {
+	if filepath.IsAbs(gitPath) {
+		return filepath.Clean(gitPath), nil
+	}
+	absCwd, err := filepath.Abs(cwd)
+	if err != nil {
+		return "", fmt.Errorf("resolve absolute cwd: %w", err)
+	}
+	return filepath.Clean(filepath.Join(absCwd, gitPath)), nil
+}
+
+// resolvePrivateGitDir locates the checkout's own git directory — the per-worktree
+// private area git keeps HEAD and the index in. It is the deliberate counterpart
+// to deriveLocation's --git-common-dir query, and the difference between the two
+// is what lets one repository hold one shared backlog and many distinct
+// identities: --git-common-dir answers with the SAME directory from every
+// worktree, while --git-dir answers with a DIFFERENT one (".git" in the primary
+// clone, ".git/worktrees/<name>" in a linked worktree) and that directory is
+// removed by `git worktree remove`. [LAW:one-source-of-truth] Git owns the
+// question of which directories belong to which checkout; lit reads the answer
+// and keeps no worktree registry of its own.
+//
+// Unlike the common dir this is NOT canonicalized through EvalSymlinks. That
+// canonicalization exists to collapse two spellings of one store path, because
+// the dolt driver caches engines per path string and serves a second spelling a
+// read-only handle. Nothing here is keyed by path: the identity is the token
+// inside the file, and any spelling that opens the file yields the same token.
+func resolvePrivateGitDir(cwd string) (string, error) {
+	// [LAW:dataflow-not-control-flow] Local geometry query that cannot block on a
+	// network, so context.Background() — "never cancels" — is the honest value,
+	// matching every other rev-parse in this file. See Resolve for the full note.
+	privateGitDir, err := gitOutput(context.Background(), cwd, "rev-parse", "--git-dir")
+	if err != nil {
+		return "", classifyGitError(fmt.Sprintf("git rev-parse --git-dir in %q", cwd), err)
+	}
+	return anchorGitPath(cwd, privateGitDir)
 }
 
 // LocationFromStorageDir mints the store geometry rooted at an already-resolved

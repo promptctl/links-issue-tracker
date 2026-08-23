@@ -11,6 +11,14 @@ import (
 type App struct {
 	Workspace workspace.Info
 	Store     *store.Store
+	// Stream is this checkout's opaque identity — the half of the attribution
+	// pair that distinguishes two worktrees of one repository, whose other half
+	// is Workspace.WorkspaceID. Under AccessWrite it is always present, minted
+	// on the checkout's first mutating command; under AccessRead it is present
+	// only if some earlier mutating command already minted it, and its absence
+	// is the honest report that this checkout has produced no work evidence and
+	// therefore holds no claim.
+	Stream workspace.StreamID
 }
 
 // AccessMode selects the store-open contract app construction uses: read
@@ -24,34 +32,64 @@ const (
 	AccessWrite AccessMode = "write"
 )
 
+// accessContract is everything an access mode decides, gathered into one value
+// so the decisions cannot be made in different places and disagree. Store access
+// and identity minting are the same question asked twice — "may this command
+// change anything?" — and pairing them here means a mode physically cannot
+// declare read-only store access while minting an identity, and a mode added
+// later cannot supply one behavior and silently inherit a default for the other.
+// [LAW:one-type-per-behavior] The modes differ only in these two values, so they
+// are two instances of one type, not two code paths.
+type accessContract struct {
+	openStore     func(ctx context.Context, databasePath string, workspaceID string) (*store.Store, error)
+	resolveStream func(privateGitDir string) (workspace.StreamID, error)
+}
+
+// accessContracts is the whole meaning of AccessMode. Read commands open the
+// store read-only and READ an existing identity without creating one; write
+// commands bootstrap the store and ENSURE an identity exists. The right-hand
+// column is the mechanism behind "a checkout that has only ever been read never
+// mints a token" — it is a property of this table, not of discipline at call
+// sites. [LAW:dataflow-not-control-flow] The variance is data in this map, not
+// branches in Open.
+var accessContracts = map[AccessMode]accessContract{
+	AccessRead:  {openStore: store.OpenForRead, resolveStream: workspace.ReadStream},
+	AccessWrite: {openStore: store.Open, resolveStream: workspace.EnsureStream},
+}
+
 // Open is the single app construction path, parameterized by mode.
-// [LAW:single-enforcer] Workspace resolution and store opening happen here
-// only; there is no second factory to drift from this one.
+// [LAW:single-enforcer] Workspace resolution, store opening, and identity
+// resolution happen here only; there is no second factory to drift from this
+// one, and the mode is validated exactly once — the lookup below is both the
+// validity check and the dispatch, so no second switch can classify an unknown
+// mode differently.
 func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
+	contract, known := accessContracts[mode]
+	if !known {
+		// [LAW:no-silent-failure] An unknown mode (including the zero value)
+		// fails closed instead of being granted write access by a default arm.
+		return nil, fmt.Errorf("invalid access mode %q", string(mode))
+	}
 	ws, err := workspace.Resolve(cwd)
 	if err != nil {
 		return nil, err
 	}
-	st, err := mode.openStore(ctx, ws.DatabasePath, ws.WorkspaceID)
+	st, err := contract.openStore(ctx, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
-	return &App{Workspace: ws, Store: st}, nil
-}
-
-// openStore maps the mode value onto the store-open contract it names.
-// [LAW:dataflow-not-control-flow] The read/write variance lives in this one
-// value crossing one boundary, not in which factory a caller picked.
-func (m AccessMode) openStore(ctx context.Context, databasePath, workspaceID string) (*store.Store, error) {
-	switch m {
-	case AccessRead:
-		return store.OpenForRead(ctx, databasePath, workspaceID)
-	case AccessWrite:
-		return store.Open(ctx, databasePath, workspaceID)
+	// Resolved after the store opens so a command that cannot reach its store
+	// mints nothing: identity marks a checkout that started doing work, and a
+	// failure to open is not that.
+	stream, err := contract.resolveStream(ws.PrivateGitDir)
+	if err != nil {
+		// The store is closed because no App is returned to close it, and the
+		// identity failure is what surfaces: a close error here would replace
+		// the diagnosis with a symptom of the abort. [LAW:no-silent-failure]
+		_ = st.Close()
+		return nil, err
 	}
-	// [LAW:no-silent-failure] An unknown mode (including the zero value) fails
-	// closed instead of being granted write access by a default arm.
-	return nil, fmt.Errorf("invalid access mode %q", string(m))
+	return &App{Workspace: ws, Store: st, Stream: stream}, nil
 }
 
 // OpenLocationForRead opens the store at an already-derived Location strictly
