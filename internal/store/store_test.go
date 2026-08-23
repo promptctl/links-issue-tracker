@@ -995,7 +995,8 @@ func TestCreateIssuePlacement(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	// Default placement (zero value) surfaces fresh work at the top.
+	// Default placement (zero value) appends, so a run of creates keeps the
+	// order it was authored in without anyone naming a placement.
 	first, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "First", Topic: "place", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(first) error = %v", err)
@@ -1004,10 +1005,10 @@ func TestCreateIssuePlacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(second) error = %v", err)
 	}
-	// Explicit bottom placement appends after everything.
-	appended, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Appended", Topic: "place", IssueType: "task", Placement: RankBottom})
+	// Explicit top placement promotes ahead of everything.
+	promoted, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Promoted", Topic: "place", IssueType: "task", Placement: RankTop})
 	if err != nil {
-		t.Fatalf("CreateIssue(appended) error = %v", err)
+		t.Fatalf("CreateIssue(promoted) error = %v", err)
 	}
 
 	issues, err := st.ListIssues(ctx, ListIssuesFilter{})
@@ -1015,9 +1016,9 @@ func TestCreateIssuePlacement(t *testing.T) {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
 	got := issueIDs(issues)
-	want := []string{second.ID, first.ID, appended.ID}
+	want := []string{promoted.ID, first.ID, second.ID}
 	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Fatalf("rank order = %#v, want %#v (newest-first default, --bottom appended last)", got, want)
+		t.Fatalf("rank order = %#v, want %#v (creation order by default, RankTop promoted to front)", got, want)
 	}
 }
 

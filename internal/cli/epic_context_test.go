@@ -37,7 +37,9 @@ func (f epicFixture) addChild(title string) string {
 	child, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID,
 		// Author children top-to-bottom in call order: append at the bottom so
-		// creation order equals rank order (production default is top).
+		// creation order equals rank order. Stated rather than inherited — this
+		// fixture's order is its own premise, not a reading of the product
+		// default it happens to agree with.
 		Placement: store.RankBottom,
 	})
 	if err != nil {

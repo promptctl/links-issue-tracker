@@ -84,7 +84,9 @@ func (h readyTestHarness) createIssue(input store.CreateIssueInput) model.Issue 
 		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
 	}
 	// Fixtures author top-to-bottom in listing order, so append at the bottom
-	// to make creation order equal rank order (production default is top).
+	// to make creation order equal rank order. Stated rather than inherited —
+	// this fixture's order is its own premise, not a reading of the product
+	// default it happens to agree with.
 	input.Placement = store.RankBottom
 	issue, err := h.ap.Store.CreateIssue(h.ctx, input)
 	if err != nil {

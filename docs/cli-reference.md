@@ -194,13 +194,16 @@ status and any cross-epic dependencies. Exits 4 if the ID doesn't exist.
 ```text
 lit new --title <text> --topic <slug> [--type task|feature|bug|chore|epic]
         [--description <text>] [--parent <id>] [--lane <key>] [--priority 0|1]
-        [--labels <csv>] [--assignee <a>] [--prompt <text>] [--bottom]
+        [--labels <csv>] [--assignee <a>] [--prompt <text>] [--top]
 ```
 
 Creates an issue and **prints its generated ID** — capture it; IDs are not guessable.
 `--topic` is required and immutable: a 1–2 word slug naming the stable area of work.
-New issues rank to the top by default; `--bottom` appends instead (use when authoring a
-batch in order). With `--parent`, the child's ID becomes `<parentID>.<n>`. `--lane`
+New issues append to the bottom of their frame — the bottom of the epic named by
+`--parent`, or of the top-level order without one — so filing work records it rather
+than promoting it, and a batch authored in order keeps that order with no flag. `--top`
+places the issue at the front of the agenda for the tickets that mean it; `lit rank`
+moves one afterwards. With `--parent`, the child's ID becomes `<parentID>.<n>`. `--lane`
 partitions an epic's children into parallel rank-ordered sub-sequences: a shared lane
 serializes, distinct lanes parallelize. `--prompt` stores a reusable agent prompt for
 the work the issue captures.
@@ -252,12 +255,13 @@ alone never propagates to prerequisites.
 ```text
 lit followup --on <closed-id> --title <text> [--description <text>] [--topic <slug>]
              [--type <t>] [--priority 0|1] [--assignee <a>] [--labels <csv>]
-             [--bottom]
+             [--top]
 ```
 
 Files a follow-up parented to a just-closed ticket — the way to capture work surfaced
 during a ticket while context is fresh. Inherits `--topic` from `--on` when omitted;
-the description defaults to a reference back to the source ticket.
+the description defaults to a reference back to the source ticket. Like `lit new`, it
+appends to the bottom of the parent's children unless `--top` says otherwise.
 
 ### `lit rank`
 
