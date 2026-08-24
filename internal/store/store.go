@@ -386,9 +386,14 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 // open — leaves the store unattributed rather than half-attributed; that is
 // NewAttribution's contract, and it is why this takes no presence flag.
 //
-// [LAW:single-enforcer] app.Open is the one caller: it is the only production
-// path that opens a store, and identity resolution lives there for the same
-// reason.
+// [LAW:single-enforcer] app.Open is the one caller. It is not the only opener —
+// OpenSync serves the sync commands, RebuildCandidate opens a recovery
+// workspace, adopt probes one, the upgrade path reads a workspace's schema, and
+// OpenLocationForRead reaches foreign stores — but it is the only opener whose
+// store records NEW events. The others read, or replay a dump through
+// insertEventTx, which preserves the producer's attribution instead of stamping.
+// A mutating operation added to any of those paths would NOT be attributed by
+// anything here, and would need to answer that question for itself.
 func (s *Store) AttributeTo(streamToken string) {
 	s.attribution = model.NewAttribution(streamToken, s.workspaceID)
 }
@@ -1961,7 +1966,7 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, re
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
-		nullableString(event.Attribution.Stream), nullableString(event.Attribution.Workspace)); err != nil {
+		nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())); err != nil {
 		return fmt.Errorf("insert issue event: %w", err)
 	}
 	for _, change := range changes {

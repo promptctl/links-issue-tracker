@@ -546,9 +546,13 @@ type FieldChange struct {
 // Both halves are opaque by mandate. The database syncs to shared remotes, so
 // nothing user-, host-, or path-shaped may ever be carried here; resolving a
 // token to a physical checkout happens only on the machine that owns it.
+// The halves are unexported so that NewAttribution is the only way to build a
+// populated pair, exactly as Issue.retention is sealed behind SetRetention above
+// and for the same reason: an invariant that a struct literal or a JSON decode
+// can walk around is a claim in a comment, not a property of the type.
 type Attribution struct {
-	Stream    string `json:"stream,omitempty"`
-	Workspace string `json:"workspace,omitempty"`
+	stream    string
+	workspace string
 }
 
 // NewAttribution is the only way an Attribution with content is built, and it
@@ -558,24 +562,77 @@ type Attribution struct {
 // could only misread, so it collapses to "unattributed" here rather than
 // travelling as one.
 //
+// The collapse is deliberately quiet rather than an error. A half pair cannot be
+// produced by any writer, so the only thing that can present one is a corrupted
+// or hand-edited export, and reading corrupt attribution as "unattributed" lands
+// on a state that is already legal and meaningful everywhere. Nothing is skipped
+// and no operation is abandoned, so there is no failure here to be loud about —
+// claim derivation simply learns that this event names no producer.
+//
 // [LAW:parse-dont-validate] Two loose strings go in and a value whose
 // complete-or-zero invariant already holds comes out, which is why nothing
-// downstream re-checks the halves: the read path and the write path both build
-// through here, so a half pair has no way into the program — not from a
-// never-attributed store, and not from a foreign row with one column filled.
-// [LAW:single-enforcer] one home for the invariant, so it cannot drift.
+// downstream re-checks the halves: every route into a populated Attribution —
+// the write path, the read path, and JSON decoding — passes through here, and
+// the unexported fields are what make that list exhaustive rather than merely
+// current. [LAW:single-enforcer] one home for the invariant, so it cannot drift.
 func NewAttribution(stream, workspace string) Attribution {
 	if stream == "" || workspace == "" {
 		return Attribution{}
 	}
-	return Attribution{Stream: stream, Workspace: workspace}
+	return Attribution{stream: stream, workspace: workspace}
 }
+
+// Stream is the opaque token of the checkout that produced the work; Workspace
+// is the opaque id of the store it was produced under. Both are empty exactly
+// when the pair is absent, never independently.
+func (a Attribution) Stream() string    { return a.stream }
+func (a Attribution) Workspace() string { return a.workspace }
+
+// IsZero reports the absent pair. encoding/json consults it for `omitzero`, so
+// this is also what keeps an unattributed event off the wire entirely rather
+// than writing an empty object into every historical record.
+func (a Attribution) IsZero() bool { return a == Attribution{} }
 
 // Present reports whether this event carries attribution at all. Absence is a
 // permanent, legal state — events predating the attribution feature carry none
 // and never will, because attribution is historical fact and is never
 // backfilled — and it reads as "derives no claim", never as missing data.
-func (a Attribution) Present() bool { return a != Attribution{} }
+//
+// Defined against IsZero rather than repeating the comparison: "present" and
+// "not zero" are one fact, and two spellings of it could later disagree.
+// [LAW:one-source-of-truth]
+func (a Attribution) Present() bool { return !a.IsZero() }
+
+// attributionWire is the serialized shape, kept as a separate type so that
+// sealing the domain type costs nothing at the boundary: the JSON stays exactly
+// what it was before the fields were unexported.
+type attributionWire struct {
+	Stream    string `json:"stream,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+}
+
+func (a Attribution) MarshalJSON() ([]byte, error) {
+	return json.Marshal(attributionWire{Stream: a.stream, Workspace: a.workspace})
+}
+
+// UnmarshalJSON is the boundary that makes the complete-or-zero invariant hold
+// for data this program did not write. A sync file or backup carrying
+// `{"stream":"x"}` with no workspace decodes to the absent pair rather than to a
+// half one, so a corrupted or hand-edited export cannot put a stream id with no
+// workspace into issue_events by way of a restore.
+//
+// [LAW:single-enforcer] The check lives here, at the one place untrusted bytes
+// become an Attribution, rather than in each consumer that persists one — a
+// per-consumer check would guard whichever call sites someone remembered and
+// drift from this one.
+func (a *Attribution) UnmarshalJSON(data []byte) error {
+	var wire attributionWire
+	if err := json.Unmarshal(data, &wire); err != nil {
+		return err
+	}
+	*a = NewAttribution(wire.Stream, wire.Workspace)
+	return nil
+}
 
 // IssueEvent is the field-agnostic history record. Every mutation to an
 // issue — status transitions, archive/delete flips, plain field updates —

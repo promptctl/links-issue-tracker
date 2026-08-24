@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"path/filepath"
 	"testing"
 
@@ -109,7 +110,7 @@ func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
 	st.AttributeTo(token)
 	exerciseEveryEventKind(t, ctx, st)
 
-	want := model.Attribution{Stream: token, Workspace: "test-workspace-id"}
+	want := model.NewAttribution(token, "test-workspace-id")
 	for _, event := range allEvents(t, ctx, st) {
 		if event.Attribution != want {
 			t.Errorf("event %s (%s) attribution = %+v, want %+v",
@@ -177,11 +178,153 @@ func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 		t.Fatalf("ReplaceFromExport() error = %v", err)
 	}
 
-	want := model.Attribution{Stream: "producerstrm1", Workspace: "producer-workspace"}
+	want := model.NewAttribution("producerstrm1", "producer-workspace")
 	for _, event := range allEvents(t, ctx, target) {
 		if event.Attribution != want {
 			t.Errorf("restored event %s attribution = %+v, want the producer's %+v",
 				event.ID, event.Attribution, want)
 		}
 	}
+}
+
+// TestRestoringACorruptedExportWritesNoHalfPair drives the one route by which a
+// half pair could reach issue_events despite nothing in this program being able
+// to construct one: a sync file or backup is bytes lit did not write, and a
+// hand-edited or truncated one can name a stream with no workspace. Restoring it
+// must store nothing rather than a stream id scoping no workspace, because a
+// row like that is invisible to the model (which reads it back as absent) while
+// being plainly there to Doctor, dolt tooling, and any future migration.
+//
+// The corruption is injected into real exported JSON rather than into a
+// hand-built fixture, so the bytes under test are the shape a real backup has.
+func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
+	ctx := context.Background()
+	source, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "producer-workspace")
+	if err != nil {
+		t.Fatalf("Open(source) error = %v", err)
+	}
+	source.AttributeTo("producerstrm1")
+	exerciseEveryEventKind(t, ctx, source)
+	dump, err := source.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("Close(source) error = %v", err)
+	}
+
+	corrupted := corruptEveryEventsAttribution(t, dump, map[string]any{"stream": "orphanstream"})
+
+	target, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "restorer-workspace")
+	if err != nil {
+		t.Fatalf("Open(target) error = %v", err)
+	}
+	defer target.Close()
+	if err := target.ReplaceFromExport(ctx, corrupted); err != nil {
+		t.Fatalf("ReplaceFromExport() error = %v", err)
+	}
+
+	for _, event := range allEvents(t, ctx, target) {
+		if event.Attribution.Present() {
+			t.Errorf("restored event %s carries %+v from a half-paired export",
+				event.ID, event.Attribution)
+		}
+		stream, workspace := rawAttribution(t, ctx, target, event.ID)
+		if stream.Valid || workspace.Valid {
+			t.Errorf("restored event %s stored stream=%#v workspace=%#v; a half pair reached the table",
+				event.ID, stream, workspace)
+		}
+	}
+}
+
+// TestRecoveredWorkspaceKeepsItsAttribution covers the recovery path, which
+// reaches the attribution columns by an entirely separate route from
+// Export/ReplaceFromExport: DumpRaw reads the raw tables, DeterministicMap
+// proposes a column-to-field mapping, and Apply rebuilds the export. Three
+// independent places have to agree on the field names — knownSourceColumns, the
+// target registry, and assembleExport — and the other shapemap fixtures all run
+// against stores that never called AttributeTo, so those columns are NULL there
+// and a disagreement between the three would pass unnoticed.
+//
+// A recovered workspace that silently lost its attribution would look perfectly
+// healthy: every ticket present, every event present, and every claim quietly
+// gone, with nothing to point at the recovery as the cause.
+func TestRecoveredWorkspaceKeepsItsAttribution(t *testing.T) {
+	ctx := context.Background()
+	src := filepath.Join(t.TempDir(), "src")
+	// withStore opens with this id, and the pair the events carry is built from
+	// it, so the assertion below names the store's real workspace rather than a
+	// value this test chose.
+	const ws = "test-workspace-id"
+	const token = "recoverstrm7"
+
+	withStore(t, ctx, src, func(st *Store) {
+		st.AttributeTo(token)
+		exerciseEveryEventKind(t, ctx, st)
+	})
+
+	dump, err := DumpRaw(ctx, src, ws)
+	if err != nil {
+		t.Fatalf("DumpRaw() error = %v", err)
+	}
+	mapping, ok := DeterministicMap(dump)
+	if !ok {
+		t.Fatal("DeterministicMap declined a dump carrying attribution — the new columns are outside its vocabulary")
+	}
+	if err := Validate(dump, mapping); err != nil {
+		t.Fatalf("mapping for an attributed dump is not valid: %v", err)
+	}
+	export, err := Apply(dump, mapping)
+	if err != nil {
+		t.Fatalf("Apply() error = %v", err)
+	}
+
+	if len(export.Events) == 0 {
+		t.Fatal("recovered export holds no events — the fixture proves nothing")
+	}
+	want := model.NewAttribution(token, ws)
+	for _, event := range export.Events {
+		if event.Attribution != want {
+			t.Errorf("recovered event %s attribution = %+v, want %+v",
+				event.ID, event.Attribution, want)
+		}
+	}
+}
+
+// corruptEveryEventsAttribution re-serializes an export with each event's
+// attribution replaced by raw JSON, then decodes it back through the ordinary
+// export decoder — the same path a restore from a file takes. Going through the
+// bytes is the point: the invariant under test belongs to decoding, so a test
+// that mutated the struct directly would be testing a value this program cannot
+// build and would prove nothing about a file it can actually be handed.
+func corruptEveryEventsAttribution(t *testing.T, dump model.Export, attribution map[string]any) model.Export {
+	t.Helper()
+	encoded, err := json.Marshal(dump)
+	if err != nil {
+		t.Fatalf("marshal export error = %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(encoded, &raw); err != nil {
+		t.Fatalf("unmarshal export to generic form error = %v", err)
+	}
+	events, ok := raw["events"].([]any)
+	if !ok || len(events) == 0 {
+		t.Fatalf("export carries no events array to corrupt; got %T", raw["events"])
+	}
+	for _, event := range events {
+		fields, ok := event.(map[string]any)
+		if !ok {
+			t.Fatalf("event is %T, not an object", event)
+		}
+		fields["attribution"] = attribution
+	}
+	recoded, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("re-marshal corrupted export error = %v", err)
+	}
+	var out model.Export
+	if err := json.Unmarshal(recoded, &out); err != nil {
+		t.Fatalf("decode corrupted export error = %v", err)
+	}
+	return out
 }

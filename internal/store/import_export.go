@@ -279,6 +279,12 @@ func insertLabelTx(ctx context.Context, tx *sql.Tx, label model.Label) error {
 // historical fact about who produced the work, so re-stamping here would
 // rewrite history into a claim for whoever happened to run the restore, and
 // preserving it is also what makes an export/import round trip lossless.
+//
+// Writing it verbatim is safe against a corrupted or hand-edited dump because
+// model.Attribution.UnmarshalJSON already collapsed any half pair to the absent
+// one on the way in. Re-checking here would be a second enforcer of that
+// invariant, free to drift from the first and covering only this one consumer.
+// [LAW:single-enforcer]
 func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) error {
 	var actionArg any
 	if event.Action != "" {
@@ -286,7 +292,7 @@ func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) erro
 	}
 	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
 		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
-		nullableString(event.Attribution.Stream), nullableString(event.Attribution.Workspace)); err != nil {
+		nullableString(event.Attribution.Stream()), nullableString(event.Attribution.Workspace())); err != nil {
 		return fmt.Errorf("restore issue event %s: %w", event.ID, err)
 	}
 	for _, change := range event.Changes {
