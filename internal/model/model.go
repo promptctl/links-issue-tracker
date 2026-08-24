@@ -531,20 +531,70 @@ type FieldChange struct {
 	To    string `json:"to"`
 }
 
+// Attribution answers "which checkout produced this work event": an opaque
+// per-checkout stream token plus the opaque per-store workspace id it was
+// produced under. It is the entire shared-data footprint of work claims —
+// claims themselves are derived from these stamps at read time and stored
+// nowhere (design-docs/work-claims.md).
+//
+// The two halves are one type because no consumer wants one alone: a stream
+// token is only meaningful within the workspace that scopes it, and two
+// checkouts of different clones may hold the same token without collision.
+// [LAW:types-are-the-program] the pair is the unit the domain reasons about,
+// so it is the unit the type system carries.
+//
+// Both halves are opaque by mandate. The database syncs to shared remotes, so
+// nothing user-, host-, or path-shaped may ever be carried here; resolving a
+// token to a physical checkout happens only on the machine that owns it.
+type Attribution struct {
+	Stream    string `json:"stream,omitempty"`
+	Workspace string `json:"workspace,omitempty"`
+}
+
+// NewAttribution is the only way an Attribution with content is built, and it
+// admits exactly two results: the complete pair, or the zero value. A stream
+// with no workspace to scope it, or a workspace with no stream that produced
+// the work, is not a weaker stamp — it is a half-fact that claim derivation
+// could only misread, so it collapses to "unattributed" here rather than
+// travelling as one.
+//
+// [LAW:parse-dont-validate] Two loose strings go in and a value whose
+// complete-or-zero invariant already holds comes out, which is why nothing
+// downstream re-checks the halves: the read path and the write path both build
+// through here, so a half pair has no way into the program — not from a
+// never-attributed store, and not from a foreign row with one column filled.
+// [LAW:single-enforcer] one home for the invariant, so it cannot drift.
+func NewAttribution(stream, workspace string) Attribution {
+	if stream == "" || workspace == "" {
+		return Attribution{}
+	}
+	return Attribution{Stream: stream, Workspace: workspace}
+}
+
+// Present reports whether this event carries attribution at all. Absence is a
+// permanent, legal state — events predating the attribution feature carry none
+// and never will, because attribution is historical fact and is never
+// backfilled — and it reads as "derives no claim", never as missing data.
+func (a Attribution) Present() bool { return a != Attribution{} }
+
 // IssueEvent is the field-agnostic history record. Every mutation to an
 // issue — status transitions, archive/delete flips, plain field updates —
 // produces one event with the actor + reason and N field-change rows for
 // the fields that actually moved. Action is optional intent metadata
 // populated by named status transitions (start/done/close/reopen/etc.) and
 // left empty for plain field updates; per-field actions do not exist.
+//
+// Attribution is append-only historical fact: written once when the event is
+// recorded, never rewritten, and absent on every event older than the feature.
 type IssueEvent struct {
-	ID        string        `json:"id"`
-	IssueID   string        `json:"issue_id"`
-	Action    string        `json:"action,omitempty"`
-	Reason    string        `json:"reason"`
-	Actor     string        `json:"actor"`
-	CreatedAt time.Time     `json:"created_at"`
-	Changes   []FieldChange `json:"changes"`
+	ID          string        `json:"id"`
+	IssueID     string        `json:"issue_id"`
+	Action      string        `json:"action,omitempty"`
+	Reason      string        `json:"reason"`
+	Actor       string        `json:"actor"`
+	CreatedAt   time.Time     `json:"created_at"`
+	Attribution Attribution   `json:"attribution,omitzero"`
+	Changes     []FieldChange `json:"changes"`
 }
 
 type IssueDetail struct {

@@ -93,6 +93,15 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 		// [LAW:no-silent-failure]
 		return nil, errors.Join(err, st.Close())
 	}
+	// Every mode attributes, and the mode's own identity contract decides what
+	// that means: a write open has just minted a token, so its store stamps a
+	// complete pair, while a read open in a never-mutated checkout passes an
+	// empty token and its store stamps nothing. Handing the store the value
+	// unconditionally is what keeps the difference in accessContracts, where
+	// AccessMode is already decided exactly once.
+	// [LAW:dataflow-not-control-flow] the operation always runs; only the value
+	// flowing through it varies.
+	st.AttributeTo(stream.Value())
 	return &App{Workspace: ws, Store: st, Stream: stream}, nil
 }
 

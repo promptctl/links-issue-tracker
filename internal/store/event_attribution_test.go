@@ -1,0 +1,187 @@
+package store
+
+import (
+	"context"
+	"database/sql"
+	"path/filepath"
+	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/model"
+)
+
+// rawAttribution reads one event's attribution columns as the database actually
+// holds them, because the distinction this feature depends on — SQL NULL versus
+// the empty string — is exactly the one model.Attribution erases on the way out.
+// A test that only read through Export could not tell a store that stamps
+// nothing from one that stamps two empty strings into every row.
+func rawAttribution(t *testing.T, ctx context.Context, st *Store, eventID string) (stream, workspace sql.NullString) {
+	t.Helper()
+	if err := st.db.QueryRowContext(ctx,
+		`SELECT stream_id, workspace_id FROM issue_events WHERE id = ?`, eventID).Scan(&stream, &workspace); err != nil {
+		t.Fatalf("read raw attribution for %s: %v", eventID, err)
+	}
+	return stream, workspace
+}
+
+// allEvents returns every event in the store, failing the test rather than
+// returning an empty slice on error — an empty result and a failed read must not
+// look alike to an assertion about "no event carries attribution".
+func allEvents(t *testing.T, ctx context.Context, st *Store) []model.IssueEvent {
+	t.Helper()
+	events, err := st.listAllEvents(ctx)
+	if err != nil {
+		t.Fatalf("listAllEvents() error = %v", err)
+	}
+	if len(events) == 0 {
+		t.Fatal("no events recorded — the fixture proves nothing about attribution")
+	}
+	return events
+}
+
+// exerciseEveryEventKind drives the three shapes of mutation that reach
+// recordEvent — creation, a plain field update, and a named lifecycle
+// transition — so an assertion over the resulting events covers all of them
+// rather than whichever one a single-mutation fixture happened to pick.
+func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
+	t.Helper()
+	issue, err := st.CreateIssue(ctx, CreateIssueInput{
+		Prefix: "test", Title: "Attributed work", Topic: "claims", IssueType: "task", Priority: 0,
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	newTitle := "Attributed work, retitled"
+	if _, err := st.Apply(ctx, issue.ID, Change{
+		Fields: UpdateIssueInput{Title: &newTitle}, Actor: "tester", Reason: "retitle",
+	}); err != nil {
+		t.Fatalf("Apply(field update) error = %v", err)
+	}
+	if _, err := st.Apply(ctx, issue.ID, Change{
+		Action: model.Start{Assignee: "tester"}, Actor: "tester", Reason: "begin",
+	}); err != nil {
+		t.Fatalf("Apply(start) error = %v", err)
+	}
+}
+
+// TestUnattributedStoreLeavesAttributionNull is the cold-start half of the
+// feature: a store nobody attributed — every store opened for reading, and every
+// store in existence before this feature — records events exactly as it always
+// did. The columns hold SQL NULL, not empty strings, so the claim predicate that
+// reads them later sees "this work has no producer" rather than "this work was
+// produced by the empty checkout".
+func TestUnattributedStoreLeavesAttributionNull(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	exerciseEveryEventKind(t, ctx, st)
+
+	for _, event := range allEvents(t, ctx, st) {
+		if event.Attribution.Present() {
+			t.Errorf("event %s (%s) carries attribution %+v from a store nobody attributed",
+				event.ID, event.Action, event.Attribution)
+		}
+		stream, workspace := rawAttribution(t, ctx, st, event.ID)
+		if stream.Valid || workspace.Valid {
+			t.Errorf("event %s stored stream=%#v workspace=%#v, want both SQL NULL",
+				event.ID, stream, workspace)
+		}
+	}
+}
+
+// TestAttributedStoreStampsEveryEventKind is the write half: once the checkout's
+// identity is known, every mutation that produces history carries the pair — not
+// creation only, and not lifecycle transitions only. The stamp lives on the
+// store rather than on each mutation's arguments, which is what makes "every"
+// true here without ten call sites cooperating.
+func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	const token = "abc23456defgh"
+	st.AttributeTo(token)
+	exerciseEveryEventKind(t, ctx, st)
+
+	want := model.Attribution{Stream: token, Workspace: "test-workspace-id"}
+	for _, event := range allEvents(t, ctx, st) {
+		if event.Attribution != want {
+			t.Errorf("event %s (%s) attribution = %+v, want %+v",
+				event.ID, event.Action, event.Attribution, want)
+		}
+	}
+}
+
+// TestAttributeToRejectsAHalfPair pins that an absent token yields no
+// attribution at all rather than a workspace id with nothing to scope it. This
+// is the shape a read-mode open in a never-mutated checkout produces, and it is
+// the reason app.Open can hand the token over unconditionally instead of
+// branching on whether one exists.
+func TestAttributeToRejectsAHalfPair(t *testing.T) {
+	ctx := context.Background()
+	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer st.Close()
+
+	st.AttributeTo("")
+	exerciseEveryEventKind(t, ctx, st)
+
+	for _, event := range allEvents(t, ctx, st) {
+		if event.Attribution.Present() {
+			t.Errorf("event %s carries %+v, want nothing: a workspace id alone identifies no checkout",
+				event.ID, event.Attribution)
+		}
+		if _, workspace := rawAttribution(t, ctx, st, event.ID); workspace.Valid {
+			t.Errorf("event %s stored workspace_id %q with no stream_id — a half pair reached the database",
+				event.ID, workspace.String)
+		}
+	}
+}
+
+// TestRestoreKeepsTheProducersAttribution pins that replaying a dump preserves
+// who actually did the work. The restoring store is attributed to a DIFFERENT
+// checkout than the events it is importing, so a re-stamping restore would
+// rewrite every historical event into a claim for whoever ran the restore — and
+// the assertion would catch it, which a same-token fixture could not.
+func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
+	ctx := context.Background()
+	source, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "producer-workspace")
+	if err != nil {
+		t.Fatalf("Open(source) error = %v", err)
+	}
+	source.AttributeTo("producerstrm1")
+	exerciseEveryEventKind(t, ctx, source)
+	dump, err := source.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	if err := source.Close(); err != nil {
+		t.Fatalf("Close(source) error = %v", err)
+	}
+
+	target, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "restorer-workspace")
+	if err != nil {
+		t.Fatalf("Open(target) error = %v", err)
+	}
+	defer target.Close()
+	target.AttributeTo("restorerstrm")
+	if err := target.ReplaceFromExport(ctx, dump); err != nil {
+		t.Fatalf("ReplaceFromExport() error = %v", err)
+	}
+
+	want := model.Attribution{Stream: "producerstrm1", Workspace: "producer-workspace"}
+	for _, event := range allEvents(t, ctx, target) {
+		if event.Attribution != want {
+			t.Errorf("restored event %s attribution = %+v, want the producer's %+v",
+				event.ID, event.Attribution, want)
+		}
+	}
+}

@@ -273,13 +273,20 @@ func insertLabelTx(ctx context.Context, tx *sql.Tx, label model.Label) error {
 // insertEventTx writes an event together with its field changes: the nested
 // rows are part of the event's value, so they land and leave with it (their
 // table cascades from issue_events).
+//
+// The event's attribution is replayed exactly as the dump carried it — the
+// checkout performing the restore never substitutes its own. Attribution is
+// historical fact about who produced the work, so re-stamping here would
+// rewrite history into a claim for whoever happened to run the restore, and
+// preserving it is also what makes an export/import round trip lossless.
 func insertEventTx(ctx context.Context, tx *sql.Tx, event model.IssueEvent) error {
 	var actionArg any
 	if event.Action != "" {
 		actionArg = event.Action
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
+		nullableString(event.Attribution.Stream), nullableString(event.Attribution.Workspace)); err != nil {
 		return fmt.Errorf("restore issue event %s: %w", event.ID, err)
 	}
 	for _, change := range event.Changes {

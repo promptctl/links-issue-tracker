@@ -40,6 +40,8 @@ CREATE TABLE `issue_events` (
   `reason` text NOT NULL,
   `actor` text NOT NULL,
   `created_at` varchar(64) NOT NULL,
+  `stream_id` varchar(64),
+  `workspace_id` varchar(191),
   PRIMARY KEY (`id`),
   KEY `idx_issue_events_issue_created` (`issue_id`,`created_at`),
   KEY `issue_id` (`issue_id`),

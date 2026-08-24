@@ -204,9 +204,11 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"issue_id":   "events.issue_id",
 		"action":     "events.action",
 		"reason":     "events.reason",
-		"actor":      "events.actor", // v1 name
-		"assignee":   "events.actor", // pre-goose, pre-rename
-		"created_at": "events.created_at",
+		"actor":        "events.actor", // v1 name
+		"assignee":     "events.actor", // pre-goose, pre-rename
+		"created_at":   "events.created_at",
+		"stream_id":    "events.stream",
+		"workspace_id": "events.workspace",
 	},
 	"issue_event_changes": {
 		"event_id":   "event_changes.event_id",

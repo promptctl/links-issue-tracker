@@ -49,6 +49,18 @@ type Store struct {
 	telemetryDir         string
 	releaseWorkspaceLock func() error
 
+	// attribution stamps every event this store records with the checkout that
+	// produced it. It is deliberately NOT an Open() parameter: identity is
+	// resolved only after the store opens, so that a command which cannot reach
+	// its store mints no identity at all — a contract app.Open owns and
+	// TestFailedIdentityResolutionReleasesTheStore pins. AttributeTo is how the
+	// owner completes the store once identity is known, and a store nobody
+	// attributes records unattributed events, which is exactly what a store
+	// opened for reading should do.
+	// [LAW:no-ambient-temporal-coupling] The phase transition has one owner
+	// (app.Open) rather than an ambient assumption about call order.
+	attribution model.Attribution
+
 	// applyPreMutationHookForTest, if non-nil, fires inside Apply after the
 	// change is fully planned and before withMutation acquires the commit lock.
 	// Production callers leave it nil; the concurrency regression test sets it to
@@ -357,6 +369,28 @@ func OpenForRead(ctx context.Context, doltRootDir string, workspaceID string) (_
 	}
 	success = true
 	return s, nil
+}
+
+// AttributeTo names the checkout whose work this store is about to record, so
+// that every event it writes from here on carries the attribution pair. The
+// caller supplies the raw stream token; pairing it with the workspace id this
+// store already holds happens here, which is why no caller can pair them
+// differently and no caller can supply half of one.
+//
+// Attribution is the store's, not each mutation's: recordEvent is the single
+// insertion point for issue history, so stamping there makes "every work
+// mutation carries its checkout's attribution pair" a property of the write
+// path rather than an obligation on ten call sites that each have to remember.
+//
+// An empty token — a checkout that has never mutated, seen through a read-mode
+// open — leaves the store unattributed rather than half-attributed; that is
+// NewAttribution's contract, and it is why this takes no presence flag.
+//
+// [LAW:single-enforcer] app.Open is the one caller: it is the only production
+// path that opens a store, and identity resolution lives there for the same
+// reason.
+func (s *Store) AttributeTo(streamToken string) {
+	s.attribution = model.NewAttribution(streamToken, s.workspaceID)
 }
 
 // EnsureDatabase bootstraps the database for standalone callers (lit init's
@@ -1911,7 +1945,12 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, re
 		Reason:    strings.TrimSpace(reason),
 		Actor:     strings.TrimSpace(actor),
 		CreatedAt: time.Now().UTC(),
-		Changes:   changes,
+		// The stamp is read off the store rather than passed in, so it is the
+		// same for every event this command writes and cannot be forgotten at a
+		// call site. Unattributed stores stamp nothing, which is how a store
+		// opened for reading and a store from before the feature agree.
+		Attribution: s.attribution,
+		Changes:     changes,
 	}
 	if event.Actor == "" {
 		event.Actor = "unknown"
@@ -1920,8 +1959,9 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, re
 	if event.Action != "" {
 		actionArg = event.Action
 	}
-	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`,
-		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano)); err != nil {
+	if _, err := tx.ExecContext(ctx, `INSERT INTO issue_events(id, issue_id, action, reason, actor, created_at, stream_id, workspace_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		event.ID, event.IssueID, actionArg, event.Reason, event.Actor, event.CreatedAt.Format(time.RFC3339Nano),
+		nullableString(event.Attribution.Stream), nullableString(event.Attribution.Workspace)); err != nil {
 		return fmt.Errorf("insert issue event: %w", err)
 	}
 	for _, change := range changes {
@@ -2027,7 +2067,7 @@ func (s *Store) listAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
 // slices. whereClause is an optional SQL fragment applied after the JOIN (e.g.
 // "e.issue_id = ?"); pass "" for an unfiltered scan. [LAW:dataflow-not-control-flow]
 func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any) ([]model.IssueEvent, error) {
-	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, c.field, c.from_value, c.to_value
+	q := `SELECT e.id, e.issue_id, e.action, e.reason, e.actor, e.created_at, e.stream_id, e.workspace_id, c.field, c.from_value, c.to_value
 		FROM issue_events e LEFT JOIN issue_event_changes c ON c.event_id = e.id`
 	if whereClause != "" {
 		q += " WHERE " + whereClause
@@ -2053,8 +2093,8 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 	idx := map[string]int{}
 	for rows.Next() {
 		var evtID, evtIssueID, evtReason, evtActor, evtCreatedAt string
-		var action, cField, cFrom, cTo sql.NullString
-		if err := rows.Scan(&evtID, &evtIssueID, &action, &evtReason, &evtActor, &evtCreatedAt, &cField, &cFrom, &cTo); err != nil {
+		var action, evtStream, evtWorkspace, cField, cFrom, cTo sql.NullString
+		if err := rows.Scan(&evtID, &evtIssueID, &action, &evtReason, &evtActor, &evtCreatedAt, &evtStream, &evtWorkspace, &cField, &cFrom, &cTo); err != nil {
 			return nil, err
 		}
 		i, seen := idx[evtID]
@@ -2069,7 +2109,13 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 				Reason:    evtReason,
 				Actor:     evtActor,
 				CreatedAt: t,
-				Changes:   []model.FieldChange{},
+				// Routed through NewAttribution so history that predates the
+				// feature — and any row a foreign writer left half-filled —
+				// arrives as the zero pair rather than as a token with no
+				// workspace to scope it. NullString's zero String is "", which
+				// is the same absence the constructor already collapses.
+				Attribution: model.NewAttribution(evtStream.String, evtWorkspace.String),
+				Changes:     []model.FieldChange{},
 			}
 			if action.Valid {
 				event.Action = action.String
