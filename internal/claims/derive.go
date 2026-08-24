@@ -42,10 +42,16 @@ func Derive(evidence Evidence, fresh Freshness, local LocalCheckouts) Standings 
 	return standings
 }
 
-// standingOf applies the four-legged predicate to one lane. The legs are checked
-// in the order the design states them, and each failure returns the variant that
-// failure means rather than a flag some later step interprets: the shape of the
-// answer is the answer.
+// standingOf applies the four-legged predicate to one lane. Each failure returns
+// the variant that failure means rather than a flag some later step interprets:
+// the shape of the answer is the answer.
+//
+// The legs run 1, 4, 2, 3 — dependency order, not the order the design numbers
+// them. Leg 4 is a filter over the evidence rather than a test of a holder, so
+// it has to run before leg 2 asks which establishing event is the *latest* one:
+// run afterwards, leg 2 would be answering that question over events leg 4 was
+// about to disprove, and the lane would read unclaimed where it should have
+// reverted to the checkout still working it.
 //
 // events arrive in the total order NewEvidence imposed, oldest first; "latest"
 // throughout this file means "last in that order."
