@@ -254,6 +254,10 @@ func buildTargetRegistry() map[TargetKey]targetField {
 	addMulti(collEvents, TransformIdentity, []Transform{TransformEventReason}, required, "reason")
 	addMulti(collEvents, TransformIdentity, []Transform{TransformEventActor}, required, "actor")
 	add(collEvents, TransformTimestamp, required, "created_at")
+	// Optional because every event recorded before the attribution feature has
+	// neither half, and a dump of such a workspace must stay a recognizable
+	// shape rather than forcing the operator mapper.
+	add(collEvents, TransformIdentity, optional, "stream", "workspace")
 	add(collEventChanges, TransformIdentity, required, "event_id", "field")
 	addMulti(collEventChanges, TransformIdentity, []Transform{TransformLegacyStatus}, optional, "from")
 	addMulti(collEventChanges, TransformIdentity, []Transform{TransformLegacyStatus}, optional, "to")
@@ -635,7 +639,11 @@ func assembleExport(workspaceID string, records map[collection][]map[string]any)
 			Reason:    cellString(rec["reason"]),
 			Actor:     cellString(rec["actor"]),
 			CreatedAt: cellTime(rec["created_at"]),
-			Changes:   []model.FieldChange{},
+			// A recovered dump carries whatever attribution the events had —
+			// including none, for anything older than the feature — and never
+			// acquires the recovering checkout's own.
+			Attribution: model.NewAttribution(cellString(rec["stream"]), cellString(rec["workspace"])),
+			Changes:     []model.FieldChange{},
 		}
 		byID[ev.ID] = len(events)
 		events = append(events, ev)

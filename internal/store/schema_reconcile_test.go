@@ -47,8 +47,24 @@ import (
 // per-migration edits here. [LAW:one-source-of-truth]
 func hijackToPreGoose(t *testing.T, st *Store) {
 	t.Helper()
+	hijackToPreGooseReshaping(t, st, func() {})
+}
+
+// hijackToPreGooseReshaping is hijackToPreGoose for callers that mutilate a
+// table the Down migrations themselves touch. reshape runs in the one window
+// where such a caller is correct: AFTER the revert, so every Down still reads
+// the head schema it was written against, and BEFORE the workspace is stamped
+// pre-goose, so the mutilated shape is what reconcile then finds.
+//
+// The window exists because the two orderings are not interchangeable and the
+// wrong one fails far from its cause — a caller that drops issue_events up
+// front leaves the revert to fail inside a migration's Down, reported as a
+// migration error rather than as the test's own sequencing.
+func hijackToPreGooseReshaping(t *testing.T, st *Store, reshape func()) {
+	t.Helper()
 	ctx := context.Background()
 	revertToBaseline(t, st)
+	reshape()
 	if err := st.ExecRawForTest(ctx, `DROP TABLE goose_db_version`); err != nil {
 		t.Fatalf("drop goose_db_version error = %v", err)
 	}
@@ -139,19 +155,22 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	}
 	// Simulate the user's workspace shape: drop issue_events + change-log
 	// tables, drop the agent_prompt column. (Drop in FK-aware order:
-	// issue_event_changes before issue_events.)
-	stmts := []string{
-		`DROP TABLE issue_event_changes`,
-		`DROP TABLE issue_events`,
-		`ALTER TABLE issues DROP COLUMN agent_prompt`,
-	}
-	for _, stmt := range stmts {
-		if err := first.ExecRawForTest(ctx, stmt); err != nil {
-			_ = first.Close()
-			t.Fatalf("simulate-pre-goose %q error = %v", stmt, err)
+	// issue_event_changes before issue_events.) These run inside the reshape
+	// window because a Down migration reads issue_events; dropping it before
+	// the revert would fail that Down instead of simulating anything.
+	hijackToPreGooseReshaping(t, first, func() {
+		stmts := []string{
+			`DROP TABLE issue_event_changes`,
+			`DROP TABLE issue_events`,
+			`ALTER TABLE issues DROP COLUMN agent_prompt`,
 		}
-	}
-	hijackToPreGoose(t, first)
+		for _, stmt := range stmts {
+			if err := first.ExecRawForTest(ctx, stmt); err != nil {
+				_ = first.Close()
+				t.Fatalf("simulate-pre-goose %q error = %v", stmt, err)
+			}
+		}
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
@@ -891,36 +910,39 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	// it after. Both must be present going into reconcile or the
 	// schema-list CREATE TABLE step will rebuild them with the
 	// canonical shape and the ordering bug wouldn't surface.
-	pre := []string{
-		`DROP TABLE issue_event_changes`,
-		`DROP TABLE issue_events`,
-		`CREATE TABLE issue_events (
-			id VARCHAR(191) PRIMARY KEY,
-			issue_id VARCHAR(191) NOT NULL,
-			action VARCHAR(64) NULL,
-			reason TEXT NOT NULL,
-			assignee TEXT NOT NULL,
-			created_at VARCHAR(64) NOT NULL,
-			FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
-		)`,
-		`CREATE TABLE issue_event_changes (
-			event_id VARCHAR(191) NOT NULL,
-			field VARCHAR(64) NOT NULL,
-			from_value TEXT NULL,
-			to_value TEXT NULL,
-			PRIMARY KEY (event_id, field),
-			FOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE
-		)`,
-	}
-	for _, stmt := range pre {
-		if err := first.ExecRawForTest(ctx, stmt); err != nil {
-			_ = first.Close()
-			t.Fatalf("reshape issue_events to legacy shape (%q) error = %v", stmt, err)
+	// Inside the reshape window: a Down migration reads issue_events, so
+	// replacing it with the legacy shape has to wait until the revert is done.
+	hijackToPreGooseReshaping(t, first, func() {
+		pre := []string{
+			`DROP TABLE issue_event_changes`,
+			`DROP TABLE issue_events`,
+			`CREATE TABLE issue_events (
+				id VARCHAR(191) PRIMARY KEY,
+				issue_id VARCHAR(191) NOT NULL,
+				action VARCHAR(64) NULL,
+				reason TEXT NOT NULL,
+				assignee TEXT NOT NULL,
+				created_at VARCHAR(64) NOT NULL,
+				FOREIGN KEY (issue_id) REFERENCES issues(id) ON DELETE CASCADE
+			)`,
+			`CREATE TABLE issue_event_changes (
+				event_id VARCHAR(191) NOT NULL,
+				field VARCHAR(64) NOT NULL,
+				from_value TEXT NULL,
+				to_value TEXT NULL,
+				PRIMARY KEY (event_id, field),
+				FOREIGN KEY (event_id) REFERENCES issue_events(id) ON DELETE CASCADE
+			)`,
 		}
-	}
-	seedCanonicalIssueHistory(t, first)
-	insertLegacyHistory(t, first, "hist-pre-rename", seeded.ID, strPtr("start"), "began work", strPtr("open"), strPtr("in_progress"), "2026-01-01T10:00:00Z", "alice")
-	hijackToPreGoose(t, first)
+		for _, stmt := range pre {
+			if err := first.ExecRawForTest(ctx, stmt); err != nil {
+				_ = first.Close()
+				t.Fatalf("reshape issue_events to legacy shape (%q) error = %v", stmt, err)
+			}
+		}
+		seedCanonicalIssueHistory(t, first)
+		insertLegacyHistory(t, first, "hist-pre-rename", seeded.ID, strPtr("start"), "began work", strPtr("open"), strPtr("in_progress"), "2026-01-01T10:00:00Z", "alice")
+	})
 	if err := first.Close(); err != nil {
 		t.Fatalf("Close(first) error = %v", err)
 	}
