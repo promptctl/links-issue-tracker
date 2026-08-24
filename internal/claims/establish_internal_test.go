@@ -4,7 +4,6 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/model/lifecycle"
 )
 
 // TestEstablishingCoversEveryAction is the reason establishing is a map and not
@@ -13,13 +12,13 @@ import (
 // silently, in a package they were not editing. Here it fails instead, naming
 // the verb nobody classified.
 func TestEstablishingCoversEveryAction(t *testing.T) {
-	for _, action := range lifecycle.Actions {
+	for _, action := range model.Actions() {
 		if _, classified := establishing[action]; !classified {
 			t.Errorf("lifecycle action %q is not classified in establishing: decide whether performing it takes a lane", action)
 		}
 	}
-	if len(establishing) != len(lifecycle.Actions) {
-		t.Errorf("establishing classifies %d actions, but the sealed set has %d: it names a verb that no longer exists", len(establishing), len(lifecycle.Actions))
+	if len(establishing) != len(model.Actions()) {
+		t.Errorf("establishing classifies %d actions, but the sealed set has %d: it names a verb that no longer exists", len(establishing), len(model.Actions()))
 	}
 }
 
@@ -31,7 +30,7 @@ func TestOnlyStartAndDoneEstablish(t *testing.T) {
 		model.ActionStart: true,
 		model.ActionDone:  true,
 	}
-	for _, action := range lifecycle.Actions {
+	for _, action := range model.Actions() {
 		if got := establishing[action]; got != want[action] {
 			t.Errorf("establishing[%q] = %v, want %v", action, got, want[action])
 		}

@@ -120,17 +120,23 @@ func DefaultOpen(value string) State {
 	return state
 }
 
-// Actions is the sealed set of transition verbs in documentation order — the
+// Actions returns the sealed set of transition verbs in canonical order — the
 // status four followed by the retention four. It exists so that consumers which
 // must decide something for *every* action can assert they have covered the set
 // rather than hoping: claim derivation classifies each verb as establishing or
 // not, and a ninth action added here without a claims decision fails that
 // package's coverage test instead of silently defaulting.
+//
 // [LAW:one-source-of-truth] ParseAction's admissible set derives from this list,
 // so the parser and every exhaustiveness check read the same enumeration.
-var Actions = []ActionName{
-	ActionStart, ActionDone, ActionClose, ActionReopen,
-	ActionArchive, ActionUnarchive, ActionDelete, ActionRestore,
+// [LAW:no-shared-mutable-globals] A fresh slice per call, exactly as IssueTypes
+// does and for the same reason: an exported slice variable is a sealed set any
+// package could widen at runtime.
+func Actions() []ActionName {
+	return []ActionName{
+		ActionStart, ActionDone, ActionClose, ActionReopen,
+		ActionArchive, ActionUnarchive, ActionDelete, ActionRestore,
+	}
 }
 
 // ParseAction maps an untrusted action string into the sealed set of all
@@ -139,7 +145,7 @@ var Actions = []ActionName{
 // boundaries call this instead of carrying their own string comparisons.
 func ParseAction(value string) (ActionName, error) {
 	normalized := ActionName(strings.TrimSpace(strings.ToLower(value)))
-	for _, action := range Actions {
+	for _, action := range Actions() {
 		if normalized == action {
 			return normalized, nil
 		}

@@ -64,6 +64,7 @@ const (
 var (
 	ParseState      = lifecycle.ParseState
 	ParseAction     = lifecycle.ParseAction
+	Actions         = lifecycle.Actions
 	DefaultOpen     = lifecycle.DefaultOpen
 	ParseResolution = lifecycle.ParseResolution
 
