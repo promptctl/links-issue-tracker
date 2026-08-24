@@ -34,6 +34,7 @@ var pinnedVersionContent = map[int64]pinnedMigration{
 	2: {file: "00002_add_lane.sql", sha256: "9126cd9e9c3a01137898fb9023c50b3f8741950f1e5d943dad521852939a4b75"},
 	3: {file: "00003_add_resolution.sql", sha256: "47b50dea1a1e2b7e31ba6b0fa95f5f77c6411b81ee525b04e1ff5e5fdb469563"},
 	4: {file: "00004_add_redirect_target.sql", sha256: "e171b9a18f13d67967e6c235499fc35254125ac23b36f9a687eddc7c411b590d"},
+	5: {file: "00005_add_event_attribution.sql", sha256: "ed625b2817365ed357ad477cd0691994a93a65a7ab1005d1b05456c39d159a70"},
 }
 
 // migrationFile is one on-disk, non-baseline registry entry reduced to the identity
