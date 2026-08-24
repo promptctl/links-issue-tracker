@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 )
@@ -50,6 +51,80 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.Sync.OwnerNotifyCmd != "" {
 		t.Fatalf("expected sync.owner_notify_cmd empty by default (no channel configured), got %q", cfg.Sync.OwnerNotifyCmd)
+	}
+	if cfg.Claims.FreshnessWindow != 24*time.Hour {
+		t.Fatalf("expected claims.freshness_window=24h by default, got %s", cfg.Claims.FreshnessWindow)
+	}
+}
+
+// TestLoadRejectsUnusableFreshnessWindow covers both ways the window can arrive
+// unusable, because only one of them looks wrong.
+//
+// A bare number is the mistake this file invites: every other numeric setting
+// here is a plain integer, so `freshness_window = 72` reads as "72 hours" to a
+// human and weak-decodes to 72 *nanoseconds* through viper. It is positive, so
+// no bounds check can catch it — a window that expires every claim the instant
+// it is made, with nothing to say the feature is off. The only thing that
+// separates it from a deliberate value is that it was never a duration, which is
+// why the key is parsed rather than bounds-checked.
+func TestLoadRejectsUnusableFreshnessWindow(t *testing.T) {
+	cases := map[string]string{
+		"bare number that reads like hours": "[claims]\nfreshness_window = 72\n",
+		"bare zero":                         "[claims]\nfreshness_window = 0\n",
+		"quoted number with no unit":        "[claims]\nfreshness_window = \"72\"\n",
+		"zero duration":                     "[claims]\nfreshness_window = \"0s\"\n",
+		"negative duration":                 "[claims]\nfreshness_window = \"-1h\"\n",
+		"not a duration at all":             "[claims]\nfreshness_window = \"soon\"\n",
+	}
+	for name, body := range cases {
+		t.Run(name, func(t *testing.T) {
+			dir := t.TempDir()
+			configDir := filepath.Join(dir, "links-issue-tracker")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			cfg, err := Load(pathspec.PathSpec{})
+			if err == nil {
+				t.Fatalf("Load() with %q accepted the value as %s, want a refusal", body, cfg.Claims.FreshnessWindow)
+			}
+		})
+	}
+}
+
+// TestLoadAcceptsDurationsWithUnits: the refusal above must not have been bought
+// by rejecting everything.
+func TestLoadAcceptsDurationsWithUnits(t *testing.T) {
+	cases := map[string]time.Duration{
+		"\"72h\"":    72 * time.Hour,
+		"\"90m\"":    90 * time.Minute,
+		"\"1h30m\"":  90 * time.Minute,
+		"\"30s\"":    30 * time.Second,
+		"\"1000ms\"": time.Second,
+	}
+	for literal, want := range cases {
+		t.Run(literal, func(t *testing.T) {
+			dir := t.TempDir()
+			configDir := filepath.Join(dir, "links-issue-tracker")
+			if err := os.MkdirAll(configDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			body := "[claims]\nfreshness_window = " + literal + "\n"
+			if err := os.WriteFile(filepath.Join(configDir, "config.toml"), []byte(body), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("XDG_CONFIG_HOME", dir)
+			cfg, err := Load(pathspec.PathSpec{})
+			if err != nil {
+				t.Fatalf("Load() with %q error = %v", body, err)
+			}
+			if cfg.Claims.FreshnessWindow != want {
+				t.Fatalf("claims.freshness_window = %s, want %s", cfg.Claims.FreshnessWindow, want)
+			}
+		})
 	}
 }
 

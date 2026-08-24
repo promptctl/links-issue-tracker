@@ -229,7 +229,7 @@ func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string
 	out := make(map[string][]model.Issue, len(relations))
 	for epicID, rel := range relations {
 		for _, child := range rel.Children {
-			if isLiveIssue(child) {
+			if child.InPlay() {
 				out[epicID] = append(out[epicID], child)
 			}
 		}
@@ -260,7 +260,7 @@ type focusGraphSource interface {
 // included. An issue's prerequisites are its unfinished explicit dependencies,
 // the unfinished children of a container, and its earlier same-lane unfinished
 // siblings — the same implicit edge the lane gate blocks membership on, read
-// through the shared isEarlierSameLaneSibling/isLiveIssue predicates.
+// through the shared isEarlierSameLaneSibling predicate and model.Issue.InPlay.
 // [LAW:one-type-per-behavior] Explicit deps and intra-epic rank order are the
 // same prerequisite fact here, exactly as they are for the membership gate.
 // [LAW:dataflow-not-control-flow] The walk is a pure expansion over relation
@@ -317,13 +317,13 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 			}
 			var prereqs []model.Issue
 			for _, dep := range rel.DependsOn {
-				if isLiveIssue(dep) {
+				if dep.InPlay() {
 					prereqs = append(prereqs, dep)
 				}
 			}
 			if rel.Issue.IsContainer() {
 				for _, child := range rel.Children {
-					if isLiveIssue(child) {
+					if child.InPlay() {
 						prereqs = append(prereqs, child)
 					}
 				}

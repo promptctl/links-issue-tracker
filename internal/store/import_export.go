@@ -39,7 +39,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	if err != nil {
 		return model.Export{}, err
 	}
-	events, err := s.listAllEvents(ctx)
+	events, err := s.ListAllEvents(ctx)
 	if err != nil {
 		return model.Export{}, err
 	}

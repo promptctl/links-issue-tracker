@@ -29,9 +29,9 @@ func rawAttribution(t *testing.T, ctx context.Context, st *Store, eventID string
 // look alike to an assertion about "no event carries attribution".
 func allEvents(t *testing.T, ctx context.Context, st *Store) []model.IssueEvent {
 	t.Helper()
-	events, err := st.listAllEvents(ctx)
+	events, err := st.ListAllEvents(ctx)
 	if err != nil {
-		t.Fatalf("listAllEvents() error = %v", err)
+		t.Fatalf("ListAllEvents() error = %v", err)
 	}
 	if len(events) == 0 {
 		t.Fatal("no events recorded — the fixture proves nothing about attribution")
