@@ -154,6 +154,83 @@ func (i Issue) Progress() Progress {
 	return i.mustLifecycle().Progress()
 }
 
+// InPlay reports whether the issue is still work anyone might do: not closed,
+// and not frozen out of the flow by archival or deletion. It is the one
+// definition of "unfinished" the whole program reads — the readiness gate uses
+// it to decide which siblings still block, and claim derivation uses it to
+// decide whether a lane still exists to be held. Two spellings of that question
+// would eventually disagree about whether a lane was finished, which is a claim
+// on work that is over. [LAW:one-source-of-truth]
+func (i Issue) InPlay() bool {
+	return !lifecycle.Frozen(i.Retention()) && i.State() != StateClosed
+}
+
+// LaneID names a lane: the declared unit of serialization, and therefore the
+// unit a checkout can hold (design-docs/work-claims.md). Lane membership is only
+// meaningful inside an epic — Issue.Lane is a bare string that two unrelated
+// epics may spell identically — so the epic is half of the name and neither half
+// identifies a lane alone.
+//
+// A lane comes in two shapes and LaneID is their discriminated union: a lane
+// inside an epic, and a lane of one. solo is the tag rather than "epic is
+// empty", because the derived encoding would make the two shapes collide
+// whenever an epic's id happened to be empty — a state the schema permits even
+// though nothing produces it. A union whose variants are told apart by a
+// convention about which field is blank is the bag of optionals wearing a
+// struct; the tag makes the distinction a property of the type instead of a
+// property of the data. [LAW:types-are-the-program]
+//
+// The fields are unexported because a LaneID assembled by hand could name a lane
+// that no issue is in, and every consumer of claim derivation looks lanes up by
+// this value. LaneOf is the only way to obtain one, which makes "this LaneID came
+// from a real issue" a property of the type.
+type LaneID struct {
+	epic string
+	key  string
+	solo bool
+}
+
+// LaneOf names the lane an issue belongs to, given the parent the caller already
+// resolved (nil for a parentless issue).
+//
+// Two shapes, and the rule that picks between them is the epic's presence, not a
+// property of the issue: a child of an epic shares its lane with every sibling
+// spelling the same Lane string — the empty spelling included, which is why an
+// epic that declares no lanes is exactly one lane rather than a special case. An
+// issue with no epic to scope it is a lane of one, keyed by its own id.
+//
+// A non-container parent scopes nothing: lanes partition an epic's children, so
+// an issue parented to a leaf is in its own lane exactly as a parentless one is.
+// The readiness gate makes the same call on the same field; keeping the rule here
+// means "which lane is this in" has one answer for both consumers.
+// [LAW:single-enforcer]
+//
+// Reads no lifecycle, so it answers for an unhydrated issue: lane identity is
+// structural, and asking which lane a ticket is in never needs to know how it
+// is going.
+func LaneOf(issue Issue, parent *Issue) LaneID {
+	if parent == nil || !parent.IsContainer() {
+		return LaneID{key: issue.ID, solo: true}
+	}
+	return LaneID{epic: parent.ID, key: issue.Lane}
+}
+
+// Epic is the id of the epic that scopes this lane, empty for a lane of one.
+// Key is the lane's spelling within that epic, or the solo issue's id.
+func (l LaneID) Epic() string { return l.epic }
+func (l LaneID) Key() string  { return l.key }
+
+// String renders the lane for logs and test failures. Epic-scoped lanes read as
+// "epic#lane" and a lane of one as the bare issue id; the unnamed default lane
+// of an epic renders as "epic#" rather than as the epic alone, so a lane is
+// never mistaken for the epic that contains it.
+func (l LaneID) String() string {
+	if l.solo {
+		return l.key
+	}
+	return l.epic + "#" + l.key
+}
+
 // Capabilities reports the issue's structural lifecycle capabilities. Whether an
 // issue exposes a status capability is fixed by its type — leaves do, containers
 // (whose state is derived from children) never do — so a container answers

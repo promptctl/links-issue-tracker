@@ -2059,7 +2059,12 @@ func (s *Store) listAllComments(ctx context.Context) ([]model.Comment, error) {
 	return out, rows.Err()
 }
 
-func (s *Store) listAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
+// ListAllEvents reads the whole issue history, oldest first. Export uses it to
+// serialize the history; claim derivation uses it because a claim is a reading
+// of the history and there is no narrower slice that answers the question — the
+// establishing event that decides a lane's holder can be arbitrarily old, so a
+// recency cutoff would silently drop exactly the claims it was meant to speed up.
+func (s *Store) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
 	events, err := s.queryEvents(ctx, "")
 	if err != nil {
 		return nil, fmt.Errorf("list all issue events: %w", err)

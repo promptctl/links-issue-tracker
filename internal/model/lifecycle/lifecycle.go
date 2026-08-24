@@ -120,19 +120,31 @@ func DefaultOpen(value string) State {
 	return state
 }
 
+// Actions is the sealed set of transition verbs in documentation order — the
+// status four followed by the retention four. It exists so that consumers which
+// must decide something for *every* action can assert they have covered the set
+// rather than hoping: claim derivation classifies each verb as establishing or
+// not, and a ninth action added here without a claims decision fails that
+// package's coverage test instead of silently defaulting.
+// [LAW:one-source-of-truth] ParseAction's admissible set derives from this list,
+// so the parser and every exhaustiveness check read the same enumeration.
+var Actions = []ActionName{
+	ActionStart, ActionDone, ActionClose, ActionReopen,
+	ActionArchive, ActionUnarchive, ActionDelete, ActionRestore,
+}
+
 // ParseAction maps an untrusted action string into the sealed set of all
 // eight transition actions.
 // [LAW:single-enforcer] The only string-to-ActionName gate; all trust
 // boundaries call this instead of carrying their own string comparisons.
 func ParseAction(value string) (ActionName, error) {
-	normalized := strings.TrimSpace(strings.ToLower(value))
-	switch ActionName(normalized) {
-	case ActionStart, ActionDone, ActionClose, ActionReopen,
-		ActionArchive, ActionUnarchive, ActionDelete, ActionRestore:
-		return ActionName(normalized), nil
-	default:
-		return "", fmt.Errorf("unsupported lifecycle action %q", value)
+	normalized := ActionName(strings.TrimSpace(strings.ToLower(value)))
+	for _, action := range Actions {
+		if normalized == action {
+			return normalized, nil
+		}
 	}
+	return "", fmt.Errorf("unsupported lifecycle action %q", value)
 }
 
 // Progresses collects every non-Container Progress reachable from l by walking

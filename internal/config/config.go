@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 
@@ -21,6 +22,7 @@ type Config struct {
 	Quickstart QuickstartConfig `mapstructure:"quickstart"`
 	Snapshot   SnapshotConfig   `mapstructure:"snapshot"`
 	Sync       SyncConfig       `mapstructure:"sync"`
+	Claims     ClaimsConfig     `mapstructure:"claims"`
 }
 
 type LoggingConfig struct {
@@ -47,6 +49,21 @@ type QuickstartConfig struct {
 
 type SnapshotConfig struct {
 	RetentionBudget int `mapstructure:"retention_budget"`
+}
+
+// ClaimsConfig tunes the read-time derivation of which checkout is working
+// which lane (design-docs/work-claims.md).
+type ClaimsConfig struct {
+	// FreshnessWindow is T: how long a checkout's last mutation in a lane keeps
+	// holding that lane. Past it the lane is available again, with provenance.
+	//
+	// It is the same family of staleness heuristic as the orphaned-ticket
+	// threshold, applied one level up — lane instead of ticket — and it is a
+	// heuristic for the same reason: there are no heartbeats and no liveness
+	// probes anywhere in lit, so age is the only honest evidence that a stream
+	// walked away. Repositories where humans idle over weekends may want ~72h;
+	// agent-heavy ones may tighten it.
+	FreshnessWindow time.Duration `mapstructure:"freshness_window"`
 }
 
 type SyncConfig struct {
@@ -177,6 +194,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
 	v.SetDefault("sync.receive", true)
 	v.SetDefault("sync.owner_notify_cmd", "")
+	v.SetDefault("claims.freshness_window", "24h")
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
@@ -202,6 +220,15 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	// An unknown value fails loudly here rather than silently falling back.
 	if !cfg.Sync.Cadence.valid() {
 		return Config{}, fmt.Errorf("config: sync.cadence must be one of %s, got %q", syncCadenceValues(), cfg.Sync.Cadence)
+	}
+	// [LAW:single-enforcer] claims.freshness_window is validated once here, the
+	// same trade snapshot.retention_budget makes above, so claim derivation reads
+	// the window as a trusted positive duration. A zero or negative window would
+	// not fail — it would quietly age out every claim the instant it was made,
+	// leaving a tool that behaves as though the feature were off. That is a
+	// silent wrong answer, so it fails loud instead. [LAW:no-silent-failure]
+	if cfg.Claims.FreshnessWindow <= 0 {
+		return Config{}, fmt.Errorf("config: claims.freshness_window must be a positive duration (e.g. 24h), got %s", cfg.Claims.FreshnessWindow)
 	}
 	return cfg, nil
 }
