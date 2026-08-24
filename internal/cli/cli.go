@@ -645,7 +645,7 @@ func listRelationColumns(ctx context.Context, st *store.Store, columns []string,
 // the list columns show: its parent/epic id, and whether a still-live dependency
 // blocks it. Blocked reuses liveIssues — the single liveness predicate — so the
 // list's "blocked" cannot drift from the close view's "unblocks".
-// [LAW:single-enforcer] liveness decided once, in isLiveIssue.
+// [LAW:single-enforcer] liveness decided once, in model.Issue.InPlay.
 func deriveRelationColumns(rel store.IssueRelations) relationColumns {
 	parentID := ""
 	if rel.Parent != nil {

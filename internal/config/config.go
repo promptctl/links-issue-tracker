@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/spf13/viper"
 
@@ -21,6 +22,7 @@ type Config struct {
 	Quickstart QuickstartConfig `mapstructure:"quickstart"`
 	Snapshot   SnapshotConfig   `mapstructure:"snapshot"`
 	Sync       SyncConfig       `mapstructure:"sync"`
+	Claims     ClaimsConfig     `mapstructure:"claims"`
 }
 
 type LoggingConfig struct {
@@ -47,6 +49,52 @@ type QuickstartConfig struct {
 
 type SnapshotConfig struct {
 	RetentionBudget int `mapstructure:"retention_budget"`
+}
+
+// ClaimsConfig tunes the read-time derivation of which checkout is working
+// which lane (design-docs/work-claims.md).
+type ClaimsConfig struct {
+	// FreshnessWindow is T: how long a checkout's last mutation in a lane keeps
+	// holding that lane. Past it the lane is available again, with provenance.
+	//
+	// It is the same family of staleness heuristic as the orphaned-ticket
+	// threshold, applied one level up — lane instead of ticket — and it is a
+	// heuristic for the same reason: there are no heartbeats and no liveness
+	// probes anywhere in lit, so age is the only honest evidence that a stream
+	// walked away. Repositories where humans idle over weekends may want "72h";
+	// agent-heavy ones may tighten it.
+	//
+	// Filled by parseFreshnessWindow rather than by struct-tag decoding, which
+	// is why the tag excludes it. Every other numeric setting in this file is a
+	// bare integer, so `freshness_window = 72` is the mistake a reader of this
+	// file is most likely to make — and viper's weak decoding would land it in
+	// the Duration's underlying int64 as 72 *nanoseconds*, a positive value that
+	// passes validation and expires every claim instantly.
+	FreshnessWindow time.Duration `mapstructure:"-"`
+}
+
+// parseFreshnessWindow turns the raw claims.freshness_window value into a
+// duration, and it is the reason that key is not decoded by struct tag. Its wire
+// type is a duration *string* — "24h", "72h" — and viper's decode hook only
+// converts a string source, so a bare number silently bypasses it and weak-decodes
+// into nanoseconds. Reading the raw value as a string and parsing it here means a
+// bare `72` fails as "missing unit in duration" instead of arriving as a plausible
+// number that no later check can tell apart from a deliberate one.
+//
+// [LAW:parse-dont-validate] The old check validated that the number was positive
+// and never established that it was a duration at all, which is exactly the
+// question that mattered: 72ns is positive. One crossing, and past it the value
+// is a duration because parsing is what produced it. [LAW:no-silent-failure] Both
+// failure arms — unparseable, and parseable but non-positive — are loud.
+func parseFreshnessWindow(raw string) (time.Duration, error) {
+	window, err := time.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("config: claims.freshness_window must be a duration with a unit, like \"24h\" or \"90m\" (got %q): %w", raw, err)
+	}
+	if window <= 0 {
+		return 0, fmt.Errorf("config: claims.freshness_window must be positive, got %s", window)
+	}
+	return window, nil
 }
 
 type SyncConfig struct {
@@ -177,6 +225,7 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	v.SetDefault("sync.cadence", string(SyncCadenceOnChange))
 	v.SetDefault("sync.receive", true)
 	v.SetDefault("sync.owner_notify_cmd", "")
+	v.SetDefault("claims.freshness_window", "24h")
 
 	required, err := configLayers(workspaceRoot).merge(v)
 	if err != nil {
@@ -203,6 +252,18 @@ func Load(workspaceRoot pathspec.PathSpec) (Config, error) {
 	if !cfg.Sync.Cadence.valid() {
 		return Config{}, fmt.Errorf("config: sync.cadence must be one of %s, got %q", syncCadenceValues(), cfg.Sync.Cadence)
 	}
+	// [LAW:single-enforcer] claims.freshness_window becomes a duration once, here,
+	// so claim derivation reads the window as a trusted positive duration and
+	// never re-checks it. A window that survived as zero, negative, or
+	// nanosecond-scale would not fail — it would quietly age out every claim the
+	// instant it was made, leaving a tool that behaves as though the feature were
+	// off. GetString rather than GetDuration: viper's cast would repeat the weak
+	// decode this exists to refuse. [LAW:no-silent-failure]
+	window, err := parseFreshnessWindow(v.GetString("claims.freshness_window"))
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.Claims.FreshnessWindow = window
 	return cfg, nil
 }
 

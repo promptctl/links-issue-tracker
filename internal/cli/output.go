@@ -461,25 +461,12 @@ func humanizeCoarseDuration(d time.Duration) string {
 	}
 }
 
-// isLiveIssue reports whether an issue is still in play — open or in_progress,
-// and neither archived nor deleted. This is the single definition of liveness
-// shared by the rendering surfaces (now-unblocked-dependents, open-siblings)
-// and the readiness pipeline (lane gating, focus-path prerequisites), so the
-// surfaces cannot drift on what counts as pending work. The readiness callers
-// feed it unfiltered relation fetches — a trust boundary that, unlike the
-// store-filtered workable list, carries archived and deleted rows, which have
-// left the flow and must neither block nor be traversed.
-// [LAW:single-enforcer] Liveness decided once, here.
-func isLiveIssue(issue model.Issue) bool {
-	return !model.Frozen(issue.Retention()) && issue.State() != model.StateClosed
-}
-
 // openUnblockIDs returns the IDs of issues from blocks that are still live —
 // the set this issue's closure would actually unblock from a "ready" perspective.
 func openUnblockIDs(blocks []model.Issue) []string {
 	ids := make([]string, 0, len(blocks))
 	for _, b := range blocks {
-		if !isLiveIssue(b) {
+		if !b.InPlay() {
 			continue
 		}
 		ids = append(ids, b.ID)
@@ -493,7 +480,7 @@ func openUnblockIDs(blocks []model.Issue) []string {
 func liveIssues(issues []model.Issue) []model.Issue {
 	out := make([]model.Issue, 0, len(issues))
 	for _, issue := range issues {
-		if isLiveIssue(issue) {
+		if issue.InPlay() {
 			out = append(out, issue)
 		}
 	}
