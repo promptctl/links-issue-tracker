@@ -27,10 +27,15 @@ import (
 const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
-// burst (an agent running many commands in seconds) triggers at most one fetch
-// per interval. The receive is inline, so this also bounds how often a command
-// pays the fetch latency.
-const receiveDebounceInterval = 10 * time.Second
+// burst (an agent running many commands) triggers at most one fetch per
+// interval. The receive is inline, so this also bounds how often a command pays
+// the fetch latency — and that only holds while the interval comfortably
+// exceeds a command's own wall time. At 10s, slow read commands re-armed the
+// debounce on every invocation and every command paid the ~7s fetch; receive
+// freshness is a minutes-scale concern, so the interval is minutes.
+// [LAW:no-ambient-temporal-coupling] the bound must not depend on commands
+// staying fast.
+const receiveDebounceInterval = 5 * time.Minute
 
 // remoteAbsentRecheckInterval bounds how often a confirmed remote-less
 // workspace re-runs the mirror path's git-remote check. The mirror-pending
