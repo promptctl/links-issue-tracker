@@ -203,7 +203,9 @@ func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.
 var relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}
 
 // relationsByEndpoint returns the structural relations whose given endpoint
-// column matches any of ids, in created_at order.
+// column matches any of ids, in no particular order — mergeRelations is the
+// sole owner of the final ordering, so an ORDER BY here would be dead work.
+// [LAW:one-source-of-truth]
 func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []string) ([]model.Relation, error) {
 	if _, ok := relationEndpointColumns[column]; !ok {
 		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
@@ -217,7 +219,7 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 	for _, relType := range structuralRelationTypes {
 		args = append(args, string(relType))
 	}
-	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s) ORDER BY created_at ASC`, column, idClause, typeClause)
+	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s)`, column, idClause, typeClause)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list relations for ids: %w", err)
