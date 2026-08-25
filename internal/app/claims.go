@@ -42,9 +42,14 @@ func (a *App) LocalCheckouts() (claims.LocalCheckouts, error) {
 // Checkouts that have never mutated carry no token and contribute none. They are
 // live, and they hold no claim either — a checkout produces its first token and
 // its first work event in the same command — so their absence from this set
-// voids nothing. Passing an empty string through instead would put "" in the
-// live set, where it would stand for a checkout that does not exist and quietly
-// make the set's meaning false. [LAW:types-are-the-program]
+// voids nothing.
+//
+// The filter is not a backstop against a bug: model.Attribution collapses a
+// half pair to the absent one, so an empty token could never reach the live set
+// through a lookup anyway. It is here because the set means "the tokens of the
+// live checkouts", and "" is not one — a member that stands for no checkout
+// makes the set's own description false for whatever reads it next.
+// [LAW:types-are-the-program]
 func streamTokens(checkouts []workspace.Checkout) []string {
 	tokens := make([]string, 0, len(checkouts))
 	for _, checkout := range checkouts {

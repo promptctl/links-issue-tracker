@@ -10,6 +10,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 // gitRepoWithCommit is gitRepo plus the commit `git worktree add` needs to
@@ -168,6 +169,21 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 	}
 	if held.By.Stream() != workerToken {
 		t.Fatalf("second clone's holder stream = %q, want the worker's %q", held.By.Stream(), workerToken)
+	}
+}
+
+// TestStreamTokensCountsOnlyMintedIdentities states the projection's contract
+// on its own, because the enumeration's live checkouts and the live TOKENS are
+// different sets and the difference is exactly the never-mutated checkout. The
+// zero StreamID is the only one constructible from outside its package, which is
+// the case that matters here.
+func TestStreamTokensCountsOnlyMintedIdentities(t *testing.T) {
+	got := streamTokens([]workspace.Checkout{
+		{Path: "/never-mutated", Branch: "main"},
+		{Path: "/also-never-mutated"},
+	})
+	if len(got) != 0 {
+		t.Fatalf("streamTokens() = %q, want none: a checkout that has minted no identity contributes no token", got)
 	}
 }
 
