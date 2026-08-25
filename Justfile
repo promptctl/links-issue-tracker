@@ -48,7 +48,9 @@ test-short:
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     go test -short ./...
 
-# Run the test suite. With no args runs the whole suite; otherwise passes args
+# Run the test suite. With no args runs the whole suite — the full lane, whose
+# -timeout matches nightly.yml's budget because internal/store's real work
+# alone brushes go test's 10-minute per-package default. Otherwise passes args
 # through, e.g. `just test -run TestFoo ./internal/cli/`.
 test *args:
     #!/usr/bin/env bash
@@ -56,7 +58,7 @@ test *args:
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     args="{{args}}"
     if [ -z "$args" ]; then
-        go test ./...
+        go test -timeout 30m ./...
     else
         go test $args
     fi
