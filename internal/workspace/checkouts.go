@@ -62,9 +62,23 @@ func LiveCheckouts(cwd string) ([]Checkout, error) {
 	// [LAW:dataflow-not-control-flow] A local enumeration that cannot block on a
 	// network, so context.Background() — "never cancels" — is the honest value,
 	// matching every other git query in this package. See Resolve for the note.
-	output, err := gitOutput(context.Background(), cwd, "worktree", "list", "--porcelain")
+	output, err := gitOutput(context.Background(), cwd, "worktree", "list", "--porcelain", "-z")
 	if err != nil {
-		return nil, classifyGitError(fmt.Sprintf("git worktree list --porcelain in %q", cwd), err)
+		// Deliberately NOT routed through classifyGitError. That function mints
+		// the ErrNotGitRepo sentinel, which means "this directory is not a
+		// lit-usable repository" — the answer a repo GATE gives, and Discover
+		// skips silently on it. Every caller here has already passed such a gate,
+		// so the sentinel could only be a lie, and a caller that treated it the
+		// way Discover does would read a failed enumeration as an empty one and
+		// void every claim this workspace holds. [LAW:no-silent-failure]
+		//
+		// The -z requirement is stated on EVERY failure rather than on a matched
+		// exit code, for the reason publishStreamToken states its hard-link
+		// requirement the same way: it is true of every failure, so naming it is
+		// never wrong, while classifying would go quiet on the operator who most
+		// needs the explanation. Git before 2.36 rejects the flag outright, which
+		// is the one failure here with a one-line fix.
+		return nil, fmt.Errorf("git worktree list --porcelain -z in %q: %w; this step requires git 2.36 or newer, which is where `-z` arrived — the unterminated format it replaces cannot be parsed correctly for worktree paths containing a newline", cwd, err)
 	}
 	records, err := parseWorktreeList(output)
 	if err != nil {
@@ -117,9 +131,10 @@ type worktreeRecord struct {
 // fails there), so it mints no identity and produces no evidence.
 func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 
-// parseWorktreeList reads `git worktree list --porcelain`. Records are groups of
-// `key value` lines separated by blank lines, and every record opens with a
-// `worktree` line.
+// parseWorktreeList reads `git worktree list --porcelain -z`. Records are groups
+// of NUL-terminated `key value` fields, a record ends with an extra NUL — which
+// arrives here as an empty field — and every record opens with a `worktree`
+// field.
 //
 // [LAW:parse-dont-validate] Loose text goes in and worktreeRecords come out, so
 // nothing downstream re-inspects git's output; the one place that understands
@@ -141,26 +156,34 @@ func (w worktreeRecord) uninhabited() bool { return w.prunable || w.bare }
 //	                      the format), and an unrecognized one must not break an
 //	                      enumeration whose answer is about deleted worktrees
 //
-// An attribute line before any `worktree` line is refused rather than attached
+// An attribute field before any `worktree` field is refused rather than attached
 // to nothing: it means the output is not the format this reads, and continuing
 // would enumerate a repository's worktrees from something else entirely.
 //
-// One honest limit. This format is not quoted and not NUL-delimited, so a
-// worktree path containing a newline is emitted raw and its trailing segment
-// arrives here as its own line — ignored by the rule above, leaving the record a
-// truncated path. `--porcelain -z` would remove the ambiguity, but it is a much
-// younger flag than the format itself and older git rejects it outright, which
-// would trade a defect nobody has hit for a failure on every command. The
-// truncated path fails loudly at resolvePrivateGitDir in LiveCheckouts rather
-// than quietly dropping the checkout, so the worst case is a confusing error,
-// never a live claimant voided.
+// [LAW:no-silent-failure] `-z` is what makes any of the above true, and it is
+// not a nicety. A newline is a legal byte in a POSIX path, and the newline-
+// terminated format emits paths raw, so a worktree at a path ending in the
+// literal bytes "\nprunable" produced a record whose second LINE was the word
+// `prunable` — parsed as an attribute of the live record it had just opened,
+// which then silently vanished from the enumeration and took its checkout's
+// claims with it. `\nbare` did the same; `\nbranch <ref>` corrupted the address.
+// That is the precise failure this leg exists to prevent, reached without any
+// error at all, and it was live here until a reviewer constructed it.
+//
+// The remedy is not a check. The newline-terminated format is ambiguous BY
+// CONSTRUCTION for these paths — that is why git grew `-z` — so a parser reading
+// it is guessing no matter how carefully it is written, and a heuristic that
+// refuses fields "that might be a continuation" makes the guess safer without
+// making it a parse. Under `-z` the path is one field with its newline intact
+// and the ambiguity does not exist to be detected. [LAW:parse-dont-validate]
 func parseWorktreeList(output string) ([]worktreeRecord, error) {
 	var records []worktreeRecord
-	for _, line := range strings.Split(output, "\n") {
-		// Cut on the FIRST space only: a worktree path may contain spaces, and
-		// trimming the line would eat a leading one. The key is a bare word in
-		// every documented attribute, so the first space is always the boundary.
-		key, value, _ := strings.Cut(line, " ")
+	for _, field := range strings.Split(output, "\x00") {
+		// Cut on the FIRST space only: a worktree path may contain spaces — and,
+		// now that the field is NUL-terminated, newlines — while every documented
+		// key is a bare word, so the first space is always the boundary and the
+		// rest of the field is the value byte for byte.
+		key, value, _ := strings.Cut(field, " ")
 		if key == "worktree" {
 			records = append(records, worktreeRecord{path: value})
 			continue
@@ -169,7 +192,7 @@ func parseWorktreeList(output string) ([]worktreeRecord, error) {
 			continue
 		}
 		if len(records) == 0 {
-			return nil, fmt.Errorf("git worktree list --porcelain opened with %q, which is not a `worktree <path>` line", line)
+			return nil, fmt.Errorf("git worktree list --porcelain -z opened with %q, which is not a `worktree <path>` field", field)
 		}
 		current := &records[len(records)-1]
 		switch key {
@@ -186,7 +209,7 @@ func parseWorktreeList(output string) ([]worktreeRecord, error) {
 		// answer is not "no worktrees" — it is an answer that did not come from
 		// the command this believes it ran. Reporting zero live checkouts from it
 		// would void every claim this workspace holds. [LAW:no-silent-failure]
-		return nil, fmt.Errorf("git worktree list --porcelain named no worktrees at all")
+		return nil, fmt.Errorf("git worktree list --porcelain -z named no worktrees at all")
 	}
 	return records, nil
 }

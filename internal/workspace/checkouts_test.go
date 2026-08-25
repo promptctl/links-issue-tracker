@@ -1,6 +1,7 @@
 package workspace
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"slices"
@@ -270,6 +271,73 @@ func TestBareRepositoryContributesNoCheckout(t *testing.T) {
 	}
 }
 
+// TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive runs the real thing
+// against real git, because this bug was live in a version of this file whose
+// unit tests were entirely green: nothing constructed the path.
+//
+// A newline is a legal byte in a POSIX filename. Under the newline-terminated
+// porcelain format, a worktree at a path ending in "\nprunable" emitted the word
+// `prunable` as its own line, which the parser read as an attribute of the live
+// record it had just opened — so the checkout was dropped from the enumeration
+// and its claims were voided with no error anywhere. The name is hostile on
+// purpose; nobody has to do this deliberately for it to be wrong.
+func TestWorktreePathWhoseTailLooksLikeAnAttributeStaysLive(t *testing.T) {
+	primary := litRepoWithCommit(t)
+	awkward := filepath.Join(t.TempDir(), "wt\nprunable")
+	// The branch is named explicitly because `git worktree add` would otherwise
+	// derive one from the basename, and a newline is legal in a path but not in
+	// a ref. That asymmetry is the whole reason this path shape is reachable
+	// while looking impossible.
+	run(t, primary, "git", "worktree", "add", "-b", "awkward", awkward)
+
+	token := tokenOf(t, awkward)
+	live := liveTokens(t, primary)
+	if !slices.Contains(live, token) {
+		t.Fatalf("token %q of a live worktree at %q is missing from %v — its path's tail was read as an attribute and the checkout was silently dropped", token, awkward, live)
+	}
+
+	checkouts, err := LiveCheckouts(primary)
+	if err != nil {
+		t.Fatalf("LiveCheckouts() error = %v", err)
+	}
+	found := false
+	for _, checkout := range checkouts {
+		if checkout.Stream.Value() != token {
+			continue
+		}
+		found = true
+		resolved, err := filepath.EvalSymlinks(checkout.Path)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", checkout.Path, err)
+		}
+		want, err := filepath.EvalSymlinks(awkward)
+		if err != nil {
+			t.Fatalf("EvalSymlinks(%q) error = %v", awkward, err)
+		}
+		if resolved != want {
+			t.Fatalf("address = %q, want %q byte for byte: a truncated path is not an address anyone can walk to", resolved, want)
+		}
+	}
+	if !found {
+		t.Fatal("the awkward checkout carried no token at all")
+	}
+}
+
+// TestFailedEnumerationIsNeverTheNotARepoSentinel keeps a failure to enumerate
+// distinguishable from "there is no repository here". ErrNotGitRepo is a repo
+// GATE's answer and Discover skips silently on it, so a caller that read it that
+// way here would take a failed enumeration for an empty one — and an empty
+// enumeration is this machine declaring every checkout of the workspace deleted.
+func TestFailedEnumerationIsNeverTheNotARepoSentinel(t *testing.T) {
+	_, err := LiveCheckouts(t.TempDir())
+	if err == nil {
+		t.Fatal("enumerating outside a repository must fail")
+	}
+	if errors.Is(err, ErrNotGitRepo) {
+		t.Fatalf("LiveCheckouts() error = %v, which callers may skip on; a failure to enumerate must never read as an empty enumeration", err)
+	}
+}
+
 // TestParseWorktreeListReadsEveryDocumentedShape walks the record grammar one
 // row at a time, because the cost of misreading any single attribute is a live
 // checkout counted dead or a deleted one counted live.
@@ -281,47 +349,62 @@ func TestParseWorktreeListReadsEveryDocumentedShape(t *testing.T) {
 	}{
 		{
 			name:   "a branch ref renders short",
-			output: "worktree /w\nHEAD abc\nbranch refs/heads/feature/nested\n",
+			output: "worktree /w\x00HEAD abc\x00branch refs/heads/feature/nested\x00\x00",
 			want:   []worktreeRecord{{path: "/w", branch: "feature/nested"}},
 		},
 		{
 			name:   "detached leaves no branch",
-			output: "worktree /w\nHEAD abc\ndetached\n",
+			output: "worktree /w\x00HEAD abc\x00detached\x00\x00",
 			want:   []worktreeRecord{{path: "/w"}},
 		},
 		{
 			name:   "prunable with a reason",
-			output: "worktree /w\nHEAD abc\nbranch refs/heads/gone\nprunable gitdir file points to non-existent location\n",
+			output: "worktree /w\x00HEAD abc\x00branch refs/heads/gone\x00prunable gitdir file points to non-existent location\x00\x00",
 			want:   []worktreeRecord{{path: "/w", branch: "gone", prunable: true}},
 		},
 		{
 			name:   "prunable with no reason",
-			output: "worktree /w\nHEAD abc\nprunable\n",
+			output: "worktree /w\x00HEAD abc\x00prunable\x00\x00",
 			want:   []worktreeRecord{{path: "/w", prunable: true}},
 		},
 		{
 			name:   "locked is not prunable",
-			output: "worktree /w\nHEAD abc\nbranch refs/heads/held\nlocked on a usb stick\n",
+			output: "worktree /w\x00HEAD abc\x00branch refs/heads/held\x00locked on a usb stick\x00\x00",
 			want:   []worktreeRecord{{path: "/w", branch: "held"}},
 		},
 		{
 			name:   "a bare repository",
-			output: "worktree /repo.git\nbare\n",
+			output: "worktree /repo.git\x00bare\x00\x00",
 			want:   []worktreeRecord{{path: "/repo.git", bare: true}},
 		},
 		{
 			name:   "an attribute git has not invented yet is ignored",
-			output: "worktree /w\nHEAD abc\nbranch refs/heads/main\nquarantined by a future release\n",
+			output: "worktree /w\x00HEAD abc\x00branch refs/heads/main\x00quarantined by a future release\x00\x00",
 			want:   []worktreeRecord{{path: "/w", branch: "main"}},
 		},
 		{
 			name:   "a path containing spaces survives intact",
-			output: "worktree /some where/my worktree\nHEAD abc\ndetached\n",
+			output: "worktree /some where/my worktree\x00HEAD abc\x00detached\x00\x00",
 			want:   []worktreeRecord{{path: "/some where/my worktree"}},
 		},
 		{
+			// The bug this format exists to make unrepresentable: under the
+			// newline-terminated output this path's tail arrived as its own line,
+			// the word `prunable` was read as an attribute of the live record it
+			// had just opened, and that record was dropped from the enumeration
+			// with no error — voiding a live checkout's claims silently.
+			name:   "a path whose tail collides with an attribute key",
+			output: "worktree /w/evil\nprunable\x00HEAD abc\x00branch refs/heads/evil\x00\x00",
+			want:   []worktreeRecord{{path: "/w/evil\nprunable", branch: "evil"}},
+		},
+		{
+			name:   "a path whose tail collides with the bare key",
+			output: "worktree /w/evil\nbare\x00HEAD abc\x00detached\x00\x00",
+			want:   []worktreeRecord{{path: "/w/evil\nbare"}},
+		},
+		{
 			name:   "several records separated by blank lines",
-			output: "worktree /a\nHEAD abc\nbranch refs/heads/main\n\nworktree /b\nHEAD def\nprunable\n\nworktree /c\nHEAD ghi\ndetached\n",
+			output: "worktree /a\x00HEAD abc\x00branch refs/heads/main\x00\x00worktree /b\x00HEAD def\x00prunable\x00\x00worktree /c\x00HEAD ghi\x00detached\x00\x00",
 			want: []worktreeRecord{
 				{path: "/a", branch: "main"},
 				{path: "/b", prunable: true},
@@ -352,8 +435,8 @@ func TestParseWorktreeListRefusesOutputThatIsNotTheFormat(t *testing.T) {
 		output string
 	}{
 		{name: "empty output", output: ""},
-		{name: "whitespace only", output: "\n\n"},
-		{name: "an attribute before any worktree line", output: "HEAD abc\nworktree /w\n"},
+		{name: "record separators only", output: "\x00\x00"},
+		{name: "an attribute before any worktree field", output: "HEAD abc\x00worktree /w\x00\x00"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
