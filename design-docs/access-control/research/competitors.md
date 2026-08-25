@@ -19,7 +19,8 @@ anyone's comments," delete issues.
 **Delete semantics.** Issue deletion is *off by default org-wide*; an org owner
 must enable it, after which only admins/owners can delete
 ([allowing-people-to-delete-issues](https://docs.github.com/en/organizations/managing-organization-settings/allowing-people-to-delete-issues-in-your-organization)).
-Deletion is a hard delete, but admins retain deletion metadata and the event is
+Deletion is a hard delete (UNVERIFIED: whether admins retain any
+post-deletion metadata beyond the audit event), and the event is
 audit-logged (`issue.destroy`). Comments have a two-tier model: **"minimize"**
 (Triage+, reason-tagged soft tombstone — any reader can still expand it) vs
 **delete** (Write+ — or the comment's own author regardless of role, GitHub's
@@ -42,7 +43,9 @@ role; authors edit their own issue/comments. UNVERIFIED: whether an author can
 reopen after a maintainer closes (community discussions suggest often not; docs
 state no clean rule). Authors can never delete their own issue.
 
-**Audit log.** Org audit log, 180 days, owner-only. Issue events:
+**Audit log**
+([audit-log events reference](https://docs.github.com/en/organizations/keeping-your-organization-secure/managing-security-settings-for-your-organization/audit-log-events-for-your-organization)).
+Org audit log, 180 days, owner-only. Issue events:
 `issue.destroy/pinned/unpinned/transfer`, `issue_comment.destroy/update`. Issue
 create/close are *not* logged — destruction and mutation of others' content
 are. UNVERIFIED: exact plan gating of the audit-log UI.
@@ -254,6 +257,8 @@ destruction) — the one deliberate tombstone design in this space
 
 ### git-bug
 
+([repo/docs](https://github.com/git-bug/git-bug))
+
 Issues are commit-chains under `refs/bugs/<id>` holding JSON OperationPacks;
 ordering via embedded Lamport clocks with validation. Identities are
 first-class entities under `refs/identities/<id>` — fast-forward-only version
@@ -410,7 +415,9 @@ enforcement is the host's push ACL. Read = whoever can fetch.
 - **Tahoe-LAFS**
   ([architecture docs](https://tahoe-lafs.readthedocs.io/en/latest/architecture.html)):
   capability lattice **write-cap ⊃ read-cap ⊃ verify-cap**
-  (read-cap = hash of public key; write-cap contains hash of private key);
+  (each weaker capability is derivable from the stronger, never the
+  reverse; the exact key-hashing derivation is per the linked architecture
+  docs and not restated here);
   attenuation is structural ("transitively read-only" directories); repairers
   hold verify-caps without decryption keys. Honest caveat: capabilities are
   "expressly delegated (irrevocably) by simply transferring the relevant
@@ -430,30 +437,35 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   uniquely — **enforces signature verification on fetch** (integrity binding
   between content and history); server still sees team membership and
   push/fetch metadata; granularity per-repo-per-team (team-key rotation on
-  removal UNVERIFIED in the git-specific post). **Nothing existing does
-  per-object tiered visibility inside one git history — that is the genuinely
-  novel part of the lit design.**
+  removal UNVERIFIED in the git-specific post). **No studied system offers
+  per-object tiered read visibility inside one shared git history — every
+  encrypted-git design surveyed here is all-or-nothing at repo or branch
+  granularity. That point in the design space is unoccupied.**
 
 ## Part V — Cross-cutting synthesis
 
-**(a) Recurring role/capability vocabulary.** The five role-based products
-converge on a ~5-step ladder: *no-access → viewer/reader →
-limited-contributor (Guest/Triage/Planner) → editor/member → admin/owner*;
-ADO is the structural outlier, an identity/Allow-Deny bitmask model rather
-than a named ladder. Three patterns recur where the evidence documents
-them: (1) **verb-split permissions** rather than
+**(a) Recurring role/capability vocabulary.** GitHub, GitLab, and Linear
+document a ladder with a distinct limited-contributor step (*no-access →
+viewer/reader → Guest/Triage/Planner → editor/member → admin/owner*);
+Rally's fixed ladder jumps Viewer straight to full-write Editor, and
+Jira's team-managed default is three fixed roles while its company-managed
+model is scheme-configured rather than a named ladder at all. ADO is the
+structural outlier, an identity/Allow-Deny bitmask model. Three patterns
+recur where the evidence documents them: (1) **verb-split permissions** rather than
 monolithic "write" (assign, transition, resolve, modify-reporter, set-security
 are separate grants in Jira; close/reopen/delete separate in GitHub custom
 roles); (2) **Own-vs-All splits** for comments/attachments (Jira's "Delete own
 comments" vs "Delete all comments"); (3) **dynamic principals** — Jira's
 Reporter/Current-assignee grant targets and GitLab's author-or-assignee
 disjunction let ticket-relative identity substitute for role. Verb-splits
-recur across all six products; the own/all split is documented here for
-GitHub, Jira, and GitLab (Rally's and Linear's comment permissioning was
-not surveyed); dynamic principals appear in Jira and GitLab. That
-recurrence — strongest for verb-splits, solid for own/all and relative
-principals among the permission-rich products — is the yardstick any
-capability vocabulary in this space gets measured against.
+are evidenced here for GitHub, Jira, GitLab, and ADO (whose namespace
+actions are per-verb by construction); Rally and Linear bundle coarse
+roles with no documented verb-level gating. The own/all split is
+documented for GitHub, Jira, and GitLab (Rally's and Linear's comment
+permissioning was not surveyed); dynamic principals appear in Jira and
+GitLab. That recurrence — concentrated in the permission-rich products —
+is the yardstick any capability vocabulary in this space gets measured
+against.
 
 **(b) The granularity floor.** Read: container-level
 (repo/project/team/area-path) is the universal baseline; the products
@@ -469,9 +481,9 @@ is tractable where key-per-ticket is not — and note the granularity of the
 only, and Jira's security levels are *defined* in terms of roles, groups,
 and dynamic principals — though a Jira level's membership can also name
 individual users and per-issue picker fields, which is genuine per-item
-ACL machinery at the high end. The role/level-shaped core maps cleanly onto
-tier keys; the user-picker tail is the part tier keys deliberately don't
-chase.
+ACL machinery at the high end. In scheme-class terms: the role/level-shaped
+core is expressible as keys held by named audiences; the user-picker tail
+is per-item ACL machinery that no audience-keyed scheme reproduces cheaply.
 
 **(c) Delete is never just delete.** Three products have a true
 recoverable-then-destroy split for work items: ADO Recycle Bin (never

@@ -54,11 +54,18 @@ happened; the principal identifies *on whose authority*. The attribution pair
 grows to a triple (stream, workspace, principal) with the same
 never-backfilled semantics the pair already has (F§3c). A principal id is
 permanent, so key rotation and device replacement need a **succession
-record**: signed by the old key when it still exists, countersigned by a
-`member.admin` holder, linking old principal id to new — own-bindings and
-keyring entitlements follow the link. A key lost *without* succession
-leaves the old principal's own-scoped rights stranded until an owner
-reassigns them (a documented limit, §3).
+record** linking old principal id to new — own-bindings and keyring
+entitlements follow the link. Its authorization has two tiers, because a
+succession is a takeover of everything the old principal held: when the
+old key still exists, its own signature plus one `member.admin`
+countersign suffices (the principal consents); when the old key is
+claimed lost, the record requires the **owner-set threshold** — the same
+quorum as owner rotation — because "their key is gone, reassign it to
+this new key" is precisely the single-signer takeover the threshold
+exists to stop. A succession for an *owner's* key always requires the
+threshold. A key lost with no succession issued leaves the old
+principal's own-scoped rights stranded until an owner reassigns them
+(a documented limit, §3).
 
 Precedent: Radicle's did:key node identities (R II); the keyring-carries-
 metadata pattern from SOPS (R IV).
@@ -68,28 +75,43 @@ metadata pattern from SOPS (R IV).
 One signed object in the store: the member list (principal → role, plus the
 wrapped tier keys per member — §2), the role definitions, and a monotonically
 increasing version. Ordinary membership changes are signed by any principal
-holding the `member.admin` capability. Changes to the *owner set itself* follow
-TUF root rotation: the new owner list must carry signatures from a threshold
-of the old owners **and** the new (R IV). The threshold defaults to 1 while
-the owner set has one member — the solo case must stay frictionless, and a
-sole owner has no quorum to defend anyway — and to a **majority of owners**
-the moment it has more, so in a multi-owner workspace a single compromised
-owner key cannot hand the owner set to itself by default, rather than only
-after someone opts in. Setting the threshold explicitly remains available
-(the 120% primitive).
+holding the `member.admin` capability — and "ordinary" is decided by the
+verifier, not the signer's framing: **any diff to the set of principals
+holding the owner role — add, remove, promote, demote — routes through the
+threshold check, no exceptions.** A `member.admin` signature alone covers
+only non-owner rows; a policy update that quietly adds a new owner under an
+ordinary signature is invalid on its face. Changes to the owner set follow
+TUF root rotation: the new owner list must carry signatures from a
+threshold of the old owners **and** the new (R IV). The threshold defaults
+to 1 while the owner set has one member — the solo case must stay
+frictionless, and a sole owner has no quorum to defend anyway — and to a
+**majority of owners** the moment it has more, so in a multi-owner
+workspace a single compromised owner key cannot hand the owner set to
+itself by default, rather than only after someone opts in. One asymmetry
+for *removal*: the old-owner quorum excludes the owner being removed —
+otherwise majority-of-2 is 2 and a two-owner workspace could never shed a
+compromised or unresponsive owner. The symmetric consequence is stated
+plainly rather than hidden: in a two-owner workspace either owner can
+remove the other, first mover wins; an owner-versus-owner dispute is a
+human matter, and every replica retains the pre-removal history. Setting
+the threshold explicitly remains available (the 120% primitive).
 
 ### Capabilities and roles
 
 The capability vocabulary is derived from lit's actual command surface (F§1),
 because every mutating command is a verb the policy must name. A capability
-is a triple: **(verb, selector, own|all)** — verb-split permissions,
-own-vs-all splits, and relative principals being the three dimensions the
-entire market converges on (R V-a). The selector names the scope (the whole
+is a triple: **(verb, selector, binding)**, where binding is the declared
+enum **own | assignee | own-or-assignee | all** — verb-split permissions,
+own-vs-all splits, and relative principals being the three dimensions that
+recur across the market's permission-rich products (R V-a). `own` binds to
+the row's creating principal, `assignee` to the issue's current assignee
+column (independent of `created_by`, so it works on legacy NULL-owned
+rows), and the disjunction is first-class because the market's dynamic
+principals are. The selector names the scope (the whole
 workspace, for now) and may restrict by issue type — needed because "can't
-delete epics" is a type restriction, not an ownership one. "Own" binds to
-the row's creating principal: comments, labels, and relations already record
-a creator; issues do not — issue ownership binds to the creation event's
-actor, materialized as a first-class `created_by` principal column in the
+delete epics" is a type restriction, not an ownership one. For `own`:
+comments, labels, and relations already record a creator; issues do not —
+issue ownership binds to the creation event's actor, materialized as a first-class `created_by` principal column in the
 schema (Required lit redesigns, §2) rather than recomputed from history on
 every check. This matches the reporter/author machinery in Jira and GitLab
 (R V-d).
@@ -103,7 +125,11 @@ ticket's work ends here"), `reopen`, `rank`, `relate`
 (dep/parent/label), `archive`/`unarchive`, `delete`/`restore` (tombstone —
 sets `deleted_at`, recoverable — and its reversal; a role holds each pair at
 one scope, so whoever can delete somewhere can restore there, and likewise
-archive/unarchive), `destroy` (irreversible — §2 crypto-shred), `tier.set`,
+archive/unarchive), `doctor.fix` (doctor --fix's integrity and rank
+repairs, which rewrite rows across the backlog), `destroy` (irreversible —
+§2 crypto-shred), `tier.set` (re-tiering an *existing* row only; the
+initial tier at creation is governed by tier membership — any member may
+create into a tier whose keys they hold, as part of `create`),
 `member.admin`, `policy.admin`, `sync.take` (the reconcile
 take-local/take-remote escape, today guarded only by an advisory token the
 client itself computes — F§7.13 — which this layer replaces with a real
@@ -118,14 +144,19 @@ gate anything — nor needs to. When no valid policy is readable, the local
 surgery proceeds without the check; the result re-enters shared history
 only through the receive boundary. And because a mechanically rebuilt
 store carries no per-mutation signature chain for peers to verify, a
-lifeboat rebuild concludes with a **re-enrollment**: the owner's signed
-enrollment commit seals the reconstruction as fiat, exactly as the
-original enrollment sealed pre-regime history, and peers accept it through
-the ordinary enrollment-aware receive path. Enforcement lives at
+lifeboat rebuild concludes with a **re-enrollment** — a distinct procedure
+from first enrollment, not subject to its no-existing-enrollment fence: a
+superseding enrollment commit *names the enrollment it replaces* and is
+signed by the owner-set threshold of the regime it supersedes, which is
+what peers verify before accepting the rebuilt history. (Total owner-key
+loss leaves no cryptographic path — recovery from that is a human
+decision among replica holders, documented, not designed around.) Enforcement lives at
 acceptance, never at local surgery — which is the write layer's model
 everywhere, stated here because this is where it is easiest to get wrong. `lit import` is not its own verb:
 it fans out to `create` and `edit` checks per affected issue, so bulk
-ingest grants nothing the interactive verbs don't. Decrypted egress
+ingest grants nothing the interactive verbs don't — and the same rule
+covers `bulk label/close/archive`, each fanning out to its per-issue verb
+(`relate`, `close`, `archive`). Decrypted egress
 (`export` and `backup create` emitting plaintext rather than envelopes —
 §2's redesign item 3; the lifeboat is not in this list because it has no
 decryption logic at all and can only ever dump envelopes) is the named
@@ -137,13 +168,15 @@ workspace for now; per-epic delegation is the TUF delegated-paths
 primitive (R IV) held in reserve — 120% rule — but not a shipped feature.
 
 Roles are named bundles of capabilities. Four defaults, matching the ladder
-every product converges on (R V-a):
+R V-a documents for the market's role-based products (ADO's namespace-ACL
+model is the structural outlier there; the claim is R V-a's qualified one,
+not restated stronger here):
 
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | read (holds tier keys granted to them; no write verbs) |
 | contributor | `create`, `start`/all, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own-or-assignee (so an agent who claimed a ticket can finish it — the market's author-or-assignee disjunction, R V-d), `delete`+`restore`/own (non-epic) |
-| editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`+`unarchive`, `tier.set` |
+| editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`+`unarchive`, `doctor.fix`, `tier.set` |
 | owner | everything, including `delete`+`restore`/all, `destroy`, `member.admin`, `policy.admin`, `sync.take`, `store.replace` |
 
 The charter's canonical example — a contributor who can create tickets but
@@ -197,10 +230,12 @@ a cloned backlog today. Verification and the last-verified head both seed at
 enrollment; a fresh workspace's enrollment commit is simply its first. Only
 history after enrollment carries the write layer's guarantees, and the
 boundary is inspectable — an auditor sees precisely where fiat ends and
-proof begins. Enrollment is an explicit command and it is **sync-fenced**:
+proof begins. First enrollment is an explicit command and it is **sync-fenced**:
 it requires a fresh fetch showing the remote holds no enrollment, and it
 pushes immediately — so on a shared remote there is one winner by ordinary
-push ordering. A race that slips through anyway (two unsynced clones each
+push ordering. (The fence governs *first* enrollment only; a superseding
+re-enrollment after disaster recovery is the distinct threshold-signed
+procedure described in §1's store.replace exception.) A race that slips through anyway (two unsynced clones each
 enrolling) is caught at reconcile: two distinct enrollment commits never
 auto-merge; the one already in the remote's linear history stands, the
 losing clone discards its enrollment and its principal re-requests
@@ -209,9 +244,16 @@ membership. The exact fencing mechanics are §6's to close.
 Reconcile is compatible with signing because it already replays folded local
 commits one-per-original with original authorship (F§4) — each replayed
 commit is re-signed by the reconciling principal with a link to the original
-signature. **OPEN:** the exact signed payload for replayed commits, so an
-auditor can distinguish "authored" from "faithfully replayed" without
-trusting the reconciler.
+signature. Replay also crosses policy versions — a commit validly authored
+under policy v1 gets reparented onto a head that may already be at v2 — so
+the rule is split: for **monotonicity**, a replayed commit re-declares its
+new parent's policy version; for **authorization**, it is judged against
+the version of its original authorship, carried in the replay link and
+attested by the reconciler's signature, because judging a v1 mutation
+against v2's roles would retroactively rewrite what its signer was allowed
+to do at the time. **OPEN:** the exact signed payload for replayed
+commits, so an auditor can distinguish "authored" from "faithfully
+replayed" without trusting the reconciler.
 
 What the write layer deliberately does not do: prevent a pusher from
 destroying the remote ref (recoverable, per the fixed boundary above), or
@@ -290,13 +332,19 @@ practice).
 Removing a member rotates the tier to a new epoch wrapped to survivors only
 (Megolm / Sender-Keys, R IV); old epochs are not re-encrypted, and the
 removed member's continued ability to read what they could already read is
-documented, not hidden. `destroy` = delete a per-issue derived key... **OPEN:**
-whether `destroy` shreds at tier-epoch granularity (simple, coarse: destroys
-every same-tier-same-epoch value) or introduces per-issue subkeys derived
-from the epoch key (HKDF per issue id — still one wrapped secret per member,
-but shreddable per issue). The per-issue derivation is the current lean: it
-costs no keyring growth and makes crypto-shredding — the GDPR Art. 17 and
-ITAR §120.54 story (R III) — precise enough to erase one ticket.
+documented, not hidden. `destroy` = crypto-shredding a per-issue key — and
+that key must be **independent randomness generated at the issue's
+creation, stored wrapped under the tier's epoch key**, never an HKDF
+derivation from the epoch key: a derived subkey is a deterministic public
+function of a secret every tier member still holds, so "destroying" it
+destroys nothing — any member recomputes it on demand. With a random
+per-issue key, `destroy` deletes the wrapped copies from live state and no
+holder of the epoch key can reconstruct it. One honest residual, because
+the substrate is append-only: superseded wrapped copies persist in synced
+*history* until history compaction makes them unreachable — so a shred is
+complete only when that closes, which is named as part of §6's
+keyring/history item. This is the GDPR Art. 17 and ITAR §120.54 story
+(R III), stated with its actual boundary.
 
 Every workspace has a default tier that all members hold. **The default
 posture for a new workspace is: one tier, encrypted, all members entitled.**
@@ -353,8 +401,10 @@ model, yields:
    creation event. Backfill rule for pre-existing issues: there is no
    truthful source (the id hash's creator input is a fixed placeholder —
    see the feature inventory), so legacy issues get `created_by = NULL`;
-   NULL-owned rows answer only to /all capabilities, and an owner may
-   explicitly assign ownership. For the motivating solo-owner backlog this
+   NULL-owned rows answer only to /all capabilities for own-bindings —
+   the `assignee` binding reads the assignee column, not `created_by`, so
+   it works on NULL-owned rows unchanged — and an owner may explicitly
+   assign ownership. For the motivating solo-owner backlog this
    is lossless; for a team migrating an existing shared backlog it is a
    documented one-time cost, not a silent one.
 3. **Plaintext-egress commands become a capability.** `export`,
@@ -489,7 +539,10 @@ one-command repair (re-push from any replica), not as silent divergence.
 ## 6. What the next sessions must close
 
 1. The replayed-commit signature payload (§1, OPEN).
-2. Per-issue key derivation for `destroy` (§2, OPEN — leaning HKDF-per-issue).
+2. `destroy` completion on an append-only substrate: the per-issue key is
+   decided (random at creation, wrapped under the tier epoch — §2); what
+   remains open is making superseded wrapped-key material *unreachable in
+   synced history*, without which a shred is incomplete. Couples to item 4.
 3. Crypto suite selection and the FIPS question (ITAR wants validated
    modules — R III; Go's stdlib vs a vetted library; no home-rolled
    primitives under charter #5).

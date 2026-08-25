@@ -28,7 +28,8 @@ has a natural single home. The inventory below is the *feature* list; flags
 shown are the semantically load-bearing ones, not an exhaustive reference.
 
 R = reads store, W = writes store (one Dolt commit per mutation), **–** =
-never opens the store.
+never opens the store, **filesystem** = operates on the whole database
+directory as files, bypassing the Dolt commit layer entirely.
 
 ### Bootstrap
 
@@ -79,11 +80,13 @@ remain in the database and are recoverable.
 
 `workspace` (prints the store's locations and ids without opening it),
 `stores` (discovers lit stores under filesystem roots and can open each
-read-only for counts), `prefix set` (cosmetic id prefix), `doctor` (health
-report; `--fix` repairs integrity and rank inversions — its access mode is
-chosen at runtime from the flag), `hooks install`, `lifeboat dump/recover`
-(disaster path — see §5), `upgrade`/`downgrade` (binary/schema version
-management; downgrade runs down-migrations and swaps the installed binary).
+read-only for counts), `prefix set` (cosmetic id prefix — local config file
+only, never opens the store: –), `doctor` (health report R; `--fix`
+repairs integrity and rank inversions, W — the access mode is chosen at
+runtime from the flag), `hooks install` (writes the git hook only: –),
+`lifeboat dump/recover` (disaster path, R-below-the-gate / whole-DB swap —
+see §5), `upgrade` (installs a binary: –) / `downgrade` (W: runs
+down-migrations, then swaps the installed binary).
 
 ### Guidance
 
@@ -267,8 +270,9 @@ disables all sync automation. Every sync/init decision — interactive or
 automated — is durably recorded as a JSON trace (§5).
 
 **Whole-store replacement paths** (beyond reconcile): restore-from-backup,
-take remote (reconcile's unrelated-history escape — the same "take local /
-take remote" mechanism named in the destructive-escapes paragraph above),
+snapshots restore (a filesystem-level directory swap), take remote
+(reconcile's unrelated-history escape — the same "take local / take
+remote" mechanism named in the destructive-escapes paragraph above),
 adopt, the lifeboat's rebuild-and-promote, downgrade's
 down-migrations, and schema migrations generally (which run under an
 automatic pre-migration snapshot guard, with failed migrations quarantined).

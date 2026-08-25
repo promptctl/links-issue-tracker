@@ -31,7 +31,10 @@ These are settled. Do not reopen them in the design.
 2. **No server.** The git remote stays a dumb replicated store. All enforcement
    is client-side: cryptographic (signatures verified by every client,
    encryption for visibility) — the Monero model, where validity is enforced by
-   every verifier instead of any trusted party.
+   every verifier instead of any trusted party. *(Amendment, 2026-08-25: an
+   optional external witness that cosigns observed history for split-view
+   detection is compatible with this constraint, provided it enforces nothing
+   and nothing requires it. Enforcement never moves off the client.)*
 3. **Transparent to the user.** Monero users don't need to know any
    cryptography to use it; neither may lit users. Key handling, signing, and
    verification happen without the user studying the system. This is a hard
@@ -109,3 +112,7 @@ lit development.
   model** and **Forward constraints**, so the checklist covers the charter's
   own stated bar and process step 3; the owner's three dictated sections are
   unchanged.
+- 2026-08-25 (amendment): constraint 2 explicitly admits optional
+  detection-only witness cosigning — never enforcement, never required —
+  so the design's deferred witness primitive rests on a recorded amendment
+  rather than reinterpretation.
