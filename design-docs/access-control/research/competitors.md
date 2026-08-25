@@ -101,8 +101,10 @@ this is at-rest key custody only; Atlassian still decrypts server-side to
 enforce permissions, so it is *not* cryptographic access control
 ([BYOK doc](https://support.atlassian.com/security-and-access-policies/docs/what-is-byok-encryption-for-atlassian-products/)).
 Data residency: Standard+. HIPAA BAA: Standard/Premium/Enterprise. FedRAMP:
-**Atlassian Government Cloud achieved FedRAMP Moderate, March 2025**;
-commercial cloud not covered. Org audit log; enhanced via Atlassian Guard. **No
+Atlassian Government Cloud is the FedRAMP-scoped offering
+([atlassian.com/government](https://www.atlassian.com/government));
+commercial cloud not covered. UNVERIFIED: the specific claim "FedRAMP
+Moderate achieved March 2025" was not confirmed against a primary source. Org audit log; enhanced via Atlassian Guard. **No
 client-side enforcement — confirmed.**
 
 ### 3. Broadcom Rally (ex-CA Agile Central)
@@ -263,6 +265,11 @@ signing/rotation design that shipped unenforced.
 
 ### Radicle (Heartwood) — closest prior art
 
+Primary sources: the [Radicle protocol guide](https://radicle.xyz/guides/protocol)
+and [user guide](https://radicle.xyz/guides/user); version-specific details
+(e.g. the crefs generalization in 1.3.0+) come from Radicle release notes
+and should be re-verified against them before load-bearing use.
+
 - **Identity**: Ed25519 keypair per node; public key = Node ID, encoded as
   **`did:key`**. Permissionless, no recovery/revocation registry.
 - **Repository identity**: canonical-JSON **identity document** at
@@ -333,8 +340,9 @@ enforcement is the host's push ACL. Read = whoever can fetch.
 - **GDPR** — **Art. 17** right to erasure is the hard problem for append-only
   git history: tombstoning that leaves personal data recoverable in prior
   commits does not satisfy erasure. Recognized mitigation: **crypto-shredding**
-  (destroy the key) — endorsed by e.g. the Danish DPA but UNVERIFIED as
-  universally accepted EU-wide. **Art. 32(1)(a)** names pseudonymisation and
+  (destroy the key) — UNVERIFIED: commonly attributed to guidance from the
+  Danish DPA, but neither that attribution nor EU-wide acceptance was
+  verified against a primary source. **Art. 32(1)(a)** names pseudonymisation and
   encryption as appropriate measures (risk-proportionate).
 
 ## Part IV — Crypto reference patterns
@@ -355,7 +363,11 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   warns removed recipients "may have had access to the data key in the past."
   Keys/structure stay cleartext; MAC covers values but binds the file to
   itself only — **no rollback protection across commits**.
-- **Matrix Megolm / Signal groups**: Megolm's forward-only ratchet means
+- **Matrix Megolm / Signal groups**
+  ([Megolm spec](https://gitlab.matrix.org/matrix-org/olm/-/blob/master/docs/megolm.md),
+  [Matrix E2EE spec](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption),
+  [Signal Private Group System paper](https://eprint.iacr.org/2019/1416)):
+  Megolm's forward-only ratchet means
   sharing state at index i grants read from i onward, never before; **no
   backward secrecy** — compromise exposes all subsequent messages, so clients
   **rotate the outbound session when a member leaves** plus
@@ -366,7 +378,9 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   member removal forces every remaining sender to issue a fresh sender key.
   This is THE reference for tier revocation: removed members keep old epochs;
   new epoch keys go to survivors only.
-- **Monero view keys**: private view key = see incoming; spend key = write.
+- **Monero view keys**
+  ([moneropedia: view key](https://www.getmonero.org/resources/moneropedia/viewkey.html)):
+  private view key = see incoming; spend key = write.
   View-only wallets "cannot reliably view outgoing transactions" — lesson: a
   read capability carved from a write keypair can be *lossy*; audit which
   observations require the write key. (Key-image explanation
@@ -379,13 +393,19 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   independent cosignatures makes split-view infeasible. This is the
   client-side defense against a dumb git remote serving different histories to
   different members.
-- **Tahoe-LAFS**: capability lattice **write-cap ⊃ read-cap ⊃ verify-cap**
+- **Tahoe-LAFS**
+  ([architecture docs](https://tahoe-lafs.readthedocs.io/en/latest/architecture.html)):
+  capability lattice **write-cap ⊃ read-cap ⊃ verify-cap**
   (read-cap = hash of public key; write-cap contains hash of private key);
   attenuation is structural ("transitively read-only" directories); repairers
   hold verify-caps without decryption keys. Honest caveat: capabilities are
   "expressly delegated (irrevocably) by simply transferring the relevant
   secrets" — Tahoe solves separation, not revocation.
-- **git-crypt / git-remote-gcrypt / Keybase git**: git-crypt = per-file
+- **git-crypt / git-remote-gcrypt / Keybase git**
+  ([git-crypt](https://github.com/AGWA/git-crypt),
+  [git-remote-gcrypt](https://spwhitton.name/tech/code/git-remote-gcrypt/),
+  [Keybase encrypted git](https://keybase.io/blog/encrypted-git-for-everyone)):
+  git-crypt = per-file
   smudge/clean, deterministic AES-256-CTR (doesn't hide change/equality
   patterns), symmetric key GPG-wrapped per collaborator; **"git-crypt does not
   support revoking access … a user having the previous key can still access
@@ -411,9 +431,10 @@ are separate grants in Jira; close/reopen/delete separate in GitHub custom
 roles); (2) **Own-vs-All splits** for comments/attachments (Jira's "Delete own
 comments" vs "Delete all comments"); (3) **dynamic principals** — Jira's
 Reporter/Current-assignee grant targets and GitLab's author-or-assignee
-disjunction let ticket-relative identity substitute for role. A capability
-system for lit should model verbs, own/all, and relative principals (author,
-assignee) as first-class, since all three recur everywhere.
+disjunction let ticket-relative identity substitute for role. All three
+patterns — verbs, own/all, relative principals — recur in every product
+studied; that recurrence is the yardstick any capability vocabulary in this
+space gets measured against.
 
 **(b) The granularity floor.** Read: container-level
 (repo/project/team/area-path) is the universal baseline; the products
@@ -438,9 +459,11 @@ purge), Jira (Archive+Restore permissions distinct from Delete), Linear
 tombstones). GitLab is the outlier (broad hard delete, no issue audit events)
 and reads as the anti-pattern. Fossil's non-propagating shun list is the one
 design built for a sync'd substrate: a tombstone that blocks re-introduction
-without letting a remote trigger destruction. For lit: tombstone = ordinary
-signed mutation; destroy = key destruction (crypto-shredding), which is
-simultaneously the GDPR Art. 17 and ITAR §120.54 story.
+without letting a remote trigger destruction. The recurring pattern for a
+synced or encrypted substrate: soft delete as an ordinary recorded mutation,
+irreversible destruction as a separate harder-gated act — and in encrypted
+systems, key destruction is the only destruction ciphertext admits (the GDPR
+Art. 17 / ITAR §120.54 connection).
 
 **(d) Creator-owns-ticket precedent.** Real but partial: GitHub (author closes
 own issue, roleless), GitLab (author-or-assignee close/reopen/edit/self-delete),
@@ -475,10 +498,10 @@ difference between cloud storage being an export event or not. The regimes'
 one structural demand that fights crypto: revocation and erasure. Every
 studied crypto system (Megolm, Sender Keys, SOPS, git-crypt) delivers only
 **forward-only revocation** — epoch/key rotation for survivors, never
-retroactive — so the design must pair rotation-on-membership-change with
-crypto-shredding for erasure, and use CT-style consistency proofs +
-witness/cosigning among clients for rollback and equivocation detection
-against the dumb remote. Note also that ACL-style **Deny is unimplementable
-cryptographically** (you cannot un-give a key): the model must be
-additive-grant with rotation, which conveniently matches how every E2E group
-system already works.
+retroactive — so every design in this space pairs rotation-on-membership-
+change with crypto-shredding for erasure, and CT-style consistency proofs +
+witness/cosigning among clients are the studied defense for rollback and
+equivocation detection against an untrusted store. Note also that ACL-style
+**Deny is unimplementable cryptographically** (you cannot un-give a key):
+every studied E2E group system is additive-grant with rotation for exactly
+this reason.

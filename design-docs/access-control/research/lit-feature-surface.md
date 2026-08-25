@@ -344,8 +344,9 @@ explicitly uncommitted); opt-in user-chosen friendly labels for checkout
 streams (a place where non-opaque data would deliberately enter the shared
 DB unless routed through keyring metadata); a deferred process-liveness
 probe. The project's stated bias is toward *fewer* features; note the
-design-docs convention that code wins over docs, with `work-claims.md`
-designated normative.
+design-docs convention that code wins over docs — `work-claims.md`'s own
+status header is the exception, claiming a divergence from it is a bug in
+one of them rather than an automatic win for either.
 
 ## 7. Strain points for an access-control layer
 

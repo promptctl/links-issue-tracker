@@ -55,7 +55,7 @@ grows to a triple (stream, workspace, principal) with the same
 never-backfilled semantics the pair already has (F§3c).
 
 Precedent: Radicle's did:key node identities (R II); the keyring-carries-
-metadata pattern from Keybase and SOPS (R IV).
+metadata pattern from SOPS (R IV).
 
 ### The policy document
 
@@ -64,31 +64,47 @@ wrapped tier keys per member — §2), the role definitions, and a monotonically
 increasing version. Ordinary membership changes are signed by any principal
 holding the member-admin capability. Changes to the *owner set itself* follow
 TUF root rotation: the new owner list must carry signatures from a threshold
-of the old owners **and** the new (R IV) — so a compromised single owner key
-cannot silently hand the workspace to itself. The threshold defaults to 1
-(the solo-owner case must stay frictionless); raising it is the 120%
-primitive already present.
+of the old owners **and** the new (R IV). The threshold defaults to 1 while
+the owner set has one member — the solo case must stay frictionless, and a
+sole owner has no quorum to defend anyway — and to a **majority of owners**
+the moment it has more, so in a multi-owner workspace a single compromised
+owner key cannot hand the owner set to itself by default, rather than only
+after someone opts in. Setting the threshold explicitly remains available
+(the 120% primitive).
 
 ### Capabilities and roles
 
 The capability vocabulary is derived from lit's actual command surface (F§1),
 because every mutating command is a verb the policy must name. A capability
-is a triple: **(verb, scope, own|all)** — the three dimensions the entire
-market converges on: verb-split permissions, own-vs-all splits, and relative
-principals (R V-a). "Own" binds to the row's creating principal
-(`created_by`), matching the reporter/author machinery in Jira and GitLab
+is a triple: **(verb, selector, own|all)** — verb-split permissions,
+own-vs-all splits, and relative principals being the three dimensions the
+entire market converges on (R V-a). The selector names the scope (the whole
+workspace, for now) and may restrict by issue type — needed because "can't
+delete epics" is a type restriction, not an ownership one. "Own" binds to
+the row's creating principal: comments, labels, and relations already record
+a creator; issues do not — issue ownership binds to the creation event's
+actor, materialized as a first-class `created_by` principal column in the
+schema (Required lit redesigns, §2) rather than recomputed from history on
+every check. This matches the reporter/author machinery in Jira and GitLab
 (R V-d).
 
 Verbs, mapped from the command table: `create`, `edit` (update's field
 writes), `comment.add`, `comment.rm`, `close`, `reopen`, `rank`, `relate`
-(dep/parent/label), `archive`, `delete` (tombstone — sets `deleted_at`,
-recoverable), `destroy` (irreversible — §2 crypto-shred), `tier.set`,
+(dep/parent/label), `archive`/`unarchive`, `delete`/`restore` (tombstone —
+sets `deleted_at`, recoverable — and its reversal; a role holds each pair at
+one scope, so whoever can delete somewhere can restore there, and likewise
+archive/unarchive), `destroy` (irreversible — §2 crypto-shred), `tier.set`,
 `member.admin`, `policy.admin`, `sync.take` (the reconcile
 take-local/take-remote escape, today guarded only by an advisory token the
 client itself computes — F§7.13 — which this layer replaces with a real
-owner signature). Scope is the workspace for now; per-epic scope is the TUF
-delegated-paths primitive (R IV) held in reserve — 120% rule — but not a
-shipped feature.
+owner signature), and `store.replace` (the whole-database replacement
+operations: backup restore, snapshots restore, lifeboat recover, downgrade —
+one capability because they are one act, replacing history wholesale).
+`lit import` is not its own verb: it fans out to `create` and `edit` checks
+per affected issue, so bulk ingest grants nothing the interactive verbs
+don't. The selector is the whole workspace for now; per-epic delegation is
+the TUF delegated-paths primitive (R IV) held in reserve — 120% rule — but
+not a shipped feature.
 
 Roles are named bundles of capabilities. Four defaults, matching the ladder
 every product converges on (R V-a):
@@ -96,17 +112,20 @@ every product converges on (R V-a):
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | read (holds tier keys granted to them; no write verbs) |
-| contributor | `create`, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own, `delete`/own |
-| editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`, `tier.set` |
-| owner | everything, including `delete`/all, `destroy`, `member.admin`, `policy.admin`, `sync.take` |
+| contributor | `create`, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own, `delete`+`restore`/own (non-epic) |
+| editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`+`unarchive`, `tier.set` |
+| owner | everything, including `delete`+`restore`/all, `destroy`, `member.admin`, `policy.admin`, `sync.take`, `store.replace` |
 
 The charter's canonical example — a contributor who can create tickets but
-cannot delete epics or others' tickets — is the contributor row verbatim.
-Note what `delete` means before it can be feared: a tombstone on a surviving
-row (F "retention" group), reversible by `restore`. Irreversible loss is a
-separate verb (`destroy`), owner-only, mirroring the soft-delete/destroy
-split five of six incumbents enforce and GitLab is the cautionary outlier for
-(R V-c).
+cannot delete epics or others' tickets — is the contributor row: `own` on
+`delete` withholds others' tickets, and the non-epic type selector withholds
+epics even from their own creator. (The two restrictions are independent,
+which is exactly why the capability selector carries an issue-type
+dimension.) Note what `delete` means before it can be feared: a tombstone on
+a surviving row (F "retention" group), reversible by the paired `restore`.
+Irreversible loss is a separate verb (`destroy`), owner-only, mirroring the
+soft-delete/destroy split five of six incumbents enforce and GitLab is the
+cautionary outlier for (R V-c).
 
 ### Enforcement
 
@@ -115,8 +134,14 @@ Every Dolt mutation commit carries the author principal's signature over
 Verification runs at every receive boundary — `sync fetch/pull`, the
 background receive, and first-clone adoption (F§4) — before the data branch
 moves: walk the new commits; check each signature; check each mutation
-against the policy as of its stated version; check policy-version
-monotonicity. A chain containing an unauthorized mutation is rejected whole,
+against the policy as of its stated version; and check that each commit's
+declared policy version is **at least its parent commit's** — monotonicity
+anchored to the parent in the verified chain, so a policy update anywhere
+upstream forecloses signing under an earlier, more permissive version
+afterward. Anchor it any more loosely (per push, or per signer) and a
+demoted principal keeps authoring under the stale version indefinitely,
+defeating the revocation the layer exists for. A chain containing an
+unauthorized mutation is rejected whole,
 the local head stays put, and the client reports (and, holding a valid
 replica, re-pushes over) the invalid remote. lit already persists
 `last_sync_hash` (F§2 meta) — that slot becomes the **last verified head**,
@@ -125,6 +150,19 @@ diverging history is refused, not adopted (R IV). Witness cosigning against
 split-view (the remote showing different members different histories) is
 acknowledged as the full CT-style answer and deliberately deferred; the
 primitive slot exists, the feature does not (120/80).
+
+**Enrollment — verification never walks to genesis.** Every existing
+workspace, this repo's included, has an unsigned history; a rule that
+verified from the first commit would reject them all the day it shipped. A
+workspace enters the regime at its **enrollment commit** — the commit that
+introduces its first policy document, signed by the enrolling owner — which
+seals everything before it as adopted by fiat: the enrolling owner vouches
+for the pre-enrollment history exactly as `init`'s remote-adopt vouches for
+a cloned backlog today. Verification and the last-verified head both seed at
+enrollment; a fresh workspace's enrollment commit is simply its first. Only
+history after enrollment carries the write layer's guarantees, and the
+boundary is inspectable — an auditor sees precisely where fiat ends and
+proof begins.
 
 Reconcile is compatible with signing because it already replays folded local
 commits one-per-original with original authorship (F§4) — each replayed
@@ -145,9 +183,10 @@ The unit of *policy* is the tier label on a row; the unit of *encryption* is
 the field value. Concretely:
 
 - Every issue carries a `tier` column. The tier governs the issue's free-text
-  fields: `title`, `description`, `agent_prompt`, and the issue's
-  `issue_events.reason` and `issue_event_changes` values (which duplicate
-  free text in plaintext today — F§2).
+  fields: `title`, `description`, `agent_prompt`, `topic` (an ordinary
+  encryptable column once the id redesign below stops embedding it), and the
+  issue's `issue_events.reason` and `issue_event_changes` values (which
+  duplicate free text in plaintext today — F§2).
 - Every comment carries its own `tier` column, defaulting to its issue's.
   So the charter's question — can a single comment be encrypted? — has a
   clean answer: **yes, because comments are rows, not a field** (F§2), and
@@ -170,17 +209,28 @@ scope — a workspace whose ticket *existence* is secret from some members is
 two workspaces, and the one-repo constraint (charter #1) already tells us
 that boundary is the repo itself.
 
-Ciphertext envelope: `{tier, epoch, nonce, ciphertext}` stored in the
-existing text columns. The envelope is opaque bytes to the schema, to
-migrations, to the export format, and to Dolt merge — which is what makes the
-sync story below hold.
+Ciphertext envelope: `{tier, epoch, nonce, ciphertext, commitment}` stored
+in the existing text columns. The nonce is fresh per encryption; the
+**commitment** is a deterministic keyed hash of the plaintext under a
+tier-derived key, present so that equality of content is decidable without
+decryption — the merge below depends on it. The stated cost: anyone can see
+that two encrypted values are equal (never what they are); that equality
+leak is the price of conflict detection over ciphertext, the same trade
+git-crypt makes for diffability (R IV), paid here only at the granularity of
+whole field values. The envelope is opaque bytes to the schema, to
+migrations, to the export format, and to Dolt merge — which is what makes
+the sync story below hold.
 
 ### Keys, grants, revocation, erasure
 
-Per tier, a symmetric **epoch key**. The current epoch's key is wrapped to
-each entitled member's public key in the keyring (SOPS recipient pattern,
-R IV). Granting read = wrapping the key to one more principal — the Monero
-view-key separation: read capability granted without any write capability,
+Per tier, a symmetric **epoch key**. Every epoch's key — current and
+historical — is wrapped to each entitled member's public key in the keyring
+(SOPS recipient pattern, R IV). Granting read wraps **all of the tier's
+epoch keys** to the new principal, so a joiner reads the tier's whole
+existing backlog, which is what the onboarding flow (§5) promises; revocation
+is asymmetric by nature — leavers keep old epochs, joiners get them — and
+only the *future* is partitioned by rotation. This is the Monero view-key
+separation: read capability granted without any write capability,
 and vice versa (a CI principal can hold write verbs and zero tier keys).
 Removing a member rotates the tier to a new epoch wrapped to survivors only
 (Megolm / Sender-Keys, R IV); old epochs are not re-encrypted, and the
@@ -213,9 +263,12 @@ Consequences, mapped to the strain points:
   lacking a tier key still produces a *complete* export, and `diffExports`
   never mistakes unreadable for absent — the silent-deletion failure mode of
   F§7.3 and the cascade cycle of F§7.7 cannot fire.
-- Field-aware merge compares envelope bytes. Single-side change wins as
-  today; a both-sides-divergent encrypted field is `ProsePending` *for
-  keyholders*: the pending fingerprint is computed over ciphertext
+- Field-aware merge compares envelope **commitments**, not envelope bytes —
+  fresh nonces make byte comparison see divergence in two independent
+  writes of the *same* text (two agents fixing the same typo would conflict
+  forever). Equal commitments merge silently as today; a genuinely
+  both-sides-divergent encrypted field is `ProsePending` *for keyholders*:
+  the pending fingerprint is computed over the envelopes
   (redefining F§7.2's plaintext fingerprint), and the bijection rule scopes
   to the tiers the reconciling principal holds. A checkout that cannot read
   the conflicted tier cannot reconcile it — it reports which tier is needed
@@ -239,7 +292,10 @@ model, yields:
    by rule.
 2. **Actor identity columns** become principal ids with keyring-resolved
    display (F§7.10); `--assignee` filtering and `lit orphaned` operate on
-   principal ids.
+   principal ids. Issues additionally gain a first-class `created_by`
+   principal column — the schema has none today, and the write layer's
+   "own" binding needs it as a column rather than a per-check replay of the
+   creation event.
 3. **Plaintext-egress commands become a capability.** `export`,
    `backup create`, and `lifeboat dump` today treat a full plaintext dump as
    an ordinary read (F§5). Under the read layer they emit envelopes by
@@ -253,6 +309,13 @@ model, yields:
 5. **Recovery verification** (`verify.go`) loses free-text mis-map detection
    under uniform ciphertext (F§7.8); conservation laws extend to envelope
    integrity (tier/epoch/nonce round-trip) to compensate.
+6. **Foreign-store opens get the same gate as local ones.** `ls --at` and
+   `stores --counts` open other projects' stores by path with no policy or
+   key consultation (F§7.11). They route through the target store's own
+   policy and keyring exactly as a local open does: verification applies,
+   the caller's principal supplies whatever tier keys it holds *for that
+   store*, and a principal with none sees the skeleton only. No separate
+   trust path exists for "but I opened it by filesystem path."
 
 ## 3. Foundational hard requirements
 
@@ -278,13 +341,14 @@ ones — these are what make the audit trail trustworthy at all):
 - Encryption itself (a public project runs a plaintext default tier).
 - The role set and every capability binding (the four roles are defaults,
   not law).
-- Owner-set threshold (defaults to 1).
+- Owner-set threshold (defaults to 1 solo, majority once multi-owner).
 - Witness cosigning, when it ships.
 
 **Documented limits, never papered over:** forward-only revocation; denial
 recoverable-not-preventable; a removed member retains what they could read;
 metadata (existence, structure, timing, actor principal ids) is visible to
-every repo reader even under full encryption. Compliance officers get these
+every repo reader even under full encryption, as is equality of two
+encrypted values (the commitment trade, §2). Compliance officers get these
 in writing; the design's honesty here is a feature (R III's regimes all
 demand accurate control descriptions, not perfect controls).
 

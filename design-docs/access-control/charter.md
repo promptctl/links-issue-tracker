@@ -88,6 +88,17 @@ like to use, what burdens it places on the user, and what risks it introduces �
 data loss presumably chief among them. The transparency constraint (3) governs
 everything in this section.
 
+**Capability model** *(amendment, 2026-08-25 — the sections above are the
+owner's dictated structure; this and the next were added so the checklist
+covers the charter's own stated bar and process)*: the answer must specify
+the RBAC vocabulary itself — the verbs, roles, grant targets, and how
+"creator owns their ticket" binds — not merely the compliance, granularity,
+and UX sections around it.
+
+**Forward constraints** *(same amendment)*: process step 3's output is a
+required section — the boundaries and burdens the design imposes on future
+lit development.
+
 ## Status
 
 - 2026-08-25: charter written from the owner's directive; research and the
