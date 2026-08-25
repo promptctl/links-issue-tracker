@@ -39,6 +39,15 @@ build:
         -ldflags "-X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE}" \
         ./cmd/lit
 
+# The inner loop: the whole suite minus the generated-scale tests. This is
+# what CI's PR gate runs (ci.yml); the skipped tests run nightly in full
+# (nightly.yml).
+test-short:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{justfile_directory()}}/scripts/cgo-env.sh"
+    go test -short ./...
+
 # Run the test suite. With no args runs the whole suite; otherwise passes args
 # through, e.g. `just test -run TestFoo ./internal/cli/`.
 test *args:

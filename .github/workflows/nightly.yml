@@ -1,0 +1,71 @@
+# The full test lane. CI's PR gate runs `go test -short ./...` — the inner
+# loop — which skips the tests whose cost is deliberately generated scale.
+# This workflow is the other half of that bargain: everything the gate skips
+# runs here, on a schedule, in full. Without `-short`, `testing.Short()` is
+# false by construction, so the scale lane cannot skip — the gate being open
+# here is guaranteed by Go, not by convention.
+#
+# A nightly job whose failures nobody sees is deletion with extra steps, so a
+# failed run files (or extends) a GitHub issue labeled `nightly-failure` with
+# the run URL. [LAW:no-silent-failure]
+name: Nightly full suite
+
+on:
+  schedule:
+    - cron: '17 9 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  full-suite:
+    runs-on: ubuntu-latest
+    # A wedged fold or an unbounded replay should fail here, not burn six
+    # hours of runner. Generous relative to the ~20 minutes the suite needs,
+    # tight relative to a hang.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: ./.github/actions/install-dolt
+
+      - name: Build
+        run: go build ./cmd/lit
+
+      # -timeout 30m: internal/store alone is ~8 minutes of real work today
+      # and the scale test adds two more, so go test's 10-minute per-package
+      # default would panic a healthy run. This is the lane where that cost is
+      # legitimate — the budget is honest here and forbidden in ci.yml, where
+      # the same flag would hide an inner-loop regression.
+      - name: Test (full, no -short)
+        run: go test -timeout 30m ./...
+
+      - name: Report failure as a GitHub issue
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="Nightly full-suite run failed: ${run_url}
+
+          This lane runs everything the PR gate's \`-short\` skips. A failure here is a real break in a covered test — triage it; do not mute this job."
+          gh label create nightly-failure --force \
+            --description "The scheduled full test lane is red" --color B60205
+          # One open issue collects repeat failures; a new day's failure lands
+          # as a comment, not a duplicate issue.
+          existing=$(gh issue list --label nightly-failure --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "Nightly full test lane is failing" \
+              --label nightly-failure --body "$body"
+          fi

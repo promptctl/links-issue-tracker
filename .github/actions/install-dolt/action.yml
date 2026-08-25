@@ -1,0 +1,18 @@
+# The test suite shells out to the `dolt` CLI as an oracle, so Dolt must be
+# installed before `go test` in every workflow that runs tests. (Dolt is a
+# test-only oracle; it is NOT a runtime dependency of the shipped binary.)
+# [LAW:one-source-of-truth] This action is the one home of the pinned Dolt
+# version — CI and the nightly full lane both install through it, so the pin
+# cannot drift between lanes.
+name: Install Dolt
+description: Install the pinned dolt CLI the test suite uses as an oracle.
+runs:
+  using: composite
+  steps:
+    - name: Install Dolt
+      shell: bash
+      run: |
+        set -euo pipefail
+        curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
+        sudo bash install-dolt.sh
+        dolt version

@@ -98,6 +98,10 @@ const scaleWallClockBudget = 10 * time.Minute
 // folded side is the whole local chain rather than just the ahead commits, so
 // it is the harshest version of the replay.
 func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
+	// [LAW:comments-carry-meaning] the other side of this gate: the inner loop
+	// (ci.yml, `just test-short`) skips here; the nightly full lane
+	// (.github/workflows/nightly.yml) runs without -short, so this test cannot
+	// skip there.
 	if testing.Short() {
 		t.Skip("scale test: folds 500 commits over a 1000-issue backlog")
 	}
