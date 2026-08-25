@@ -22,8 +22,9 @@ must enable it, after which only admins/owners can delete
 Deletion is a hard delete, but admins retain deletion metadata and the event is
 audit-logged (`issue.destroy`). Comments have a two-tier model: **"minimize"**
 (Triage+, reason-tagged soft tombstone — any reader can still expand it) vs
-**delete** (Write+, hard delete of content but a timeline event remains visible
-to all readers, and comment *edit history* is retained). **Lock conversation**
+**delete** (Write+ — or the comment's own author regardless of role, GitHub's
+own/all split for comments; hard delete of content but a timeline event
+remains visible to all readers, and comment *edit history* is retained). **Lock conversation**
 (Write+): after locking, only write-access users can comment.
 
 **Read granularity: repository-level only.** No per-issue confidentiality, no
@@ -145,7 +146,8 @@ authored"** — so Planner/Owner delete anything; Reporter/Developer/Maintainer
 self-delete only. Hard delete, no tombstone, and the
 [audit event types list](https://docs.gitlab.com/user/compliance/audit_event_types/)
 contains **no issue-level events** (it does have `delete_epic`) — the weakest
-forensic story of the six products. Deleting an epic detaches (doesn't delete)
+forensic story among the four products whose audit trails this document
+records (GitHub, Jira, Linear, GitLab; Rally's and ADO's were not surveyed). Deleting an epic detaches (doesn't delete)
 its issues. Close/reopen/edit: role Planner+ **or author or assignee**.
 
 **Read granularity.** Per-issue: **confidential issues** — visible to
@@ -374,8 +376,11 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   [Matrix E2EE spec](https://spec.matrix.org/latest/client-server-api/#end-to-end-encryption),
   [Signal Private Group System paper](https://eprint.iacr.org/2019/1416)):
   Megolm's forward-only ratchet means
-  sharing state at index i grants read from i onward, never before; **no
-  backward secrecy** — compromise exposes all subsequent messages, so clients
+  sharing state at index i grants read from i onward, never before — stated
+  concretely because the forward/backward-secrecy vocabulary is used
+  inconsistently across the literature: compromise of a session state
+  exposes all *subsequent* messages in that session and none *before* it
+  (the hash ratchet cannot be reversed), so clients
   **rotate the outbound session when a member leaves** plus
   `rotation_period_ms` (default 604800000) / `rotation_period_msgs` (default
   100). Signal Private Group System: group state encrypted under a
@@ -431,19 +436,24 @@ enforcement is the host's push ACL. Read = whoever can fetch.
 
 ## Part V — Cross-cutting synthesis
 
-**(a) Recurring role/capability vocabulary.** Every product converges on a
-~5-step ladder: *no-access → viewer/reader → limited-contributor
-(Guest/Triage/Planner) → editor/member → admin/owner*, with three
-universal patterns layered on: (1) **verb-split permissions** rather than
+**(a) Recurring role/capability vocabulary.** The five role-based products
+converge on a ~5-step ladder: *no-access → viewer/reader →
+limited-contributor (Guest/Triage/Planner) → editor/member → admin/owner*;
+ADO is the structural outlier, an identity/Allow-Deny bitmask model rather
+than a named ladder. Three patterns recur where the evidence documents
+them: (1) **verb-split permissions** rather than
 monolithic "write" (assign, transition, resolve, modify-reporter, set-security
 are separate grants in Jira; close/reopen/delete separate in GitHub custom
 roles); (2) **Own-vs-All splits** for comments/attachments (Jira's "Delete own
 comments" vs "Delete all comments"); (3) **dynamic principals** — Jira's
 Reporter/Current-assignee grant targets and GitLab's author-or-assignee
-disjunction let ticket-relative identity substitute for role. All three
-patterns — verbs, own/all, relative principals — recur in every product
-studied; that recurrence is the yardstick any capability vocabulary in this
-space gets measured against.
+disjunction let ticket-relative identity substitute for role. Verb-splits
+recur across all six products; the own/all split is documented here for
+GitHub, Jira, and GitLab (Rally's and Linear's comment permissioning was
+not surveyed); dynamic principals appear in Jira and GitLab. That
+recurrence — strongest for verb-splits, solid for own/all and relative
+principals among the permission-rich products — is the yardstick any
+capability vocabulary in this space gets measured against.
 
 **(b) The granularity floor.** Read: container-level
 (repo/project/team/area-path) is the universal baseline; the products
@@ -485,7 +495,7 @@ systems, key destruction is the only destruction ciphertext admits (the GDPR
 Art. 17 / ITAR §120.54 connection).
 
 **(d) Creator-owns-ticket precedent.** Real but partial: GitHub (author closes
-own issue, roleless), GitLab (author-or-assignee close/reopen/edit/self-delete),
+own issue, roleless), GitLab (author-or-assignee close/reopen/edit; author-only self-delete),
 Jira (Reporter as a grant target in schemes *and* as an issue-security-level
 member), Rally (owner-may-delete-own-item). ADO and Linear have none at item
 level. So creator-ownership as a default capability is well-precedented for

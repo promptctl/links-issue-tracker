@@ -52,7 +52,13 @@ signs (display name, key, role), rendered at display time. Agent sessions act
 *as* a principal: the checkout's stream id keeps identifying *where* work
 happened; the principal identifies *on whose authority*. The attribution pair
 grows to a triple (stream, workspace, principal) with the same
-never-backfilled semantics the pair already has (F§3c).
+never-backfilled semantics the pair already has (F§3c). A principal id is
+permanent, so key rotation and device replacement need a **succession
+record**: signed by the old key when it still exists, countersigned by a
+`member.admin` holder, linking old principal id to new — own-bindings and
+keyring entitlements follow the link. A key lost *without* succession
+leaves the old principal's own-scoped rights stranded until an owner
+reassigns them (a documented limit, §3).
 
 Precedent: Radicle's did:key node identities (R II); the keyring-carries-
 metadata pattern from SOPS (R IV).
@@ -62,7 +68,7 @@ metadata pattern from SOPS (R IV).
 One signed object in the store: the member list (principal → role, plus the
 wrapped tier keys per member — §2), the role definitions, and a monotonically
 increasing version. Ordinary membership changes are signed by any principal
-holding the member-admin capability. Changes to the *owner set itself* follow
+holding the `member.admin` capability. Changes to the *owner set itself* follow
 TUF root rotation: the new owner list must carry signatures from a threshold
 of the old owners **and** the new (R IV). The threshold defaults to 1 while
 the owner set has one member — the solo case must stay frictionless, and a
@@ -91,7 +97,9 @@ every check. This matches the reporter/author machinery in Jira and GitLab
 Verbs, mapped from the command table: `create`, `edit` (update's field
 writes), `start` (claim into in_progress — granted /all, because pulling
 the top of the shared queue regardless of creator *is* the agent workflow),
-`comment.add`, `comment.rm`, `close`, `reopen`, `rank`, `relate`
+`comment.add`, `comment.rm`, `close` (one verb covering both of lit's
+close paths — `done` and resolution-close — because both mean "this
+ticket's work ends here"), `reopen`, `rank`, `relate`
 (dep/parent/label), `archive`/`unarchive`, `delete`/`restore` (tombstone —
 sets `deleted_at`, recoverable — and its reversal; a role holds each pair at
 one scope, so whoever can delete somewhere can restore there, and likewise
@@ -102,19 +110,26 @@ client itself computes — F§7.13 — which this layer replaces with a real
 owner signature), and `store.replace` (the whole-database replacement
 operations: backup restore, snapshots restore, lifeboat recover, downgrade —
 one capability because they are one act, replacing history wholesale).
-One deliberate exception inside `store.replace`: lifeboat recover exists
-precisely for stores broken enough that the policy document may itself be
-unreadable, and a broken local store cannot cryptographically gate
-anything — nor needs to. When no valid policy is readable, recovery
-proceeds locally without the check; the recovered store re-enters shared
-history only through receive-time verification, where every peer judges it
-like any other push. Enforcement lives at acceptance, never at local
-surgery — which is the write layer's model everywhere, stated here because
-this is where it is easiest to get wrong. `lit import` is not its own verb:
+One deliberate exception inside `store.replace`, covering the two
+filesystem-level disaster paths — lifeboat recover and snapshots restore:
+both exist precisely for stores broken enough that the policy document may
+itself be unreadable, and a broken local store cannot cryptographically
+gate anything — nor needs to. When no valid policy is readable, the local
+surgery proceeds without the check; the result re-enters shared history
+only through the receive boundary. And because a mechanically rebuilt
+store carries no per-mutation signature chain for peers to verify, a
+lifeboat rebuild concludes with a **re-enrollment**: the owner's signed
+enrollment commit seals the reconstruction as fiat, exactly as the
+original enrollment sealed pre-regime history, and peers accept it through
+the ordinary enrollment-aware receive path. Enforcement lives at
+acceptance, never at local surgery — which is the write layer's model
+everywhere, stated here because this is where it is easiest to get wrong. `lit import` is not its own verb:
 it fans out to `create` and `edit` checks per affected issue, so bulk
 ingest grants nothing the interactive verbs don't. Decrypted egress
-(`export`/`backup create`/`lifeboat dump` emitting plaintext rather than
-envelopes — §2's redesign item 3) is the named verb `export.plain`,
+(`export` and `backup create` emitting plaintext rather than envelopes —
+§2's redesign item 3; the lifeboat is not in this list because it has no
+decryption logic at all and can only ever dump envelopes) is the named
+verb `export.plain`,
 granted to every member by default and honest-client only: a keyholder can
 always decrypt locally, so this is a guardrail against accidental egress,
 not enforcement, and is documented as such. The selector is the whole
@@ -127,7 +142,7 @@ every product converges on (R V-a):
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | read (holds tier keys granted to them; no write verbs) |
-| contributor | `create`, `start`/all, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own, `delete`+`restore`/own (non-epic) |
+| contributor | `create`, `start`/all, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own-or-assignee (so an agent who claimed a ticket can finish it — the market's author-or-assignee disjunction, R V-d), `delete`+`restore`/own (non-epic) |
 | editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`+`unarchive`, `tier.set` |
 | owner | everything, including `delete`+`restore`/all, `destroy`, `member.admin`, `policy.admin`, `sync.take`, `store.replace` |
 
@@ -139,8 +154,9 @@ which is exactly why the capability selector carries an issue-type
 dimension.) Note what `delete` means before it can be feared: a tombstone on
 a surviving row (F "retention" group), reversible by the paired `restore`.
 Irreversible loss is a separate verb (`destroy`), owner-only, mirroring the
-soft-delete/destroy split five of six incumbents enforce and GitLab is the
-cautionary outlier for (R V-c).
+soft-delete/destroy split the market enforces to varying depth — true
+recycle bins in three products, harder-gated destruction nearly everywhere,
+GitLab the cautionary outlier (R V-c's per-product breakdown).
 
 ### Enforcement
 
@@ -164,7 +180,11 @@ which is the TUF rollback defense: a remote serving an older-than-known or
 diverging history is refused, not adopted (R IV). Witness cosigning against
 split-view (the remote showing different members different histories) is
 acknowledged as the full CT-style answer and deliberately deferred; the
-primitive slot exists, the feature does not (120/80).
+primitive slot exists, the feature does not (120/80). To keep charter
+constraint 2 intact rather than quietly loosened: a witness is split-view
+*detection*, never enforcement, and never required — enforcement is
+client-side everywhere, always, and no lit feature may depend on a witness
+existing.
 
 **Enrollment — verification never walks to genesis.** Every existing
 workspace, this repo's included, has an unsigned history; a rule that
@@ -233,8 +253,11 @@ that boundary is the repo itself.
 
 Ciphertext envelope: `{tier, epoch, nonce, ciphertext, commitment}` stored
 in the existing text columns. The nonce is fresh per encryption; the
-**commitment** is a deterministic keyed hash of the plaintext under **the
-epoch key in force at write time**, present so that equality of content is
+**commitment** is a deterministic keyed hash of the plaintext under a key
+derived from **the epoch key in force at write time** — the encryption key
+and the commitment key are separate HKDF-derived, domain-separated subkeys
+of the epoch key, never the raw epoch key doing two jobs — present so that
+equality of content is
 decidable without decryption — the merge below depends on it. Keying the
 commitment to the epoch is a deliberate choice between two defects: a
 stable per-tier commitment key would survive rotation but hand every
@@ -327,7 +350,13 @@ model, yields:
    principal ids. Issues additionally gain a first-class `created_by`
    principal column — the schema has none today, and the write layer's
    "own" binding needs it as a column rather than a per-check replay of the
-   creation event.
+   creation event. Backfill rule for pre-existing issues: there is no
+   truthful source (the id hash's creator input is a fixed placeholder —
+   see the feature inventory), so legacy issues get `created_by = NULL`;
+   NULL-owned rows answer only to /all capabilities, and an owner may
+   explicitly assign ownership. For the motivating solo-owner backlog this
+   is lossless; for a team migrating an existing shared backlog it is a
+   documented one-time cost, not a silent one.
 3. **Plaintext-egress commands become a capability.** `export`,
    `backup create`, and `lifeboat dump` today treat a full plaintext dump as
    an ordinary read (F§5). Under the read layer they emit envelopes by
@@ -340,7 +369,9 @@ model, yields:
    existing privacy invariant today.
 5. **Recovery verification** (`verify.go`) loses free-text mis-map detection
    under uniform ciphertext (F§7.8); conservation laws extend to envelope
-   integrity (tier/epoch/nonce round-trip) to compensate.
+   integrity (tier/epoch/nonce/commitment round-trip — the commitment
+   especially, being the one field derived from content and so the one
+   that can catch a scrambled-field mis-map) to compensate.
 6. **Foreign-store opens get the same gate as local ones.** `ls --at` and
    `stores --counts` open other projects' stores by path with no policy or
    key consultation (F§7.11). They route through the target store's own
@@ -374,13 +405,19 @@ ones — these are what make the audit trail trustworthy at all):
 - The role set and every capability binding (the four roles are defaults,
   not law).
 - Owner-set threshold (defaults to 1 solo, majority once multi-owner).
-- Witness cosigning, when it ships.
+- Witness cosigning, when it ships (detection only — enforcement never
+  depends on it, per charter constraint 2).
 
 **Documented limits, never papered over:** forward-only revocation; denial
 recoverable-not-preventable; a removed member retains what they could read;
 metadata (existence, structure, timing, actor principal ids) is visible to
 every repo reader even under full encryption, as is equality of two
-encrypted values (the commitment trade, §2). Compliance officers get these
+encrypted values (the commitment trade, §2); narrowing an issue's tier
+restricts only its future — every prior member of the old, broader tier
+keeps the keys to its pre-narrowing history (§6 item 7); and a member who
+loses a signing key without a succession record (§1) leaves their
+own-scoped rights attached to the old principal until an owner reassigns
+them. Compliance officers get these
 in writing; the design's honesty here is a feature (R III's regimes all
 demand accurate control descriptions, not perfect controls).
 
@@ -396,13 +433,15 @@ design imposes. A future lit change stays compatible iff:
    ship.
 3. **Shared structure may not depend on another tier's plaintext.** Rank,
    lanes, claims, epic status — anything computed across rows reads
-   structural columns only. This is true today (F§7.1, F§7.4) and becomes a
+   structural columns only. This is true today (F§7.1, F§7.4, F§7.6) and becomes a
    law: a feature needing cross-tier *content* is misdesigned.
 4. **The synced representation is the protected representation.** No layer
    below the CLI boundary ever sees plaintext; escape hatches inherit
    protection for free. (This is why the lifeboat needed no exemption.)
 5. **No feature may require a server.** Anything needing central state is
-   out — or it is a witness, which is optional by definition.
+   out — or it is a witness: an optional external observer that detects
+   equivocation and enforces nothing, which is why it does not breach the
+   charter's no-server constraint. Enforcement never moves off the client.
 6. **Structural columns are workspace-public by definition**, so adding a
    structural column is adding metadata every repo reader can see; that
    trade-off gets named in the adding change's design, every time.
@@ -454,7 +493,11 @@ one-command repair (re-push from any replica), not as silent divergence.
 3. Crypto suite selection and the FIPS question (ITAR wants validated
    modules — R III; Go's stdlib vs a vetted library; no home-rolled
    primitives under charter #5).
-4. Keyring/policy wire format and where it lives in the store (a table vs a
+4. Keyring/policy wire format, growth, and where it lives in the store —
+   the keyring is O(members × epochs-ever-minted) with wrapped keys for
+   every historical epoch, synced to every clone, so the format decision
+   must state a bound or a compaction strategy (or argue concretely why
+   churn keeps it small); also (a table vs a
    Dolt-versioned file; it must ride reconcile safely).
 5. The joiner-request flow's abuse surface (an unauthenticated ref push as a
    membership request is a spam channel; probably fine, needs a look).

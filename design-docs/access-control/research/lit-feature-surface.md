@@ -106,9 +106,10 @@ free text a tier could encrypt, versus structure the whole workspace must
 read.
 
 **Issues** carry: an id; three free-text fields (title, description, agent
-prompt); a topic slug; and structural fields — status, priority, type, lane,
-a global fractional rank, four lifecycle timestamps plus archived/deleted
-retention timestamps, a close resolution, and an optional redirect target.
+prompt); a topic slug; an identity-bearing assignee; and structural fields —
+status, priority, type, lane, a global fractional rank, three lifecycle
+timestamps (created/updated/closed) plus archived/deleted retention
+timestamps, a close resolution, and an optional redirect target.
 Database CHECK constraints enforce the semantic couplings (epics have no
 status of their own; a redirect target requires a redirecting resolution).
 
@@ -363,16 +364,19 @@ row-filtering or ciphertext. Stated as invariants so they survive refactors.
 complete issue set and hard-fails on events referencing issues it wasn't
 given — a guard ensuring a partial read can never yield a wrong claim. A
 row-filtering RBAC layer *is* a partial read and will hit the guard, not
-degrade gracefully. Compatible resolution: derivation reads only structural
-fields, so it can run over the full row set with free text still encrypted —
-but that must become a stated law, not an accident.
+degrade gracefully. The relevant observed fact: derivation reads only
+structural fields today, so a full-row-set read with free text opaque would
+satisfy the guard — whether that becomes a stated law or claims get scoped
+another way is the design's decision, not this inventory's.
 
 **7.2 Prose conflicts are resolved by an agent holding plaintext.** The
 reconcile hands base/ours/theirs plaintext to the calling agent and pins the
 answer with a fingerprint over those plaintexts; an incomplete resolution
-set rejects the entire batch. Under encryption: only keyholders can
-reconcile a tier, fingerprints must be redefined over ciphertext, and the
-all-or-nothing batch rule must scope per tier or one unreadable field blocks
+set rejects the entire batch. The contracts at stake under encryption: who
+may reconcile a field they cannot read, what the fingerprint is computed
+over when plaintext is unavailable, and what the all-or-nothing batch rule
+means when one participant cannot see every conflicted field — each is a
+fork the design must choose; as-is, one unreadable field would block
 everyone's reconcile.
 
 **7.3 The merge unit is the whole export, and absence means deletion.** The
@@ -416,10 +420,10 @@ round-trip) to compensate.
 
 **7.9 The lifeboat is a deliberate below-the-gate bypass.** It reads the
 store without the migration gate and without schema knowledge, on purpose —
-any enforcement living above that gate does not cover it. The clean answer
-is representational: if the at-rest form is the protected form (ciphertext
-in the columns), the lifeboat needs no exemption because what it dumps is
-already protected.
+any enforcement living above that gate does not cover it, so the design
+must either exempt it explicitly or choose a representation the bypass
+cannot leak. (Observed consequence, not a recommendation: whatever the
+at-rest bytes are is exactly what the lifeboat emits.)
 
 **7.10 Actor identity is human-readable in the synced DB today.** Session
 ids and usernames sit in assignee/actor/creator fields, contradicting the
