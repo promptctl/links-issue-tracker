@@ -113,8 +113,12 @@ Database CHECK constraints enforce the semantic couplings (epics have no
 status of their own; a redirect target requires a redirecting resolution).
 
 **The issue id is not opaque.** A top-level id embeds the plaintext topic
-slug and a hash computed over topic, title, description, creator, and
-creation time — a commitment to the content. A child id is its parent's id
+slug and a hash computed over topic, title, description, a creator input,
+and creation time — a commitment to the content. (The creator input is
+currently a fixed placeholder constant, identical for every issue in every
+workspace — it carries zero attributive information, so no historical
+creator signal exists for issues anywhere, not even approximately in the
+id.) A child id is its parent's id
 plus a sequence number, so ids alone reveal parentage and sibling count. Ids
 appear everywhere: every output, every relation row, every trace, and in
 branch names derived from tickets.
@@ -262,7 +266,9 @@ disables all sync automation. Every sync/init decision — interactive or
 automated — is durably recorded as a JSON trace (§5).
 
 **Whole-store replacement paths** (beyond reconcile): restore-from-backup,
-reset-to-remote, adopt, the lifeboat's rebuild-and-promote, downgrade's
+take remote (reconcile's unrelated-history escape — the same "take local /
+take remote" mechanism named in the destructive-escapes paragraph above),
+adopt, the lifeboat's rebuild-and-promote, downgrade's
 down-migrations, and schema migrations generally (which run under an
 automatic pre-migration snapshot guard, with failed migrations quarantined).
 Migrations and the legacy-schema reconciler read and rewrite entire tables —

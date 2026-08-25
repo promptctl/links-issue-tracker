@@ -67,7 +67,9 @@ In order, each step feeding the next:
    what actually exists, not a sketch of it.
 3. **Forward constraints.** For each design choice, what it forecloses or
    burdens in future lit development.
-4. **Customer needs**, separated into the sections below.
+4. **Customer needs**, separated into the sections below — which also carry
+   the capability model (the bar from "Why this exists") and step 3's
+   forward-constraints output, per the amendment noted there.
 
 ## Required sections of the answer
 
@@ -103,3 +105,7 @@ lit development.
 
 - 2026-08-25: charter written from the owner's directive; research and the
   first draft of [design.md](design.md) in progress.
+- 2026-08-25 (amendment): Required sections extended with **Capability
+  model** and **Forward constraints**, so the checklist covers the charter's
+  own stated bar and process step 3; the owner's three dictated sections are
+  unchanged.

@@ -89,7 +89,9 @@ every check. This matches the reporter/author machinery in Jira and GitLab
 (R V-d).
 
 Verbs, mapped from the command table: `create`, `edit` (update's field
-writes), `comment.add`, `comment.rm`, `close`, `reopen`, `rank`, `relate`
+writes), `start` (claim into in_progress — granted /all, because pulling
+the top of the shared queue regardless of creator *is* the agent workflow),
+`comment.add`, `comment.rm`, `close`, `reopen`, `rank`, `relate`
 (dep/parent/label), `archive`/`unarchive`, `delete`/`restore` (tombstone —
 sets `deleted_at`, recoverable — and its reversal; a role holds each pair at
 one scope, so whoever can delete somewhere can restore there, and likewise
@@ -100,11 +102,24 @@ client itself computes — F§7.13 — which this layer replaces with a real
 owner signature), and `store.replace` (the whole-database replacement
 operations: backup restore, snapshots restore, lifeboat recover, downgrade —
 one capability because they are one act, replacing history wholesale).
-`lit import` is not its own verb: it fans out to `create` and `edit` checks
-per affected issue, so bulk ingest grants nothing the interactive verbs
-don't. The selector is the whole workspace for now; per-epic delegation is
-the TUF delegated-paths primitive (R IV) held in reserve — 120% rule — but
-not a shipped feature.
+One deliberate exception inside `store.replace`: lifeboat recover exists
+precisely for stores broken enough that the policy document may itself be
+unreadable, and a broken local store cannot cryptographically gate
+anything — nor needs to. When no valid policy is readable, recovery
+proceeds locally without the check; the recovered store re-enters shared
+history only through receive-time verification, where every peer judges it
+like any other push. Enforcement lives at acceptance, never at local
+surgery — which is the write layer's model everywhere, stated here because
+this is where it is easiest to get wrong. `lit import` is not its own verb:
+it fans out to `create` and `edit` checks per affected issue, so bulk
+ingest grants nothing the interactive verbs don't. Decrypted egress
+(`export`/`backup create`/`lifeboat dump` emitting plaintext rather than
+envelopes — §2's redesign item 3) is the named verb `export.plain`,
+granted to every member by default and honest-client only: a keyholder can
+always decrypt locally, so this is a guardrail against accidental egress,
+not enforcement, and is documented as such. The selector is the whole
+workspace for now; per-epic delegation is the TUF delegated-paths
+primitive (R IV) held in reserve — 120% rule — but not a shipped feature.
 
 Roles are named bundles of capabilities. Four defaults, matching the ladder
 every product converges on (R V-a):
@@ -112,7 +127,7 @@ every product converges on (R V-a):
 | Role | Capabilities (beyond the previous row) |
 |---|---|
 | observer | read (holds tier keys granted to them; no write verbs) |
-| contributor | `create`, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own, `delete`+`restore`/own (non-epic) |
+| contributor | `create`, `start`/all, `edit`/own, `comment.add`, `comment.rm`/own, `close`/own, `delete`+`restore`/own (non-epic) |
 | editor | `edit`/all, `close`/all, `reopen`, `rank`, `relate`, `archive`+`unarchive`, `tier.set` |
 | owner | everything, including `delete`+`restore`/all, `destroy`, `member.admin`, `policy.admin`, `sync.take`, `store.replace` |
 
@@ -162,7 +177,14 @@ a cloned backlog today. Verification and the last-verified head both seed at
 enrollment; a fresh workspace's enrollment commit is simply its first. Only
 history after enrollment carries the write layer's guarantees, and the
 boundary is inspectable — an auditor sees precisely where fiat ends and
-proof begins.
+proof begins. Enrollment is an explicit command and it is **sync-fenced**:
+it requires a fresh fetch showing the remote holds no enrollment, and it
+pushes immediately — so on a shared remote there is one winner by ordinary
+push ordering. A race that slips through anyway (two unsynced clones each
+enrolling) is caught at reconcile: two distinct enrollment commits never
+auto-merge; the one already in the remote's linear history stands, the
+losing clone discards its enrollment and its principal re-requests
+membership. The exact fencing mechanics are §6's to close.
 
 Reconcile is compatible with signing because it already replays folded local
 commits one-per-original with original authorship (F§4) — each replayed
@@ -211,13 +233,20 @@ that boundary is the repo itself.
 
 Ciphertext envelope: `{tier, epoch, nonce, ciphertext, commitment}` stored
 in the existing text columns. The nonce is fresh per encryption; the
-**commitment** is a deterministic keyed hash of the plaintext under a
-tier-derived key, present so that equality of content is decidable without
-decryption — the merge below depends on it. The stated cost: anyone can see
-that two encrypted values are equal (never what they are); that equality
-leak is the price of conflict detection over ciphertext, the same trade
-git-crypt makes for diffability (R IV), paid here only at the granularity of
-whole field values. The envelope is opaque bytes to the schema, to
+**commitment** is a deterministic keyed hash of the plaintext under **the
+epoch key in force at write time**, present so that equality of content is
+decidable without decryption — the merge below depends on it. Keying the
+commitment to the epoch is a deliberate choice between two defects: a
+stable per-tier commitment key would survive rotation but hand every
+removed member a permanent oracle for testing plaintext guesses against
+*future* content, while an epoch-keyed commitment merely loses equality
+detection *across* a rotation — so a concurrent edit pair straddling a
+membership change can surface a spurious prose conflict, rare (rotations
+happen on membership change) and safe (a keyholder confirms the texts
+match). Confidentiality wins over a rare liveness annoyance. The remaining
+cost: anyone can see that two same-epoch encrypted values are equal (never
+what they are) — the same trade git-crypt makes for diffability (R IV),
+paid here only at the granularity of whole field values. The envelope is opaque bytes to the schema, to
 migrations, to the export format, and to Dolt merge — which is what makes
 the sync story below hold.
 
@@ -230,8 +259,11 @@ epoch keys** to the new principal, so a joiner reads the tier's whole
 existing backlog, which is what the onboarding flow (§5) promises; revocation
 is asymmetric by nature — leavers keep old epochs, joiners get them — and
 only the *future* is partitioned by rotation. This is the Monero view-key
-separation: read capability granted without any write capability,
-and vice versa (a CI principal can hold write verbs and zero tier keys).
+separation: read capability granted without any write capability. The
+converse also holds here — a CI principal can hold write verbs and zero
+tier keys — though that half is this design's own key-type independence,
+not a Monero precedent (Monero's spend side needs the view key in
+practice).
 Removing a member rotates the tier to a new epoch wrapped to survivors only
 (Megolm / Sender-Keys, R IV); old epochs are not re-encrypted, and the
 removed member's continued ability to read what they could already read is
@@ -429,6 +461,15 @@ one-command repair (re-push from any replica), not as silent divergence.
 6. Verification cost at receive time on long histories (adoption clones the
    full archive — F§4; incremental verification from last-verified-head
    should make steady-state cheap; the first adopt is the expensive one).
-7. Whether `tier.set` to a *more* restricted tier should re-encrypt the
-   issue's existing history or only future writes (leaning: future-only,
-   stated plainly, consistent with forward-only everything).
+7. `tier.set` mechanics in both directions. Position: **narrowing** is
+   future-only — existing history stays under the old tier, stated plainly,
+   consistent with forward-only everything. **Widening** re-encrypts the
+   issue's *current* field values under the destination tier's epoch key
+   (one issue's worth of work, cheap), because "make this visible to more
+   people" that leaves the content unreadable to them is a lie; the issue's
+   *history* stays under the old tier and is documented as such. The open
+   detail is the widening rewrite's interaction with sync (it is an
+   ordinary signed mutation, but the re-encryption must be performed by a
+   principal holding both tiers).
+8. The enrollment fence made precise (§1): the fetch-check-push window, and
+   reconcile's detection and discard of a losing concurrent enrollment.

@@ -67,8 +67,9 @@ Reporter dynamic grant is the workaround.
 **Grant targets** (permission-scheme holders): user, group, **project role**,
 application access, anyone/public, **reporter**, **current assignee**, project
 lead, user/group custom-field value. Granting to Reporter is direct "creator
-owns their ticket" machinery. Known KB caveat: granting Browse to
-reporter/assignee/custom-field leaks project metadata to all users.
+owns their ticket" machinery. UNVERIFIED: a KB caveat that granting Browse to
+reporter/assignee/custom-field leaks project metadata to all users — the
+specific KB article was not re-located for a link.
 
 **Read granularity — the market high-water mark, three nested levels:**
 
@@ -158,9 +159,10 @@ to regular comments"; replies inherit internal status). Granularity is
 per-comment, but against *fixed role thresholds*, never arbitrary principals —
 the only principal-level grant is the confidential-issue assignee carve-out.
 
-**Creator semantics — strongest of the incumbents.** The "author-or-assignee OR
-role" disjunction appears in nearly every issue mutation prerequisite (close,
-reopen, edit, promote, self-delete for Reporter+).
+**Creator semantics — strongest of the incumbents.** The "author-or-assignee
+OR role" disjunction appears in most issue mutation prerequisites (close,
+reopen, edit, promote); self-delete is narrower — authors only, per the
+footnote quoted above, with no assignee carve-out.
 
 **Custom roles**: Ultimate tier. Audit events: Premium/Ultimate, retained
 indefinitely. **No crypto enforcement — confirmed.**
@@ -303,6 +305,8 @@ encryption goes strictly beyond anything it ships.
 
 ### git-appraise
 
+([repo/docs](https://github.com/google/git-appraise))
+
 Review data as single-line JSON entries in git-notes refs
 (`refs/notes/devtools/reviews`, `/discuss`, `/ci`, `/analyses`), merged with
 the `cat_sort_uniq` notes strategy (concatenate/sort/dedupe — append-only,
@@ -355,7 +359,9 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   new root signed by threshold of *both* old and new root keys (old quorum
   blesses new); rollback/freeze protection via version monotonicity + expiry +
   snapshot binding; all keys offline except timestamp.
-- **SOPS/age** (README v3.9.0): per-file data key wrapped to each recipient
+- **SOPS/age**
+  ([SOPS README](https://github.com/getsops/sops), v3.9.0): per-file data
+  key wrapped to each recipient
   (age/KMS/PGP) in the file's `sops:` metadata; `.sops.yaml` `creation_rules`
   by `path_regex`; `key_groups` + `shamir_threshold` gives real threshold
   decryption. Rotation semantics matter: **`sops updatekeys` rewraps without
@@ -385,7 +391,10 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   read capability carved from a write keypair can be *lossy*; audit which
   observations require the write key. (Key-image explanation
   UNVERIFIED-as-quoted.)
-- **CT + witness cosigning**: RFC 6962 STHs + Merkle **consistency proofs**;
+- **CT + witness cosigning**
+  ([RFC 6962](https://www.rfc-editor.org/rfc/rfc6962),
+  [C2SP tlog-witness](https://github.com/C2SP/C2SP/blob/main/tlog-witness.md)):
+  RFC 6962 STHs + Merkle **consistency proofs**;
   §7.3: "two conflicting Signed Tree Heads for the same log … is cryptographic
   proof of that log's misbehavior"; the C2SP **tlog-witness** protocol (used by
   Sigsum) has witnesses atomically verify a consistency proof from their last
@@ -424,7 +433,7 @@ enforcement is the host's push ACL. Read = whoever can fetch.
 
 **(a) Recurring role/capability vocabulary.** Every product converges on a
 ~5-step ladder: *no-access → viewer/reader → limited-contributor
-(Guest/Stakeholder/Triage/Planner) → editor/member → admin/owner*, with three
+(Guest/Triage/Planner) → editor/member → admin/owner*, with three
 universal patterns layered on: (1) **verb-split permissions** rather than
 monolithic "write" (assign, transition, resolve, modify-reporter, set-security
 are separate grants in Jira; close/reopen/delete separate in GitHub custom
@@ -445,19 +454,29 @@ nobody offers per-field read restriction. Write: verb-level per container,
 with per-issue write reduction only via author/assignee dynamics. A
 per-visibility-tier encryption design that supports (project-tier, issue-tier,
 comment-tier) matches the best-in-market surface; key-per-tier-per-container
-is tractable where key-per-ticket is not — but note both GitLab and Jira gate
-their finer read units on *roles/levels*, not arbitrary per-item ACLs, which
-maps cleanly onto tier keys.
+is tractable where key-per-ticket is not — and note the granularity of the
+*grant targets*: GitLab's confidential issues gate on fixed role thresholds
+only, and Jira's security levels are *defined* in terms of roles, groups,
+and dynamic principals — though a Jira level's membership can also name
+individual users and per-issue picker fields, which is genuine per-item
+ACL machinery at the high end. The role/level-shaped core maps cleanly onto
+tier keys; the user-picker tail is the part tier keys deliberately don't
+chase.
 
-**(c) Delete is never just delete.** Five of six products separate **soft
-delete (recoverable, ordinary privilege)** from **destroy (irreversible,
-admin-gated)**: ADO Recycle Bin (never auto-purges; "Permanently delete work
-items" is a distinct permission that even collection admins can be Denied),
-Rally Recycle Bin (owner or Editor deletes; only subscription/workspace admins
-purge), Jira (Archive+Restore permissions distinct from Delete), Linear
-(30-day trash), GitHub (org-opt-in + admin + audit event; comment "minimize"
-tombstones). GitLab is the outlier (broad hard delete, no issue audit events)
-and reads as the anti-pattern. Fossil's non-propagating shun list is the one
+**(c) Delete is never just delete.** Three products have a true
+recoverable-then-destroy split for work items: ADO Recycle Bin (never
+auto-purges; "Permanently delete work items" is a distinct permission that
+even collection admins can be Denied), Rally Recycle Bin (owner or Editor
+deletes; only subscription/workspace admins purge), and Linear (30-day
+trash). Jira sits adjacent: Archive+Restore are permissions distinct from
+Delete, but Delete itself is not documented here as recoverable — archive
+is a separate lifecycle, not a delete trash-state. GitHub gates issue
+delete hard (org-opt-in + admin + audit event) with no recoverable step;
+its tombstone machinery ("minimize") exists only at comment level. GitLab
+is the outlier (broad hard delete, no issue audit events) and reads as the
+anti-pattern. The pattern that survives the details: destruction is
+consistently *harder-gated* than deletion, and where a recoverable
+intermediate exists it is the ordinary-privilege path. Fossil's non-propagating shun list is the one
 design built for a sync'd substrate: a tombstone that blocks re-introduction
 without letting a remote trigger destruction. The recurring pattern for a
 synced or encrypted substrate: soft delete as an ordinary recorded mutation,
@@ -498,10 +517,12 @@ difference between cloud storage being an export event or not. The regimes'
 one structural demand that fights crypto: revocation and erasure. Every
 studied crypto system (Megolm, Sender Keys, SOPS, git-crypt) delivers only
 **forward-only revocation** — epoch/key rotation for survivors, never
-retroactive — so every design in this space pairs rotation-on-membership-
-change with crypto-shredding for erasure, and CT-style consistency proofs +
-witness/cosigning among clients are the studied defense for rollback and
-equivocation detection against an untrusted store. Note also that ACL-style
+retroactive. Rotation alone therefore cannot satisfy an erasure demand;
+crypto-shredding (Part III) is the recognized mitigation for that gap — a
+compliance-side answer, not a documented feature of the studied systems.
+CT-style consistency proofs + witness/cosigning among clients are the
+studied defense for rollback and equivocation detection against an
+untrusted store. Note also that ACL-style
 **Deny is unimplementable cryptographically** (you cannot un-give a key):
 every studied E2E group system is additive-grant with rotation for exactly
 this reason.
