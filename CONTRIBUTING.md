@@ -65,8 +65,9 @@ go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit
 The suite has two lanes. The **inner loop** — `go test -short ./...` — is what
 you run while working and what CI's PR gate runs; `-short` skips only the tests
 whose cost comes from deliberately generated scale (today that is exactly one:
-a sync-reconcile combine folding 500 commits over a 1000-issue backlog, ~2
-minutes on its own). The **full lane** — plain `go test ./...` — runs
+a sync-reconcile combine folding 500 commits over a 1000-issue backlog — 119s
+at the 2026-08-24 measurement on the development machine; the test logs its
+own runtime, so a full-lane run's output is the current number). The **full lane** — plain `go test ./...` — runs
 everything, and a scheduled job
 ([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml)) runs it
 nightly, filing a `nightly-failure` issue when it breaks so the skipped tests

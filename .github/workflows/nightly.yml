@@ -19,6 +19,14 @@ permissions:
   contents: read
   issues: write
 
+# A dispatched run overlapping the scheduled one must queue, not race: two
+# concurrent failing runs would each see no open nightly-failure issue and
+# file a duplicate. Never cancel-in-progress — a cancelled full lane is a
+# skipped full lane.
+concurrency:
+  group: nightly-full-suite
+  cancel-in-progress: false
+
 jobs:
   full-suite:
     runs-on: ubuntu-latest
@@ -46,17 +54,21 @@ jobs:
       - name: Test (full, no -short)
         run: go test -timeout 30m ./...
 
+      # failure() alone would miss the job-level timeout: GitHub marks a
+      # timed-out job cancelled, not failed, so the wedge this workflow's
+      # timeout exists to catch is exactly the case a bare failure() guard
+      # would let pass in silence. [LAW:no-silent-failure]
       - name: Report failure as a GitHub issue
-        if: failure()
+        if: failure() || cancelled()
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
-          body="Nightly full-suite run failed: ${run_url}
+          body="Nightly full-suite run did not finish green: ${run_url}
 
-          This lane runs everything the PR gate's \`-short\` skips. A failure here is a real break in a covered test — triage it; do not mute this job."
+          This lane runs everything the PR gate's \`-short\` skips. This means a break in the build or in a covered test — or, if the run shows cancelled, a hang that hit the job timeout. Triage it; do not mute this job."
           gh label create nightly-failure --force \
             --description "The scheduled full test lane is red" --color B60205
           # One open issue collects repeat failures; a new day's failure lands
