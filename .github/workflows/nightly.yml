@@ -68,7 +68,7 @@ jobs:
           run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
           body="Nightly full-suite run did not finish green: ${run_url}
 
-          This lane runs everything the PR gate's \`-short\` skips. This means a break in the build or in a covered test — or, if the run shows cancelled, a hang that hit the job timeout. Triage it; do not mute this job."
+          A step in this job failed, or the job was cancelled (a job that hits its 60-minute timeout also reports cancelled) — read the run log for which step and why. This lane runs everything the PR gate's \`-short\` skips; triage it, do not mute this job."
           gh label create nightly-failure --force \
             --description "The scheduled full test lane is red" --color B60205
           # One open issue collects repeat failures; a new day's failure lands
