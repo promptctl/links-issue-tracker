@@ -248,14 +248,10 @@ func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []st
 // count once. Ties on created_at break by primary key, so the merged order is
 // deterministic where the SQL ordering never was.
 func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
-	type relationKey struct {
-		src, dst string
-		relType  model.RelationType
-	}
 	seen := make(map[relationKey]struct{}, len(bySrc)+len(byDst))
 	merged := make([]model.Relation, 0, len(bySrc)+len(byDst))
 	for _, rel := range append(bySrc, byDst...) {
-		key := relationKey{src: rel.SrcID, dst: rel.DstID, relType: rel.Type}
+		key := relationKey{srcID: rel.SrcID, dstID: rel.DstID, kind: rel.Type}
 		if _, ok := seen[key]; ok {
 			continue
 		}
