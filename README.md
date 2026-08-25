@@ -31,6 +31,8 @@ small, predictable CLI.
 ### Requirements
 
 - A git repository (or worktree)
+- git 2.36 or newer — `lit` enumerates a repository's worktrees with
+  `git worktree list --porcelain -z`, and `-z` arrived in 2.36
 
 > `lit` ships **prebuilt, self-contained binaries** — no Go toolchain and no
 > system ICU/zstd needed to run them. The `dolt` CLI isn't required either; the
