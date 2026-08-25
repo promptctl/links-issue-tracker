@@ -105,8 +105,8 @@ dispatchable but only print a pointer to their replacement.
 Authoritative schema: `internal/store/schema_snapshot.sql` — generated, and
 byte-compared by a drift canary, so schema change is deliberately loud. Seven
 application tables. What matters for access control is each field's *kind*:
-free text a tier could encrypt, versus structure the whole workspace must
-read.
+free text a restriction scheme could encrypt, versus structure the whole
+workspace must read.
 
 **Issues** carry: an id; three free-text fields (title, description, agent
 prompt); a topic slug; an identity-bearing assignee; and structural fields —
@@ -128,10 +128,11 @@ appear everywhere: every output, every relation row, every trace, and in
 branch names derived from tickets.
 
 **Comments are rows, not a field** — each with its own id, body (free text),
-creation time, and creator. **Labels** are rows keyed (issue, label); label
-names are a queryable dimension. **Relations** are rows keyed (src, dst,
-type) over the closed type set; parentage is therefore recorded twice — in
-the child's id string and as a relation row — plus enforced by cascade.
+creation time, and creator. **Labels** are rows keyed (issue, label), each
+recording its creator; label names are a queryable dimension. **Relations**
+are rows keyed (src, dst, type) over the closed type set, each recording
+its creator; parentage is therefore recorded twice — in the child's id
+string and as a relation row — plus enforced by cascade.
 
 **Events are the history and attribution spine.** Every mutation records an
 event (action, free-text reason, actor, timestamp, and the attribution
@@ -222,7 +223,7 @@ design resolves them into key-bound opaque principals.
 
 **One Dolt commit per mutation**, under a kernel-flock commit lock, so the
 store's own history is a complete, ordered, per-mutation audit trail with
-attribution. This is the substrate the write layer signs.
+attribution. This is the substrate any mutation-signing scheme would sign.
 
 **Transport is the code repo's own git remote.** Before every sync
 operation, lit re-derives its Dolt remotes from `git remote -v`, so git
@@ -393,9 +394,9 @@ byte-faithfully — "unreadable" must be representable as distinct from
 **7.4 Rank is one global order.** Rank operations read and rewrite
 neighbors across the entire backlog (top/bottom queries, N-way set,
 inversion repair), and an epic's rank carries its children. "Rank to top"
-is meaningless if the top is invisible; therefore ticket *existence and
-rank* must stay readable to every member (the design's visible-skeleton
-rule) or ranking fragments per tier.
+is meaningless if the top is invisible; so any content-restriction scheme
+faces a fork: keep ticket *existence and rank* readable to every member, or
+accept that ranking fragments into per-audience orders.
 
 **7.5 The queue needs titles, and filters run in SQL.** Backlog/next render
 titles; search, assignee, and label filters are database predicates over
@@ -403,11 +404,15 @@ plaintext columns. Encrypted fields move filtering to the client after
 decryption; anything that must stay a database predicate must stay
 structural plaintext.
 
-**7.6 Structure crosses tiers by construction.** Parentage lives in the id
-string, the relations table, and cascades; lane readiness is computed over
-an epic's *full* child set (a hidden sibling still gates its lane-mates);
-an epic's own status is derived from all of its children. Content-hiding
-survives all of this; existence-hiding breaks all of it at once.
+**7.6 Structure is computed over whole row sets by construction.**
+Parentage lives in the id string, the relations table, and cascades; lane
+readiness is computed over an epic's *full* child set (a hidden sibling
+still gates its lane-mates); an epic's own status is derived from all of
+its children. That coupling forces a fork on any restriction scheme: keep
+every row's existence and structural fields readable to all members, or
+redesign parentage, lane gating, and epic-status derivation for partial
+visibility — which side to take is the design's decision, not this
+inventory's.
 
 **7.7 Cascade rewrite cycles must preserve envelopes.** Sync deltas express
 a changed issue as delete-plus-reinsert, cascading child rows away and back.
@@ -418,9 +423,10 @@ as "should be dropped" (same invariant as 7.3, at the row-lifecycle level).
 **7.8 Recovery verification leans on distinguishable plaintext.** The
 lifeboat's conservation checks compare rebuilt stores against raw dumps and
 already acknowledge that same-typed free-text fields can be swapped
-undetectably. Uniform ciphertext makes *all* encrypted fields same-typed;
-the verification gate needs envelope-integrity checks (tier/epoch/nonce
-round-trip) to compensate.
+undetectably. Uniform ciphertext makes *all* encrypted fields same-typed —
+so whatever the at-rest representation becomes, the verification gate loses
+this signal and needs a compensating integrity check derivable from that
+representation itself.
 
 **7.9 The lifeboat is a deliberate below-the-gate bypass.** It reads the
 store without the migration gate and without schema knowledge, on purpose —
@@ -443,21 +449,22 @@ store or they become either broken or a bypass.
 
 **7.12 Unattended processes need credentials.** The on-change mirror and
 background receive run detached, after the invoking command exits, with no
-user present. Signing keys and tier keys must be available non-interactively
-(private git dir / OS keychain), or sync automation dies — a hard
-transparency constraint.
+user present. Whatever signing or decryption material a scheme introduces
+must be available non-interactively (private git dir / OS keychain), or
+sync automation dies — a hard transparency constraint.
 
 **7.13 The existing owner-approval gate is advisory.** The destructive
 reconcile escapes require an approval token — but the same client computes
 the token, so it is a speed bump for honest agents, not enforcement. It is
-the in-repo precedent for "owner sign-off on destructive acts" and precisely
-the pattern the write layer upgrades to a real signature.
+the in-repo precedent for "owner sign-off on destructive acts"; any scheme
+that wants that sign-off to be real must replace the self-computed token
+with something the approving client cannot mint alone.
 
 **7.14 The schema is deliberately hard to change quietly.** CHECK
 constraints couple structural fields; a generated schema snapshot is
 byte-compared as a drift canary; schema change requires a numbered
-migration. This cuts both ways: adding envelope/tier/principal columns is
-loud and reviewed, and any scheme requiring structural fields to become
+migration. This cuts both ways: adding encryption-metadata or identity
+columns is loud and reviewed, and any scheme requiring structural fields to become
 opaque (encrypting type or resolution) fights the database itself.
 
 ## Known-stale risks in this document

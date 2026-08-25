@@ -68,8 +68,11 @@ In order, each step feeding the next:
    granularity floors, the defaults.
 2. **lit feature survey.** Walk lit's full feature set so the design covers
    what actually exists, not a sketch of it.
-3. **Forward constraints.** For each design choice, what it forecloses or
-   burdens in future lit development.
+3. **Forward constraints.** What a choice in this space forecloses or
+   burdens in future lit development — begun here as a lens over the hard
+   constraints above (which exist before any design does), finalized only
+   once step 4 pins the actual design choices down, since a choice's cost
+   cannot be enumerated before the choice exists.
 4. **Customer needs**, separated into the sections below — which also carry
    the capability model (the bar from "Why this exists") and step 3's
    forward-constraints output, per the amendment noted there.

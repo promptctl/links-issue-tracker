@@ -307,7 +307,7 @@ and should be re-verified against them before load-bearing use.
   **XK**, NID as static key).
 
 **Verdict**: Radicle proves client-side-verified *write integrity* (signed
-namespaces + delegate thresholds) over a git substrate; per-tier *read*
+namespaces + delegate thresholds) over a git substrate; per-audience *read*
 encryption goes strictly beyond anything it ships.
 
 ### git-appraise
@@ -392,8 +392,8 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   **GroupMasterKey** the server never has; membership proven via
   keyed-verification anonymous credentials. Sender Keys (WhatsApp whitepaper):
   member removal forces every remaining sender to issue a fresh sender key.
-  This is THE reference for tier revocation: removed members keep old epochs;
-  new epoch keys go to survivors only.
+  This is THE reference for revoking read access from a shared-key group:
+  removed members keep old epochs; new epoch keys go to survivors only.
 - **Monero view keys**
   ([moneropedia: view key](https://www.getmonero.org/resources/moneropedia/viewkey.html)):
   private view key = see incoming; spend key = write.
@@ -438,7 +438,7 @@ enforcement is the host's push ACL. Read = whoever can fetch.
   between content and history); server still sees team membership and
   push/fetch metadata; granularity per-repo-per-team (team-key rotation on
   removal UNVERIFIED in the git-specific post). **No studied system offers
-  per-object tiered read visibility inside one shared git history — every
+  per-object audience-scoped read visibility inside one shared git history — every
   encrypted-git design surveyed here is all-or-nothing at repo or branch
   granularity. That point in the design space is unoccupied.**
 
@@ -461,9 +461,11 @@ disjunction let ticket-relative identity substitute for role. Verb-splits
 are evidenced here for GitHub, Jira, GitLab, and ADO (whose namespace
 actions are per-verb by construction); Rally and Linear bundle coarse
 roles with no documented verb-level gating. The own/all split is
-documented for GitHub, Jira, and GitLab (Rally's and Linear's comment
-permissioning was not surveyed); dynamic principals appear in Jira and
-GitLab. That recurrence — concentrated in the permission-rich products —
+documented for comments in GitHub and Jira; GitLab's documented own/all
+evidence is at issue level instead — the author-only self-delete footnote
+in its section above — not for comments or attachments (Rally's and
+Linear's comment permissioning was not surveyed); dynamic principals
+appear in Jira and GitLab. That recurrence — concentrated in the permission-rich products —
 is the yardstick any capability vocabulary in this space gets measured
 against.
 
@@ -473,17 +475,19 @@ customers pay most for add **per-issue security (Jira issue security schemes,
 GitLab confidential issues) and per-comment restriction (Jira restricted
 comments, GitLab internal notes)** — that's the evident ceiling of demand;
 nobody offers per-field read restriction. Write: verb-level per container,
-with per-issue write reduction only via author/assignee dynamics. A
-per-visibility-tier encryption design that supports (project-tier, issue-tier,
-comment-tier) matches the best-in-market surface; key-per-tier-per-container
-is tractable where key-per-ticket is not — and note the granularity of the
-*grant targets*: GitLab's confidential issues gate on fixed role thresholds
-only, and Jira's security levels are *defined* in terms of roles, groups,
-and dynamic principals — though a Jira level's membership can also name
-individual users and per-issue picker fields, which is genuine per-item
-ACL machinery at the high end. In scheme-class terms: the role/level-shaped
-core is expressible as keys held by named audiences; the user-picker tail
-is per-item ACL machinery that no audience-keyed scheme reproduces cheaply.
+with per-issue write reduction only via author/assignee dynamics. The demand
+surface is therefore three container levels — project, issue, comment — and
+nothing finer is sold anywhere. Note also the granularity of the *grant
+targets*: GitLab's confidential issues gate on fixed role thresholds with a
+single principal-level exception (the assignee carve-out documented in its
+section above), and Jira's security levels are *defined* in terms of roles,
+groups, and dynamic principals — though a Jira level's membership can also
+name individual users and per-issue picker fields, which is genuine
+per-item ACL machinery at the high end. In scheme-class terms: the
+role/level-shaped core is expressible as keys held by named audiences, and
+a key-per-audience-per-container scheme is tractable at these three levels
+where key-per-ticket is not; the user-picker tail is per-item ACL machinery
+that no audience-keyed scheme reproduces cheaply.
 
 **(c) Delete is never just delete.** Three products have a true
 recoverable-then-destroy split for work items: ADO Recycle Bin (never
@@ -496,9 +500,11 @@ is a separate lifecycle, not a delete trash-state. GitHub gates issue
 delete hard (org-opt-in + admin + audit event) with no recoverable step;
 its tombstone machinery ("minimize") exists only at comment level. GitLab
 is the outlier (broad hard delete, no issue audit events) and reads as the
-anti-pattern. The pattern that survives the details: destruction is
-consistently *harder-gated* than deletion, and where a recoverable
-intermediate exists it is the ordinary-privilege path. Fossil's non-propagating shun list is the one
+anti-pattern. The pattern that survives the details: destruction is never
+the *easier* act than deletion — gated by elevated privilege in ADO and
+Rally, and by a 30-day time delay rather than a privilege check in Linear —
+and where a recoverable intermediate exists it is the ordinary-privilege
+path. Fossil's non-propagating shun list is the one
 design built for a sync'd substrate: a tombstone that blocks re-introduction
 without letting a remote trigger destruction. The recurring pattern for a
 synced or encrypted substrate: soft delete as an ordinary recorded mutation,
@@ -511,9 +517,9 @@ own issue, roleless), GitLab (author-or-assignee close/reopen/edit; author-only 
 Jira (Reporter as a grant target in schemes *and* as an issue-security-level
 member), Rally (owner-may-delete-own-item). ADO and Linear have none at item
 level. So creator-ownership as a default capability is well-precedented for
-close/edit and even delete-own — lit making it cryptographic (the creator's
-signature is the capability) would formalize what incumbents implement as
-special-cased ACL logic.
+close/edit and even delete-own — and in every incumbent it is implemented
+as special-cased ACL logic bolted onto the role system, never as a
+first-class primitive.
 
 **(e) No incumbent has any cryptographic or client-side enforcement —
 confirmed for all six products.** The closest gestures: Atlassian BYOK/CMK
@@ -523,7 +529,7 @@ bypasses them). Among git-native systems, Radicle is the sole prior art for
 client-side *write* enforcement (Ed25519 sigrefs + delegate-threshold identity
 docs, TUF-inspired self-certification) but explicitly does not encrypt at rest
 — read privacy is trusted-seed allow-lists. Nobody anywhere combines
-signed-mutation write control with per-tier read encryption in one git
+signed-mutation write control with per-audience read encryption in one git
 history.
 
 **(f) What compliance actually requires vs nice-to-have.** Required: unique

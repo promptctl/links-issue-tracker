@@ -63,7 +63,15 @@ claimed lost, the record requires the **owner-set threshold** — the same
 quorum as owner rotation — because "their key is gone, reassign it to
 this new key" is precisely the single-signer takeover the threshold
 exists to stop. A succession for an *owner's* key always requires the
-threshold. A key lost with no succession issued leaves the old
+threshold. The record itself moves no key material — epoch keys are wrapped
+per member public key (§2), so someone holding the plaintext must actively
+re-wrap to the new key. Who does is split the same way: in the consenting
+case the old key's holder re-wraps every epoch they hold in the same
+transaction; in the lost-key case the threshold-signed record *authorizes*
+the transfer, and each tier's restoration is then performed as an ordinary
+grant by any current member of that tier — the signing owners need not hold
+the keys themselves — with the new principal's access to a tier pending
+until some member of it performs the re-wrap. A key lost with no succession issued leaves the old
 principal's own-scoped rights stranded until an owner reassigns them
 (a documented limit, §3).
 
@@ -80,7 +88,15 @@ verifier, not the signer's framing: **any diff to the set of principals
 holding the owner role — add, remove, promote, demote — routes through the
 threshold check, no exceptions.** A `member.admin` signature alone covers
 only non-owner rows; a policy update that quietly adds a new owner under an
-ordinary signature is invalid on its face. Changes to the owner set follow
+ordinary signature is invalid on its face. The same threshold gates **any
+change that widens a role's capability bundle**, because role definitions
+live in this same signed document and relabeling is otherwise a complete
+bypass: a single owner key could grant "editor" the admin capabilities and
+promote an accomplice into it, achieving owner-equivalent control without
+the owner set ever changing. A lone `policy.admin` signature therefore
+covers only edits that widen nothing — narrowing a bundle, renaming,
+reordering; the verifier decides which by diffing the granted surface, not
+by trusting the change's framing, exactly as with owner-set diffs. Changes to the owner set follow
 TUF root rotation: the new owner list must carry signatures from a
 threshold of the old owners **and** the new (R IV). The threshold defaults
 to 1 while the owner set has one member — the solo case must stay
@@ -88,12 +104,14 @@ frictionless, and a sole owner has no quorum to defend anyway — and to a
 **majority of owners** the moment it has more, so in a multi-owner
 workspace a single compromised owner key cannot hand the owner set to
 itself by default, rather than only after someone opts in. One asymmetry
-for *removal*: the old-owner quorum excludes the owner being removed —
-otherwise majority-of-2 is 2 and a two-owner workspace could never shed a
-compromised or unresponsive owner. The symmetric consequence is stated
-plainly rather than hidden: in a two-owner workspace either owner can
-remove the other, first mover wins; an owner-versus-owner dispute is a
-human matter, and every replica retains the pre-removal history. Setting
+for the two verbs that strip an owner — *removal* and *demotion*: the
+old-owner quorum excludes the owner being removed or demoted — otherwise
+majority-of-2 is 2 and a two-owner workspace could never shed, or even
+demote, a compromised or unresponsive owner. The symmetric consequence is
+stated plainly rather than hidden: in a two-owner workspace either owner
+can remove or demote the other, first mover wins; an owner-versus-owner
+dispute is a human matter, and every replica retains the pre-removal
+history. Setting
 the threshold explicitly remains available (the 120% primitive).
 
 ### Capabilities and roles
@@ -118,7 +136,11 @@ every check. This matches the reporter/author machinery in Jira and GitLab
 
 Verbs, mapped from the command table: `create`, `edit` (update's field
 writes), `start` (claim into in_progress — granted /all, because pulling
-the top of the shared queue regardless of creator *is* the agent workflow),
+the top of the shared queue regardless of creator *is* the agent workflow;
+under this layer `start` also records the claiming principal as the issue's
+assignee — redesign item 7, §2 — because claims derivation stores nothing
+(F§3d) and the `assignee` binding below reads a column, so without this a
+claimed ticket would answer to neither `own` nor `assignee`),
 `comment.add`, `comment.rm`, `close` (one verb covering both of lit's
 close paths — `done` and resolution-close — because both mean "this
 ticket's work ends here"), `reopen`, `rank`, `relate`
@@ -163,7 +185,13 @@ decryption logic at all and can only ever dump envelopes) is the named
 verb `export.plain`,
 granted to every member by default and honest-client only: a keyholder can
 always decrypt locally, so this is a guardrail against accidental egress,
-not enforcement, and is documented as such. The selector is the whole
+not enforcement, and is documented as such. The owner-notify hook — an
+arbitrary egress channel by design (F§5 item 9) — sits at the same
+honest-client boundary: its event summaries are rendered by the invoking
+checkout, so they carry plaintext only for tiers whose keys the invoking
+principal holds, and everything else appears in redacted-skeleton form
+exactly as in any other render. The hook needs no verb of its own because
+it can never emit what its own principal could not already read. The selector is the whole
 workspace for now; per-epic delegation is the TUF delegated-paths
 primitive (R IV) held in reserve — 120% rule — but not a shipped feature.
 
@@ -207,10 +235,15 @@ demoted principal keeps authoring under the stale version indefinitely,
 defeating the revocation the layer exists for. A chain containing an
 unauthorized mutation is rejected whole,
 the local head stays put, and the client reports (and, holding a valid
-replica, re-pushes over) the invalid remote. lit already persists
-`last_sync_hash` (F§2 meta) — that slot becomes the **last verified head**,
-which is the TUF rollback defense: a remote serving an older-than-known or
-diverging history is refused, not adopted (R IV). Witness cosigning against
+replica, re-pushes over) the invalid remote. The **last verified head** is a
+new, strictly local value — it lives in the private git dir beside the
+stream id, never in any synced table. lit's existing `last_sync_hash` (F§2
+meta) shows the bookkeeping precedent but is deliberately *not* reused: that
+slot is synced state, so a hostile remote could rewrite it through the very
+sync it is supposed to gate — the same defect §2's redesign item 4 removes
+`last_sync_path` for. The local anchor is the TUF rollback defense: a remote
+serving an older-than-known or diverging history is refused, not adopted
+(R IV). Witness cosigning against
 split-view (the remote showing different members different histories) is
 acknowledged as the full CT-style answer and deliberately deferred; the
 primitive slot exists, the feature does not (120/80). To keep charter
@@ -248,10 +281,16 @@ signature. Replay also crosses policy versions — a commit validly authored
 under policy v1 gets reparented onto a head that may already be at v2 — so
 the rule is split: for **monotonicity**, a replayed commit re-declares its
 new parent's policy version; for **authorization**, it is judged against
-the version of its original authorship, carried in the replay link and
-attested by the reconciler's signature, because judging a v1 mutation
+the version of its original authorship, because judging a v1 mutation
 against v2's roles would retroactively rewrite what its signer was allowed
-to do at the time. **OPEN:** the exact signed payload for replayed
+to do at the time. That original version is never taken on the
+reconciler's say-so: the original commit's own signature already covers
+the version it was authored under, so every verifier follows the replay
+link and re-checks the claimed version against the original signed
+payload itself. The reconciler's signature attests to one thing only —
+faithful replay — and a compromised reconciler that declares an earlier,
+more permissive version than the original signature carries is rejected
+like any other forgery. **OPEN:** the exact signed payload for replayed
 commits, so an auditor can distinguish "authored" from "faithfully
 replayed" without trusting the reconciler.
 
@@ -294,12 +333,16 @@ two workspaces, and the one-repo constraint (charter #1) already tells us
 that boundary is the repo itself.
 
 Ciphertext envelope: `{tier, epoch, nonce, ciphertext, commitment}` stored
-in the existing text columns. The nonce is fresh per encryption; the
-**commitment** is a deterministic keyed hash of the plaintext under a key
-derived from **the epoch key in force at write time** — the encryption key
-and the commitment key are separate HKDF-derived, domain-separated subkeys
-of the epoch key, never the raw epoch key doing two jobs — present so that
-equality of content is
+in the existing text columns. The nonce is fresh per encryption. The
+**encryption key is the row's content key** — the independent per-row
+randomness the destroy scheme below requires, stored wrapped under the
+tier's epoch key named by `epoch`; the wrapped copy rides the row (one slot
+per issue and per comment), not each envelope, so the envelope format needs
+no key slot of its own. It is never an HKDF derivation of the epoch key —
+the destroy scheme below says why. HKDF derivation from the epoch key is
+restricted to one job: the **commitment** — a deterministic keyed hash of
+the plaintext, its key a domain-separated subkey of **the epoch key in
+force at write time** — present so that equality of content is
 decidable without decryption — the merge below depends on it. Keying the
 commitment to the epoch is a deliberate choice between two defects: a
 stable per-tier commitment key would survive rotation but hand every
@@ -332,18 +375,27 @@ practice).
 Removing a member rotates the tier to a new epoch wrapped to survivors only
 (Megolm / Sender-Keys, R IV); old epochs are not re-encrypted, and the
 removed member's continued ability to read what they could already read is
-documented, not hidden. `destroy` = crypto-shredding a per-issue key — and
-that key must be **independent randomness generated at the issue's
-creation, stored wrapped under the tier's epoch key**, never an HKDF
+documented, not hidden. `destroy` = crypto-shredding **content keys**, and a
+content key must be **independent randomness generated at the row's
+creation, stored wrapped under the row's tier's epoch key**, never an HKDF
 derivation from the epoch key: a derived subkey is a deterministic public
 function of a secret every tier member still holds, so "destroying" it
-destroys nothing — any member recomputes it on demand. With a random
-per-issue key, `destroy` deletes the wrapped copies from live state and no
-holder of the epoch key can reconstruct it. One honest residual, because
-the substrate is append-only: superseded wrapped copies persist in synced
-*history* until history compaction makes them unreachable — so a shred is
-complete only when that closes, which is named as part of §6's
-keyring/history item. This is the GDPR Art. 17 and ITAR §120.54 story
+destroys nothing — any member recomputes it on demand. The unit is the
+row, because comments tier independently of their issue (§2 granularity): a
+comment encrypted under its *issue's* key would be readable by issue-tier
+members whatever the comment's own tier said, so **each encrypted row — the
+issue and every one of its comments — carries its own content key**, and
+destroying an issue shreds the issue's key *and all of its comments' keys*,
+whatever tiers those comments sit in. Nothing of a destroyed issue's
+content survives in recoverable form; `destroy` deletes the wrapped copies
+from live state and no holder of any epoch key can reconstruct them. Two
+honest residuals. First, the substrate is append-only: superseded wrapped
+copies persist in synced *history* until history compaction makes them
+unreachable — so a shred is complete only when that closes, which is named
+as part of §6's keyring/history item. Second, the envelope's commitment
+outlives the shred and its key is an epoch subkey members still hold, so a
+tier member can test a *guessed* plaintext against a destroyed field
+forever — destroy removes recovery, not confirmation of a guess. This is the GDPR Art. 17 and ITAR §120.54 story
 (R III), stated with its actual boundary.
 
 Every workspace has a default tier that all members hold. **The default
@@ -429,6 +481,14 @@ model, yields:
    the caller's principal supplies whatever tier keys it holds *for that
    store*, and a principal with none sees the skeleton only. No separate
    trust path exists for "but I opened it by filesystem path."
+7. **`start` sets the assignee.** Today `assignee` is written only by
+   `update` (F§1), and claims derivation deliberately stores nothing
+   (F§3d) — so a contributor who claimed a ticket they didn't create would
+   be neither its owner nor its assignee and could never `close` it. Under
+   the write layer, `start` additionally records the claiming principal in
+   the issue's `assignee` column. A declared lit behavior change beyond
+   what F§3d documents, and a natural one: the market's assignment
+   semantics are exactly "the person working it" (R V-d).
 
 ## 3. Foundational hard requirements
 
@@ -464,7 +524,11 @@ metadata (existence, structure, timing, actor principal ids) is visible to
 every repo reader even under full encryption, as is equality of two
 encrypted values (the commitment trade, §2); narrowing an issue's tier
 restricts only its future — every prior member of the old, broader tier
-keeps the keys to its pre-narrowing history (§6 item 7); and a member who
+keeps the keys to its pre-narrowing history (§6 item 7); widening an
+issue's tier grants only its present — the destination tier's members read
+the issue's current field values, while its pre-widening history stays
+under the old tier's keys (§6 item 7 again, the same forward-only coin
+from the other side); and a member who
 loses a signing key without a succession record (§1) leaves their
 own-scoped rights attached to the old principal until an owner reassigns
 them. Compliance officers get these
@@ -539,10 +603,11 @@ one-command repair (re-push from any replica), not as silent divergence.
 ## 6. What the next sessions must close
 
 1. The replayed-commit signature payload (§1, OPEN).
-2. `destroy` completion on an append-only substrate: the per-issue key is
-   decided (random at creation, wrapped under the tier epoch — §2); what
-   remains open is making superseded wrapped-key material *unreachable in
-   synced history*, without which a shred is incomplete. Couples to item 4.
+2. `destroy` completion on an append-only substrate: per-row content keys
+   are decided (random at row creation, wrapped under the row's tier epoch —
+   §2); what remains open is making superseded wrapped-key material
+   *unreachable in synced history*, without which a shred is incomplete.
+   Couples to item 4.
 3. Crypto suite selection and the FIPS question (ITAR wants validated
    modules — R III; Go's stdlib vs a vetted library; no home-rolled
    primitives under charter #5).
@@ -559,11 +624,14 @@ one-command repair (re-push from any replica), not as silent divergence.
    should make steady-state cheap; the first adopt is the expensive one).
 7. `tier.set` mechanics in both directions. Position: **narrowing** is
    future-only — existing history stays under the old tier, stated plainly,
-   consistent with forward-only everything. **Widening** re-encrypts the
-   issue's *current* field values under the destination tier's epoch key
-   (one issue's worth of work, cheap), because "make this visible to more
-   people" that leaves the content unreadable to them is a lie; the issue's
-   *history* stays under the old tier and is documented as such. The open
+   consistent with forward-only everything. **Widening** mints a fresh
+   content key for the row, re-encrypts the issue's *current* field values
+   under it, and wraps it to the destination tier's epoch key (one issue's
+   worth of work, cheap), because "make this visible to more people" that
+   leaves the content unreadable to them is a lie; the old content key and
+   the *history* it encrypts stay under the old tier — re-wrapping the
+   existing key would expose the history too — and this is documented as
+   such (§3's limits list). The open
    detail is the widening rewrite's interaction with sync (it is an
    ordinary signed mutation, but the re-encryption must be performed by a
    principal holding both tiers).
