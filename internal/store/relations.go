@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -167,25 +168,56 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 var structuralRelationTypes = []model.RelationType{model.RelBlocks, model.RelParentChild}
 
 // listRelationsForIDs returns every structural relation row incident to any of
-// the given ids in one query — the batch counterpart of listRelations, scoped to
-// the edge types GetRelationsByIDs serves.
+// the given ids — the batch counterpart of listRelations, scoped to the edge
+// types GetRelationsByIDs serves.
+//
+// It runs one query per endpoint column and merges in Go instead of a single
+// `src_id IN (…) OR dst_id IN (…)` query. The OR is a performance landmine, not
+// a style choice: no index covers both columns, so the engine's costed-index
+// analysis carries an unbounded range for the other column's disjuncts on every
+// candidate index, and its overlap elimination then does quadratic
+// collation-aware compares across the blown-up range set — seconds of pure
+// analysis once the id list reaches backlog size. Two single-column
+// conjunctive queries keep every range a point and the analysis linear.
+// [LAW:carrying-cost] the merge code below is the whole price; the OR's price
+// grew with every ticket filed.
 func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.Relation, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
+	bySrc, err := s.relationsByEndpoint(ctx, "src_id", ids)
+	if err != nil {
+		return nil, err
+	}
+	byDst, err := s.relationsByEndpoint(ctx, "dst_id", ids)
+	if err != nil {
+		return nil, err
+	}
+	return mergeRelations(bySrc, byDst), nil
+}
+
+// relationEndpointColumns is the closed set of column names
+// relationsByEndpoint may interpolate. The query text is built with Sprintf, so
+// membership here is what keeps that interpolation a choice between two
+// constants rather than an injection surface. [LAW:parse-dont-validate]
+var relationEndpointColumns = map[string]struct{}{"src_id": {}, "dst_id": {}}
+
+// relationsByEndpoint returns the structural relations whose given endpoint
+// column matches any of ids, in created_at order.
+func (s *Store) relationsByEndpoint(ctx context.Context, column string, ids []string) ([]model.Relation, error) {
+	if _, ok := relationEndpointColumns[column]; !ok {
+		return nil, fmt.Errorf("list relations by endpoint: unknown column %q", column)
+	}
 	idClause := strings.Join(repeatPlaceholder(len(ids)), ",")
 	typeClause := strings.Join(repeatPlaceholder(len(structuralRelationTypes)), ",")
-	args := make([]any, 0, len(ids)*2+len(structuralRelationTypes))
-	for _, id := range ids {
-		args = append(args, id)
-	}
+	args := make([]any, 0, len(ids)+len(structuralRelationTypes))
 	for _, id := range ids {
 		args = append(args, id)
 	}
 	for _, relType := range structuralRelationTypes {
 		args = append(args, string(relType))
 	}
-	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE (src_id IN (%s) OR dst_id IN (%s)) AND type IN (%s) ORDER BY created_at ASC`, idClause, idClause, typeClause)
+	query := fmt.Sprintf(`SELECT src_id, dst_id, type, created_at, created_by FROM relations WHERE %s IN (%s) AND type IN (%s) ORDER BY created_at ASC`, column, idClause, typeClause)
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list relations for ids: %w", err)
@@ -206,6 +238,41 @@ func (s *Store) listRelationsForIDs(ctx context.Context, ids []string) ([]model.
 		rels = append(rels, rel)
 	}
 	return rels, rows.Err()
+}
+
+// mergeRelations combines the two endpoint result sets into the order the
+// single query produced: created_at ascending, deduplicated by primary key. A
+// row whose src and dst are both subjects arrives from both queries and must
+// count once. Ties on created_at break by primary key, so the merged order is
+// deterministic where the SQL ordering never was.
+func mergeRelations(bySrc, byDst []model.Relation) []model.Relation {
+	type relationKey struct {
+		src, dst string
+		relType  model.RelationType
+	}
+	seen := make(map[relationKey]struct{}, len(bySrc)+len(byDst))
+	merged := make([]model.Relation, 0, len(bySrc)+len(byDst))
+	for _, rel := range append(bySrc, byDst...) {
+		key := relationKey{src: rel.SrcID, dst: rel.DstID, relType: rel.Type}
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		merged = append(merged, rel)
+	}
+	slices.SortFunc(merged, func(a, b model.Relation) int {
+		if c := a.CreatedAt.Compare(b.CreatedAt); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.SrcID, b.SrcID); c != 0 {
+			return c
+		}
+		if c := strings.Compare(a.DstID, b.DstID); c != 0 {
+			return c
+		}
+		return strings.Compare(string(a.Type), string(b.Type))
+	})
+	return merged
 }
 
 // dedupeStrings returns the distinct values of ids preserving first-seen order.

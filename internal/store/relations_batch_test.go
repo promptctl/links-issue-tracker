@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
@@ -116,4 +117,36 @@ func ids(issues []model.Issue) []string {
 		out[i] = issue.ID
 	}
 	return out
+}
+
+// mergeRelations reunifies the two per-endpoint-column queries into what the
+// old single query returned: each relation once, created_at ascending. The
+// dedupe leg is load-bearing on every real backlog — an edge between two
+// subjects arrives from both queries — and a duplicate here becomes a
+// duplicated child in every bucketed view downstream.
+func TestMergeRelationsDedupesAndOrders(t *testing.T) {
+	at := func(sec int) time.Time { return time.Date(2026, 8, 25, 0, 0, sec, 0, time.UTC) }
+	edge := func(src, dst string, relType model.RelationType, created time.Time) model.Relation {
+		return model.Relation{SrcID: src, DstID: dst, Type: relType, CreatedAt: created}
+	}
+	shared := edge("epic-1", "epic-1.2", model.RelParentChild, at(1))
+	srcOnly := edge("epic-1", "outside-a", model.RelParentChild, at(3))
+	dstOnly := edge("outside-b", "epic-1.2", model.RelBlocks, at(0))
+	// Same timestamp as shared: order must still be deterministic, by key.
+	tied := edge("epic-1", "epic-1.2", model.RelBlocks, at(1))
+
+	got := mergeRelations(
+		[]model.Relation{shared, srcOnly, tied},
+		[]model.Relation{dstOnly, shared, tied},
+	)
+
+	want := []model.Relation{dstOnly, tied, shared, srcOnly}
+	if len(got) != len(want) {
+		t.Fatalf("merged %d relations, want %d: %v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("merged[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
 }
