@@ -27,11 +27,11 @@ func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssu
 	if continueBias {
 		sortByContinueBias(annotated, details)
 	}
-	standings, self, err := claimStandings(h.ctx, io.Discard, h.ap)
+	cc, err := gatherClaimContext(h.ctx, io.Discard, h.ap)
 	if err != nil {
-		h.t.Fatalf("claimStandings error = %v", err)
+		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
-	outcome := routeNext(annotated, details, standings, self)
+	outcome := routeNext(annotated, details, cc.standings, cc.self)
 	served, ok := outcome.(ServedFromGlobal)
 	if !ok {
 		h.t.Fatalf("routeNext = %#v (%T), want ServedFromGlobal (harness carries no claims)", outcome, outcome)

@@ -88,3 +88,33 @@ func (e Evidence) Lanes() []model.LaneID {
 	}
 	return lanes
 }
+
+// LaneProgress is the "how is it going" half of a lane's dossier: how many of
+// its member issues are closed, out of how many total, and which member (if
+// any) is the one actually in progress right now. Active is its own field
+// rather than something a caller infers from Done/Total because an
+// epic-major lane can hold several sibling issues — the one a listing
+// happens to be rendering is not necessarily the one the claimant is
+// actually working, and the dossier names that one explicitly.
+type LaneProgress struct {
+	Done, Total int
+	Active      *model.Issue
+}
+
+// LaneProgress reports the given lane's progress. A lane this evidence never
+// saw reports the zero LaneProgress (Total 0), which formats as nothing —
+// the same total-map-read convention Standings.Of uses.
+func (e Evidence) LaneProgress(lane model.LaneID) LaneProgress {
+	var progress LaneProgress
+	for _, issue := range e.members[lane] {
+		progress.Total++
+		switch issue.State() {
+		case model.StateClosed:
+			progress.Done++
+		case model.StateInProgress:
+			active := issue
+			progress.Active = &active
+		}
+	}
+	return progress
+}
