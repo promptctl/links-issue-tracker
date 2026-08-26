@@ -30,7 +30,7 @@ import (
 func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -84,7 +84,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -109,7 +109,7 @@ func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
 func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	// Bootstrap the database so Open's only failure mode here is the lock.
 	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -147,7 +147,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -176,7 +176,7 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -224,15 +224,15 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 // false-negative "repository not initialized" error.
 //
 // The test simulates the transient state by:
-//   1. Opening and closing a Store to bootstrap the workspace
-//   2. Renaming the database dir away (mimicking restore's first rename)
-//   3. Calling OpenForRead under a short context and asserting the error
-//      shape: it must be a workspace-busy refusal (because the exclusive
-//      lock is held), NOT a "not initialized" error.
+//  1. Opening and closing a Store to bootstrap the workspace
+//  2. Renaming the database dir away (mimicking restore's first rename)
+//  3. Calling OpenForRead under a short context and asserting the error
+//     shape: it must be a workspace-busy refusal (because the exclusive
+//     lock is held), NOT a "not initialized" error.
 func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	bootstrap, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -285,7 +285,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := OpenSync(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -317,7 +317,7 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 // primitive without spawning.
 func TestTryAcquireSyncPushLockIsSingleFlight(t *testing.T) {
 	t.Parallel()
-	dbPath := filepath.Join(t.TempDir(), "dolt")
+	dbPath := migratedDoltDir(t)
 
 	release, acquired, err := TryAcquireSyncPushLock(dbPath)
 	if err != nil {
@@ -380,7 +380,7 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 func TestMirrorBeaconLivenessProof(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dbPath := filepath.Join(t.TempDir(), "dolt")
+	dbPath := migratedDoltDir(t)
 
 	verdict, err := ProbeMirrorBeacon(dbPath)
 	if err != nil {
@@ -472,7 +472,7 @@ func TestMirrorBeaconLockPathIsSiblingOfDolt(t *testing.T) {
 func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	// Initialize the parent dir by opening and closing a Store once. The lock
 	// file lives in the workspace storage dir, so its parent must exist.

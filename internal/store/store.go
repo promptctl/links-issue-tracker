@@ -290,7 +290,17 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	}
 	s.releaseWorkspaceLock = release
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
-	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+	// Branch normalization runs on this open's own engine every time — the
+	// bootstrap only runs it at creation now — so a database that arrived
+	// pre-made on another branch (an adopt's clone) is still renamed to
+	// master on its first write open. [LAW:dataflow-not-control-flow] it is
+	// unconditional; on an already-normalized store it reads and does nothing.
+	if err = s.withCommitLock(ctx, func(ctx context.Context) error {
+		if err := ensureMasterDefaultBranch(ctx, s.db); err != nil {
+			return wrapEngineOpenContention(err)
+		}
+		return s.migrate(ctx)
+	}); err != nil {
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
@@ -2633,6 +2643,17 @@ func nullableStringPtr(value *string) any {
 
 func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {
 	root := filepath.Clean(doltRootDir)
+	// An existing database needs nothing from the bootstrap: CREATE DATABASE
+	// IF NOT EXISTS would no-op, and branch normalization runs on each write
+	// open's own engine (Open/OpenSync call ensureMasterDefaultBranch), which
+	// also covers databases that arrive pre-made, like an adopt's clone. The
+	// two bootstrap pools below each construct a full Dolt engine — process-
+	// serialized since vendored-driver patch 5 — so skipping them here is what
+	// keeps every open after the first from paying twice for a creation that
+	// already happened. [LAW:carrying-cost]
+	if dirExists(filepath.Join(root, doltDatabaseName, ".dolt")) {
+		return false, nil
+	}
 	created := !dirExists(root)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return false, fmt.Errorf("create dolt root dir: %w", err)

@@ -19,7 +19,7 @@ import (
 
 func openIssueStore(t *testing.T, ctx context.Context) *Store {
 	t.Helper()
-	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
+	st, err := Open(ctx, migratedDoltDir(t), "test-workspace-id")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}

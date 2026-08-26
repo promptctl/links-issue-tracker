@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 	"testing"
@@ -200,7 +199,7 @@ func unifiedSchemaDiff(fromLabel, toLabel, from, to string) string {
 
 func openFreshWorkspace(t *testing.T) *Store {
 	t.Helper()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(context.Background(), doltRoot, "drift-canary")
 	if err != nil {
 		t.Fatalf("Open: %v", err)

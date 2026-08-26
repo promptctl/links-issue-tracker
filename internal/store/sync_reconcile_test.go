@@ -21,8 +21,8 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -121,8 +121,8 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -190,8 +190,8 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -246,8 +246,8 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)

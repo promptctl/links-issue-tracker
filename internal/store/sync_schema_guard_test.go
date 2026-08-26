@@ -69,8 +69,8 @@ func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
@@ -103,8 +103,8 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
@@ -134,8 +134,8 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	seedReconcileRemote(t, ctx, rootA, remoteURL) // remote at registry max
@@ -164,8 +164,8 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	rootC := filepath.Join(base, "c")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
@@ -214,8 +214,8 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	// Remote starts at the CURRENT schema so both sides can build a real divergence.

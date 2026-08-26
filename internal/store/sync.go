@@ -146,6 +146,19 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	// Same per-open branch normalization Store.Open runs: the bootstrap only
+	// normalizes at creation now, so a pre-made database (an adopt's clone)
+	// gets renamed to master here on the mirror's own engine rather than by
+	// a bootstrap pool. Unconditional; a normalized store reads and does
+	// nothing. [LAW:dataflow-not-control-flow]
+	if err = ensureMasterDefaultBranch(ctx, s.db); err != nil {
+		err = wrapEngineOpenContention(err)
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
+		return nil, err
+	}
 	success = true
 	return s, nil
 }

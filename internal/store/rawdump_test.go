@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"errors"
-	"path/filepath"
 	"testing"
 )
 
@@ -46,7 +45,7 @@ func columnIndex(t *testing.T, table RawTable, column string) int {
 func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	const workspaceID = "test-workspace-id"
 
 	// Seed real application data through the normal write path, then capture
@@ -131,7 +130,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	const workspaceID = "test-workspace-id"
 
 	var id string

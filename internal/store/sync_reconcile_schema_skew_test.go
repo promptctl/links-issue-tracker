@@ -251,8 +251,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("up_to_date", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL) // B == remote head
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
@@ -268,9 +268,9 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("fast_forwarded", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		rootA := filepath.Join(base, "a")
+		rootA := migratedDoltDir(t)
 		id := seedReconcileRemote(t, ctx, rootA, remoteURL)
-		rootB := filepath.Join(base, "b")
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// A advances the remote; B is now strictly behind and must fast-forward.
 		updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("ahead")})
@@ -291,8 +291,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("ahead", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		id := seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		id := seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// B commits locally and does not push; the remote has nothing new.
 		updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("local")})
@@ -310,8 +310,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("never_synced", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
