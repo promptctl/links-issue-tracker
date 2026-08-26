@@ -563,13 +563,13 @@ func sortByContinueBias(rows []annotation.AnnotatedIssue, details map[string]sto
 // standard id+state+topic+title line, indented epic context if any, and inline
 // dependency annotations so the agent knows what context to load before
 // `lit start`.
-func printNextSummary(w io.Writer, row annotation.AnnotatedIssue) error {
+func printNextSummary(w io.Writer, row annotation.AnnotatedIssue, cc claimContext, lane model.LaneID) error {
 	columns := resolveColumns(nil)
 	line := formatIssueColumns(row.Issue, columns, "  ", nil)
 	if _, err := fmt.Fprintln(w, line); err != nil {
 		return err
 	}
-	return printInlineDeps(w, row, nil)
+	return printInlineDeps(w, row, nil, cc, lane)
 }
 
 // buildUnblocksMap derives a reverse dependency index from the classified
@@ -614,12 +614,17 @@ func partitionWorkable(issues []annotation.AnnotatedIssue) (inProgress, ready []
 // indented under a workable item. `lit next` shows exactly this common core;
 // the backlog view (printBacklogContext) composes its extra lines around the
 // same emitters. [LAW:single-enforcer]
-func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+func printInlineDeps(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, cc claimContext, lane model.LaneID) error {
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
 	}
 	if err := printIDListLine(w, contextIndent, "depends on", ClassifyReadiness(entry.Annotations).DependencyIDs()); err != nil {
 		return err
+	}
+	if line, ok := formatClaimLine(cc, lane, time.Now()); ok {
+		if _, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line); err != nil {
+			return err
+		}
 	}
 	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }

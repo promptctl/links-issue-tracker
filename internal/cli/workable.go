@@ -51,7 +51,7 @@ type workableView struct {
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue) error
+	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -157,7 +157,11 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	view.order(annotated, details, knobs)
 	rows := view.keep(annotated)
 	rows = applyLimit(rows, knobs.limit)
-	if err := view.render(stdout, knobs.columns, rows); err != nil {
+	cc, err := gatherClaimContext(ctx, stdout, ap)
+	if err != nil {
+		return err
+	}
+	if err := view.render(stdout, knobs.columns, rows, details, cc); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
