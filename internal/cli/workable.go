@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,16 +15,16 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
-// The workable commands (backlog, next) are one query with two presentations:
-// they both consume gatherWorkableAnnotated and differ only in which knobs they
-// expose, the extra ordering they apply, which rows they keep, and how they
-// render. That variability is data — a workableView preset — not two run
-// functions re-declaring the same flags. (The retired ready/queue views were two
-// further presets over this same query; retiring them was a surface change, not
-// a query change.)
-// [LAW:one-type-per-behavior] one runner; presentation is a value, not a verb.
-// [LAW:no-mode-explosion] the two presets below are the closed set; no generic
-// third command exposes the view as a flag.
+// backlog is the one remaining consumer of gatherWorkableAnnotated's shared
+// query through the workableView preset shape below. `next` used to be a
+// second preset here (order/keep/render over the same rows); claim routing
+// gave it a genuinely different shape — a multi-step precedence over claim
+// standings producing a discriminated outcome, not a single-row keep() over
+// an ordered list — so it forked into its own file (next.go) rather than
+// stretching this preset to fit a shape it wasn't designed for.
+// [LAW:carrying-cost] (The retired ready/queue views were two further
+// presets over this same query; retiring them was a surface change, not a
+// query change.)
 
 // workableKnobs carries the parsed values of every knob a workable view can
 // expose. A view that does not expose a knob leaves it at the zero value,
@@ -33,13 +32,12 @@ import (
 // [LAW:dataflow-not-control-flow] downstream stages never ask which knobs
 // exist; they consume the values unconditionally.
 type workableKnobs struct {
-	assignee     string
-	issueType    model.IssueType
-	status       model.State
-	labels       []string
-	limit        int
-	columns      []string
-	continueBias bool
+	assignee  string
+	issueType model.IssueType
+	status    model.State
+	labels    []string
+	limit     int
+	columns   []string
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -47,14 +45,13 @@ type workableKnobs struct {
 // preset is exactly the existing sort/selection/printer for that command —
 // the runner itself stays branchless.
 type workableView struct {
-	name        string
-	hasFilters  bool // --type / --status / --labels
-	hasLimit    bool
-	hasColumns  bool
-	hasContinue bool
-	order       func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs)
-	keep        func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render      func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue) error
+	name       string
+	hasFilters bool // --type / --status / --labels
+	hasLimit   bool
+	hasColumns bool
+	order      func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs)
+	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
+	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -64,16 +61,13 @@ type workableView struct {
 }
 
 // usage derives the positional-argument error string from the knob set, in the
-// fixed fragment order filters, continue, assignee, limit, columns.
+// fixed fragment order filters, assignee, limit, columns.
 // [LAW:one-source-of-truth] the knobs a view exposes and the usage line that
 // names them cannot drift.
 func (v workableView) usage() string {
 	parts := []string{"usage: lit " + v.name}
 	if v.hasFilters {
 		parts = append(parts, "[--type ...] [--status ...] [--labels ...]")
-	}
-	if v.hasContinue {
-		parts = append(parts, "[--continue]")
 	}
 	parts = append(parts, "[--assignee <user>]")
 	if v.hasLimit {
@@ -102,41 +96,6 @@ var backlogView = workableView{
 	occasion: func([]annotation.AnnotatedIssue) workflows.Occasion { return backlogOccasion() },
 }
 
-// `next` — "the one leaf to lit start now": optional --continue bias is one
-// extra stable sort over the same data; it never changes which rows are
-// workable, only where we look first. Empty selection is a loud error, not an
-// empty list — the agent asked for work and there is none. Filters make "the
-// next workable bug" expressible; --limit/--columns stay off because a
-// single-row summary has no row count or column set to vary.
-var nextView = workableView{
-	name:        "next",
-	hasFilters:  true,
-	hasContinue: true,
-	order: func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs) {
-		if knobs.continueBias {
-			sortByContinueBias(rows, details)
-		}
-	},
-	keep: func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue {
-		next, ok := pickFirstReady(rows)
-		if !ok {
-			return nil
-		}
-		return []annotation.AnnotatedIssue{next}
-	},
-	render: func(w io.Writer, _ []string, rows []annotation.AnnotatedIssue) error {
-		if len(rows) == 0 {
-			return errors.New("no ready work")
-		}
-		return printNextSummary(w, rows[0])
-	},
-	// render above already errors out on an empty selection, so occasion is
-	// only ever called with the one row it just printed.
-	occasion: func(rows []annotation.AnnotatedIssue) workflows.Occasion {
-		return nextPulledOccasion(rows[0].Issue)
-	},
-}
-
 // workableRun adapts a preset to the registry's appRunFn shape.
 func workableRun(view workableView) appRunFn {
 	return func(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
@@ -156,7 +115,6 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
 	columnsExpr := optionalString(fs, view.hasColumns, "columns", "Comma-separated output columns")
-	continueBias := optionalBool(fs, view.hasContinue, "continue", "Bias toward leaves under in-progress epics")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -171,20 +129,21 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	// Backlog and next are exactly the "ordinary read command" surface
-	// links-sync-pgct.2 targets: printed first, so unpushed/unfetched drift is
-	// the first thing on screen rather than a diagnostic nobody runs.
+	// Backlog is exactly the "ordinary read command" surface links-sync-pgct.2
+	// targets: printed first, so unpushed/unfetched drift is the first thing
+	// on screen rather than a diagnostic nobody runs. (`next` — next.go —
+	// prints the same warning at the same position, independently, since it
+	// no longer runs through this pipeline.)
 	if err := printSyncStalenessWarning(ctx, stdout, ap.Workspace, ap.Store, time.Now()); err != nil {
 		return err
 	}
 	knobs := workableKnobs{
-		assignee:     strings.TrimSpace(*assignee),
-		issueType:    issueTypeValue,
-		status:       statusState,
-		labels:       splitCSV(*labels),
-		limit:        *limit,
-		columns:      parseColumns(*columnsExpr),
-		continueBias: *continueBias,
+		assignee:  strings.TrimSpace(*assignee),
+		issueType: issueTypeValue,
+		status:    statusState,
+		labels:    splitCSV(*labels),
+		limit:     *limit,
+		columns:   parseColumns(*columnsExpr),
 	}
 	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  knobs.assignee,
@@ -253,11 +212,4 @@ func optionalInt(fs *cobraFlagSet, enabled bool, name, usage string) *int {
 		return new(int)
 	}
 	return fs.Int(name, 0, usage)
-}
-
-func optionalBool(fs *cobraFlagSet, enabled bool, name, usage string) *bool {
-	if !enabled {
-		return new(bool)
-	}
-	return fs.Bool(name, false, usage)
 }
