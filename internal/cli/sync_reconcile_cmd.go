@@ -95,7 +95,7 @@ func runSyncReconcileShow(ctx context.Context, stdout io.Writer, ws workspace.In
 		recordSyncCommandTrace(ws, reconcileShowCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(ctx, stdout, ws, reconcileShowCommand, remote, branch, result, false)
+	return reportReconcileResult(ctx, stdout, ws, syncStore, reconcileShowCommand, remote, branch, result, false)
 }
 
 // runSyncReconcileResolve finalizes a prose-pending reconcile with the agent's
@@ -133,7 +133,7 @@ func runSyncReconcileResolve(ctx context.Context, stdout io.Writer, ws workspace
 		recordSyncCommandTrace(ws, proseResolveCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(ctx, stdout, ws, proseResolveCommand, remote, branch, result, true)
+	return reportReconcileResult(ctx, stdout, ws, syncStore, proseResolveCommand, remote, branch, result, true)
 }
 
 // runSyncReconcileAbort defers the reconcile: the clone stays diverged and usable.
@@ -254,7 +254,7 @@ func runSyncReconcileCombine(ctx context.Context, stdout io.Writer, ws workspace
 		recordSyncCommandTrace(ws, reconcileCombineCommand, "error", err, map[string]string{"remote": remote, "sync_branch": branch})
 		return asSyncFailure(err)
 	}
-	return reportReconcileResult(ctx, stdout, ws, reconcileCombineCommand, remote, branch, result, false)
+	return reportReconcileResult(ctx, stdout, ws, syncStore, reconcileCombineCommand, remote, branch, result, false)
 }
 
 // parseUnrelatedSide maps the take command's positional to the store resolution
@@ -402,14 +402,16 @@ func discardedIDs(inv *store.UnrelatedInventory, choice store.UnrelatedResolutio
 // an unrelated-histories result returns the one sync-failure contract (also exit
 // ExitConflict), so `lit sync reconcile`, `lit sync pull`, and the inline receive
 // all surface no-common-ancestor identically; every other state is a one-line
-// success. resolved=true distinguishes a finalize whose resolutions missed the live
+// success — Linearized and Combined follow it with reportContestedLanes, since
+// those are the two states where histories actually just merged (links-claims-1ihf.8).
+// resolved=true distinguishes a finalize whose resolutions missed the live
 // divergence (re-surfaced) from a first-time surface, so the agent knows to re-merge
 // the CURRENT conflicts shown. It records the durable, unconditional trace for the
 // reconcile decision — the one point every one of the three callers' outcomes
 // passes through — and it feeds the owner channel the same way every surface does:
 // a held state notifies out-of-band, a converged one ends the divergence episode
 // (links-sync-pgct.4). [LAW:single-enforcer]
-func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, command string, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
+func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, command string, remote, branch string, result store.SyncReconcileResult, resolved bool) error {
 	// "replayed" mirrors reportTakeOutcome: the provenance-replay count is part
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
@@ -472,8 +474,13 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	case store.SyncReconcileLinearized:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
-		_, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed))
-		return err
+		if _, err := fmt.Fprintf(stdout, "reconciled: the divergence merged into linear history — %s replayed with original messages and timestamps; the next push fast-forwards\n", describeReplayed(result.Replayed)); err != nil {
+			return err
+		}
+		// The histories that just merged are exactly the moment
+		// design-docs/work-claims.md's "Distribution, races, and failure
+		// modes" says a partition race first becomes knowable. [LAW:no-silent-failure]
+		return reportContestedLanes(ctx, stdout, ws, syncStore)
 	case store.SyncReconcileCombined:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
@@ -485,7 +492,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		if inv == nil {
 			inv = &store.UnrelatedInventory{}
 		}
-		_, err := fmt.Fprintf(stdout,
+		if _, err := fmt.Fprintf(stdout,
 			"combined: unioned both backlogs onto %s — %s replayed with original messages and timestamps; run `lit sync push` (or let auto-sync) to fast-forward the remote onto it.\n"+
 				"  kept local-only:  %s\n"+
 				"  kept remote-only: %s\n"+
@@ -494,8 +501,10 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 			describeReplayed(result.Replayed),
 			describeIDSet(inv.OnlyLocal),
 			describeIDSet(inv.OnlyRemote),
-			describeIDSet(inv.OnBoth))
-		return err
+			describeIDSet(inv.OnBoth)); err != nil {
+			return err
+		}
+		return reportContestedLanes(ctx, stdout, ws, syncStore)
 	case store.SyncReconcileNotDiverged:
 		recordReconcileDecisionTrace(ws, command, result.State, metadata)
 		clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)

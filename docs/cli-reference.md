@@ -542,6 +542,14 @@ partial or stale resolution (including one merged against a since-changed
 base/ours/theirs) is rejected and re-surfaced. `abort` defers — the clone stays
 diverged and usable.
 
+When two partitioned checkouts started the same lane before either saw the
+other's push, a reconcile that lands in linear or combined history also names
+the contest: it prints the lane, its current holder, and every other checkout
+whose evidence is still live there — the same claim line `next`/`backlog`
+render — right under the reconcile's own success line. This is reporting
+only; routing and evidence are unaffected, and a reconcile with no contested
+lane prints nothing extra. See `design-docs/work-claims.md` in the repository.
+
 For **unrelated histories** (no common ancestor, so the field-aware merge has no
 base), `combine` unions both backlogs with nothing dropped and needs no
 approval, while `take local|remote` adopts one side wholesale and **permanently
