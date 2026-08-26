@@ -121,13 +121,16 @@ nothing — is a usage error (exit 2) naming the legal values.
 ### `lit next`
 
 ```text
-lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--continue] [--assignee <a>]
+lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <a>]
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
-`backlog` — so "the next workable bug" is `lit next --type bug`. `--continue` biases
-toward leaves under epics that are already in progress. `--limit` and `--columns` do
-not apply to a single-row summary and are not accepted.
+`backlog` — so "the next workable bug" is `lit next --type bug`. Selection is
+claims-first: a ready lane this checkout already holds comes back before anything
+else, then another unclaimed lane of the same epic, then the global pool — see
+design-docs/work-claims.md for the full precedence. `--limit` and `--columns` do
+not apply to a single-row summary and are not accepted. `--continue` is retired —
+claim routing already keeps a checkout in its own epic first, unconditionally.
 
 ### `lit orphaned`
 
