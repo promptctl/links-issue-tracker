@@ -1225,6 +1225,20 @@ type transitionSpec struct {
 	// builder invoked after parsing, which turns the flag values into the
 	// sealed action variant.
 	registerFlags func(fs *cobraFlagSet) func() (model.Action, error)
+	// authorize, when set, runs after the action is built and before Apply,
+	// and may abort the transition by returning an error. Only `start`
+	// supplies one — the fresh-claim takeover gate
+	// (design-docs/work-claims.md, links-claims-1ihf.7) — so it costs the
+	// other seven transitions nothing. [LAW:single-enforcer] one hook point
+	// for per-transition authorization, rather than a type switch on the
+	// built action scattered through runTransition.
+	authorize func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error
+}
+
+// noAuthorize is the authorize hook of every transition that gates nothing
+// beyond the ordinary state-machine check store.Apply already performs.
+func noAuthorize(*cobraFlagSet) func(context.Context, io.Writer, *app.App, string, model.Issue) error {
+	return func(context.Context, io.Writer, *app.App, string, model.Issue) error { return nil }
 }
 
 // fixedAction is the registerFlags of every transition whose action carries no
@@ -1236,32 +1250,45 @@ func fixedAction(action model.Action) func(fs *cobraFlagSet) func() (model.Actio
 }
 
 var (
-	startSpec = transitionSpec{name: "start", registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
-		// Start is the claim transition and the only action that carries an
-		// assignee. The resolver overrides the flag with CLAUDE_CODE_SESSION_ID
-		// whenever set; the flag survives only as a fallback for environments
-		// without the env var.
-		assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
-		return func() (model.Action, error) {
-			return model.Start{Assignee: resolveIdentity(*assignee)}, nil
-		}
-	}}
-	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{})}
-	closeSpec = transitionSpec{name: "close", registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
-		resolution, target := registerCloseOutcomeFlags(fs)
-		return func() (model.Action, error) {
-			outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
-			if err != nil {
-				return nil, err
+	startSpec = transitionSpec{
+		name: "start",
+		registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
+			// Start is the claim transition and the only action that carries an
+			// assignee. The resolver overrides the flag with CLAUDE_CODE_SESSION_ID
+			// whenever set; the flag survives only as a fallback for environments
+			// without the env var.
+			assignee := fs.String("assignee", "", "Assignee fallback when CLAUDE_CODE_SESSION_ID is unset (env always wins when set)")
+			return func() (model.Action, error) {
+				return model.Start{Assignee: resolveIdentity(*assignee)}, nil
 			}
-			return model.Close{Outcome: outcome}, nil
-		}
-	}}
-	openSpec      = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{})}
-	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{})}
-	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{})}
-	deleteSpec    = transitionSpec{name: "delete", registerFlags: fixedAction(model.Delete{})}
-	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{})}
+		},
+		authorize: func(fs *cobraFlagSet) func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
+			take := fs.Bool("take", false, "Confirm taking over a lane another checkout claims right now (required for non-interactive callers; an interactive terminal is prompted instead)")
+			return func(ctx context.Context, stdout io.Writer, ap *app.App, issueID string, prior model.Issue) error {
+				return authorizeStart(ctx, stdout, ap, issueID, prior, *take)
+			}
+		},
+	}
+	doneSpec  = transitionSpec{name: "done", registerFlags: fixedAction(model.Done{}), authorize: noAuthorize}
+	closeSpec = transitionSpec{
+		name: "close",
+		registerFlags: func(fs *cobraFlagSet) func() (model.Action, error) {
+			resolution, target := registerCloseOutcomeFlags(fs)
+			return func() (model.Action, error) {
+				outcome, err := closeOutcomeFromFlags(*resolution, *target, "usage: lit close <id> --resolution <duplicate|superseded|obsolete|wontfix> [--of <canonical-id>] [--reason <text>]")
+				if err != nil {
+					return nil, err
+				}
+				return model.Close{Outcome: outcome}, nil
+			}
+		},
+		authorize: noAuthorize,
+	}
+	openSpec      = transitionSpec{name: "open", registerFlags: fixedAction(model.Reopen{}), authorize: noAuthorize}
+	archiveSpec   = transitionSpec{name: "archive", registerFlags: fixedAction(model.Archive{}), authorize: noAuthorize}
+	unarchiveSpec = transitionSpec{name: "unarchive", registerFlags: fixedAction(model.Unarchive{}), authorize: noAuthorize}
+	deleteSpec    = transitionSpec{name: "delete", registerFlags: fixedAction(model.Delete{}), authorize: noAuthorize}
+	restoreSpec   = transitionSpec{name: "restore", registerFlags: fixedAction(model.Restore{}), authorize: noAuthorize}
 )
 
 // registerCloseOutcomeFlags declares the close-outcome flags shared by `lit
@@ -1314,6 +1341,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	reason := fs.String("reason", "", "Transition reason")
 	resolveActor := registerActor(fs)
 	buildAction := spec.registerFlags(fs)
+	authorize := spec.authorize(fs)
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -1334,6 +1362,14 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	action, err := buildAction()
 	if err != nil {
+		return err
+	}
+
+	// [LAW:single-enforcer] The one gate every transition's authorization
+	// passes through, ahead of Apply — a no-op for every transition but
+	// `start`. See transitionSpec.authorize and authorizeStart
+	// (claims_takeover.go).
+	if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
 		return err
 	}
 
