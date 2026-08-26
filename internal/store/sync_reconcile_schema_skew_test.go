@@ -10,6 +10,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
+// The skew tests in this file build their stores from nothing on purpose:
+// their subject is the migration chain under version skew — Downgrade() lands
+// a store at an older schema and the heal replays the missing migrations — so
+// replaying the chain is the premise, not fixture tax. Only
+// TestSyncPullStateTransitions below, whose subtests never skew a schema,
+// draws from the template fixture.
+
 // TestLiftWorkingSetToRegistryRecoversDowngradedSchema isolates the schema-lift
 // primitive from the sync dance: a store whose working set sits at an OLDER
 // schema (the multi-machine skew the reconcile must be total over) cannot be

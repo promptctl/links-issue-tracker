@@ -171,7 +171,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 	release = nil
 }
 
-func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
+func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
