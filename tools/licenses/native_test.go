@@ -654,7 +654,8 @@ func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
 // both -check and artifact generation go through.
 func TestBuildEntriesRefusesALyingNativeRecord(t *testing.T) {
 	// Deliberately NOT t.Parallel: this test swaps the package-level nativeLibs
-	// for its duration, and every parallel test in the package reads it. The
+	// for its duration, and the parallel tests over the native and shared
+	// inventories read it. The
 	// runner finishes all serial tests — cleanup included — before any parallel
 	// body resumes, so serial is the fence that keeps the lying record out of
 	// their view. [LAW:no-shared-mutable-globals]
