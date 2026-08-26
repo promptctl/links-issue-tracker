@@ -1,0 +1,92 @@
+# Event store: budgets and baselines
+
+Status: baselines measured 2026-08-25; targets set by owner directive; scale
+projections await the harness. This file is the single home for every
+**measured baseline and derived budget figure** in the event-store design —
+prose in charter.md/design.md cites those rather than restating them. The two
+governing directives are **charter.md hard constraint 3's** — the figures
+live there, and this file only turns them into measurable rows. A budget
+change is an owner decision recorded here, not a drift.
+
+## Measured baselines (2026-08-25, this machine)
+
+| Measurement | Value | Provenance |
+|---|---|---|
+| lit stores under ~/code | 52 unique store paths (57 pre-dedup; owner counts ~30 projects) | walk of `git-common-dir/links/dolt`, deduplicated by resolved real path |
+| Aggregate Dolt store disk | ~0.9 GB (901 MB deduplicated; the naive 57-dir sum reads 1.1 GB) | `du -sm` over the 52 unique real paths |
+| Largest single store | 190 MB (links-issue-tracker) | `du -sh` |
+| `lit backlog` wall time, pre-#414 binary | 10.9 s (includes inline receive fetch) | timed in links-issue-tracker |
+| `lit backlog` wall time, post-#414 | ~0.2 s | PR #414's measurement; re-confirm in harness |
+| Active backlog rows (this repo) | ~123 | `lit backlog \| wc -l` |
+| Total tickets / total mutations per store | **unmeasured** — harness's first job | — |
+| Events per week of agent churn | **unmeasured** — harness's first job | — |
+
+The 10x corpus has **two components**, defined here once (per-row notes may
+add detail but never substitute a different construction):
+
+- **Depth corpus** — the real fleet's largest store replayed, then
+  synthesized to 10x its event count preserving its shape (event-type mix,
+  rank-intent density, prose sizes). Per-command benchmarks (the Command
+  budgets table) run against this — **on a machine concurrently running the
+  breadth fleet's background sync load**, so command latency is measured
+  under both axes at once, not on a quiet machine. The per-store rows of the
+  Storage table (per-store disk, the git-experience ceiling, the dead-refs
+  predicate under churn replay) also run against the depth corpus, being
+  properties of one repo keyed to the largest-store baseline.
+- **Breadth fleet** — 10x the measured store count, **with each store's
+  history also scaled ×10**, preserving the measured size distribution's
+  *shape* (most stores small), not 10x copies of the largest. Machine-wide
+  benchmarks (aggregate disk, background stampede, and the background load
+  behind the depth corpus's command runs) come from this, so they test the
+  genuinely compounded both-axes case.
+
+## Command budgets (at 10x depth corpus, on this class of machine)
+
+Every command row is a **total wall-time ceiling, inclusive of all
+components** — the staleness row profiles a component *inside* those
+ceilings, not an addition to them; there is no reading of this table under
+which per-component greens can sum past a command ceiling. "Compute" excludes
+network transfer only where physics demands it (first-clone download); per
+`[INV:no-foreground-network]` no other command touches the network in the
+foreground at all.
+
+| Operation | Budget | Notes |
+|---|---|---|
+| Any command, warm cache | < 300 ms | the everyday case; p95 |
+| Any command, cold cache (incremental fold from snapshot) | < 1 s | |
+| Full refold from genesis (fold-version bump; worst case) | < 1 s | can occur inside any command; sets the codec + snapshot bar |
+| First-adopt verification compute | < 1 s | the riskiest budget; forces design OPEN #3 (batch verify vs signed snapshot) |
+| Staleness check (read all writer ref heads) | < 20 ms | component profile within the command ceilings above |
+| Background receive/mirror, per occasion | ≤ 1 CPU-second | and machine-wide background CPU ≤ 5% of one core averaged over any 60 s window on the breadth fleet |
+
+## Storage and repo-impact budgets (at 10x)
+
+Growth is monotone by charter #7 (no truncation), so these are ceilings on
+rate and footprint, not promises of shrinkage.
+
+| Quantity | Budget | Notes |
+|---|---|---|
+| Event store disk per store at 10x history | ≤ 1/10 of today's Dolt store at 1x (i.e. ≤ ~19 MB where Dolt spends 190 MB) | hypothesis to verify in S1; if missed, it is a design problem to solve before S2, not a note |
+| Aggregate lit disk per machine at 10x both axes | ≤ the measured aggregate in the baselines table | checked against the breadth fleet |
+| Added latency to the code repo's own `git status` / `git fetch` | < 5 ms p95 vs a control clone without lit refs/objects | lit may not degrade the developer's ordinary git experience |
+| Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
+
+## Harness contract
+
+The load harness is the migration's instrument, not an afterthought:
+
+- **Measures first.** Its first run produces the unmeasured baseline rows
+  above from the real fleet before any synthetic scaling.
+- **Replays reality.** Both corpus components are built from real-store
+  replays per the corpus definition above — never from uniform random
+  events.
+- **Gates the migration.** The gate condition is **owned by design
+  §migration** (S1 row) and its wording governs: the oracle diff empty over
+  sustained real use, and budgets passing at 10x — where "budgets passing"
+  means every row of the two budget tables above green (the baselines table
+  is descriptive input, not a gate). A red row stops the flip; the fix
+  happens while Dolt is still authoritative and stopping is free.
+- **Outlives the migration.** The per-command budgets become regression
+  checks in CI once S4 lands, so the charter #3 directive is enforced by the
+  build, not by memory (the testperf epic's runtime-budget gate is the
+  pattern).

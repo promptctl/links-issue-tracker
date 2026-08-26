@@ -6,6 +6,17 @@ Status: draft, first pass. Answers [charter.md](charter.md); evidence in
 *F§*). Written 2026-08-25. Sections marked **OPEN** are decisions a later
 session must close; everything else is a position this draft commits to.
 
+Substrate note (2026-08-25, added with the event-store design): this draft's
+enforcement *mechanics* are written against the Dolt store, and the
+event-store design ([../event-store/](../event-store/design.md), accepted the
+same day) supersedes that substrate — its charter directs that the write
+layer be built on the event store, not on Dolt first. The policy design here
+(principals, capabilities, roles, tiers, epochs, keys) carries over
+unchanged; §1's Dolt-commit-chain mechanics translate to signed events on
+per-writer refs, where reconcile-replay re-signing (this draft's OPEN #1)
+dissolves. Read "the existing git-synced Dolt store" below as the substrate
+of record when this was written, not a sequencing commitment.
+
 ## The shape in one paragraph
 
 Two independent layers over the existing git-synced Dolt store. The **write
@@ -21,7 +32,9 @@ each member's public key in a keyring inside the store — the SOPS recipient
 pattern for grants (R IV), the Megolm/Sender-Keys epoch pattern for
 revocation (R IV), key destruction for erasure (R III). The layers compose
 but neither needs the other: the write layer alone meets the charter's RBAC
-bar; the read layer alone meets the confidentiality bar.
+bar; the read layer alone meets the confidentiality bar — with one field
+excepted: `topic` stays embedded in plaintext ids until the event-store id
+redesign lands (see the documented limits in §3).
 
 Two boundaries are fixed by physics, not by this design, and everything else
 is stated in their terms:
@@ -440,11 +453,23 @@ Consequences, mapped to the strain points:
 Charter rule 4 applied — places where the current model, not the security
 model, yields:
 
-1. **Issue-id scheme.** Ids embed the plaintext topic slug and a hash
-   commitment to title+description (F§2). Ids become opaque
-   (`<prefix>-<base36>`); `topic` becomes an ordinary column, encryptable
-   like other free text. Child `.n` suffixes may stay — structure is visible
-   by rule.
+1. **Issue-id scheme.** Today's ids embed the plaintext topic slug and a
+   hash commitment to title+description (F§2); that scheme is retired. Ids
+   become opaque (`<prefix>-<base36>`); `topic` becomes an ordinary column,
+   encryptable like other free text. This document owns the id **policy** —
+   opacity, format, what stays visible; the **minting mechanism** for every
+   id, top-level and child alike, is owned by the event-store design's
+   §events, whose inputs include a per-writer component precisely so that
+   offline writers cannot collide (a content hash alone collides on
+   duplicate filings, and a stored sequential child id collides under
+   uncoordinated writers). Child `.n` numbering survives as **display
+   only**: the ordinal is derived at render time, may renumber when a
+   concurrent sibling syncs in late, and is never a durable reference — the
+   opaque id is what agents store. Sequencing is explicit: this item is
+   **realized by the event-store migration** — the id scheme flips with the
+   store, and no interim Dolt-only minting scheme is designed (the substrate
+   note at the top of this document records the same sequencing for the
+   write layer as a whole).
 2. **Actor identity columns** become principal ids with keyring-resolved
    display (F§7.10); `--assignee` filtering and `lit orphaned` operate on
    principal ids. Issues additionally gain a first-class `created_by`
@@ -518,7 +543,10 @@ ones — these are what make the audit trail trustworthy at all):
 - Witness cosigning, when it ships (detection only — enforcement never
   depends on it, per charter constraint 2).
 
-**Documented limits, never papered over:** forward-only revocation; denial
+**Documented limits, never papered over:** until the event-store migration
+lands, `topic` remains embedded in plaintext issue ids, so a read-layer
+deployment over Dolt leaves `topic` exposed to every repo reader (the id
+redesign that frees it ships with the event store); forward-only revocation; denial
 recoverable-not-preventable; a removed member retains what they could read;
 metadata (existence, structure, timing, actor principal ids) is visible to
 every repo reader even under full encryption, as is equality of two
