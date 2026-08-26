@@ -21,6 +21,7 @@ func hydratedIssue(t *testing.T, id string, labels []string, state model.State) 
 }
 
 func TestShowTicketOccasion(t *testing.T) {
+	t.Parallel()
 	issue := hydratedIssue(t, "lit-1", []string{"need-design"}, model.StateOpen)
 	got := showTicketOccasion(issue)
 	want := workflows.Occasion{Event: workflows.EventShowTicket, IssueID: "lit-1", Labels: []string{"need-design"}}
@@ -33,6 +34,7 @@ func TestShowTicketOccasion(t *testing.T) {
 }
 
 func TestBacklogOccasionCarriesNoSingleTicket(t *testing.T) {
+	t.Parallel()
 	got := backlogOccasion()
 	if got.Event != workflows.EventShowBacklog {
 		t.Fatalf("backlogOccasion().Event = %q, want %q", got.Event, workflows.EventShowBacklog)
@@ -43,6 +45,7 @@ func TestBacklogOccasionCarriesNoSingleTicket(t *testing.T) {
 }
 
 func TestNextPulledOccasion(t *testing.T) {
+	t.Parallel()
 	issue := hydratedIssue(t, "lit-2", []string{"epic-child"}, model.StateOpen)
 	got := nextPulledOccasion(issue)
 	if got.Event != workflows.EventNextPulled || got.IssueID != "lit-2" || !slices.Equal(got.Labels, []string{"epic-child"}) {
@@ -51,6 +54,7 @@ func TestNextPulledOccasion(t *testing.T) {
 }
 
 func TestTicketCreatedOccasion(t *testing.T) {
+	t.Parallel()
 	issue := hydratedIssue(t, "lit-3", []string{"needs-triage"}, model.StateOpen)
 	got := ticketCreatedOccasion(issue)
 	if got.Event != workflows.EventTicketCreated || got.IssueID != "lit-3" || !slices.Equal(got.Labels, []string{"needs-triage"}) {
@@ -59,6 +63,7 @@ func TestTicketCreatedOccasion(t *testing.T) {
 }
 
 func TestTicketUpdatedOccasionCarriesNoTransition(t *testing.T) {
+	t.Parallel()
 	issue := hydratedIssue(t, "lit-4", []string{"blocked"}, model.StateInProgress)
 	got := ticketUpdatedOccasion(issue)
 	if got.Event != workflows.EventTicketUpdated || got.IssueID != "lit-4" || !slices.Equal(got.Labels, []string{"blocked"}) {
@@ -70,6 +75,7 @@ func TestTicketUpdatedOccasionCarriesNoTransition(t *testing.T) {
 }
 
 func TestCommentAddedOccasion(t *testing.T) {
+	t.Parallel()
 	issue := hydratedIssue(t, "lit-5", []string{"discuss"}, model.StateOpen)
 	got := commentAddedOccasion(issue)
 	if got.Event != workflows.EventCommentAdded || got.IssueID != "lit-5" || !slices.Equal(got.Labels, []string{"discuss"}) {
@@ -81,6 +87,7 @@ func TestCommentAddedOccasion(t *testing.T) {
 // requirement: every one of the four status transitions dispatches the right
 // event with the right from/to state pair.
 func TestTransitionOccasionAllFourStatusActions(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		action      model.StatusAction
@@ -154,6 +161,7 @@ func TestTransitionOccasionAllFourStatusActions(t *testing.T) {
 // runTransition type assertion that guards the call excludes them
 // structurally — there is no runtime case to test.
 func TestRetentionActionsAreNotStatusActions(t *testing.T) {
+	t.Parallel()
 	var actions = []model.Action{model.Archive{}, model.Unarchive{}, model.Delete{}, model.Restore{}}
 	for _, action := range actions {
 		if _, ok := action.(model.StatusAction); ok {

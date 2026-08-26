@@ -10,6 +10,7 @@ import (
 )
 
 func TestCommandErrorReason(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		err  error
@@ -46,6 +47,7 @@ func TestCommandErrorReason(t *testing.T) {
 // the actionable remediation for the error's typed reason. Text is the one
 // canonical surface, so the remediation guidance reaches every caller.
 func TestWriteCommandError(t *testing.T) {
+	t.Parallel()
 	var stderr bytes.Buffer
 	exitCode := WriteCommandError(&stderr, UnknownCommandError{Command: "unknown"})
 	if exitCode != ExitValidation {
@@ -65,6 +67,7 @@ func TestWriteCommandError(t *testing.T) {
 // aware headline and its resolution steps — never the raw "database is read only"
 // line as the whole message. [FRAMING:representation]
 func TestWriteCommandErrorWorkspaceWriteBlocked(t *testing.T) {
+	t.Parallel()
 	var stderr bytes.Buffer
 	err := store.WorkspaceWriteBlockedError{
 		Cause: errors.New("dolt commit working set: Error 1105: cannot update manifest: database is read only"),

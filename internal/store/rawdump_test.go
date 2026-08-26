@@ -44,6 +44,7 @@ func columnIndex(t *testing.T, table RawTable, column string) int {
 // the links-recovery-icqp deadend shape — is refused by store.Open(), yet
 // DumpRaw releases its application rows without ever calling Open().
 func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	const workspaceID = "test-workspace-id"
@@ -128,6 +129,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 // openable workspace: text columns survive as strings (driver []byte
 // normalized) and a NULL column scans to nil, distinct from an empty string.
 func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	const workspaceID = "test-workspace-id"

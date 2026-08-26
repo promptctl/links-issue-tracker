@@ -15,6 +15,7 @@ import (
 // The identity header is where prefix provenance becomes observable: the one
 // run that mints a prefix the user never chose must say so.
 func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	ws := workspace.Info{
 		Location:    workspace.Location{StorageDir: "/tmp/store", GitCommonDir: "/tmp/repo/.git"},
@@ -30,6 +31,7 @@ func TestPrintWorkspaceIdentityReportsPrefixSource(t *testing.T) {
 }
 
 func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	gitInit := exec.Command("git", "init")
 	gitInit.Dir = repo
@@ -56,6 +58,7 @@ func TestPrintWorkspaceIdentityReportsDerivedPrefix(t *testing.T) {
 }
 
 func TestPrintSyncFreshness(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		report      doctorSyncReport

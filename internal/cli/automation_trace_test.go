@@ -10,6 +10,7 @@ import (
 )
 
 func TestRecordAutomationTraceWritesCanonicalJSON(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	ws, err := workspace.Resolve(repo)

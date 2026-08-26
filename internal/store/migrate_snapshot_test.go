@@ -21,6 +21,7 @@ import (
 // The snapshot must exist in the workspace snapshots directory after Open
 // returns and must be the only entry there.
 func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -49,6 +50,7 @@ func TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot(t *testing.T) {
 // snapshot" acceptance criterion. A second Open against a workspace that is
 // already at canonical shape must not increase the snapshot count.
 func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -86,6 +88,8 @@ func TestMigrateSnapshotNoOpOpenTakesNoSnapshot(t *testing.T) {
 // acceptance criterion. The failure injection fires post-snapshot, ensuring
 // the rollback path is exercised.
 func TestMigrateSnapshotFailureSurfacesRestoreCommand(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// migrationPostSnapshotHookForTest hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -120,6 +124,8 @@ func TestMigrateSnapshotFailureSurfacesRestoreCommand(t *testing.T) {
 // dbsnapshot.Restore against the snapshot's name must produce a workspace
 // directory that Open can succeed on.
 func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// migrationPostSnapshotHookForTest hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	snapshotsDir := migrationSnapshotsDir(doltRoot)
@@ -141,6 +147,11 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	}
 	freshSnapshot := freshSnaps[0]
 
+	// Force re-migration by dropping goose's history so the next Open
+	// re-adopts the workspace; without work to do, the hook never fires.
+	// The drop runs before the hook is installed so the helper's own
+	// internal Open cannot trip it.
+	withGooseHistoryDropped(t, ctx, doltRoot)
 	// Inject a synthetic failure so a *new* Open captures a snapshot and
 	// then errors out; the snapshot it captures should restore cleanly.
 	// t.Cleanup guards against early-fail leaks; the explicit reset below
@@ -148,9 +159,6 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	// this test cannot accidentally trigger it.
 	migrationPostSnapshotHookForTest = func() error { return errors.New("synthetic failure") }
 	t.Cleanup(func() { migrationPostSnapshotHookForTest = nil })
-	// Force re-migration by dropping goose's history so the next Open
-	// re-adopts the workspace; without work to do, the hook never fires.
-	withGooseHistoryDropped(t, ctx, doltRoot)
 	failedOpen, openErr := Open(ctx, doltRoot, "test-workspace-id")
 	migrationPostSnapshotHookForTest = nil
 	if openErr == nil {
@@ -202,6 +210,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 // snapshots and then triggering a mutating Open must reduce the listing to
 // the retention count.
 func TestMigrateSnapshotPruneEnforcesRetention(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	snapshotsDir := migrationSnapshotsDir(doltRoot)
@@ -268,6 +277,7 @@ func countMigrationSnapshots(t *testing.T, dir string) int {
 // Without this guarantee, a mutating Open could silently delete recovery
 // artifacts the user explicitly created via `lit snapshots new`.
 func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	snapshotsDir := migrationSnapshotsDir(doltRoot)
@@ -332,6 +342,7 @@ func TestMigrationPruneSparesUserSnapshots(t *testing.T) {
 // Only names matching the exact "<unix-ns>-pre-migrate-<unix-ns>" stamp
 // produced by formatMigrationSnapshotLabel are migration snapshots.
 func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		want bool
@@ -367,6 +378,8 @@ func TestIsMigrationSnapshotNameRejectsUserCollisions(t *testing.T) {
 // field-history events) is byte-identical after a failed migration is recovered
 // via dbsnapshot.Restore. [LAW:behavior-not-structure] [LAW:verifiable-goals]
 func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// migrationPostSnapshotHookForTest hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	snapshotsDir := migrationSnapshotsDir(doltRoot)
@@ -543,12 +556,12 @@ func assertExportStateIdentical(t *testing.T, want, got model.Export) {
 // classifies the workspace as phaseAdopt (pre-goose schema, no history) and
 // re-stamps the baseline version — a mutating migrate() pass, which is what
 // the snapshot/failure/prune tests need to drive.
+// Callers that install migrationPostSnapshotHookForTest (all serial) do so
+// only after this helper returns; the helper itself must not touch that
+// package-level hook, because it also runs inside parallel tests, where any
+// write to it races every concurrently migrating Open.
 func withGooseHistoryDropped(t *testing.T, ctx context.Context, doltRoot string) {
 	t.Helper()
-	prev := migrationPostSnapshotHookForTest
-	migrationPostSnapshotHookForTest = nil
-	defer func() { migrationPostSnapshotHookForTest = prev }()
-
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("withGooseHistoryDropped Open error = %v", err)

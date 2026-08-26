@@ -18,6 +18,7 @@ import (
 // migrations' DDL. Downgrade manufactures the old schema faithfully: Dolt does
 // not care whether a v2 commit came from an old binary or a downgrade.
 func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := t.TempDir()
 
@@ -80,6 +81,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 // the epic acceptance: the state that used to fail on every retry forever now
 // self-heals.
 func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -186,6 +188,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 // can be resolved" failure that native DOLT_PULL raises. The conflicting edits
 // are code-owned, so the engine settles them (no prose-pending).
 func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -242,6 +245,7 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 // diverged→linearized and diverged→prose-pending arms are covered by
 // TestSyncPullHealsSchemaSkewDivergence and the reconcile suite.
 func TestSyncPullStateTransitions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	t.Run("up_to_date", func(t *testing.T) {
@@ -328,6 +332,7 @@ func TestSyncPullStateTransitions(t *testing.T) {
 // snapshots. Mirrors TestIsDowngradeSnapshotNameSymmetry, extended to the third
 // classifier this PR adds.
 func TestIsReconcileSnapshotNameDisjoint(t *testing.T) {
+	t.Parallel()
 	const ns = "1700000000000000000"
 	recName := ns + "-" + reconcileSnapshotLabel + "-1700000000000000001"
 	migName := ns + "-" + migrationSnapshotLabel + "-1700000000000000001"

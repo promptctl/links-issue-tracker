@@ -9,6 +9,7 @@ import (
 )
 
 func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := func(s string) *string { return &s }
@@ -52,6 +53,7 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 // by saying nothing. ImportTree gets the same treatment from the same zero
 // value.
 func TestBulkApplyCreatesLandInFileOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := func(s string) *string { return &s }
@@ -86,6 +88,7 @@ func TestBulkApplyCreatesLandInFileOrder(t *testing.T) {
 }
 
 func TestBulkApplyCreateWithoutLocalIDIsReportedByRealID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := func(s string) *string { return &s }
@@ -107,6 +110,7 @@ func TestBulkApplyCreateWithoutLocalIDIsReportedByRealID(t *testing.T) {
 }
 
 func TestBulkApplyUpdatesExistingIssueByID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Before", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -134,6 +138,7 @@ func TestBulkApplyUpdatesExistingIssueByID(t *testing.T) {
 }
 
 func TestBulkApplyMixedCreateAndUpdate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	existing, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Old", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -163,6 +168,7 @@ func TestBulkApplyMixedCreateAndUpdate(t *testing.T) {
 }
 
 func TestBulkApplyRejectsUnknownID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := "New title"
@@ -175,6 +181,7 @@ func TestBulkApplyRejectsUnknownID(t *testing.T) {
 }
 
 func TestBulkApplyRejectsUpdateWithNoFields(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -188,6 +195,7 @@ func TestBulkApplyRejectsUpdateWithNoFields(t *testing.T) {
 }
 
 func TestBulkApplyRejectsUpdateWithTopic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -202,6 +210,7 @@ func TestBulkApplyRejectsUpdateWithTopic(t *testing.T) {
 }
 
 func TestBulkApplyRejectsUpdateWithParentOrDependsOn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -216,6 +225,7 @@ func TestBulkApplyRejectsUpdateWithParentOrDependsOn(t *testing.T) {
 }
 
 func TestBulkApplyRejectsInvalidTypeOrPriorityOnUpdate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -233,6 +243,7 @@ func TestBulkApplyRejectsInvalidTypeOrPriorityOnUpdate(t *testing.T) {
 }
 
 func TestBulkApplyRejectsMissingCreateFields(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := "no topic"
@@ -243,6 +254,7 @@ func TestBulkApplyRejectsMissingCreateFields(t *testing.T) {
 }
 
 func TestBulkApplyRejectsDuplicateID(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -257,6 +269,7 @@ func TestBulkApplyRejectsDuplicateID(t *testing.T) {
 }
 
 func TestBulkApplyRejectsIDAndLocalIDTogether(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	created, err := st.CreateIssue(ctx, CreateIssueInput{Title: "X", Topic: "bulk", IssueType: "task", Prefix: "test"})
@@ -271,6 +284,7 @@ func TestBulkApplyRejectsIDAndLocalIDTogether(t *testing.T) {
 }
 
 func TestBulkApplyCreateChildOfExistingIssue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Epic", Topic: "bulk", IssueType: "epic", Prefix: "test"})
@@ -299,6 +313,7 @@ func TestBulkApplyCreateChildOfExistingIssue(t *testing.T) {
 }
 
 func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	title := "will roll back"
@@ -330,6 +345,7 @@ func TestBulkApplyRollsBackCreatesOnLaterFailure(t *testing.T) {
 }
 
 func TestParseBulkSpecsRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	doc := []byte("title: X\ntopic: bulk\ntype: task\nchildren: [a, b]\n")
 	if _, err := ParseBulkSpecs(doc); err == nil || !strings.Contains(err.Error(), "children") {
 		t.Fatalf("ParseBulkSpecs(unknown field) error = %v, want error naming \"children\"", err)
@@ -337,6 +353,7 @@ func TestParseBulkSpecsRejectsUnknownField(t *testing.T) {
 }
 
 func TestParseBulkSpecsMultiDocument(t *testing.T) {
+	t.Parallel()
 	doc := []byte("title: A\ntopic: bulk\ntype: task\n---\ntitle: B\ntopic: bulk\ntype: task\n")
 	specs, err := ParseBulkSpecs(doc)
 	if err != nil {
@@ -348,6 +365,7 @@ func TestParseBulkSpecsMultiDocument(t *testing.T) {
 }
 
 func TestBulkApplyRejectsEmptyInput(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	if _, err := st.BulkApply(ctx, "test", "agent", nil); err == nil || !strings.Contains(err.Error(), "no issues in input") {

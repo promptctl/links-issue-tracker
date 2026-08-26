@@ -35,6 +35,7 @@ import (
 // [LAW:one-source-of-truth] The version list comes from the same FS goose
 // reads. There is no parallel "expected versions" constant to drift.
 func TestEveryMigrationDownIsExercised(t *testing.T) {
+	t.Parallel()
 	versions, err := registryVersionsDescending()
 	if err != nil {
 		t.Fatalf("enumerate migration versions: %v", err)

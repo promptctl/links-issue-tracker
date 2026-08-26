@@ -48,6 +48,7 @@ func readSyncTraceRecords(t *testing.T, ws workspace.Info) []syncTraceRecord {
 // still writes a durable record, under the "sync" kind alongside "automation"
 // and "workflows", with an empty Trigger naming that no automation fired it.
 func TestRecordSyncTraceWritesCanonicalJSONUnconditionally(t *testing.T) {
+	t.Parallel()
 	if v := os.Getenv(automationTriggerEnvVar); v != "" {
 		t.Fatalf("test environment unexpectedly has %s=%q set", automationTriggerEnvVar, v)
 	}
@@ -431,6 +432,7 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 // focused test rather than only being exercised incidentally through
 // happy-path e2e runs.
 func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	ws, err := workspace.Resolve(repo)

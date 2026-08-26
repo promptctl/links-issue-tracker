@@ -7,6 +7,7 @@ import (
 )
 
 func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []ImportTreeSpec{
@@ -45,6 +46,7 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 }
 
 func TestImportTreeRejectsCycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []ImportTreeSpec{
@@ -57,6 +59,7 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 }
 
 func TestImportTreeRejectsMissingReference(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []ImportTreeSpec{
@@ -68,6 +71,7 @@ func TestImportTreeRejectsMissingReference(t *testing.T) {
 }
 
 func TestImportTreeRejectsInvalidType(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	specs := []ImportTreeSpec{
@@ -82,6 +86,7 @@ func TestImportTreeRejectsInvalidType(t *testing.T) {
 // local_id+parent form — is the canonical schema-drift case. The unknown
 // "children" field must be rejected by name, not silently dropped.
 func TestParseImportTreeSpecsRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	nested := []byte(`[{"local_id":"e1","title":"Epic","type":"epic","topic":"x","children":[{"local_id":"t1","title":"Child"}]}]`)
 	_, err := ParseImportTreeSpecs(nested)
 	if err == nil || !strings.Contains(err.Error(), "children") {
@@ -90,6 +95,7 @@ func TestParseImportTreeSpecsRejectsUnknownField(t *testing.T) {
 }
 
 func TestParseImportTreeSpecsRejectsTrailingData(t *testing.T) {
+	t.Parallel()
 	doc := []byte(`[{"local_id":"a","title":"A","type":"task","topic":"x"}] [{"local_id":"b","title":"B","type":"task","topic":"x"}]`)
 	_, err := ParseImportTreeSpecs(doc)
 	if err == nil || !strings.Contains(err.Error(), "trailing data") {
@@ -100,6 +106,7 @@ func TestParseImportTreeSpecsRejectsTrailingData(t *testing.T) {
 // The valid flat form (local_id + parent + depends_on) must survive the strict
 // parse and import unchanged: same wiring the in-memory spec form produces.
 func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	flat := []byte(`[

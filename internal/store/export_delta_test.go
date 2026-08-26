@@ -24,6 +24,7 @@ import (
 // Divergence at any step fails, so a bug is reported at the transition that
 // caused it rather than at whatever later state exposed it.
 func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	states := buildDeltaScenarioStates(t, ctx)
 	if len(states) < 2 {
@@ -65,6 +66,7 @@ func TestExportDeltaMatchesFullRewriteAcrossEveryChangeShape(t *testing.T) {
 // and still differ. A diff that matched on the key alone would call this pair
 // unchanged and silently keep the stale row forever.
 func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
+	t.Parallel()
 	relation := model.Relation{SrcID: "a", DstID: "b", Type: model.RelBlocks, CreatedAt: time.Unix(0, 0).UTC(), CreatedBy: "first"}
 	restamped := relation
 	restamped.CreatedBy = "second"
@@ -96,6 +98,7 @@ func TestExportDeltaRewritesARelationChangedOutsideItsKey(t *testing.T) {
 // rows differ, ignoring what the delete drags away, would leave those rows
 // missing with no error anywhere.
 func TestExportDeltaReinsertsChildrenOfARewrittenIssue(t *testing.T) {
+	t.Parallel()
 	touched := hydratedIssue(t, model.Issue{ID: "touched", IssueType: model.TypeTask, Title: "before"}, model.StateOpen)
 	retitled := touched
 	retitled.Title = "after"
@@ -147,6 +150,7 @@ func TestExportDeltaReinsertsChildrenOfARewrittenIssue(t *testing.T) {
 // again and the replay is back to O(chain × backlog) writes with no test
 // failing to say so.
 func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
+	t.Parallel()
 	export := model.Export{
 		Issues: []model.Issue{
 			hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t"}, model.StateOpen),
@@ -178,6 +182,7 @@ func TestExportDeltaLeavesAnUnchangedBacklogAlone(t *testing.T) {
 // rewrite dragged its comments and its surviving labels through a needless
 // delete-and-reinsert.
 func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
+	t.Parallel()
 	before := hydratedIssue(t, model.Issue{ID: "a", IssueType: model.TypeTask, Title: "t", Labels: []string{"keep"}}, model.StateOpen)
 	after := before
 	after.Labels = []string{"keep", "urgent"}
@@ -221,6 +226,7 @@ func TestExportDeltaLeavesTheIssueRowAloneWhenOnlyALabelMoves(t *testing.T) {
 // the epic on every child transition, which on a real backlog is exactly the
 // shape of change a folded commit makes.
 func TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses(t *testing.T) {
+	t.Parallel()
 	openChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateOpen)
 	closedChild := hydratedIssue(t, model.Issue{ID: "child", IssueType: model.TypeTask, Title: "c"}, model.StateClosed)
 
@@ -255,6 +261,7 @@ func TestExportDeltaLeavesAnEpicsRowAloneWhenAChildCloses(t *testing.T) {
 // for re-insertion (which would fail the foreign key) or for deletion (which
 // the cascade already did).
 func TestExportDeltaDropsARemovedIssueWithoutResurrectingItsChildren(t *testing.T) {
+	t.Parallel()
 	gone := hydratedIssue(t, model.Issue{ID: "gone", IssueType: model.TypeTask}, model.StateOpen)
 	stays := hydratedIssue(t, model.Issue{ID: "stays", IssueType: model.TypeTask}, model.StateOpen)
 	prev := model.Export{

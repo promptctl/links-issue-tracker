@@ -12,6 +12,7 @@ import (
 // GetIssueDetail resolves — it is the batch form of the same query, so the two
 // cannot disagree.
 func TestGetRelationsByIDsMatchesIssueDetail(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -125,6 +126,7 @@ func ids(issues []model.Issue) []string {
 // subjects arrives from both queries — and a duplicate here becomes a
 // duplicated child in every bucketed view downstream.
 func TestMergeRelationsDedupesAndOrders(t *testing.T) {
+	t.Parallel()
 	at := func(sec int) time.Time { return time.Date(2026, 8, 25, 0, 0, sec, 0, time.UTC) }
 	edge := func(src, dst string, relType model.RelationType, created time.Time) model.Relation {
 		return model.Relation{SrcID: src, DstID: dst, Type: relType, CreatedAt: created}

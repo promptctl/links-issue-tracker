@@ -23,6 +23,7 @@ func doltCommitCount(t *testing.T, ctx context.Context, st *Store) int {
 // state: an update carrying both a status change and a field edit lands as ONE
 // Dolt commit with both halves applied — not two commits that could tear apart.
 func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -76,6 +77,7 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 // command. Field validation now runs before any write, so the transition never
 // lands — the torn state is unrepresentable.
 func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

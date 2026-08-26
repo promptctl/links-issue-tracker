@@ -21,6 +21,8 @@ import (
 // its whole lifetime. (Originally provided by a lit-minted engine flock,
 // retired in links-locking-il18.3 as a partial shadow of that same lock.)
 func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
+	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
+	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -74,6 +76,8 @@ func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 // contend on Dolt's own journal lock with a bounded retry, so OpenSync waits
 // instead of colliding.
 func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
+	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
+	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -122,6 +126,8 @@ func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
 // unnecessary-latency regression write-open serialization must not
 // introduce.
 func TestOpenForReadDoesNotWaitForLiveWriteEngine(t *testing.T) {
+	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
+	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

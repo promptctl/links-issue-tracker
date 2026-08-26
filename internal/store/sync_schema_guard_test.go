@@ -66,6 +66,7 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL, 
 // remote head's applied schema version and producer stamp as raw data, AS OF the
 // commit hash — no branch move, no lift.
 func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -99,6 +100,7 @@ func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
 // TestGuardRemoteSchemaAheadDetects proves the guard returns the typed refusal
 // carrying the versions and producer when the remote head is ahead.
 func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -129,6 +131,7 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 // same-schema and old-schema sync paths are not falsely blocked. A never-synced
 // branch (no tracking ref) is likewise a no-op.
 func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -158,6 +161,7 @@ func TestGuardRemoteSchemaNotAheadAtOrBelowMax(t *testing.T) {
 // error and ZERO commits reach the remote — a fresh clone still sees the pre-push
 // state, so no --force-style regression happened.
 func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -207,6 +211,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 // refused with the typed error BEFORE any write — its local head is untouched (no
 // regressed replay commit) and the remote is unchanged.
 func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -291,6 +296,7 @@ func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id, pr
 }
 
 func TestIsDoltCommitHash(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want bool

@@ -21,6 +21,7 @@ import (
 // construction. The root-skip is an orthogonal axis: root bypasses the permission
 // check, so the injection cannot fail there.
 func TestDiscardRetriesDirectoryRemoval(t *testing.T) {
+	t.Parallel()
 	if os.Geteuid() == 0 {
 		t.Skip("removal-permission injection has no effect as root")
 	}

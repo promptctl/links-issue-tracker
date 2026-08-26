@@ -53,6 +53,7 @@ func assertContractElements(t *testing.T, block string, wantCommands ...string) 
 }
 
 func TestSyncFailureBlockProseHeld(t *testing.T) {
+	t.Parallel()
 	failure := SyncFailure{
 		Class:  syncFailureProseHeld,
 		Remote: "origin",
@@ -77,6 +78,7 @@ func TestSyncFailureBlockProseHeld(t *testing.T) {
 }
 
 func TestSyncFailureBlockDivergedUnresolvedWithCause(t *testing.T) {
+	t.Parallel()
 	backend := errors.New(`table "i" does not have column "resolution"`)
 	failure := SyncFailure{
 		Class:  syncFailureDivergedUnresolved,
@@ -113,6 +115,7 @@ func TestSyncFailureBlockDivergedUnresolvedWithCause(t *testing.T) {
 // span — not by the surface that observed it. Either signal alone trips the
 // incident framing. [LAW:dataflow-not-control-flow]
 func TestSyncFailureEscalationByValue(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name         string
 		age          time.Duration
@@ -148,6 +151,7 @@ func TestSyncFailureEscalationByValue(t *testing.T) {
 // conflict exit an unresolved reconcile uses, with no second remediation line to
 // drift from the block. [LAW:single-enforcer] [LAW:one-source-of-truth]
 func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
+	t.Parallel()
 	err := SyncFailureError{Failure: SyncFailure{
 		Class: syncFailureProseHeld, Remote: "origin", Branch: "master",
 	}}
@@ -169,6 +173,7 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 // frames the state as BLOCKED-until-upgrade, never an age-based "still routine"
 // line that would invite the wait-and-retry the epic kills.
 func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
+	t.Parallel()
 	t.Run("producer named", func(t *testing.T) {
 		block := SyncFailure{
 			Class:               syncFailureRemoteSchemaAhead,
@@ -209,6 +214,7 @@ func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 // (asSyncFailure, syncFailureFromPull, doctorSyncReport.divergenceFailure)
 // sets via resolveBuildStatusNote.
 func TestSyncFailureBlockNamesBuildStatus(t *testing.T) {
+	t.Parallel()
 	block := SyncFailure{
 		Class:     syncFailureDivergedUnresolved,
 		Remote:    "origin",
@@ -225,6 +231,7 @@ func TestSyncFailureBlockNamesBuildStatus(t *testing.T) {
 // through a construction boundary (e.g. a bare test literal, as the other
 // tests in this file use) — BuildNote is opt-in data, not a default.
 func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
+	t.Parallel()
 	block := SyncFailure{Class: syncFailureDivergedUnresolved, Remote: "origin", Branch: "master"}.blockString()
 	if strings.Contains(block, "build:") {
 		t.Errorf("block rendered a build status line with BuildNote unset:\n%s", block)
@@ -236,6 +243,7 @@ func TestSyncFailureBlockOmitsBuildStatusWhenUnset(t *testing.T) {
 // renders the identical block from the same store error. A non-matching error
 // passes through asSyncFailure untouched. [LAW:single-enforcer]
 func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
+	t.Parallel()
 	storeErr := &store.RemoteSchemaAheadError{
 		Remote: "origin", Branch: "master",
 		RemoteVersion: 7, BinarySupportedMax: 4, RemoteProducerVersion: "v9.9.0",
@@ -270,6 +278,7 @@ func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 }
 
 func TestAgeFromOldestDivergedUnix(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
 	if got := ageFromOldestDivergedUnix(0, now); got != 0 {
 		t.Errorf("zero timestamp age = %v, want 0 (unknown)", got)
@@ -286,6 +295,7 @@ func TestAgeFromOldestDivergedUnix(t *testing.T) {
 // a nonzero exit (the sync-failure contract on stderr), while a fresh divergence
 // stays a diagnostic note with a zero exit. Exit codes are a contract.
 func TestDoctorDivergenceExit(t *testing.T) {
+	t.Parallel()
 	diverged := func(age time.Duration, ahead, behind int64) doctorSyncReport {
 		return doctorSyncReport{
 			Kind: doctorSyncResolved,

@@ -86,6 +86,7 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 }
 
 func TestResolveDoctorAccessMode(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		args []string
@@ -106,6 +107,7 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 }
 
 func TestCommandFamilyResolve(t *testing.T) {
+	t.Parallel()
 	// [LAW:behavior-not-structure] Pins the contract: which subcommands open
 	// the app read-only vs writable, and that illegal paths fail with usage
 	// before any app opens.

@@ -52,6 +52,7 @@ func currentRanks(t *testing.T, ctx context.Context, st *Store, issues []model.I
 }
 
 func TestRankAboveStandaloneAgainstEpicChildAnchorsToEpic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -77,6 +78,7 @@ func TestRankAboveStandaloneAgainstEpicChildAnchorsToEpic(t *testing.T) {
 }
 
 func TestRankAboveChildAgainstStandaloneMovesEpic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -102,6 +104,7 @@ func TestRankAboveChildAgainstStandaloneMovesEpic(t *testing.T) {
 }
 
 func TestRankBelowAcrossTwoEpicsMovesBothRepresentatives(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx1 := newFrameFixture(t, ctx, st)
@@ -121,6 +124,7 @@ func TestRankBelowAcrossTwoEpicsMovesBothRepresentatives(t *testing.T) {
 }
 
 func TestRankAboveSameEpicSiblingsRanksTheSiblings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -139,6 +143,7 @@ func TestRankAboveSameEpicSiblingsRanksTheSiblings(t *testing.T) {
 }
 
 func TestRankAgainstOwnContainerErrors(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -152,6 +157,7 @@ func TestRankAgainstOwnContainerErrors(t *testing.T) {
 }
 
 func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -181,6 +187,7 @@ func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
 }
 
 func TestRankSetAcrossTwoEpicsRanksRepresentatives(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx1 := newFrameFixture(t, ctx, st)
@@ -207,6 +214,7 @@ func TestRankSetAcrossTwoEpicsRanksRepresentatives(t *testing.T) {
 }
 
 func TestRankSetSameEpicSiblingsRanksSiblingsDirectly(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -234,6 +242,7 @@ func TestRankSetSameEpicSiblingsRanksSiblingsDirectly(t *testing.T) {
 }
 
 func TestRankSetDuplicateRepresentativesRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -253,6 +262,7 @@ func TestRankSetDuplicateRepresentativesRejected(t *testing.T) {
 }
 
 func TestRankSetWithOwnContainerRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	fx := newFrameFixture(t, ctx, st)
@@ -266,6 +276,7 @@ func TestRankSetWithOwnContainerRejected(t *testing.T) {
 }
 
 func TestResolveFrameRepresentatives(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		chains  [][]string
@@ -308,6 +319,7 @@ func TestResolveFrameRepresentatives(t *testing.T) {
 }
 
 func TestResolveComparableFrame(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name                    string
 		issueChain, targetChain []string

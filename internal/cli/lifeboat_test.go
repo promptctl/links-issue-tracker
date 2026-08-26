@@ -38,6 +38,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 // autonomous path: a recognized workspace recovers with no human input, the
 // rebuild is promoted in place, and the prior contents are preserved as a backup.
 func TestRunLifeboatRecoverPromotesRecognizedWorkspace(t *testing.T) {
+	t.Parallel()
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
 
@@ -69,6 +70,7 @@ func TestRunLifeboatRecoverPromotesRecognizedWorkspace(t *testing.T) {
 
 // TestRunLifeboatRecoverRejectsExtraArgs guards the verb's argument contract.
 func TestRunLifeboatRecoverRejectsExtraArgs(t *testing.T) {
+	t.Parallel()
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
 	if err := runLifeboatRecover(context.Background(), &out, ws, []string{"unexpected"}); err == nil {
@@ -133,6 +135,7 @@ func mappingForWorkspace(t *testing.T, ws workspace.Info) store.ShapeMapping {
 // the door into the recovery engine for any shape the deterministic mapper cannot
 // recognize — exercised here through the real flag and file.
 func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
+	t.Parallel()
 	ws := seedWorkspace(t)
 	path := writeMappingFile(t, mappingForWorkspace(t, ws))
 
@@ -148,6 +151,7 @@ func TestRunLifeboatRecoverWithOperatorMapping(t *testing.T) {
 // TestRunLifeboatRecoverMissingMappingFile locks the trust boundary: a path that
 // does not resolve fails loudly before any workspace mutation.
 func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
+	t.Parallel()
 	ws := seedWorkspace(t)
 	var out bytes.Buffer
 	err := runLifeboatRecover(context.Background(), &out, ws, []string{"--mapping", filepath.Join(t.TempDir(), "absent.json")})
@@ -161,6 +165,7 @@ func TestRunLifeboatRecoverMissingMappingFile(t *testing.T) {
 // fails loudly and the residual names the unaccounted-for column, which is the
 // operator's worklist for the next edit-and-rerun.
 func TestRunLifeboatRecoverIncompleteMappingNamesGaps(t *testing.T) {
+	t.Parallel()
 	ws := seedWorkspace(t)
 	m := mappingForWorkspace(t, ws)
 	removed := store.ColumnRef{Table: "issues", Column: "title"}

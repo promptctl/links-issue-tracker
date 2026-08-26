@@ -18,6 +18,8 @@ func captureProgress(t *testing.T) *bytes.Buffer {
 }
 
 func TestProgressfPrefixesOperationAndTerminatesLine(t *testing.T) {
+	// serial: no t.Parallel — captureProgress swaps the package-level
+	// progressOut; parallel writers through progressf would race on it.
 	buf := captureProgress(t)
 	progressf("sync pull", "pulling lit data from %s/%s", "origin", "master")
 	want := "lit: sync pull: pulling lit data from origin/master\n"
@@ -31,6 +33,7 @@ func TestProgressfPrefixesOperationAndTerminatesLine(t *testing.T) {
 // stays empty — the failure already has its one loud channel and must not be
 // double-reported. [LAW:single-enforcer]
 func TestRemoteSituationLine(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		state     initSyncState
 		wantEmpty bool

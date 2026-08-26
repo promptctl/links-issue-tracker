@@ -14,6 +14,7 @@ import (
 )
 
 func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -50,6 +51,7 @@ func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 }
 
 func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -72,6 +74,7 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 }
 
 func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
@@ -112,6 +115,7 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 }
 
 func TestSyncRemoteLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -158,6 +162,7 @@ func TestSyncRemoteLifecycle(t *testing.T) {
 }
 
 func TestSyncRemoteValidation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -218,6 +223,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 }
 
 func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -257,6 +263,7 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 }
 
 func TestValidateEmbeddedSyncSupportAcceptsRequiredVersions(t *testing.T) {
+	t.Parallel()
 	err := validateEmbeddedSyncSupport(map[string]string{
 		"github.com/dolthub/dolt/go": minEmbeddedDoltVersion,
 		"github.com/dolthub/driver":  minEmbeddedDriverVersion,
@@ -267,6 +274,7 @@ func TestValidateEmbeddedSyncSupportAcceptsRequiredVersions(t *testing.T) {
 }
 
 func TestValidateEmbeddedSyncSupportRejectsOlderVersions(t *testing.T) {
+	t.Parallel()
 	err := validateEmbeddedSyncSupport(map[string]string{
 		"github.com/dolthub/dolt/go": "v0.40.5-0.20240702155756-bcf4dd5f5cc1",
 		"github.com/dolthub/driver":  "v0.2.0",
@@ -280,6 +288,7 @@ func TestValidateEmbeddedSyncSupportRejectsOlderVersions(t *testing.T) {
 }
 
 func TestSyncFreshnessStateClassification(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   SyncFreshness
@@ -301,6 +310,7 @@ func TestSyncFreshnessStateClassification(t *testing.T) {
 }
 
 func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	st, err := Open(ctx, doltRoot, "ws")
@@ -321,6 +331,7 @@ func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
 // tracking-ref guard are proven against the embedded engine, not asserted in a
 // vacuum.
 func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	doltRoot := filepath.Join(base, "dolt")
@@ -435,6 +446,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 // remote is a real file-backed Dolt remote, so "delivered" means the tracking
 // ref advanced to match local, not a stub.
 func TestSyncPushDelivers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	doltRoot := filepath.Join(base, "dolt")
@@ -508,6 +520,7 @@ func TestSyncPushDelivers(t *testing.T) {
 // commit lock) is structural in SyncCompactAndPush; this pins that the composed
 // operation still reaches the remote, against a real file-backed Dolt remote.
 func TestSyncCompactAndPushDelivers(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	doltRoot := filepath.Join(base, "dolt")
@@ -553,6 +566,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 // the recovery machinery — reconnect + retry — actually makes a real store usable
 // again. A post-recovery write confirms the rotated handle is fully functional.
 func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -603,6 +617,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 // write, reconnects, commits on the fresh handle, then reads it back through a
 // brand-new Open (its own engine) to confirm the change is durably committed.
 func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -661,6 +676,7 @@ func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 // post-`lit init` usage path. A plain SyncPull cannot do this; it fails with
 // "no common ancestor" across the unrelated roots, which is why adopt resets.
 func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	remoteURL := "file://" + filepath.Join(base, "remote")
@@ -739,6 +755,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 // absent) reports 0, a migrated store with no tickets still reports 0, and a
 // store with a ticket reports its count.
 func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 
@@ -772,6 +789,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 }
 
 func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	st, err := OpenSync(ctx, doltRoot, "ws")
@@ -788,6 +806,7 @@ func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
 }
 
 func TestGitBackedRemoteURL(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -816,6 +835,7 @@ func TestGitBackedRemoteURL(t *testing.T) {
 }
 
 func TestGitBackedRemoteURLIsIdempotent(t *testing.T) {
+	t.Parallel()
 	for _, in := range []string{
 		"https://github.com/org/repo",
 		"git@github.com:org/repo.git",
@@ -835,6 +855,7 @@ func TestGitBackedRemoteURLIsIdempotent(t *testing.T) {
 // the remote forever. Covers the suffix-less and local-path forms that a pure unit
 // test of the string output cannot prove against the real store.
 func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, raw := range []string{
 		"https://github.com/org/repo.git",
@@ -884,6 +905,7 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 // reports a divergence WITHOUT merging it (that is the foreground reconcile's
 // job), so no divergent local work is ever touched by the background receive.
 func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")

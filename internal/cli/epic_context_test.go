@@ -341,6 +341,7 @@ func TestRenderEpicContextEpicNodeCrossEpicEdges(t *testing.T) {
 }
 
 func TestFirstLineStripsHeadingAndBlanks(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"# Heading\nbody":  "Heading",
 		"\n\n## Why\nmore": "Why",

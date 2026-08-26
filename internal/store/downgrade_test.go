@@ -64,6 +64,7 @@ func snapshotCount(t *testing.T, doltRoot string) int {
 // consults for its backward-move refusal: on a goose-managed workspace it
 // returns the same recorded version DowngradeTargetAheadError compares against.
 func TestAppliedSchemaVersionMatchesRecorded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 
@@ -93,6 +94,7 @@ func TestAppliedSchemaVersionMatchesRecorded(t *testing.T) {
 // (no tables at all) is unreachable here because the reader's caller opens through
 // OpenForRead, which requires an initialized database.
 func TestAppliedSchemaVersionZeroForNonManaged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 
@@ -121,6 +123,7 @@ func TestAppliedSchemaVersionZeroForNonManaged(t *testing.T) {
 // TestDowngradeTargetEqualIsNoOp pins the no-op branch: target == current
 // returns nil without taking a snapshot.
 func TestDowngradeTargetEqualIsNoOp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 
@@ -140,6 +143,7 @@ func TestDowngradeTargetEqualIsNoOp(t *testing.T) {
 // TestDowngradeTargetAheadRefused pins the forward-direction refusal: a target
 // above current yields a typed error and takes no snapshot.
 func TestDowngradeTargetAheadRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 
@@ -166,6 +170,7 @@ func TestDowngradeTargetAheadRefused(t *testing.T) {
 // below baselineVersion (the only Down whose execution drops every table) is
 // refused before invoking goose, so the snapshot is NOT taken.
 func TestDowngradeBelowBaselineRefused(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 
@@ -197,6 +202,8 @@ func TestDowngradeBelowBaselineRefused(t *testing.T) {
 // returns a real-looking error. The hook is invoked AFTER the snapshot guard
 // fires, so DowngradeRollbackError must wrap the failure.
 func TestDowngradeRollbackOnFailure(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationDownForTest
+	// hook.
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 
@@ -242,6 +249,8 @@ func TestDowngradeRollbackOnFailure(t *testing.T) {
 // applied row, and assert (a) the recorded version walks down to target, and
 // (b) the dolt log carries the expected per-step commit messages.
 func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationDownForTest
+	// hook.
 	ctx := context.Background()
 	st, doltRoot := openWorkspaceForDowngrade(t)
 
@@ -311,6 +320,8 @@ func TestDowngradeHappyPathSteppedAndCommitted(t *testing.T) {
 // loop must NOT report success — it raises DowngradeIncompleteError so the
 // operator sees the gap.
 func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationDownForTest
+	// hook.
 	ctx := context.Background()
 	st, _ := openWorkspaceForDowngrade(t)
 	registryMax, err := migrations.MaxVersion()
@@ -348,6 +359,7 @@ func TestDowngradeIncompleteWhenGooseExhausted(t *testing.T) {
 // downgrade snapshot is also classified as a migration snapshot, breaking
 // the "each producer owns its own retention" invariant.
 func TestIsDowngradeSnapshotNameSymmetry(t *testing.T) {
+	t.Parallel()
 	migName := "1700000000000000000-pre-migrate-1700000000000000001"
 	dgName := "1700000000000000000-lit-downgrade-1700000000000000001"
 	if !IsMigrationSnapshotName(migName) {
@@ -370,6 +382,7 @@ func TestIsDowngradeSnapshotNameSymmetry(t *testing.T) {
 // This is the simulation of "downgraded workspace re-opens on the prior
 // binary" called out in the ticket.
 func TestDowngradeUntouchedOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -412,6 +425,7 @@ func TestDowngradeUntouchedOpen(t *testing.T) {
 // reverts the workspace to a phaseAdopt-shaped classification (canonical
 // tables present, no goose history), which Downgrade has nothing to act on.
 func TestDowngradeRequiresGooseManaged(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	st, err := Open(ctx, doltRoot, "test-workspace-id")

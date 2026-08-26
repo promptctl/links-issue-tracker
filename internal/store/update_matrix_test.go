@@ -52,6 +52,7 @@ func transitionActionCount(events []model.IssueEvent) int {
 // implementation agrees. Field writes succeed on every type; leaf transitions
 // succeed for every target; only container transitions are refused.
 func TestApplyIssueTypeFlagMatrix(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

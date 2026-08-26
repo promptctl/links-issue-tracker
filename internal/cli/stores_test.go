@@ -31,6 +31,7 @@ func addLitStore(t *testing.T, repoDir string) {
 // explicit root over a tree with two lit repos and one lit-less git repo, it
 // prints exactly the two store directories, sorted, one per line.
 func TestRunStoresListsDiscoveredStores(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 
 	repoA := filepath.Join(root, "repoA")
@@ -80,6 +81,7 @@ func TestRunStoresListsDiscoveredStores(t *testing.T) {
 // non-existent root makes the filesystem walk fail deterministically, without
 // coupling the test to git-resolution mechanics. [LAW:behavior-not-structure]
 func TestRunStoresPropagatesDiscoverError(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "does-not-exist")
 
 	var out bytes.Buffer
@@ -95,6 +97,7 @@ func TestRunStoresPropagatesDiscoverError(t *testing.T) {
 // TestRunStoresEmptyWhenNoStores confirms a store-less root exits cleanly with
 // no output rather than erroring.
 func TestRunStoresEmptyWhenNoStores(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(root, "plain"), 0o755); err != nil {
 		t.Fatalf("mkdir plain: %v", err)
@@ -115,6 +118,7 @@ func TestRunStoresEmptyWhenNoStores(t *testing.T) {
 // the criterion's "error row while the other projects still render".
 // [LAW:behavior-not-structure] Asserts the emitted view, not how it was built.
 func TestPrintCrossProjectRollupTableAndErrors(t *testing.T) {
+	t.Parallel()
 	rows := []projectRollup{
 		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 2, InFlight: 1, Blocked: 3},
 		{Label: "/repos/broken/.git/links", StorageDir: "/repos/broken/.git/links", Err: errors.New("open store: manifest missing")},
@@ -161,6 +165,7 @@ func TestPrintCrossProjectRollupTableAndErrors(t *testing.T) {
 // discovered stores prints a plain sentinel, not a header and an all-zeros TOTAL
 // that a reader could not tell apart from "every project is empty".
 func TestPrintCrossProjectRollupEmptyIsExplicit(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	if err := printCrossProjectRollup(&out, nil); err != nil {
 		t.Fatalf("printCrossProjectRollup(nil) error = %v", err)
@@ -181,6 +186,7 @@ func TestPrintCrossProjectRollupEmptyIsExplicit(t *testing.T) {
 // omitted — a reader sees only the self-labeled error lines, never a misleading
 // "all projects empty" summary above them.
 func TestPrintCrossProjectRollupAllErroredSkipsTable(t *testing.T) {
+	t.Parallel()
 	rows := []projectRollup{
 		{StorageDir: "/repos/a/.git/links", Err: errors.New("open store: locked")},
 		{StorageDir: "/repos/b/.git/links", Err: errors.New("read config: missing")},
@@ -205,6 +211,7 @@ func TestPrintCrossProjectRollupAllErroredSkipsTable(t *testing.T) {
 // its counts in the table AND a distinct `~` close-warning note — the warning
 // never suppresses the valid data the way a read error does.
 func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
+	t.Parallel()
 	rows := []projectRollup{
 		{Label: "alpha", StorageDir: "/repos/alpha/.git/links", Ready: 3, InFlight: 1, Blocked: 0,
 			CloseErr: errors.New("engine failed to release lock")},
@@ -236,6 +243,7 @@ func TestPrintCrossProjectRollupCloseWarningKeepsCounts(t *testing.T) {
 // than a fatal error, so one broken store never aborts the whole overview.
 // [LAW:no-silent-failure] The stores are surfaced as errors, not skipped.
 func TestGatherCrossProjectRollupUnreadableStoreIsErrorRow(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	for _, name := range []string{"repoA", "repoB"} {
 		repo := filepath.Join(root, name)

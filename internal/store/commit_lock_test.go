@@ -18,6 +18,7 @@ import (
 // a live holder must block a second acquirer until that holder releases, and
 // nothing may remove the hold out from under it.
 func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
+	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	s := &Store{commitLockPath: lockPath}
 
@@ -65,6 +66,7 @@ func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 // succeeds immediately with no staleness classification and no reclamation
 // step, because absence of a kernel hold IS the death certificate.
 func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
+	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	if err := os.WriteFile(lockPath, []byte("99999\n"), 0o600); err != nil {
 		t.Fatalf("WriteFile(lock) error = %v", err)
@@ -110,6 +112,7 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 // and TestAcquireCommitLockNeverEvictsLiveHolderByAge already proves a live
 // holder drives this path's acquisition into contention.
 func TestWrapCommitLockContention(t *testing.T) {
+	t.Parallel()
 	wrapped := wrapCommitLockContention(ErrWorkspaceBusy)
 	if !errors.Is(wrapped, ErrWorkspaceBusy) {
 		t.Fatalf("wrapped contention lost the ErrWorkspaceBusy discriminator: %v", wrapped)
@@ -130,6 +133,7 @@ func TestWrapCommitLockContention(t *testing.T) {
 // nil return) — failing a mutation that already landed would invite the
 // operator to retry it into a duplicate.
 func TestSettleCommitLockRelease(t *testing.T) {
+	t.Parallel()
 	opErr := errors.New("operation failed")
 	relErr := errors.New("release failed")
 
@@ -156,6 +160,7 @@ func TestSettleCommitLockRelease(t *testing.T) {
 // would find the staged row and mint a SECOND issue under a higher nonce —
 // so the discriminating assertion is that exactly one issue exists afterward.
 func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -197,6 +202,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 // original and the replayed commit share the session identity there — so this
 // test stamps an identity the session does not have.
 func TestCommitWorkingSetOnceRendersStamp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

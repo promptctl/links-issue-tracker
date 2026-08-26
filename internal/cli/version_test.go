@@ -19,6 +19,8 @@ import (
 // The pin is here so a refactor that drops one of the currently-rendered
 // fields fails the build.
 func TestVersionHumanSurfacesAllInfoFields(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
+	// parallel readers of it would race.
 	// Stamp link-time fields so the human form has something concrete to render.
 	// Use values that can NOT appear anywhere except in their respective fields:
 	// version is a sentinel that cannot collide with schema digits ("0.0.0" not
@@ -60,6 +62,8 @@ func TestVersionHumanSurfacesAllInfoFields(t *testing.T) {
 // "unknown" in place of empty Commit/Date. Consumers of the human form rely
 // on these labels (they're more legible than literal empty strings).
 func TestVersionHumanLabelsDevBuild(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
+	// parallel readers of it would race.
 	origV, origC, origD := version.Version, version.Commit, version.Date
 	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
 	version.Version = ""
@@ -83,6 +87,7 @@ func TestVersionHumanLabelsDevBuild(t *testing.T) {
 // like `lit version v0.1.0` (which a user might think means "show v0.1.0's
 // release manifest" — that operation belongs to a different command).
 func TestVersionRejectsPositionalArgs(t *testing.T) {
+	t.Parallel()
 	var stdout bytes.Buffer
 	err := runVersion(&stdout, []string{"v0.1.0"})
 	if err == nil {
@@ -99,6 +104,8 @@ func TestVersionRejectsPositionalArgs(t *testing.T) {
 // long ago it was built instead of leaving the reader to guess from a bare
 // timestamp.
 func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
+	// parallel readers of it would race.
 	origV, origC, origD := version.Version, version.Commit, version.Date
 	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
 	version.Version = ""
@@ -123,6 +130,8 @@ func TestVersionReportsBuildAgeWhenDateStamped(t *testing.T) {
 // agent reading `lit version` learns its binary is worth rebuilding without
 // having to compute the age itself.
 func TestVersionFlagsStaleBuild(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
+	// parallel readers of it would race.
 	origV, origC, origD := version.Version, version.Commit, version.Date
 	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
 	version.Version = ""
@@ -148,6 +157,8 @@ func TestVersionFlagsStaleBuild(t *testing.T) {
 // — the existing "built unknown" phrasing (TestVersionHumanLabelsDevBuild)
 // stays the whole story.
 func TestVersionOmitsBuildAgeWithoutDate(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version/Commit/Date;
+	// parallel readers of it would race.
 	origV, origC, origD := version.Version, version.Commit, version.Date
 	t.Cleanup(func() { version.Version, version.Commit, version.Date = origV, origC, origD })
 	version.Version = ""

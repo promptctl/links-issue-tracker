@@ -12,6 +12,7 @@ func normalizeWhitespace(input string) string {
 }
 
 func TestCompletionScriptsRender(t *testing.T) {
+	t.Parallel()
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		var stdout bytes.Buffer
 		if err := runCompletion(&stdout, []string{shell}); err != nil {
@@ -37,6 +38,7 @@ func renderCompletion(t *testing.T, shell string) string {
 // A command added to commandSpecs flows into completion with no second edit;
 // none can silently drop. [LAW:one-source-of-truth]
 func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
+	t.Parallel()
 	joined := strings.Join(topLevelNames(commandCompletionModel()), " ")
 
 	bash := renderCompletion(t, "bash")
@@ -61,6 +63,7 @@ func TestCompletionTopLevelDerivedFromRegistry(t *testing.T) {
 // retired, hidden command deliberately excluded from completion — see
 // TestCompletionExcludesRetiredCommands.)
 func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
+	t.Parallel()
 	// `assign` was among the originally-drifted commands but is now retired (folded
 	// into `update --assignee`) and deliberately excluded from completion — see
 	// TestCompletionExcludesRetiredCommands.
@@ -80,6 +83,7 @@ func TestCompletionIncludesPreviouslyDriftedCommands(t *testing.T) {
 // off the advertised completion surface even though it stays dispatchable — the
 // same Hidden bit cobra reads for `--help`. [LAW:one-source-of-truth]
 func TestCompletionExcludesRetiredCommands(t *testing.T) {
+	t.Parallel()
 	have := map[string]bool{}
 	for _, name := range topLevelNames(commandCompletionModel()) {
 		have[name] = true
@@ -95,6 +99,7 @@ func TestCompletionExcludesRetiredCommands(t *testing.T) {
 // projected from the family tables — including nested families — and excludes
 // the deliberately hidden mirror entrypoint. [LAW:one-source-of-truth]
 func TestCompletionSubcommandsDerivedFromFamilies(t *testing.T) {
+	t.Parallel()
 	bash := renderCompletion(t, "bash")
 	wants := []string{
 		`sync)
@@ -114,6 +119,7 @@ func TestCompletionSubcommandsDerivedFromFamilies(t *testing.T) {
 // TestCompletionExcludesHiddenMirror guards the one row flagged hidden: a real,
 // dispatchable subcommand that must never reach the advertised surface.
 func TestCompletionExcludesHiddenMirror(t *testing.T) {
+	t.Parallel()
 	for _, shell := range []string{"bash", "zsh", "fish"} {
 		out := renderCompletion(t, shell)
 		if strings.Contains(out, backgroundMirrorSubcommand) {
@@ -123,6 +129,7 @@ func TestCompletionExcludesHiddenMirror(t *testing.T) {
 }
 
 func TestRunHelpIncludesCompletion(t *testing.T) {
+	t.Parallel()
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
 		t.Fatalf("Run(help) error = %v", err)
@@ -137,6 +144,7 @@ func TestRunHelpIncludesCompletion(t *testing.T) {
 }
 
 func TestRunHelpDocumentsRankOrderingDefaults(t *testing.T) {
+	t.Parallel()
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"help"}); err != nil {
 		t.Fatalf("Run(help) error = %v", err)

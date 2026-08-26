@@ -18,6 +18,7 @@ import (
 // style mirrors TestPrintSyncFreshness, the sibling this shares its
 // resolve/render split with.
 func TestSyncStalenessLines(t *testing.T) {
+	t.Parallel()
 	freshAge := 2 * time.Hour
 	staleAge := 25 * time.Hour
 
@@ -161,6 +162,7 @@ func TestSyncStalenessLines(t *testing.T) {
 // marker reads as unknown (not zero-age, not infinite-age), and writing it
 // makes the age observable and monotonically increasing from that write.
 func TestMarkFetchSuccessAndLastFetchSuccessAge(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	now := time.Now()
 
@@ -211,6 +213,7 @@ func TestLastFetchSuccessAgeSurfacesNonNotExistStatErrorsToStderr(t *testing.T) 
 // backdated past the threshold makes lastFetchSuccessAge report a stale age,
 // exactly the input that triggers the "stale fetch" warning line above.
 func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	if err := markFetchSuccess(ws); err != nil {
 		t.Fatalf("markFetchSuccess() error = %v", err)
@@ -257,6 +260,7 @@ func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 // own storage directory (e.g. a shared/global path that would leak state
 // across workspaces).
 func TestFetchSuccessMarkerPathLivesUnderStorageDir(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: "/tmp/some-workspace/.lit"}}
 	got := fetchSuccessMarkerPath(ws)
 	want := filepath.Join("/tmp/some-workspace/.lit", "fetch-success.last")

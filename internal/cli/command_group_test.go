@@ -50,6 +50,7 @@ func renderedGrouping(t *testing.T) (groupOf map[string]string, headerLine map[s
 // pins that split — the acceptance criterion for regrouping the transition verbs —
 // against the rendered `lit --help`.
 func TestTransitionVerbGrouping(t *testing.T) {
+	t.Parallel()
 	groupOf, headerLine := renderedGrouping(t)
 
 	for _, name := range []string{"start", "done", "close", "open"} {

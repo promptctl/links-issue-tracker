@@ -74,6 +74,7 @@ func staticMapper(m ShapeMapping) Mapper {
 // autonomously — the loop reaches Reconciled with a Doctor-clean, conserving
 // candidate and no human input.
 func TestRecoverReconcilesKnownShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := preGooseDump()
 
@@ -107,6 +108,7 @@ func TestRecoverReconcilesKnownShape(t *testing.T) {
 // mapper converges on a later pass. The first proposal is malformed (the applier
 // rejects it); the second is correct and must arrive carrying the prior feedback.
 func TestRecoverSelfRepairsAcrossAttempts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := preGooseDump()
 	good := mustMap(t, dump)
@@ -146,6 +148,7 @@ func TestRecoverSelfRepairsAcrossAttempts(t *testing.T) {
 // promote. The dropped column is optional, so the rebuild still conserves; the
 // drop is caught by provenance, not by the conservation gate.
 func TestRecoverRequiresDropOnUnexplainedDrop(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := preGooseDump()
 
@@ -172,6 +175,7 @@ func TestRecoverRequiresDropOnUnexplainedDrop(t *testing.T) {
 // report — never a silent give-up. The mis-map (priority<->rank) is well-formed
 // but breaks rank distinctness, so every pass produces the same finding.
 func TestRecoverUnconvergedSurfacesResidual(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := rankedDump()
 	swapped := swapTargets(mustMap(t, dump),
@@ -197,6 +201,7 @@ func TestRecoverUnconvergedSurfacesResidual(t *testing.T) {
 // budget below one would exit with no pass run and an empty residual, making
 // "failure with no residual" representable. The precondition fails loudly instead.
 func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := preGooseDump()
 	for _, n := range []int{0, -1} {
@@ -214,6 +219,7 @@ func TestRecoverRejectsNonPositiveBudget(t *testing.T) {
 // exported recovery entry refuses an empty canonical path rather than degrading to
 // cwd-relative scratch, lock, and backup artifacts.
 func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	if _, err := Recover(ctx, "  ", preGooseDump(), DeterministicMapper, 1); err == nil {
 		t.Error("Recover must reject an empty canonical path")
@@ -230,6 +236,7 @@ func TestRecoveryEntryPointsRejectEmptyPath(t *testing.T) {
 // an empty path, and canonicalize the rest so equivalent paths differing only by a
 // trailing separator derive identical lock, backup, and staging locations.
 func TestValidateDoltRootDirCleansPath(t *testing.T) {
+	t.Parallel()
 	if _, err := validateDoltRootDir("   "); err == nil {
 		t.Error("empty path must be rejected")
 	}
@@ -248,6 +255,7 @@ func TestValidateDoltRootDirCleansPath(t *testing.T) {
 // route it back as feedback while leaving every other (infrastructure) build
 // failure to surface as a hard error.
 func TestRebuildCandidateTagsMappingRejection(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	_, err := RebuildCandidate(ctx, t.TempDir(), preGooseDump(), ShapeMapping{})
 	if err == nil {
@@ -262,6 +270,7 @@ func TestRebuildCandidateTagsMappingRejection(t *testing.T) {
 // source: a mapper that never produces a proposal (e.g. an unrecognized shape)
 // exhausts the budget with its decline as the residual, not a panic or silence.
 func TestRecoverUnconvergedOnPersistentMapperDecline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	mapper := func(RawDump, string) (ShapeMapping, error) {
 		return ShapeMapping{}, errors.New("shape not recognized")

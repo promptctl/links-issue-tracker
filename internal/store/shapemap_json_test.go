@@ -99,6 +99,7 @@ func novelAheadDump() RawDump {
 // re-encodings (rather than the in-memory structs) is the meaning-preserving
 // equality, since Marshal is canonical/sorted.
 func TestShapeMappingJSONRoundTrip(t *testing.T) {
+	t.Parallel()
 	original := aheadColumnMapping()
 	original.Tables[0].Drops = map[string]Dropped{
 		"obsolete": {Provenance: DropUnexplained, Reason: "no target in baseline"},
@@ -124,6 +125,7 @@ func TestShapeMappingJSONRoundTrip(t *testing.T) {
 // TestShapeMappingJSONStableOrder locks that the encoded artifact is sorted, so
 // two encodings of the same mapping are byte-identical (diffable, reproducible).
 func TestShapeMappingJSONStableOrder(t *testing.T) {
+	t.Parallel()
 	a, err := json.Marshal(aheadColumnMapping())
 	if err != nil {
 		t.Fatalf("Marshal a: %v", err)
@@ -143,6 +145,7 @@ func TestShapeMappingJSONStableOrder(t *testing.T) {
 // encoding must be byte-identical regardless of the emitters' in-memory order, so
 // the same mapping never has two encodings.
 func TestShapeMappingJSONStableOrderMultiEmitter(t *testing.T) {
+	t.Parallel()
 	emA := Emitter{Collection: collEventChanges, When: Always{}, Fields: map[string]FieldSource{
 		"event_id": col("id", TransformIdentity),
 		"field":    Constant{Value: "status"},
@@ -172,6 +175,7 @@ func TestShapeMappingJSONStableOrderMultiEmitter(t *testing.T) {
 // what Validate cannot see — by decode time a bad kind would already have become
 // a typed zero value.
 func TestShapeMappingJSONRejectsUnknownSource(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"always"},"fields":[{"field":"id","source":"transmute","column":"id"}]}]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
@@ -184,6 +188,7 @@ func TestShapeMappingJSONRejectsUnknownSource(t *testing.T) {
 // TestShapeMappingJSONRejectsUnknownConditionKind locks the same boundary for the
 // emit-condition discriminator.
 func TestShapeMappingJSONRejectsUnknownConditionKind(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"sometimes"},"fields":[{"field":"id","source":"column","column":"id","transform":"identity"}]}]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
@@ -197,6 +202,7 @@ func TestShapeMappingJSONRejectsUnknownConditionKind(t *testing.T) {
 // entries for one field within an emitter would silently collapse to whichever
 // landed last, so the boundary rejects the ambiguity loudly.
 func TestShapeMappingJSONRejectsDuplicateField(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[{"table":"issues","emitters":[{"collection":"issues","when":{"kind":"always"},"fields":[
 		{"field":"id","source":"column","column":"id","transform":"identity"},
 		{"field":"id","source":"column","column":"other","transform":"identity"}
@@ -212,6 +218,7 @@ func TestShapeMappingJSONRejectsDuplicateField(t *testing.T) {
 // TestShapeMappingJSONRejectsDuplicateTable locks that a table dispositioned twice
 // is rejected — which fate wins would otherwise be ambiguous.
 func TestShapeMappingJSONRejectsDuplicateTable(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[{"table":"issues","emitters":[]},{"table":"issues","emitters":[]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
@@ -226,6 +233,7 @@ func TestShapeMappingJSONRejectsDuplicateTable(t *testing.T) {
 // than silently dropped, which would otherwise surface as a confusing downstream
 // Validate error far from its cause.
 func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[{"table":"issues","drops":[{"column":"x","prov":"unexplained"}]}]}`
 	var m ShapeMapping
 	if err := json.Unmarshal([]byte(bad), &m); err == nil {
@@ -239,6 +247,7 @@ func TestShapeMappingJSONRejectsUnknownField(t *testing.T) {
 // mapping file is one JSON object, so a valid object followed by more
 // non-whitespace bytes is rejected rather than silently decoding only the first.
 func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
+	t.Parallel()
 	bad := `{"tables":[]}{"tables":[]}`
 
 	var viaUnmarshal ShapeMapping
@@ -273,6 +282,7 @@ func TestShapeMappingJSONRejectsTrailingData(t *testing.T) {
 // issue conserved, the title values intact through the rename. This is the icqp
 // deadend's recovery, exercised through the exact artifact the CLI consumes.
 func TestDecodedMappingRecoversNovelAheadShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := novelAheadDump()
 
