@@ -176,6 +176,7 @@ func TestExplicitPullSurfacesContractOnProseHeld(t *testing.T) {
 // structural guard on purpose: no behavioral test can assert the ABSENCE of a
 // future bad print. [LAW:no-silent-failure]
 func TestNoRawReconcileShrugInSource(t *testing.T) {
+	t.Parallel()
 	const shrug = "automatic reconcile of the diverged clone failed"
 	for _, dir := range []string{".", "../store"} {
 		entries, err := os.ReadDir(dir)
@@ -205,6 +206,7 @@ func TestNoRawReconcileShrugInSource(t *testing.T) {
 // demoted to the block's trailing cause, and a held prose conflict becomes the
 // proseHeld class. A clean reconcile maps to no failure. [LAW:dataflow-not-control-flow]
 func TestInlineSyncFailureMapping(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 	base := syncReceiveOutcome{
 		remote: "origin", branch: "master", ahead: 41, behind: 5,

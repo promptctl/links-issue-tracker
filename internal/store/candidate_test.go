@@ -55,6 +55,7 @@ func dirEntryCount(t *testing.T, dir string) int {
 // mapping produces a candidate at the current baseline, Doctor-clean, with every
 // source issue conserved.
 func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := preGooseDump()
 
@@ -84,6 +85,7 @@ func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
 // the very next attempt — under the same parent dir, reusing the same dump —
 // starts clean. The dump is read-only across both attempts.
 func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	parent := t.TempDir()
 	dump := preGooseDump()
@@ -132,6 +134,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 // second remains fully queryable. This is the structural property the
 // per-attempt directory buys — no shared residue between attempts.
 func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	parent := t.TempDir()
 	dump := preGooseDump()

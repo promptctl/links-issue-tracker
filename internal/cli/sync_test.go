@@ -15,6 +15,7 @@ import (
 )
 
 func TestMapRemotesByName(t *testing.T) {
+	t.Parallel()
 	entries := []store.SyncRemote{
 		{Name: "origin", URL: "https://fetch.example/repo.git"},
 		{Name: "upstream", URL: "https://upstream.example/repo.git"},
@@ -31,6 +32,7 @@ func TestMapRemotesByName(t *testing.T) {
 }
 
 func TestMapGitRemotesByName(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{
 		{Name: "origin", URL: "https://github.com/a/repo.git"},
 		{Name: "upstream", URL: "https://github.com/b/repo.git"},
@@ -46,6 +48,7 @@ func TestMapGitRemotesByName(t *testing.T) {
 }
 
 func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
+	t.Parallel()
 	// A branch the remote has never seen is the typed never_synced state, not a
 	// parsed backend error string — the payload directs the caller to set the
 	// upstream with a deterministic command.
@@ -71,6 +74,7 @@ func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
 // syncFailureFromPull is the pure mapping the command uses; this pins that a
 // prose-pending pull yields the proseHeld contract and every non-held state does not.
 func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
+	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
 	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
 		State:              store.SyncPullProsePending,
@@ -107,6 +111,7 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 }
 
 func TestBuildSyncPullPayloadOKStates(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		state store.SyncPullState
 		want  string
@@ -127,6 +132,7 @@ func TestBuildSyncPullPayloadOKStates(t *testing.T) {
 }
 
 func TestBuildSyncPullPayloadUnknownStateSurfaces(t *testing.T) {
+	t.Parallel()
 	// A SyncPullState the renderer does not enumerate must not masquerade as ok.
 	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: store.SyncPullState("weird_new_state")})
 	if payload["status"] != "unknown" {
@@ -138,6 +144,7 @@ func TestBuildSyncPullPayloadUnknownStateSurfaces(t *testing.T) {
 }
 
 func TestPrintSyncPullPayloadSkippedText(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status":        "skipped",
 		"remote":        "origin",
@@ -162,6 +169,7 @@ func TestPrintSyncPullPayloadSkippedText(t *testing.T) {
 }
 
 func TestPrintSyncPullPayloadSkippedTextWithoutVerboseOmitsRemoteDetails(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status":        "skipped",
 		"remote":        "origin",
@@ -183,6 +191,7 @@ func TestPrintSyncPullPayloadSkippedTextWithoutVerboseOmitsRemoteDetails(t *test
 }
 
 func TestPrintSyncPullPayloadVerboseOKShowsState(t *testing.T) {
+	t.Parallel()
 	for _, state := range []string{"up_to_date", "fast_forwarded", "linearized", "ahead"} {
 		payload := map[string]any{"status": "ok", "state": state, "remote": "origin", "branch": "master"}
 		var out bytes.Buffer
@@ -200,6 +209,7 @@ func TestPrintSyncPullPayloadVerboseOKShowsState(t *testing.T) {
 }
 
 func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{"status": "unknown", "state": "weird_new_state", "remote": "origin", "branch": "master"}
 	// Must surface even in non-verbose mode — a bug must never hide behind "pulled".
 	var out bytes.Buffer
@@ -221,6 +231,7 @@ func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
 // state used here because a prose_pending reaching the builder at all would be a
 // routing bug (runSyncPull intercepts it first) — exactly what must surface loudly.
 func TestPrintSyncPullPayloadSurfacesUnknownStateAsBug(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{"status": "unknown", "state": "prose_pending", "remote": "origin", "branch": "master"}
 	var out bytes.Buffer
 	if err := printSyncPullPayload(&out, payload, false); err != nil {
@@ -232,6 +243,7 @@ func TestPrintSyncPullPayloadSurfacesUnknownStateAsBug(t *testing.T) {
 }
 
 func TestPrintSyncPullPayloadNoRemoteSkippedText(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "no_sync_remote",
@@ -246,6 +258,7 @@ func TestPrintSyncPullPayloadNoRemoteSkippedText(t *testing.T) {
 }
 
 func TestPrintSyncPullPayloadNoRemoteSkippedVerboseText(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "no_sync_remote",
@@ -260,6 +273,7 @@ func TestPrintSyncPullPayloadNoRemoteSkippedVerboseText(t *testing.T) {
 }
 
 func TestPrintSyncPushPayloadNoRemoteSkippedText(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "no_sync_remote",
@@ -274,6 +288,7 @@ func TestPrintSyncPushPayloadNoRemoteSkippedText(t *testing.T) {
 }
 
 func TestPrintSyncPushPayloadNoRemoteSkippedVerboseText(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "no_sync_remote",
@@ -288,6 +303,7 @@ func TestPrintSyncPushPayloadNoRemoteSkippedVerboseText(t *testing.T) {
 }
 
 func TestPrintSyncPushPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "remote_empty",
@@ -311,6 +327,7 @@ func TestPrintSyncPushPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T
 }
 
 func TestPrintSyncPullPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "skipped",
 		"reason": "remote_empty",
@@ -331,6 +348,7 @@ func TestPrintSyncPullPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T
 }
 
 func TestPrintSyncPullPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "ok",
 		"remote": "origin",
@@ -347,6 +365,7 @@ func TestPrintSyncPullPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 }
 
 func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
+	t.Parallel()
 	payload := map[string]any{
 		"status": "ok",
 		"remote": "origin",
@@ -363,6 +382,7 @@ func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) 
 }
 
 func TestBuildRemoteSyncChanges(t *testing.T) {
+	t.Parallel()
 	gitRemotes := []workspace.GitRemote{
 		{Name: "origin", URL: "https://example.com/new-origin.git"},
 		{Name: "upstream", URL: "https://example.com/upstream.git"},
@@ -384,6 +404,7 @@ func TestBuildRemoteSyncChanges(t *testing.T) {
 }
 
 func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
 	got, err := resolveSyncRemote("origin", "upstream", remotes)
 	if err != nil {
@@ -395,6 +416,7 @@ func TestResolveSyncRemoteUsesRequestedRemoteFirst(t *testing.T) {
 }
 
 func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
 	_, err := resolveSyncRemote("fork", "upstream", remotes)
 	if err == nil {
@@ -403,6 +425,7 @@ func TestResolveSyncRemoteErrorsWhenRequestedRemoteIsUnknown(t *testing.T) {
 }
 
 func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
 	got, err := resolveSyncRemote("", "upstream", remotes)
 	if err != nil {
@@ -414,6 +437,7 @@ func TestResolveSyncRemoteUsesUpstreamRemoteWhenPresent(t *testing.T) {
 }
 
 func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}}
 	got, err := resolveSyncRemote("", "", remotes)
 	if err != nil {
@@ -425,6 +449,7 @@ func TestResolveSyncRemoteUsesSingleRemoteFallback(t *testing.T) {
 }
 
 func TestResolveSyncRemoteIgnoresUnknownUpstreamRemote(t *testing.T) {
+	t.Parallel()
 	remotes := []workspace.GitRemote{{Name: "origin"}, {Name: "upstream"}}
 	got, err := resolveSyncRemote("", "missing", remotes)
 	if err != nil {
@@ -436,6 +461,7 @@ func TestResolveSyncRemoteIgnoresUnknownUpstreamRemote(t *testing.T) {
 }
 
 func TestResolveSyncRemoteReturnsEmptyWhenNoEligibleRemote(t *testing.T) {
+	t.Parallel()
 	got, err := resolveSyncRemote("", "", nil)
 	if err != nil {
 		t.Fatalf("resolveSyncRemote() error = %v", err)

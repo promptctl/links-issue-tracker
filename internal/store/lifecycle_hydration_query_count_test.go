@@ -21,6 +21,7 @@ import (
 // test fails if a future change reintroduces per-epic query fan-out regardless
 // of how the loop is written.
 func TestLifecycleHydrationQueryCountIsEpicCountIndependent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 
 	// A single epic carrying one child, and five epics each carrying one child,

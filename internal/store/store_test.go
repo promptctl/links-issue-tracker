@@ -47,6 +47,7 @@ func containsIssueID(issues []model.Issue, id string) bool {
 }
 
 func TestStoreCreateEpicAndRelations(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Renderer cleanup", Topic: "renderer", IssueType: "epic", Priority: 1})
@@ -102,6 +103,7 @@ func TestStoreCreateEpicAndRelations(t *testing.T) {
 }
 
 func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Container", Topic: "life", IssueType: "epic", Priority: 1})
@@ -154,6 +156,7 @@ func TestEpicLifecycleCapabilitiesAndProgress(t *testing.T) {
 // category (ContainerActionError + live unfinished count), not the prose.
 // [LAW:behavior-not-structure]
 func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Container", Topic: "reject", IssueType: "epic", Priority: 1})
@@ -213,6 +216,7 @@ func TestTransitionEpicRejectsWithUnfinishedChildCount(t *testing.T) {
 // rather than the dead i.status DB column. This regression test pins the three
 // epic shapes against the canonical default and explicit status filters.
 func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -287,6 +291,7 @@ func TestListIssuesStatusFilterUsesDerivedEpicState(t *testing.T) {
 }
 
 func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -336,6 +341,7 @@ func TestFixRankInversionsConvergesWhenDependencyBlocksMultipleIssues(t *testing
 }
 
 func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -390,6 +396,7 @@ func TestFixRankInversionsConvergesWhenPassCreatesNewInversion(t *testing.T) {
 // pointing at an open epic — Doctor reported 0 inversions and --fix was a
 // no-op even when ready.go's annotator flagged the same edge.
 func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -437,6 +444,7 @@ func TestFixRankInversionsDetectsEpicDependency(t *testing.T) {
 }
 
 func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -475,6 +483,7 @@ func TestFixRankInversionsIgnoresClosedEpic(t *testing.T) {
 }
 
 func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -515,6 +524,7 @@ func TestFixRankInversionsIgnoresDeletedIssues(t *testing.T) {
 // edge for a child must replace the first, leaving exactly one parent edge, so a
 // two-parent child is unrepresentable.
 func TestAddRelationEnforcesSingleParentCardinality(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -567,6 +577,7 @@ func TestAddRelationEnforcesSingleParentCardinality(t *testing.T) {
 // A blocks cycle has no valid rank order, so the only durable fix is to keep
 // it from existing. AddRelation rejects the edge that would close the loop.
 func TestAddRelationRejectsBlocksCycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -599,6 +610,7 @@ func TestAddRelationRejectsBlocksCycle(t *testing.T) {
 // The cycle guard must follow transitive precedence, not just the direct edge:
 // A->B->C means adding C->A closes a 3-cycle.
 func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -622,6 +634,7 @@ func TestAddRelationRejectsTransitiveBlocksCycle(t *testing.T) {
 }
 
 func TestAddRelationRejectsSelfBlock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "cycle", IssueType: "task", Priority: 0})
@@ -638,6 +651,7 @@ func TestAddRelationRejectsSelfBlock(t *testing.T) {
 // FixRankInversions refuses with an actionable message instead of looping into
 // the opaque "unable to converge" failure.
 func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -684,6 +698,7 @@ func TestDoctorAndFixDetectImportedBlocksCycle(t *testing.T) {
 // and an archived/deleted issue is frozen regardless of the action's own
 // legality. It must never mutate.
 func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -723,6 +738,7 @@ func TestApplyTransitionRejectsContainerAndArchived(t *testing.T) {
 }
 
 func TestStoreRejectsInvalidIssueType(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Bad", Topic: "bad", IssueType: "weird", Priority: 0}); err == nil {
@@ -731,6 +747,7 @@ func TestStoreRejectsInvalidIssueType(t *testing.T) {
 }
 
 func TestStoreCreateIssueRequiresTopic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Bad", IssueType: "task", Priority: 0}); err == nil {
@@ -741,6 +758,7 @@ func TestStoreCreateIssueRequiresTopic(t *testing.T) {
 }
 
 func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -765,6 +783,7 @@ func TestStoreCreateIssueUsesBeadsCompatibleIDFormat(t *testing.T) {
 }
 
 func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -826,6 +845,7 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 }
 
 func TestGenerateHashIssueIDIsDeterministicForSameInputs(t *testing.T) {
+	t.Parallel()
 	createdAt := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
 
 	first := issueid.GenerateHashID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
@@ -837,6 +857,7 @@ func TestGenerateHashIssueIDIsDeterministicForSameInputs(t *testing.T) {
 }
 
 func TestCreateIssueNormalizesAndClampsConfiguredPrefix(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -856,6 +877,7 @@ func TestCreateIssueNormalizesAndClampsConfiguredPrefix(t *testing.T) {
 }
 
 func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -888,6 +910,7 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 }
 
 func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -938,6 +961,7 @@ func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
 }
 
 func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -992,6 +1016,7 @@ func TestStoreListIssuesSupportsAdvancedFilters(t *testing.T) {
 }
 
 func TestCreateIssuePlacement(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1023,6 +1048,7 @@ func TestCreateIssuePlacement(t *testing.T) {
 }
 
 func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1055,6 +1081,7 @@ func TestStoreListChildrenDefaultsToRankOrder(t *testing.T) {
 }
 
 func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1139,6 +1166,7 @@ func TestStoreGetIssueDetailDefaultsRelatedIssueGroupsToRankOrder(t *testing.T) 
 }
 
 func TestStoreLabelsAreWritableFirstClassData(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1207,6 +1235,7 @@ func issueWithStatus(t *testing.T, issue model.Issue, status model.State) model.
 }
 
 func TestReplaceFromExportAndSyncState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1281,6 +1310,7 @@ func TestReplaceFromExportAndSyncState(t *testing.T) {
 }
 
 func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1350,6 +1380,7 @@ func TestIssueLifecycleTracksReasonHistory(t *testing.T) {
 }
 
 func TestCloseTransitionAllowsEmptyReason(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1384,6 +1415,7 @@ func TestCloseTransitionAllowsEmptyReason(t *testing.T) {
 // asserts the contract (one transition per change, the variant's verb), not
 // the implementation (no compound action chains, no dispatch table).
 func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		from   model.State
 		action model.StatusAction
@@ -1457,6 +1489,7 @@ func TestApplyEveryTargetStateRecordsOneEvent(t *testing.T) {
 // start event carrying only the assignee change (no from==to status row;
 // history reflects actual mutations).
 func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{
@@ -1517,6 +1550,7 @@ func TestApplySameTargetStateStillRecordsEvent(t *testing.T) {
 // no-op — no event, no row write. History reflects actual mutations; the
 // diagonal of the 3x3 matrix is silent.
 func TestApplySameStateSameAssigneeRecordsNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{
@@ -1554,6 +1588,7 @@ func TestApplySameStateSameAssigneeRecordsNothing(t *testing.T) {
 }
 
 func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1620,6 +1655,7 @@ func TestIssueStatusClaimAndDoneAreDeterministic(t *testing.T) {
 }
 
 func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1656,6 +1692,7 @@ func TestOpenDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 }
 
 func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1689,6 +1726,7 @@ func TestOpenPreservesExistingSchemaVersionMeta(t *testing.T) {
 }
 
 func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1728,6 +1766,7 @@ func TestOpenForReadDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) 
 }
 
 func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1759,6 +1798,7 @@ func TestOpenForReadDoesNotCreateDatabaseWhenMissing(t *testing.T) {
 // error naming the missing prerequisite column, not a vague refusal —
 // and refuses before any mutation lands on the workspace.
 func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1798,6 +1838,7 @@ func TestOpenForReadRefusesUnreconcilableShape(t *testing.T) {
 }
 
 func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1831,6 +1872,7 @@ func TestListChildrenReturnsEpicChildrenWithDerivedLifecycle(t *testing.T) {
 }
 
 func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1896,6 +1938,7 @@ func TestGetIssueDetailRelationSidesAreHydrated(t *testing.T) {
 }
 
 func TestEpicAsDependencyDerivedState(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -1931,6 +1974,7 @@ func TestEpicAsDependencyDerivedState(t *testing.T) {
 // dead-data write is gone; any future code that reads i.status on an epic
 // will get NULL and fail loudly instead of silently lying.
 func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Container", Topic: "schema", IssueType: "epic", Priority: 1})
@@ -1964,6 +2008,7 @@ func TestCreateEpicPersistsNullStatusColumn(t *testing.T) {
 // requires owned status. Refused at the trust boundary instead of patched up
 // downstream with an invented default.
 func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Container", Topic: "schema", IssueType: "epic", Priority: 1})
@@ -1995,6 +2040,7 @@ func TestUpdateIssueRefusesContainerLeafTypeChange(t *testing.T) {
 // commit each time. This test pins migration idempotence at the observable
 // boundary — the Dolt commit log — so any future drift is loud.
 func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -2029,6 +2075,7 @@ func TestMigrationIsIdempotentOnSecondOpen(t *testing.T) {
 // is rejected at INSERT time, mechanically — no future code path can quietly
 // re-introduce the dead-data lie.
 func TestSchemaRejectsEpicWithNonNullStatus(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -2049,6 +2096,7 @@ func TestSchemaRejectsEpicWithNonNullStatus(t *testing.T) {
 // through. This test pins the schema-level rejection so any future drift in
 // Dolt's CHECK-NULL semantics or in the clause itself fails loudly.
 func TestSchemaRejectsLeafWithNullStatus(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
@@ -2063,6 +2111,7 @@ func TestSchemaRejectsLeafWithNullStatus(t *testing.T) {
 }
 
 func TestSyncRoundTripIncludingEpic(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source := openIssueStore(t, ctx)
 	epic, err := source.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Sync epic", Topic: "sync", IssueType: "epic", Priority: 1})
@@ -2106,6 +2155,7 @@ func TestSyncRoundTripIncludingEpic(t *testing.T) {
 }
 
 func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Close me", Topic: "life", IssueType: "task", Priority: 0})
@@ -2136,6 +2186,7 @@ func TestCloseLeafUsesOptimisticConcurrency(t *testing.T) {
 // a snapshot another writer has since moved must surface a conflict, not
 // silently last-write-win.
 func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "task", Priority: 0})
@@ -2169,6 +2220,7 @@ func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
 // TestRetentionUsesOptimisticConcurrency: Apply itself re-reads, so the
 // contention under test is between planning and writing.)
 func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Rename me", Topic: "life", IssueType: "task", Priority: 0})
@@ -2206,6 +2258,7 @@ func TestFieldWriteDoesNotClobberConcurrentLifecycle(t *testing.T) {
 }
 
 func TestArchiveReturnsHydratedIssue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Archive epic", Topic: "life", IssueType: "epic", Priority: 1})
@@ -2226,6 +2279,7 @@ func TestArchiveReturnsHydratedIssue(t *testing.T) {
 }
 
 func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Archived snapshot", Topic: "life", IssueType: "epic", Priority: 1})
@@ -2256,6 +2310,7 @@ func TestArchivedEpicProgressIncludesArchivedChildren(t *testing.T) {
 }
 
 func TestReopenClearsClosedAt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Reopen me", Topic: "life", IssueType: "task", Priority: 0})
@@ -2289,6 +2344,7 @@ func TestReopenClearsClosedAt(t *testing.T) {
 // close records the resolution and the canonical ticket as the issue's own
 // redirect target — no graph edge; related-to means only manual peer links.
 func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2333,6 +2389,7 @@ func TestCloseAsDuplicateRecordsRedirectTarget(t *testing.T) {
 // TestCloseAsObsoleteRecordsNoRedirect pins that terminal resolutions record
 // the resolution but no redirect — there is nowhere to redirect.
 func TestCloseAsObsoleteRecordsNoRedirect(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Obsolete", Topic: "term", IssueType: "task", Priority: 0})
@@ -2360,6 +2417,7 @@ func TestCloseAsObsoleteRecordsNoRedirect(t *testing.T) {
 // the whole close is rejected — the issue stays open with no resolution, never
 // a "duplicate of nothing". [LAW:no-silent-failure]
 func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	dup, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Duplicate", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2385,6 +2443,7 @@ func TestCloseRedirectToMissingTargetRollsBack(t *testing.T) {
 // TestCloseRedirectToSelfRejected pins that an issue cannot redirect to itself —
 // a duplicate-of-itself is meaningless and the close is rejected outright.
 func TestCloseRedirectToSelfRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Self", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2409,6 +2468,7 @@ func TestCloseRedirectToSelfRejected(t *testing.T) {
 // flow, and "duplicate of something already done" is the most common real
 // redirect — the close succeeds and records the redirect.
 func TestCloseRedirectToArchivedCanonicalAllowed(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2437,6 +2497,7 @@ func TestCloseRedirectToArchivedCanonicalAllowed(t *testing.T) {
 // the retention conflict, and nothing persists — the issue stays open with
 // no resolution and no redirect. [LAW:no-silent-failure]
 func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2480,6 +2541,7 @@ func TestCloseRedirectToDeletedCanonicalRejected(t *testing.T) {
 // persisted a redirect to a deleted canonical, the exact state the validation
 // exists to reject. [LAW:no-ambient-temporal-coupling] [LAW:no-silent-failure]
 func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	canonical, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Canonical", Topic: "dup", IssueType: "task", Priority: 0})
@@ -2531,6 +2593,7 @@ func TestCloseRedirectRaceWithDeleteRejected(t *testing.T) {
 // purge path; using a row that genuinely existed proves the check reads current
 // DB state at write time, not a stale pre-read. [LAW:no-ambient-temporal-coupling]
 func TestRelationEndpointVanishedRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	src, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Src", Topic: "rel", IssueType: "task", Priority: 0})
@@ -2578,6 +2641,7 @@ func TestRelationEndpointVanishedRejected(t *testing.T) {
 // "duplicate of nothing". A target on a terminal outcome needs no runtime
 // twin — Obsolete/Wontfix have no field to carry one. [LAW:types-are-the-program]
 func TestCloseRedirectingWithoutTargetRejected(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Dup", Topic: "term", IssueType: "task", Priority: 0})
@@ -2591,6 +2655,7 @@ func TestCloseRedirectingWithoutTargetRejected(t *testing.T) {
 }
 
 func TestExportRefusesUnhydratedIssue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	hydrated, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Hydrated", Topic: "life", IssueType: "task", Priority: 0})
@@ -2611,6 +2676,7 @@ func TestExportRefusesUnhydratedIssue(t *testing.T) {
 }
 
 func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Archive me", Topic: "life", IssueType: "epic", Priority: 1})
@@ -2631,6 +2697,7 @@ func TestArchiveSecondCallErrorsAlreadyArchived(t *testing.T) {
 }
 
 func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
@@ -2662,6 +2729,7 @@ func TestRankSetEstablishesAbsoluteTopOrder(t *testing.T) {
 }
 
 func TestRankSetRejectsDuplicates(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
@@ -2674,6 +2742,7 @@ func TestRankSetRejectsDuplicates(t *testing.T) {
 }
 
 func TestRankSetRejectsTooFewIDs(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 	a, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "A", Topic: "rank", IssueType: "task", Priority: 0, Placement: RankBottom})
@@ -2690,6 +2759,7 @@ func TestRankSetRejectsTooFewIDs(t *testing.T) {
 // after a rank reorder. The store-level orientation for blocks is:
 // src=dependent (blocked), dst=dependency (blocker).
 func TestRemovePerChildBlockAfterRankReorder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -2761,6 +2831,7 @@ func countNonEmptyLines(input string) int {
 // GetIssueDetail.Siblings is the parent's other children in rank order, never
 // the focal issue itself. Parentless issues and only children have no siblings.
 func TestStoreGetIssueDetailSiblings(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -2826,6 +2897,7 @@ func TestStoreGetIssueDetailSiblings(t *testing.T) {
 // the old two-flag encoding kept both stamps and restore silently resurrected
 // the archive.
 func TestDeleteArchivedIssueDropsArchiveStamp(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

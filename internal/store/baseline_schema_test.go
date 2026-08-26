@@ -14,6 +14,7 @@ import (
 // pseudo-column. This is the adoption oracle — if the parse drifts from the
 // file, adoption verifies the wrong shape, so the contract is locked here.
 func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
+	t.Parallel()
 	schema, err := baselineSchema()
 	if err != nil {
 		t.Fatalf("baselineSchema() error = %v", err)
@@ -61,6 +62,7 @@ func TestBaselineSchemaParsesEmbeddedMigration(t *testing.T) {
 // driven; the missing column gets filled regardless of which earlier shape
 // the workspace was at.
 func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

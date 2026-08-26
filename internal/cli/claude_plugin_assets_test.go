@@ -30,6 +30,7 @@ type marketplaceManifest struct {
 }
 
 func TestClaudePluginAssetsUseQuickstartHooks(t *testing.T) {
+	t.Parallel()
 	root := mustRepoRoot(t)
 
 	marketplacePath := filepath.Join(root, ".claude-plugin", "marketplace.json")

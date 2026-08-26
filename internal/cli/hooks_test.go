@@ -13,6 +13,7 @@ import (
 )
 
 func TestHooksInstallWritesPrePushHook(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	ws, err := workspace.Resolve(repo)
@@ -49,6 +50,7 @@ func TestHooksInstallWritesPrePushHook(t *testing.T) {
 }
 
 func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	ws, err := workspace.Resolve(repo)
@@ -83,6 +85,7 @@ func TestHooksInstallPreservesExistingPrePushHook(t *testing.T) {
 }
 
 func TestHooksInstallMigratesLegacyMarkers(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	ws, err := workspace.Resolve(repo)

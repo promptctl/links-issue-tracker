@@ -20,6 +20,7 @@ import (
 const testBuildNote = "build: TEST-SENTINEL"
 
 func TestWriteInitSyncLine(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		outcome initSyncOutcome
@@ -451,6 +452,7 @@ func TestInitHardStopsAndCreatesNoStoreWhenRemoteDetectionFails(t *testing.T) {
 // abandoned (mirroring dolt), proving the wrapper returns a loud failure on the
 // deadline rather than blocking on it.
 func TestInitAdoptHardStopsOnTimeout(t *testing.T) {
+	t.Parallel()
 	prevFn := adoptRemoteTicketsBlockingFn
 	prevTimeout := adoptRemoteTimeout
 	defer func() {

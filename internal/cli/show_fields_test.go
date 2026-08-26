@@ -14,6 +14,7 @@ import (
 // A single --field request prints the bare value with no label, so it
 // round-trips directly into `lit update --description` and similar.
 func TestPrintIssueFieldsSingleFieldPrintsBareValue(t *testing.T) {
+	t.Parallel()
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "Multi-line\ndescription body"}
 
 	var buf bytes.Buffer
@@ -30,6 +31,7 @@ func TestPrintIssueFieldsSingleFieldPrintsBareValue(t *testing.T) {
 // Multiple --field names print as "name: value" lines, in the requested
 // order, so a multi-line value stays attributable to its field.
 func TestPrintIssueFieldsMultipleFieldsPrintsLabeledLines(t *testing.T) {
+	t.Parallel()
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "The body"}
 
 	var buf bytes.Buffer
@@ -47,6 +49,7 @@ func TestPrintIssueFieldsMultipleFieldsPrintsLabeledLines(t *testing.T) {
 // vocabulary, and prints nothing — fields are validated before any output,
 // so a typo in a multi-field request never emits a partial result.
 func TestPrintIssueFieldsUnknownFieldReturnsUsageErrorWithNoOutput(t *testing.T) {
+	t.Parallel()
 	issue := model.Issue{ID: "test.1", Title: "A title", Description: "The body"}
 
 	var buf bytes.Buffer

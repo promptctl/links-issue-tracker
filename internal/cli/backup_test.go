@@ -16,6 +16,7 @@ import (
 // path, latest backup) and that the degenerate combinations fail loudly rather
 // than picking a silent precedence.
 func TestResolveRestorePathCap(t *testing.T) {
+	t.Parallel()
 	t.Run("no source is a usage error", func(t *testing.T) {
 		ap := &app.App{Workspace: workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}}
 		_, err := resolveRestorePath(ap, "  ", false)
@@ -65,6 +66,7 @@ func TestResolveRestorePathCap(t *testing.T) {
 }
 
 func TestHashExportRefusesUnhydratedIssue(t *testing.T) {
+	t.Parallel()
 	// hashExport relies on Issue.MarshalJSON to reject unhydrated values; the
 	// hydrator's post-condition keeps this path unreachable from store output,
 	// but the JSON boundary still enforces if any other producer slips one in.

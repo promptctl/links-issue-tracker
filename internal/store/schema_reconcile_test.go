@@ -139,6 +139,7 @@ func assertReachedBaseline(t *testing.T, doltRoot string) *Store {
 // must forward-migrate to v1, not refuse. This is the exact shape the user
 // hit when the deletion shipped.
 func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -191,6 +192,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 // predating the prompt→agent_prompt rename forward-migrate cleanly: the
 // column is renamed (not dropped) so any pre-rename prompt values survive.
 func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -230,6 +232,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 // canonical set ('in_progress', 'open', 'closed') AND the corresponding
 // rows still exist after migration. Pre-rename data must not be dropped.
 func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -286,6 +289,7 @@ func TestReconcileNormalizesLegacyStatusValues(t *testing.T) {
 // NULLed during reconcile (containers derive state from children). The
 // epic row itself must survive — only the status column is rewritten.
 func TestReconcileNullsEpicStatus(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -341,6 +345,7 @@ func TestReconcileNullsEpicStatus(t *testing.T) {
 // fields are backfilled to 'misc' so the canonical topic invariant
 // holds post-migration. Rows are not dropped.
 func TestReconcileBackfillsTopicDefault(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -377,6 +382,7 @@ func TestReconcileBackfillsTopicDefault(t *testing.T) {
 // 0..4 priority range get all priorities reset to 0 (normal) and the
 // canonical priority CHECK installed. Rows survive.
 func TestReconcileResetsLegacyPriorities(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -428,6 +434,7 @@ func TestReconcileResetsLegacyPriorities(t *testing.T) {
 // rows translated by TestReconcileTranslatesLegacyIssueHistoryToEvents
 // below; this test guards the synthetic/partial fallback path.
 func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -480,6 +487,7 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 // (Nullable × Nullable) → bool. Truth-table coverage is the only
 // proof its branches do what their names say.
 func TestIsLegacyStatusTransition(t *testing.T) {
+	t.Parallel()
 	null := sql.NullString{}
 	open := sql.NullString{Valid: true, String: "open"}
 	openAlso := sql.NullString{Valid: true, String: "open"}
@@ -510,6 +518,7 @@ func TestIsLegacyStatusTransition(t *testing.T) {
 // translated event rows are byte-equivalent to live-written rows.
 // [LAW:one-source-of-truth] — both writers produce the same shape.
 func TestCanonicalEventCanonicalization(t *testing.T) {
+	t.Parallel()
 	null := sql.NullString{}
 	t.Run("action: null → SQL NULL", func(t *testing.T) {
 		if got := canonicalEventAction(null); got != nil {
@@ -559,6 +568,7 @@ func TestCanonicalEventCanonicalization(t *testing.T) {
 // status spellings in issue_event_changes while issues.status was
 // already normalized — a [LAW:one-source-of-truth] violation.
 func TestCanonicalLegacyStatus(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   sql.NullString
@@ -644,6 +654,7 @@ func nullableStrPtr(p *string) any {
 // [LAW:no-silent-failure] Drop-without-translate was the silent
 // fallback this ticket eliminates.
 func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -841,6 +852,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 // improvement; the count of dropped rows is implicit in (legacy count -
 // translated count) and surfaces via the existing reconcile logs.
 func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -893,6 +905,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 // canonical column layout because it follows the rename in the
 // reconcile sequence; the dataflow makes the precondition implicit.
 func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -976,6 +989,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 // this iteration" so the change row cannot attach to a pre-existing
 // unrelated event.
 func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1094,6 +1108,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 // that satisfies the first but violates the second is still pre-goose
 // — the goose log was fabricated, not produced by migrations.
 func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1187,6 +1202,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 // adoption path proceeds normally. This guards against the reconcile
 // somehow mutating in steady state.
 func TestReconcileIsIdempotent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1230,6 +1246,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 // reconcile via createIssuesTableStmt) produce the same constraint
 // names; this test pins them in lockstep so silent drift surfaces.
 func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1294,6 +1311,7 @@ func TestReconcileCreatedTablesMatchBaselineConstraintNames(t *testing.T) {
 // [LAW:one-source-of-truth] Both creators (goose-baseline and
 // reconcile) produce the same column shape, no defaults to drift on.
 func TestReconcileTopicHasNoDefault(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1336,6 +1354,7 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 // [LAW:no-silent-failure] Generated ranks cannot duplicate any
 // existing rank value in the workspace, even in mixed states.
 func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1405,6 +1424,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 // verifies the actual shape matches baseline; any remaining gap aborts
 // with a structural error before the stamp lands.
 func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1466,6 +1486,7 @@ func TestPostReconcileBaselineVerificationCatchesNonIssuesGaps(t *testing.T) {
 // replacement must point at the actual structural issue so the operator
 // can fix it without data loss.
 func TestReconcileErrorMessageIsActionable(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -1516,6 +1537,7 @@ func TestReconcileErrorMessageIsActionable(t *testing.T) {
 // below are the test's independent copy of the at-rest schema, not a second
 // authority in production code.
 func TestDerivedTypeCheckClausesMatchHistoricalLiterals(t *testing.T) {
+	t.Parallel()
 	if want := `issue_type IN ('task','feature','bug','chore','epic')`; issueTypeCheckClause != want {
 		t.Fatalf("issueTypeCheckClause = %q, want %q", issueTypeCheckClause, want)
 	}

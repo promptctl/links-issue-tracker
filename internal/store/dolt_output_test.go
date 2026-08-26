@@ -67,6 +67,8 @@ func captureStdout(t *testing.T, fn func() error) []byte {
 // mechanism (how dolt's output channel is routed), so a different suppression that
 // still keeps stdout clean would keep this test green.
 func TestDoltTransferKeepsStdoutClean(t *testing.T) {
+	// serial: no t.Parallel — swaps the process-global os.Stdout to capture what
+	// dolt writes to the real fd.
 	ctx := context.Background()
 	base := t.TempDir()
 	producer := filepath.Join(base, "producer")

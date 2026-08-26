@@ -29,6 +29,7 @@ func assertCommitLockFree(t *testing.T, lockPath string) {
 // Without defer, a panic would leave the flock held for the Store's lifetime,
 // blocking all future mutations.
 func TestPanicDuringMutationReleasesLock(t *testing.T) {
+	t.Parallel()
 	st := openIssueStore(t, context.Background())
 
 	// withMutation panics inside the mutation fn.
@@ -58,6 +59,7 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 // TestPanicDuringWithCommitLockReleasesLock verifies that withCommitLock's
 // deferred release fires even when the enclosed operation panics.
 func TestPanicDuringWithCommitLockReleasesLock(t *testing.T) {
+	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	s := &Store{commitLockPath: lockPath}
 
@@ -84,6 +86,7 @@ func TestPanicDuringWithCommitLockReleasesLock(t *testing.T) {
 // only succeeds end-to-end when the re-entrant path completes without
 // deadlocking or attempting to take the file lock a second time.
 func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
+	t.Parallel()
 	st := openIssueStore(t, context.Background())
 
 	// CreateIssue goes through withMutation, which:
@@ -121,6 +124,7 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 // from within a held lock is a no-op acquisition (the context already carries
 // the lock marker and the release is a no-op).
 func TestReentrantWithCommitLockShortCircuits(t *testing.T) {
+	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	s := &Store{commitLockPath: lockPath}
 
@@ -146,6 +150,7 @@ func TestReentrantWithCommitLockShortCircuits(t *testing.T) {
 // prevents lock acquisition rather than blocking out the full retry budget
 // against a live holder.
 func TestAcquireCommitLockContextCancellation(t *testing.T) {
+	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
 	s := &Store{commitLockPath: lockPath}
 

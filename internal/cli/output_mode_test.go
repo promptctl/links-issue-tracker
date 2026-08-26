@@ -9,6 +9,7 @@ import (
 )
 
 func TestParseGlobalArgs(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name     string
 		args     []string
@@ -43,6 +44,7 @@ func TestParseGlobalArgs(t *testing.T) {
 // TestParseGlobalArgsRejectsOutputFlag pins the one legacy flag the global
 // parser still refuses outright. [LAW:no-silent-failure]
 func TestParseGlobalArgsRejectsOutputFlag(t *testing.T) {
+	t.Parallel()
 	for _, arg := range []string{"--output", "--output=json"} {
 		if _, err := parseGlobalArgs([]string{arg}); err == nil {
 			t.Fatalf("parseGlobalArgs(%q) succeeded; want UnsupportedError", arg)
@@ -51,6 +53,7 @@ func TestParseGlobalArgsRejectsOutputFlag(t *testing.T) {
 }
 
 func TestRunQuickstartDefaultsToText(t *testing.T) {
+	t.Parallel()
 	var stdout bytes.Buffer
 	if err := Run(context.Background(), &stdout, &stdout, []string{"quickstart"}); err != nil {
 		t.Fatalf("Run(quickstart) error = %v", err)
@@ -74,6 +77,7 @@ func TestRunQuickstartDefaultsToText(t *testing.T) {
 // ambient workspace state: a command that opens the app first can fail at
 // app.Open (exit 1) before its flags are ever parsed. [LAW:no-ambient-temporal-coupling]
 func TestRejectsJSONFlag(t *testing.T) {
+	t.Parallel()
 	cases := [][]string{
 		{"--json", "quickstart"}, // global position → root FlagErrorFunc
 		{"quickstart", "--json"}, // command-local → parseFlagSet

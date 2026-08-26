@@ -12,6 +12,7 @@ import (
 // classification family (blocking, orphaned, rank hygiene) or to none
 // (FocusPath — an ordering fact, deliberately invisible to readiness).
 func TestClassifyReadinessPerKind(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name           string
 		ann            annotation.Annotation
@@ -89,6 +90,7 @@ func TestClassifyReadinessPerKind(t *testing.T) {
 // This is the regression guard for the original bug — a new kind that should
 // block but isn't classified reading as pullable.
 func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
+	t.Parallel()
 	for _, kind := range annotation.Kinds() {
 		t.Run(kind.String(), func(t *testing.T) {
 			r := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "x"}})
@@ -121,6 +123,7 @@ func TestClassifyReadinessCoversEveryRegisteredKind(t *testing.T) {
 // readiness is always the typed interpretation, never `len(annotations) == 0`
 // used as a proxy.
 func TestClassifyReadinessNoAnnotations(t *testing.T) {
+	t.Parallel()
 	r := ClassifyReadiness(nil)
 	if !r.IsReady() {
 		t.Fatal("no annotations must classify as ready")
@@ -134,6 +137,7 @@ func TestClassifyReadinessNoAnnotations(t *testing.T) {
 // family at once: blocking, staleness, hygiene, and ordering coexist without
 // masking each other, and DependencyIDs projects only the open dependencies.
 func TestClassifyReadinessComposite(t *testing.T) {
+	t.Parallel()
 	r := ClassifyReadiness([]annotation.Annotation{
 		{Kind: annotation.OpenDependency, Message: "dep-1"},
 		{Kind: annotation.OpenDependency, Message: "dep-2"},

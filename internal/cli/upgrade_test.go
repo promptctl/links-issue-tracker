@@ -16,6 +16,7 @@ import (
 // yield the workspace version so upgrade proceeds instead of dead-ending. Any
 // other open failure must NOT be swallowed.
 func TestAppliedVersionFromOpenErr(t *testing.T) {
+	t.Parallel()
 	// The schema-ahead refusal carries WorkspaceVersion as data; upgrade reads it.
 	ahead := &store.UnsupportedSchemaVersionError{WorkspaceVersion: 7, MaxSupported: 3}
 	if v, ok := appliedVersionFromOpenErr(ahead); !ok || v != 7 {
@@ -52,6 +53,7 @@ func (s *stubSchemaReader) ReadWorkspaceSchema(_ context.Context) (workspaceSche
 // newFakeTarget (downgrade_test.go) reports Schema{Min:1, Max:3}. A workspace at
 // v2 is BEHIND that target, so upgrading to it is the forward move upgrade owns.
 func TestRunUpgradeWithHappyPath(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{}
@@ -84,6 +86,7 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 // plain backward move: refuse before installing, and name lit downgrade (which
 // can run here — it reverses the schema, then installs the older binary).
 func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}       // Schema.Max == 3
 	sr := &stubSchemaReader{version: 5, openable: true} // workspace ahead of the target, but openable
 	inst := &stubInstaller{}
@@ -110,6 +113,7 @@ func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
 // This is the misleading-remediation trap the PR set out to kill, at the seam
 // between the two features.
 func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}        // Schema.Max == 3
 	sr := &stubSchemaReader{version: 7, openable: false} // workspace ahead; this binary can't open it
 	inst := &stubInstaller{}
@@ -138,6 +142,7 @@ func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
 // local-ahead reinstall case (a newer binary wrote the workspace; the user is on
 // an old one). Equality is not a backward move — install proceeds.
 func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()} // Schema.Max == 3
 	sr := &stubSchemaReader{version: 3, openable: true}
 	inst := &stubInstaller{}
@@ -151,6 +156,7 @@ func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 }
 
 func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{err: errors.New("network down")}
@@ -174,6 +180,7 @@ func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 }
 
 func TestRunUpgradeWithResolverErrorSkipsReadAndInstall(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{err: errors.New("manifest 404")}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
@@ -191,6 +198,7 @@ func TestRunUpgradeWithResolverErrorSkipsReadAndInstall(t *testing.T) {
 }
 
 func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{err: errors.New("store closed")}
 	inst := &stubInstaller{}
@@ -205,6 +213,7 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 }
 
 func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{}
@@ -224,6 +233,7 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 }
 
 func TestRunUpgradeMissingTagIsRequired(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}

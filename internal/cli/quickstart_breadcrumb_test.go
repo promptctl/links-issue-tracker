@@ -8,6 +8,7 @@ import (
 )
 
 func TestQuickstartBreadcrumbDerivesFromTopicTable(t *testing.T) {
+	t.Parallel()
 	for _, token := range quickstartTopicTokens() {
 		crumb := quickstartBreadcrumb(token)
 		if !strings.Contains(crumb, "lit quickstart "+token) {
@@ -20,6 +21,7 @@ func TestQuickstartBreadcrumbDerivesFromTopicTable(t *testing.T) {
 }
 
 func TestQuickstartBreadcrumbPanicsOnUnknownTopic(t *testing.T) {
+	t.Parallel()
 	defer func() {
 		if recover() == nil {
 			t.Fatal("quickstartBreadcrumb(bogus) should panic; a wiring typo must fail loudly, not print a broken hint")
@@ -29,6 +31,7 @@ func TestQuickstartBreadcrumbPanicsOnUnknownTopic(t *testing.T) {
 }
 
 func TestTransitionBreadcrumbTopicsAreValidTokens(t *testing.T) {
+	t.Parallel()
 	for action, topic := range transitionBreadcrumbTopics {
 		if _, ok := quickstartTopicTemplate(topic); !ok {
 			t.Fatalf("transitionBreadcrumbTopics[%q] = %q, which is not a quickstartTopics token", action, topic)

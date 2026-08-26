@@ -18,6 +18,7 @@ import (
 // one edge per recorded redirect so the pre-upgrade reader renders the same
 // graph it wrote.
 func TestRedirectTargetMigrationBackfill(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -128,6 +129,7 @@ func TestRedirectTargetMigrationBackfill(t *testing.T) {
 // must not fail on the primary-key collision; the edge the redirect needs
 // already exists.
 func TestRedirectTargetMigrationDownToleratesExistingManualEdge(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

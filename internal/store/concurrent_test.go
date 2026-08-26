@@ -20,6 +20,9 @@ import (
 // withMutation, which acquires the commit lock, begins a tx, runs the mutation,
 // commits the tx, runs commitWorkingSet (re-entrant), and releases the lock.
 func TestConcurrentMutationsCreateIssues(t *testing.T) {
+	// serial: no t.Parallel — its value is ten goroutines genuinely overlapping
+	// inside one store; sharing CPU with the parallel batch would let it pass on
+	// degenerate, near-serial schedules.
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -93,6 +96,9 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 // mutation types (create, update, comment, transition) against the same Store.
 // After completion, verifies data integrity and lock release.
 func TestConcurrentMutationsMixedOperations(t *testing.T) {
+	// serial: no t.Parallel — its value is many goroutines genuinely overlapping
+	// inside one store; sharing CPU with the parallel batch would let it pass on
+	// degenerate, near-serial schedules.
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

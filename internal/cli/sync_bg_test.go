@@ -49,6 +49,7 @@ func TestMirrorEnvStripsInheritedTraceRefFile(t *testing.T) {
 // non-positive parent pid means "no parent to wait for", so the mirror proceeds
 // at once (true) without polling.
 func TestWaitForParentExitReturnsImmediatelyForNoParent(t *testing.T) {
+	t.Parallel()
 	calls := 0
 	got := waitForParentExit(context.Background(), 0, func() int { calls++; return 4242 }, time.Second, time.Millisecond)
 	if !got {
@@ -65,6 +66,7 @@ func TestWaitForParentExitReturnsImmediatelyForNoParent(t *testing.T) {
 // flips after a few polls, standing in for the parent exiting — no real process
 // tree, no platform sleep binary.
 func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
+	t.Parallel()
 	const parentPID = 5150
 	polls := 0
 	getppid := func() int {
@@ -86,6 +88,7 @@ func TestWaitForParentExitReturnsWhenReparented(t *testing.T) {
 // the parent outlives the wait (getppid never changes), the result is false so
 // the caller aborts instead of opening the store.
 func TestWaitForParentExitReportsTimeout(t *testing.T) {
+	t.Parallel()
 	const parentPID = 5151
 	if waitForParentExit(context.Background(), parentPID, func() int { return parentPID }, 30*time.Millisecond, time.Millisecond) {
 		t.Fatal("waitForParentExit must report false when the parent never exits before the timeout")
@@ -97,6 +100,7 @@ func TestWaitForParentExitReportsTimeout(t *testing.T) {
 // window must spend it releasing state, not sleeping toward a timeout it will
 // be killed before reaching.
 func TestWaitForParentExitEndsOnTeardown(t *testing.T) {
+	t.Parallel()
 	const parentPID = 5152
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()

@@ -71,6 +71,7 @@ func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
 // reads them later sees "this work has no producer" rather than "this work was
 // produced by the empty checkout".
 func TestUnattributedStoreLeavesAttributionNull(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
@@ -99,6 +100,7 @@ func TestUnattributedStoreLeavesAttributionNull(t *testing.T) {
 // store rather than on each mutation's arguments, which is what makes "every"
 // true here without ten call sites cooperating.
 func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
@@ -125,6 +127,7 @@ func TestAttributedStoreStampsEveryEventKind(t *testing.T) {
 // the reason app.Open can hand the token over unconditionally instead of
 // branching on whether one exists.
 func TestAttributeToRejectsAHalfPair(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
@@ -153,6 +156,7 @@ func TestAttributeToRejectsAHalfPair(t *testing.T) {
 // rewrite every historical event into a claim for whoever ran the restore — and
 // the assertion would catch it, which a same-token fixture could not.
 func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "producer-workspace")
 	if err != nil {
@@ -198,6 +202,7 @@ func TestRestoreKeepsTheProducersAttribution(t *testing.T) {
 // The corruption is injected into real exported JSON rather than into a
 // hand-built fixture, so the bytes under test are the shape a real backup has.
 func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	source, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "producer-workspace")
 	if err != nil {
@@ -250,6 +255,7 @@ func TestRestoringACorruptedExportWritesNoHalfPair(t *testing.T) {
 // healthy: every ticket present, every event present, and every claim quietly
 // gone, with nothing to point at the recovery as the cause.
 func TestRecoveredWorkspaceKeepsItsAttribution(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "src")
 	// withStore opens with this id, and the pair the events carry is built from

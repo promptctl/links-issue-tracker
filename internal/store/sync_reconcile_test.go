@@ -18,6 +18,7 @@ import (
 // LINEAR history (the reconcile commit has one parent — the remote head) that
 // fast-forward pushes. A seeds; B diverges and reconciles.
 func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -117,6 +118,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 // leaves a prose-pending state — nothing committed, the local branch untouched
 // and still diverged — that the agent surface consumes.
 func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -185,6 +187,7 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 // re-derives the same divergence, splices the text in, and replays it as ONE
 // forward commit on the remote head — linear history the next push fast-forwards.
 func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -240,6 +243,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 // [LAW:no-silent-failure] the agent can never overwrite a field whose divergence
 // changed underneath it.
 func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")

@@ -16,6 +16,7 @@ import (
 // statement for real but forces the result's RowsAffected() to fail,
 // proving the two outcomes are now distinguishable. (links-store-mb6e.1)
 func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
@@ -48,6 +49,7 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 // this proves its RowsAffected() error is likewise surfaced rather than
 // misread as a real zero-rows "label not found" result. (links-store-mb6e.1)
 func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 

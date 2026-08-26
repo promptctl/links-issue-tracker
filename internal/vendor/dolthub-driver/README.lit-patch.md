@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **four** independent patches. When refreshing (below), all
+This copy carries **five** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -128,6 +128,25 @@ line in `go.mod` and still a row an auditor reads:
 On refresh, expect upstream to still have all of this. Re-apply the rewrite and
 re-drop both test dependencies; do not "restore" them because the diff looks
 lossy. See lit ticket `links-licensing-c0ce.2`.
+
+### Patch 5 — serialize engine construction (`driver.go`)
+
+Constructing a SQL engine writes package-level state in the dolt stack:
+`go-mysql-server`'s `InitStatusVariables` (called from `gms.New`, inside
+`engine.NewSqlEngine`) rewrites the process-global status-variable table,
+and `NewSqlEngine` re-points the global binlog-consumer singleton
+(`doltBinlogConsumer.SetEngine`). Two engines constructed concurrently in
+one process therefore data-race on those globals even when their databases
+live at unrelated paths — `go test -race` on lit's parallelized
+`internal/store` suite caught exactly this (145 warnings, all at
+construction; none during query execution).
+
+The patch holds a package-level mutex (`engineConstructMu` in `driver.go`)
+around the `engine.NewSqlEngine` call, the one funnel every engine
+construction in this driver passes through. Construction is serialized;
+opened engines run concurrently exactly as before. This protects any lit
+path that opens multiple stores in one process (the cross-project rollup,
+parallel tests).
 
 ## Refreshing this copy
 

@@ -16,6 +16,7 @@ import (
 // creates the migration_quarantine table before any goose migration runs,
 // so it is always available for recording failures.
 func TestQuarantineTableCreatedByFreshOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -38,6 +39,7 @@ func TestQuarantineTableCreatedByFreshOpen(t *testing.T) {
 // after Open runs the adoption path (pre-goose workspace without goose
 // history).
 func TestQuarantineTableCreatedByAdoption(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -71,6 +73,7 @@ func TestQuarantineTableCreatedByAdoption(t *testing.T) {
 // returns a QuarantineBlockError when a quarantine row exists for a version
 // greater than the current applied version.
 func TestCheckPendingQuarantineBlocksPendingVersion(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -107,6 +110,7 @@ func TestCheckPendingQuarantineBlocksPendingVersion(t *testing.T) {
 // TestCheckPendingQuarantineAllowsAlreadyApplied pins that a quarantine row for
 // a version ≤ appliedVersion does NOT block Open (the version is already past).
 func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -134,6 +138,7 @@ func TestCheckPendingQuarantineAllowsAlreadyApplied(t *testing.T) {
 // This verifies the bootstrap-before-checkpoint ordering that prevents the
 // PR #119 bug (quarantine table erased by the very reset it was meant to survive).
 func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -188,6 +193,7 @@ func TestQuarantineTableSurvivesCheckpointReset(t *testing.T) {
 // (so it persists in the post-reset database, not in the pre-reset state that
 // was just discarded).
 func TestQuarantineRowInsertedAfterReset(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -250,6 +256,8 @@ func TestQuarantineRowInsertedAfterReset(t *testing.T) {
 // appliedVersion=registryMax, willMutate=false), and the test verifies the
 // checkpoint branch and quarantine commit persisted across the reset.
 func TestMigrationFailureCheckpointPath(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -348,6 +356,7 @@ func TestMigrationFailureCheckpointPath(t *testing.T) {
 // creates at least one pre-migrate checkpoint branch as part of applying the
 // baseline migration.
 func TestMigrationCheckpointCreatedByFreshOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -369,6 +378,7 @@ func TestMigrationCheckpointCreatedByFreshOpen(t *testing.T) {
 // TestMigrationCheckpointRetentionBounded pins that repeated mutating Opens
 // do not accumulate checkpoints beyond the retention limit.
 func TestMigrationCheckpointRetentionBounded(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -408,6 +418,8 @@ func TestMigrationCheckpointRetentionBounded(t *testing.T) {
 // branch, the operator would see misleading output like v0 "" and a DELETE
 // targeting a quarantine row that was never inserted.
 func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
+	// serial: no t.Parallel — installs the package-level migrationUpByOneForTest
+	// hook.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -463,6 +475,7 @@ func TestCheckpointResetErrorUnknownVersion(t *testing.T) {
 // quarantine fast-fail fires before guard.ensure(), so no recovery snapshot is
 // created. This tests criterion 2 end-to-end through Open() itself.
 func TestReopenBlockedByQuarantineOnAdoptionPath(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -567,6 +580,7 @@ func withStaleShapeQuarantineTable(t *testing.T, ctx context.Context, doltRoot s
 // an ordinary lit Open, with no manual SQL — instead of ensureQuarantineTable's
 // CREATE TABLE IF NOT EXISTS silently trusting the wrong shape forever.
 func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -606,6 +620,7 @@ func TestQuarantineTableSelfHealsStaleShapeWhenEmpty(t *testing.T) {
 // history under column names this binary can't translate. Open must refuse
 // loudly instead, naming the shape and row count.
 func TestQuarantineTableRefusesToDiscardStaleShapeHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

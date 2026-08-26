@@ -63,6 +63,7 @@ func normalizeEvents(events []model.IssueEvent, keep func(id string) bool) map[s
 // paths consume the identical legacy rows: one through the in-place forward
 // migration, one through dump→map→apply.
 func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

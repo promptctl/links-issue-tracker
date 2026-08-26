@@ -105,6 +105,7 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 // TestLsAtRejectsMissingStore pins the loud-failure contract: a path with no
 // lit store is an actionable error naming the path, not an empty success.
 func TestLsAtRejectsMissingStore(t *testing.T) {
+	t.Parallel()
 	missing := filepath.Join(t.TempDir(), "nope", "links")
 
 	var out bytes.Buffer
@@ -126,6 +127,7 @@ func TestLsAtRejectsMissingStore(t *testing.T) {
 // the store layer as a path (so `--at --help` doesn't try to open a store named
 // "--help").
 func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
+	t.Parallel()
 	for _, args := range [][]string{
 		{"--at"}, {"--at="}, {"--at", ""},
 		{"--at", "--help"}, {"--at", "--status"}, {"--at=--nope"},
@@ -145,6 +147,7 @@ func TestLsAtRejectsEmptyOrFlagShapedDir(t *testing.T) {
 // honors the `--` terminator (a later --at is a positional literal, not a route),
 // and reports a present-but-empty --at so the caller can reject it.
 func TestExtractAtDir(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		args    []string
 		wantDir string

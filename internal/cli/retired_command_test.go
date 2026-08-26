@@ -15,6 +15,7 @@ import (
 // with a self-contained (no second-line) remediation. The handler returns before
 // opening any workspace, so this holds outside a git repo too.
 func TestRetiredCommandsPointToReplacements(t *testing.T) {
+	t.Parallel()
 	for _, name := range []string{"ready", "queue"} {
 		var out bytes.Buffer
 		err := Run(context.Background(), &out, &out, []string{name})
@@ -51,6 +52,7 @@ func TestRetiredCommandsPointToReplacements(t *testing.T) {
 // flag, so a stale invocation is redirected rather than silently broken. Each
 // carries its own pointer, so the expected substrings differ per command.
 func TestFoldedCommandsPointToTheirFlags(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		wants []string
@@ -130,6 +132,7 @@ func TestBulkImportRetiredPointsToBackupRestore(t *testing.T) {
 // are marked Hidden, which is the single bit that keeps them off both `--help`
 // and the completion projection.
 func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
+	t.Parallel()
 	specs := commandSpecs(context.Background(), nil, nil)
 	byName := map[string]CommandSpec{}
 	for _, s := range specs {
@@ -151,6 +154,7 @@ func TestRetiredCommandsAreHiddenButRegistered(t *testing.T) {
 // Hidden command is absent from the rendered help. This is the ticket's surface
 // acceptance criterion.
 func TestRootHelpShowsCuratedWorkableSurface(t *testing.T) {
+	t.Parallel()
 	var out bytes.Buffer
 	if err := Run(context.Background(), &out, &out, []string{"--help"}); err != nil {
 		t.Fatalf("lit --help error = %v", err)

@@ -10,6 +10,7 @@ import (
 // TestCheckpointCreateAndList pins that CreateCheckpoint creates a Dolt branch
 // that appears in ListCheckpoints with the correct prefix filter.
 func TestCheckpointCreateAndList(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -66,6 +67,7 @@ func TestCheckpointCreateAndList(t *testing.T) {
 // TestCheckpointListExcludesOtherPrefixes pins that ListCheckpoints returns
 // only branches matching the given prefix and no cross-prefix contamination.
 func TestCheckpointListExcludesOtherPrefixes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -112,6 +114,7 @@ func TestCheckpointListExcludesOtherPrefixes(t *testing.T) {
 // TestCheckpointResetReverts pins that ResetToCheckpoint rolls back committed
 // changes made after the checkpoint was taken.
 func TestCheckpointResetReverts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -181,6 +184,7 @@ func TestCheckpointResetReverts(t *testing.T) {
 // TestCheckpointPruneEnforcesRetention pins that PruneCheckpoints reduces the
 // branch count to at most `retain` for the given prefix.
 func TestCheckpointPruneEnforcesRetention(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -239,6 +243,7 @@ func TestCheckpointPruneEnforcesRetention(t *testing.T) {
 // TestCheckpointPruneZeroDeletesAll pins that PruneCheckpoints(retain=0)
 // deletes every checkpoint for the given prefix.
 func TestCheckpointPruneZeroDeletesAll(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -271,6 +276,7 @@ func TestCheckpointPruneZeroDeletesAll(t *testing.T) {
 // TestCheckpointSortedOldestFirst pins that ListCheckpoints returns checkpoints
 // in creation order (oldest first).
 func TestCheckpointSortedOldestFirst(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -308,6 +314,7 @@ func TestCheckpointSortedOldestFirst(t *testing.T) {
 // CreateCheckpoint's formatting is reconstructed identically by
 // parseCheckpointName.
 func TestParseCheckpointName(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name   string
 		prefix string

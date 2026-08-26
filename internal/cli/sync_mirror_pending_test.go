@@ -35,6 +35,7 @@ func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 // way) the same marker is residue, re-claimed with its claim time refreshed
 // so concurrent observers bind to the re-spawn.
 func TestClaimMirrorPendingStateMachine(t *testing.T) {
+	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	ctx := context.Background()
 	now := time.Now()
@@ -149,6 +150,7 @@ func TestClaimMirrorPendingStateMachine(t *testing.T) {
 // already-absent marker (a racing attempt got there first) is a quiet no-op —
 // the marker's absence IS the goal state, not an error.
 func TestClearMirrorPendingIdempotent(t *testing.T) {
+	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
@@ -168,6 +170,7 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 // the last HEAD read and deserves a cycle. Liveness matters only to the claim
 // (who spawns), never to this read (whether a mirror is still owed).
 func TestMirrorPendingSetIgnoresLiveness(t *testing.T) {
+	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	if mirrorPendingSet(ws) {
 		t.Fatal("an absent marker read as set")
@@ -320,6 +323,7 @@ func TestCompleteMirrorWithoutAttemptStopsAnsweringFirst(t *testing.T) {
 // negative-age branch for this; the kernel's answer never consulted the
 // clock in the first place.
 func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
+	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	_, releaseAnswer, err := claimMirrorPending(context.Background(), ws, time.Now())
 	if err != nil {
@@ -346,6 +350,7 @@ func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 // entry-clear — the clear is failing — and must stop the loop with an error
 // rather than cycle forever against a marker that cannot be removed.
 func TestRecheckMirrorPending(t *testing.T) {
+	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	cycleStart := time.Now()
 
@@ -383,6 +388,7 @@ func TestRecheckMirrorPending(t *testing.T) {
 // degradation the FAILING banner and the owner channel must hear about, not
 // healthy engine serialization.
 func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	_, releaseAnswer, err := claimMirrorPending(context.Background(), ws, time.Now())
 	if err != nil {
@@ -423,6 +429,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 // so the last completed attempt's record must keep answering "where do things
 // stand".
 func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
+	t.Parallel()
 	ws := notifyTestWorkspace(t)
 	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)

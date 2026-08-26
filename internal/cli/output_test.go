@@ -18,6 +18,8 @@ import (
 // a reader trusts show as current state, and the trail still has a home. Local
 // tz is pinned so the trail's timestamp format stays covered where it now lives.
 func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global time.Local;
+	// parallel readers of it would race.
 	denver, err := time.LoadLocation("America/Denver")
 	if err != nil {
 		t.Fatalf("LoadLocation() error = %v", err)

@@ -18,6 +18,7 @@ import (
 // escalation — because unrelated histories, like a schema-ahead remote, never merge
 // on a retry; only a deliberate choice resolves them.
 func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
+	t.Parallel()
 	failure := SyncFailure{
 		Class:  syncFailureUnrelatedHistories,
 		Remote: "origin",
@@ -61,6 +62,7 @@ func TestSyncFailureBlockUnrelatedHistories(t *testing.T) {
 // non-empty side names its count and members. This is the ticket's visibility — see
 // what each side holds before choosing take-one or union.
 func TestSyncFailureBlockUnrelatedInventory(t *testing.T) {
+	t.Parallel()
 	failure := SyncFailure{
 		Class:  syncFailureUnrelatedHistories,
 		Remote: "origin",
@@ -93,6 +95,7 @@ func TestSyncFailureBlockUnrelatedInventory(t *testing.T) {
 // renders as an explicit "(0)" rather than a blank the reader must interpret, and
 // that a nil inventory (any other class) emits no inventory section at all.
 func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
+	t.Parallel()
 	withEmpty := SyncFailure{
 		Class:  syncFailureUnrelatedHistories,
 		Remote: "origin",
@@ -122,6 +125,7 @@ func TestSyncFailureBlockUnrelatedInventoryEmptySide(t *testing.T) {
 // forwards the store's both-sides partition into the rendered contract, so the
 // operator sees what each side holds on `lit sync reconcile`.
 func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
+	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	err := reportReconcileResult(context.Background(), &sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
@@ -147,6 +151,7 @@ func TestReportReconcileResultUnrelatedCarriesInventory(t *testing.T) {
 // the same partition through the same contract, so pull and reconcile show the
 // identical both-sides view of one divergence.
 func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
+	t.Parallel()
 	inv := &store.UnrelatedInventory{OnlyLocal: []string{"proj-l"}, OnBoth: []string{"proj-b"}}
 	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
 		State:     store.SyncPullUnrelated,
@@ -164,6 +169,7 @@ func TestSyncFailureFromPullUnrelatedCarriesInventory(t *testing.T) {
 // an unrelated-histories result to the one sync-failure contract at ExitConflict —
 // the same exit a held prose conflict gives — rather than a bland success line.
 func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
+	t.Parallel()
 	var sink strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	err := reportReconcileResult(context.Background(), &sink, ws, "lit sync reconcile", "origin", "master", store.SyncReconcileResult{
@@ -194,6 +200,7 @@ func TestReportReconcileResultUnrelatedExitsConflict(t *testing.T) {
 // take-local the remote-only ones — so the discard is reported, never silent, which is
 // the ticket's core guarantee. [LAW:no-silent-failure]
 func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
+	t.Parallel()
 	inv := &store.UnrelatedInventory{
 		OnlyLocal:  []string{"proj-localA", "proj-localB"},
 		OnlyRemote: []string{"proj-remoteA"},
@@ -241,6 +248,7 @@ func TestReportTakeOutcomeReportsDiscard(t *testing.T) {
 // TestReportTakeOutcomeEmptyDiscard proves that when the chosen side drops nothing, the
 // output states an explicit "(0)" rather than a blank the reader must interpret.
 func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
+	t.Parallel()
 	var out strings.Builder
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	if err := reportTakeOutcome(&out, ws, "lit sync reconcile take remote", "origin", "master", store.SyncReconcileResult{
@@ -258,6 +266,7 @@ func TestReportTakeOutcomeEmptyDiscard(t *testing.T) {
 // to their store resolution, and an unknown word is a usage error, never a silent
 // default. [LAW:no-silent-failure]
 func TestParseUnrelatedSide(t *testing.T) {
+	t.Parallel()
 	for word, want := range map[string]store.UnrelatedResolution{
 		"local": store.TakeLocal, "remote": store.TakeRemote,
 		"LOCAL": store.TakeLocal, " remote ": store.TakeRemote,
@@ -281,6 +290,7 @@ func TestParseUnrelatedSide(t *testing.T) {
 // unrelated-histories pull outcome through the same contract and exit as
 // `lit sync reconcile`, so the two never disagree on the same divergence.
 func TestSyncFailureFromPullUnrelated(t *testing.T) {
+	t.Parallel()
 	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
 		State:  store.SyncPullUnrelated,
 		Ahead:  7,

@@ -41,6 +41,7 @@ func enableOwnerNotify(t *testing.T, ws workspace.Info, hook string) {
 // marker with the same fingerprint suppresses, a changed fingerprint fires
 // regardless of age, and the cooldown re-fires a persisting episode.
 func TestOwnerNotifyDue(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "owner-notify.push_failed.last")
 	now := time.Now()
@@ -67,6 +68,7 @@ func TestOwnerNotifyDue(t *testing.T) {
 // failure's own domain sentence; a remote-schema-ahead block (a version
 // condition, not a divergence) does not.
 func TestOwnerNotifyEventForFailure(t *testing.T) {
+	t.Parallel()
 	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories} {
 		ev, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"})
 		if !ok {
@@ -86,6 +88,7 @@ func TestOwnerNotifyEventForFailure(t *testing.T) {
 // episode is per kind — one broken channel failing at different stages (refs
 // check vs. refused push) must not read as several episodes.
 func TestOwnerNotifyEventFingerprint(t *testing.T) {
+	t.Parallel()
 	unrelatedA := ownerNotifyEvent{Kind: ownerNotifyKind(syncFailureUnrelatedHistories), Remote: "origin", Branch: "master"}
 	unrelatedB := ownerNotifyEvent{Kind: ownerNotifyKind(syncFailureUnrelatedHistories), Remote: "backup", Branch: "master"}
 	if unrelatedA.fingerprint() == unrelatedB.fingerprint() {
@@ -208,6 +211,7 @@ func TestObservePushOutcomeForOwner(t *testing.T) {
 // divergence. Skips and failures carry no information; a non-converged
 // reconcile keeps the episode standing.
 func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		outcome syncReceiveOutcome
@@ -235,6 +239,7 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 // owner-approved rerun with its token, and — for a stale token — that the
 // approval no longer matches.
 func TestOwnerApprovalRefusalBlock(t *testing.T) {
+	t.Parallel()
 	refusal := ownerApprovalRefusalError{
 		Approval: store.OwnerApprovalRequiredError{
 			Choice:        store.TakeLocal,
