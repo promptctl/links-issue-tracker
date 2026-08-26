@@ -46,9 +46,10 @@ jobs:
       - name: Build
         run: go build ./cmd/lit
 
-      # -timeout 30m: internal/store alone is ~8 minutes of real work today
-      # and the scale test adds two more, so go test's 10-minute per-package
-      # default would panic a healthy run. This is the lane where that cost is
+      # -timeout 30m: internal/store alone measured ~8 minutes of real work on
+      # the development machine (2026-08-24, links-testperf-xxsx) and the scale
+      # test adds two more, so go test's 10-minute per-package default can
+      # panic a healthy run on slow-enough hardware. This is the lane where that cost is
       # legitimate — the budget is honest here and forbidden in ci.yml, where
       # the same flag would hide an inner-loop regression.
       - name: Test (full, no -short)

@@ -13,7 +13,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job here gates merge and must stay fast (<5 min total). CI runs on
+# Every job here gates merge and must stay fast — <5 min total is the target,
+# and build-and-test is the current outlier the testperf epic
+# (links-testperf-xxsx) is driving down to it. CI runs on
 # Linux only by deliberate choice — no macOS runners, no build matrix. The
 # embedded Dolt engine builds with cgo (ICU/zstd); covering a second OS would
 # slow the gate and add platform-provisioning machinery for little signal, so
