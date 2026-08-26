@@ -73,14 +73,17 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+// premadeMainBranchDB builds the pre-made-database shape an adopt's clone
+// arrives in: a real database at the root, created outside lit's bootstrap,
+// still on Dolt's own default branch rather than master. Returns the dolt
+// root and the database's repo path, having asserted the branch is not yet
+// master — the precondition both normalization tests depend on.
+func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath string) {
+	t.Helper()
+	doltRoot = filepath.Join(t.TempDir(), "dolt")
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-
 	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", engineWrite)
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
@@ -91,15 +94,47 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 	if err := bootstrap.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("bootstrap close error = %v", err)
 	}
-
-	repoPath := filepath.Join(doltRoot, "links")
+	repoPath = filepath.Join(doltRoot, "links")
 	statusBefore, err := doltcli.Run(ctx, repoPath, "status")
 	if err != nil {
-		t.Fatalf("dolt status before EnsureDatabase error = %v", err)
+		t.Fatalf("dolt status on pre-made database error = %v", err)
 	}
 	if strings.Contains(statusBefore, "On branch master") {
-		t.Fatalf("unexpected dolt status before EnsureDatabase: %q", statusBefore)
+		t.Fatalf("pre-made database is already on master: %q", statusBefore)
 	}
+	return doltRoot, repoPath
+}
+
+// TestOpenSyncNormalizesPreMadeMainBranchToMaster proves the mirror-side
+// rename actually fires: OpenSync on a pre-made non-master database must land
+// it on master via its own engine — the sibling of the Open half proven
+// below, so neither write-open path only ever no-ops through the
+// normalization call.
+func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
+
+	sync, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
+	if err != nil {
+		t.Fatalf("dolt status after OpenSync error = %v", err)
+	}
+	if !strings.Contains(statusAfter, "On branch master") {
+		t.Fatalf("unexpected dolt status after OpenSync: %q", statusAfter)
+	}
+}
+
+func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
 
 	// EnsureDatabase over a pre-existing database is a no-op — since the
 	// creation fast-path, branch normalization is owned by write opens, so a
@@ -776,7 +811,10 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	root := migratedDoltDir(t)
+	// From nothing on purpose: the pristine stage exists to reach the
+	// issues-table-absent short-circuit, which a pre-migrated template copy
+	// can never exercise.
+	root := filepath.Join(t.TempDir(), "dolt")
 
 	pristine, err := OpenSync(ctx, root, "ws")
 	if err != nil {

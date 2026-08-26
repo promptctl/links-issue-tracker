@@ -183,11 +183,11 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	if !errors.As(err, &ahead) {
 		t.Fatalf("SyncPush onto ahead remote = %v, want *RemoteSchemaAheadError", err)
 	}
-	// Close before touching rootC below: rootB and rootC are test-fixture
-	// sibling directories under the same t.TempDir() parent (unlike a real
-	// workspace's uniquely-parented storage dir), so they share the
-	// sibling-of-doltRootDir workspace and commit lock paths.
-	// syncB is done with its work; hold nothing open past this point.
+	// syncB is done with its work; close before opening rootC below and hold
+	// nothing open past this point. (rootB comes from unrelatedDoltDir with
+	// its own t.TempDir parent, so the two stores' workspace/commit lock
+	// paths are independent — the early close is hygiene, not a lock-sharing
+	// requirement.)
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("syncB.Close(): %v", err)
 	}

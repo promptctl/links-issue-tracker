@@ -151,7 +151,13 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	// gets renamed to master here on the mirror's own engine rather than by
 	// a bootstrap pool. Unconditional; a normalized store reads and does
 	// nothing. [LAW:dataflow-not-control-flow]
-	if err = ensureMasterDefaultBranch(ctx, s.db); err != nil {
+	// [LAW:single-enforcer] The commit lock is the single writer gate for
+	// every mutation on a live write store — the rename joins it here just
+	// as it does in Open, so a snapshot copy or a concurrent read-open's
+	// migration can never interleave with an in-flight branch rename.
+	if err = s.withCommitLock(ctx, func(ctx context.Context) error {
+		return ensureMasterDefaultBranch(ctx, s.db)
+	}); err != nil {
 		err = wrapEngineOpenContention(err)
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)

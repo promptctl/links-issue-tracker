@@ -113,17 +113,14 @@ func buildStoreTemplate() (dir string, commits map[string]bool, _ error) {
 	if logErr != nil {
 		return "", nil, fmt.Errorf("template log: %w", logErr)
 	}
-	// Lock the template's files read-only so a test that accidentally opens
-	// the template path itself — instead of a copy — fails loudly at its
-	// first write rather than leaking state into every later copy.
-	// [LAW:no-silent-failure]
-	err = filepath.WalkDir(dir, func(path string, d fs.DirEntry, err error) error {
-		if err != nil || d.IsDir() {
-			return err
-		}
-		return os.Chmod(path, 0o444)
-	})
-	if err != nil {
+	// Lock the template read-only so a test that accidentally opens the
+	// template path itself — instead of a copy — fails loudly at its first
+	// write rather than leaking state into every later copy. Directories are
+	// frozen too, not just files: rename(2) — the write-new-then-rename-over
+	// pattern Dolt uses for atomic swaps — is gated by the containing
+	// directory's write bit, so file bits alone would let those writes
+	// through silently. [LAW:no-silent-failure]
+	if err := freezeTemplate(dir, 0o444, 0o555); err != nil {
 		return "", nil, fmt.Errorf("freeze template: %w", err)
 	}
 	return dir, commits, nil
@@ -148,13 +145,31 @@ func templateCommits(ctx context.Context, st *Store) (map[string]bool, error) {
 	return commits, rows.Err()
 }
 
+// freezeTemplate stamps one mode onto every file and another onto every
+// directory under root — the same walk freezes a finished template and thaws
+// it for removal, so the two modes cannot drift apart. [LAW:one-source-of-truth]
+func freezeTemplate(root string, fileMode, dirMode fs.FileMode) error {
+	return filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return os.Chmod(path, dirMode)
+		}
+		return os.Chmod(path, fileMode)
+	})
+}
+
 // TestMain exists only to remove the templates after the run; they live
 // outside any t.TempDir precisely so no single test's cleanup can delete one
-// out from under the others.
+// out from under the others. The thaw before RemoveAll is what makes removal
+// possible at all — unlinking from a 0o555 directory is exactly what the
+// freeze forbids.
 func TestMain(m *testing.M) {
 	code := m.Run()
 	for i := range storeTemplates {
 		if dir := storeTemplates[i].dir; dir != "" {
+			_ = freezeTemplate(dir, 0o644, 0o755)
 			_ = os.RemoveAll(filepath.Dir(dir))
 		}
 	}
