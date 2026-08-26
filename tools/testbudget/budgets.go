@@ -23,9 +23,17 @@ import "time"
 // moving benchmark-shaped work to the nightly lane — never by asserting less,
 // and never by absorbing slowness into a bigger number. A budget moves only
 // when the package's honest floor moves: a new test whose cost IS the behavior
-// it pins (cite it here), or a suite-wide condition change like
-// links-testing-tt0c.3 putting `-race` on the inner loop (re-baseline every
-// number from the first green run under the new conditions). If you hit a
+// it pins (cite it here), or a suite-wide condition change (re-baseline every
+// number from the first green run under the new conditions). The suite-wide
+// case has been reached once and DECLINED, which is the precedent to reason
+// from: links-testing-tt0c.3 brought the race detector into CI, and -race is a
+// runtime regime, not a flag — on the inner loop it took tools/licenses from
+// 29s to 149s and internal/cli from 117s to 242s. Re-baselining to those
+// figures would have been the alarm switched off, blind to a 3x regression in
+// anything below the new floor. It runs in its own `race` job instead, so
+// every number here still measures one territory: un-instrumented wall clock.
+// A condition that inflates the whole table is a reason to ask whether the
+// condition belongs in this lane at all. If you hit a
 // budget while adding a test, the epic's per-package notes below say where the
 // headroom went; make the test cheaper the way the epic did.
 var budgets = map[string]time.Duration{
