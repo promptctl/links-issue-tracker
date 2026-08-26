@@ -47,13 +47,14 @@ var budgets = map[string]time.Duration{
 	// the production mirror-contention it exists to reproduce (xxsx.5).
 	"github.com/promptctl/links-issue-tracker/cmd/lit": 50 * time.Second,
 
-	// 18.2s/7.2s — the one CI-bound entry (cold corpus load on CI), and
+	// 18.2–30.2s across two same-day CI runs (cold corpus load makes it the
+	// suite's noisiest package) / 7.2s dev — the one CI-bound entry, and
 	// above every unlisted package in its worst environment, which is what
 	// graduates it from the default: five genuine buildEntries runs (~2s
 	// each) plus sub-second tests; the content tests share one memoized
 	// inventory (xxsx.6). The graph audit is env-gated and does not run
 	// here.
-	"github.com/promptctl/links-issue-tracker/tools/licenses": 40 * time.Second,
+	"github.com/promptctl/links-issue-tracker/tools/licenses": 50 * time.Second,
 }
 
 // Every package not listed above — today all at or under ~12s in the slower
