@@ -340,6 +340,57 @@ An **opt-in, user-chosen stream label** (chosen, never harvested) remains
 open as a future nicety for teams that want friendlier remote rendering than
 an opaque token.
 
+### PRE-INVARIANT ATTRIBUTION AUDIT (2026-08-26)
+
+The standing flag above — "any attribution that predates the invariant
+deserves the same review" — was discharged against links-claims-1ihf.11 by
+exporting the live backlog (`lit export`: 941 events, 503 issues) and
+counting every distinct value the actor and assignee columns hold. Every
+value found a disposition; none needed redaction, because the invariant
+only ever governed what enters *from here forward*.
+
+**Actor column, counted:**
+
+| Value                     | Count | Disposition |
+|---------------------------|-------|--------------|
+| `links`                   | 345   | ALIGNED — a literal tool-name constant (`store.go`), not a person/host/path |
+| `bmf`                     | 280   | DOCUMENTED EXCEPTION — see below |
+| `claude_<session-uuid>`   | 138 distinct | ALIGNED — opaque, mints from `CLAUDE_CODE_SESSION_ID` |
+| `smoke-agent`              | 4     | ALIGNED — a literal role label, not harvested from any environment |
+| `unknown`                  | 2     | ALIGNED — the store's existing empty-actor sentinel (`store.go`, `Apply`) |
+| `claude_local`             | 1     | ALIGNED — a literal label, not harvested |
+
+**Assignee column**: already clean — `claude_<session-uuid>` values, plus
+the literal labels `claude` and `codex_xyz789`. No host-, path-, or
+device-shaped value anywhere. The stream-id and workspace-id columns
+links-claims-1ihf.2 added are ALIGNED for the same reason the design always
+claimed: a 13-character opaque token and a UUID, neither derived from
+anything user-, host-, or path-shaped.
+
+**The one gap, and its fix.** Every one of the 280 `bmf` rows traces to
+exactly one line: `registerActor`'s `--by` fallback default was
+`os.Getenv("USER")` — the OS username, entering the shared, synced database
+raw, whenever a mutating command ran without `CLAUDE_CODE_SESSION_ID` set
+and without an explicit `--assignee`/`--by`. `--assignee`'s own default
+(`startSpec`, `internal/cli/cli.go`) was already `""`, resolving through the
+same empty-actor sentinel as the `unknown` rows above — `--by` was the only
+fallback still answering "what identity applies with no session" with a
+username instead. Fixed in links-claims-1ihf.11 by making `--by`'s default
+`""` too (`registerActor`, `internal/cli/cli.go`): one line, because
+`registerActor` was already the sole caller of the `$USER` default across
+every mutating command.
+
+**Disposition for the already-committed 280 rows: DOCUMENTED EXCEPTION.**
+They predate the fix, this database's history does not rewrite, and the set
+is now closed — no code path can add to it after links-claims-1ihf.11 lands.
+An OS username is a weaker identifier than the durable, syncing history
+already carries elsewhere (workspace paths in commit messages, real names in
+authored code) — treated here as a bounded, historical artifact rather than
+a live leak, and left exactly as recorded rather than scrubbed, since
+scrubbing a synced history is a materially bigger and riskier undertaking
+than the value it launders. Any future rewrite of this history should carry
+the same disposition forward rather than re-litigate it.
+
 ## State inventory
 
 - **Shared, synchronized**: work records, now carrying the append-only
