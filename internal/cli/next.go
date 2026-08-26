@@ -11,10 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
-	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
@@ -74,76 +71,15 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	if *continueBias {
 		sortByContinueBias(rows, details)
 	}
-	standings, self, err := claimStandings(ctx, stdout, ap)
+	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {
 		return err
 	}
-	occasion, err := renderNextOutcome(stdout, routeNext(rows, details, standings, self))
+	occasion, err := renderNextOutcome(stdout, routeNext(rows, details, cc.standings, cc.self), details, cc)
 	if err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, occasion)
-}
-
-// claimStandings derives every lane's claim standing and this checkout's own
-// attribution — the two facts routeNext needs from the claims package, and
-// the only store/filesystem reads `next` performs beyond the shared workable
-// gather. Gathered once here and handed down as values, so routeNext itself
-// stays pure. [LAW:effects-at-boundaries]
-//
-// Evidence needs every issue and event, closed ones included — a checkout's
-// hold on a lane can rest entirely on a `done` against a ticket no longer
-// open (internal/claims/evidence.go) — so this reads wider than the workable
-// gather's open/in-progress filter deliberately, not by accident.
-func claimStandings(ctx context.Context, stdout io.Writer, ap *app.App) (claims.Standings, model.Attribution, error) {
-	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
-	if err != nil {
-		return nil, model.Attribution{}, err
-	}
-	allIssues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{})
-	if err != nil {
-		return nil, model.Attribution{}, err
-	}
-	ids := make([]string, len(allIssues))
-	for i, issue := range allIssues {
-		ids[i] = issue.ID
-	}
-	relations, err := ap.Store.GetRelationsByIDs(ctx, ids)
-	if err != nil {
-		return nil, model.Attribution{}, err
-	}
-	parents := make(map[string]*model.Issue, len(allIssues))
-	for _, issue := range allIssues {
-		parents[issue.ID] = relations[issue.ID].Parent
-	}
-	events, err := ap.Store.ListAllEvents(ctx)
-	if err != nil {
-		return nil, model.Attribution{}, err
-	}
-	evidence, err := claims.NewEvidence(allIssues, parents, events)
-	if err != nil {
-		return nil, model.Attribution{}, err
-	}
-	local, err := ap.LocalCheckouts()
-	if err != nil {
-		// [LAW:no-silent-failure] This machine cannot prove which of its own
-		// worktrees are still alive. The judgment call left open by
-		// links-claims-1ihf.4's comment: fall back to the zero LocalCheckouts,
-		// which voids nothing and lets freshness alone govern (leg 4's honest
-		// degenerate case) — but say so, every time, because the fallback
-		// silently changes which lanes route around this checkout otherwise.
-		if _, printErr := fmt.Fprintf(stdout, "warning: could not enumerate local checkouts (%v) — claim liveness check skipped, freshness alone governs\n", err); printErr != nil {
-			return nil, model.Attribution{}, printErr
-		}
-		local = claims.LocalCheckouts{}
-	}
-	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
-	standings := claims.Derive(evidence, fresh, local)
-	// NewAttribution collapses an absent stream (a checkout that has never
-	// mutated) to the zero Attribution, which is exactly "no live claims" —
-	// no branch needed here for the never-minted case.
-	self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
-	return standings, self, nil
 }
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted
@@ -152,7 +88,7 @@ func claimStandings(ctx context.Context, stdout io.Writer, ap *app.App) (claims.
 // row, visible at the moment the commitment happens
 // (design-docs/work-claims.md, Routing step 3); an already-held claim
 // (ServedFromClaim) prints exactly as `next` always has.
-func renderNextOutcome(w io.Writer, outcome NextOutcome) (workflows.Occasion, error) {
+func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]store.IssueRelations, cc claimContext) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
 	switch o := outcome.(type) {
@@ -176,7 +112,8 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome) (workflows.Occasion, er
 			return workflows.Occasion{}, err
 		}
 	}
-	if err := printNextSummary(w, row); err != nil {
+	lane := model.LaneOf(row.Issue, details[row.ID].Parent)
+	if err := printNextSummary(w, row, cc, lane); err != nil {
 		return workflows.Occasion{}, err
 	}
 	return nextPulledOccasion(row.Issue), nil

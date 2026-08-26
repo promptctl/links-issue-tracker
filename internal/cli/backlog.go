@@ -4,9 +4,11 @@ import (
 	"fmt"
 	"io"
 	"strings"
+	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
@@ -25,7 +27,7 @@ Use 'lit next' to pick the top workable item to start.`
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
 // suffix, unblocks). Empty data flows through the same path — the "(backlog
 // empty)" message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue) error {
+func printBacklogOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue, details map[string]store.IssueRelations, cc claimContext) error {
 	resolved := resolveColumns(columns)
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
@@ -45,12 +47,14 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 	}
 
 	unblocksMap := buildUnblocksMap(issues)
+	now := time.Now()
 	for i, entry := range issues {
 		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  ", nil))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
-		if err := printBacklogContext(w, entry, unblocksMap); err != nil {
+		lane := model.LaneOf(entry.Issue, details[entry.ID].Parent)
+		if err := printBacklogContext(w, entry, unblocksMap, cc, lane, now); err != nil {
 			return err
 		}
 	}
@@ -63,7 +67,7 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // "blocked: ..." surfaces non-dependency blockers, "depends on: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
-func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string) error {
+func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, cc claimContext, lane model.LaneID, now time.Time) error {
 	readiness := ClassifyReadiness(entry.Annotations)
 	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
 		return err
@@ -80,6 +84,11 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 	}
 	if entry.State() == model.StateInProgress {
 		if _, err := fmt.Fprintf(w, "%sin_progress: %s\n", contextIndent, inProgressSuffix(entry)); err != nil {
+			return err
+		}
+	}
+	if line, ok := formatClaimLine(cc, lane, now); ok {
+		if _, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line); err != nil {
 			return err
 		}
 	}
