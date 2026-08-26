@@ -83,7 +83,8 @@ These are settled. Do not reopen them in the design.
    (design-docs/work-claims.md records the ban).
 9. **The migration is a strangler fig with the old system as oracle.** The
    current Dolt store remains authoritative while the event store shadows it;
-   every advance is gated by [budgets.md](budgets.md) passing at 10x and, at
+   every advance — from the moment an event store exists to measure, the
+   shadow state onward — is gated by [budgets.md](budgets.md) passing at 10x and, at
    every gate up to and including the write flip, by the differential oracle
    agreeing (after the flip Dolt no longer receives writes, so there is
    nothing left to compare; the oracle is deleted with Dolt at exit); each

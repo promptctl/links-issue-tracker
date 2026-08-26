@@ -134,7 +134,13 @@ Events live in the code repo's git object database under
 `$(git rev-parse --git-common-dir)`, the same shared location the Dolt store
 occupies today, so all worktrees of a clone see one store. Each checkout
 appends to exactly one ref — `refs/lit/log/<checkout-id>` — and no checkout
-ever writes another's ref (`INV:single-writer-ref`). A lit command batches all
+ever writes another's ref (`INV:single-writer-ref`). The checkout-id is a
+**full-entropy token** (128 bits, minted once into the checkout's private git
+dir — the same slot the work-claims identity occupies); the short forms
+existing surfaces render are display aliases, never identity. Everything
+downstream leans on this uniqueness — ref names, the fold's writer-id
+tiebreak, the id-minting salt — and at full entropy it holds even between
+never-connected workspaces that later meet on one remote. A lit command batches all
 its events into **one** commit (one object walk, one ref update, atomic per
 command); the commit's first parent is the writer's previous head, so each
 writer's ref is fast-forward-only and linear in its **first-parent** history —
@@ -164,11 +170,15 @@ maintenance, not authorship. Fetch cannot resurrect a *stale* swept ref, and
 the anchor is what discriminates stale from alive: a reappearing ref whose
 head is at or behind its folded sweep anchor is the old corpse and is
 re-deleted; a ref whose head carries commits **past** the anchor proves its
-writer lives, and the receive keeps it and folds the new events. So a
-false-positive death costs nothing durable: an idle falsely-swept checkout
-stays swept (harmless — its events are anchored) until its next mutation,
-whose mirror push carries commits past the anchor and durably restores the
-ref. Two survivors racing to sweep the same
+writer lives, and the receive keeps it and folds the new events. A checkout
+whose own ref is absent — swept locally under a shared common dir, or deleted
+on the remote — never roots a fresh chain: on its next mutation it looks up
+its latest sweep anchor in the fold and chains onto that anchored head, so
+its new commits are past the anchor **by construction** and pass the
+liveness test. So a false-positive death costs nothing durable: an idle
+falsely-swept checkout stays swept (harmless — its events are anchored)
+until its next mutation, which resumes from the anchor and durably restores
+the ref. Two survivors racing to sweep the same
 corpse is harmless: sweep events are idempotent facts the fold deduplicates,
 and each CAS delete has at most one winner — the loser no-ops.
 Loose objects from event bursts are packed on the same maintenance occasions
@@ -344,7 +354,11 @@ remains the normative home for the layers themselves.
   requires) are **quorum-by-events**, not multi-signature events: the change
   is a proposal event, each co-signer independently appends an approval event
   citing the proposal's hash, and the new config version activates at fold
-  when the prior policy's threshold is met. Per-writer refs make this the
+  only when **both** legs of the access-control rotation rule are satisfied:
+  the prior policy's threshold of outgoing-owner approvals *and* a threshold
+  of the proposed new owner set — each incoming owner attesting with the very
+  key being enrolled, so no one is rotated in without their own key's
+  consent. Per-writer refs make this the
   only natural shape — co-signers cannot share a commit — and it is why one
   signature slot per event remains sufficient as a birth requirement.
   Events cite the version they were authored under (`INV:config-versioned`);
@@ -391,6 +405,9 @@ gates prove the fold against it, on real fleet data, at 10x.
 S1 is also where history backfills: the existing backlog replays into events
 via export, with a provenance marker so pre-migration history is attributed
 honestly rather than re-authored.
+
+Gate scope, stated once: the budgets gate binds from S1 onward — at S0 no
+event store exists to measure, so S0's gate is behavioral identity alone.
 
 The oracle's comparison ends at the write flip: once S3 flips writes, Dolt
 receives none, so there is nothing left to diff — S2's gate is deliberately
