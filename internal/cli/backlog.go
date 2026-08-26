@@ -21,6 +21,8 @@ Items at the top are ranked higher than items below them. Blocked items stay whe
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
+Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
+just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
 
 // printBacklogOutput renders the backlog as a numbered list with inline

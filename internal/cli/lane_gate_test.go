@@ -55,7 +55,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	}
 
 	// next hands back the earlier sibling, never the urgent-but-blocked one.
-	if pick := h.runNextRow(false); pick.ID != first.ID {
+	if pick := h.runNextRow(); pick.ID != first.ID {
 		t.Fatalf("next = %q, want earlier sibling %q", pick.ID, first.ID)
 	}
 
@@ -82,7 +82,7 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	if !containsID(pullableAfter, urgentLater.ID) {
 		t.Fatalf("after closing earlier sibling, pullable should contain %q; got=%v", urgentLater.ID, ids(pullableAfter))
 	}
-	if pick := h.runNextRow(false); pick.ID != urgentLater.ID {
+	if pick := h.runNextRow(); pick.ID != urgentLater.ID {
 		t.Fatalf("after closing earlier sibling, next = %q, want %q", pick.ID, urgentLater.ID)
 	}
 }
@@ -102,7 +102,7 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 		t.Fatalf("both lanes should be pullable in parallel; got=%v", ids(pullable))
 	}
 	// Among ready items urgent still orders first — ordering is unchanged.
-	if pick := h.runNextRow(false); pick.ID != otherLane.ID {
+	if pick := h.runNextRow(); pick.ID != otherLane.ID {
 		t.Fatalf("next = %q, want urgent distinct-lane sibling %q (ordering among ready)", pick.ID, otherLane.ID)
 	}
 }
