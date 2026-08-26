@@ -33,24 +33,30 @@ import (
 // recoverable by backing off, rotating the poisoned connection, and retrying.
 var ErrTransientGCContention = errors.New("transient online-gc contention")
 
+// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
+// bound the total wait (~25s: five uncapped doublings then 25 more attempts
+// at the 1s cap) for a transient online-GC contention to clear. Sized to
+// match engineOpenRetryMaxElapsed's ~30s budget for "how long do we wait
+// on a co-resident holder of this store" (links-sync-pgct.11): that retry
+// bounds how long two engines can contend at OPEN, but this one is what
+// absorbs the brief settle window right after one releases — under real
+// system load (a slower/contended CI runner, an earlier mirror's real
+// network push taking longer) that window is not always sub-second, and a
+// budget tuned only for a quick intra-process GC blip cut this retry off
+// before a legitimately-finishing prior holder released, escalating a
+// recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
+// wedged holder still surfaces as that same terminal error, just after the
+// longer budget elapses rather than hanging forever.
+//
+// The attempt count is a package variable (the delays stay const) so tests
+// whose premise makes exhaustion CERTAIN — a foreign journal holder that
+// cannot release mid-test — can shrink the budget instead of sleeping through
+// the production one, the same convention engineOpenRetryMaxElapsed serves.
+var transientRetryMaxAttempts = 30
+
 const (
-	// transientRetryMaxAttempts/transientRetryBaseDelay/transientRetryMaxDelay
-	// bound the total wait (~25s: five uncapped doublings then 25 more attempts
-	// at the 1s cap) for a transient online-GC contention to clear. Sized to
-	// match engineOpenRetryMaxElapsed's ~30s budget for "how long do we wait
-	// on a co-resident holder of this store" (links-sync-pgct.11): that retry
-	// bounds how long two engines can contend at OPEN, but this one is what
-	// absorbs the brief settle window right after one releases — under real
-	// system load (a slower/contended CI runner, an earlier mirror's real
-	// network push taking longer) that window is not always sub-second, and a
-	// budget tuned only for a quick intra-process GC blip cut this retry off
-	// before a legitimately-finishing prior holder released, escalating a
-	// recoverable wait into a hard WorkspaceWriteBlockedError. A genuinely
-	// wedged holder still surfaces as that same terminal error, just after the
-	// longer budget elapses rather than hanging forever.
-	transientRetryMaxAttempts = 30
-	transientRetryBaseDelay   = 50 * time.Millisecond
-	transientRetryMaxDelay    = 1 * time.Second
+	transientRetryBaseDelay = 50 * time.Millisecond
+	transientRetryMaxDelay  = 1 * time.Second
 
 	// commitLockRetryAttempts/commitLockRetryDelay bound the wait for a
 	// co-resident writer — a mutation in this or another process, or a
