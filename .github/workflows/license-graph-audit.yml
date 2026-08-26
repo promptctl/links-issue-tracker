@@ -54,10 +54,16 @@ jobs:
           # 10 GB repo-wide cache shared with every other workflow.
           cache: false
 
+      # No -timeout override: the whole job — cold-cache `go mod download all`
+      # included — measured ~100s on 2026-08-24, so go test's default 10m alarm
+      # already carries 6x headroom. The 30m override this step used to carry
+      # was the alarm widened instead of the cost questioned
+      # (links-testperf-xxsx.6); if this ever trips 10m, that is real news
+      # about the graph or the network, not a reason to put 30m back.
       - name: Whole-graph acceptance tests
         env:
           LIT_LICENSE_GRAPH_AUDIT: "1"
-        run: go test ./tools/licenses/ -run TestGraph -v -timeout 30m
+        run: go test ./tools/licenses/ -run TestGraph -v
 
       # Printed into the run log so the posture is readable without checking out
       # the repo, and so a diff between two weeks' runs is a diff a human can

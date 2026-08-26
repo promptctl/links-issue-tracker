@@ -34,6 +34,7 @@ func verifiedNativeEntries(t *testing.T) []Entry {
 // renders from nativeEntries — the exact Entry values buildEntries appends to
 // the Go inventory — so it checks precisely what the generated artifacts contain.
 func TestNativeLibsInSBOMAndBundle(t *testing.T) {
+	t.Parallel()
 	entries := verifiedNativeEntries(t)
 
 	// Bundle: each native lib's name/version section plus its verbatim notice.
@@ -182,6 +183,7 @@ func TestLicenseChoiceArms(t *testing.T) {
 // reach a reader of the shipped document. What changed is which field carries
 // it, because CycloneDX defines description as what the component IS.
 func TestNativeNotesSurfaceInReportAndSBOM(t *testing.T) {
+	t.Parallel()
 	entries := verifiedNativeEntries(t)
 
 	var report bytes.Buffer
@@ -271,6 +273,7 @@ func TestBundleOmitsEmptyNote(t *testing.T) {
 // library — the ticket requires the gate to "account for them". Runs the real
 // predicate over just the native inventory against the committed policy.
 func TestNativeLibsPassPolicy(t *testing.T) {
+	t.Parallel()
 	policy, err := LoadPolicy()
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
@@ -360,6 +363,7 @@ func TestNativeZigVersionMatchesDockerfile(t *testing.T) {
 // its description "carries the licensing note" while naming a note that does
 // not exist.
 func TestNativeDescriptionsSayWhatTheComponentIs(t *testing.T) {
+	t.Parallel()
 	byName := componentsByName(decodeSBOM(t, verifiedNativeEntries(t), ""))
 
 	for _, n := range nativeLibs {
@@ -474,6 +478,7 @@ func withEvidence(n nativeLib, edit func([]armEvidence) []armEvidence) nativeLib
 // What stops it is not a bigger taxonomy — it is that the notice bytes still
 // say BSD-3-Clause and now nothing in the record matches them.
 func TestVerifyNoticeCatchesEachWayTheRecordCanLie(t *testing.T) {
+	t.Parallel()
 	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
 	if err != nil {
 		t.Fatalf("build license classifier: %v", err)
@@ -607,6 +612,7 @@ func TestVerifyNoticeCatchesEachWayTheRecordCanLie(t *testing.T) {
 // records as committed. Without it a rule that rejects everything — including
 // correct input — would look identical to a rule that works.
 func TestVerifyNoticeAcceptsTheCuratedRecords(t *testing.T) {
+	t.Parallel()
 	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
 	if err != nil {
 		t.Fatalf("build license classifier: %v", err)
@@ -624,6 +630,7 @@ func TestVerifyNoticeAcceptsTheCuratedRecords(t *testing.T) {
 // reconcile the numbers and move on — which would discard the only signal that
 // the text changed at all.
 func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
+	t.Parallel()
 	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
 	if err != nil {
 		t.Fatalf("build license classifier: %v", err)
@@ -646,6 +653,11 @@ func TestVerifyNoticeFailureCarriesTheRemedy(t *testing.T) {
 // lying one and drives the real inventory build, which is the single function
 // both -check and artifact generation go through.
 func TestBuildEntriesRefusesALyingNativeRecord(t *testing.T) {
+	// Deliberately NOT t.Parallel: this test swaps the package-level nativeLibs
+	// for its duration, and every parallel test in the package reads it. The
+	// runner finishes all serial tests — cleanup included — before any parallel
+	// body resumes, so serial is the fence that keeps the lying record out of
+	// their view. [LAW:no-shared-mutable-globals]
 	original := nativeLibs
 	t.Cleanup(func() { nativeLibs = original })
 
