@@ -83,10 +83,12 @@ These are settled. Do not reopen them in the design.
    (design-docs/work-claims.md records the ban).
 9. **The migration is a strangler fig with the old system as oracle.** The
    current Dolt store remains authoritative while the event store shadows it;
-   every advance is gated by the differential oracle agreeing and by
-   [budgets.md](budgets.md) passing at 10x; each superseded mechanism is
-   deleted in the same campaign that replaces it. A store with two truths is a
-   temporary state with a gate out, never a resting place.
+   every advance is gated by [budgets.md](budgets.md) passing at 10x and — for
+   as long as the oracle exists, which is through the write flip (it
+   necessarily dies with Dolt) — by the differential oracle agreeing; each
+   superseded mechanism is deleted in the same campaign that replaces it. A
+   store with two truths is a temporary state with a gate out, never a
+   resting place.
 
 ## Calibration
 

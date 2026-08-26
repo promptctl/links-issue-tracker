@@ -443,8 +443,12 @@ model, yields:
 1. **Issue-id scheme.** Ids embed the plaintext topic slug and a hash
    commitment to title+description (F§2). Ids become opaque
    (`<prefix>-<base36>`); `topic` becomes an ordinary column, encryptable
-   like other free text. Child `.n` suffixes may stay — structure is visible
-   by rule.
+   like other free text. Child `.n` numbering survives as **display only**:
+   child identity is opaque like every id, and the `.n` ordinal is derived at
+   render time — structure stays visible by rule while identity stays
+   collision-proof. (The minting/presentation mechanism is owned by the
+   event-store design's §events, which records why a stored sequential child
+   id cannot survive uncoordinated concurrent writers.)
 2. **Actor identity columns** become principal ids with keyring-resolved
    display (F§7.10); `--assignee` filtering and `lit orphaned` operate on
    principal ids. Issues additionally gain a first-class `created_by`

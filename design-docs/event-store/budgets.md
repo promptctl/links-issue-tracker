@@ -4,10 +4,9 @@ Status: baselines measured 2026-08-25; targets set by owner directive; scale
 projections await the harness. This file is the single home for every
 **measured baseline and derived budget figure** in the event-store design —
 prose in charter.md/design.md cites those rather than restating them. The two
-governing directives — under one second per command, held at 10x on both
-axes — are **charter.md hard constraint 3's**, owned there and only turned
-into measurable rows here. A budget change is an owner decision recorded
-here, not a drift.
+governing directives are **charter.md hard constraint 3's** — the figures
+live there, and this file only turns them into measurable rows. A budget
+change is an owner decision recorded here, not a drift.
 
 ## Measured baselines (2026-08-25, this machine)
 
@@ -29,10 +28,11 @@ add detail but never substitute a different construction):
   synthesized to 10x its event count preserving its shape (event-type mix,
   rank-intent density, prose sizes). Per-command benchmarks (the Command
   budgets table) run against this, as the worst case.
-- **Breadth fleet** — 10x the measured store count, preserving the measured
-  size *distribution* (most stores are small), not 10x copies of the
-  largest. Machine-wide benchmarks (aggregate disk, background stampede) run
-  against this.
+- **Breadth fleet** — 10x the measured store count, **with each store's
+  history also scaled ×10**, preserving the measured size distribution's
+  *shape* (most stores small), not 10x copies of the largest. Machine-wide
+  benchmarks (aggregate disk, background stampede) run against this, so they
+  test the genuinely compounded both-axes case.
 
 ## Command budgets (at 10x depth corpus, on this class of machine)
 
@@ -62,8 +62,8 @@ rate and footprint, not promises of shrinkage.
 |---|---|---|
 | Event store disk per store at 10x history | ≤ 1/10 of today's Dolt store at 1x (i.e. ≤ ~19 MB where Dolt spends 190 MB) | hypothesis to verify in S1; if missed, it is a design problem to solve before S2, not a note |
 | Aggregate lit disk per machine at 10x both axes | ≤ today's 1.1 GB aggregate | checked against the breadth fleet |
-| Added latency to the code repo's own `git status` / `git fetch` | not measurable above noise | lit's refs and objects may not degrade the developer's ordinary git experience |
-| Writer refs per repo | pruned to live checkouts + anchored sweeps | dead-ref growth is a hygiene bug, not a budget consumer |
+| Added latency to the code repo's own `git status` / `git fetch` | < 5 ms p95 vs a control clone without lit refs/objects | lit may not degrade the developer's ordinary git experience |
+| Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
 
 ## Harness contract
 

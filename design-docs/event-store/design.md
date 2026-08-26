@@ -129,8 +129,10 @@ occupies today, so all worktrees of a clone see one store. Each checkout
 appends to exactly one ref — `refs/lit/log/<checkout-id>` — and no checkout
 ever writes another's ref (`INV:single-writer-ref`). A lit command batches all
 its events into **one** commit (one object walk, one ref update, atomic per
-command); the commit's parent is the writer's previous head, so each writer's
-ref is a linear, fast-forward-only chain.
+command); the commit's first parent is the writer's previous head, so each
+writer's ref is fast-forward-only and linear in its **first-parent** history —
+the one exception to single-parent commits is the sweep anchor below, which
+adds a second parent, so tooling walks first-parent for a writer's own chain.
 
 The store has **no eraser**. A wrong event — bad status, mangled title,
 mistaken close — is corrected by appending the correcting event, exactly as a
@@ -346,9 +348,9 @@ gates prove the fold against it, on real fleet data, at 10x.
 |---|---|---|
 | S0 seam | CLI depends on a storage interface; Dolt implements it | interface carved; behavior unchanged |
 | S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x |
-| S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; one flag flips back |
-| S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet |
-| S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted** | deletions merged; docs' statuses flipped |
+| S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x |
+| S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x |
+| S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped |
 
 S1 is also where history backfills: the existing backlog replays into events
 via export, with a provenance marker so pre-migration history is attributed
