@@ -9,10 +9,22 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
-// --status is validated once, at the shared flag seam, so one table over the
-// workable views is the whole contract: every workable command rejects the same
-// inputs with the same usage error. [LAW:single-enforcer]
-var workableViews = []workableView{backlogView, nextView}
+// --status is validated once, at the shared flag seam
+// (parseWorkableStatus), so one table over every workable command is the
+// whole contract: each rejects the same inputs with the same usage error,
+// whether it runs through the workableView preset (backlog) or its own
+// runner (next, forked out in next.go once claim routing gave it a
+// genuinely different shape). [LAW:single-enforcer]
+var workableCmds = []struct {
+	name string
+	run  func(h readyTestHarness, args ...string) error
+}{
+	{name: backlogView.name, run: func(h readyTestHarness, args ...string) error { return h.runViewErr(backlogView, args...) }},
+	{name: "next", run: func(h readyTestHarness, args ...string) error {
+		var stdout bytes.Buffer
+		return runNext(h.ctx, &stdout, h.ap, args)
+	}},
+}
 
 func (h readyTestHarness) runViewErr(view workableView, args ...string) error {
 	h.t.Helper()
@@ -27,21 +39,21 @@ func TestWorkableStatusRejectsInvalidValues(t *testing.T) {
 	h := newReadyTestHarness(t)
 	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Open leaf", Topic: "status", IssueType: "task", Priority: 1})
 
-	for _, view := range workableViews {
+	for _, cmd := range workableCmds {
 		for _, value := range []string{"weird", "closed", "CLOSED", "done"} {
-			err := h.runViewErr(view, "--status", value)
+			err := cmd.run(h, "--status", value)
 			var usageErr UsageError
 			if !errors.As(err, &usageErr) {
-				t.Fatalf("lit %s --status %s error = %v, want UsageError", view.name, value, err)
+				t.Fatalf("lit %s --status %s error = %v, want UsageError", cmd.name, value, err)
 			}
 			if got := ExitCode(err); got != ExitUsage {
-				t.Fatalf("lit %s --status %s exit code = %d, want %d", view.name, value, got, ExitUsage)
+				t.Fatalf("lit %s --status %s exit code = %d, want %d", cmd.name, value, got, ExitUsage)
 			}
 			if !strings.Contains(err.Error(), "open, in_progress") {
-				t.Fatalf("lit %s --status %s error = %q, want the legal values named", view.name, value, err)
+				t.Fatalf("lit %s --status %s error = %q, want the legal values named", cmd.name, value, err)
 			}
 			if !strings.Contains(err.Error(), value) {
-				t.Fatalf("lit %s --status %s error = %q, want the rejected value echoed", view.name, value, err)
+				t.Fatalf("lit %s --status %s error = %q, want the rejected value echoed", cmd.name, value, err)
 			}
 		}
 	}
