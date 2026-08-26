@@ -84,10 +84,14 @@ offline checkouts to collide on. The current store's child scheme
 under concurrent filing and does not carry over as identity. Sequential child
 numbering survives as **fold-derived presentation**: the fold assigns display
 ordinals deterministically, so two children filed offline under one epic are
-two distinct issues that both survive and both get a number. This adopts the
-opaque-id direction the access-control design already mandates (its "required
-lit redesigns" §1, which remains the id-scheme's normative home); this
-section records only the event-store consequence.
+two distinct issues that both survive and both get a number. Ordinals are
+deterministic at any event set but **not stable across time** — a concurrent
+sibling syncing in late can sort earlier in the total order and renumber its
+peers — so `.n` is never a durable reference; the opaque id is what agents
+store. This section is the minting mechanism's **home** for every id,
+top-level and child alike; the access-control design's "required lit
+redesigns" §1 owns the id *policy* (opacity, format, what stays visible) and
+defers the mechanism here.
 
 **Schema versioning.** Events are immortal, so every shape ever shipped stays
 readable forever. Readers hold a chain of pure upcasters (v1→v2→…) applied at
@@ -149,10 +153,18 @@ events. The sweep needs no shared ref and no exception to
 `INV:single-writer-ref`: the sweeping checkout appends a sweep event to **its
 own** ref, with the dead ref's head as an additional git parent, so the dead
 writer's objects stay reachable from a live chain; the dead ref is then
-deleted with a compare-and-swap. Nobody ever writes the dead ref or a common
-one. Two survivors racing to sweep the same corpse is harmless: sweep events
-are idempotent facts the fold deduplicates, and the CAS delete has at most
-one winner — the loser's delete no-ops.
+deleted — locally *and* on the remote, via a ref-deletion push — with a
+compare-and-swap against the anchored head. "Write," in the invariant's
+sense, means appending commits to a ref, and no checkout ever does that to
+another's; deleting a proven-dead, already-anchored ref is namespace
+maintenance, not authorship. Fetch cannot resurrect a swept ref: the receive
+declines to re-create a fetched ref whose sweep anchor it has already folded,
+and re-deletes a remote copy that reappears. A false-positive death
+self-heals — the supposedly dead checkout still holds its own chain locally,
+and its next mirror push restores the ref; its events were never at risk,
+because the anchor preserved them. Two survivors racing to sweep the same
+corpse is harmless: sweep events are idempotent facts the fold deduplicates,
+and each CAS delete has at most one winner — the loser no-ops.
 Loose objects from event bursts are packed on the same maintenance occasions
 git already runs; the budgets file carries the ceiling on what lit may add to
 the code repo's own `git status`/`git fetch` times, because the first place
@@ -292,8 +304,10 @@ last fetched T ago," plus the owner-notification hook for push failures.
 verify what the active policy requires (§security-and-config), fold. Two
 workspaces independently initialized against one remote simply union — the
 destructive take/combine choice the current store forces does not arise from
-histories (there is no shared spine to diverge), only id collisions surface as
-fold advisories. **OPEN:** whether adoption may trust a signed snapshot to
+histories (there is no shared spine to diverge). Identity cannot collide
+(§events derives ids from writer and position), so what a union surfaces is
+*semantic* duplication — two issues describing one bug — held as a fold
+advisory for an agent to settle by closing one. **OPEN:** whether adoption may trust a signed snapshot to
 defer full-history verification, and what that concedes — the
 verification-cost budget in budgets.md forces this decision.
 
@@ -319,7 +333,13 @@ remains the normative home for the layers themselves.
   itself an event stream with a monotone version, signed like any events.
   Events cite the version they were authored under (`INV:config-versioned`);
   the validation engine judges each event against its cited version, so two
-  machines straddling a config change still fold identically.
+  machines straddling a config change still fold identically. One seam here
+  is deliberately OPEN rather than hand-waved: cited-version judgment alone
+  would let a revoked principal keep minting forever under the last
+  permissive version it saw — the revocation bypass the access-control
+  enforcement section exists to prevent. Any fix must stay deterministic (a
+  rule keyed to what a receiver happens to know would fold differently on
+  different machines); see OPEN #6.
 - **Erasure is cryptographic.** An append-only replicated store has no
   physical delete (`INV:append-only`, restated where it bites: even an owner
   cannot recall pushed plaintext). Content that may ever need destroying is
@@ -355,6 +375,11 @@ gates prove the fold against it, on real fleet data, at 10x.
 S1 is also where history backfills: the existing backlog replays into events
 via export, with a provenance marker so pre-migration history is attributed
 honestly rather than re-authored.
+
+The oracle's comparison ends at the write flip: once S3 flips writes, Dolt
+receives none, so there is nothing left to diff — S2's gate is deliberately
+the last to carry an oracle clause, and S3→S4 is judged on rollback-quiet
+plus budgets alone.
 
 The dangerous state is the comfortable one. S1–S2 *work* — everything green,
 both stores humming — and the temptation will be to live there: *"the shadow's
@@ -398,3 +423,9 @@ Recorded so they are not re-proposed from scratch; each was weighed in the
    adoption — and what trust that implies (couples to 3).
 5. Config-stream bootstrap: how the first config version is established in a
    fresh workspace and how the current `.lit/config.toml` maps in.
+6. Config-version currency at enforcement time — the revocation-bypass seam
+   (§security-and-config): a deterministic rule that rejects a revoked
+   principal's post-revocation events. Candidate shape: validity judged
+   against the config version in force at the event's causal position, plus
+   per-ref causal-position monotonicity so positions cannot be backdated.
+   Owned jointly with the access-control write layer.

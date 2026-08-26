@@ -440,15 +440,19 @@ Consequences, mapped to the strain points:
 Charter rule 4 applied — places where the current model, not the security
 model, yields:
 
-1. **Issue-id scheme.** Ids embed the plaintext topic slug and a hash
-   commitment to title+description (F§2). Ids become opaque
-   (`<prefix>-<base36>`); `topic` becomes an ordinary column, encryptable
-   like other free text. Child `.n` numbering survives as **display only**:
-   child identity is opaque like every id, and the `.n` ordinal is derived at
-   render time — structure stays visible by rule while identity stays
-   collision-proof. (The minting/presentation mechanism is owned by the
-   event-store design's §events, which records why a stored sequential child
-   id cannot survive uncoordinated concurrent writers.)
+1. **Issue-id scheme.** Today's ids embed the plaintext topic slug and a
+   hash commitment to title+description (F§2); that scheme is retired. Ids
+   become opaque (`<prefix>-<base36>`); `topic` becomes an ordinary column,
+   encryptable like other free text. This document owns the id **policy** —
+   opacity, format, what stays visible; the **minting mechanism** for every
+   id, top-level and child alike, is owned by the event-store design's
+   §events, whose inputs include a per-writer component precisely so that
+   offline writers cannot collide (a content hash alone collides on
+   duplicate filings, and a stored sequential child id collides under
+   uncoordinated writers). Child `.n` numbering survives as **display
+   only**: the ordinal is derived at render time, may renumber when a
+   concurrent sibling syncs in late, and is never a durable reference — the
+   opaque id is what agents store.
 2. **Actor identity columns** become principal ids with keyring-resolved
    display (F§7.10); `--assignee` filtering and `lit orphaned` operate on
    principal ids. Issues additionally gain a first-class `created_by`

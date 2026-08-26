@@ -12,8 +12,8 @@ change is an owner decision recorded here, not a drift.
 
 | Measurement | Value | Provenance |
 |---|---|---|
-| lit projects under ~/code | ~30 unique (57 store dirs incl. worktree double-counts) | filesystem walk of `git-common-dir/links/dolt` |
-| Aggregate Dolt store disk | ~1.1 GB | `du -sm` sum over the 57 dirs |
+| lit stores under ~/code | 52 unique store paths (57 pre-dedup; owner counts ~30 projects) | walk of `git-common-dir/links/dolt`, deduplicated by resolved real path |
+| Aggregate Dolt store disk | ~0.9 GB (901 MB deduplicated; the naive 57-dir sum reads 1.1 GB) | `du -sm` over the 52 unique real paths |
 | Largest single store | 190 MB (links-issue-tracker) | `du -sh` |
 | `lit backlog` wall time, pre-#414 binary | 10.9 s (includes inline receive fetch) | timed in links-issue-tracker |
 | `lit backlog` wall time, post-#414 | ~0.2 s | PR #414's measurement; re-confirm in harness |
@@ -61,7 +61,7 @@ rate and footprint, not promises of shrinkage.
 | Quantity | Budget | Notes |
 |---|---|---|
 | Event store disk per store at 10x history | ≤ 1/10 of today's Dolt store at 1x (i.e. ≤ ~19 MB where Dolt spends 190 MB) | hypothesis to verify in S1; if missed, it is a design problem to solve before S2, not a note |
-| Aggregate lit disk per machine at 10x both axes | ≤ today's 1.1 GB aggregate | checked against the breadth fleet |
+| Aggregate lit disk per machine at 10x both axes | ≤ the measured aggregate in the baselines table | checked against the breadth fleet |
 | Added latency to the code repo's own `git status` / `git fetch` | < 5 ms p95 vs a control clone without lit refs/objects | lit may not degrade the developer's ordinary git experience |
 | Dead-checkout writer refs remaining after maintenance | 0 (refs present = live checkouts + unswept inbox refs) | countable predicate; dead-ref growth is a hygiene bug the harness asserts away |
 
@@ -81,5 +81,6 @@ The load harness is the migration's instrument, not an afterthought:
   is descriptive input, not a gate). A red row stops the flip; the fix
   happens while Dolt is still authoritative and stopping is free.
 - **Outlives the migration.** The per-command budgets become regression
-  checks in CI once S4 lands, so the <1s directive is enforced by the build,
-  not by memory (the testperf epic's runtime-budget gate is the pattern).
+  checks in CI once S4 lands, so the charter #3 directive is enforced by the
+  build, not by memory (the testperf epic's runtime-budget gate is the
+  pattern).
