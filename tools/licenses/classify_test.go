@@ -232,6 +232,7 @@ const nonStandardWTFPL = `           DO WHATEVER THE FUCK YOU WANT, PUBLIC LICEN
 `
 
 func TestClassify(t *testing.T) {
+	t.Parallel()
 	classifier, err := lc.New(lc.DefaultConfidenceThreshold)
 	if err != nil {
 		t.Fatalf("build classifier: %v", err)

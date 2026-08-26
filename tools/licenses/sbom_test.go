@@ -202,10 +202,8 @@ func TestWriteSBOMComponentFields(t *testing.T) {
 // [LAW:verifiable-goals] this is the offline proof of the document shape the
 // release validator would otherwise be the first to see.
 func TestSBOMLicenseArmsAreExclusive(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 	var buf bytes.Buffer
 	if err := WriteSBOM(&buf, entries, "9.9.9"); err != nil {
 		t.Fatalf("WriteSBOM: %v", err)
@@ -323,10 +321,8 @@ func TestBuildSBOMDeterministic(t *testing.T) {
 // additionally runs `cyclonedx validate` against the shipped file; this proves
 // the content contract without that external tool.
 func TestSBOMEndToEndCoversDolt(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 	bom := decodeSBOM(t, entries, "9.9.9")
 
 	var doltWant string
@@ -560,10 +556,8 @@ func TestSBOMPedigreeRecordsBothReplacementShapes(t *testing.T) {
 // remember, and the failure it would miss — a NEW replace — is exactly the one
 // worth catching. [LAW:one-source-of-truth]
 func TestSBOMDisclosesEveryReplacementInTheRealBuild(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 	byName := componentsByName(decodeSBOM(t, entries, "9.9.9"))
 
 	goModForks := forkPURLsFromGoMod(t)
@@ -640,6 +634,7 @@ func TestSBOMPedigreeRefusesAnUnknownKind(t *testing.T) {
 // promptctl:lit:license-note carrying a contradictory value would ship in the
 // document while every other test stayed green.
 func TestSBOMPropertyNamesAreUnique(t *testing.T) {
+	t.Parallel()
 	// Driven from the curated native inventory rather than a real build. Only
 	// those four components can populate Properties at all, and buildEntries
 	// costs a `go list -deps` plus 149 license classifications (~2s) to reach

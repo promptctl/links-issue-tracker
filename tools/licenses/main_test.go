@@ -3,7 +3,9 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -11,6 +13,37 @@ import (
 // full import path (not "./cmd/lit") so `go list -deps` resolves it
 // regardless of the test binary's working directory.
 const litPkg = "github.com/promptctl/links-issue-tracker/cmd/lit"
+
+// realInventory memoizes the one buildEntries(litPkg) run the whole test
+// binary shares — a `go list -deps` plus ~150 license classifications, ~2s of
+// deterministic work that six tests were each redoing on identical input.
+// [LAW:one-source-of-truth] every consumer reads the same single-enforcer
+// pipeline's output; nothing about what runs changed, only how many times.
+var realInventory struct {
+	once    sync.Once
+	entries []Entry
+	err     error
+}
+
+// realEntries hands a test the real release package's inventory, built once
+// per test binary. Each caller gets its own clone (Entry holds only value
+// fields), so a test that splices synthetic entries in — the policy gate's
+// rejection table does — cannot leak them into a sibling's copy. A failed
+// build still fails every consumer loudly. [LAW:no-silent-failure]
+//
+// Tests whose subject is the building itself — run()'s orchestration, the
+// lying-native-record refusal — keep their own direct calls: memoizing those
+// would test the cache, not the pipeline.
+func realEntries(t *testing.T) []Entry {
+	t.Helper()
+	realInventory.once.Do(func() {
+		realInventory.entries, realInventory.err = buildEntries(litPkg)
+	})
+	if realInventory.err != nil {
+		t.Fatalf("buildEntries(%s): %v", litPkg, realInventory.err)
+	}
+	return slices.Clone(realInventory.entries)
+}
 
 // TestEndToEndAgainstLitCoversDolt is this ticket's acceptance criterion
 // (links-supply-chain-w6m9.1) expressed as a test: build the real inventory
@@ -20,10 +53,8 @@ const litPkg = "github.com/promptctl/links-issue-tracker/cmd/lit"
 // pipeline run() uses — so it asserts against production's inventory, not a
 // copy. [LAW:single-enforcer]
 func TestEndToEndAgainstLitCoversDolt(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 
 	var doltEntry *Entry
 	for i := range entries {
@@ -61,6 +92,7 @@ func TestEndToEndAgainstLitCoversDolt(t *testing.T) {
 // helpers it calls) against the real release package, writing both output
 // files and checking the stdout summary line.
 func TestRunHappyPath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
@@ -91,6 +123,7 @@ func TestRunHappyPath(t *testing.T) {
 // three-artifact path, so without this the return-and-log branch for this still
 // -supported CLI invocation would be uncovered. [LAW:verifiable-goals]
 func TestRunWithoutSBOM(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
@@ -132,6 +165,7 @@ func TestRunEmptyModulesGuard(t *testing.T) {
 // TestRunUnwritableBundlePath pins writeFile's create-error path as surfaced
 // through run(): a bundle path inside a directory that doesn't exist.
 func TestRunUnwritableBundlePath(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	bundlePath := filepath.Join(dir, "no-such-subdir", "THIRD_PARTY_LICENSES")
 	reportPath := filepath.Join(dir, "LICENSE-REPORT.md")
@@ -259,6 +293,7 @@ func TestGraphModeWritesNoArtifacts(t *testing.T) {
 // dependency set" acceptance criterion: two independent runs against the same
 // package must resolve to byte-identical module lists.
 func TestLinkedModulesDeterministic(t *testing.T) {
+	t.Parallel()
 	first, err := LinkedModules(litPkg)
 	if err != nil {
 		t.Fatalf("LinkedModules: %v", err)

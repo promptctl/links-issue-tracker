@@ -274,10 +274,8 @@ func TestCheckPolicyAcceptReject(t *testing.T) {
 // ci.yml's `go test ./...`, so a dependency bump that pulls in a non-allowlisted
 // license fails the build here. [LAW:verifiable-goals]
 func TestDependencyLicensesArePermitted(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 	policy, err := LoadPolicy()
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
@@ -330,10 +328,8 @@ func TestDependencyLicensesArePermitted(t *testing.T) {
 // against the real inventory — but "a row that stops failing means a route was
 // re-opened" was true when written and is not now. [LAW:verifiable-goals]
 func TestGateRejectsADeniedLicense(t *testing.T) {
-	entries, err := buildEntries(litPkg)
-	if err != nil {
-		t.Fatalf("buildEntries(%s): %v", litPkg, err)
-	}
+	t.Parallel()
+	entries := realEntries(t)
 	policy, err := LoadPolicy()
 	if err != nil {
 		t.Fatalf("LoadPolicy: %v", err)
