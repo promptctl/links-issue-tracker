@@ -39,8 +39,14 @@ jobs:
       # deliberately generated scale (see nightly.yml for the lane that runs
       # them). Do not add a -timeout here to absorb slowness — a raised timeout
       # is the alarm being switched off, and slow inner-loop tests are bugs.
+      # The alarm that IS wired in: tools/testbudget consumes this run's -json
+      # stream and fails the build when a package exceeds its wall-clock budget
+      # (tools/testbudget/budgets.go), naming the package and the overage.
+      # `shell: bash` is load-bearing — it enables pipefail, so go test's own
+      # exit code still fails the step through the pipe. [LAW:no-silent-failure]
       - name: Test
-        run: go test -short ./...
+        shell: bash
+        run: go test -short -json ./... | go run ./tools/testbudget
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
