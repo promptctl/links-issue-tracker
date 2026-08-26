@@ -144,8 +144,7 @@ func readMarker(t *testing.T, path string) string {
 func TestPromoteCandidateEndToEnd(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	storageDir := t.TempDir()
-	canonical := filepath.Join(storageDir, "dolt")
+	canonical := migratedDoltDir(t)
 
 	dump := seedRealWorkspace(t, ctx, canonical, "alpha rescue subject", "beta rescue subject")
 	originalIDs := freshExportIDs(t, ctx, canonical)
@@ -211,8 +210,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	storageDir := t.TempDir()
-	canonical := filepath.Join(storageDir, "dolt")
+	canonical := migratedDoltDir(t)
 
 	dump := seedRealWorkspace(t, ctx, canonical, "original subject")
 	outcome, err := Recover(ctx, canonical, dump, DeterministicMapper, 1)
@@ -373,7 +371,7 @@ func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
-	canonical := filepath.Join(storageDir, "dolt")
+	canonical := migratedDoltDir(t)
 
 	originalIDs := func() map[string]bool {
 		seedRealWorkspace(t, ctx, canonical, "live subject")
@@ -444,7 +442,7 @@ func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
-	canonical := filepath.Join(storageDir, "dolt")
+	canonical := migratedDoltDir(t)
 
 	// A real workspace at canonical, whose head the candidate is built to match, so
 	// the lost-update gate passes and the install-failure path is the one exercised.

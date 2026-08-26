@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -12,7 +11,7 @@ import (
 func TestCheckpointCreateAndList(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -69,7 +68,7 @@ func TestCheckpointCreateAndList(t *testing.T) {
 func TestCheckpointListExcludesOtherPrefixes(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -116,7 +115,7 @@ func TestCheckpointListExcludesOtherPrefixes(t *testing.T) {
 func TestCheckpointResetReverts(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -186,7 +185,7 @@ func TestCheckpointResetReverts(t *testing.T) {
 func TestCheckpointPruneEnforcesRetention(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -245,7 +244,7 @@ func TestCheckpointPruneEnforcesRetention(t *testing.T) {
 func TestCheckpointPruneZeroDeletesAll(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -278,7 +277,7 @@ func TestCheckpointPruneZeroDeletesAll(t *testing.T) {
 func TestCheckpointSortedOldestFirst(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -322,11 +321,11 @@ func TestParseCheckpointName(t *testing.T) {
 	}{
 		{"pre-migrate-1716998765000000000", "pre-migrate", true},
 		{"other-123456789", "other", true},
-		{"pre-migrate-abc", "pre-migrate", false},   // suffix not numeric
-		{"pre-migrate-", "pre-migrate", false},       // empty suffix
-		{"not-matching-123", "pre-migrate", false},   // wrong prefix
-		{"pre-migrate-123", "other", false},           // wrong prefix arg
-		{"pre-migrate", "pre-migrate", false},         // no suffix
+		{"pre-migrate-abc", "pre-migrate", false},  // suffix not numeric
+		{"pre-migrate-", "pre-migrate", false},     // empty suffix
+		{"not-matching-123", "pre-migrate", false}, // wrong prefix
+		{"pre-migrate-123", "other", false},        // wrong prefix arg
+		{"pre-migrate", "pre-migrate", false},      // no suffix
 	}
 	for _, c := range cases {
 		cp, ok := parseCheckpointName(c.name, c.prefix)

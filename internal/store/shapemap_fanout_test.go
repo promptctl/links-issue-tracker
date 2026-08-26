@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"reflect"
 	"sort"
 	"testing"
@@ -65,7 +64,7 @@ func normalizeEvents(events []model.IssueEvent, keep func(id string) bool) map[s
 func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {

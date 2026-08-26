@@ -26,8 +26,8 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	// A seeds the remote with its own bootstrap root; B forks an UNRELATED clone —
@@ -104,8 +104,8 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "")
@@ -159,8 +159,8 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -213,8 +213,8 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -285,8 +285,8 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -347,8 +347,8 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	localOnly, remoteOnly, shared := seedUnrelatedPairWithShared(t, ctx, rootA, rootB, remoteURL, "")
@@ -415,8 +415,8 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	// Plant the shared id on B with a DIFFERENT title than A's, so its free text diverges
@@ -555,8 +555,8 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -600,8 +600,8 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	// A seeds the remote at the current schema, then advances its head to a future
@@ -723,8 +723,8 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -798,8 +798,8 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
@@ -957,8 +957,8 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 		t.Run(tc.name, func(t *testing.T) {
 			ctx := context.Background()
 			base := t.TempDir()
-			rootA := filepath.Join(base, "a")
-			rootB := filepath.Join(base, "b")
+			rootA := migratedDoltDir(t)
+			rootB := unrelatedDoltDir(t)
 			remoteURL := "file://" + filepath.Join(base, "remote")
 
 			remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)

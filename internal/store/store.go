@@ -290,7 +290,17 @@ func Open(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store
 	}
 	s.releaseWorkspaceLock = release
 	// [LAW:single-enforcer] Store-level commit lock is the single writer gate for all startup and runtime mutations.
-	if err = s.withCommitLock(ctx, s.migrate); err != nil {
+	// Branch normalization runs on this open's own engine every time — the
+	// bootstrap only runs it at creation now — so a database that arrived
+	// pre-made on another branch (an adopt's clone) is still renamed to
+	// master on its first write open. [LAW:dataflow-not-control-flow] it is
+	// unconditional; on an already-normalized store it reads and does nothing.
+	if err = s.withCommitLock(ctx, func(ctx context.Context) error {
+		if err := ensureMasterDefaultBranch(ctx, s.db); err != nil {
+			return wrapEngineOpenContention(err)
+		}
+		return s.migrate(ctx)
+	}); err != nil {
 		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
 			err = errors.Join(err, closeErr)
 		}
@@ -2633,6 +2643,17 @@ func nullableStringPtr(value *string) any {
 
 func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID string) (bool, error) {
 	root := filepath.Clean(doltRootDir)
+	// An existing database needs nothing from the bootstrap: CREATE DATABASE
+	// IF NOT EXISTS would no-op, and branch normalization runs on each write
+	// open's own engine (Open/OpenSync call ensureMasterDefaultBranch), which
+	// also covers databases that arrive pre-made, like an adopt's clone. The
+	// two bootstrap pools below each construct a full Dolt engine — process-
+	// serialized since vendored-driver patch 5 — so skipping them here is what
+	// keeps every open after the first from paying twice for a creation that
+	// already happened. [LAW:carrying-cost]
+	if dirExists(filepath.Join(root, doltDatabaseName, ".dolt")) {
+		return false, nil
+	}
 	created := !dirExists(root)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return false, fmt.Errorf("create dolt root dir: %w", err)
@@ -2669,14 +2690,21 @@ func ensureDoltDatabase(ctx context.Context, doltRootDir string, workspaceID str
 	return created, nil
 }
 
-func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
+// masterRenameSource is the lock-free half of branch normalization: it reads
+// the branch state and names the branch a rename must move, or "" when the
+// store is already normalized (master present, or a multi-branch shape the
+// rename must not touch). Callers that must not block on the commit lock for
+// a no-op — OpenSync, whose read-only consumers would otherwise queue behind
+// a snapshot copy's minutes-long hold — consult this first and take the lock
+// only on a non-empty answer; the rename itself re-derives under the lock.
+func masterRenameSource(ctx context.Context, db *sql.DB) (string, error) {
 	activeBranch := ""
 	if err := db.QueryRowContext(ctx, `SELECT active_branch()`).Scan(&activeBranch); err != nil {
-		return fmt.Errorf("query dolt active branch: %w", err)
+		return "", fmt.Errorf("query dolt active branch: %w", err)
 	}
 	rows, err := db.QueryContext(ctx, `SELECT name FROM dolt_branches ORDER BY name`)
 	if err != nil {
-		return fmt.Errorf("query dolt branches: %w", err)
+		return "", fmt.Errorf("query dolt branches: %w", err)
 	}
 	defer rows.Close()
 	hasMaster := false
@@ -2684,16 +2712,24 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 	for rows.Next() {
 		var branchName string
 		if err := rows.Scan(&branchName); err != nil {
-			return fmt.Errorf("scan dolt branch: %w", err)
+			return "", fmt.Errorf("scan dolt branch: %w", err)
 		}
 		hasMaster = hasMaster || branchName == "master"
 		branchCount++
 	}
 	if err := rows.Err(); err != nil {
-		return fmt.Errorf("iterate dolt branches: %w", err)
+		return "", fmt.Errorf("iterate dolt branches: %w", err)
 	}
 	if activeBranch == "master" || hasMaster || branchCount != 1 {
-		return nil
+		return "", nil
+	}
+	return activeBranch, nil
+}
+
+func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
+	activeBranch, err := masterRenameSource(ctx, db)
+	if err != nil || activeBranch == "" {
+		return err
 	}
 	// [LAW:one-source-of-truth] Embedded bootstrap normalizes the initial Dolt branch name at database creation time so callers do not re-encode branch-policy drift.
 	renameQuery := fmt.Sprintf(

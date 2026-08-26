@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"path/filepath"
 	"testing"
 	"time"
 )
@@ -24,7 +23,7 @@ func TestConcurrentOpenWaitsForLiveWriteEngine(t *testing.T) {
 	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
 	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	first, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -79,7 +78,7 @@ func TestOpenSyncWaitsForLiveForegroundEngine(t *testing.T) {
 	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
 	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	foreground, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -129,7 +128,7 @@ func TestOpenForReadDoesNotWaitForLiveWriteEngine(t *testing.T) {
 	// serial: no t.Parallel — asserts through a 300ms must-not-have-completed-
 	// yet window; background load turns that window into a flake.
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	writer, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
