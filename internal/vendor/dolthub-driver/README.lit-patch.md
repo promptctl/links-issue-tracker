@@ -157,7 +157,7 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **all three** patches against the new version, copying the rest
+3. Re-apply **all five** patches against the new version, copying the rest
    of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
@@ -181,6 +181,12 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      `go mod tidy && grep -rn "go-sql-driver" --include="*.go" --include=go.mod .`
      returning no import or requirement, and that lit's
      `internal/store` still matches error 1146 via `isMissingTableError`.
+   - Patch 5: re-add the package-level `engineConstructMu sync.Mutex` in
+     `driver.go` and hold it around exactly the `engine.NewSqlEngine` call at
+     the end of `openSqlEngine` — after the env load, so the I/O-bound open
+     phases stay outside the fence. Confirm with lit's parallelized
+     `internal/store` suite under `go test -short -race`, which fails with
+     construction-time DATA RACE warnings if the fence is missing.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 
