@@ -452,7 +452,12 @@ model, yields:
    uncoordinated writers). Child `.n` numbering survives as **display
    only**: the ordinal is derived at render time, may renumber when a
    concurrent sibling syncs in late, and is never a durable reference — the
-   opaque id is what agents store.
+   opaque id is what agents store. Sequencing is explicit: this item is
+   **realized by the event-store migration** — the id scheme flips with the
+   store, and a write layer shipped over the current Dolt store does not
+   include it; no interim Dolt-only minting scheme is designed, per the
+   event-store charter's direction that the write layer's hardest machinery
+   not be built against the substrate being retired.
 2. **Actor identity columns** become principal ids with keyring-resolved
    display (F§7.10); `--assignee` filtering and `lit orphaned` operate on
    principal ids. Issues additionally gain a first-class `created_by`

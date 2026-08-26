@@ -59,8 +59,11 @@ after it — an intent minted *because* you saw something supersedes that
 something on every machine. A plain per-writer sequence number would not have
 this property, and the failure it produces is §fold's no-crime-scene kind: a
 deliberate override sorting before the event it overrides, discarded
-identically everywhere. Combined with the writer id as tiebreak, the pair
-gives the fold a total order without wall clocks. The signature slot is
+identically everywhere. Within a command's batched commit the counter still
+advances **per event** — a command minting k events occupies k strictly
+increasing positions — so the total order never leans on payload iteration
+order. Combined with the writer id as tiebreak, the pair gives the fold a
+total order without wall clocks. The signature slot is
 structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
@@ -157,12 +160,15 @@ deleted — locally *and* on the remote, via a ref-deletion push — with a
 compare-and-swap against the anchored head. "Write," in the invariant's
 sense, means appending commits to a ref, and no checkout ever does that to
 another's; deleting a proven-dead, already-anchored ref is namespace
-maintenance, not authorship. Fetch cannot resurrect a swept ref: the receive
-declines to re-create a fetched ref whose sweep anchor it has already folded,
-and re-deletes a remote copy that reappears. A false-positive death
-self-heals — the supposedly dead checkout still holds its own chain locally,
-and its next mirror push restores the ref; its events were never at risk,
-because the anchor preserved them. Two survivors racing to sweep the same
+maintenance, not authorship. Fetch cannot resurrect a *stale* swept ref, and
+the anchor is what discriminates stale from alive: a reappearing ref whose
+head is at or behind its folded sweep anchor is the old corpse and is
+re-deleted; a ref whose head carries commits **past** the anchor proves its
+writer lives, and the receive keeps it and folds the new events. So a
+false-positive death costs nothing durable: an idle falsely-swept checkout
+stays swept (harmless — its events are anchored) until its next mutation,
+whose mirror push carries commits past the anchor and durably restores the
+ref. Two survivors racing to sweep the same
 corpse is harmless: sweep events are idempotent facts the fold deduplicates,
 and each CAS delete has at most one winner — the loser no-ops.
 Loose objects from event bursts are packed on the same maintenance occasions
@@ -300,8 +306,11 @@ The current design's degradation surfaces carry over with less to say: there
 is no "diverged" state to report, only "N events not yet pushed" and "peers
 last fetched T ago," plus the owner-notification hook for push failures.
 
-**Adoption** (first clone of an existing workspace): fetch `refs/lit/log/*`,
-verify what the active policy requires (§security-and-config), fold. Two
+**Adoption** (first clone of an existing workspace): fetch `refs/lit/log/*`
+**and** `refs/lit/inbox/*` — inbox events fold exactly as an ordinary receive
+would fold them, so a workspace-founding adopter sees remotely-filed bugs
+with no established-clone prerequisite — verify what the active policy
+requires (§security-and-config), fold. Two
 workspaces independently initialized against one remote simply union — the
 destructive take/combine choice the current store forces does not arise from
 histories (there is no shared spine to diverge). Identity cannot collide
@@ -331,6 +340,13 @@ remains the normative home for the layers themselves.
 - **Config stream.** Workspace configuration — policy document, hierarchy and
   required-field templates, min-reader-version, invariant parameters — is
   itself an event stream with a monotone version, signed like any events.
+  Threshold operations (the owner-rotation quorum the access-control design
+  requires) are **quorum-by-events**, not multi-signature events: the change
+  is a proposal event, each co-signer independently appends an approval event
+  citing the proposal's hash, and the new config version activates at fold
+  when the prior policy's threshold is met. Per-writer refs make this the
+  only natural shape — co-signers cannot share a commit — and it is why one
+  signature slot per event remains sufficient as a birth requirement.
   Events cite the version they were authored under (`INV:config-versioned`);
   the validation engine judges each event against its cited version, so two
   machines straddling a config change still fold identically. One seam here

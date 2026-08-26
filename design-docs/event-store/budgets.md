@@ -27,12 +27,18 @@ add detail but never substitute a different construction):
 - **Depth corpus** — the real fleet's largest store replayed, then
   synthesized to 10x its event count preserving its shape (event-type mix,
   rank-intent density, prose sizes). Per-command benchmarks (the Command
-  budgets table) run against this, as the worst case.
+  budgets table) run against this — **on a machine concurrently running the
+  breadth fleet's background sync load**, so command latency is measured
+  under both axes at once, not on a quiet machine. The per-store rows of the
+  Storage table (per-store disk, the git-experience ceiling, the dead-refs
+  predicate under churn replay) also run against the depth corpus, being
+  properties of one repo keyed to the largest-store baseline.
 - **Breadth fleet** — 10x the measured store count, **with each store's
   history also scaled ×10**, preserving the measured size distribution's
   *shape* (most stores small), not 10x copies of the largest. Machine-wide
-  benchmarks (aggregate disk, background stampede) run against this, so they
-  test the genuinely compounded both-axes case.
+  benchmarks (aggregate disk, background stampede, and the background load
+  behind the depth corpus's command runs) come from this, so they test the
+  genuinely compounded both-axes case.
 
 ## Command budgets (at 10x depth corpus, on this class of machine)
 
