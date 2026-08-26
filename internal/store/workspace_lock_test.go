@@ -317,7 +317,10 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 // primitive without spawning.
 func TestTryAcquireSyncPushLockIsSingleFlight(t *testing.T) {
 	t.Parallel()
-	dbPath := migratedDoltDir(t)
+	// A bare path on purpose: these flock primitives only derive a sibling
+	// lock path from dbPath and never read the store, so the template
+	// fixture would couple them to machinery they don't use.
+	dbPath := filepath.Join(t.TempDir(), "dolt")
 
 	release, acquired, err := TryAcquireSyncPushLock(dbPath)
 	if err != nil {
@@ -380,7 +383,9 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 func TestMirrorBeaconLivenessProof(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	dbPath := migratedDoltDir(t)
+	// Bare path, as above: the beacon derives a sibling path and never
+	// reads the store.
+	dbPath := filepath.Join(t.TempDir(), "dolt")
 
 	verdict, err := ProbeMirrorBeacon(dbPath)
 	if err != nil {

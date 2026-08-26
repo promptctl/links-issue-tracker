@@ -132,7 +132,10 @@ func buildStoreTemplate() (dir string, commits map[string]bool, _ error) {
 	// frozen too, not just files: rename(2) — the write-new-then-rename-over
 	// pattern Dolt uses for atomic swaps — is gated by the containing
 	// directory's write bit, so file bits alone would let those writes
-	// through silently. [LAW:no-silent-failure]
+	// through silently. Scope: permission bits are defense-in-depth, inert
+	// under CAP_DAC_OVERRIDE (a root test run); the residue test is the
+	// proof of isolation, this freeze just makes the common mistake loud.
+	// [LAW:no-silent-failure]
 	if err := freezeTemplate(dir, 0o444, 0o555); err != nil {
 		return "", nil, fmt.Errorf("freeze template: %w", err)
 	}

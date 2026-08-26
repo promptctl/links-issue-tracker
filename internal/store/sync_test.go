@@ -131,6 +131,46 @@ func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
 	}
 }
 
+// TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock pins the liveness
+// contract the rename's lock-free pre-check exists for: on an
+// already-normalized store — every store but a freshly adopted one — OpenSync
+// must complete while another holder (a snapshot copy, which can hold for
+// minutes) owns the commit lock, because its normalization is a read that
+// never needs the lock. Without the pre-check this test hangs on the commit
+// lock's retry budget instead of returning.
+func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	release, err := LockCommitPath(ctx, CommitLockPath(doltRoot))
+	if err != nil {
+		t.Fatalf("LockCommitPath() error = %v", err)
+	}
+	defer func() {
+		if release != nil {
+			_ = release()
+		}
+	}()
+
+	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	sync, err := OpenSync(openCtx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenSync() under a held commit lock error = %v", err)
+	}
+	if _, err := sync.SyncListRemotes(ctx); err != nil {
+		t.Fatalf("SyncListRemotes() under a held commit lock error = %v", err)
+	}
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release commit lock: %v", err)
+	}
+	release = nil
+}
+
 func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
