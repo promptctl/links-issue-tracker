@@ -300,7 +300,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		{Name: "queue", Summary: "(retired) use `lit backlog` or `lit next`", GroupID: "operations", Hidden: true,
 			Run: retiredCommandRun("queue", workableRetirementGuidance)},
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
-			Run: r.appCmd(app.AccessRead, workableRun(nextView))},
+			Run: r.appCmd(app.AccessRead, runNext)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runOrphaned)},
 		// ls is a raw runner (not appCmd) because `--at <store-dir>` points it at a

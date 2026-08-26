@@ -175,6 +175,36 @@ conflict in waiting.
   *that ticket's own lane* — working a dependency never swallows the
   neighboring epic.
 
+The lane stays the *claim* unit exactly as above — several checkouts may
+still legitimately share one epic across lanes, and a multi-lane epic is
+claimable lane by lane. What the GRANULARITY RULING below adds is the
+*serving order* around that unit: epic-major, not lane-major. The two are
+different questions — "what does one act of starting a ticket claim" versus
+"in what order does routing offer a checkout its own work" — and only the
+second changes.
+
+### GRANULARITY RULING (owner, 2026-08-24)
+
+Recorded against links-claims-1ihf.5 and folded back here on that ticket's
+landing, superseding the lane-granular reading of Routing steps 1→3 below.
+
+**The rule, in the owner's words**: "ALL LANES IN AN EPIC SHOULD BE SURFACED
+BEFORE ANY LANE FROM THE NEXT EPIC." One checkout works an entire epic to
+completion before moving on, no exceptions. Never more epics in_progress
+than worktrees.
+
+**Why this is the rule and not a tuning knob**: the pre-claims selector's
+`--continue` bias (see "Relationship to adjacent mechanisms" below) tried to
+approximate this with a stable partial sort gated by a flag —
+`sortByContinueBias`, promoting leaves under *any* in_progress epic. That
+mechanism is self-defeating under exactly the failure it exists to prevent:
+each hop to a new epic enlarges the promoted set, weakening the bias for the
+*next* hop, so six in_progress epics in one checkout is the loop's fixed
+point, not a pathology of it. The fix cannot be another nudge in the same
+shape; it has to be a total order whose most significant component is epic
+affinity, so every in-epic leaf precedes every out-of-epic leaf as residue of
+the ordering rather than as a rule someone can forget to apply.
+
 ## Routing
 
 Selection consults claims in a fixed precedence:
@@ -182,23 +212,35 @@ Selection consults claims in a fixed precedence:
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes, in backlog order, including the prerequisite closure — a dependency
    outside the claimed lane that gates it is on the path and is offered.
-2. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, 2 blocked
-   on E.4 (unclaimed, on your path — start it?)". Completing the last ticket
-   announces the epic's completion; the claim has dissolved by predicate, and
-   the checkout is global again. Unfocus is not an action.
-3. **Then the global pool**: the top-ranked ready ticket in unclaimed lanes,
+2. **Then the rest of its epic**: the claimed lane's epic's other ready lanes
+   that no one else holds, before any lane of any other epic — the
+   GRANULARITY RULING above, expressed as a routing step rather than a bias.
+   A parentless (solo) claim has no epic to continue into and falls straight
+   to step 3 once its own ticket is no longer ready.
+3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, 2 blocked
+   on E.4 (unclaimed, on your path — start it?)". It fires only once steps 1
+   and 2 have both found nothing — the epic's own claimed lane and the rest of
+   its lanes — and it never falls through to a leaf outside the epic.
+   Completing the last ticket announces the epic's completion; the claim has
+   dissolved by predicate, and the checkout is global again. Unfocus is not an
+   action.
+4. **Then the global pool**: the top-ranked ready ticket in unclaimed lanes,
    labeled as what it is — "starting B.1 claims B#1" — so the act of
-   commitment is visible at the moment it happens.
-4. **Lanes claimed elsewhere are routed around, not hidden.** `next` skips
+   commitment is visible at the moment it happens. Reached directly, with no
+   detour through steps 1–3, by a checkout that holds no live claims at all —
+   unfocus is the zero state, not a hop through the earlier steps.
+5. **Lanes claimed elsewhere are routed around, not hidden.** `next` skips
    them silently; listings show everything with claim annotations.
    Visibility is not pullability.
-5. **Stale claims surface as an option, never a default.** "A#1: claimed by
+6. **Stale claims surface as an option, never a default.** "A#1: claimed by
    7f3a, idle 3d, nothing completed — available for takeover." Taking over is
    the ordinary primitive — starting a ticket in the lane — explicitly
-   targeted, never reached by bare `next`. Overriding a claim that is still
-   fresh requires explicit confirmation. A claim is a well-founded default,
-   never a lock.
-6. **Contested lanes** keep deterministic routing (latest establishing event
+   targeted, never reached by bare `next`. A stale lane is excluded from
+   steps 2 and 4 exactly as a fresh foreign hold is — "never reached by bare
+   `next`" admits no exception for staleness. Overriding a claim that is
+   still fresh requires explicit confirmation. A claim is a well-founded
+   default, never a lock.
+7. **Contested lanes** keep deterministic routing (latest establishing event
    holds), while the other party's selection stands down and says why:
    "claim on A#1 moved to 7f3a at 14:02 — coordinate or stand down."
 
