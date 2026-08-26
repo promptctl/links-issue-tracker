@@ -81,6 +81,54 @@ func TestConsumeEchoesNonJSONAndBuildOutput(t *testing.T) {
 	}
 }
 
+func TestConsumeFlushesStrandedOutputWhenStreamEndsMidTest(t *testing.T) {
+	// A binary that dies mid-test (os.Exit, a hard signal) never emits its
+	// running tests' fail events; their buffered output must surface at end
+	// of stream instead of being silently dropped.
+	var out strings.Builder
+	_, err := consume(stream(
+		`{"Action":"output","Package":"p","Test":"TestDies","Output":"    about to crash\n"}`,
+		`{"Action":"output","Package":"a","Test":"TestAlsoDies","Output":"    sibling detail\n"}`,
+	), &out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := out.String()
+	for _, want := range []string{"unfinished", "about to crash", "sibling detail"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("stranded output missing %q; got:\n%s", want, got)
+		}
+	}
+	// Deterministic order: package "a" before package "p".
+	if strings.Index(got, "sibling detail") > strings.Index(got, "about to crash") {
+		t.Errorf("stranded output not in deterministic package order; got:\n%s", got)
+	}
+}
+
+func TestPrintTableRendersSlowestFirstWithBudgetsAndFailureMarks(t *testing.T) {
+	var out strings.Builder
+	printTable(&out, []packageResult{
+		{ImportPath: "example.com/fast", Elapsed: 1200 * time.Millisecond},
+		{ImportPath: "example.com/slow", Elapsed: 90 * time.Second},
+		{ImportPath: "example.com/red", Elapsed: 3 * time.Second, Failed: true},
+	}, map[string]time.Duration{"example.com/slow": 120 * time.Second}, 30*time.Second)
+	got := out.String()
+	lines := strings.Split(strings.TrimSpace(got), "\n")
+	if len(lines) != 4 { // header + three rows
+		t.Fatalf("got %d lines, want 4:\n%s", len(lines), got)
+	}
+	wantRows := []string{
+		"    90.0s /  120s  example.com/slow",
+		"     3.0s /   30s  example.com/red  [FAILED — not a calibration point]",
+		"     1.2s /   30s  example.com/fast",
+	}
+	for i, want := range wantRows {
+		if lines[i+1] != want {
+			t.Errorf("row %d = %q, want %q", i, lines[i+1], want)
+		}
+	}
+}
+
 func TestEnforceFlagsOnlyPackagesOverTheirBudget(t *testing.T) {
 	b := map[string]time.Duration{"listed/slow": 10 * time.Second}
 	viols := enforce([]packageResult{

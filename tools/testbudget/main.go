@@ -61,6 +61,20 @@ type violation struct {
 	Budget     time.Duration
 }
 
+// testKey identifies one running test's buffered output.
+type testKey struct{ pkg, test string }
+
+// budgetFor resolves one package's budget — its listed entry or the default,
+// so no package is ever exempt. The one home of the resolution rule, shared
+// by enforcement and the printed table so the two can never disagree about a
+// package's budget. [LAW:single-enforcer]
+func budgetFor(path string, budgets map[string]time.Duration, def time.Duration) time.Duration {
+	if b, ok := budgets[path]; ok {
+		return b
+	}
+	return def
+}
+
 // consume reads one `go test -json` stream from r, replaying human-readable
 // output to w, and returns each package's terminal result in stream order.
 // Lines that are not JSON events (a panic trace, stray build noise) are echoed
@@ -68,7 +82,6 @@ type violation struct {
 func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 	// Output for a still-running test, held until its verdict: failed tests
 	// replay it, passing tests discard it — go test's non-verbose contract.
-	type testKey struct{ pkg, test string }
 	buffered := make(map[testKey][]string)
 
 	var results []packageResult
@@ -112,6 +125,29 @@ func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 	if err := sc.Err(); err != nil {
 		return nil, fmt.Errorf("reading go test -json stream: %w", err)
 	}
+	// A test binary that dies mid-test (os.Exit, a hard signal) never emits
+	// its running tests' fail events, so their buffered output would strand
+	// here unprinted — exactly when the diagnostics matter most. Surface it.
+	// [LAW:no-silent-failure]
+	if len(buffered) > 0 {
+		keys := make([]testKey, 0, len(buffered))
+		for k := range buffered {
+			keys = append(keys, k)
+		}
+		sort.Slice(keys, func(i, j int) bool {
+			if keys[i].pkg != keys[j].pkg {
+				return keys[i].pkg < keys[j].pkg
+			}
+			return keys[i].test < keys[j].test
+		})
+		fmt.Fprintf(w, "\ntestbudget: stream ended with %d test(s) unfinished; their buffered output:\n", len(keys))
+		for _, k := range keys {
+			fmt.Fprintf(w, "--- unfinished: %s %s\n", k.pkg, k.test)
+			for _, s := range buffered[k] {
+				io.WriteString(w, s)
+			}
+		}
+	}
 	return results, nil
 }
 
@@ -122,10 +158,7 @@ func consume(r io.Reader, w io.Writer) ([]packageResult, error) {
 func enforce(results []packageResult, budgets map[string]time.Duration, def time.Duration) []violation {
 	var viols []violation
 	for _, r := range results {
-		budget, listed := budgets[r.ImportPath]
-		if !listed {
-			budget = def
-		}
+		budget := budgetFor(r.ImportPath, budgets, def)
 		if r.Elapsed > budget {
 			viols = append(viols, violation{r.ImportPath, r.Elapsed, budget})
 		}
@@ -141,11 +174,15 @@ func printTable(w io.Writer, results []packageResult, budgets map[string]time.Du
 	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Elapsed > sorted[j].Elapsed })
 	fmt.Fprintf(w, "\ntestbudget: per-package wall clock vs budget (budgets: tools/testbudget/budgets.go)\n")
 	for _, r := range sorted {
-		budget, listed := budgets[r.ImportPath]
-		if !listed {
-			budget = def
+		// A failed package's elapsed is however far it got before dying, not
+		// a measurement — mark it so a red run's short number can never be
+		// read back as a legitimate calibration point.
+		note := ""
+		if r.Failed {
+			note = "  [FAILED — not a calibration point]"
 		}
-		fmt.Fprintf(w, "%8.1fs / %4ds  %s\n", r.Elapsed.Seconds(), int(budget.Seconds()), r.ImportPath)
+		budget := budgetFor(r.ImportPath, budgets, def)
+		fmt.Fprintf(w, "%8.1fs / %4ds  %s%s\n", r.Elapsed.Seconds(), int(budget.Seconds()), r.ImportPath, note)
 	}
 }
 
