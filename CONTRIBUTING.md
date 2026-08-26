@@ -137,7 +137,8 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
   an epic land as separate PRs; the release for the whole epic is a final,
   dedicated `chore(release)` PR (see *Cutting a release*).
 - Open a PR against `master` — don't push directly to it.
-- Keep the suite green (`go test ./...`) and the linter clean
+- Keep the suite green (`go test -short ./...` is what the PR gate runs;
+  `just test` for the full lane) and the linter clean
   (`golangci-lint run`) before requesting review.
 
 ## Cutting a release
