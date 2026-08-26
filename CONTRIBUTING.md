@@ -25,7 +25,8 @@ You need:
   the Dolt storage engine in and does **not** need the CLI at runtime; some
   tests use `dolt` as an oracle. Install it from
   [dolthub/dolt](https://github.com/dolthub/dolt) (CI pins the exact version it
-  installs in [`.github/workflows/ci.yml`](.github/workflows/ci.yml)).
+  installs in
+  [`.github/actions/install-dolt/action.yml`](.github/actions/install-dolt/action.yml)).
 
 > On macOS, building the embedded engine needs ICU and zstd headers, which
 > Homebrew installs keg-only. Run `just setup` once (it installs `icu4c@78` +
@@ -41,11 +42,12 @@ cgo path automatically (via `scripts/cgo-env.sh`), so they work on macOS even if
 you skip `just setup`:
 
 ```sh
-just setup    # one-time per machine: native deps + persist cgo paths (macOS)
-just build    # build the lit binary
-just test     # run the full suite (needs the dolt CLI; see above) — args pass through
-just lint     # golangci-lint against .golangci.yml
-just install  # build from source and install onto your PATH
+just setup       # one-time per machine: native deps + persist cgo paths (macOS)
+just build       # build the lit binary
+just test-short  # the inner loop: full suite minus the generated-scale tests
+just test        # run the full suite (needs the dolt CLI; see above) — args pass through
+just lint        # golangci-lint against .golangci.yml
+just install     # build from source and install onto your PATH
 ```
 
 The equivalent raw commands (these need the cgo paths already on your env — i.e.
@@ -54,10 +56,25 @@ after `just setup`, or run via `just`):
 ```sh
 go build ./cmd/lit    # build the lit binary
 ./scripts/install.sh  # build and install onto your PATH (wires cgo paths itself)
-go test ./...         # run the test suite (needs the dolt CLI; see above)
+go test -short ./...          # the inner loop (needs the dolt CLI; see above)
+go test -timeout 30m ./...    # the full suite, generated-scale tests included
 golangci-lint run     # lint against .golangci.yml before opening a PR
 go mod tidy           # CI fails if go.mod/go.sum aren't tidy — run and commit any diff
 ```
+
+The suite has two lanes. The **inner loop** — `go test -short ./...` — is what
+you run while working and what CI's PR gate runs; `-short` skips only the tests
+whose cost comes from deliberately generated scale (today that is exactly one:
+a sync-reconcile combine folding 500 commits over a 1000-issue backlog — 119s
+at the 2026-08-24 measurement on the development machine; the test logs its
+own runtime, so a full-lane run's output is the current number). The **full lane** — `go test -timeout 30m ./...`, since the suite's
+real work brushes go test's 10-minute per-package default — runs everything,
+and a scheduled job
+([`.github/workflows/nightly.yml`](.github/workflows/nightly.yml)) runs it
+nightly, filing a `nightly-failure` issue when it breaks so the skipped tests
+stay covered rather than quietly rotting. A test belongs behind
+`testing.Short()` only when its cost is the scale it generates, not the
+behavior it pins — never move a test there to make a slow test disappear.
 
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
@@ -120,7 +137,8 @@ repo, hand it [docs/agent-setup.md](docs/agent-setup.md).
   an epic land as separate PRs; the release for the whole epic is a final,
   dedicated `chore(release)` PR (see *Cutting a release*).
 - Open a PR against `master` — don't push directly to it.
-- Keep the suite green (`go test ./...`) and the linter clean
+- Keep the suite green (`go test -short ./...` is what the PR gate runs;
+  `just test` for the full lane) and the linter clean
   (`golangci-lint run`) before requesting review.
 
 ## Cutting a release

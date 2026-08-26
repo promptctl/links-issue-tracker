@@ -28,7 +28,7 @@ not just "tests pass". Include manual verification for behavior tests can't reac
 
 ## Checklist
 
-- [ ] `go test ./...` passes
+- [ ] `go test -short ./...` passes (the PR gate; `just test` runs the full lane)
 - [ ] `golangci-lint run` is clean
 - [ ] Docs updated (or N/A)
 - [ ] `CHANGELOG.md` entry added under `## [Unreleased]` (or N/A)

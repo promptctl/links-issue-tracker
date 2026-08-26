@@ -39,18 +39,28 @@ build:
         -ldflags "-X ${pkg}.Commit=${LIT_BUILD_COMMIT} -X ${pkg}.Date=${LIT_BUILD_DATE}" \
         ./cmd/lit
 
-# Run the test suite. With no args runs the whole suite; otherwise passes args
-# through, e.g. `just test -run TestFoo ./internal/cli/`.
+# The inner loop: the whole suite minus the generated-scale tests. This is
+# what CI's PR gate runs (ci.yml); the skipped tests run nightly in full
+# (nightly.yml).
+test-short:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source "{{justfile_directory()}}/scripts/cgo-env.sh"
+    go test -short ./...
+
+# Run the test suite — the full lane by default; args pass through, e.g.
+# `just test -run TestFoo ./internal/cli/`. The -timeout matches nightly.yml's
+# budget because internal/store's real work alone brushes go test's 10-minute
+# per-package default; it applies on every path (a later -timeout in args
+# wins, since go test takes the last occurrence), so a targeted run against
+# the slow package cannot dodge it. [LAW:dataflow-not-control-flow] the
+# no-args default is a value, not a second code path.
 test *args:
     #!/usr/bin/env bash
     set -euo pipefail
     source "{{justfile_directory()}}/scripts/cgo-env.sh"
     args="{{args}}"
-    if [ -z "$args" ]; then
-        go test ./...
-    else
-        go test $args
-    fi
+    go test -timeout 30m ${args:-./...}
 
 # Lint (depguard lifecycle-boundary rule + style). Needs golangci-lint installed.
 lint:
