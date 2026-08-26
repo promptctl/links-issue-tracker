@@ -13,7 +13,9 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
-# Every job here gates merge and must stay fast (<5 min total). CI runs on
+# Every job here gates merge and must stay fast — <5 min total is the target,
+# and build-and-test is the current outlier the testperf epic
+# (links-testperf-xxsx) is driving down to it. CI runs on
 # Linux only by deliberate choice — no macOS runners, no build matrix. The
 # embedded Dolt engine builds with cgo (ICU/zstd); covering a second OS would
 # slow the gate and add platform-provisioning machinery for little signal, so
@@ -28,21 +30,17 @@ jobs:
         with:
           go-version-file: go.mod
 
-      # The test suite shells out to the `dolt` CLI as an oracle, so Dolt must
-      # be installed to run `go test`. (Dolt is a test-only oracle; it is NOT a
-      # runtime dependency of the shipped binary.)
-      - name: Install Dolt
-        run: |
-          set -euo pipefail
-          curl -L https://github.com/dolthub/dolt/releases/download/v1.81.10/install.sh -o install-dolt.sh
-          sudo bash install-dolt.sh
-          dolt version
+      - uses: ./.github/actions/install-dolt
 
       - name: Build
         run: go build ./cmd/lit
 
+      # The inner loop: `-short` skips the tests that exist to exercise
+      # deliberately generated scale (see nightly.yml for the lane that runs
+      # them). Do not add a -timeout here to absorb slowness — a raised timeout
+      # is the alarm being switched off, and slow inner-loop tests are bugs.
       - name: Test
-        run: go test ./...
+        run: go test -short ./...
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
