@@ -5,15 +5,18 @@ import "time"
 // The per-package wall-clock budgets ci.yml enforces on every PR — the one
 // home of the numbers. [LAW:one-source-of-truth]
 //
-// HOW THE NUMBERS ARE SET. Each budget is calibrated from the measurement the
-// check itself makes: the per-package table testbudget prints in the CI log of
-// a green master run (packages running concurrently under `go test -short` on
-// CI hardware — slower and noisier than any dev machine, which is why these
-// numbers are well above local ones). Budgets sit far enough over the measured
-// number to absorb runner variance, close enough that sustained creep or a
-// single expensive test fails the build long before go test's 10-minute
-// per-package default turns it into a timeout panic on an innocent diff.
-// Calibration record: CI run of PR #422, 2026-08-26.
+// HOW THE NUMBERS ARE SET. Each budget is roughly 1.5x the package's worst
+// measured environment, rounded up — far enough over the measurement to absorb
+// machine variance, close enough that sustained creep or a single expensive
+// test fails the build long before go test's 10-minute per-package default
+// turns it into a timeout panic on an innocent diff. Two environments matter
+// because the check reads whatever `go test -short -json ./...` run it is
+// piped: CI's concurrent run (the enforcing one — its table is in every CI
+// log) and the dev machine's (the documented local invocation) — and at
+// calibration the dev machine was the SLOWER of the two on every heavy
+// package, so most numbers below are dev-bound. Calibration record: CI table
+// from PR #422's run and the dev-machine full-suite measurement, both
+// 2026-08-26, both quoted per package below as CI/dev.
 //
 // RAISING A BUDGET IS NOT A FIX. The testperf epic (links-testperf-xxsx) got
 // its seventeen minutes back from cheaper fixtures, real parallelism, and
@@ -26,30 +29,36 @@ import "time"
 // budget while adding a test, the epic's per-package notes below say where the
 // headroom went; make the test cheaper the way the epic did.
 var budgets = map[string]time.Duration{
-	// Honest floor ~141s local isolated after xxsx.2/.3 (parallel tests +
-	// migrated-template fixtures); remaining poles are two ~5s contention
-	// tests. Anything approaching this budget means fixture tax is back.
-	"github.com/promptctl/links-issue-tracker/internal/store": 300 * time.Second,
+	// 58.5s/95s (141s dev isolated, 2026-08-25). Honest floor after
+	// xxsx.2/.3's parallel tests + migrated-template fixtures; remaining
+	// poles are two ~5s contention tests. Approaching this budget means
+	// fixture tax is back.
+	"github.com/promptctl/links-issue-tracker/internal/store": 210 * time.Second,
 
-	// ~174s local, of which ~170s is the serial e2e set — the floor moves
-	// only via links-testperf-xxsx.2.1 (Run taking cwd/env as parameters, so
-	// the e2e tests can parallelize). Tighten this budget when 2.1 lands.
-	"github.com/promptctl/links-issue-tracker/internal/cli": 400 * time.Second,
+	// 108s/220s (174s dev isolated), of which ~170s is the serial e2e set —
+	// the floor moves only via links-testperf-xxsx.2.1 (Run taking cwd/env
+	// as parameters, so the e2e tests can parallelize). Tighten this budget
+	// when 2.1 lands.
+	"github.com/promptctl/links-issue-tracker/internal/cli": 340 * time.Second,
 
-	// ~18.5s local and that is a floor, not slack: the package's wall equals
-	// its one giant, TestBurstOfMutationsNeverHitsEngineReadOnlyCollision,
-	// whose runtime is the production mirror-contention it exists to
-	// reproduce (xxsx.5).
-	"github.com/promptctl/links-issue-tracker/cmd/lit": 90 * time.Second,
+	// 17.3s/31.5s, and the ~18.5s isolated number is a floor, not slack:
+	// the package's wall equals its one giant,
+	// TestBurstOfMutationsNeverHitsEngineReadOnlyCollision, whose runtime is
+	// the production mirror-contention it exists to reproduce (xxsx.5).
+	"github.com/promptctl/links-issue-tracker/cmd/lit": 50 * time.Second,
 
-	// ~6s local: five genuine buildEntries runs (~2s each) plus sub-second
-	// tests; the content tests share one memoized inventory (xxsx.6). The
-	// graph audit is env-gated and does not run here.
-	"github.com/promptctl/links-issue-tracker/tools/licenses": 60 * time.Second,
+	// 18.2s/7.2s — the one CI-bound entry (cold corpus load on CI), and
+	// above every unlisted package in its worst environment, which is what
+	// graduates it from the default: five genuine buildEntries runs (~2s
+	// each) plus sub-second tests; the content tests share one memoized
+	// inventory (xxsx.6). The graph audit is env-gated and does not run
+	// here.
+	"github.com/promptctl/links-issue-tracker/tools/licenses": 40 * time.Second,
 }
 
-// Every package not listed above — today all under ~12s local — gets this
-// budget, so a new or newly slow package is caught without anyone remembering
-// to enroll it. A package that legitimately outgrows the default graduates to
-// an explicit entry with its rationale, not a bigger default.
-const defaultBudget = 60 * time.Second
+// Every package not listed above — today all at or under ~12s in the slower
+// environment — gets this budget, so a new or newly slow package is caught
+// without anyone remembering to enroll it. A package that legitimately
+// outgrows the default graduates to an explicit entry with its rationale, not
+// a bigger default.
+const defaultBudget = 30 * time.Second
