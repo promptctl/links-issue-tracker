@@ -125,3 +125,32 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 		t.Fatalf("template mutated by a consumer: digest %s -> %s", templateBefore, after)
 	}
 }
+
+// TestFrozenTemplateRefusesDirectOpen pins the freeze layer the same way the
+// residue test pins copy isolation: opening the template path directly —
+// instead of a copy — must fail, and must leave the template byte-identical.
+// This is the automated form of the share-the-template mutation check, so a
+// refactor of freezeTemplate/copyOfStoreTemplate that silently un-freezes
+// the template turns CI red instead of quietly poisoning every parallel
+// consumer. [LAW:no-silent-failure]
+func TestFrozenTemplateRefusesDirectOpen(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("permission bits are inert under CAP_DAC_OVERRIDE (root); the freeze's documented scope excludes this environment")
+	}
+	ctx := context.Background()
+
+	// Force the template build, then record its pre-open digest.
+	_ = migratedDoltDir(t)
+	before := digestDir(t, storeTemplates[0].dir)
+
+	st, err := Open(ctx, storeTemplates[0].dir, "freeze-probe")
+	if err == nil {
+		_ = st.Close()
+		t.Fatal("Open on the frozen template path succeeded; the freeze no longer makes the direct-open mistake loud")
+	}
+
+	if after := digestDir(t, storeTemplates[0].dir); after != before {
+		t.Fatalf("the refused open still mutated the template: digest %s -> %s", before, after)
+	}
+}
