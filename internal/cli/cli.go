@@ -287,6 +287,11 @@ func parseFlagSet(fs *cobraFlagSet, args []string, stdout io.Writer) error {
 			strings.Contains(msg, "flag provided but not defined: --output") {
 			return UnsupportedError{Message: "--output is no longer supported; omit it for text output", Feature: "--output"}
 		}
+		if strings.Contains(msg, "flag provided but not defined: -continue") ||
+			strings.Contains(msg, "flag provided but not defined: --continue") ||
+			strings.Contains(msg, "unknown flag: --continue") {
+			return UnsupportedError{Message: "--continue is retired; claim routing already keeps `lit next` in your checkout's own epic first — run `lit next` with no flag", Feature: "--continue"}
+		}
 		if strings.HasPrefix(msg, "unknown flag:") || strings.HasPrefix(msg, "flag provided but not defined:") {
 			return UsageError{Message: msg}
 		}
@@ -674,8 +679,8 @@ type workableFilter struct {
 // gatherWorkableAnnotated runs the shared workable pipeline: list workable
 // leaves, fetch details, annotate, sort into canonical priority/rank order,
 // enrich with parent epic refs. Returns the prepared rows and the details
-// map so callers that need extra row context (e.g. `lit next --continue`)
-// avoid a second fetch round-trip.
+// map so callers that need extra row context (e.g. claim routing's epic-lane
+// lookups) avoid a second fetch round-trip.
 //
 // The returned order is the canonical backlog order: focus path first, then
 // priority desc, then composite rank asc. Ready-specific presentation (e.g.

@@ -543,22 +543,6 @@ func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.Anno
 	return issues[:limit]
 }
 
-// sortByContinueBias is a stable sort that pulls leaves whose parent epic is
-// currently in_progress to the front, preserving composite-rank order within
-// each group. The bias absorbs "what is the agent's current focus" as a sort
-// key over data, not as a branch in the consumer.
-// [LAW:dataflow-not-control-flow] Same comparator runs over every pair; the
-// parent-epic state decides ordering, not whether the comparator runs.
-func sortByContinueBias(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
-	inProgressEpic := func(row annotation.AnnotatedIssue) bool {
-		parent := details[row.ID].Parent
-		return parent != nil && parent.IsContainer() && parent.State() == model.StateInProgress
-	}
-	sort.SliceStable(rows, func(i, j int) bool {
-		return inProgressEpic(rows[i]) && !inProgressEpic(rows[j])
-	})
-}
-
 // printNextSummary renders one workable leaf for `lit next` text output: the
 // standard id+state+topic+title line, indented epic context if any, and inline
 // dependency annotations so the agent knows what context to load before

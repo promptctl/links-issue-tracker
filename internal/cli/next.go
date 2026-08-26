@@ -26,7 +26,7 @@ import (
 // honest move once the shapes diverge (backlog stays exactly what it was);
 // stretching the shared preset to fit would have re-tangled the two.
 // [LAW:decomposition] [LAW:carrying-cost]
-const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--continue] [--assignee <user>]"
+const nextUsage = "usage: lit next [--type ...] [--status ...] [--labels ...] [--assignee <user>]"
 
 func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	fs := newCobraFlagSet("next")
@@ -34,12 +34,6 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	issueType := fs.String("type", "", "Filter by issue type")
 	status := fs.String("status", "", "Filter by status: open|in_progress")
 	labels := fs.String("labels", "", "Comma-separated labels all of which must match")
-	// --continue predates claim routing and is retired by links-claims-1ihf.10,
-	// which depends on this ticket. Left wired here unchanged: claim routing
-	// already subsumes it for a checkout with live claims (routing step 2 IS
-	// the epic-affinity bias, made unconditional and correct), and this flag
-	// still matters as a plain rank-order tiebreak for a checkout with none.
-	continueBias := fs.Bool("continue", false, "Bias toward leaves under in-progress epics")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -67,9 +61,6 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	})
 	if err != nil {
 		return err
-	}
-	if *continueBias {
-		sortByContinueBias(rows, details)
 	}
 	cc, err := gatherClaimContext(ctx, stdout, ap)
 	if err != nil {

@@ -760,7 +760,7 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 	// Focusing the goal surfaces its earliest ready prerequisite as the next
 	// thing to start — above the unrelated urgent item, which would otherwise win
 	// on priority. `lit next` is the surviving "what should I start" surface.
-	if pick := h.runNextRow(false); pick.ID != c1.ID {
+	if pick := h.runNextRow(); pick.ID != c1.ID {
 		t.Fatalf("next = %q, want earliest ready prerequisite %q", pick.ID, c1.ID)
 	}
 
@@ -789,11 +789,11 @@ func TestFocusPathSurfacesEarliestPrerequisiteAndAdvances(t *testing.T) {
 
 	// The path auto-advances as each prerequisite closes: next walks c1 → c2 → c3.
 	h.closeIssue(c1.ID, "done")
-	if pick := h.runNextRow(false); pick.ID != c2.ID {
+	if pick := h.runNextRow(); pick.ID != c2.ID {
 		t.Fatalf("after closing c1, next = %q, want %q", pick.ID, c2.ID)
 	}
 	h.closeIssue(c2.ID, "done")
-	if pick := h.runNextRow(false); pick.ID != c3.ID {
+	if pick := h.runNextRow(); pick.ID != c3.ID {
 		t.Fatalf("after closing c2, next = %q, want %q", pick.ID, c3.ID)
 	}
 }
@@ -822,7 +822,7 @@ func TestFocusPathFollowsExplicitDependenciesTransitively(t *testing.T) {
 
 	// Focus follows explicit dependency edges transitively (goal→a→b), so the
 	// only ready path member — b — is what surfaces to start next.
-	if pick := h.runNextRow(false); pick.ID != b.ID {
+	if pick := h.runNextRow(); pick.ID != b.ID {
 		t.Fatalf("next = %q, want transitive prerequisite %q", pick.ID, b.ID)
 	}
 }
@@ -845,19 +845,19 @@ func TestFocusRemovalRestoresOrderAndUrgentDoesNotPropagate(t *testing.T) {
 
 	// Urgent goal, no focus: the standing-urgent item is next; the goal's
 	// prerequisite does NOT inherit the goal's urgency, so it does not surface.
-	if pick := h.runNextRow(false); pick.ID != urgent.ID {
+	if pick := h.runNextRow(); pick.ID != urgent.ID {
 		t.Fatalf("no focus: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
 	}
 
 	// Focusing the goal surfaces its prerequisite above the unrelated urgent item.
 	h.setLabels(goal.ID, FocusLabel)
-	if pick := h.runNextRow(false); pick.ID != prereq.ID {
+	if pick := h.runNextRow(); pick.ID != prereq.ID {
 		t.Fatalf("focused: next = %q, want surfaced prerequisite %q", pick.ID, prereq.ID)
 	}
 
 	// Removing focus restores the standing-urgent ordering.
 	h.setLabels(goal.ID)
-	if pick := h.runNextRow(false); pick.ID != urgent.ID {
+	if pick := h.runNextRow(); pick.ID != urgent.ID {
 		t.Fatalf("focus removed: next = %q, want standing-urgent %q", pick.ID, urgent.ID)
 	}
 }
@@ -886,7 +886,7 @@ func TestFocusPathExpandsContainerChildren(t *testing.T) {
 
 	// Focusing an epic expands its children onto the path; the first ready child
 	// surfaces as next.
-	if pick := h.runNextRow(false); pick.ID != c1.ID {
+	if pick := h.runNextRow(); pick.ID != c1.ID {
 		t.Fatalf("next = %q, want first ready child %q", pick.ID, c1.ID)
 	}
 }

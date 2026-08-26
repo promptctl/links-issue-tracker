@@ -124,8 +124,7 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	}
 	// A.2 sits in its own lane so the lane gate does not block it behind the
 	// in_progress default-lane sibling A.1 — this test's contract is
-	// epic-continuation, not lane-gate membership (mirrors next_test.go's
-	// --continue fixture).
+	// epic-continuation, not lane-gate membership.
 	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})

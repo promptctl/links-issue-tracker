@@ -12,20 +12,17 @@ import (
 )
 
 // runNextRow reproduces exactly what `lit next` picks — the shared workable
-// pipeline, the optional --continue bias, and claim routing — and returns the
-// chosen annotated row. This harness never mints a stream token or attributes
-// a write (newTestCLIApp opens the store directly, bypassing app.Open's
-// AttributeTo), so every lane derives Unclaimed and routing always lands on
-// ServedFromGlobal — the claims-aware routing degenerating to exactly the
-// pre-claims "first ready row" pick these tests pin. [LAW:single-enforcer]
-func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssue {
+// pipeline and claim routing — and returns the chosen annotated row. This
+// harness never mints a stream token or attributes a write (newTestCLIApp
+// opens the store directly, bypassing app.Open's AttributeTo), so every lane
+// derives Unclaimed and routing always lands on ServedFromGlobal — the
+// claims-aware routing degenerating to exactly the pre-claims "first ready
+// row" pick these tests pin. [LAW:single-enforcer]
+func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 	h.t.Helper()
 	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
 		h.t.Fatalf("gatherWorkableAnnotated error = %v", err)
-	}
-	if continueBias {
-		sortByContinueBias(annotated, details)
 	}
 	cc, err := gatherClaimContext(h.ctx, io.Discard, h.ap)
 	if err != nil {
@@ -61,7 +58,7 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
 	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextRow(false)
+	got := h.runNextRow()
 	if got.ID != first.ID {
 		t.Fatalf("next.ID = %q, want %q (top of ready order)", got.ID, first.ID)
 	}
@@ -78,7 +75,7 @@ func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	}
 	openLeaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextRow(false)
+	got := h.runNextRow()
 	if got.ID != openLeaf.ID {
 		t.Fatalf("next.ID = %q, want %q (in-progress leaves are not startable)", got.ID, openLeaf.ID)
 	}
@@ -95,7 +92,7 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	h.addDependency(dependent.ID, blocker.ID)
 	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0})
 
-	got := h.runNextRow(false)
+	got := h.runNextRow()
 	if got.ID == dependent.ID {
 		t.Fatalf("next.ID = %q (dependent), want a non-blocked leaf", got.ID)
 	}
@@ -147,57 +144,18 @@ func TestRunNextErrorsWhenNoReadyWork(t *testing.T) {
 	}
 }
 
-// `--continue` biases toward leaves whose parent epic derives to in_progress
-// (any child started). The composite-rank order would otherwise pick a
-// higher-ranked leaf in another epic; --continue keeps the agent in the same
-// epic context until it's done.
-func TestRunNextContinueBiasesTowardInProgressEpic(t *testing.T) {
+// `--continue` is retired: it predates claim routing, which now subsumes the
+// epic-affinity bias unconditionally (routeNext's ServedFromEpicLane step).
+// Passing the flag surfaces a pointer to that replacement instead of an
+// unhelpful "unknown flag" error.
+func TestRunNextContinueFlagIsRetired(t *testing.T) {
 	h := newReadyTestHarness(t)
-	// epicA gets created first → composite rank places its leaves above epicB's.
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
-
-	// Start B.1 so epicB derives to in_progress; epicA stays open.
-	if _, err := h.ap.Store.Apply(h.ctx, b1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
-		t.Fatalf("StartIssue(B.1) error = %v", err)
+	err := h.runNextErr("--continue")
+	if err == nil {
+		t.Fatal("runNext(--continue) error = nil, want retirement error")
 	}
-
-	// Default order would pick A.1 (top composite rank).
-	defaultPick := h.runNextRow(false)
-	if defaultPick.ID != a1.ID {
-		t.Fatalf("default next = %q, want A.1 %q (composite-rank top)", defaultPick.ID, a1.ID)
-	}
-
-	// --continue should skip past A.1/A.2 to find a leaf under in_progress epic B.
-	// B.1 is in_progress (skipped); there are no other open leaves under B.
-	// So --continue falls back to top-of-queue: A.1.
-	// Reframe the test: add B.2 so there is a workable leaf under B. B.2 sits in
-	// its own lane so the lane gate does not block it behind the in_progress B.1
-	// (an earlier default-lane sibling) — this test's contract is the
-	// continue-bias, not lane-gate membership.
-	b2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID, Lane: "b2"})
-	_ = a2
-
-	continuePick := h.runNextRow(true)
-	if continuePick.ID != b2.ID {
-		t.Fatalf("--continue next = %q, want B.2 %q (under in_progress epic)", continuePick.ID, b2.ID)
-	}
-}
-
-// `--continue` with no in-progress epic falls back to the default top-of-queue
-// pick — the bias is "prefer if available," not "filter to only".
-func TestRunNextContinueFallsBackWhenNoInProgressEpic(t *testing.T) {
-	h := newReadyTestHarness(t)
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-
-	got := h.runNextRow(true)
-	if got.ID != a1.ID {
-		t.Fatalf("--continue with no in-progress epic returned %q, want %q (fallback to top)", got.ID, a1.ID)
+	if !strings.Contains(err.Error(), "retired") {
+		t.Fatalf("runNext(--continue) error = %q, want it to say the flag is retired", err.Error())
 	}
 }
 
@@ -208,7 +166,7 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
 	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
-	got := h.runNextRow(false)
+	got := h.runNextRow()
 	if got.ID != leaf.ID {
 		t.Fatalf("next.ID = %q, want %q", got.ID, leaf.ID)
 	}
