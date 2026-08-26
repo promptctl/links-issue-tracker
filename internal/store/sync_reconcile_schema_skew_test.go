@@ -10,6 +10,13 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
+// The skew tests in this file build their stores from nothing on purpose:
+// their subject is the migration chain under version skew — Downgrade() lands
+// a store at an older schema and the heal replays the missing migrations — so
+// replaying the chain is the premise, not fixture tax. Only
+// TestSyncPullStateTransitions below, whose subtests never skew a schema,
+// draws from the template fixture.
+
 // TestLiftWorkingSetToRegistryRecoversDowngradedSchema isolates the schema-lift
 // primitive from the sync dance: a store whose working set sits at an OLDER
 // schema (the multi-machine skew the reconcile must be total over) cannot be
@@ -251,8 +258,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("up_to_date", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL) // B == remote head
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
@@ -268,9 +275,9 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("fast_forwarded", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		rootA := filepath.Join(base, "a")
+		rootA := migratedDoltDir(t)
 		id := seedReconcileRemote(t, ctx, rootA, remoteURL)
-		rootB := filepath.Join(base, "b")
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// A advances the remote; B is now strictly behind and must fast-forward.
 		updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("ahead")})
@@ -291,8 +298,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("ahead", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		id := seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		id := seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// B commits locally and does not push; the remote has nothing new.
 		updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("local")})
@@ -310,8 +317,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 	t.Run("never_synced", func(t *testing.T) {
 		base := t.TempDir()
 		remoteURL := "file://" + filepath.Join(base, "remote")
-		seedReconcileRemote(t, ctx, filepath.Join(base, "a"), remoteURL)
-		rootB := filepath.Join(base, "b")
+		seedReconcileRemote(t, ctx, migratedDoltDir(t), remoteURL)
+		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()

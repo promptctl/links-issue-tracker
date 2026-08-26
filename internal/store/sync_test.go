@@ -16,7 +16,7 @@ import (
 func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -73,14 +73,17 @@ func TestOpenSyncCreatesDatabaseWhenMissing(t *testing.T) {
 	}
 }
 
-func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
-	t.Parallel()
-	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+// premadeMainBranchDB builds the pre-made-database shape an adopt's clone
+// arrives in: a real database at the root, created outside lit's bootstrap,
+// still on Dolt's own default branch rather than master. Returns the dolt
+// root and the database's repo path, having asserted the branch is not yet
+// master — the precondition both normalization tests depend on.
+func premadeMainBranchDB(t *testing.T, ctx context.Context) (doltRoot, repoPath string) {
+	t.Helper()
+	doltRoot = filepath.Join(t.TempDir(), "dolt")
 	if err := os.MkdirAll(doltRoot, 0o755); err != nil {
 		t.Fatalf("MkdirAll(doltRoot) error = %v", err)
 	}
-
 	bootstrap, err := openDoltPool(doltRoot, "test-workspace-id", "", engineWrite)
 	if err != nil {
 		t.Fatalf("openDoltPool() bootstrap error = %v", err)
@@ -91,33 +94,124 @@ func TestEnsureDatabaseRenamesEmbeddedMainBranchToMaster(t *testing.T) {
 	if err := bootstrap.Close(); err != nil && !errors.Is(err, context.Canceled) {
 		t.Fatalf("bootstrap close error = %v", err)
 	}
-
-	repoPath := filepath.Join(doltRoot, "links")
+	repoPath = filepath.Join(doltRoot, "links")
 	statusBefore, err := doltcli.Run(ctx, repoPath, "status")
 	if err != nil {
-		t.Fatalf("dolt status before EnsureDatabase error = %v", err)
+		t.Fatalf("dolt status on pre-made database error = %v", err)
 	}
 	if strings.Contains(statusBefore, "On branch master") {
-		t.Fatalf("unexpected dolt status before EnsureDatabase: %q", statusBefore)
+		t.Fatalf("pre-made database is already on master: %q", statusBefore)
 	}
+	return doltRoot, repoPath
+}
 
+// TestOpenSyncNormalizesPreMadeMainBranchToMaster proves the mirror-side
+// rename actually fires: OpenSync on a pre-made non-master database must land
+// it on master via its own engine — the sibling of the Open half proven
+// below, so neither write-open path only ever no-ops through the
+// normalization call.
+func TestOpenSyncNormalizesPreMadeMainBranchToMaster(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
+
+	sync, err := OpenSync(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
+	if err != nil {
+		t.Fatalf("dolt status after OpenSync error = %v", err)
+	}
+	if !strings.Contains(statusAfter, "On branch master") {
+		t.Fatalf("unexpected dolt status after OpenSync: %q", statusAfter)
+	}
+}
+
+// TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock pins the liveness
+// contract the rename's lock-free pre-check exists for: on an
+// already-normalized store — every store but a freshly adopted one — OpenSync
+// must complete while another holder (a snapshot copy, which can hold for
+// minutes) owns the commit lock, because its normalization is a read that
+// never needs the lock. Without the pre-check this test hangs on the commit
+// lock's retry budget instead of returning.
+func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	release, err := LockCommitPath(ctx, CommitLockPath(doltRoot))
+	if err != nil {
+		t.Fatalf("LockCommitPath() error = %v", err)
+	}
+	defer func() {
+		if release != nil {
+			_ = release()
+		}
+	}()
+
+	openCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	sync, err := OpenSync(openCtx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("OpenSync() under a held commit lock error = %v", err)
+	}
+	if _, err := sync.SyncListRemotes(ctx); err != nil {
+		t.Fatalf("SyncListRemotes() under a held commit lock error = %v", err)
+	}
+	if err := sync.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	if err := release(); err != nil {
+		t.Fatalf("release commit lock: %v", err)
+	}
+	release = nil
+}
+
+func TestBranchNormalizationDefersToFirstWriteOpen(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot, repoPath := premadeMainBranchDB(t, ctx)
+
+	// EnsureDatabase over a pre-existing database is a no-op — since the
+	// creation fast-path, branch normalization is owned by write opens, so a
+	// pre-made main-branch store stays on main here...
 	if _, err := EnsureDatabase(ctx, doltRoot, "test-workspace-id"); err != nil {
 		t.Fatalf("EnsureDatabase() error = %v", err)
 	}
-
-	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
+	statusEnsured, err := doltcli.Run(ctx, repoPath, "status")
 	if err != nil {
 		t.Fatalf("dolt status after EnsureDatabase error = %v", err)
 	}
+	if strings.Contains(statusEnsured, "On branch master") {
+		t.Fatalf("EnsureDatabase should leave a pre-existing database untouched, got: %q", statusEnsured)
+	}
+
+	// ...and the contract — on master before any write use — holds at the
+	// first write open. [LAW:behavior-not-structure]
+	st, err := Open(ctx, doltRoot, "test-workspace-id")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	statusAfter, err := doltcli.Run(ctx, repoPath, "status")
+	if err != nil {
+		t.Fatalf("dolt status after write open error = %v", err)
+	}
 	if !strings.Contains(statusAfter, "On branch master") {
-		t.Fatalf("unexpected dolt status after EnsureDatabase: %q", statusAfter)
+		t.Fatalf("unexpected dolt status after write open: %q", statusAfter)
 	}
 }
 
 func TestSyncRemoteLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -164,7 +258,7 @@ func TestSyncRemoteLifecycle(t *testing.T) {
 func TestSyncRemoteValidation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	syncStore, err := OpenSync(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -225,7 +319,7 @@ func TestSyncRemoteValidation(t *testing.T) {
 func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "test-workspace-id")
 	if err != nil {
@@ -312,7 +406,7 @@ func TestSyncFreshnessStateClassification(t *testing.T) {
 func TestSyncFreshnessRequiresRemoteAndBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := Open(ctx, doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
@@ -334,7 +428,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	doltRoot := filepath.Join(base, "dolt")
+	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	commit := func(title string) {
@@ -449,7 +543,7 @@ func TestSyncPushDelivers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	doltRoot := filepath.Join(base, "dolt")
+	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	commit := func(title string) {
@@ -523,7 +617,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	doltRoot := filepath.Join(base, "dolt")
+	doltRoot := migratedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	st, err := Open(ctx, doltRoot, "ws")
@@ -568,7 +662,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "ws")
 	if err != nil {
@@ -619,7 +713,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 func TestStagedWorkingSetSurvivesReconnect(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 
 	st, err := Open(ctx, doltRoot, "ws")
 	if err != nil {
@@ -682,7 +776,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	// Producer: a real workspace with a ticket, pushed to the remote.
-	producerRoot := filepath.Join(base, "producer")
+	producerRoot := migratedDoltDir(t)
 	producer, err := Open(ctx, producerRoot, "ws-producer")
 	if err != nil {
 		t.Fatalf("Open(producer) error = %v", err)
@@ -708,7 +802,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	}
 
 	// Consumer: a brand-new store with an unrelated bootstrap root.
-	consumerRoot := filepath.Join(base, "consumer")
+	consumerRoot := unrelatedDoltDir(t)
 	consumer, err := OpenSync(ctx, consumerRoot, "ws-consumer")
 	if err != nil {
 		t.Fatalf("OpenSync(consumer) error = %v", err)
@@ -757,6 +851,9 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
+	// From nothing on purpose: the pristine stage exists to reach the
+	// issues-table-absent short-circuit, which a pre-migrated template copy
+	// can never exercise.
 	root := filepath.Join(t.TempDir(), "dolt")
 
 	pristine, err := OpenSync(ctx, root, "ws")
@@ -791,7 +888,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 func TestSyncResetToRemoteHeadRequiresRemoteAndBranch(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
-	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	doltRoot := migratedDoltDir(t)
 	st, err := OpenSync(ctx, doltRoot, "ws")
 	if err != nil {
 		t.Fatalf("OpenSync() error = %v", err)
@@ -866,7 +963,7 @@ func TestGitBackedRemoteURLRoundTripsThroughDolt(t *testing.T) {
 		"/srv/git/repo",
 	} {
 		t.Run(raw, func(t *testing.T) {
-			doltRoot := filepath.Join(t.TempDir(), "dolt")
+			doltRoot := migratedDoltDir(t)
 			st, err := Open(ctx, doltRoot, "test-workspace-id")
 			if err != nil {
 				t.Fatalf("Open() error = %v", err)
@@ -908,8 +1005,8 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
-	rootA := filepath.Join(base, "a")
-	rootB := filepath.Join(base, "b")
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
 	createIssue := func(root, title string) {

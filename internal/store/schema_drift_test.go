@@ -198,6 +198,11 @@ func unifiedSchemaDiff(fromLabel, toLabel, from, to string) string {
 	return out
 }
 
+// openFreshWorkspace builds from nothing on purpose — every test in this file
+// asserts a property of the migration chain's own output (its schema, its
+// determinism), so replaying the chain is the premise, not fixture tax; a
+// template copy would in particular make the determinism test compare one
+// migration run with itself.
 func openFreshWorkspace(t *testing.T) *Store {
 	t.Helper()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")

@@ -146,6 +146,32 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 		return nil, err
 	}
 	s.releaseWorkspaceLock = release
+	// Same per-open branch normalization Store.Open runs: the bootstrap only
+	// normalizes at creation now, so a pre-made database (an adopt's clone)
+	// gets renamed to master here on the mirror's own engine rather than by
+	// a bootstrap pool. The decision is a lock-free read and the commit lock
+	// is taken only when a rename is actually due — read-only OpenSync
+	// consumers (lit sync status, every mirror cycle) must not queue behind
+	// a snapshot copy's minutes-long commit-lock hold for a no-op. The one
+	// branch is the domain's own discriminator: masterRenameSource's typed
+	// absence. [LAW:dataflow-not-control-flow]
+	// [LAW:single-enforcer] The rename itself still runs only inside
+	// ensureMasterDefaultBranch under the commit lock, which re-derives the
+	// decision — the pre-check is an optimization, never the enforcer.
+	renameSource, err := masterRenameSource(ctx, s.db)
+	if err == nil && renameSource != "" {
+		err = s.withCommitLock(ctx, func(ctx context.Context) error {
+			return ensureMasterDefaultBranch(ctx, s.db)
+		})
+	}
+	if err != nil {
+		err = wrapEngineOpenContention(err)
+		if closeErr := s.db.Close(); closeErr != nil && !errors.Is(closeErr, context.Canceled) {
+			err = errors.Join(err, closeErr)
+		}
+		s.releaseWorkspaceLock = nil
+		return nil, err
+	}
 	success = true
 	return s, nil
 }
