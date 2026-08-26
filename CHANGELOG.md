@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-08-26
+
 ### Added
 
 - CI now runs the race detector, in a lane of its own: a new `race` job in `.github/workflows/ci.yml` runs `go test -short -race ./cmd/... ./internal/...` in parallel with the existing test job. Until now nothing in CI ever ran the detector over the store's commit-lock mutex or the interrupt package's goroutine-based signal watching, both of which are genuine in-process concurrency. It is a separate job rather than a `-race` on the existing test step because the detector is a runtime regime, not a flag — measured on this suite it takes `tools/licenses` from 29s to 149s and `internal/cli` from 117s to 242s, so folding it in would have forced every `tools/testbudget/budgets.go` number up to race-inflated figures, leaving that alarm blind to the inner-loop runtime regressions it exists to catch. Scope is the shipped binary and its libraries; `tools/` is build-time repo tooling that never runs on a user's machine. The suite is race-clean as of this change. (links-testing-tt0c.3)
