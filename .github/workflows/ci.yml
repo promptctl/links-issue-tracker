@@ -14,8 +14,13 @@ concurrency:
   cancel-in-progress: true
 
 # Every job here gates merge and must stay fast — <5 min total is the target,
-# and build-and-test is the current outlier the testperf epic
-# (links-testperf-xxsx) is driving down to it. CI runs on
+# and two jobs are over it: build-and-test at 4m52s, which the testperf epic
+# (links-testperf-xxsx) is driving down, and race at 7m40s (both measured
+# 2026-08-26), which sets the gate's critical path. The race lane's overage is
+# instrumentation, not slow tests — the detector multiplies whatever the tests
+# already cost — so it has no fix of its own: its floor comes down when the same
+# epic brings internal/cli's down, and it is the one job here whose number is
+# not an invitation to go optimize this file. CI runs on
 # Linux only by deliberate choice — no macOS runners, no build matrix. The
 # embedded Dolt engine builds with cgo (ICU/zstd); covering a second OS would
 # slow the gate and add platform-provisioning machinery for little signal, so
@@ -47,6 +52,45 @@ jobs:
       - name: Test
         shell: bash
         run: go test -short -json ./... | go run ./tools/testbudget
+
+  # The race detector's own lane. "Do the tests pass, and fast enough?" and "are
+  # there data races?" are two questions, so they are two jobs
+  # ([LAW:decomposition]) running in parallel, not one flag added to the step
+  # above. The split is load-bearing, not tidiness: -race is a runtime regime,
+  # not a flag — it instruments every memory access, and measured on this suite
+  # (2026-08-26) it took tools/licenses from 29s to 149s and internal/cli from
+  # 117s to 242s. Folding it into build-and-test would force every number in
+  # tools/testbudget/budgets.go up to race-inflated figures, and that file is a
+  # map of exactly one territory: un-instrumented inner-loop wall clock
+  # ([LAW:one-source-of-truth]). Re-baselining it to absorb the detector is the
+  # same move the Test step's comment forbids for -timeout — the alarm switched
+  # off, blind thereafter to the runtime regressions it exists to catch. A
+  # failure here also names itself as a race instead of arriving as a generic
+  # red test step.
+  #
+  # Scope is the shipped binary and its libraries, not ./... : tools/ holds
+  # build-time repo tooling that never runs on a user's machine, and a race
+  # there cannot reach anyone. That is a structural boundary, which absorbs new
+  # packages on its own — deliberately not a curated list of "the concurrent
+  # packages", which would be a map that drifts from the code it describes.
+  # No testbudget pipe: this lane's wall clock is instrumentation cost, so
+  # measuring it against the honest budgets would be measuring the wrong thing.
+  race:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: ./.github/actions/install-dolt
+
+      # -short for the same reason the gate uses it: the scale tests exercise
+      # generated volume through the same code paths the ordinary tests already
+      # cover, so under instrumentation they buy hours and no new race coverage.
+      - name: Test with race detector
+        run: go test -short -race ./cmd/... ./internal/...
 
   # Repo/release hygiene gates — fast, platform-independent, ubuntu-only. These
   # check correctness properties of the repo, not the build, so they live apart
