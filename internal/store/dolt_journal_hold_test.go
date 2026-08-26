@@ -51,8 +51,28 @@ func chunkJournalPath(doltRoot string) string {
 // migration's DDL then fails. The failure must surface as the
 // retry-after-holder guidance (not the raw read-only line), and the same
 // open must succeed — applying the migration — once the holder releases.
+//
+// PROFILE FINDING (links-testperf-xxsx.4), for the next migration-test
+// author: at the production budget this test spent 29.2 of its 29.7s inside
+// the failing OpenForRead, and NOT where the epic's notes guessed. The
+// engine-open backoff (engineOpenRetryMaxElapsed) never engages — read opens
+// configure no BackOff, and Dolt's own journal-lock wait is 100ms before the
+// read-only fallback. Migration mechanics are also innocent: Open 0.4s,
+// DownTo 19ms, and the healing open applies the migration in 64ms. The whole
+// wait is retryTransientGCContention grinding its ~26s of sleeps against a
+// DOLT_COMMIT whose manifest-read-only failure classifies as transient GC
+// contention but cannot heal while the holder lives. That wait is correct in
+// production — a short-lived holder overlapping an open is absorbed, not
+// escalated — so the test shrinks transientRetryMaxAttempts rather than the
+// behavior: exhaustion is this premise's CERTAIN outcome, and the assertions
+// are about the exhausted error's shape, not the budget's size.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
-	t.Parallel()
+	// serial: no t.Parallel — rewrites the package-level
+	// transientRetryMaxAttempts budget.
+	prevAttempts := transientRetryMaxAttempts
+	transientRetryMaxAttempts = 2
+	t.Cleanup(func() { transientRetryMaxAttempts = prevAttempts })
+
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
