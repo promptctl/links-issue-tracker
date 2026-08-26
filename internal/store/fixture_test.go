@@ -100,6 +100,19 @@ func buildStoreTemplate() (dir string, commits map[string]bool, _ error) {
 	if err != nil {
 		return "", nil, err
 	}
+	// base lives outside every t.TempDir on purpose (no test's cleanup may
+	// reach a shared template), so a failed build must sweep it itself —
+	// TestMain only removes templates that finished. Success-gated, same
+	// pattern as Open/OpenSync's lock release. [LAW:no-silent-failure]
+	success := false
+	defer func() {
+		if !success {
+			// Thaw first: a build that failed mid-freeze left read-only
+			// directories RemoveAll cannot unlink from.
+			_ = freezeTemplate(base, 0o644, 0o755)
+			_ = os.RemoveAll(base)
+		}
+	}()
 	dir = filepath.Join(base, "dolt")
 	ctx := context.Background()
 	st, err := Open(ctx, dir, "test-workspace-id")
@@ -123,6 +136,7 @@ func buildStoreTemplate() (dir string, commits map[string]bool, _ error) {
 	if err := freezeTemplate(dir, 0o444, 0o555); err != nil {
 		return "", nil, fmt.Errorf("freeze template: %w", err)
 	}
+	success = true
 	return dir, commits, nil
 }
 
