@@ -51,8 +51,17 @@ Attribution is the (stream, workspace, principal) triple — the existing
 work-claims pair plus the principal reference the access-control design
 requires. `config-ref` names the config-stream version in force when the event
 was authored (`INV:config-versioned`). `causal-position` is a Lamport
-timestamp; combined with the writer id it gives the fold a total order without
-clocks. The signature slot is structural from v1: before the access-control
+timestamp with the real Lamport advance rule, which is load-bearing and stated
+here so no implementation ships the cheap half: a writer mints its next event
+at `1 + max(its own last counter, the highest causal-position among all events
+it has folded)`. Observing an event therefore always places your next event
+after it — an intent minted *because* you saw something supersedes that
+something on every machine. A plain per-writer sequence number would not have
+this property, and the failure it produces is §fold's no-crime-scene kind: a
+deliberate override sorting before the event it overrides, discarded
+identically everywhere. Combined with the writer id as tiebreak, the pair
+gives the fold a total order without wall clocks. The signature slot is
+structural from v1: before the access-control
 write layer ships, events are self-signed by their checkout identity; the slot
 exists so that shipping verification later changes policy, not schema.
 
@@ -65,6 +74,20 @@ event that embeds a derived value forks truth into two homes:
   arbitrate nonsense.
 - RIGHT: `{"type":"rank.place","issue":"x1","above":"y2"}` — an intent that
   stays meaningful whatever else happened concurrently.
+
+**Issue identity.** Ids are minted with no coordination, so they must be
+collision-proof by construction: an issue id derives from the creating event's
+`(writer-id, causal-position, content)` — opaque, and impossible for two
+offline checkouts to collide on. The current store's child scheme
+(`epic.<maxChild+1>` computed from the local view — see
+`newChildIssueID` in `internal/store/issue_ids.go`) is a guaranteed collision
+under concurrent filing and does not carry over as identity. Sequential child
+numbering survives as **fold-derived presentation**: the fold assigns display
+ordinals deterministically, so two children filed offline under one epic are
+two distinct issues that both survive and both get a number. This adopts the
+opaque-id direction the access-control design already mandates (its "required
+lit redesigns" §1, which remains the id-scheme's normative home); this
+section records only the event-store consequence.
 
 **Schema versioning.** Events are immortal, so every shape ever shipped stays
 readable forever. Readers hold a chain of pure upcasters (v1→v2→…) applied at
@@ -119,8 +142,15 @@ eraser in the whole design and it is cryptographic (§security-and-config).
 
 **Ref hygiene.** Writer refs are per-checkout, and checkouts die; the store
 prunes refs whose checkout the existing dead-checkout detection (work-claims
-liveness leg) proves deleted, after their events are anchored by a sweep
-commit so no data is lost — pruning trims the *namespace*, never the events.
+liveness leg) proves deleted — pruning trims the *namespace*, never the
+events. The sweep needs no shared ref and no exception to
+`INV:single-writer-ref`: the sweeping checkout appends a sweep event to **its
+own** ref, with the dead ref's head as an additional git parent, so the dead
+writer's objects stay reachable from a live chain; the dead ref is then
+deleted with a compare-and-swap. Nobody ever writes the dead ref or a common
+one. Two survivors racing to sweep the same corpse is harmless: sweep events
+are idempotent facts the fold deduplicates, and the CAS delete has at most
+one winner — the loser's delete no-ops.
 Loose objects from event bursts are packed on the same maintenance occasions
 git already runs; the budgets file carries the ceiling on what lit may add to
 the code repo's own `git status`/`git fetch` times, because the first place
@@ -179,11 +209,20 @@ status: destination
 Rank is the most contended object in the system — one shared total order the
 whole fleet reorders constantly — and the hottest fold path (see budgets).
 Rank events are **relative intents**: `place X above Y`, `place X at
-top/bottom of frame F`. The fold applies intents in the global total order;
-later intents about the same issue supersede earlier ones (last intent wins,
-which is what a human expects: the later decision stands). Concurrent intents
-about different issues commute; concurrent intents about the same issue
-resolve by the same total order every machine shares.
+top/bottom of frame F`. The fold applies intents in the global total order,
+and supersession is scoped honestly to what the order can promise. For
+**causally ordered** intents — the writer had folded the earlier intent when
+it minted the later one — the later strictly supersedes, guaranteed by the
+Lamport advance rule in §events; that is the "the later decision stands" a
+human expects, and it covers every intent made in view of the state it
+changes. For **genuinely concurrent** same-issue intents there is no "later":
+the shared total order settles them as deterministic arbitration, and the
+design claims convergence there, not recency. Concurrent intents **commute
+only when their subject-and-anchor sets are disjoint**: `place X above Y`
+concurrent with `place Y above X` has different subjects but contradictory
+content, and it too resolves by the total order — for this reason the fold
+may not be partitioned or parallelized by subject issue, which would break
+`INV:deterministic-fold` on exactly the anchor-overlap case.
 
 An intent survives interleaving in a way a position never can: "above Y" stays
 above Y however the list shuffled around them, where a stored position 4 is a
@@ -216,9 +255,9 @@ lock costs the design.
 "Premature optimization" does not apply to snapshots, and the objection should
 be met on its own turf: the proverb correctly bans speculative machinery for
 unmeasured problems. The refold ceiling in budgets.md is not speculative — it
-is a charter constraint (<1s, 10x fleet), and a fold that only meets it warm
-is a fold that misses it on every fold-version bump. Snapshots are load-bearing
-from the first shipped version.
+descends directly from the charter's hard constraint 3, and a fold that only
+meets it warm is a fold that misses it on every fold-version bump. Snapshots
+are load-bearing from the first shipped version.
 
 ## §sync — refs out, refs in, nothing in front
 status: destination
@@ -227,8 +266,9 @@ status: destination
 mirrors and receive fetches run in background processes; a command reads and
 writes local objects only. The temptation is always modest: *"one quick fetch
 inline here — it's fast and the data's fresher."* That exact reasoning, made
-policy, is how `lit backlog` reached eleven seconds under the current store
-(fixed only by PR #414 after the fact). The current architecture had an
+policy, is how `lit backlog` came to overshoot the per-command directive by an
+order of magnitude under the current store (budgets.md's pre-#414 baseline
+row; fixed only by PR #414 after the fact). The current architecture had an
 excuse: embedded Dolt permits one read-write engine, so background sync would
 break foreground commands, and inline was the least-bad seat for the fetch.
 This design removes the excuse — appends and folds cannot conflict with a
