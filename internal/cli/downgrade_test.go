@@ -75,6 +75,7 @@ func newFakeTarget() *release.Target {
 }
 
 func TestRunDowngradeWithHappyPath(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	dg := &stubDowngrader{}
 	inst := &stubInstaller{}
@@ -98,6 +99,7 @@ func TestRunDowngradeWithHappyPath(t *testing.T) {
 }
 
 func TestRunDowngradeWithInstallFailureSurfacesRecovery(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	dg := &stubDowngrader{}
 	inst := &stubInstaller{err: errors.New("network down")}
@@ -119,6 +121,7 @@ func TestRunDowngradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 }
 
 func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
+	t.Parallel()
 	res := &stubResolver{target: newFakeTarget()}
 	dg := &stubDowngrader{err: errors.New("schema refused")}
 	inst := &stubInstaller{}
@@ -133,6 +136,7 @@ func TestRunDowngradeWithSchemaErrorSkipsInstall(t *testing.T) {
 }
 
 func TestNormalizeReleaseTag(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in      string
 		want    string

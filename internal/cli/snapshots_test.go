@@ -595,6 +595,7 @@ func TestSnapshotsNew_CollectsInterruptOrphanedResidue(t *testing.T) {
 // USER budget would silently destroy a rollback path its own producer still
 // counts on; ordinary user names (bare and labeled) stay in.
 func TestIsUserSnapshotName(t *testing.T) {
+	t.Parallel()
 	for name, want := range map[string]bool{
 		"1723200000000000001":                                   true,
 		"1723200000000000001-nightly":                           true,

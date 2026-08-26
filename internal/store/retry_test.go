@@ -29,6 +29,7 @@ func (f *fakeRetryOperation) run(_ context.Context) error {
 func noRotate(context.Context) error { return nil }
 
 func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			transientGCContentionError{err: errors.New("transient manifest read only")},
@@ -52,6 +53,7 @@ func TestRetryTransientGCContentionRetriesTransientError(t *testing.T) {
 }
 
 func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T) {
+	t.Parallel()
 	results := make([]error, 0, transientRetryMaxAttempts)
 	for attempt := 1; attempt < transientRetryMaxAttempts; attempt++ {
 		results = append(results, transientGCContentionError{err: errors.New("transient")})
@@ -87,6 +89,7 @@ func TestRetryTransientGCContentionReturnsLastErrorAfterExhaustion(t *testing.T)
 // WorkspaceWriteBlockedError — not the raw transient — while still preserving the
 // backend cause for diagnosis. [FRAMING:representation]
 func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.T) {
+	t.Parallel()
 	// Shape the input the way production does — through wrapCommitWorkingSetError,
 	// the real entry a Dolt commit error flows through — so the test is a true map
 	// of the production error, not a bare-string approximation.
@@ -125,6 +128,7 @@ func TestRetryTransientGCContentionPromotesExhaustedManifestReadOnly(t *testing.
 // online-GC reset is an intra-process condition and must stay the plain transient
 // error, never the holder message.
 func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) {
+	t.Parallel()
 	results := make([]error, 0, transientRetryMaxAttempts)
 	for attempt := 1; attempt <= transientRetryMaxAttempts; attempt++ {
 		results = append(results, errors.New("this connection was established when this server performed an online garbage collection. please reconnect."))
@@ -148,6 +152,7 @@ func TestRetryTransientGCContentionKeepsExhaustedGCResetTransient(t *testing.T) 
 }
 
 func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			errors.New("some other storage failure"),
@@ -171,6 +176,7 @@ func TestRetryTransientGCContentionDoesNotRetryNonTransientError(t *testing.T) {
 }
 
 func TestRetryTransientGCContentionHonorsContextTimeoutDuringBackoff(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			transientGCContentionError{err: errors.New("transient timeout")},
@@ -198,6 +204,7 @@ func TestRetryTransientGCContentionHonorsContextTimeoutDuringBackoff(t *testing.
 // the GC reset poisons the connection, so the retry must rotate it before each
 // re-attempt. One rotation per backoff, never after the final (succeeding) call.
 func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			transientGCContentionError{err: errors.New("gc reset 1")},
@@ -229,6 +236,7 @@ func TestRetryTransientGCContentionRotatesConnectionBetweenAttempts(t *testing.T
 // aborts the retry loudly instead of silently looping on a dead connection.
 // [LAW:no-silent-failure]
 func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			transientGCContentionError{err: errors.New("gc reset")},
@@ -260,6 +268,7 @@ func TestRetryTransientGCContentionSurfacesRotateFailure(t *testing.T) {
 // until its ctx dies — so the test fails (hangs past its deadline, or returns
 // the wrong error) if the loop ever stops threading a live ctx through.
 func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.T) {
+	t.Parallel()
 	op := &fakeRetryOperation{
 		results: []error{
 			transientGCContentionError{err: errors.New("gc reset")},
@@ -297,6 +306,7 @@ func TestRetryTransientGCContentionCancellationEscapesBlockedRotator(t *testing.
 }
 
 func TestTransientRetryDelayIsBounded(t *testing.T) {
+	t.Parallel()
 	for attempt := 1; attempt <= 10; attempt++ {
 		delay := transientRetryDelay(attempt)
 		if delay < transientRetryBaseDelay {
@@ -309,6 +319,7 @@ func TestTransientRetryDelayIsBounded(t *testing.T) {
 }
 
 func TestWrapCommitWorkingSetErrorMarksManifestReadOnly(t *testing.T) {
+	t.Parallel()
 	err := wrapCommitWorkingSetError(errors.New("Error 1105: cannot update manifest: database is read only"))
 	if !errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
@@ -322,6 +333,7 @@ func TestWrapCommitWorkingSetErrorMarksManifestReadOnly(t *testing.T) {
 // variant: a commit that hits Dolt's online-GC connection invalidation must be
 // classified transient so it is retried (with a reconnect), not surfaced raw.
 func TestWrapCommitWorkingSetErrorMarksGCReset(t *testing.T) {
+	t.Parallel()
 	err := wrapCommitWorkingSetError(errors.New("this connection was established when this server performed an online garbage collection. this connection can no longer be used. please reconnect."))
 	if !errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
@@ -329,6 +341,7 @@ func TestWrapCommitWorkingSetErrorMarksGCReset(t *testing.T) {
 }
 
 func TestWrapCommitWorkingSetErrorLeavesNonTransientUnmarked(t *testing.T) {
+	t.Parallel()
 	err := wrapCommitWorkingSetError(errors.New("permission denied"))
 	if errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("errors.Is(err, ErrTransientGCContention) = true, err=%v", err)
@@ -339,6 +352,7 @@ func TestWrapCommitWorkingSetErrorLeavesNonTransientUnmarked(t *testing.T) {
 }
 
 func TestClassifyTransientGCErrorWrapsManifestReadOnly(t *testing.T) {
+	t.Parallel()
 	err := classifyTransientGCError(errors.New("commit add comment: Error 1105: cannot update manifest: database is read only"))
 	if !errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
@@ -346,6 +360,7 @@ func TestClassifyTransientGCErrorWrapsManifestReadOnly(t *testing.T) {
 }
 
 func TestClassifyTransientGCErrorWrapsGCReset(t *testing.T) {
+	t.Parallel()
 	err := classifyTransientGCError(errors.New("gc_copier: this connection was established when this server performed an online garbage collection. please reconnect."))
 	if !errors.Is(err, ErrTransientGCContention) {
 		t.Fatalf("errors.Is(err, ErrTransientGCContention) = false, err=%v", err)
@@ -356,6 +371,7 @@ func TestClassifyTransientGCErrorWrapsGCReset(t *testing.T) {
 // the GC-reset predicate: the cluster role-transition error also says "please
 // reconnect" but is not GC contention, so it must NOT be retried as transient.
 func TestClassifyTransientGCErrorLeavesClusterRoleReconnect(t *testing.T) {
+	t.Parallel()
 	source := errors.New("this server transitioned cluster roles. this connection can no longer be used. please reconnect.")
 	err := classifyTransientGCError(source)
 	if errors.Is(err, ErrTransientGCContention) {
@@ -364,6 +380,7 @@ func TestClassifyTransientGCErrorLeavesClusterRoleReconnect(t *testing.T) {
 }
 
 func TestClassifyTransientGCErrorLeavesGenericFailures(t *testing.T) {
+	t.Parallel()
 	source := errors.New("permission denied")
 	err := classifyTransientGCError(source)
 	if err != source {
@@ -372,6 +389,8 @@ func TestClassifyTransientGCErrorLeavesGenericFailures(t *testing.T) {
 }
 
 func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
+	// serial: no t.Parallel — asserts non-entry through a 25ms window; load-
+	// sensitive.
 	s := &Store{commitLockPath: filepath.Join(t.TempDir(), ".links-commit.lock")}
 	firstEntered := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})

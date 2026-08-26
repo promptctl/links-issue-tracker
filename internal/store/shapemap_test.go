@@ -12,6 +12,7 @@ import (
 // --- Validate: the single totality enforcer (acceptance #1) ---
 
 func TestValidateRejectsIncompleteMapping(t *testing.T) {
+	t.Parallel()
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issues", Columns: []string{"id", "title"}, Rows: [][]any{{"i1", "T"}}},
 	}}
@@ -32,6 +33,7 @@ func TestValidateRejectsIncompleteMapping(t *testing.T) {
 }
 
 func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
+	t.Parallel()
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issues", Columns: []string{"id"}, Rows: nil},
 	}}
@@ -93,6 +95,7 @@ func TestValidateRejectsStaleAndMalformedKeys(t *testing.T) {
 // declines rather than emit a mapping that drops one alias's data, and the public
 // boundary rejects a hand-built mapping that leaves the other alias unaccounted.
 func TestRejectsAmbiguousAlias(t *testing.T) {
+	t.Parallel()
 	// An otherwise-complete issues table that carries BOTH the v1 name and its
 	// pre-goose alias for the prompt field.
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
@@ -135,6 +138,7 @@ func TestRejectsAmbiguousAlias(t *testing.T) {
 // comment (ReplaceFromExport does raw inserts, bypassing ImportComment's
 // required-field checks).
 func TestDeterministicMapDeclinesThinNonIssuesTable(t *testing.T) {
+	t.Parallel()
 	// A complete issues table (so issues is not the reason to decline) plus a
 	// comments table carrying only issue_id.
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
@@ -178,6 +182,7 @@ func fullIssuesMapping(table RawTable) TableMapping {
 // table — whatever the collection — reaches Apply and fabricates empty required
 // fields. Optional fields (e.g. issues.topic, events.action) are not required.
 func TestDeterministicMapDeclinesThinRequiredTargets(t *testing.T) {
+	t.Parallel()
 	cases := map[string]RawTable{
 		// issues covering the historical-shape columns but missing id/title:
 		// Apply would build an issue with empty id/title.
@@ -209,6 +214,7 @@ func TestDeterministicMapDeclinesThinRequiredTargets(t *testing.T) {
 // than panicking on a positional index deep in Apply. The dump may be a
 // serialized artifact, so this is real external input.
 func TestValidateRejectsRowArityMismatch(t *testing.T) {
+	t.Parallel()
 	// A complete issues shape (so coverage passes and the arity check is what
 	// fires) whose single row is one cell short of the column count.
 	cols := []string{"id", "title", "description", "status", "priority", "issue_type", "closed_at", "created_at", "updated_at"}
@@ -225,6 +231,7 @@ func TestValidateRejectsRowArityMismatch(t *testing.T) {
 // --- Drop provenance distinguishable from migration history (acceptance #2) ---
 
 func TestClassifyDropDistinguishesProvenance(t *testing.T) {
+	t.Parallel()
 	if prov, reason := classifyDrop("goose_db_version", "version_id"); prov != DropIntended || reason == "" {
 		t.Fatalf("bookkeeping column: got (%q,%q), want intended with a reason", prov, reason)
 	}
@@ -234,6 +241,7 @@ func TestClassifyDropDistinguishesProvenance(t *testing.T) {
 }
 
 func TestParseDroppedColumnsReadsMigrationHistory(t *testing.T) {
+	t.Parallel()
 	sqlText := "ALTER TABLE issues DROP COLUMN legacy_field;\n" +
 		"ALTER TABLE `relations` DROP COLUMN IF EXISTS `old_col`;\n" +
 		"ALTER TABLE issues DROP COLUMN a, DROP COLUMN b;"
@@ -256,6 +264,7 @@ func TestParseDroppedColumnsReadsMigrationHistory(t *testing.T) {
 // Down; reading Down would misclassify a kept column as an intended drop and
 // could justify discarding live data.
 func TestGooseUpSectionExcludesDownDrops(t *testing.T) {
+	t.Parallel()
 	addInUpDropInDown := "-- +goose Up\n" +
 		"ALTER TABLE issues ADD COLUMN foo TEXT;\n" +
 		"-- +goose Down\n" +
@@ -287,6 +296,7 @@ func mustClean(t *testing.T, report HealthReport) {
 // the produced Export rebuilds into a clean workspace with every issue
 // conserved — exercising the actual dumper and the typed write path.
 func TestDeterministicMapCleanAhead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	src := filepath.Join(t.TempDir(), "src")
 	const ws = "test-workspace-id"
@@ -376,6 +386,7 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 // status vocabulary, no goose_db_version, no topic/item_rank — and proves it
 // rebuilds clean with the aliased values and canonicalized statuses intact.
 func TestDeterministicMapPreGoose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	const created = "2026-01-01T00:00:00Z"
 	const closed = "2026-01-02T00:00:00Z"
@@ -456,6 +467,7 @@ func TestDeterministicMapPreGoose(t *testing.T) {
 // --- The NULL-vs-"" distinction is load-bearing and preserved ---
 
 func TestApplyTransformPreservesNull(t *testing.T) {
+	t.Parallel()
 	// An epic's NULL status must never be coerced to a leaf value, and a NULL
 	// timestamp must never become a zero time, by any transform.
 	for _, tf := range []Transform{TransformIdentity, TransformLegacyStatus, TransformTimestamp} {
@@ -477,6 +489,7 @@ func TestApplyTransformPreservesNull(t *testing.T) {
 // value — [LAW:no-silent-failure], the conservation guarantee a recovery tool
 // must hold.
 func TestApplyRejectsCorruptTimestamp(t *testing.T) {
+	t.Parallel()
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issues",
 			Columns: []string{"id", "title", "description", "status", "priority", "issue_type", "closed_at", "created_at", "updated_at"},

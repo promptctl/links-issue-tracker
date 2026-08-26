@@ -11,6 +11,7 @@ import (
 // divergence to 1970. The fractional-decimal case is the real driver format that
 // forced the NullString scan in the first place. [LAW:no-silent-failure]
 func TestParseUnixSeconds(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		raw       sql.NullString
@@ -48,6 +49,7 @@ func TestParseUnixSeconds(t *testing.T) {
 // valid is 0 (absent). This is what dates a divergence to its earliest fork commit
 // across the two ranges.
 func TestEarlierValidUnix(t *testing.T) {
+	t.Parallel()
 	v := func(n int64) sql.NullInt64 { return sql.NullInt64{Int64: n, Valid: true} }
 	invalid := sql.NullInt64{Valid: false}
 	cases := []struct {

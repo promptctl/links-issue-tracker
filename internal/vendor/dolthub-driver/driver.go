@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/dolthub/dolt/go/cmd/dolt/commands/engine"
 	"github.com/dolthub/dolt/go/cmd/dolt/errhand"
@@ -58,6 +59,17 @@ type doltDriver struct {
 // openSqlEngineForConnector exists to make OpenConnector retry behavior testable without
 // needing to take actual filesystem locks. Production code should leave this nil.
 var openSqlEngineForConnector func(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.Filesys, dir, version string, seCfg *engine.SqlEngineConfig) (*engine.SqlEngine, error)
+
+// engineConstructMu serializes SQL-engine construction process-wide (lit
+// patch 5). Constructing an engine writes package-level state in the dolt
+// stack: go-mysql-server's InitStatusVariables rewrites the global
+// status-variable table, and NewSqlEngine re-points the global
+// binlog-consumer singleton. Two engines constructed concurrently in one
+// process therefore race on those globals — even when their databases live
+// at unrelated paths. Queries against already-constructed engines touch
+// none of this state, so only construction needs the fence.
+// [LAW:no-shared-mutable-globals]
+var engineConstructMu sync.Mutex
 
 func openSqlEngine(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.Filesys, dir, version string, seCfg *engine.SqlEngineConfig) (*engine.SqlEngine, error) {
 	if openSqlEngineForConnector != nil {
@@ -102,6 +114,8 @@ func openSqlEngine(ctx context.Context, cfg config.ReadWriteConfig, fs filesys.F
 		return nil, loadErr
 	}
 
+	engineConstructMu.Lock()
+	defer engineConstructMu.Unlock()
 	return engine.NewSqlEngine(ctx, mrEnv, seCfg)
 }
 

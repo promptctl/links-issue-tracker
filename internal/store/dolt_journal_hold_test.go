@@ -20,6 +20,7 @@ import (
 // copy's database-dir stat would then pass, and a bogus empty "snapshot"
 // would be minted where the command previously failed clean.
 func TestLockDoltJournalExclusiveRefusesUninitializedWorkspace(t *testing.T) {
+	t.Parallel()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
 	release, err := LockDoltJournalExclusive(context.Background(), doltRoot)
@@ -51,6 +52,7 @@ func chunkJournalPath(doltRoot string) string {
 // retry-after-holder guidance (not the raw read-only line), and the same
 // open must succeed — applying the migration — once the holder releases.
 func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -120,6 +122,7 @@ func TestOpenForReadPendingMigrationUnderJournalHolder(t *testing.T) {
 // vacuously against a journal nothing would have recovered anyway.
 // [LAW:verifiable-goals]
 func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

@@ -23,6 +23,7 @@ import (
 // shared-ancestor divergence still reconciling is proved by
 // TestSyncReconcileLinearizesDivergenceAndFastForwardPushes.
 func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -100,6 +101,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 // the same issue (e.g. the same logical ticket filed in both stores). The
 // reconcile reads both anchors AS OF and reports the correct three-way partition.
 func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -154,6 +156,7 @@ func ownerApprovedTakeToken(t *testing.T, ctx context.Context, st *Store, remote
 // the remote and sync report clean, and the discard of the local-only issue is
 // reported (not silent) via the result's inventory.
 func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -207,6 +210,7 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 // fast-forwardable descendant carrying its own backlog; a push then converges the
 // remote), and the discard of the remote-only issue is reported, not silent.
 func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -278,6 +282,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 // commit landing after issuance voids it — the refusal re-mints a token for the
 // moved fork, and only that fresh token runs. No refused path mutates.
 func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -339,6 +344,7 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 // and combine settles as SyncReconcileCombined. The union then fast-forward-pushes and the
 // remote side converges onto it, proving no side's issues were lost. [LAW:no-silent-failure]
 func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -406,6 +412,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 // union. It proves the two-way (no base) resolution surfaces prose exactly as the shared-history
 // three-way does. [LAW:no-silent-failure]
 func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -545,6 +552,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 // wholesale would silently drop the other side's non-conflicting work. The resolver
 // refuses loudly and mutates nothing. [LAW:no-silent-failure]
 func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -589,6 +597,7 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 // push. It must refuse and mutate nothing — while take-remote, which adopts the remote
 // head wholesale and authors no replay commit, is exempt and proceeds. [LAW:single-enforcer]
 func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -643,6 +652,7 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 // valid, so an unknown value is rejected at SyncResolveUnrelated's door rather than
 // reaching the dispatch and silently no-op'ing. [LAW:no-silent-failure]
 func TestUnrelatedResolutionValid(t *testing.T) {
+	t.Parallel()
 	for _, valid := range []UnrelatedResolution{TakeLocal, TakeRemote} {
 		if !valid.valid() {
 			t.Errorf("%q reported invalid, want valid", valid)
@@ -710,6 +720,7 @@ func assertIDSet(t *testing.T, label string, got, want []string) {
 // this replaces is the 2026-08-08 field-incident cost: the data survived but its
 // provenance did not.
 func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -784,6 +795,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 // provenance commit, gone at the marker — attributing the destruction to the
 // take itself rather than to any of local's commits.
 func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	rootA := filepath.Join(base, "a")
@@ -934,6 +946,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 // is the first provenance step (a replayDeltaOnScratch commit — pinning the
 // per-step single-attempt contract, not just the lift's).
 func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		failAt int

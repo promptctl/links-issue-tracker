@@ -30,6 +30,9 @@ func journalLockPath(doltRoot string) string {
 // certain instead of timing-dependent. [LAW:no-silent-failure]
 // [LAW:no-ambient-temporal-coupling]
 func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// engineOpenRetryMaxElapsed budget and asserts a wall-clock bound on the
+	// failure.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	s, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -73,6 +76,9 @@ func TestOpenFailsLoudWhenForeignEngineHoldsJournalLock(t *testing.T) {
 // a read-only one. The release happens while Open is already retrying; the
 // retry loop — not test timing — owns the reconciliation.
 func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// engineOpenRetryMaxElapsed budget, which would govern every concurrently
+	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	s, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -115,6 +121,9 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 // mirror blocked behind a healthy long-running writer records a push
 // FAILURE and pages the owner over ordinary serialization.
 func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
+	// serial: no t.Parallel — rewrites the package-level
+	// engineOpenRetryMaxElapsed budget, which would govern every concurrently
+	// running Open.
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	s, err := Open(ctx, doltRoot, "test-workspace-id")
@@ -153,6 +162,7 @@ func TestOpenSyncContentionCarriesWorkspaceBusy(t *testing.T) {
 // dolt's read-only fallback and serves reads — reading a store someone else is
 // writing is exactly what a read open is for.
 func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 	s, err := Open(ctx, doltRoot, "test-workspace-id")

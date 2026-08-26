@@ -74,6 +74,7 @@ func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings
 // released, transferred, or cleaned up — and that only stays true if deriving
 // never quietly materializes a cache, a marker, or a "last computed" row.
 func TestDerivingClaimsWritesNothing(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {
@@ -105,6 +106,7 @@ func TestDerivingClaimsWritesNothing(t *testing.T) {
 // that would catch the columns being written, read, or joined wrongly while
 // every in-memory case stayed green.
 func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	st, err := Open(ctx, filepath.Join(t.TempDir(), "dolt"), "test-workspace-id")
 	if err != nil {

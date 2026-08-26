@@ -10,7 +10,7 @@ instead of on a remote host, so the patch travels with the PR that needed it.
 
 ## Why this exists
 
-This copy carries **four** independent patches. When refreshing (below), all
+This copy carries **five** independent patches. When refreshing (below), all
 must be re-applied.
 
 ### Patch 1 — telemetry removal (`connector.go`, `driver.go`)
@@ -129,6 +129,25 @@ On refresh, expect upstream to still have all of this. Re-apply the rewrite and
 re-drop both test dependencies; do not "restore" them because the diff looks
 lossy. See lit ticket `links-licensing-c0ce.2`.
 
+### Patch 5 — serialize engine construction (`driver.go`)
+
+Constructing a SQL engine writes package-level state in the dolt stack:
+`go-mysql-server`'s `InitStatusVariables` (called from `gms.New`, inside
+`engine.NewSqlEngine`) rewrites the process-global status-variable table,
+and `NewSqlEngine` re-points the global binlog-consumer singleton
+(`doltBinlogConsumer.SetEngine`). Two engines constructed concurrently in
+one process therefore data-race on those globals even when their databases
+live at unrelated paths — `go test -race` on lit's parallelized
+`internal/store` suite caught exactly this (145 warnings, all at
+construction; none during query execution).
+
+The patch holds a package-level mutex (`engineConstructMu` in `driver.go`)
+around the `engine.NewSqlEngine` call, the one funnel every engine
+construction in this driver passes through. Construction is serialized;
+opened engines run concurrently exactly as before. This protects any lit
+path that opens multiple stores in one process (the cross-project rollup,
+parallel tests).
+
 ## Refreshing this copy
 
 When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
@@ -138,7 +157,7 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
    `replace` directive temporarily removed).
 2. Diff `$(go env GOMODCACHE)/github.com/dolthub/driver@<version>` against
    this directory to see what upstream changed.
-3. Re-apply **all three** patches against the new version, copying the rest
+3. Re-apply **all five** patches against the new version, copying the rest
    of upstream's changes through untouched:
    - Patch 1: delete `emitUsageEvent` and its supporting machinery in
      `connector.go`, and the `go emitUsageEvent(...)` call in `driver.go`.
@@ -162,6 +181,12 @@ When bumping the `dolthub/driver` version pinned in the top-level `go.mod`:
      `go mod tidy && grep -rn "go-sql-driver" --include="*.go" --include=go.mod .`
      returning no import or requirement, and that lit's
      `internal/store` still matches error 1146 via `isMissingTableError`.
+   - Patch 5: re-add the package-level `engineConstructMu sync.Mutex` in
+     `driver.go` and hold it around exactly the `engine.NewSqlEngine` call at
+     the end of `openSqlEngine` — after the env load, so the I/O-bound open
+     phases stay outside the fence. Confirm with lit's parallelized
+     `internal/store` suite under `go test -short -race`, which fails with
+     construction-time DATA RACE warnings if the fence is missing.
 4. Update the `replace` directive's version comment in the top-level
    `go.mod` to match.
 

@@ -30,6 +30,7 @@ func rankedDump() RawDump {
 // TestVerifyCandidateReconciledOnFaithfulRebuild is acceptance #1: a correct
 // rebuild passes — Doctor-clean and every conservation law holds.
 func TestVerifyCandidateReconciledOnFaithfulRebuild(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := rankedDump()
 
@@ -55,6 +56,7 @@ func TestVerifyCandidateReconciledOnFaithfulRebuild(t *testing.T) {
 // yet corrupts the data: priority values collide as ranks. The gate must catch it
 // by the rank-permutation law, naming the colliding ids — not by guessing.
 func TestVerifyCandidateRejectsMisMappedRank(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dump := rankedDump()
 
@@ -89,6 +91,7 @@ func TestVerifyCandidateRejectsMisMappedRank(t *testing.T) {
 // against the raw dump, with no round-trip: a collection short of its source row
 // count is reported, naming the collection and both counts.
 func TestCountFindingsDetectsRowLoss(t *testing.T) {
+	t.Parallel()
 	dump := rankedDump() // 2 issue rows
 	// A rebuild that lost one issue.
 	export := model.Export{Issues: []model.Issue{{ID: "i1"}}}
@@ -112,6 +115,7 @@ func TestCountFindingsDetectsRowLoss(t *testing.T) {
 // matches the row count must produce no count finding, no matter how many change
 // rows it nests.
 func TestCountFindingsExcludesConditionalFanOutChildren(t *testing.T) {
+	t.Parallel()
 	const created = "2026-01-01T10:00:00Z"
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issue_history",
@@ -148,6 +152,7 @@ func TestCountFindingsExcludesConditionalFanOutChildren(t *testing.T) {
 // isolation: an id present in the source but missing from the rebuild, and an id
 // the rebuild invented, are each reported.
 func TestIDStabilityFindingsDetectsLostAndExtraIDs(t *testing.T) {
+	t.Parallel()
 	dump := rankedDump() // source issue ids: i1, i2
 	export := model.Export{Issues: []model.Issue{{ID: "i1"}, {ID: "i9"}}}
 
@@ -173,6 +178,7 @@ func TestIDStabilityFindingsDetectsLostAndExtraIDs(t *testing.T) {
 // contributing column, so id stability does not flag a second table's ids as
 // spuriously extra.
 func TestSourceValuesForAggregatesAcrossTables(t *testing.T) {
+	t.Parallel()
 	dump := RawDump{Tables: []RawTable{
 		{Name: "issues", Columns: []string{"id"}, Rows: [][]any{{"i1"}, {"i2"}}},
 		{Name: "issues_overflow", Columns: []string{"id"}, Rows: [][]any{{"i3"}}},

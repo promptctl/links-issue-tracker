@@ -14,6 +14,7 @@ import (
 // there a local backlog to lose?" for an absent or empty store WITHOUT creating
 // it — the property that lets a fresh init clone straight into the target path.
 func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 
@@ -48,6 +49,7 @@ func TestLocalHasTicketsDoesNotCreateStore(t *testing.T) {
 // replaced. Uses a plain dolt file remote; the git-backed transport is covered
 // end-to-end by the CLI init integration test.
 func TestAdoptRemoteByCloneBootstrapsAndReAdopts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	producer := filepath.Join(base, "producer")
@@ -90,6 +92,7 @@ func assertHasIssueAfterAdopt(t *testing.T, ctx context.Context, root, id string
 // nor an adopt-pending marker, so the retry the error text asks for starts
 // from a provably clean slate — and the retry itself succeeds.
 func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	producer := filepath.Join(base, "producer")
@@ -127,6 +130,7 @@ func TestAdoptRemoteByCloneFailedCloneLeavesNoResidue(t *testing.T) {
 // consumed the marker without opening the leftover, and the retried adopt
 // discards it and re-clones to a working store with the marker gone.
 func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
 	producer := filepath.Join(base, "producer")
@@ -181,6 +185,7 @@ func TestAdoptRemoteByCloneHealsAbandonedAdoptResidue(t *testing.T) {
 // exclusive workspace hold), so while that hold is live it reports
 // workspace-busy instead of racing the holder's discard+clone with a CREATE.
 func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 	if err := os.MkdirAll(root, 0o755); err != nil {
@@ -206,6 +211,7 @@ func TestEnsureDatabaseContendsWithWorkspaceExclusiveHolder(t *testing.T) {
 // — never the false "interrupted before completing" diagnosis — and the
 // interrupted-adopt refusal fires only once the hold is gone (the adopt died).
 func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {
@@ -244,6 +250,7 @@ func TestMarkerRefusalIsReservedForDeadAdopts(t *testing.T) {
 // perfectly openable database. Removing the marker restores every open,
 // proving the marker was the sole condemner.
 func TestPendingAdoptMarkerCondemnsEveryNormalOpen(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	root := filepath.Join(t.TempDir(), "dolt")
 	if _, err := EnsureDatabase(ctx, root, "ws"); err != nil {

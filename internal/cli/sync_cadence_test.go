@@ -19,6 +19,7 @@ import (
 // — read-mode commands, the opt-in on-push policy — stays silent. The truth
 // table pins all four cells so neither axis can drift into a spurious push.
 func TestShouldSyncAfterMutation(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		access  app.AccessMode
@@ -45,6 +46,7 @@ func TestShouldSyncAfterMutation(t *testing.T) {
 // serialization makes an over-eager allow a harmless no-op, so the boundary
 // errs toward allow.
 func TestShouldReceiveNowDebounce(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	now := time.Now()
 	interval := 10 * time.Second
@@ -77,6 +79,7 @@ func TestShouldReceiveNowDebounce(t *testing.T) {
 // call, observable as the absence marker's mtime standing still — and no
 // mirror-pending claim survives either call.
 func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
+	t.Parallel()
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
@@ -125,6 +128,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 // enable it; empty, unset, and unrecognized strings are false so background sync
 // is never disabled by accident.
 func TestIsTruthyEnv(t *testing.T) {
+	t.Parallel()
 	truthy := []string{"1", "t", "T", "true", "TRUE", "True", " 1 "}
 	for _, v := range truthy {
 		if !isTruthyEnv(v) {

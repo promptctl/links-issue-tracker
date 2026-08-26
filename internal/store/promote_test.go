@@ -142,6 +142,7 @@ func readMarker(t *testing.T, path string) string {
 // workspace, its recorded head matches at promote time and the lost-update gate
 // passes silently.
 func TestPromoteCandidateEndToEnd(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
@@ -208,6 +209,7 @@ func TestPromoteCandidateEndToEnd(t *testing.T) {
 // dump-time state. Nothing on disk changes — no backup is made, and the concurrent
 // commit stays live.
 func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
@@ -258,6 +260,7 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 // state a swap can leave — canonical absent, backup present — and asserts the heal
 // restores the original (rolls back), not forward to anything else.
 func TestHealCanonicalRestoresInterruptedSwap(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
 	backup := canonical + ".backup-1700000000000000001"
@@ -278,6 +281,7 @@ func TestHealCanonicalRestoresInterruptedSwap(t *testing.T) {
 // TestHealCanonicalPicksNewestBackup proves the restore is chronological: among
 // several backups the newest (highest fixed-width stamp) is the one restored.
 func TestHealCanonicalPicksNewestBackup(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
 	markerDir(t, canonical+".backup-1700000000000000001", "older")
@@ -295,6 +299,7 @@ func TestHealCanonicalPicksNewestBackup(t *testing.T) {
 // existing backup path even if the nanosecond stamp repeats, so the prior backup —
 // the most precious artifact in the flow — is never clobbered.
 func TestUniqueBackupPathStepsPastCollision(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
 	const stamp int64 = 1700000000000000001
@@ -318,6 +323,7 @@ func TestUniqueBackupPathStepsPastCollision(t *testing.T) {
 // even though it sorts lexicographically after the numeric stamps and would
 // otherwise roll the workspace back to the wrong contents.
 func TestHealCanonicalIgnoresForeignBackupNames(t *testing.T) {
+	t.Parallel()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
 	markerDir(t, canonical+".backup-1700000000000000001", "real")
@@ -336,6 +342,7 @@ func TestHealCanonicalIgnoresForeignBackupNames(t *testing.T) {
 // between its two renames) is restored from the newest backup; a healthy
 // workspace is left untouched.
 func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
@@ -363,6 +370,7 @@ func TestHealWorkspaceRestoresAfterCrash(t *testing.T) {
 // unverifiable. It fails with the provenance-specific error, never a bogus advance
 // from "", and changes nothing on disk.
 func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
@@ -405,6 +413,7 @@ func TestPromoteCandidateRefusesDumpWithoutProvenance(t *testing.T) {
 // handing back a cwd-relative "workspace" path that would rename an unintended
 // directory into the canonical location.
 func TestPromoteCandidateRejectsDiscardedCandidate(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")
@@ -432,6 +441,7 @@ func TestPromoteCandidateRejectsDiscardedCandidate(t *testing.T) {
 // the canonical path and the failure is surfaced — never a half-swapped or empty
 // canonical, never the unverified candidate.
 func TestPromoteCandidateRollsBackOnInstallFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	storageDir := t.TempDir()
 	canonical := filepath.Join(storageDir, "dolt")

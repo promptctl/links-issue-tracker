@@ -17,6 +17,7 @@ import (
 // TestPushOutcomeOf pins the derivation from one performSyncPush completion to
 // the marker record — every completion shape the deferred write can see.
 func TestPushOutcomeOf(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name    string
 		outcome syncPushOutcome
@@ -82,6 +83,7 @@ func TestPushOutcomeOf(t *testing.T) {
 // TestPushOutcomeMarkerRoundtrip pins that what one push attempt records is
 // exactly what a later command reads back, with a sane age off the file mtime.
 func TestPushOutcomeMarkerRoundtrip(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	want := pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"}
 	recordPushOutcome(ws, want)
@@ -110,6 +112,7 @@ func TestPushOutcomeMarkerRoundtrip(t *testing.T) {
 // a quiet, distinct state (no attempt has happened yet); corruption is a real
 // operational fault that must not silently read as one.
 func TestLastPushOutcomeAbsentAndCorrupt(t *testing.T) {
+	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
 	if _, _, ok := lastPushOutcome(ws, time.Now()); ok {
 		t.Fatal("lastPushOutcome() ok = true on a workspace with no marker")
@@ -127,6 +130,7 @@ func TestLastPushOutcomeAbsentAndCorrupt(t *testing.T) {
 // recorded FAILED attempt warns — never absence, never a landed push, never
 // the healthy skips, never a decision this binary does not know.
 func TestSyncPushFailureLines(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name        string
 		rec         pushOutcomeRecord
@@ -201,6 +205,7 @@ func TestSyncPushFailureLines(t *testing.T) {
 // read-side banner (resolved ref) and the store-free mutation-side banner
 // (no ref): the warning text adapts, the condition does not.
 func TestFetchStalenessLinesRefIsData(t *testing.T) {
+	t.Parallel()
 	stale := 25 * time.Hour
 
 	withRef := fetchStalenessLines("origin/master", stale, true)
@@ -222,6 +227,7 @@ func TestFetchStalenessLinesRefIsData(t *testing.T) {
 // TestOneLineReason pins the banner-size compression: first line, capped,
 // never empty.
 func TestOneLineReason(t *testing.T) {
+	t.Parallel()
 	if got := oneLineReason("line one\nline two"); got != "line one" {
 		t.Fatalf("oneLineReason(multiline) = %q", got)
 	}
@@ -238,6 +244,7 @@ func TestOneLineReason(t *testing.T) {
 // end over real marker files: a failing workspace warns on a mutating
 // command's writer; a healthy one stays silent.
 func TestPrintMutationSyncStalenessWarning(t *testing.T) {
+	t.Parallel()
 	now := time.Now()
 
 	t.Run("failed last push warns", func(t *testing.T) {

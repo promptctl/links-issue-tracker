@@ -29,6 +29,7 @@ func headVersion(t *testing.T) int64 {
 // applies every registry migration in order, goose records HEAD, and each apply
 // lands as its own Dolt commit whose message names the migration.
 func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -60,6 +61,7 @@ func TestFreshOpenAppliesRegistryToHead(t *testing.T) {
 // (stamped at baseline, not re-created) and then forward-migrated to HEAD, with
 // the baseline tables and their data surviving untouched.
 func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -109,6 +111,7 @@ func TestPreGooseAdoptionStampsWithoutRerunningBaseline(t *testing.T) {
 // cleanup: after adoption, the legacy meta.schema_version key is removed so
 // goose_db_version is the sole applied-state authority.
 func TestAdoptionDeletesLegacySchemaVersionKey(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -215,6 +218,7 @@ func stampGooseVersionAhead(t *testing.T, ctx context.Context, doltRoot string) 
 // trim was an implementation detail (and an actively harmful one — it destroyed
 // true migration history and left the live schema ahead of a reset log).
 func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -249,6 +253,7 @@ func TestOpenToleratesAheadOfRegistryWhenBaselineIntact(t *testing.T) {
 // [LAW:behavior-not-structure] Asserts the workspace opens and is queryable,
 // not any particular post-recovery row count in goose_db_version.
 func TestOpenToleratesGooseLogWithOnlyAheadRow(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -285,6 +290,7 @@ func assertIssuesQueryable(t *testing.T, ctx context.Context, st *Store) {
 // cannot operate against. This is the only path that still surfaces
 // UnsupportedSchemaVersionError.
 func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -331,6 +337,7 @@ func TestOpenRefusesAheadOfRegistryWhenBaselineCorrupt(t *testing.T) {
 // When MissingBaseline is populated, the message additionally surfaces the
 // schema gaps so the operator can diagnose the genuine-incompatibility branch.
 func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
+	t.Parallel()
 	forbidden := []string{"delete", "DELETE", "manual SQL", "drop", "DROP"}
 	assertForbiddenAbsent := func(t *testing.T, msg string) {
 		t.Helper()
@@ -435,6 +442,7 @@ func TestUnsupportedSchemaVersionMessageShape(t *testing.T) {
 // for Error() rendering passes while the lookup layer that populates the
 // fields could regress silently.
 func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version.
 	const sentinel = "vSENTINEL-0.4.2"
 	prev := version.Version
 	version.Version = sentinel
@@ -492,6 +500,7 @@ func TestRefusalSurfacesRecoveryDataFromWorkspace(t *testing.T) {
 // binary with no link-time Version (IsDev == true) must NOT write a producer
 // row, so a stray local build does not overwrite a real release stamp.
 func TestProducerBinaryVersionUnstampedForDevBuild(t *testing.T) {
+	// serial: no t.Parallel — rewrites the process-global version.Version.
 	prev := version.Version
 	version.Version = ""
 	t.Cleanup(func() { version.Version = prev })
@@ -515,6 +524,7 @@ func TestProducerBinaryVersionUnstampedForDevBuild(t *testing.T) {
 // workspace stamped exactly at the registry max opens cleanly as a no-op (the
 // guard refuses strictly-greater only).
 func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -561,6 +571,7 @@ func TestOpenAllowsWorkspaceExactlyAtMax(t *testing.T) {
 // surface an error: detecting the drift is no longer where lit stops,
 // applying it is.
 func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -631,6 +642,7 @@ func TestOpenRepairsVersionSlotReuseContentMismatch(t *testing.T) {
 // would already see it as target-eligible — a genuine ALTER error distinct
 // from the "column already exists" case the probe itself excludes.
 func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -673,6 +685,7 @@ func TestRepairVersionContentDriftWithRollbackResetsOnFailure(t *testing.T) {
 // plain `ADD COLUMN <name> <type>` shape every migration in this registry
 // uses parses to exactly the targets present, with no error.
 func TestParseAddColumnTargetsRecognizesPlainForm(t *testing.T) {
+	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';"
 	adds, err := parseAddColumnTargets("00002_add_lane.sql", up)
 	if err != nil {
@@ -693,6 +706,7 @@ func TestParseAddColumnTargetsRecognizesPlainForm(t *testing.T) {
 // whole Up section — so repairVersionContentDrift can execute it alone
 // without re-running unrelated preceding SQL.
 func TestParseAddColumnTargetsCapturesEachStatementSeparately(t *testing.T) {
+	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN resolution VARCHAR(32) NULL;\n" +
 		"ALTER TABLE issues ADD CONSTRAINT issues_resolution_check CHECK (resolution IS NULL OR resolution IN ('duplicate','superseded','obsolete','wontfix'));"
 	adds, err := parseAddColumnTargets("00003_add_resolution.sql", up)
@@ -714,6 +728,7 @@ func TestParseAddColumnTargetsCapturesEachStatementSeparately(t *testing.T) {
 // same quote-tracking discipline parenBlock/splitTopLevel already use
 // elsewhere in this file.
 func TestParseAddColumnTargetsToleratesSemicolonInStringLiteral(t *testing.T) {
+	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN note TEXT NOT NULL DEFAULT 'a;b';\n" +
 		"ALTER TABLE issues ADD COLUMN lane text NOT NULL DEFAULT '';"
 	adds, err := parseAddColumnTargets("00099_semicolon.sql", up)
@@ -740,6 +755,7 @@ func TestParseAddColumnTargetsToleratesSemicolonInStringLiteral(t *testing.T) {
 // alterAddColumnRe cannot parse (here, IF NOT EXISTS) must fail loudly by
 // name, not silently register zero targets for the migration.
 func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
+	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN IF NOT EXISTS lane text NOT NULL DEFAULT '';"
 	_, err := parseAddColumnTargets("00099_unsupported.sql", up)
 	if err == nil {
@@ -753,6 +769,7 @@ func TestParseAddColumnTargetsRejectsUnrecognizedForm(t *testing.T) {
 // TestParseAddColumnTargetsRejectsMultiColumnForm covers the second shape
 // named in review: a parenthesized multi-column ADD COLUMN list.
 func TestParseAddColumnTargetsRejectsMultiColumnForm(t *testing.T) {
+	t.Parallel()
 	up := "ALTER TABLE issues ADD COLUMN (lane text NOT NULL DEFAULT '', resolution VARCHAR(32) NULL);"
 	_, err := parseAddColumnTargets("00099_unsupported.sql", up)
 	if err == nil {
@@ -765,6 +782,7 @@ func TestParseAddColumnTargetsRejectsMultiColumnForm(t *testing.T) {
 // agree (the common case) must open cleanly with no false positive, whether
 // or not there are pending migrations.
 func TestOpenToleratesHealthyManagedWorkspace(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

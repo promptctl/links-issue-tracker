@@ -98,6 +98,9 @@ const scaleWallClockBudget = 10 * time.Minute
 // folded side is the whole local chain rather than just the ahead commits, so
 // it is the harshest version of the replay.
 func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
+	// serial: no t.Parallel — a throughput benchmark asserting an elapsed bound;
+	// CPU contention from parallel tests would fail it for reasons unrelated to
+	// the code.
 	// [LAW:comments-carry-meaning] the other side of this gate: the inner loop
 	// (ci.yml, `just test-short`) skips here; the nightly full lane
 	// (.github/workflows/nightly.yml) runs without -short, so this test cannot

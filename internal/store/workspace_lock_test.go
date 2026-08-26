@@ -28,6 +28,7 @@ import (
 // TestOpenSyncWaitsForLiveForegroundEngine in engine_serialization_test.go
 // for that companion (deliberately opposite) contract.
 func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -81,6 +82,7 @@ func TestWorkspaceLockSharedHoldersCoexist(t *testing.T) {
 // [LAW:single-enforcer] One exclusive holder at a time; this test pins that
 // the refusal contract is owned by LockWorkspaceExclusive.
 func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -105,6 +107,7 @@ func TestWorkspaceLockExclusiveRefusesWhileSharedHeld(t *testing.T) {
 // a Store must not succeed. The shared-side acquisition retries briefly and
 // then refuses with a workspace-busy error naming the likely cause.
 func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -142,6 +145,7 @@ func TestWorkspaceLockSharedRefusesWhileExclusiveHeld(t *testing.T) {
 // shared hold, so a subsequent restore can take the exclusive hold without
 // any explicit quiesce step beyond closing the Store.
 func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -170,6 +174,7 @@ func TestWorkspaceLockExclusiveReleasedAfterClose(t *testing.T) {
 // [LAW:one-source-of-truth] One sentinel; the wrapping message varies for
 // context, but the discriminator is uniform.
 func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -225,6 +230,7 @@ func TestWorkspaceBusyErrorsWrapSentinel(t *testing.T) {
 //      shape: it must be a workspace-busy refusal (because the exclusive
 //      lock is held), NOT a "not initialized" error.
 func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -277,6 +283,7 @@ func TestOpenForReadAcquiresLockBeforeStat(t *testing.T) {
 // connections route through the same workspace-lock contract; OpenSync is no
 // exception even though it serves a different higher-level purpose.
 func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 
@@ -309,6 +316,7 @@ func TestOpenSyncHoldsWorkspaceLock(t *testing.T) {
 // path contend under flock even in a single process, so this proves the
 // primitive without spawning.
 func TestTryAcquireSyncPushLockIsSingleFlight(t *testing.T) {
+	t.Parallel()
 	dbPath := filepath.Join(t.TempDir(), "dolt")
 
 	release, acquired, err := TryAcquireSyncPushLock(dbPath)
@@ -350,6 +358,7 @@ func TestTryAcquireSyncPushLockIsSingleFlight(t *testing.T) {
 // position as the commit and workspace locks, so a snapshots restore that
 // rotates the Dolt directory does not move it out from under a running mirror.
 func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
+	t.Parallel()
 	got := SyncPushLockPath(filepath.Join("repo", ".git", "links", "dolt"))
 	want := filepath.Join("repo", ".git", "links", ".links-sync-push.lock")
 	if got != want {
@@ -369,6 +378,7 @@ func TestSyncPushLockPathIsSiblingOfDolt(t *testing.T) {
 // "covered". Two separate descriptors contend under flock even in one
 // process, so this proves the primitive without spawning.
 func TestMirrorBeaconLivenessProof(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	dbPath := filepath.Join(t.TempDir(), "dolt")
 
@@ -451,6 +461,7 @@ func TestMirrorBeaconLivenessProof(t *testing.T) {
 // snapshots restore that rotates the Dolt directory does not move it out from
 // under a running mirror.
 func TestMirrorBeaconLockPathIsSiblingOfDolt(t *testing.T) {
+	t.Parallel()
 	got := MirrorBeaconLockPath(filepath.Join("repo", ".git", "links", "dolt"))
 	want := filepath.Join("repo", ".git", "links", ".links-sync-mirror.lock")
 	if got != want {
@@ -459,6 +470,7 @@ func TestMirrorBeaconLockPathIsSiblingOfDolt(t *testing.T) {
 }
 
 func TestWorkspaceLockExclusiveSerializes(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	doltRoot := filepath.Join(t.TempDir(), "dolt")
 

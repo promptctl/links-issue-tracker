@@ -13,6 +13,7 @@ import (
 )
 
 func TestParseProseResolutions(t *testing.T) {
+	t.Parallel()
 	// TEXT may itself contain ':' and '=' and newlines; the prefix before the first
 	// '=' splits on ':' into exactly id/field/fingerprint.
 	got, err := parseProseResolutions([]string{
@@ -39,6 +40,7 @@ func TestParseProseResolutions(t *testing.T) {
 }
 
 func TestParseProseResolutionsRejectsMalformed(t *testing.T) {
+	t.Parallel()
 	// no '='; only two prefix parts (missing fingerprint); empty fingerprint; empty id.
 	for _, raw := range []string{"no-separators", "links-x.1:title=text", "links-x.1:title:=text", ":title:fp=text"} {
 		if _, err := parseProseResolutions([]string{raw}); err == nil {
@@ -48,12 +50,14 @@ func TestParseProseResolutionsRejectsMalformed(t *testing.T) {
 }
 
 func TestParseProseResolutionsRejectsUnknownField(t *testing.T) {
+	t.Parallel()
 	if _, err := parseProseResolutions([]string{"links-x.1:status:fp=closed"}); err == nil {
 		t.Fatalf("parseProseResolutions accepted a non-prose field")
 	}
 }
 
 func TestProseGuidanceNamesRealAbortCommand(t *testing.T) {
+	t.Parallel()
 	var b bytes.Buffer
 	if err := renderProsePendingGuidance(&b, []merge.ProsePending{{IssueID: "links-x.1", Field: merge.ProseTitle, Base: "b", Ours: "o", Theirs: "t"}}, testBuildNote); err != nil {
 		t.Fatalf("renderProsePendingGuidance() error = %v", err)
@@ -83,6 +87,7 @@ func parsedReconcileFlags(t *testing.T, args ...string) *cobraFlagSet {
 }
 
 func TestGuardReconcileInputRejectsStrayPositional(t *testing.T) {
+	t.Parallel()
 	// A stray positional must fail loudly rather than be silently ignored, or a
 	// malformed finalize could appear to succeed.
 	err := guardReconcileInput(parsedReconcileFlags(t, "junk", "--resolve", "links-x.1:title=merged"), "sync reconcile resolve")
