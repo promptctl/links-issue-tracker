@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"io"
 	"strings"
 	"testing"
 
@@ -11,10 +12,12 @@ import (
 )
 
 // runNextRow reproduces exactly what `lit next` picks — the shared workable
-// pipeline, the optional --continue bias, and the first-ready pick — and returns
-// the chosen annotated row. With --json removed this probes the command's
-// selection logic against real domain values rather than a parsed line.
-// [LAW:single-enforcer]
+// pipeline, the optional --continue bias, and claim routing — and returns the
+// chosen annotated row. This harness never mints a stream token or attributes
+// a write (newTestCLIApp opens the store directly, bypassing app.Open's
+// AttributeTo), so every lane derives Unclaimed and routing always lands on
+// ServedFromGlobal — the claims-aware routing degenerating to exactly the
+// pre-claims "first ready row" pick these tests pin. [LAW:single-enforcer]
 func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssue {
 	h.t.Helper()
 	annotated, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
@@ -24,23 +27,28 @@ func (h readyTestHarness) runNextRow(continueBias bool) annotation.AnnotatedIssu
 	if continueBias {
 		sortByContinueBias(annotated, details)
 	}
-	next, ok := pickFirstReady(annotated)
-	if !ok {
-		h.t.Fatal("pickFirstReady found no ready row")
+	standings, self, err := claimStandings(h.ctx, io.Discard, h.ap)
+	if err != nil {
+		h.t.Fatalf("claimStandings error = %v", err)
 	}
-	return next
+	outcome := routeNext(annotated, details, standings, self)
+	served, ok := outcome.(ServedFromGlobal)
+	if !ok {
+		h.t.Fatalf("routeNext = %#v (%T), want ServedFromGlobal (harness carries no claims)", outcome, outcome)
+	}
+	return served.Row
 }
 
 func (h readyTestHarness) runNextErr(args ...string) error {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	return runWorkable(h.ctx, &stdout, h.ap, args, nextView)
+	return runNext(h.ctx, &stdout, h.ap, args)
 }
 
 func (h readyTestHarness) runNextText(args ...string) string {
 	h.t.Helper()
 	var stdout bytes.Buffer
-	if err := runWorkable(h.ctx, &stdout, h.ap, args, nextView); err != nil {
+	if err := runNext(h.ctx, &stdout, h.ap, args); err != nil {
 		h.t.Fatalf("runNext(%v) error = %v", args, err)
 	}
 	return stdout.String()
