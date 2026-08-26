@@ -76,6 +76,17 @@ stay covered rather than quietly rotting. A test belongs behind
 `testing.Short()` only when its cost is the scale it generates, not the
 behavior it pins — never move a test there to make a slow test disappear.
 
+Inner-loop runtime is enforced, not just observed: CI's PR gate pipes the test
+run through [`tools/testbudget`](tools/testbudget/main.go), which fails the
+build when any package exceeds its wall-clock budget, naming the package and
+the overage. The budgets — and the rules for when a number may move — live in
+[`tools/testbudget/budgets.go`](tools/testbudget/budgets.go); read that file
+before raising one. To check locally:
+
+```sh
+(set -o pipefail; go test -short -json ./... | go run ./tools/testbudget)
+```
+
 Linting needs [`golangci-lint`](https://golangci-lint.run/welcome/install/) on
 your PATH.
 
