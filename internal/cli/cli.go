@@ -1188,10 +1188,19 @@ type actorResolver func() string
 
 // registerActor declares the hidden --by fallback flag on fs and returns the
 // resolver that reads it. Call the returned resolver after parseFlagSet has run.
-// [LAW:one-source-of-truth] the $USER default lives here alone, not at each
+// [LAW:one-source-of-truth] the fallback default lives here alone, not at each
 // mutating callsite.
+// [LAW:one-type-per-behavior] the fallback identity, absent both
+// CLAUDE_CODE_SESSION_ID and an explicit flag, is "" for --by exactly as it
+// already is for --assignee (see startSpec) — one answer to "what identity
+// applies when there is no session," not a divergent one per flag. os.Getenv("USER")
+// was a documented-invariant violation (design-docs/work-claims.md, "The privacy
+// invariant"): the shared database syncs to remotes and admits no
+// username-shaped values. "" resolves through the store's existing empty-actor
+// normalization (store.go Apply) to the opaque "unknown", the same sentinel
+// --assignee's default has always produced.
 func registerActor(fs *cobraFlagSet) actorResolver {
-	by := fs.String("by", os.Getenv("USER"), "")
+	by := fs.String("by", "", "")
 	fs.Hide("by")
 	return func() string { return resolveIdentity(*by) }
 }
