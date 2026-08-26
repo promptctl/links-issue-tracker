@@ -32,6 +32,7 @@ import (
 // [LAW:no-ambient-temporal-coupling] If the marker/banner chain never fires,
 // the poll exhausts its deadline and fails — a real regression signal.
 func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
+	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
@@ -44,12 +45,12 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	}
 
 	// Isolate config so the run exercises the shipped default cadence, exactly
-	// as the eager-push delivery test does.
+	// as the eager-push delivery test does — per-call via isolatedEnv, never
+	// t.Setenv, so the test stays parallel-safe.
 	xdgConfigHome := filepath.Join(base, "xdg-config")
 	if err := os.Mkdir(xdgConfigHome, 0o755); err != nil {
 		t.Fatalf("mkdir xdg config home: %v", err)
 	}
-	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.email", "banner@test.co")
@@ -69,21 +70,21 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	// Establish a healthy, connected sync relationship. The explicit bootstrap
 	// push also records the push-outcome marker as "pushed", so the healthy
 	// assertion below starts from a truthful baseline.
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
 	// The mutations below spawn detached mirrors; the last one can outlive the
 	// test body, so the TempDir sweep must wait for mirror quiescence.
 	awaitMirrorQuiescence(t, root)
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
 
 	// No cry-wolf: a mutation on a HEALTHY workspace prints no failure banner,
 	// even though its own commit has not been pushed yet at print time.
-	healthyOut, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "0"},
+	healthyOut, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
 		"new", "--title", "healthy-mutation", "--topic", "demo")
 	if err != nil {
 		t.Fatalf("lit new (healthy): %v\noutput:\n%s", err, healthyOut)
@@ -102,7 +103,7 @@ func TestPushFailureBannerReachesMutationOnlySession(t *testing.T) {
 	deadline := time.Now().Add(pollTimeout)
 	var lastOut string
 	for time.Now().Before(deadline) {
-		out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "0"},
+		out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
 			"new", "--title", "mutation-against-dead-remote", "--topic", "demo")
 		if err != nil {
 			t.Fatalf("lit new (mutation-only chain): %v\noutput:\n%s", err, out)

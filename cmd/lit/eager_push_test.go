@@ -54,6 +54,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	if _, err := exec.LookPath("dolt"); err != nil {
 		t.Skip("dolt not available")
 	}
+	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
@@ -69,16 +70,15 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	// must not accidentally inherit a real `sync.cadence` from whatever global
 	// config.toml happens to exist on the machine running the suite — litEnv
 	// otherwise passes the real process environment straight through, host XDG
-	// config included. Point every child at an isolated, always-empty XDG
-	// config dir instead; t.Setenv restores the prior value on cleanup, and
-	// every runLit call below builds its child env from this process's
-	// os.Environ() (see litEnv), so one call here covers every call site.
-	// [LAW:no-ambient-temporal-coupling]
+	// config included. Every child is pointed at an isolated, always-empty XDG
+	// config dir instead, as an explicit per-call override (isolatedEnv) rather
+	// than a t.Setenv mutation of this process — the env var is consumed only
+	// by the children, and keeping it out of the test process's environment is
+	// what lets this test run in parallel. [LAW:no-ambient-temporal-coupling]
 	xdgConfigHome := filepath.Join(base, "xdg-config")
 	if err := os.Mkdir(xdgConfigHome, 0o755); err != nil {
 		t.Fatalf("mkdir xdg config home: %v", err)
 	}
-	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.email", "eager@test.co")
@@ -102,11 +102,17 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 	// Bootstrap: init, then one manual push to establish an already-connected
 	// sync relationship — this test is about an ESTABLISHED connected
 	// workspace's next mutation, not the never-synced bootstrap edge case.
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	// The oracle poll below proves DELIVERY, not quiescence: the `lit new`'s
+	// detached mirror can still owe a post-release re-check cycle after the
+	// commit has landed, and that no-op cycle's engine would race this test's
+	// TempDir sweep. Same guard, same reason as the sibling mirror-spawning
+	// tests. [LAW:no-ambient-temporal-coupling]
+	awaitMirrorQuiescence(t, root)
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
@@ -126,7 +132,7 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 
 	// No config.toml exists anywhere under xdgConfigHome: this run exercises
 	// config.Load's shipped default, not an explicit on-change opt-in.
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "0"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
 		"new", "--title", "eager-push", "--topic", "demo"); err != nil {
 		t.Fatalf("lit new: %v\noutput:\n%s", err, out)
 	}
@@ -149,6 +155,19 @@ func TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush(t *testing.T)
 		time.Sleep(pollInterval)
 	}
 	t.Fatalf("mutation never reached the remote without an explicit push, %s after lit new returned (default cadence should be on-change)", pollTimeout)
+}
+
+// isolatedEnv builds the child-env overrides for a test whose claim is about
+// config.Load's shipped defaults: an isolated (empty) XDG config dir so no
+// host config.toml leaks in, plus the auto-sync switch. Passing these
+// per-call, instead of t.Setenv on the shared process environment, is what
+// permits t.Parallel across this package's tests — every env var here is
+// consumed only by the child lit processes, never by the test process itself.
+func isolatedEnv(xdgConfigHome, disableAutoSync string) map[string]string {
+	return map[string]string{
+		"XDG_CONFIG_HOME":     xdgConfigHome,
+		disableAutoSyncEnvVar: disableAutoSync,
+	}
 }
 
 // gitCurrentBranch reads the checked-out branch name rather than assuming

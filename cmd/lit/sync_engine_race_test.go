@@ -53,6 +53,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	if _, err := exec.LookPath("dolt"); err != nil {
 		t.Skip("dolt not available")
 	}
+	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
@@ -67,12 +68,13 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// Isolate this run's config from whatever XDG config exists on the host,
 	// same as TestEagerPushOnDefaultCadenceReachesRemoteWithoutExplicitPush:
 	// this test's claim is about the shipped default cadence, not whatever a
-	// developer's machine happens to have configured. [LAW:no-ambient-temporal-coupling]
+	// developer's machine happens to have configured — passed per-call via
+	// isolatedEnv, never t.Setenv, so the test stays parallel-safe.
+	// [LAW:no-ambient-temporal-coupling]
 	xdgConfigHome := filepath.Join(base, "xdg-config")
 	if err := os.Mkdir(xdgConfigHome, 0o755); err != nil {
 		t.Fatalf("mkdir xdg config home: %v", err)
 	}
-	t.Setenv("XDG_CONFIG_HOME", xdgConfigHome)
 
 	runGit(t, root, "init")
 	runGit(t, root, "config", "user.email", "burst@test.co")
@@ -89,7 +91,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	runGit(t, root, "remote", "add", "origin", remoteGit)
 	runGit(t, root, "push", "-u", "origin", branch)
 
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
@@ -101,7 +103,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// single-flight lock through the sweep, so an in-cycle mirror is waited
 	// out and a pre-lock one exits silently. [LAW:no-ambient-temporal-coupling]
 	awaitMirrorQuiescence(t, root)
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
 		t.Fatalf("bootstrap lit sync push: %v\noutput:\n%s", err, out)
 	}
@@ -120,7 +122,7 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// spawns a real on-change mirror exactly as production does.
 	const burstSize = 15
 	for i := 0; i < burstSize; i++ {
-		out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "0"},
+		out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "0"),
 			"new", "--title", "burst-issue", "--topic", "demo")
 		if err != nil {
 			t.Fatalf("lit new #%d failed: %v\noutput:\n%s\n%s", i, err, out, dumpMirrorLog(root))

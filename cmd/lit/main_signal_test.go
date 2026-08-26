@@ -64,17 +64,18 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
 	}
 
-	ws := setupWedgeWorkspace(t, self)
+	ws, cadenceConfig := setupWedgeWorkspace(t, self)
 	lockPath := store.CommitLockPath(ws.DatabasePath)
 
 	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
 	cmd.Dir = ws.RootDir
-	cmd.Env = litEnv(map[string]string{disableAutoSyncEnvVar: "0"})
+	cmd.Env = litEnv(onPushEnv(cadenceConfig, "0"))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -164,7 +165,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	if err := releaseSeize(); err != nil {
 		t.Fatalf("release seized commit lock: %v", err)
 	}
-	verifyOut, err := runLit(t, ws.RootDir, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	verifyOut, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
 		"new", "--title", "after-wedge", "--topic", "demo")
 	if err != nil {
 		t.Fatalf("workspace not usable after the SIGTERM-ed sync: %v\noutput:\n%s", err, verifyOut)
@@ -172,10 +173,11 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 }
 
 // setupWedgeWorkspace builds a git repo with a configured (never-pushed) remote
-// and an initialized lit store, and returns its resolved workspace info. The
+// and an initialized lit store, and returns its resolved workspace info plus
+// the cadence-pin config path for the caller's own child invocations. The
 // remote's mere presence is what drives the first inline receive to call
 // SyncAddRemote — the commit-lock mutation the test wedges.
-func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
+func setupWedgeWorkspace(t *testing.T, self string) (workspace.Info, string) {
 	t.Helper()
 	base := t.TempDir()
 	root := filepath.Join(base, "workspace")
@@ -193,8 +195,8 @@ func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
 	runGit(t, base, "init", "--bare", "remote.git")
 	runGit(t, root, "remote", "add", "origin", filepath.Join(base, "remote.git"))
 
-	pinOnPushCadence(t, base)
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	cadenceConfig := pinOnPushCadence(t, base)
+	if out, err := runLit(t, root, self, onPushEnv(cadenceConfig, "1"),
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
@@ -203,15 +205,15 @@ func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
-	return ws
+	return ws, cadenceConfig
 }
 
-// pinOnPushCadence writes a config.toml selecting on-push cadence under dir and
-// points lit's global-config lookup at it for the rest of the calling test —
-// t.Setenv restores the prior value on test cleanup, and every runLit/
-// exec.Command call site in this file builds its child env from this process's
-// os.Environ() (see litEnv), so one call here is enough for the whole test
-// without threading an env map through every call site.
+// pinOnPushCadence writes a config.toml selecting on-push cadence under dir
+// and returns its path, for the caller to hand every child process via
+// onPushEnv. The path travels as an explicit per-call override rather than a
+// t.Setenv mutation of this process — the variable is consumed only by the
+// child lit processes, and keeping the shared process environment untouched is
+// what lets the wedge tests run in parallel with the rest of the package.
 //
 // The SIGTERM wedge tests are specifically about the INLINE RECEIVE; the
 // on-change cadence's background push mirror is an orthogonal automatic
@@ -221,13 +223,22 @@ func setupWedgeWorkspace(t *testing.T, self string) workspace.Info {
 // read only") — a real flake these tests are not designed to account for. Both
 // wedge tests pin cadence explicitly instead of depending on whatever value
 // happens to be the shipped default. [LAW:locality-or-seam]
-func pinOnPushCadence(t *testing.T, dir string) {
+func pinOnPushCadence(t *testing.T, dir string) string {
 	t.Helper()
 	path := filepath.Join(dir, "wedge-test-config.toml")
 	if err := os.WriteFile(path, []byte("[sync]\ncadence = \"on-push\"\n"), 0o644); err != nil {
 		t.Fatalf("write cadence-pin config: %v", err)
 	}
-	t.Setenv("LIT_CONFIG_GLOBAL_PATH", path)
+	return path
+}
+
+// onPushEnv builds the child-env overrides for a wedge test: the cadence-pin
+// config written by pinOnPushCadence, plus the auto-sync switch.
+func onPushEnv(cadenceConfigPath, disableAutoSync string) map[string]string {
+	return map[string]string{
+		"LIT_CONFIG_GLOBAL_PATH": cadenceConfigPath,
+		disableAutoSyncEnvVar:    disableAutoSync,
+	}
 }
 
 // runLit runs a lit command to completion via a re-exec of the test binary.
@@ -294,17 +305,18 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
 	}
+	t.Parallel()
 	self, err := os.Executable()
 	if err != nil {
 		t.Fatalf("os.Executable() = %v", err)
 	}
 
 	remoteURL := blackHoleGitRemote(t)
-	ws := setupGitWedgeWorkspace(t, self, remoteURL)
+	ws, cadenceConfig := setupGitWedgeWorkspace(t, self, remoteURL)
 
 	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
 	cmd.Dir = ws.RootDir
-	cmd.Env = litEnv(map[string]string{disableAutoSyncEnvVar: "0"})
+	cmd.Env = litEnv(onPushEnv(cadenceConfig, "0"))
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -376,7 +388,7 @@ func TestSIGTERMDuringWedgedGitSubprocessExitsCleanly(t *testing.T) {
 	// The store was released and lit stranded no lock of its own: with the black-hole
 	// remote removed, an ordinary write proceeds normally.
 	runGit(t, ws.RootDir, "remote", "remove", "origin")
-	verifyOut, err := runLit(t, ws.RootDir, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	verifyOut, err := runLit(t, ws.RootDir, self, onPushEnv(cadenceConfig, "1"),
 		"new", "--title", "after-wedge", "--topic", "demo")
 	if err != nil {
 		t.Fatalf("workspace not usable after the SIGTERM-ed git wedge: %v\noutput:\n%s", err, verifyOut)
@@ -412,7 +424,7 @@ func blackHoleGitRemote(t *testing.T) string {
 // setupGitWedgeWorkspace builds a git repo with an initialized lit store, then
 // points origin at a black-hole remote AFTER init so init's own remote probes never
 // touch it — only the post-`lit new` auto-sync does. Returns the resolved workspace.
-func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) workspace.Info {
+func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) (workspace.Info, string) {
 	t.Helper()
 	base := t.TempDir()
 	root := filepath.Join(base, "workspace")
@@ -428,8 +440,8 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) workspace.Info
 	runGit(t, root, "add", "-A")
 	runGit(t, root, "commit", "-m", "seed")
 
-	pinOnPushCadence(t, base)
-	if out, err := runLit(t, root, self, map[string]string{disableAutoSyncEnvVar: "1"},
+	cadenceConfig := pinOnPushCadence(t, base)
+	if out, err := runLit(t, root, self, onPushEnv(cadenceConfig, "1"),
 		"init", "--skip-hooks", "--skip-agents"); err != nil {
 		t.Fatalf("lit init: %v\noutput:\n%s", err, out)
 	}
@@ -442,5 +454,5 @@ func setupGitWedgeWorkspace(t *testing.T, self, remoteURL string) workspace.Info
 	if err != nil {
 		t.Fatalf("resolve workspace: %v", err)
 	}
-	return ws
+	return ws, cadenceConfig
 }
