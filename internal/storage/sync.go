@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/promptctl/links-issue-tracker/internal/merge"
+import (
+	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/merge"
+)
 
 // This file is the vocabulary the sync and reconcile capabilities speak. It
 // lives beside the contract rather than inside an engine because a capability
@@ -190,6 +194,57 @@ type SyncPullResult struct {
 	// no-common-ancestor divergence, so the pull surface enumerates the same
 	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
+}
+
+// GCMode is how deep a compaction pass collects. Engines that collect
+// generationally reclaim different things at different depths, and neither
+// depth subsumes the other's savings, so the caller names the depth it wants
+// rather than the engine inferring one. [LAW:dataflow-not-control-flow]
+//
+// It is engine-neutral vocabulary: the depths describe what is collected, not
+// how any particular engine spells the request. An engine with only one depth
+// implements both by doing its one thing.
+type GCMode int
+
+const (
+	// GCNewGen collects recent history that has not yet been archived. It is
+	// the cheap, routine depth, and it cannot reclaim anything already
+	// archived.
+	GCNewGen GCMode = iota
+	// GCFull additionally rewrites the archived history, and is the only depth
+	// that reclaims what earlier passes left behind. It costs proportionally
+	// to the whole store rather than to recent activity.
+	GCFull
+)
+
+// String names the depth for traces and operator-facing output.
+func (m GCMode) String() string {
+	switch m {
+	case GCNewGen:
+		return "newgen"
+	case GCFull:
+		return "full"
+	}
+	return fmt.Sprintf("unknown(%d)", int(m))
+}
+
+// CompactionOutcome reports what a compaction pass did, in terms every engine
+// can speak.
+type CompactionOutcome struct {
+	// Ran is whether a pass was actually performed. A due-check that found
+	// nothing owing returns false, which is an ordinary outcome and not a
+	// failure — the common case, in fact, since the check is cheap and the
+	// pass is not.
+	Ran bool
+	// Depth is the depth performed. Meaningful only when Ran.
+	Depth GCMode
+	// Detail is the engine's own account of what the pass changed, already
+	// rendered, and empty when there is nothing worth saying. It is the
+	// engine's words because only the engine knows what it stores: journals
+	// and generations are one engine's vocabulary, not the contract's. An
+	// engine that cannot measure its own reclaim leaves this empty rather than
+	// inventing a number. [LAW:no-silent-failure]
+	Detail string
 }
 
 // SyncPushResult reports what the peer said about the delivery.

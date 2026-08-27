@@ -26,6 +26,13 @@ const (
 	// ownerNotifyHookTimeout bounds the hook run so a hung notifier (an
 	// unreachable ntfy host) cannot hang the lit command that detected the event.
 	ownerNotifyHookTimeout = 10 * time.Second
+
+	// ownerNotifyPipeWaitDelay is how long past the kill Wait will hold the
+	// output pipe. Named rather than inlined because it is a term in the
+	// parent's post-spawn tail, which the detached mirror's parent-wait bound
+	// is derived from — a number only spelled at its use site cannot be summed
+	// there. [LAW:one-source-of-truth]
+	ownerNotifyPipeWaitDelay = time.Second
 	// ownerNotifyCooldown is how often a PERSISTING condition re-notifies. The
 	// first detection of an episode always fires (its marker was cleared when the
 	// previous episode resolved); the cooldown only paces repeats of the same
@@ -193,7 +200,7 @@ func runOwnerNotifyHook(ctx context.Context, hook, repoRoot string, ev ownerNoti
 	// the caller past the cap indefinitely. WaitDelay forces Wait to abandon
 	// the pipe shortly after the kill, making the timeout the real bound.
 	// [LAW:no-ambient-temporal-coupling]
-	cmd.WaitDelay = time.Second
+	cmd.WaitDelay = ownerNotifyPipeWaitDelay
 	cmd.Dir = repoRoot
 	cmd.Env = append(os.Environ(),
 		"LIT_NOTIFY_KIND="+string(ev.Kind),

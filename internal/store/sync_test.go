@@ -341,11 +341,34 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	if err := syncStore.SyncCompact(ctx); err != nil {
-		t.Fatalf("SyncCompact() error = %v", err)
+	// Both depths, and each twice: the second call proves a depth is
+	// re-runnable against a store it already collected, which is the shape a
+	// backstop invoking it on a cadence actually exercises.
+	for _, mode := range []GCMode{GCNewGen, GCFull} {
+		outcome, err := syncStore.SyncCompact(ctx, mode)
+		if err != nil {
+			t.Fatalf("SyncCompact(%v) error = %v", mode, err)
+		}
+		if !outcome.Ran || outcome.Depth != mode {
+			t.Fatalf("SyncCompact(%v) outcome = %+v, want a pass at that depth", mode, outcome)
+		}
+		if outcome.Detail == "" {
+			t.Fatalf("SyncCompact(%v) reported no detail; a caller cannot tell what was reclaimed", mode)
+		}
+		if _, err := syncStore.SyncCompact(ctx, mode); err != nil {
+			t.Fatalf("second SyncCompact(%v) error = %v", mode, err)
+		}
 	}
-	if err := syncStore.SyncCompact(ctx); err != nil {
-		t.Fatalf("second SyncCompact() error = %v", err)
+
+	// A freshly compacted store is under every threshold, so the backstop's own
+	// entrypoint must decline rather than collect again — that decline is what
+	// keeps it cheap to ask often.
+	idle, err := syncStore.CompactIfDue(ctx)
+	if err != nil {
+		t.Fatalf("CompactIfDue() on a just-compacted store error = %v", err)
+	}
+	if idle.Ran {
+		t.Fatalf("CompactIfDue() ran a pass on a just-compacted store: %+v", idle)
 	}
 
 	got, err := syncStore.GetIssue(ctx, issue.ID)

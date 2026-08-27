@@ -157,12 +157,18 @@ func TestAbsentCapabilityAnswersWithTypedAbsence(t *testing.T) {
 type syncOnlyReconcileless struct {
 	storage.Store
 	storage.Syncer
-	compacted bool
+	compacted   bool
+	compactedAt storage.GCMode
 }
 
-func (e *syncOnlyReconcileless) SyncCompact(context.Context) error {
+func (e *syncOnlyReconcileless) SyncCompact(_ context.Context, mode storage.GCMode) (storage.CompactionOutcome, error) {
 	e.compacted = true
-	return nil
+	e.compactedAt = mode
+	return storage.CompactionOutcome{Ran: true, Depth: mode}, nil
+}
+
+func (e *syncOnlyReconcileless) CompactIfDue(context.Context) (storage.CompactionOutcome, error) {
+	return storage.CompactionOutcome{}, nil
 }
 
 func TestSyncWithoutReconcileIsRepresentable(t *testing.T) {
@@ -178,11 +184,17 @@ func TestSyncWithoutReconcileIsRepresentable(t *testing.T) {
 
 	// Of hands back the engine itself, not a wrapper around it: calling
 	// through the capability must reach the engine's own method.
-	if err := syncer.SyncCompact(t.Context()); err != nil {
+	if _, err := syncer.SyncCompact(t.Context(), storage.GCFull); err != nil {
 		t.Fatalf("SyncCompact through the capability: %v", err)
 	}
 	if !engine.compacted {
 		t.Fatal("the call through the capability did not reach the engine")
+	}
+	// The depth is part of the contract, so it must survive the crossing —
+	// a capability that reached the engine but dropped the requested depth
+	// would silently collect at the wrong one.
+	if engine.compactedAt != storage.GCFull {
+		t.Fatalf("compaction depth through the capability = %v, want %v", engine.compactedAt, storage.GCFull)
 	}
 }
 
