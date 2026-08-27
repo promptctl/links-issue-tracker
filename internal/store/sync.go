@@ -486,7 +486,22 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		}
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
-		return pushErr
+		if pushErr != nil {
+			return pushErr
+		}
+		// DOLT_GC above compacts `noms`; this collects the other half of the
+		// store's local footprint, the abandoned git remote mirrors, in the same
+		// locked run. It runs AFTER the push on purpose: the push has just
+		// opened the live mirror, so that directory provably exists and the
+		// prune's key derivation has something true to match itself against.
+		//
+		// Its outcome is carried, never raised. The push has already succeeded
+		// and its success is not the prune's to retract — a cache that failed to
+		// collect costs disk, while a failed `lit sync push` costs the user
+		// their sync. [LAW:dataflow-not-control-flow] the prune runs every time
+		// and reports as a value; nothing branches on whether it did.
+		result.Maintenance = s.pruneRemoteCache(ctx).String()
+		return nil
 	})
 	if err != nil {
 		return storage.SyncPushResult{}, err

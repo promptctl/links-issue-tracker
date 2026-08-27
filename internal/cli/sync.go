@@ -348,15 +348,19 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 // on-change cadence owner both consume this one orchestration so their push
 // behavior cannot drift. [LAW:single-enforcer]
 type syncPushOutcome struct {
-	status     string // "ok" | "skipped"
-	reason     string // set when status == "skipped"
-	remote     string
-	branch     string
-	message    string
-	pushStatus int64
-	traceRef   *automationTraceRef
-	traceErr   error
-	pushErr    error // the push failure; the trace is already recorded when set
+	status  string // "ok" | "skipped"
+	reason  string // set when status == "skipped"
+	remote  string
+	branch  string
+	message string
+	// maintenance is what the engine reclaimed locally while servicing this
+	// push, rendered as its own payload key so `raw` stays the engine's
+	// verbatim push output. [LAW:one-source-of-truth]
+	maintenance string
+	pushStatus  int64
+	traceRef    *automationTraceRef
+	traceErr    error
+	pushErr     error // the push failure; the trace is already recorded when set
 }
 
 // payload renders the outcome into the map shape printSyncPushPayload consumes.
@@ -372,6 +376,9 @@ func (o syncPushOutcome) payload() map[string]any {
 		return payload
 	}
 	payload["push_status"] = o.pushStatus
+	if o.maintenance != "" {
+		payload["maintenance"] = o.maintenance
+	}
 	if o.traceRef != nil {
 		payload["trace_ref"] = o.traceRef.Path
 	}
@@ -526,14 +533,15 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 		Metadata:  traceMetadata,
 	})
 	return syncPushOutcome{
-		status:     "ok",
-		remote:     remoteName,
-		branch:     syncBranch,
-		message:    result.Message,
-		pushStatus: result.Status,
-		traceRef:   traceRef,
-		traceErr:   traceRecordErr,
-		pushErr:    pushErr,
+		status:      "ok",
+		remote:      remoteName,
+		branch:      syncBranch,
+		message:     result.Message,
+		maintenance: result.Maintenance,
+		pushStatus:  result.Status,
+		traceRef:    traceRef,
+		traceErr:    traceRecordErr,
+		pushErr:     pushErr,
 	}, nil
 }
 
