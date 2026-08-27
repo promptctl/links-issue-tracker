@@ -254,11 +254,20 @@ type CompactionOutcome struct {
 	// Depth is the depth performed. Meaningful only when Ran.
 	Depth GCMode
 	// Detail is the engine's own account of what the pass changed, already
-	// rendered, and empty when there is nothing worth saying. It is the
-	// engine's words because only the engine knows what it stores: journals
-	// and generations are one engine's vocabulary, not the contract's. An
-	// engine that cannot measure its own reclaim leaves this empty rather than
-	// inventing a number. [LAW:no-silent-failure]
+	// rendered. It is the engine's words because only the engine knows what it
+	// stores: journals and generations are one engine's vocabulary, not the
+	// contract's.
+	//
+	// An engine that could not measure its own reclaim says so here, naming
+	// what it could not measure. That failure is the account in that case, and
+	// blanking the field instead would hide it behind an outcome that still
+	// reports Ran — "a pass ran and there is nothing worth reporting" and "a
+	// pass ran and I cannot tell you what it reclaimed" are different facts,
+	// and one value meaning both is a void the caller can never pull apart.
+	// [LAW:no-silent-failure]
+	//
+	// Empty therefore belongs to the outcome that did nothing — the zero value
+	// CompactIfDue returns when no pass was owed — never to one that ran.
 	Detail string
 }
 

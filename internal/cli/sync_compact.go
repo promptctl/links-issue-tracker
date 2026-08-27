@@ -113,7 +113,29 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 		// Nothing was owed. The common case, and not worth a trace.
 		return
 	}
-	recordSyncCommandTrace(ws, compactTraceCommand, "ok", nil, compactionTraceMetadata(outcome))
+	recordCompactionSuccess(ws, compactTraceCommand, outcome)
+}
+
+// recordCompactionSuccess is the one way a completed pass reaches the durable
+// trail. Both entry points record through it — the backstop above and the
+// explicit `lit sync compact` — so the decision and the metadata each have a
+// single home, and the only thing a caller supplies is the one thing that
+// genuinely differs between them: which command ran. [LAW:composability] the
+// variability crosses one boundary as a value.
+//
+// It exists because sharing the metadata renderer alone was not enough. The two
+// paths still passed their own decision string, so the same event was recorded
+// as "ok" by the backstop and "compacted" by the command, and an operator
+// filtering the trail for successful compactions saw only half of them. Command
+// already says which path ran — compactTraceCommand is deliberately distinct
+// from the command line for exactly that purpose — so a second axis saying it
+// again could only disagree. [LAW:one-source-of-truth]
+//
+// The decision is spelled here and nowhere else, which is what stops a third
+// entry point from inventing a fourth vocabulary: there is nothing left for it
+// to spell.
+func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.CompactionOutcome) {
+	recordSyncCommandTrace(ws, command, "compacted", nil, compactionTraceMetadata(outcome))
 }
 
 // compactionTraceMetadata renders a finished pass into the trace's vocabulary.
