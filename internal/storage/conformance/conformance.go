@@ -75,19 +75,23 @@ var cases = []engineCase{
 	{"create_read_roundtrip", createReadRoundtrip},
 	{"create_defaults", createDefaults},
 	{"create_requires_title", createRequiresTitle},
+	{"create_normalizes_topic", createNormalizesTopic},
 	{"create_under_missing_parent_is_not_found", createUnderMissingParent},
 	{"get_missing_issue_is_not_found", getMissingIssue},
 	{"apply_field_patch", applyFieldPatch},
 	{"apply_status_transition", applyStatusTransition},
 	{"apply_missing_issue_is_not_found", applyMissingIssue},
 	{"apply_to_container_is_refused", applyToContainer},
+	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
 	{"list_sorts_and_limits", listSortsAndLimits},
 	{"rank_intents_reorder", rankIntentsReorder},
+	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
 	{"rank_set_imposes_order", rankSetImposesOrder},
+	{"close_redirects_to_a_canonical", closeRedirectsToCanonical},
 	{"comments_roundtrip", commentsRoundtrip},
 	{"labels_roundtrip", labelsRoundtrip},
 	{"relations_roundtrip", relationsRoundtrip},
@@ -96,6 +100,7 @@ var cases = []engineCase{
 	{"topics_derive_from_issues", topicsDeriveFromIssues},
 	{"export_carries_whole_store", exportCarriesWholeStore},
 	{"bulk_apply_creates_and_updates", bulkApplyCreatesAndUpdates},
+	{"bulk_apply_compensates_a_failed_batch", bulkApplyCompensatesFailure},
 	{"import_tree_maps_local_ids", importTreeMapsLocalIDs},
 	{"attribution_stamps_events", attributionStampsEvents},
 	{"local_issue_count_tracks_creates", localIssueCountTracksCreates},
@@ -189,6 +194,29 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store) {
 	for _, title := range []string{"", "   "} {
 		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: title, Topic: "core"}); err == nil {
 			t.Errorf("CreateIssue(title=%q) succeeded; want an error", title)
+		}
+	}
+}
+
+// createNormalizesTopic pins the topic as already-canonical by the time it is
+// stored. The vocabulary is DERIVED from what issues carry, and a topic that
+// reached storage in one spelling could never be found under another — so
+// normalizing is the store's job, not each caller's, and a name too short to
+// be one is refused rather than stored. [LAW:parse-dont-validate]
+func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store) {
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shaped", Topic: "  Renderer Cleanup  "})
+	if issue.Topic != "renderer-cleanup" {
+		t.Errorf("Topic = %q, want the normalized renderer-cleanup", issue.Topic)
+	}
+	topics, err := st.ListTopics(ctx)
+	if err != nil {
+		t.Fatalf("ListTopics error = %v", err)
+	}
+	assertStrings(t, "topics after a normalized create", topics, []string{"renderer-cleanup"})
+
+	for _, topic := range []string{"", "   ", "ab", "-!-"} {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "unnamed", Topic: topic, Prefix: prefix}); err == nil {
+			t.Errorf("CreateIssue(topic=%q) succeeded; want an error", topic)
 		}
 	}
 }
@@ -291,6 +319,36 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
+// containerStateFollowsLiveChildren pins the one rule that decides what an
+// epic's derived state is about. A container in the flow reads only children
+// in the flow, so archiving the last unfinished child finishes the epic; a
+// container that is itself out of the flow keeps its whole child set, so an
+// archived epic stays the state it had when it left instead of collapsing.
+func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st storage.Store) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	finished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "finished", Topic: "core", ParentID: epic.ID})
+	unfinished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unfinished", Topic: "core", ParentID: epic.ID})
+
+	if _, err := st.Apply(ctx, finished.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply done error = %v", err)
+	}
+	assertState(t, ctx, st, epic.ID, model.StateInProgress, "one of two children done")
+
+	// Archiving the unfinished child takes it out of the epic's reading, so
+	// what is left is all done.
+	if _, err := st.Apply(ctx, unfinished.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply archive child error = %v", err)
+	}
+	assertState(t, ctx, st, epic.ID, model.StateClosed, "the only live child is done")
+
+	// Archiving the epic freezes its reading: every child counts again, so
+	// the state it leaves with is the state it had.
+	if _, err := st.Apply(ctx, epic.ID, storage.Change{Action: model.Archive{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply archive epic error = %v", err)
+	}
+	assertState(t, ctx, st, epic.ID, model.StateInProgress, "an archived epic keeps its whole child set")
+}
+
 func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tracked", Topic: "core"})
 	title := "retitled"
@@ -308,6 +366,32 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 		t.Errorf("no-op Apply wrote %d events, want none", len(after)-before)
 	}
 
+	// A status action whose target state AND resulting assignee already hold
+	// is the same no-op: the ticket did not move, so the log does not say it
+	// did. A same-state start naming a NEW owner is the reclaim path and does
+	// record, which is what keeps "who took this over" answerable.
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+	before = len(mustEvents(t, ctx, st))
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply repeated start error = %v", err)
+	}
+	if repeated := len(mustEvents(t, ctx, st)); repeated != before {
+		t.Errorf("a start that changed nothing wrote %d events, want none", repeated-before)
+	}
+	reclaimed, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "grace"}, Actor: "grace"})
+	if err != nil {
+		t.Fatalf("Apply reclaim error = %v", err)
+	}
+	if reclaimed.Assignee != "grace" {
+		t.Errorf("Assignee after reclaim = %q, want grace", reclaimed.Assignee)
+	}
+	if len(mustEvents(t, ctx, st)) == before {
+		t.Error("a reclaim wrote no event; the ownership change is the audit substrate")
+	}
+
+	after = mustEvents(t, ctx, st)
 	var sawRetitle bool
 	for _, e := range after {
 		if e.IssueID != issue.ID {
@@ -474,6 +558,41 @@ func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
+// rankIntentsResolveAcrossFrames is why the anchored verbs report a RankMove
+// at all. Rank meaning is frame-local — an issue's position is only ever read
+// against its frame-mates — so an intent naming two issues from different
+// frames is honored against the containing ancestors that ARE comparable, and
+// the substitution comes back so the caller can say so.
+func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storage.Store) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
+
+	// "put the child above the standalone" is a request about the epic: the
+	// child has no position the standalone can be compared against.
+	move, err := st.RankAbove(ctx, child.ID, standalone.ID)
+	if err != nil {
+		t.Fatalf("RankAbove across frames error = %v", err)
+	}
+	if move.MovedID != epic.ID || move.AnchorID != standalone.ID {
+		t.Errorf("RankAbove reported %+v, want moved=%s anchor=%s", move, epic.ID, standalone.ID)
+	}
+	// Nothing inside the epic was reordered, and the epic now precedes the
+	// standalone.
+	listed := mustList(t, ctx, st, storage.ListIssuesFilter{})
+	assertPrecedes(t, listed, epic.ID, standalone.ID)
+
+	// An issue and its own container share no comparable frame, so there is no
+	// order between them to write — and saying so beats writing one of the two
+	// orders that could be meant. [LAW:no-silent-failure]
+	if _, err := st.RankAbove(ctx, child.ID, epic.ID); err == nil {
+		t.Error("RankAbove against its own container succeeded; want an error")
+	}
+	if _, err := st.RankBelow(ctx, epic.ID, child.ID); err == nil {
+		t.Error("RankBelow against its own child succeeded; want an error")
+	}
+}
+
 func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store) {
 	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
@@ -497,6 +616,58 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store) {
 		if resolutions[i].RankedID != want {
 			t.Errorf("resolution %d RankedID = %q, want the same frame-mate %q", i, resolutions[i].RankedID, want)
 		}
+	}
+}
+
+// closeRedirectsToCanonical pins the close payload as a whole: a redirecting
+// outcome records both the resolution and the ticket the work moved to, a
+// reopen clears all of it at once, and a redirect to an issue that is not
+// there is refused rather than stored as a dangling pointer.
+func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Store) {
+	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core"})
+	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core"})
+
+	closed, err := st.Apply(ctx, duplicate.ID, storage.Change{
+		Action: model.Close{Outcome: model.Duplicate{Of: canonical.ID}}, Actor: "ada",
+	})
+	if err != nil {
+		t.Fatalf("Apply close-as-duplicate error = %v", err)
+	}
+	if closed.State() != model.StateClosed {
+		t.Errorf("State after close = %q, want closed", closed.State())
+	}
+	// The outcome travels through the state machine into the closed leaf, so
+	// both halves come back off the issue rather than out of a second write.
+	if resolution := closed.ResolutionValue(); resolution == nil || *resolution != model.ResolutionDuplicate {
+		t.Errorf("Resolution after close = %v, want duplicate", resolution)
+	}
+	if target := closed.RedirectTargetValue(); target == nil || *target != canonical.ID {
+		t.Errorf("RedirectTarget after close = %v, want %s", target, canonical.ID)
+	}
+	if closed.ClosedAtValue() == nil {
+		t.Error("ClosedAt after close is nil; a close must record when")
+	}
+
+	reopened, err := st.Apply(ctx, duplicate.ID, storage.Change{Action: model.Reopen{}, Actor: "ada"})
+	if err != nil {
+		t.Fatalf("Apply reopen error = %v", err)
+	}
+	// Reopening clears the whole close payload together — a live issue
+	// carrying a stale resolution or redirect is a state no reader could make
+	// sense of.
+	if reopened.ResolutionValue() != nil || reopened.RedirectTargetValue() != nil || reopened.ClosedAtValue() != nil {
+		t.Errorf("reopen left a close payload: resolution=%v redirect=%v closedAt=%v",
+			reopened.ResolutionValue(), reopened.RedirectTargetValue(), reopened.ClosedAtValue())
+	}
+
+	_, err = st.Apply(ctx, duplicate.ID, storage.Change{
+		Action: model.Close{Outcome: model.Duplicate{Of: "no-such-issue"}}, Actor: "ada",
+	})
+	assertNotFound(t, err, "issue", "closing as a duplicate of a missing issue")
+	if _, err := st.Apply(ctx, duplicate.ID, storage.Change{
+		Action: model.Close{Outcome: model.Duplicate{Of: duplicate.ID}}, Actor: "ada",
+	}); err == nil {
+		t.Error("closing an issue as a duplicate of itself succeeded; want an error")
 	}
 }
 
@@ -834,6 +1005,30 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	}
 }
 
+// bulkApplyCompensatesFailure pins what a batch owes when it fails partway.
+// The contract trades atomicity for an account: the issues the batch created
+// are undone, and what could not be undone is named in the error. A batch that
+// left its early creates standing and said nothing would be the worst of both.
+// [LAW:no-silent-failure]
+func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.Store) {
+	kept := "created before the failure"
+	orphan := "parented to nothing"
+	topic := "core"
+	issueType := "task"
+
+	_, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
+		{LocalID: "first", Title: &kept, Topic: &topic, IssueType: &issueType},
+		// A parent that is neither a name in this batch nor a real id passes
+		// the file's own validation and fails at the write — which is exactly
+		// the mid-batch failure the compensation exists for.
+		{LocalID: "second", Title: &orphan, Topic: &topic, IssueType: &issueType, Parent: "no-such-issue"},
+	})
+	if err == nil {
+		t.Fatal("BulkApply with an unresolvable parent succeeded; want an error")
+	}
+	assertIssueIDs(t, "issues after a compensated batch", mustList(t, ctx, st, storage.ListIssuesFilter{}), nil)
+}
+
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store) {
 	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
 		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
@@ -974,6 +1169,41 @@ func mustEvents(t *testing.T, ctx context.Context, st storage.Store) []model.Iss
 func assertOrder(t *testing.T, ctx context.Context, st storage.Store, what string, want ...string) {
 	t.Helper()
 	assertIssueIDs(t, what, mustList(t, ctx, st, storage.ListIssuesFilter{}), want)
+}
+
+// assertState reads an issue back and pins its derived state, including the
+// out-of-flow issues a default listing would not show.
+func assertState(t *testing.T, ctx context.Context, st storage.Store, id string, want model.State, why string) {
+	t.Helper()
+	issue, err := st.GetIssue(ctx, id)
+	if err != nil {
+		t.Fatalf("GetIssue(%q) error = %v", id, err)
+	}
+	if issue.State() != want {
+		t.Errorf("State of %s = %q, want %q — %s", id, issue.State(), want, why)
+	}
+}
+
+// assertPrecedes pins a relative position without pinning the whole listing,
+// for the cases where the contract states which of two issues comes first and
+// says nothing about what else sits between them.
+func assertPrecedes(t *testing.T, issues []model.Issue, first, second string) {
+	t.Helper()
+	firstAt, secondAt := -1, -1
+	for i, issue := range issues {
+		switch issue.ID {
+		case first:
+			firstAt = i
+		case second:
+			secondAt = i
+		}
+	}
+	if firstAt < 0 || secondAt < 0 {
+		t.Fatalf("listing is missing %s or %s: %v", first, second, issues)
+	}
+	if firstAt > secondAt {
+		t.Errorf("%s follows %s in the listing; want it to precede", first, second)
+	}
 }
 
 func assertIssueIDs(t *testing.T, what string, got []model.Issue, want []string) {
