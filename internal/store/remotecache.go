@@ -20,9 +20,11 @@ import (
 
 // Dolt gives every git-backed remote its own bare-repo mirror under
 // `<db>/.dolt/git-remote-cache/<sha256(url|ref)>/repo.git`, and it deletes one
-// never. The key is the literal URL string, so any change to that string — a
-// GitHub org rename, an scp-vs-ssh re-spelling — sends the next open to a fresh
-// key, which clones a whole new mirror and abandons the previous one forever.
+// never. The key hashes the URL with `git+` stripped from its scheme and any
+// query and fragment cleared — normalized, but nowhere near canonicalized, so
+// any re-spelling that survives that stripping — a GitHub org rename, an
+// scp-vs-ssh rewrite — sends the next open to a fresh key, which clones a whole
+// new mirror and abandons the previous one forever.
 // Measured on this repository when this file landed: 142 MB of cache, of which
 // 97 MB was live and 45 MB was three abandoned mirrors of two long-gone remote
 // spellings. Nothing upstream collects them; Dolt ships no prune, evict, or
@@ -129,6 +131,16 @@ type remoteCachePlan struct {
 // has no directory AND there is something to delete, the two cases cannot be
 // told apart and the prune declines wholesale. [LAW:no-silent-failure]
 //
+// A missing directory is itself two facts wearing one shape — a broken
+// derivation, or a remote nothing has opened yet, since Dolt writes a mirror on
+// first use and not when a remote is configured. The refusal deliberately does
+// NOT try to separate them by narrowing to the remote being pushed. That reading
+// looks safe and is not: derivation drift is URL-shape-specific, which is the
+// only kind this code has met, so verifying the pushed remote's key says nothing
+// about a differently-shaped sibling — and under a narrowed gate that sibling's
+// LIVE mirror is exactly what lands in `abandoned` and gets deleted. Refusing on
+// either cause costs disk that nobody loses; separating them costs the mirror.
+//
 // A store that has never pushed trips nothing: it has no directories, so there
 // is nothing to delete and the unaccounted keys are just a cache not yet built.
 func planRemoteCachePrune(expected map[string]string, onDisk []string) (remoteCachePlan, error) {
@@ -156,11 +168,16 @@ func planRemoteCachePrune(expected map[string]string, onDisk []string) (remoteCa
 	if len(abandoned) > 0 && len(unaccounted) > 0 {
 		return remoteCachePlan{}, fmt.Errorf(
 			"declining to prune: %d cache director%s match no configured remote, but %d configured "+
-				"remote%s also has no directory (%s). Together those mean the key derivation disagrees "+
-				"with what Dolt actually wrote, so an unmatched directory can no longer be told apart "+
-				"from a live mirror this code failed to find — nothing was deleted",
+				"remote%s also %s no directory (%s). That is two possible facts wearing one shape, and "+
+				"this code cannot tell which it is looking at: either the key derivation disagrees with "+
+				"what Dolt actually wrote, or those remotes have simply never been opened — Dolt writes "+
+				"a mirror on first use, never when a remote is configured. While both readings stand an "+
+				"unmatched directory cannot be told apart from a live mirror this code failed to find, "+
+				"so nothing was deleted. One `lit sync push --remote <name>` or `lit sync fetch --remote "+
+				"<name>` through each remote named above creates its directory and settles it",
 			len(abandoned), plural(len(abandoned), "y", "ies"),
 			len(unaccounted), plural(len(unaccounted), "", "s"),
+			plural(len(unaccounted), "has", "have"),
 			strings.Join(unaccounted, ", "))
 	}
 	return remoteCachePlan{abandoned: abandoned}, nil
@@ -336,21 +353,56 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 	}
 
 	outcome := remoteCachePruneOutcome{}
+	var problems []string
 	for _, key := range plan.abandoned {
-		dir := filepath.Join(base, key)
-		// Size first: once the directory is gone there is nothing left to
-		// measure, and a reclaim figure nobody can check is worth nothing.
-		size, err := dirSize(dir)
+		reclaimed, collected, err := collectAbandonedMirror(base, key)
 		if err != nil {
-			outcome.Problem = fmt.Errorf("measure abandoned mirror %s: %w", key, err).Error()
-			return outcome
+			problems = append(problems, err.Error())
+			continue
 		}
-		if err := os.RemoveAll(dir); err != nil {
-			outcome.Problem = fmt.Errorf("remove abandoned mirror %s: %w", key, err).Error()
-			return outcome
+		if !collected {
+			continue
 		}
 		outcome.Removed++
-		outcome.Reclaimed += size
+		outcome.Reclaimed += reclaimed
 	}
+	// Every entry is attempted and a failure records itself rather than ending
+	// the walk. Returning on the first error made one permanently unremovable
+	// directory a head-of-line blocker: plan.abandoned is sorted, so that same
+	// entry is reached first on every push forever and nothing sorting after it
+	// is ever attempted again, however removable it is.
+	// [LAW:dataflow-not-control-flow] which entries get visited no longer
+	// depends on what the earlier ones did.
+	outcome.Problem = strings.Join(problems, "; ")
 	return outcome
+}
+
+// collectAbandonedMirror measures and removes one abandoned mirror, and has
+// three things it can report: collected, with the bytes it reclaimed; already
+// gone; or a failure naming the key.
+//
+// Already gone is the one worth explaining, and it is not an error. Two explicit
+// pushes are not serialized against each other — the single-flight lock belongs
+// to the background mirror and is a non-blocking probe, not mutual exclusion —
+// so a sibling prune can take this directory between the plan and this call.
+// That is the state this code was trying to reach, so reporting it would be
+// inventing a failure out of a success. [LAW:no-silent-failure] cuts both ways
+// here: the refusal this outcome carries only works if it is believed, and a
+// prune that cries wolf whenever two pushes overlap spends exactly the
+// credibility the refusal depends on.
+func collectAbandonedMirror(base, key string) (reclaimed int64, collected bool, err error) {
+	dir := filepath.Join(base, key)
+	// Size first: once the directory is gone there is nothing left to measure,
+	// and a reclaim figure nobody can check is worth nothing.
+	size, err := dirSize(dir)
+	if errors.Is(err, fs.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("measure abandoned mirror %s: %w", key, err)
+	}
+	if err := os.RemoveAll(dir); err != nil {
+		return 0, false, fmt.Errorf("remove abandoned mirror %s: %w", key, err)
+	}
+	return size, true, nil
 }

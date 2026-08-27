@@ -213,6 +213,84 @@ func TestPruneRemoteCacheCollectsAbandonedMirrors(t *testing.T) {
 	}
 }
 
+// TestPruneRemoteCacheIsNotBlockedByOneStuckMirror pins the head-of-line
+// property. plan.abandoned is sorted, so an entry that can never be removed is
+// reached first on every push for the life of the workspace; returning on it
+// meant nothing sorting after it was ever attempted again, however removable.
+// The failure still has to be reported — the point is that it stops being a
+// gate on everyone else's collection.
+func TestPruneRemoteCacheIsNotBlockedByOneStuckMirror(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not block unlink")
+	}
+	ctx := context.Background()
+	base := t.TempDir()
+
+	remote := seedBareGitRemote(t, base)
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	sync, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer sync.Close()
+	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+
+	// Two orphans, and the stuck one sorts first so it is reached first. Its own
+	// directory is read-only, so the walk that measures it succeeds while the
+	// unlink of what is inside it cannot.
+	cacheBase := sync.remoteCacheBase()
+	stuck, collectible := strings.Repeat("aa", 32), strings.Repeat("bb", 32)
+	for _, key := range []string{stuck, collectible} {
+		repo := filepath.Join(cacheBase, key, "repo.git")
+		if err := os.MkdirAll(repo, 0o755); err != nil {
+			t.Fatalf("plant orphan %s: %v", key, err)
+		}
+		if err := os.WriteFile(filepath.Join(repo, "packed-refs"), make([]byte, 4096), 0o644); err != nil {
+			t.Fatalf("plant orphan payload %s: %v", key, err)
+		}
+	}
+	if err := os.Chmod(filepath.Join(cacheBase, stuck), 0o500); err != nil {
+		t.Fatalf("chmod stuck orphan: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(filepath.Join(cacheBase, stuck), 0o700) })
+
+	outcome := sync.pruneRemoteCache(ctx)
+
+	if outcome.Removed != 1 {
+		t.Fatalf("Removed = %d, want 1 — the collectible orphan sorts after the stuck one "+
+			"and must still be collected (Problem = %q)", outcome.Removed, outcome.Problem)
+	}
+	if _, err := os.Stat(filepath.Join(cacheBase, collectible)); !os.IsNotExist(err) {
+		t.Fatalf("the collectible orphan survived: one stuck mirror is blocking the rest (stat err = %v)", err)
+	}
+	if !strings.Contains(outcome.Problem, stuck) {
+		t.Fatalf("Problem = %q, want the stuck mirror still reported by key", outcome.Problem)
+	}
+	if _, err := os.Stat(filepath.Join(cacheBase, stuck)); err != nil {
+		t.Fatalf("the stuck orphan should still be there to report on: %v", err)
+	}
+}
+
 // seedBareGitRemote creates a bare git repo carrying one commit. The commit is
 // required, not decoration: dbfactory's ensureRemoteHasBranches refuses to push
 // to a remote advertising no heads.

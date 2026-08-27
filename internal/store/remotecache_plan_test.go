@@ -1,6 +1,10 @@
 package store
 
 import (
+	"errors"
+	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -51,6 +55,110 @@ func TestPlanRemoteCachePruneDeclinesWhenDerivationMissesTheLiveMirror(t *testin
 	}
 	if !strings.Contains(err.Error(), "origin") {
 		t.Fatalf("refusal = %q, want it to name the remote it could not account for", err)
+	}
+}
+
+// TestPlanRemoteCachePruneRefusalOwnsUpToBothCauses pins what the refusal is
+// allowed to claim. A configured remote with no directory is two facts wearing
+// one shape — a drifted derivation, or a remote nothing has opened yet, since
+// Dolt writes a mirror on first use and not when a remote is configured — and
+// this code declines precisely because it cannot separate them. Asserting the
+// first as established fact sends a reader to audit a derivation that is fine,
+// so the message must carry both readings and the action that settles them.
+func TestPlanRemoteCachePruneRefusalOwnsUpToBothCauses(t *testing.T) {
+	t.Parallel()
+	_, err := planRemoteCachePrune(
+		map[string]string{missedKey: "backup", liveKey: "origin"},
+		[]string{liveKey, orphanKey},
+	)
+	if err == nil {
+		t.Fatal("planRemoteCachePrune() returned a plan, want a refusal")
+	}
+	for _, want := range []string{
+		"derivation disagrees", // the alarming cause
+		"never been opened",    // the benign one it must not hide
+		"lit sync push",        // what clears the benign one
+		"nothing was deleted",  // what it did about it
+		"backup",               // which remote to act on
+	} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("refusal = %q, want it to mention %q", err, want)
+		}
+	}
+}
+
+// TestCollectAbandonedMirrorTreatsAnAlreadyGoneDirectoryAsDone pins the
+// concurrent-prune case. Explicit pushes are not serialized against each other,
+// so a sibling can collect a planned directory between the plan and this walk —
+// which is the state this code was trying to reach. Calling that a failure would
+// spend exactly the credibility the refusal message depends on.
+func TestCollectAbandonedMirrorTreatsAnAlreadyGoneDirectoryAsDone(t *testing.T) {
+	t.Parallel()
+	reclaimed, collected, err := collectAbandonedMirror(t.TempDir(), orphanKey)
+	if err != nil {
+		t.Fatalf("collectAbandonedMirror() on a missing directory = %v, want no error — "+
+			"someone else already did the work", err)
+	}
+	if collected || reclaimed != 0 {
+		t.Fatalf("collectAbandonedMirror() = (%d, %v), want (0, false) — this call collected nothing",
+			reclaimed, collected)
+	}
+}
+
+// TestCollectAbandonedMirrorReclaimsWhatItRemoves is the ordinary case, and it
+// checks the byte count against a known payload so the reclaim figure is a
+// measurement rather than a directory tally.
+func TestCollectAbandonedMirrorReclaimsWhatItRemoves(t *testing.T) {
+	t.Parallel()
+	base := t.TempDir()
+	repo := filepath.Join(base, orphanKey, "repo.git")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatalf("plant orphan: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "packed-refs"), make([]byte, 4096), 0o644); err != nil {
+		t.Fatalf("plant orphan payload: %v", err)
+	}
+
+	reclaimed, collected, err := collectAbandonedMirror(base, orphanKey)
+	if err != nil {
+		t.Fatalf("collectAbandonedMirror() error = %v", err)
+	}
+	if !collected || reclaimed != 4096 {
+		t.Fatalf("collectAbandonedMirror() = (%d, %v), want (4096, true)", reclaimed, collected)
+	}
+	if _, err := os.Stat(filepath.Join(base, orphanKey)); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the mirror survived a successful collection: stat err = %v", err)
+	}
+}
+
+// TestCollectAbandonedMirrorReportsAFailureNamingTheKey keeps a real failure
+// loud and locatable. The outcome joins these, so an error that does not name
+// its key leaves an operator with a count and nowhere to look.
+func TestCollectAbandonedMirrorReportsAFailureNamingTheKey(t *testing.T) {
+	t.Parallel()
+	if os.Geteuid() == 0 {
+		t.Skip("running as root: directory permissions do not block unlink")
+	}
+	base := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(base, orphanKey), 0o755); err != nil {
+		t.Fatalf("plant orphan: %v", err)
+	}
+	// Unlinking the key directory needs write on its parent, so a read-only base
+	// fails the removal while leaving the walk that measures it working.
+	if err := os.Chmod(base, 0o500); err != nil {
+		t.Fatalf("chmod base: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(base, 0o700) })
+
+	_, collected, err := collectAbandonedMirror(base, orphanKey)
+	if err == nil {
+		t.Fatal("collectAbandonedMirror() on an unremovable directory returned no error")
+	}
+	if collected {
+		t.Fatal("collectAbandonedMirror() reported a collection it did not make")
+	}
+	if !strings.Contains(err.Error(), orphanKey) {
+		t.Fatalf("error = %q, want it to name the key it failed on", err)
 	}
 }
 
