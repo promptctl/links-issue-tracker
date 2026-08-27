@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -354,7 +355,7 @@ func TestSnapshotsRestore_RefusesWhileWorkspaceBusy(t *testing.T) {
 
 	// Open a long-lived Store that holds the shared workspace lock — the
 	// concrete shape of an `lit ls`/`lit show` reader.
-	reader, err := store.OpenForRead(context.Background(), ws.DatabasePath, ws.WorkspaceID)
+	reader, err := engine.Open(context.Background(), engine.ReadOnly, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		t.Fatalf("OpenForRead: %v", err)
 	}

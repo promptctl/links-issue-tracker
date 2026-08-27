@@ -88,4 +88,3 @@ func ClassifyReadiness(anns []annotation.Annotation) IssueReadiness {
 	}
 	return r
 }
-

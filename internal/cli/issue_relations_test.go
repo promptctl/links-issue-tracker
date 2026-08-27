@@ -6,18 +6,18 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func TestParentSetRejectsBarePositionalArgs(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	child, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
@@ -36,11 +36,11 @@ func TestParentSetWithNamedFlags(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	child, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "parent", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "parent", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}

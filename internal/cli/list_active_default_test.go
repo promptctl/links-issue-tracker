@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // runLs drives the shared list logic against the app's store and returns its
@@ -29,9 +29,9 @@ func runLs(t *testing.T, ap *app.App, args ...string) string {
 // only active work. [LAW:no-silent-failure]
 func TestListClosedOnlyFilterIsNotSilentlyEmptied(t *testing.T) {
 	h := newReadyTestHarness(t)
-	openBug := h.createIssue(store.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering"})
-	wontfixBug := h.createIssue(store.CreateIssueInput{Title: "declined bug", IssueType: model.TypeBug, Topic: "filtering"})
-	if _, err := h.ap.Store.Apply(h.ctx, wontfixBug.ID, store.Change{
+	openBug := h.createIssue(storage.CreateIssueInput{Title: "still open", IssueType: model.TypeBug, Topic: "filtering"})
+	wontfixBug := h.createIssue(storage.CreateIssueInput{Title: "declined bug", IssueType: model.TypeBug, Topic: "filtering"})
+	if _, err := h.ap.Store.Apply(h.ctx, wontfixBug.ID, storage.Change{
 		Action: model.Close{Outcome: model.Wontfix{}},
 		Actor:  "tester",
 		Reason: "not doing it",

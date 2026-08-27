@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 var depFamily = commandFamily[appSubcommand]{
@@ -54,7 +54,7 @@ func runDepAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 		}
 	}
 	srcID, dstID := rt.StoreEndpoints(fromID, toID)
-	rel, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
+	rel, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: rt, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}

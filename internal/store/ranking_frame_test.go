@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // frameFixture builds the canonical cross-frame scenario: epic E with three
@@ -19,19 +20,19 @@ type frameFixture struct {
 
 func newFrameFixture(t *testing.T, ctx context.Context, st *Store) frameFixture {
 	t.Helper()
-	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic E", Topic: "frame", IssueType: "epic", Placement: RankBottom})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic E", Topic: "frame", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
 	children := make([]model.Issue, 0, 3)
 	for _, title := range []string{"C1", "C2", "C3"} {
-		child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: RankBottom})
+		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 		if err != nil {
 			t.Fatalf("CreateIssue(%s) error = %v", title, err)
 		}
 		children = append(children, child)
 	}
-	standalone, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Standalone X", Topic: "frame", IssueType: "task", Placement: RankBottom})
+	standalone, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone X", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}
@@ -167,7 +168,7 @@ func TestRankSetMixedFrameResolvesChildToEpic(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RankSet(standalone, child) error = %v", err)
 	}
-	want := []RankSetResolution{
+	want := []storage.RankSetResolution{
 		{NamedID: fx.standalone.ID, RankedID: fx.standalone.ID},
 		{NamedID: fx.children[1].ID, RankedID: fx.epic.ID},
 	}

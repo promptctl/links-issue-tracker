@@ -4,7 +4,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // runPullableAnnotated reproduces the pullable set an agent can start now — the
@@ -41,9 +41,9 @@ func containsID(rows []annotation.AnnotatedIssue, id string) bool {
 // earlier one is open — priority ordering is untouched.
 func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
-	urgentLater := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "urgent later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	urgentLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "urgent later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID})
 
 	// The pullable set drops the blocked urgent sibling; only the earlier one is pullable.
 	pullable := h.runPullableAnnotated(workableFilter{})
@@ -93,9 +93,9 @@ func TestLaneGateUrgentLaterSiblingBlockedByOpenEarlierSibling(t *testing.T) {
 // "give it a lane nobody else shares".
 func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
-	otherLane := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "other lane", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "b"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Lane: "a"})
+	otherLane := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "other lane", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Lane: "b"})
 
 	pullable := h.runPullableAnnotated(workableFilter{})
 	if !containsID(pullable, first.ID) || !containsID(pullable, otherLane.ID) {
@@ -113,9 +113,9 @@ func TestLaneGateDistinctLaneRunsInParallel(t *testing.T) {
 // would leak whenever work is split across assignees.
 func TestLaneGateSeesSiblingsHiddenByAssigneeFilter(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
-	_ = h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "bob's first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Assignee: "bob"})
-	mineLater := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "my later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Assignee: "alice"})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "lane", IssueType: "epic", Priority: 1})
+	_ = h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "bob's first", Topic: "lane", IssueType: "task", Priority: 0, ParentID: epic.ID, Assignee: "bob"})
+	mineLater := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "my later", Topic: "lane", IssueType: "task", Priority: 1, ParentID: epic.ID, Assignee: "alice"})
 
 	// Viewing only alice's work, her later sibling is still gated by bob's open
 	// earlier sibling even though bob's ticket is filtered out of the view.

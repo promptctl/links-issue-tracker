@@ -264,13 +264,13 @@ func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error 
 // the push-outcome seam and the caller must stop rather than loop on a broken
 // precondition.
 func mirrorCycle(ctx context.Context, ws workspace.Info, stopAnswering func()) (attempted bool) {
-	syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
+	session, closeStore, err := openSyncSession(ctx, ws)
 	if err != nil {
 		_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err), stopAnswering)
 		return false
 	}
-	defer syncStore.Close()
-	mirrorOnce(ctx, syncStore, ws)
+	defer closeStore()
+	mirrorOnce(ctx, session, ws)
 	return true
 }
 
@@ -286,10 +286,10 @@ func mirrorCycle(ctx context.Context, ws workspace.Info, stopAnswering func()) (
 // commit that lands after this session is a fresh mirror-pending claim, and
 // the caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx context.Context, syncStore *store.Store, ws workspace.Info) {
+func mirrorOnce(ctx context.Context, session syncSession, ws workspace.Info) {
 	// The mirror pushes without compaction — plain SyncPush, never the
 	// compact-and-push variant the explicit command uses.
-	outcome, err := performSyncPush(ctx, syncStore, ws, "", false, false, syncStore.SyncPush)
+	outcome, err := performSyncPush(ctx, session, ws, "", false, false, session.syncer.SyncPush)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
 		// own deferred completion already recorded the outcome; this adds only

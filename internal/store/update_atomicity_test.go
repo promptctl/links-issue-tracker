@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // doltCommitCount returns the number of commits in the working branch's history.
@@ -27,7 +28,7 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	created, err := st.CreateIssue(ctx, CreateIssueInput{
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Original",
 		Topic:     "atomicity",
@@ -40,10 +41,10 @@ func TestApplyTransitionAndFieldsCommitAsOneUnit(t *testing.T) {
 
 	before := doltCommitCount(t, ctx, st)
 
-	updated, err := st.Apply(ctx, created.ID, Change{
+	updated, err := st.Apply(ctx, created.ID, storage.Change{
 		Action: model.Done{},
 		Actor:  "tester",
-		Fields: UpdateIssueInput{
+		Fields: storage.UpdateIssueInput{
 			Title:    ptr("Renamed"),
 			Priority: ptr(model.PriorityUrgent),
 		},
@@ -81,7 +82,7 @@ func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	created, err := st.CreateIssue(ctx, CreateIssueInput{
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Original",
 		Topic:     "atomicity",
@@ -99,10 +100,10 @@ func TestApplyRejectedFieldWriteLeavesNoTransition(t *testing.T) {
 
 	// A valid transition (open -> closed) paired with an empty title, which
 	// planFieldUpdate rejects.
-	_, err = st.Apply(ctx, created.ID, Change{
+	_, err = st.Apply(ctx, created.ID, storage.Change{
 		Action: model.Done{},
 		Actor:  "tester",
-		Fields: UpdateIssueInput{
+		Fields: storage.UpdateIssueInput{
 			Title: ptr(""),
 		},
 	})

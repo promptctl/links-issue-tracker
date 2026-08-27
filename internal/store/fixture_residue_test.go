@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // digestDir folds every file's path and bytes into one hash, so any byte of
@@ -68,18 +70,18 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open first copy: %v", err)
 	}
-	epic, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "residue", Title: "Residue epic", Topic: "residue", IssueType: "epic", Priority: 1})
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: "Residue epic", Topic: "residue", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue epic: %v", err)
 	}
-	child, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "residue", Title: "Residue child", Topic: "residue", IssueType: "task"})
+	child, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "residue", Title: "Residue child", Topic: "residue", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue child: %v", err)
 	}
-	if _, err := first.AddRelation(ctx, AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "residue"}); err != nil {
+	if _, err := first.AddRelation(ctx, storage.AddRelationInput{SrcID: child.ID, DstID: epic.ID, Type: "parent-child", CreatedBy: "residue"}); err != nil {
 		t.Fatalf("AddRelation: %v", err)
 	}
-	if _, _, err := first.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "residue that must not travel", CreatedBy: "residue"}); err != nil {
+	if _, _, err := first.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "residue that must not travel", CreatedBy: "residue"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	if err := first.Close(); err != nil {
@@ -93,7 +95,7 @@ func TestFixtureResidueCannotCrossCopies(t *testing.T) {
 		t.Fatalf("Open second copy: %v", err)
 	}
 	defer second.Close()
-	issues, err := second.ListIssues(ctx, ListIssuesFilter{})
+	issues, err := second.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues on second copy: %v", err)
 	}

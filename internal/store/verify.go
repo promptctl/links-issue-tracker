@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The verify gate is the trust boundary the recovery loop cannot talk its way
@@ -143,7 +144,7 @@ func VerifyCandidate(ctx context.Context, dump RawDump, mapping ShapeMapping, st
 // legitimately reproduces. Rejecting on warnings would make recovering such a
 // source impossible, so only Errors become findings — and the classification is
 // Doctor's, not a second opinion here.
-func healthFindings(h HealthReport) []VerifyFinding {
+func healthFindings(h storage.HealthReport) []VerifyFinding {
 	out := make([]VerifyFinding, 0, len(h.Errors))
 	for _, e := range h.Errors {
 		out = append(out, VerifyFinding{Law: LawHealth, Detail: e})

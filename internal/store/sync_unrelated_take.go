@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // takeLocalCommitMessage labels the marker commit that settles a take-local
@@ -29,7 +30,7 @@ const takeLocalCommitMessage = "reconcile: take local backlog over unrelated rem
 // checkable value rather than an assumption. Deliberately unexported: the only
 // way to obtain a token is to run the take and read its refusal, so the
 // destruction inventory has been surfaced before any approval can exist.
-func takeApprovalToken(localHead, remoteHead string, choice UnrelatedResolution) string {
+func takeApprovalToken(localHead, remoteHead string, choice storage.UnrelatedResolution) string {
 	sum := sha256.Sum256([]byte("take:" + string(choice) + "\x00" + localHead + "\x00" + remoteHead))
 	return hex.EncodeToString(sum[:6])
 }
@@ -43,7 +44,7 @@ func takeApprovalToken(localHead, remoteHead string, choice UnrelatedResolution)
 // [LAW:parse-dont-validate] the error is the checkpoint's output: downstream
 // rendering needs no second store read to describe the refusal.
 type OwnerApprovalRequiredError struct {
-	Choice UnrelatedResolution
+	Choice storage.UnrelatedResolution
 	// ApprovalToken is the token that WOULD authorize this take right now.
 	ApprovalToken string
 	// Stale is true when a token was supplied but no longer matches — the
@@ -51,7 +52,7 @@ type OwnerApprovalRequiredError struct {
 	Stale                 bool
 	LocalHead, RemoteHead string
 	Ahead, Behind         int64
-	Inventory             *UnrelatedInventory
+	Inventory             *storage.UnrelatedInventory
 }
 
 func (e OwnerApprovalRequiredError) Error() string {
@@ -89,22 +90,22 @@ func (e OwnerApprovalRequiredError) Error() string {
 // the owner approved and the state destroyed. [LAW:no-ambient-temporal-coupling]
 // [LAW:single-enforcer] the gate lives on the destructive operation itself, not on
 // any of its surfaces.
-func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice UnrelatedResolution, ownerApproval string) (SyncReconcileResult, error) {
+func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch string, choice storage.UnrelatedResolution, ownerApproval string) (storage.SyncReconcileResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 	if !choice.Valid() {
 		// [LAW:no-silent-failure] an unknown side must never reach the dispatch and
 		// silently do nothing; reject it at the boundary with the legal values.
-		return SyncReconcileResult{}, fmt.Errorf("resolve unrelated histories: unknown side %q (want %q or %q)", choice, TakeLocal, TakeRemote)
+		return storage.SyncReconcileResult{}, fmt.Errorf("resolve unrelated histories: unknown side %q (want %q or %q)", choice, storage.TakeLocal, storage.TakeRemote)
 	}
 
-	var result SyncReconcileResult
+	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
 		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
 		if err != nil {
@@ -114,7 +115,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 		if !plan.diverged {
 			// Nothing to resolve — a re-run after the divergence already cleared lands
 			// here. [LAW:dataflow-not-control-flow] the freshness value selects the outcome.
-			result.State = SyncReconcileNotDiverged
+			result.State = storage.SyncReconcileNotDiverged
 			return nil
 		}
 		_, shared := plan.base.shared()
@@ -154,7 +155,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 		return s.applyUnrelatedTake(ctx, &result, plan, trimmedRemote, trimmedBranch, choice)
 	})
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 	return result, nil
 }
@@ -165,9 +166,9 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 // the data branch to the remote head; take-local replays the local export as a forward
 // commit on the remote head. [LAW:dataflow-not-control-flow] the choice is a value
 // selecting the domain operation, not a mode threaded through duplicated plumbing.
-func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileResult, plan reconcilePlan, remote, branch string, choice UnrelatedResolution) error {
+func (s *Store) applyUnrelatedTake(ctx context.Context, result *storage.SyncReconcileResult, plan reconcilePlan, remote, branch string, choice storage.UnrelatedResolution) error {
 	switch choice {
-	case TakeRemote:
+	case storage.TakeRemote:
 		// take-remote adopts the remote head wholesale (resetHardToRef) — no scratch, no
 		// replay commit — so it takes only its own snapshot guard, NOT the full scratch
 		// envelope, and is exempt from the schema-ahead refusal: adopting an ahead head is a
@@ -177,7 +178,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 		return retryTransientGCContention(ctx, func(ctx context.Context) error {
 			return s.takeRemoteHead(ctx, result, guard, trackingRef)
 		}, s.reconnect, transientRetryDelay, waitWithContext)
-	case TakeLocal:
+	case storage.TakeLocal:
 		// take-local authors replay commits ON the remote head (commitReplayAndAdvance),
 		// so it shares the three-way path's full safe-replay envelope — schema-ahead refusal
 		// included: a replay below an ahead remote's schema would drop the newer fields and
@@ -203,7 +204,7 @@ func (s *Store) applyUnrelatedTake(ctx context.Context, result *SyncReconcileRes
 // Local content then equals the remote and sync is clean; the local-only issues are
 // discarded by design. It is idempotent under retry: the snapshot is cached and the
 // reset targets a fixed ref. [LAW:no-silent-failure]
-func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, trackingRef string) error {
+func (s *Store) takeRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, trackingRef string) error {
 	if _, err := guard.ensure(ctx); err != nil {
 		return fmt.Errorf("snapshot before take-remote: %w", err)
 	}
@@ -216,7 +217,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult,
 	if err := dbsnapshot.PruneMatching(migrationSnapshotsDir(s.doltRootDir), reconcileSnapshotRetention, IsReconcileSnapshotName); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: take-remote could not prune old recovery snapshots (reset already done): %v\n", err)
 	}
-	result.State = SyncReconcileTookRemote
+	result.State = storage.SyncReconcileTookRemote
 	return nil
 }
 
@@ -233,7 +234,7 @@ func (s *Store) takeRemoteHead(ctx context.Context, result *SyncReconcileResult,
 // three-way reconcile uses: scratch branch, snapshot-first, one atomic data-branch
 // advance. [LAW:single-enforcer] one safe-replay, one step builder, one scratch
 // lifecycle, shared with the field-aware path.
-func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *storage.SyncReconcileResult, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
 		local, err := s.exportAtCommit(ctx, scratch.read, localHead)
 		if err != nil {
@@ -255,7 +256,7 @@ func (s *Store) takeLocalOntoRemoteHead(ctx context.Context, result *SyncReconci
 		if err != nil {
 			return err
 		}
-		result.State = SyncReconcileTookLocal
+		result.State = storage.SyncReconcileTookLocal
 		result.Replayed = replayed
 		return nil
 	})

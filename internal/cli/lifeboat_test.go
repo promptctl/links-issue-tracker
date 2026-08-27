@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -19,7 +20,7 @@ func seedWorkspace(t *testing.T) workspace.Info {
 	t.Helper()
 	root := t.TempDir()
 	canonical := filepath.Join(root, "dolt")
-	st, err := store.Open(context.Background(), canonical, "test-workspace-id")
+	st, err := engine.Open(context.Background(), engine.ReadWrite, canonical, "test-workspace-id")
 	if err != nil {
 		t.Fatalf("seed workspace: %v", err)
 	}

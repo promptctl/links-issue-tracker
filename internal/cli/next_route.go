@@ -8,7 +8,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // NextOutcome is what routeNext concluded, sealed to the cases the routing
@@ -78,7 +78,7 @@ func (NoWork) isNextOutcome()             {}
 // is the zero state, not a hop through the earlier steps.
 // [LAW:dataflow-not-control-flow] rows is walked in the same composite-rank
 // order at every step; only which predicate admits a row changes.
-func routeNext(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, standings claims.Standings, self model.Attribution) NextOutcome {
+func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, standings claims.Standings, self model.Attribution) NextOutcome {
 	laneOf := func(row annotation.AnnotatedIssue) model.LaneID {
 		return model.LaneOf(row.Issue, details[row.ID].Parent)
 	}

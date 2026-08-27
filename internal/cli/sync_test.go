@@ -10,13 +10,13 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 func TestMapRemotesByName(t *testing.T) {
 	t.Parallel()
-	entries := []store.SyncRemote{
+	entries := []storage.SyncRemote{
 		{Name: "origin", URL: "https://fetch.example/repo.git"},
 		{Name: "upstream", URL: "https://upstream.example/repo.git"},
 	}
@@ -52,7 +52,7 @@ func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
 	// A branch the remote has never seen is the typed never_synced state, not a
 	// parsed backend error string — the payload directs the caller to set the
 	// upstream with a deterministic command.
-	payload := buildSyncPullPayload("origin", "feature/local-only", store.SyncPullResult{State: store.SyncPullNeverSynced})
+	payload := buildSyncPullPayload("origin", "feature/local-only", storage.SyncPullResult{State: storage.SyncPullNeverSynced})
 	if payload["status"] != "skipped" {
 		t.Fatalf("status = %v, want skipped", payload["status"])
 	}
@@ -76,8 +76,8 @@ func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
 func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 	t.Parallel()
 	now := time.Unix(1_700_000_000, 0)
-	failure, held := syncFailureFromPull("origin", "master", store.SyncPullResult{
-		State:              store.SyncPullProsePending,
+	failure, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{
+		State:              storage.SyncPullProsePending,
 		Ahead:              2,
 		Behind:             3,
 		OldestDivergedUnix: now.Add(-3 * time.Hour).Unix(),
@@ -100,11 +100,11 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 		t.Fatal("syncFailureFromPull did not resolve BuildNote")
 	}
 	// Every non-held state stays a printable payload, not a contract error.
-	for _, state := range []store.SyncPullState{
-		store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized,
-		store.SyncPullAhead, store.SyncPullNeverSynced,
+	for _, state := range []storage.SyncPullState{
+		storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized,
+		storage.SyncPullAhead, storage.SyncPullNeverSynced,
 	} {
-		if _, held := syncFailureFromPull("origin", "master", store.SyncPullResult{State: state}, now); held {
+		if _, held := syncFailureFromPull("origin", "master", storage.SyncPullResult{State: state}, now); held {
 			t.Fatalf("state %q wrongly classified as a held conflict", state)
 		}
 	}
@@ -113,15 +113,15 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 func TestBuildSyncPullPayloadOKStates(t *testing.T) {
 	t.Parallel()
 	for _, tc := range []struct {
-		state store.SyncPullState
+		state storage.SyncPullState
 		want  string
 	}{
-		{store.SyncPullUpToDate, "up_to_date"},
-		{store.SyncPullFastForwarded, "fast_forwarded"},
-		{store.SyncPullLinearized, "linearized"},
-		{store.SyncPullAhead, "ahead"},
+		{storage.SyncPullUpToDate, "up_to_date"},
+		{storage.SyncPullFastForwarded, "fast_forwarded"},
+		{storage.SyncPullLinearized, "linearized"},
+		{storage.SyncPullAhead, "ahead"},
 	} {
-		payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: tc.state})
+		payload := buildSyncPullPayload("origin", "master", storage.SyncPullResult{State: tc.state})
 		if payload["status"] != "ok" {
 			t.Fatalf("state %q: status = %v, want ok", tc.state, payload["status"])
 		}
@@ -134,7 +134,7 @@ func TestBuildSyncPullPayloadOKStates(t *testing.T) {
 func TestBuildSyncPullPayloadUnknownStateSurfaces(t *testing.T) {
 	t.Parallel()
 	// A SyncPullState the renderer does not enumerate must not masquerade as ok.
-	payload := buildSyncPullPayload("origin", "master", store.SyncPullResult{State: store.SyncPullState("weird_new_state")})
+	payload := buildSyncPullPayload("origin", "master", storage.SyncPullResult{State: storage.SyncPullState("weird_new_state")})
 	if payload["status"] != "unknown" {
 		t.Fatalf("status = %v, want unknown (unmapped state must surface, not render ok)", payload["status"])
 	}
@@ -387,7 +387,7 @@ func TestBuildRemoteSyncChanges(t *testing.T) {
 		{Name: "origin", URL: "https://example.com/new-origin.git"},
 		{Name: "upstream", URL: "https://example.com/upstream.git"},
 	}
-	doltRemotes := []store.SyncRemote{
+	doltRemotes := []storage.SyncRemote{
 		{Name: "origin", URL: "https://example.com/old-origin.git"},
 		{Name: "fork", URL: "https://example.com/fork.git"},
 	}

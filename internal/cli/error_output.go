@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -26,7 +27,7 @@ func WriteCommandError(stderr io.Writer, err error) int {
 // [LAW:single-enforcer] All error→reason mappings live here; dispatch is by type via errors.As.
 // [LAW:types-are-the-program] No message text is inspected; classification is carried by the type.
 func commandErrorReason(err error) string {
-	var notFound store.NotFoundError
+	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return "entity_not_found"
 	}

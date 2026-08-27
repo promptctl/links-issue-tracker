@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func TestOpenSyncDoesNotCreateStartupCommitWhenSchemaIsCurrent(t *testing.T) {
@@ -326,7 +327,7 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 		t.Fatalf("Open() error = %v", err)
 	}
 	defer st.Close()
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "gc target", Topic: "gc-test", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
@@ -385,14 +386,14 @@ func TestSyncFreshnessStateClassification(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
 		name string
-		in   SyncFreshness
-		want SyncFreshnessState
+		in   storage.SyncFreshness
+		want storage.SyncFreshnessState
 	}{
-		{"never synced ignores counts", SyncFreshness{Synced: false, Ahead: 0, Behind: 0}, SyncNeverSynced},
-		{"up to date", SyncFreshness{Synced: true, Ahead: 0, Behind: 0}, SyncUpToDate},
-		{"ahead only", SyncFreshness{Synced: true, Ahead: 2, Behind: 0}, SyncAhead},
-		{"behind only", SyncFreshness{Synced: true, Ahead: 0, Behind: 3}, SyncBehind},
-		{"diverged", SyncFreshness{Synced: true, Ahead: 2, Behind: 3}, SyncDiverged},
+		{"never synced ignores counts", storage.SyncFreshness{Synced: false, Ahead: 0, Behind: 0}, storage.SyncNeverSynced},
+		{"up to date", storage.SyncFreshness{Synced: true, Ahead: 0, Behind: 0}, storage.SyncUpToDate},
+		{"ahead only", storage.SyncFreshness{Synced: true, Ahead: 2, Behind: 0}, storage.SyncAhead},
+		{"behind only", storage.SyncFreshness{Synced: true, Ahead: 0, Behind: 3}, storage.SyncBehind},
+		{"diverged", storage.SyncFreshness{Synced: true, Ahead: 2, Behind: 3}, storage.SyncDiverged},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -436,7 +437,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -444,7 +445,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		}
 	}
 
-	assertFreshness := func(label string, sync *Store, wantState SyncFreshnessState, wantAhead, wantBehind int64) {
+	assertFreshness := func(label string, sync *Store, wantState storage.SyncFreshnessState, wantAhead, wantBehind int64) {
 		t.Helper()
 		got, err := sync.SyncFreshness(ctx, "origin", "master")
 		if err != nil {
@@ -474,7 +475,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	}
 
 	// Remote configured but never pushed/fetched: tracking ref absent.
-	assertFreshness("never synced", sync, SyncNeverSynced, 0, 0)
+	assertFreshness("never synced", sync, storage.SyncNeverSynced, 0, 0)
 
 	if _, err := sync.SyncPush(ctx, "origin", "master", true, false); err != nil {
 		t.Fatalf("SyncPush(c1) error = %v", err)
@@ -483,7 +484,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	if err := sync.db.QueryRowContext(ctx, `SELECT hash FROM dolt_branches WHERE name = 'master'`).Scan(&c1Hash); err != nil {
 		t.Fatalf("read c1 hash error = %v", err)
 	}
-	assertFreshness("after first push", sync, SyncUpToDate, 0, 0)
+	assertFreshness("after first push", sync, storage.SyncUpToDate, 0, 0)
 	if err := sync.Close(); err != nil {
 		t.Fatalf("Close() after push error = %v", err)
 	}
@@ -494,18 +495,18 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() after c2 error = %v", err)
 	}
-	assertFreshness("after local commit", sync, SyncAhead, 1, 0)
+	assertFreshness("after local commit", sync, storage.SyncAhead, 1, 0)
 
 	// Publish c2 so the remote-tracking ref advances to c2, then rewind the
 	// local branch to c1: the tracking ref is now ahead of local → behind by 1.
 	if _, err := sync.SyncPush(ctx, "origin", "master", false, false); err != nil {
 		t.Fatalf("SyncPush(c2) error = %v", err)
 	}
-	assertFreshness("after publishing c2", sync, SyncUpToDate, 0, 0)
+	assertFreshness("after publishing c2", sync, storage.SyncUpToDate, 0, 0)
 	if _, err := sync.db.ExecContext(ctx, `CALL DOLT_RESET('--hard', ?)`, c1Hash); err != nil {
 		t.Fatalf("DOLT_RESET to c1 error = %v", err)
 	}
-	assertFreshness("after rewind to c1", sync, SyncBehind, 0, 1)
+	assertFreshness("after rewind to c1", sync, storage.SyncBehind, 0, 1)
 
 	// New local commit on top of the rewound branch: c3 is not on the remote and
 	// c2 is not local → diverged.
@@ -517,7 +518,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("OpenSync() after c3 error = %v", err)
 	}
-	assertFreshness("after divergent commit", sync, SyncDiverged, 1, 1)
+	assertFreshness("after divergent commit", sync, storage.SyncDiverged, 1, 1)
 	if err := sync.Close(); err != nil {
 		t.Fatalf("Close() after divergence error = %v", err)
 	}
@@ -530,7 +531,7 @@ func TestSyncFreshnessTracksAheadBehindAgainstRemote(t *testing.T) {
 		t.Fatalf("OpenForRead() error = %v", err)
 	}
 	defer readStore.Close()
-	assertFreshness("read-only store", readStore, SyncDiverged, 1, 1)
+	assertFreshness("read-only store", readStore, storage.SyncDiverged, 1, 1)
 }
 
 // TestSyncPushDelivers proves SyncPush delivers every commit to the remote on
@@ -551,7 +552,7 @@ func TestSyncPushDelivers(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%q) error = %v", title, err)
 		}
-		if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -576,7 +577,7 @@ func TestSyncPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness() error = %v", err)
 	}
-	if got.State() != SyncUpToDate {
+	if got.State() != storage.SyncUpToDate {
 		t.Fatalf("after no-compact push: state = %q (%+v), want up-to-date", got.State(), got)
 	}
 	// Close before the next commit/OpenSync round: embedded Dolt permits only
@@ -604,7 +605,7 @@ func TestSyncPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness() after c2 push error = %v", err)
 	}
-	if after.State() != SyncUpToDate {
+	if after.State() != storage.SyncUpToDate {
 		t.Fatalf("after second no-compact push: state = %q (%+v), want up-to-date", after.State(), after)
 	}
 }
@@ -624,7 +625,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := st.Close(); err != nil {
@@ -646,7 +647,7 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness() error = %v", err)
 	}
-	if got.State() != SyncUpToDate {
+	if got.State() != storage.SyncUpToDate {
 		t.Fatalf("after compact+push: state = %q (%+v), want up-to-date", got.State(), got)
 	}
 }
@@ -697,7 +698,7 @@ func TestReconnectRotatorRecoversPoisonedOperation(t *testing.T) {
 
 	// The rotated connection must be a fully working handle, not just non-nil:
 	// a real mutation through it has to commit.
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "after-reconnect", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 		t.Fatalf("CreateIssue() after reconnect error = %v", err)
 	}
 }
@@ -781,7 +782,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(producer) error = %v", err)
 	}
-	if _, err := producer.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := producer.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-ticket", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 		t.Fatalf("CreateIssue(producer) error = %v", err)
 	}
 	if err := producer.Close(); err != nil {
@@ -835,7 +836,7 @@ func TestSyncResetToRemoteHeadAdoptsUnrelatedHistory(t *testing.T) {
 		t.Fatalf("Open(consumer after adopt) error = %v", err)
 	}
 	defer adopted.Close()
-	issues, err := adopted.ListIssues(ctx, ListIssuesFilter{})
+	issues, err := adopted.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues(consumer) error = %v", err)
 	}
@@ -874,7 +875,7 @@ func TestLocalIssueCountAcrossLifecycle(t *testing.T) {
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 0 {
 		t.Fatalf("migrated-empty LocalIssueCount() = %d, %v; want 0, nil", got, err)
 	}
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "t1", Topic: "topic", IssueType: "task", Priority: 0}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if got, err := st.LocalIssueCount(ctx); err != nil || got != 1 {
@@ -1015,7 +1016,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Open(%s,%q) error = %v", root, title, err)
 		}
-		if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task"}); err != nil {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "topic", IssueType: "task"}); err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
 		}
 		if err := st.Close(); err != nil {
@@ -1029,7 +1030,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 			t.Fatalf("OpenForRead(%s) error = %v", root, err)
 		}
 		defer st.Close()
-		list, err := st.ListIssues(ctx, ListIssuesFilter{})
+		list, err := st.ListIssues(ctx, storage.ListIssuesFilter{})
 		if err != nil {
 			t.Fatalf("ListIssues(%s) error = %v", root, err)
 		}
@@ -1048,7 +1049,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 			t.Fatalf("Close(%s) after push error = %v", root, err)
 		}
 	}
-	receive := func(label string, wantState SyncReceiveState) SyncReceiveResult {
+	receive := func(label string, wantState storage.SyncReceiveState) storage.SyncReceiveResult {
 		t.Helper()
 		st, err := OpenSync(ctx, rootB, "ws")
 		if err != nil {
@@ -1103,7 +1104,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	}
 
 	// Up to date: receive is a no-op.
-	receive("up to date", SyncReceiveUpToDate)
+	receive("up to date", storage.SyncReceiveUpToDate)
 	if got := issueCount(rootB); got != 1 {
 		t.Fatalf("B issue count after up-to-date receive = %d, want 1", got)
 	}
@@ -1111,7 +1112,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	// A pushes c2: B is now behind by one. Receive fast-forwards it.
 	createIssue(rootA, "c2")
 	pushFrom(rootA, false)
-	res := receive("behind", SyncReceiveFastForwarded)
+	res := receive("behind", storage.SyncReceiveFastForwarded)
 	if res.Behind != 1 {
 		t.Fatalf("behind receive: Behind = %d, want 1", res.Behind)
 	}
@@ -1121,7 +1122,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 
 	// B makes a local, unpushed commit: it is ahead, remote unchanged. No-op.
 	createIssue(rootB, "b-local")
-	res = receive("ahead", SyncReceiveAhead)
+	res = receive("ahead", storage.SyncReceiveAhead)
 	if res.Ahead != 1 {
 		t.Fatalf("ahead receive: Ahead = %d, want 1", res.Ahead)
 	}
@@ -1133,7 +1134,7 @@ func TestSyncReceiveFastForwardsWhenBehindAndDefersDivergence(t *testing.T) {
 	// report it and NOT merge — B's three issues are untouched.
 	createIssue(rootA, "c3")
 	pushFrom(rootA, false)
-	res = receive("diverged", SyncReceiveDiverged)
+	res = receive("diverged", storage.SyncReceiveDiverged)
 	if res.Ahead != 1 || res.Behind != 1 {
 		t.Fatalf("diverged receive: ahead=%d behind=%d, want 1/1", res.Ahead, res.Behind)
 	}

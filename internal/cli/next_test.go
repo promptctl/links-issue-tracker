@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // runNextRow reproduces exactly what `lit next` picks — the shared workable
@@ -55,8 +55,8 @@ func (h readyTestHarness) runNextText(args ...string) string {
 // leaf in the same composite-rank order `lit ready` produces.
 func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	first := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First leaf", Topic: "next", IssueType: "task", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second leaf", Topic: "next", IssueType: "task", Priority: 0})
 
 	got := h.runNextRow()
 	if got.ID != first.ID {
@@ -69,11 +69,11 @@ func TestRunNextReturnsTopReadyLeaf(t *testing.T) {
 // `lit start` it again.
 func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	inProgress := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.Apply(h.ctx, inProgress.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	inProgress := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Already started", Topic: "next", IssueType: "task", Priority: 1})
+	if _, err := h.ap.Store.Apply(h.ctx, inProgress.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
-	openLeaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
+	openLeaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Workable", Topic: "next", IssueType: "task", Priority: 0})
 
 	got := h.runNextRow()
 	if got.ID != openLeaf.ID {
@@ -87,10 +87,10 @@ func TestRunNextSkipsInProgressLeaf(t *testing.T) {
 // so the assertion pins both "dependent skipped" and the exact expected pick.
 func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1})
-	dependent := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 0})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "next", IssueType: "task", Priority: 1})
+	dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Dependent", Topic: "next", IssueType: "task", Priority: 0})
 	h.addDependency(dependent.ID, blocker.ID)
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Unblocked third", Topic: "next", IssueType: "task", Priority: 0})
 
 	got := h.runNextRow()
 	if got.ID == dependent.ID {
@@ -106,8 +106,8 @@ func TestRunNextSkipsBlockedLeaf(t *testing.T) {
 // same narrowed question ready/backlog/queue would.
 func TestRunNextTypeFilterPicksMatchingLeaf(t *testing.T) {
 	h := newReadyTestHarness(t)
-	task := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1})
-	bug := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Lower-ranked bug", Topic: "next", IssueType: "bug", Priority: 0})
+	task := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Top-ranked task", Topic: "next", IssueType: "task", Priority: 1})
+	bug := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Lower-ranked bug", Topic: "next", IssueType: "bug", Priority: 0})
 
 	text := h.runNextText("--type", "bug")
 	if !strings.Contains(text, bug.ID) {
@@ -163,8 +163,8 @@ func TestRunNextContinueFlagIsRetired(t *testing.T) {
 // which epic it would be joining before it claims the leaf.
 func TestRunNextCarriesParentEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
-	leaf := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Container", Topic: "next", IssueType: "epic", Priority: 1})
+	leaf := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Leaf", Topic: "next", IssueType: "task", Priority: 0, ParentID: epic.ID})
 
 	got := h.runNextRow()
 	if got.ID != leaf.ID {

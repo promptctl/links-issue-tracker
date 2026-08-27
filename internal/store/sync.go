@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"golang.org/x/mod/semver"
 )
 
@@ -96,16 +97,16 @@ func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *S
 	return s, nil
 }
 
-func (s *Store) SyncListRemotes(ctx context.Context) ([]SyncRemote, error) {
+func (s *Store) SyncListRemotes(ctx context.Context) ([]storage.SyncRemote, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT name, url FROM dolt_remotes ORDER BY name`)
 	if err != nil {
 		return nil, fmt.Errorf("list dolt remotes: %w", err)
 	}
 	defer rows.Close()
 
-	remotes := []SyncRemote{}
+	remotes := []storage.SyncRemote{}
 	for rows.Next() {
-		var remote SyncRemote
+		var remote storage.SyncRemote
 		if err := rows.Scan(&remote.Name, &remote.URL); err != nil {
 			return nil, fmt.Errorf("scan dolt remote: %w", err)
 		}
@@ -235,8 +236,8 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 // refs that cannot move under the held lock, so the diverged state the receive
 // saw is the state the reconcile heals. [LAW:no-ambient-temporal-coupling] one
 // owner of the converge's atomicity.
-func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (SyncPullResult, error) {
-	var result SyncPullResult
+func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (storage.SyncPullResult, error) {
+	var result storage.SyncPullResult
 	err := s.withCommitLock(ctx, func(ctx context.Context) error {
 		recv, err := s.SyncReceive(ctx, remote, branch)
 		if err != nil {
@@ -245,23 +246,23 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 		result.Ahead, result.Behind = recv.Ahead, recv.Behind
 		result.OldestDivergedUnix = recv.OldestDivergedUnix
 		switch recv.State {
-		case SyncReceiveUpToDate:
-			result.State = SyncPullUpToDate
-		case SyncReceiveFastForwarded:
-			result.State = SyncPullFastForwarded
-		case SyncReceiveAhead:
-			result.State = SyncPullAhead
-		case SyncReceiveNeverSynced:
-			result.State = SyncPullNeverSynced
-		case SyncReceiveDiverged:
+		case storage.SyncReceiveUpToDate:
+			result.State = storage.SyncPullUpToDate
+		case storage.SyncReceiveFastForwarded:
+			result.State = storage.SyncPullFastForwarded
+		case storage.SyncReceiveAhead:
+			result.State = storage.SyncPullAhead
+		case storage.SyncReceiveNeverSynced:
+			result.State = storage.SyncPullNeverSynced
+		case storage.SyncReceiveDiverged:
 			rec, err := s.SyncReconcile(ctx, remote, branch)
 			if err != nil {
 				return err
 			}
 			result.Ahead, result.Behind = rec.Ahead, rec.Behind
 			switch rec.State {
-			case SyncReconcileLinearized:
-				result.State = SyncPullLinearized
+			case storage.SyncReconcileLinearized:
+				result.State = storage.SyncPullLinearized
 				// rec's ahead/behind describe the divergence that was just healed,
 				// not the outcome. Re-read so the reported counts match the linear
 				// result (the merge commit sits on the remote head: 1 ahead, 0
@@ -276,23 +277,23 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 				}
 				result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 				result.OldestDivergedUnix = fresh.OldestDivergedUnix
-			case SyncReconcileProsePending:
-				result.State = SyncPullProsePending
+			case storage.SyncReconcileProsePending:
+				result.State = storage.SyncPullProsePending
 				result.Pending = rec.Pending
-			case SyncReconcileUnrelated:
+			case storage.SyncReconcileUnrelated:
 				// No common ancestor: nothing merged, nothing committed. The divergence
 				// is real and still present, so the ahead/behind counts and the fork
 				// timestamp the receive recorded ride along unchanged — the fork the
 				// receive saw is the fork this reports. [LAW:one-source-of-truth] The
 				// both-sides inventory the reconcile read off the two anchors rides along
 				// too, so the pull surface shows what each side holds.
-				result.State = SyncPullUnrelated
+				result.State = storage.SyncPullUnrelated
 				result.Unrelated = rec.Unrelated
-			case SyncReconcileNotDiverged:
+			case storage.SyncReconcileNotDiverged:
 				// Under the single lock a push race cannot resolve the divergence
 				// between the receive and the reconcile, so this is the benign
 				// idempotent case (the divergence was already gone). Nothing to merge.
-				result.State = SyncPullUpToDate
+				result.State = storage.SyncPullUpToDate
 				// Up-to-date has no divergence, so the timestamp the receive recorded
 				// must not ride along — it would date a fork that is gone, a field
 				// contradicting its state. [LAW:one-source-of-truth]
@@ -311,7 +312,7 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (Syn
 		return nil
 	})
 	if err != nil {
-		return SyncPullResult{}, err
+		return storage.SyncPullResult{}, err
 	}
 	return result, nil
 }
@@ -390,17 +391,17 @@ func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
 // silently dropped. [LAW:dataflow-not-control-flow] The post-fetch freshness is
 // the value that selects the outcome; there is one fetch and one freshness read
 // every call.
-func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (SyncReceiveResult, error) {
+func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (storage.SyncReceiveResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return SyncReceiveResult{}, err
+		return storage.SyncReceiveResult{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return SyncReceiveResult{}, err
+		return storage.SyncReceiveResult{}, err
 	}
 
-	var result SyncReceiveResult
+	var result storage.SyncReceiveResult
 	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
 		if _, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", trimmedRemote); err != nil {
 			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
@@ -412,25 +413,25 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 		result.Ahead, result.Behind = fresh.Ahead, fresh.Behind
 		result.OldestDivergedUnix = fresh.OldestDivergedUnix
 		switch fresh.State() {
-		case SyncBehind:
+		case storage.SyncBehind:
 			trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
 			if err := execProcedureDiscard(ctx, s.db, "DOLT_MERGE", "--ff-only", trackingRef); err != nil {
 				return fmt.Errorf("fast-forward to %q: %w", trackingRef, err)
 			}
-			result.State = SyncReceiveFastForwarded
-		case SyncDiverged:
-			result.State = SyncReceiveDiverged
-		case SyncAhead:
-			result.State = SyncReceiveAhead
-		case SyncNeverSynced:
-			result.State = SyncReceiveNeverSynced
+			result.State = storage.SyncReceiveFastForwarded
+		case storage.SyncDiverged:
+			result.State = storage.SyncReceiveDiverged
+		case storage.SyncAhead:
+			result.State = storage.SyncReceiveAhead
+		case storage.SyncNeverSynced:
+			result.State = storage.SyncReceiveNeverSynced
 		default:
-			result.State = SyncReceiveUpToDate
+			result.State = storage.SyncReceiveUpToDate
 		}
 		return nil
 	})
 	if err != nil {
-		return SyncReceiveResult{}, err
+		return storage.SyncReceiveResult{}, err
 	}
 	return result, nil
 }
@@ -458,15 +459,15 @@ func (s *Store) SyncCompact(ctx context.Context) error {
 // on-change mirror calls this plain push because DOLT_GC transitions the
 // embedded store read-only mid-run and collides with the engine state just
 // after a mutation, and reclaiming local disk is not worth that on every change.
-func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
-	var result SyncPushResult
+func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	var result storage.SyncPushResult
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
 		return pushErr
 	})
 	if err != nil {
-		return SyncPushResult{}, err
+		return storage.SyncPushResult{}, err
 	}
 	return result, nil
 }
@@ -477,8 +478,8 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 // The explicit `lit sync push` and the pre-push hook use this; the on-change
 // mirror uses the plain SyncPush. The two are distinct single-purpose
 // entrypoints, not one method with a compaction flag. [LAW:decomposition]
-func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
-	var result SyncPushResult
+func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
+	var result storage.SyncPushResult
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		if err := s.compactWithinLock(ctx); err != nil {
 			return err
@@ -488,7 +489,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		return pushErr
 	})
 	if err != nil {
-		return SyncPushResult{}, err
+		return storage.SyncPushResult{}, err
 	}
 	return result, nil
 }
@@ -497,10 +498,10 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 // holds the commit lock (via runSyncMutation); SyncPush and SyncCompactAndPush
 // both compose over this one push implementation so the push step cannot drift
 // between them. [LAW:single-enforcer]
-func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error) {
+func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return SyncPushResult{}, err
+		return storage.SyncPushResult{}, err
 	}
 	trimmedBranch := strings.TrimSpace(branch)
 	// [LAW:single-enforcer] Refuse before authoring a commit onto a remote whose
@@ -512,7 +513,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 	// branch) has no tracking ref to compare against and is left to Dolt.
 	if trimmedBranch != "" {
 		if err := s.guardRemoteSchemaAhead(ctx, trimmedRemote, trimmedBranch); err != nil {
-			return SyncPushResult{}, err
+			return storage.SyncPushResult{}, err
 		}
 	}
 	args := []string{}
@@ -527,51 +528,51 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 		args = append(args, fmt.Sprintf("HEAD:%s", trimmedBranch))
 	}
 	query := buildProcedureCall("DOLT_PUSH", len(args))
-	var result SyncPushResult
+	var result storage.SyncPushResult
 	var message sql.NullString
 	if err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message); err != nil {
-		return SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, err)
+		return storage.SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, err)
 	}
 	result.Message = nullStringValue(message)
 	return result, nil
 }
 
-func (s *Store) SyncStatus(ctx context.Context) (SyncStatusReport, error) {
-	report := SyncStatusReport{}
+func (s *Store) SyncStatus(ctx context.Context) (storage.SyncStatusReport, error) {
+	report := storage.SyncStatusReport{}
 	if err := s.db.QueryRowContext(ctx, `SELECT DOLT_VERSION()`).Scan(&report.DoltVersion); err != nil {
-		return SyncStatusReport{}, fmt.Errorf("read dolt version: %w", err)
+		return storage.SyncStatusReport{}, fmt.Errorf("read dolt version: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT ACTIVE_BRANCH()`).Scan(&report.Branch); err != nil {
-		return SyncStatusReport{}, fmt.Errorf("read active branch: %w", err)
+		return storage.SyncStatusReport{}, fmt.Errorf("read active branch: %w", err)
 	}
 	var headMessage sql.NullString
 	headQuery := `SELECT commit_hash, message FROM dolt_log() LIMIT 1`
 	if err := s.db.QueryRowContext(ctx, headQuery).Scan(&report.HeadCommit, &headMessage); err != nil {
-		return SyncStatusReport{}, fmt.Errorf("read head commit: %w", err)
+		return storage.SyncStatusReport{}, fmt.Errorf("read head commit: %w", err)
 	}
 	report.HeadMessage = nullStringValue(headMessage)
 	remotes, err := s.SyncListRemotes(ctx)
 	if err != nil {
-		return SyncStatusReport{}, err
+		return storage.SyncStatusReport{}, err
 	}
 	report.Remotes = remotes
 
 	rows, err := s.db.QueryContext(ctx, `SELECT table_name, staged, status FROM dolt_status ORDER BY table_name, staged`)
 	if err != nil {
-		return SyncStatusReport{}, fmt.Errorf("read dolt status: %w", err)
+		return storage.SyncStatusReport{}, fmt.Errorf("read dolt status: %w", err)
 	}
 	defer rows.Close()
 
-	report.Status = []SyncStatusRow{}
+	report.Status = []storage.SyncStatusRow{}
 	for rows.Next() {
-		var statusRow SyncStatusRow
+		var statusRow storage.SyncStatusRow
 		if err := rows.Scan(&statusRow.TableName, &statusRow.Staged, &statusRow.Status); err != nil {
-			return SyncStatusReport{}, fmt.Errorf("scan dolt status row: %w", err)
+			return storage.SyncStatusReport{}, fmt.Errorf("scan dolt status row: %w", err)
 		}
 		report.Status = append(report.Status, statusRow)
 	}
 	if err := rows.Err(); err != nil {
-		return SyncStatusReport{}, fmt.Errorf("iterate dolt status rows: %w", err)
+		return storage.SyncStatusReport{}, fmt.Errorf("iterate dolt status rows: %w", err)
 	}
 	return report, nil
 }
@@ -583,23 +584,23 @@ func (s *Store) SyncStatus(ctx context.Context) (SyncStatusReport, error) {
 // remote and branch (the same selection `lit sync` uses) and owns the
 // no-remote-configured case; this method owns the never-synced case, guarding
 // the range queries so they never run against a missing ref.
-func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string) (SyncFreshness, error) {
+func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string) (storage.SyncFreshness, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return SyncFreshness{}, err
+		return storage.SyncFreshness{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return SyncFreshness{}, err
+		return storage.SyncFreshness{}, err
 	}
-	freshness := SyncFreshness{Remote: trimmedRemote, Branch: trimmedBranch}
+	freshness := storage.SyncFreshness{Remote: trimmedRemote, Branch: trimmedBranch}
 	trackingRef := fmt.Sprintf("remotes/%s/%s", trimmedRemote, trimmedBranch)
 
 	var trackingRefCount int64
 	if err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM dolt_remote_branches WHERE name = ?`, trackingRef,
 	).Scan(&trackingRefCount); err != nil {
-		return SyncFreshness{}, fmt.Errorf("check remote-tracking ref %q: %w", trackingRef, err)
+		return storage.SyncFreshness{}, fmt.Errorf("check remote-tracking ref %q: %w", trackingRef, err)
 	}
 	if trackingRefCount == 0 {
 		// [LAW:no-defensive-null-guards] Absent tracking ref is a real domain
@@ -612,16 +613,16 @@ func (s *Store) SyncFreshness(ctx context.Context, remote string, branch string)
 
 	var localBranch string
 	if err := s.db.QueryRowContext(ctx, `SELECT ACTIVE_BRANCH()`).Scan(&localBranch); err != nil {
-		return SyncFreshness{}, fmt.Errorf("read active branch: %w", err)
+		return storage.SyncFreshness{}, fmt.Errorf("read active branch: %w", err)
 	}
 
 	ahead, aheadOldest, err := s.commitRangeStats(ctx, trackingRef, localBranch)
 	if err != nil {
-		return SyncFreshness{}, fmt.Errorf("summarize commits ahead of %q: %w", trackingRef, err)
+		return storage.SyncFreshness{}, fmt.Errorf("summarize commits ahead of %q: %w", trackingRef, err)
 	}
 	behind, behindOldest, err := s.commitRangeStats(ctx, localBranch, trackingRef)
 	if err != nil {
-		return SyncFreshness{}, fmt.Errorf("summarize commits behind %q: %w", trackingRef, err)
+		return storage.SyncFreshness{}, fmt.Errorf("summarize commits behind %q: %w", trackingRef, err)
 	}
 	freshness.Ahead = ahead
 	freshness.Behind = behind

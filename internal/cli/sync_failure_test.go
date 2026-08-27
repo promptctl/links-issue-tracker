@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -300,7 +301,7 @@ func TestDoctorDivergenceExit(t *testing.T) {
 		return doctorSyncReport{
 			Kind: doctorSyncResolved,
 			Age:  age,
-			Freshness: store.SyncFreshness{
+			Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: ahead, Behind: behind,
 			},
 		}
@@ -329,7 +330,7 @@ func TestDoctorDivergenceExit(t *testing.T) {
 	// A non-diverged (behind-only) freshness never trips the incident exit.
 	behindOnly := doctorSyncReport{
 		Kind: doctorSyncResolved, Age: 10 * 24 * time.Hour,
-		Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Behind: 3},
+		Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Behind: 3},
 	}
 	if err := doctorDivergenceExit(behindOnly); err != nil {
 		t.Fatalf("non-diverged state wrongly exited nonzero: %v", err)

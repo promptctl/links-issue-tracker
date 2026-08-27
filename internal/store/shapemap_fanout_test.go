@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // normEvent is an order-insensitive, provenance-insensitive view of one issue
@@ -70,7 +71,7 @@ func TestFanOutConservesIssueHistoryAgainstReconcile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first): %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue: %v", err)

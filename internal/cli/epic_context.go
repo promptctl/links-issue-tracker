@@ -8,7 +8,7 @@ import (
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // childStatus is the display state of one epic child. The variants defined in
@@ -113,7 +113,7 @@ func classifyChildStatus(child model.Issue, openBlockers []string) childStatus {
 // epic-level call). Each child's detail is fetched once and feeds both its
 // status classification and the cross-epic edge collection, so there is one
 // resolved source per child rather than a separate fetch per concern.
-func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChildID string) (EpicContext, error) {
+func buildEpicContext(ctx context.Context, st storage.Store, epicID, focusedChildID string) (EpicContext, error) {
 	epicRels, err := st.GetRelationsByIDs(ctx, []string{epicID})
 	if err != nil {
 		return EpicContext{}, err
@@ -124,7 +124,7 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 	// (matching the prior GetIssueDetail path) rather than skipping silently.
 	epic, ok := epicRels[epicID]
 	if !ok {
-		return EpicContext{}, store.NotFoundError{Entity: "issue", ID: epicID}
+		return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: epicID}
 	}
 	internal := epicMemberIDs(epic.Issue.ID, epic.Children)
 	childIDs := make([]string, len(epic.Children))
@@ -153,7 +153,7 @@ func buildEpicContext(ctx context.Context, st *store.Store, epicID, focusedChild
 		// a zero-value Issue. [LAW:no-defensive-null-guards]
 		childRel, ok := childRels[child.ID]
 		if !ok {
-			return EpicContext{}, store.NotFoundError{Entity: "issue", ID: child.ID}
+			return EpicContext{}, storage.NotFoundError{Entity: "issue", ID: child.ID}
 		}
 		children = append(children, epicChild{
 			Issue:  childRel.Issue,
@@ -199,7 +199,7 @@ func epicViewFor(issue model.Issue, parent *model.Issue) *epicTarget {
 // resolution meets the show text path — the build/render seam stays pure.
 // [LAW:no-defensive-null-guards] target is an explicit optional: nil is the
 // real "no epic membership" case, not a defended-against bug.
-func writeEpicContext(ctx context.Context, st *store.Store, w io.Writer, detail model.IssueDetail) error {
+func writeEpicContext(ctx context.Context, st storage.Store, w io.Writer, detail model.IssueDetail) error {
 	target := epicViewFor(detail.Issue, detail.Parent)
 	if target == nil {
 		return nil
@@ -230,7 +230,7 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 // deterministic. Same-epic blockers are kept — an inline blocked-by marker
 // names whichever open blocker comes first, sibling or not — so nothing is
 // excluded.
-func openBlockers(rel store.IssueRelations) []string {
+func openBlockers(rel storage.IssueRelations) []string {
 	var ids []string
 	for _, dep := range openExcluding(rel.DependsOn, nil) {
 		ids = append(ids, dep.ID)
@@ -244,7 +244,7 @@ func openBlockers(rel store.IssueRelations) []string {
 // live plan context, so it contributes nothing; same-epic counterparts are
 // excluded because their ordering is already conveyed by rank in the children
 // list, and closed counterparts are dropped by openExcluding.
-func (x *crossEpicEdges) collect(member store.IssueRelations, internal map[string]struct{}) {
+func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[string]struct{}) {
 	if member.Issue.State() == model.StateClosed {
 		return
 	}

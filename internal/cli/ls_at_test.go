@@ -9,7 +9,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -35,9 +35,9 @@ func foreignStore(t *testing.T, wsID, prefix string) (storeDir, issueID string) 
 		t.Fatalf("WriteFile(config.json) error = %v", err)
 	}
 
-	st, err := store.Open(ctx, loc.DatabasePath, wsID)
+	st, err := engine.Open(ctx, engine.ReadWrite, loc.DatabasePath, wsID)
 	if err != nil {
-		t.Fatalf("store.Open() error = %v", err)
+		t.Fatalf("engine.Open() error = %v", err)
 	}
 	ap := &app.App{
 		Workspace: workspace.Info{
@@ -83,9 +83,9 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 
 	ctx := context.Background()
 	loc := workspace.LocationFromStorageDir(storeDir)
-	st, err := store.Open(ctx, loc.DatabasePath, "ws-foreign")
+	st, err := engine.Open(ctx, engine.ReadWrite, loc.DatabasePath, "ws-foreign")
 	if err != nil {
-		t.Fatalf("store.Open() after read error = %v — read left the store un-writable", err)
+		t.Fatalf("engine.Open() after read error = %v — read left the store un-writable", err)
 	}
 	defer func() { _ = st.Close() }()
 	ap := &app.App{

@@ -11,10 +11,10 @@ import (
 
 const (
 	// [LAW:one-source-of-truth] Marker pairs are the canonical ownership boundary for AGENTS.md content.
-	litAgentsBeginMarker     = "<!-- BEGIN LIT INTEGRATION -->"
-	litAgentsEndMarker       = "<!-- END LIT INTEGRATION -->"
-	legacyAgentsBeginMarker  = "<!-- BEGIN LINKS INTEGRATION -->"
-	legacyAgentsEndMarker    = "<!-- END LINKS INTEGRATION -->"
+	litAgentsBeginMarker    = "<!-- BEGIN LIT INTEGRATION -->"
+	litAgentsEndMarker      = "<!-- END LIT INTEGRATION -->"
+	legacyAgentsBeginMarker = "<!-- BEGIN LINKS INTEGRATION -->"
+	legacyAgentsEndMarker   = "<!-- END LINKS INTEGRATION -->"
 )
 
 type agentsInstallResult struct {
@@ -87,4 +87,3 @@ func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude a
 
 	return agentsResult, claudeResult, nil
 }
-

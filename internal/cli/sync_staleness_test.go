@@ -9,7 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -43,7 +44,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "up to date and freshly fetched emits nothing",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
 			fetchAge:      freshAge,
@@ -52,7 +53,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "fetch age unknown (never fetched yet) does not warn",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
 			fetchAgeKnown: false,
@@ -60,7 +61,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "ahead warns and names the push fix",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 3,
 			}},
 			fetchAge:      freshAge,
@@ -70,7 +71,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "stale fetch warns and names the fetch fix",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
 			fetchAge:      staleAge,
@@ -80,7 +81,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "ahead AND stale fetch produce both lines",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 1,
 			}},
 			fetchAge:      staleAge,
@@ -90,7 +91,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "diverged does not duplicate the sync-failure escalation",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
 			fetchAge:      freshAge,
@@ -100,7 +101,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "diverged AND stale fetch still warns about the fetch (independent conditions)",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3,
 			}},
 			fetchAge:      staleAge,
@@ -111,7 +112,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "behind alone does not warn (auto-receive fast-forwards it)",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true, Behind: 4,
 			}},
 			fetchAge:      freshAge,
@@ -120,7 +121,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "never synced alone (no local Ahead signal) does not warn",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: false,
 			}},
 			fetchAge:      freshAge,
@@ -129,7 +130,7 @@ func TestSyncStalenessLines(t *testing.T) {
 		},
 		{
 			name: "boundary: exactly the threshold warns (>=, not >)",
-			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{
+			report: doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{
 				Remote: "origin", Branch: "master", Synced: true,
 			}},
 			fetchAge:      unfetchedStalenessThreshold,
@@ -240,9 +241,9 @@ func TestMarkFetchSuccessBackdatedMarkerIsStale(t *testing.T) {
 func TestPrintSyncStalenessWarningResolvesAgainstRealWorkspace(t *testing.T) {
 	_, ws := initBootstrapTestRepo(t)
 	ctx := context.Background()
-	st, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, engine.Sync, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		t.Fatalf("store.OpenSync() error = %v", err)
+		t.Fatalf("engine.Open() error = %v", err)
 	}
 	defer st.Close()
 

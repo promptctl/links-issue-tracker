@@ -9,7 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // writeProjectWorkflow authors a workflow definition file under the app's
@@ -36,7 +36,7 @@ func TestRunTransitionInjectsProjectWorkflowFromArbitraryNestedPath(t *testing.T
 	ap := newTestCLIApp(t)
 	writeProjectWorkflow(t, ap, "reviews/deep/nested/close.md", "---\nevents: [ticket_closed]\n---\nTicket <id> closed without finishing — check for a duplicate.")
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Injection test", Topic: "workflows", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -61,13 +61,13 @@ func TestRunTransitionProjectLayerOverridesEmbeddedDoneByID(t *testing.T) {
 	ap := newTestCLIApp(t)
 	writeProjectWorkflow(t, ap, "done.md", "---\nid: done\nevents: [work_finished]\n---\nCUSTOM: <id> wrapped up.")
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Override test", Topic: "workflows", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 

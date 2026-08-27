@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The delta is the reconcile replay's write path, and a delta that is subtly
@@ -343,48 +344,48 @@ func buildDeltaScenarioStates(t *testing.T, ctx context.Context) []deltaScenario
 		states = append(states, deltaScenarioState{name: name, export: export})
 	}
 
-	epic, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "delta", IssueType: "epic"})
+	epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "delta", IssueType: "epic"})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	first, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "First", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: RankBottom})
+	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(first): %v", err)
 	}
-	second, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Second", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: RankBottom})
+	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(second): %v", err)
 	}
 	snapshot("epic with two children")
 
-	if _, err := st.Apply(ctx, first.ID, Change{Fields: UpdateIssueInput{Lane: strptr("alpha")}}); err != nil {
+	if _, err := st.Apply(ctx, first.ID, storage.Change{Fields: storage.UpdateIssueInput{Lane: strptr("alpha")}}); err != nil {
 		t.Fatalf("Apply(lane): %v", err)
 	}
 	snapshot("one field edited on one issue")
 
-	if _, _, err := st.AddComment(ctx, AddCommentInput{IssueID: first.ID, Body: "a comment", CreatedBy: "tester"}); err != nil {
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: first.ID, Body: "a comment", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddComment: %v", err)
 	}
 	snapshot("comment added")
 
-	if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: second.ID, Name: "urgent", CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: second.ID, Name: "urgent", CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddLabel: %v", err)
 	}
 	snapshot("label added")
 
-	if _, err := st.AddRelation(ctx, AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlocks, CreatedBy: "tester"}); err != nil {
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: first.ID, DstID: second.ID, Type: model.RelBlocks, CreatedBy: "tester"}); err != nil {
 		t.Fatalf("AddRelation(blocks): %v", err)
 	}
 	snapshot("relation spanning two issues added")
 
 	// Retitling the BLOCKING endpoint cascades the edge away — the case a
 	// key-wise diff gets wrong — so the delta must restore it.
-	if _, err := st.Apply(ctx, first.ID, Change{Fields: UpdateIssueInput{Title: strptr("First, retitled")}}); err != nil {
+	if _, err := st.Apply(ctx, first.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: strptr("First, retitled")}}); err != nil {
 		t.Fatalf("Apply(title): %v", err)
 	}
 	snapshot("relation endpoint rewritten")
 
-	third, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Third", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: RankBottom})
+	third, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Third", Topic: "delta", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(third): %v", err)
 	}

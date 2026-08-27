@@ -14,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestMigrateSnapshotFreshDBOpenTakesExactlyOneSnapshot pins the "fresh-DB
@@ -186,7 +187,7 @@ func TestMigrateSnapshotRestoreRoundTripsPreMutationState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() after restore error = %v", err)
 	}
-	if _, err := restored.ListIssues(ctx, ListIssuesFilter{}); err != nil {
+	if _, err := restored.ListIssues(ctx, storage.ListIssuesFilter{}); err != nil {
 		t.Fatalf("ListIssues() after restore error = %v", err)
 	}
 	if err := restored.Close(); err != nil {
@@ -391,7 +392,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 
 	// Issue A: feature, urgent priority, labels, transitions to in_progress with assignee.
-	issueA, err := st.CreateIssue(ctx, CreateIssueInput{
+	issueA, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Alpha feature",
 		Topic:     "feature",
@@ -402,12 +403,12 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(A) error = %v", err)
 	}
-	if _, err := st.Apply(ctx, issueA.ID, Change{Action: model.Start{Assignee: "alice"}, Actor: "alice"}); err != nil {
+	if _, err := st.Apply(ctx, issueA.ID, storage.Change{Action: model.Start{Assignee: "alice"}, Actor: "alice"}); err != nil {
 		t.Fatalf("StartIssue(A) error = %v", err)
 	}
 
 	// Issue B: task, receives a comment.
-	issueB, err := st.CreateIssue(ctx, CreateIssueInput{
+	issueB, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Beta task",
 		Topic:     "backend",
@@ -417,7 +418,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(B) error = %v", err)
 	}
-	if _, _, err := st.AddComment(ctx, AddCommentInput{
+	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{
 		IssueID:   issueB.ID,
 		Body:      "Needs review before merge.",
 		CreatedBy: "bob",
@@ -426,7 +427,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	}
 
 	// Issue C: chore with label.
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Gamma chore",
 		Topic:     "infra",
@@ -439,7 +440,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 
 	// Dependency edge: A depends on B (B blocks A).
 	// blocks convention: src_id=dependent, dst_id=dependency.
-	if _, err := st.AddRelation(ctx, AddRelationInput{
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID:     issueA.ID,
 		DstID:     issueB.ID,
 		Type:      "blocks",
@@ -520,7 +521,7 @@ func TestDataSurvivesFailedMigrationSnapshotRestore(t *testing.T) {
 	assertExportStateIdentical(t, before, after)
 
 	// Step 7: Assert the restored workspace is writable.
-	if _, err := restored.CreateIssue(ctx, CreateIssueInput{
+	if _, err := restored.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Post-restore write check",
 		Topic:     "verify",

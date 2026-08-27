@@ -11,7 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -29,7 +29,7 @@ import (
 // the same "who has this, contested by whom" rendering `next`/`backlog` already
 // give the caller — so a contested lane reads identically here and there.
 // [LAW:one-source-of-truth]
-func reportContestedLanes(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store) error {
+func reportContestedLanes(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore storage.Store) error {
 	cc, err := gatherClaimContext(ctx, stdout, &app.App{Workspace: ws, Store: syncStore})
 	if err != nil {
 		return err

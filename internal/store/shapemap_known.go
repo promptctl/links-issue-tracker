@@ -200,10 +200,10 @@ var knownSourceColumns = map[string]map[string]TargetKey{
 		"created_by": "labels.created_by",
 	},
 	"issue_events": {
-		"id":         "events.id",
-		"issue_id":   "events.issue_id",
-		"action":     "events.action",
-		"reason":     "events.reason",
+		"id":           "events.id",
+		"issue_id":     "events.issue_id",
+		"action":       "events.action",
+		"reason":       "events.reason",
 		"actor":        "events.actor", // v1 name
 		"assignee":     "events.actor", // pre-goose, pre-rename
 		"created_at":   "events.created_at",

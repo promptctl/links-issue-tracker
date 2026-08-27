@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -9,7 +10,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/precedence"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -26,21 +29,57 @@ const firstPushSkipMessage = "Skipping lit sync: remote has no refs yet. " +
 	"If you have pushed to this remote before, this message means something is wrong — " +
 	"check the remote URL, credentials, or run `git ls-remote <remote>`."
 
+// syncSession is an open sync engine together with the sync capability every
+// `lit sync` subcommand needs, resolved once before any handler runs.
+//
+// The capability is carried as a field rather than re-derived because
+// [storage.Sync.Of] is a parser: what it returns is a type that could not have
+// existed before the engine was asked, so nothing downstream re-asks and no
+// handler can hold an engine it cannot sync with. [LAW:parse-dont-validate]
+//
+// The engine travels beside it so that `lit sync reconcile` can ask for
+// reconcile — a separate capability, because an engine whose arrivals cannot
+// conflict offers sync and stops (design.md §sync) — without re-asking for the
+// one already in hand.
+type syncSession struct {
+	engine storage.Store
+	syncer storage.Syncer
+}
+
+// openSyncSession is the one place a sync engine is opened and its capability
+// resolved. [LAW:single-enforcer] The returned close is the caller's to defer;
+// it releases the workspace lock, so a caller that drops it strands the lock.
+func openSyncSession(ctx context.Context, ws workspace.Info) (syncSession, func() error, error) {
+	st, err := engine.Open(ctx, engine.Sync, ws.DatabasePath, ws.WorkspaceID)
+	if err != nil {
+		return syncSession{}, nil, err
+	}
+	syncer, err := storage.Sync.Of(st)
+	if err != nil {
+		// An engine that cannot sync cannot serve any subcommand of this
+		// family, so it is refused here rather than at each verb — and the
+		// store is closed because no session is returned to close it.
+		// [LAW:no-silent-failure]
+		return syncSession{}, nil, errors.Join(err, st.Close())
+	}
+	return syncSession{engine: st, syncer: syncer}, st.Close, nil
+}
+
 // syncRunFn is the handler shape for sync subcommands: every one operates on
-// the workspace's open sync store.
-type syncRunFn func(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error
+// the workspace's open sync session.
+type syncRunFn func(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error
 
 // withSyncStore adapts a sync handler to the workspace family shape, owning
 // the sync store's open/close lifecycle so no handler manages it.
 // [LAW:no-ambient-temporal-coupling]
 func withSyncStore(run syncRunFn) wsRunFn {
 	return func(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-		syncStore, err := store.OpenSync(ctx, ws.DatabasePath, ws.WorkspaceID)
+		session, closeStore, err := openSyncSession(ctx, ws)
 		if err != nil {
 			return err
 		}
-		defer syncStore.Close()
-		return run(ctx, stdout, ws, syncStore, args)
+		defer closeStore()
+		return run(ctx, stdout, ws, session, args)
 	}
 }
 
@@ -67,20 +106,20 @@ var syncRemoteFamily = commandFamily[syncRunFn]{
 	},
 }
 
-func runSyncRemote(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncRemote(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	run, err := syncRemoteFamily.resolve(args)
 	if err != nil {
 		return err
 	}
-	return run(ctx, stdout, ws, syncStore, args[1:])
+	return run(ctx, stdout, ws, session, args[1:])
 }
 
-func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync remote ls")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	syncState, err := readSyncRemoteState(ctx, syncStore, ws)
+	syncState, err := readSyncRemoteState(ctx, session, ws)
 	if err != nil {
 		return err
 	}
@@ -96,7 +135,7 @@ func runSyncRemoteLs(ctx context.Context, stdout io.Writer, ws workspace.Info, s
 	return err
 }
 
-func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync fetch")
 	remote := fs.String("remote", "origin", "Remote name")
 	prune := fs.Bool("prune", false, "Pass --prune to dolt fetch")
@@ -104,7 +143,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	if _, err := syncDoltRemotesFromGit(ctx, syncStore, ws); err != nil {
+	if _, err := syncDoltRemotesFromGit(ctx, session, ws); err != nil {
 		// A could-not-attempt failure (git-remote reconciliation itself failed,
 		// before any fetch was even tried) is still a decision this command
 		// reached — trace it, matching the coverage recordMirrorTraceError/
@@ -114,7 +153,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 		return err
 	}
 	remoteName := strings.TrimSpace(*remote)
-	fetchErr := syncStore.SyncFetch(ctx, remoteName, *prune)
+	fetchErr := session.syncer.SyncFetch(ctx, remoteName, *prune)
 	recordSyncCommandTrace(ws, "lit sync fetch", "fetched", fetchErr, map[string]string{"remote": remoteName})
 	if fetchErr != nil {
 		return fetchErr
@@ -130,7 +169,7 @@ func runSyncFetch(ctx context.Context, stdout io.Writer, ws workspace.Info, sync
 	return err
 }
 
-func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync pull")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	verbose := fs.Bool("verbose", false, "Include detailed remote output")
@@ -138,7 +177,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		return err
 	}
 	progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
-	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
 	if err != nil {
 		// A could-not-attempt failure — traced like every other decision this
 		// command reaches, matching the coverage recordMirrorTraceError/
@@ -194,7 +233,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 		return err
 	}
 	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
-	result, err := syncStore.SyncPull(ctx, remoteName, resolvedBranch)
+	result, err := session.syncer.SyncPull(ctx, remoteName, resolvedBranch)
 	pullTraceMetadata := map[string]string{"remote": remoteName, "sync_branch": resolvedBranch}
 	if err != nil {
 		recordSyncCommandTrace(ws, "lit sync pull", "error", err, pullTraceMetadata)
@@ -244,7 +283,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 // identity via resolveBuildStatusNote (link-time version vars plus the embedded
 // migration registry), so it is not safe to memoize or assume side-effect-free.
 // [LAW:dataflow-not-control-flow]
-func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now time.Time) (SyncFailureError, bool) {
+func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, now time.Time) (SyncFailureError, bool) {
 	base := SyncFailure{
 		Remote:    remote,
 		Branch:    branch,
@@ -254,11 +293,11 @@ func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now
 		BuildNote: resolveBuildStatusNote(now),
 	}
 	switch result.State {
-	case store.SyncPullProsePending:
+	case storage.SyncPullProsePending:
 		base.Class = syncFailureProseHeld
 		base.Fields = result.Pending
 		return SyncFailureError{Failure: base}, true
-	case store.SyncPullUnrelated:
+	case storage.SyncPullUnrelated:
 		base.Class = syncFailureUnrelatedHistories
 		base.Inventory = result.Unrelated
 		return SyncFailureError{Failure: base}, true
@@ -267,7 +306,7 @@ func syncFailureFromPull(remote, branch string, result store.SyncPullResult, now
 	}
 }
 
-func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync push")
 	remote := fs.String("remote", "", "Remote name (defaults to upstream remote, then single configured remote)")
 	setUpstream := fs.Bool("set-upstream", false, "Pass -u to dolt push")
@@ -280,7 +319,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, syncS
 	// backs) compacts atomically with the push; the on-change mirror pushes
 	// without compaction. The choice is the push step passed as a value, so
 	// performSyncPush has no compaction branch and a skipped push never compacts.
-	outcome, err := performSyncPush(ctx, syncStore, ws, strings.TrimSpace(*remote), *setUpstream, *force, syncStore.SyncCompactAndPush)
+	outcome, err := performSyncPush(ctx, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
 	if err != nil {
 		// A could-not-attempt failure (performSyncPush returned before reaching
 		// its own trace-recording push attempt) — traced here, matching the
@@ -347,7 +386,7 @@ func (o syncPushOutcome) payload() map[string]any {
 // store.Store.SyncCompactAndPush (compact + push, atomic). [LAW:dataflow-not-control-flow]
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
-type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (store.SyncPushResult, error)
+type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
 
 // performSyncPush reconciles Dolt remotes from git, resolves the remote and
 // branch, runs the supplied push step, and records an automation trace for the
@@ -356,11 +395,11 @@ type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, 
 // with its trace already recorded, leaving the caller to decide whether that
 // fails it (the command) or is best-effort (the cadence owner).
 //
-// Precondition: the caller holds the path's one read-write engine (syncStore
+// Precondition: the caller holds the path's one read-write engine (session
 // is that engine). The mirror-pending clear below is only sound inside an
 // engine session — that is what puts every commit whose command could have
 // observed the marker strictly before this session's HEAD read.
-func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// This attempt now answers for every mutation committed before this engine
 	// session opened: clear the mirror-pending marker so their commands (and
 	// later ones observing it) stop counting on a further mirror
@@ -388,7 +427,7 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 		}
 		completePushAttempt(ctx, ws, outcome, retErr)
 	}()
-	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
@@ -498,16 +537,16 @@ func performSyncPush(ctx context.Context, syncStore *store.Store, ws workspace.I
 	}, nil
 }
 
-func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, syncStore *store.Store, args []string) error {
+func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
 	fs := newCobraFlagSet("sync status")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
-	syncState, err := readSyncRemoteState(ctx, syncStore, ws)
+	syncState, err := readSyncRemoteState(ctx, session, ws)
 	if err != nil {
 		return err
 	}
-	report, err := syncStore.SyncStatus(ctx)
+	report, err := session.syncer.SyncStatus(ctx)
 	if err != nil {
 		return err
 	}
@@ -603,9 +642,9 @@ func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (stri
 // building a payload, so this builder renders only the non-blocking outcomes.
 // [LAW:types-are-the-program] the state is the discriminator; [LAW:dataflow-not-control-flow]
 // one builder, the state selects the fields.
-func buildSyncPullPayload(remote string, branch string, result store.SyncPullResult) map[string]any {
+func buildSyncPullPayload(remote string, branch string, result storage.SyncPullResult) map[string]any {
 	switch result.State {
-	case store.SyncPullNeverSynced:
+	case storage.SyncPullNeverSynced:
 		return map[string]any{
 			"status":        "skipped",
 			"reason":        "remote_branch_missing",
@@ -614,7 +653,7 @@ func buildSyncPullPayload(remote string, branch string, result store.SyncPullRes
 			"next_command":  fmt.Sprintf("lit sync push --remote %s --set-upstream", remote),
 			"retry_command": fmt.Sprintf("lit sync pull --remote %s", remote),
 		}
-	case store.SyncPullUpToDate, store.SyncPullFastForwarded, store.SyncPullLinearized, store.SyncPullAhead:
+	case storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead:
 		return map[string]any{
 			"status": "ok",
 			"state":  string(result.State),
@@ -739,16 +778,16 @@ type remoteSyncChanges struct {
 
 type remoteSyncState struct {
 	gitRemotes  []workspace.GitRemote
-	doltRemotes []store.SyncRemote
+	doltRemotes []storage.SyncRemote
 	changes     remoteSyncChanges
 }
 
-func readSyncRemoteState(ctx context.Context, syncStore *store.Store, ws workspace.Info) (remoteSyncState, error) {
+func readSyncRemoteState(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
 	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return remoteSyncState{}, fmt.Errorf("read git remotes: %w", err)
 	}
-	doltRemotes, err := syncStore.SyncListRemotes(ctx)
+	doltRemotes, err := session.syncer.SyncListRemotes(ctx)
 	if err != nil {
 		return remoteSyncState{}, err
 	}
@@ -759,8 +798,8 @@ func readSyncRemoteState(ctx context.Context, syncStore *store.Store, ws workspa
 	}, nil
 }
 
-func syncDoltRemotesFromGit(ctx context.Context, syncStore *store.Store, ws workspace.Info) (remoteSyncState, error) {
-	state, err := readSyncRemoteState(ctx, syncStore, ws)
+func syncDoltRemotesFromGit(ctx context.Context, session syncSession, ws workspace.Info) (remoteSyncState, error) {
+	state, err := readSyncRemoteState(ctx, session, ws)
 	if err != nil {
 		return remoteSyncState{}, err
 	}
@@ -774,16 +813,16 @@ func syncDoltRemotesFromGit(ctx context.Context, syncStore *store.Store, ws work
 		desiredURL := store.GitBackedRemoteURL(remote.URL)
 		currentURL, exists := doltByName[remote.Name]
 		if !exists {
-			if err := syncStore.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
+			if err := session.syncer.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
 				return remoteSyncState{}, err
 			}
 			continue
 		}
 		if strings.TrimSpace(currentURL) != desiredURL {
-			if err := syncStore.SyncRemoveRemote(ctx, remote.Name); err != nil {
+			if err := session.syncer.SyncRemoveRemote(ctx, remote.Name); err != nil {
 				return remoteSyncState{}, err
 			}
-			if err := syncStore.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
+			if err := session.syncer.SyncAddRemote(ctx, remote.Name, desiredURL); err != nil {
 				return remoteSyncState{}, err
 			}
 		}
@@ -792,11 +831,11 @@ func syncDoltRemotesFromGit(ctx context.Context, syncStore *store.Store, ws work
 		if _, keep := gitByName[name]; keep {
 			continue
 		}
-		if err := syncStore.SyncRemoveRemote(ctx, name); err != nil {
+		if err := session.syncer.SyncRemoveRemote(ctx, name); err != nil {
 			return remoteSyncState{}, err
 		}
 	}
-	finalRemotes, err := syncStore.SyncListRemotes(ctx)
+	finalRemotes, err := session.syncer.SyncListRemotes(ctx)
 	if err != nil {
 		return remoteSyncState{}, err
 	}
@@ -807,7 +846,7 @@ func syncDoltRemotesFromGit(ctx context.Context, syncStore *store.Store, ws work
 	}, nil
 }
 
-func buildRemoteSyncChanges(gitRemotes []workspace.GitRemote, doltRemotes []store.SyncRemote) remoteSyncChanges {
+func buildRemoteSyncChanges(gitRemotes []workspace.GitRemote, doltRemotes []storage.SyncRemote) remoteSyncChanges {
 	gitByName := mapGitRemotesByName(gitRemotes)
 	doltByName := mapRemotesByName(doltRemotes)
 	changes := remoteSyncChanges{
@@ -845,7 +884,7 @@ func mapGitRemotesByName(remotes []workspace.GitRemote) map[string]string {
 	return out
 }
 
-func mapRemotesByName(remotes []store.SyncRemote) map[string]string {
+func mapRemotesByName(remotes []storage.SyncRemote) map[string]string {
 	out := make(map[string]string, len(remotes))
 	for _, remote := range remotes {
 		name := strings.TrimSpace(remote.Name)

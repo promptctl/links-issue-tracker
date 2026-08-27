@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -17,7 +18,7 @@ func TestCommandErrorReason(t *testing.T) {
 		want string
 	}{
 		{"unknown command", UnknownCommandError{Command: "wat"}, "unknown_command"},
-		{"not found", store.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
+		{"not found", storage.NotFoundError{Entity: "issue", ID: "lit-abc"}, "entity_not_found"},
 		{"unsupported output flag", UnsupportedError{Feature: "--output"}, "unsupported_output_flag"},
 		{"generic", UsageError{Message: "bad"}, "usage_error"},
 		// A write blocked by another store holder is its own reason, and wins over

@@ -7,11 +7,11 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 type ParseResult struct {
-	Filter store.ListIssuesFilter
+	Filter storage.ListIssuesFilter
 }
 
 func Parse(input string) (ParseResult, error) {
@@ -19,7 +19,7 @@ func Parse(input string) (ParseResult, error) {
 	if err != nil {
 		return ParseResult{}, err
 	}
-	filter := store.ListIssuesFilter{}
+	filter := storage.ListIssuesFilter{}
 	for _, term := range terms {
 		if err := applyTerm(&filter, term); err != nil {
 			return ParseResult{}, err
@@ -28,15 +28,15 @@ func Parse(input string) (ParseResult, error) {
 	return ParseResult{Filter: filter}, nil
 }
 
-func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.ListIssuesFilter, error) {
+func Merge(base storage.ListIssuesFilter, incoming storage.ListIssuesFilter) (storage.ListIssuesFilter, error) {
 	filter := base
 	normalizedBase, err := normalizeQueryStatuses(filter.Statuses)
 	if err != nil {
-		return store.ListIssuesFilter{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	normalizedIncoming, err := normalizeQueryStatuses(incoming.Statuses)
 	if err != nil {
-		return store.ListIssuesFilter{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	filter.Statuses = mergeSlice(normalizedBase, normalizedIncoming)
 	// Resolution filtering is OR within the set, so duplicates are absorbed by the
@@ -48,13 +48,13 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	filter.IDs = append(filter.IDs, incoming.IDs...)
 	filter.LabelsAll = append(filter.LabelsAll, incoming.LabelsAll...)
 	if err := mergeBoolPointer("has-comments", &filter.HasComments, incoming.HasComments); err != nil {
-		return store.ListIssuesFilter{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	if err := mergeTimePointer("updated-after", &filter.UpdatedAfter, incoming.UpdatedAfter); err != nil {
-		return store.ListIssuesFilter{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	if err := mergeTimePointer("updated-before", &filter.UpdatedBefore, incoming.UpdatedBefore); err != nil {
-		return store.ListIssuesFilter{}, err
+		return storage.ListIssuesFilter{}, err
 	}
 	if incoming.Limit > 0 {
 		filter.Limit = incoming.Limit
@@ -73,7 +73,7 @@ func Merge(base store.ListIssuesFilter, incoming store.ListIssuesFilter) (store.
 	return filter, validateFilter(filter)
 }
 
-func applyTerm(filter *store.ListIssuesFilter, term string) error {
+func applyTerm(filter *storage.ListIssuesFilter, term string) error {
 	switch {
 	case strings.HasPrefix(term, "status:"):
 		parsed, err := model.ParseState(strings.TrimPrefix(term, "status:"))
@@ -121,9 +121,9 @@ func applyTerm(filter *store.ListIssuesFilter, term string) error {
 		}
 	case strings.HasPrefix(term, "sort:"):
 		// [LAW:one-source-of-truth] The sort: token and the --sort flag both
-		// route through the one store.ParseSortSpecs; the query grammar owns no
+		// route through the one storage.ParseSortSpecs; the query grammar owns no
 		// second copy of the direction syntax.
-		specs, err := store.ParseSortSpecs(strings.TrimPrefix(term, "sort:"))
+		specs, err := storage.ParseSortSpecs(strings.TrimPrefix(term, "sort:"))
 		if err != nil {
 			return err
 		}
@@ -202,7 +202,7 @@ func mergeSlice[T comparable](base, incoming []T) []T {
 	return result
 }
 
-func applyTimeTerm(filter *store.ListIssuesFilter, expr string) error {
+func applyTimeTerm(filter *storage.ListIssuesFilter, expr string) error {
 	comparator, value, err := splitComparator(expr)
 	if err != nil {
 		return fmt.Errorf("parse updated term %q: %w", "updated"+expr, err)
@@ -273,7 +273,7 @@ func tokenize(input string) ([]string, error) {
 	return out, nil
 }
 
-func validateFilter(filter store.ListIssuesFilter) error {
+func validateFilter(filter storage.ListIssuesFilter) error {
 	if filter.UpdatedAfter != nil && filter.UpdatedBefore != nil && filter.UpdatedAfter.After(*filter.UpdatedBefore) {
 		return fmt.Errorf("updated-after cannot be greater than updated-before")
 	}

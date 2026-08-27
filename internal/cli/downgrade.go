@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/release"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // runDowngrade composes the schema-side Downgrade boundary (internal/store)
@@ -27,20 +28,31 @@ import (
 //     prompt invokes the prior binary; no re-exec is needed.
 //
 // [LAW:single-enforcer] release.Resolver owns artifact resolution,
-// release.Installer owns binary install, store.Downgrade owns schema reverse.
+// release.Installer owns binary install, the engine's storage.SchemaMigrator
+// owns schema reverse.
 // This composer sequences them and contains no novel logic itself.
 // [LAW:dataflow-not-control-flow] The pipeline runs the same stages every
 // invocation; --to is data, not a mode toggle.
 // [LAW:no-mode-explosion] One flag (--to). No --dry-run, --force, or
 // --skip-snapshot; each would have to earn its way via a concrete user need.
 func runDowngrade(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
-	return runDowngradeWith(ctx, stdout, ap.Store, args, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+	// [LAW:parse-dont-validate] Schema migration is a capability: an engine
+	// whose data has no shape versioned apart from the data itself has nothing
+	// to downgrade. Asking here yields the migrator, which already satisfies
+	// the narrower schemaDowngrader below — so the pipeline never sees an
+	// engine that cannot revert.
+	migrator, err := storage.SchemaMigration.Of(ap.Store)
+	if err != nil {
+		return err
+	}
+	return runDowngradeWith(ctx, stdout, migrator, args, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
 }
 
 // schemaDowngrader is the schema-side dependency runDowngradeWith calls. The
-// production implementation is *store.Store; tests substitute a fake.
+// production implementation is the engine's storage.SchemaMigrator; tests
+// substitute a fake.
 //
-// [LAW:types-are-the-program] The CLI doesn't need the full *store.Store API
+// [LAW:types-are-the-program] The CLI doesn't need the full storage.Store API
 // for downgrade; it needs exactly this verb. Narrowing the dependency to the
 // one method that's used makes the pipeline testable without a real Dolt
 // workspace and prevents callers from coupling to incidental Store methods.
