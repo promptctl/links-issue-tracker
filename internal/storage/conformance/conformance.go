@@ -33,8 +33,10 @@
 package conformance
 
 import (
+	"cmp"
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -88,6 +90,10 @@ var cases = []engineCase{
 	{"list_filters_select", listFiltersSelect},
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
 	{"list_sorts_and_limits", listSortsAndLimits},
+	{"list_breaks_sort_ties_by_id", listBreaksSortTiesByID},
+	{"list_accepts_exactly_the_contract_sort_fields", listAcceptsContractSortFields},
+	{"list_sorts_status_by_stored_encoding", listSortsStatusByStoredEncoding},
+	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
 	{"rank_set_imposes_order", rankSetImposesOrder},
@@ -513,6 +519,115 @@ func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store) {
 
 	if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "nonsense"}}}); err == nil {
 		t.Error("sorting by an unknown field succeeded; want an error")
+	}
+}
+
+// listBreaksSortTiesByID pins the trailing id key. Every other sort case in
+// this suite uses distinct values, which is exactly why none of them can catch
+// an engine that leaves tied rows in whatever order it held them — and two
+// engines holding them differently is what the differential oracle would read
+// as divergence.
+func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store) {
+	// One title across three issues: the sort key cannot separate them, so the
+	// contract's tie-break is the only thing deciding the order.
+	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
+	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
+	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
+
+	ascending := []string{first.ID, second.ID, third.ID}
+	slices.Sort(ascending)
+	assertIssueIDs(t, "tied titles ordered by id",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title"}}}),
+		ascending)
+
+	// Descending reverses the named key, never the tie-break: id stays
+	// ascending, so a caller paging a descending listing sees a stable order.
+	assertIssueIDs(t, "tied titles descending still ordered by id",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "title", Desc: true}}}),
+		ascending)
+}
+
+// listAcceptsContractSortFields checks the engine's sort binding against
+// storage.SortFields in both directions. An engine that omits a key the
+// contract names is missing a listing the CLI can ask for; an engine that
+// accepts a key the contract does not name has grown a private vocabulary the
+// other engine will reject. Neither shows up in a case that sorts by one
+// hand-picked field. [LAW:one-source-of-truth]
+func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage.Store) {
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
+	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
+
+	for _, field := range storage.SortFields {
+		if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}); err != nil {
+			t.Errorf("sorting by %q is in storage.SortFields but the engine rejected it: %v", field, err)
+		}
+	}
+}
+
+// listSortsStatusByStoredEncoding pins the one sort key that does not order
+// what its name suggests, and it pins it to the wrong answer on purpose.
+//
+// Sorting by status reads the STORED status encoding. A container has none —
+// its state is derived from its children — so it sorts ahead of every leaf
+// ascending no matter what state it derives to. The listing's status FILTER,
+// meanwhile, reads derived state. Filter and sort therefore disagree, which is
+// a fault; this case exists so that both engines commit the same fault, in
+// writing, until links-store-seam-q35v.6 corrects it deliberately. Deleting
+// this case is the first step of that ticket, not a cleanup.
+func listSortsStatusByStoredEncoding(t *testing.T, ctx context.Context, st storage.Store) {
+	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
+	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
+
+	// The child is in progress, so the epic derives in_progress too — putting
+	// them in the same bucket if the sort read derived state, and in different
+	// ones because it does not.
+	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Start{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start error = %v", err)
+	}
+	assertState(t, ctx, st, epic.ID, model.StateInProgress, "its only child is in progress")
+
+	// Ascending: the epic's absent stored status is the low key, so it leads —
+	// even though "in_progress" would not sort before "in_progress".
+	assertIssueIDs(t, "container leads ascending on stored status",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "status"}}}),
+		[]string{epic.ID, child.ID})
+
+	// Descending reverses it, which is the tell that the epic is being ordered
+	// by an absent value rather than by the state it derives.
+	assertIssueIDs(t, "container trails descending on stored status",
+		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "status", Desc: true}}}),
+		[]string{child.ID, epic.ID})
+}
+
+// eventsAreTotallyOrdered pins the history ordering to (created_at, id).
+//
+// It cannot manufacture a same-tick tie — the engine stamps the clock, and the
+// contract gives no way to reach it — so it asserts the property that holds
+// tie or no tie: the sequence never steps backwards under the full comparison.
+// An engine returning recording order passes on a fine clock and fails the
+// moment a coarse one produces the tie this rule exists to settle, which is
+// the strongest statement available from outside the engine.
+func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store) {
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "audited", Topic: "core"})
+	for _, title := range []string{"first", "second", "third"} {
+		if _, err := st.Apply(ctx, issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
+			t.Fatalf("apply %q: %v", title, err)
+		}
+	}
+
+	events, err := st.ListAllEvents(ctx)
+	if err != nil {
+		t.Fatalf("ListAllEvents: %v", err)
+	}
+	if len(events) < 4 {
+		t.Fatalf("got %d events, want at least the create plus three changes", len(events))
+	}
+	for i := 1; i < len(events); i++ {
+		prev, cur := events[i-1], events[i]
+		if cmp.Or(prev.CreatedAt.Compare(cur.CreatedAt), strings.Compare(prev.ID, cur.ID)) > 0 {
+			t.Errorf("events step backwards at index %d: (%s, %s) after (%s, %s)",
+				i, cur.CreatedAt, cur.ID, prev.CreatedAt, prev.ID)
+		}
 	}
 }
 

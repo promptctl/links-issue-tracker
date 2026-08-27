@@ -88,13 +88,13 @@ func TestRecoverReconcilesKnownShape(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = recon.Candidate.Discard() })
 
-	report, err := recon.Candidate.Store().Doctor(ctx)
+	report, err := recon.Candidate.store.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
 	mustClean(t, report)
 
-	export, err := recon.Candidate.Store().Export(ctx)
+	export, err := recon.Candidate.store.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}

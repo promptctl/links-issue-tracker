@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -265,15 +266,30 @@ func (e *Engine) ListTopics(ctx context.Context) ([]string, error) {
 	return topics, nil
 }
 
-// ListAllEvents returns the whole history, oldest first.
+// ListAllEvents returns the whole history, oldest first, ties broken by event
+// id — the contract's ordering, on storage.IssueReader.ListAllEvents.
 //
-// It is the recording order rather than a timestamp sort: the events slice is
-// append-only, so the order it holds IS the order things happened, and no
-// clock coarse enough to stamp two mutations identically can scramble it.
+// The append-only slice already holds true recording order, which is a BETTER
+// answer, and it is deliberately not the one given. A same-tick tie is exactly
+// where the two engines would otherwise part company, and the differential
+// oracle compares whole event lists: an engine that is right where the other
+// is arbitrary reads as divergence, and the campaign would spend the signal it
+// needs for real faults on a known, catalogued one. Happens-before ordering
+// arrives with the event store's Lamport positions, for both engines at once.
 func (e *Engine) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
-	return cloneEvents(e.events), nil
+	return sortEvents(cloneEvents(e.events)), nil
+}
+
+// sortEvents imposes the contract's total order: creation time ascending, ties
+// broken by id. It is the one place this engine orders history, so ListAllEvents
+// and a single issue's history cannot drift. [LAW:single-enforcer]
+func sortEvents(events []model.IssueEvent) []model.IssueEvent {
+	slices.SortStableFunc(events, func(a, b model.IssueEvent) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	return events
 }
 
 // LocalIssueCount reports how many issues this store holds — the adopt-safety
@@ -291,5 +307,5 @@ func (e *Engine) eventsFor(issueID string) []model.IssueEvent {
 			out = append(out, event)
 		}
 	}
-	return cloneEvents(out)
+	return sortEvents(cloneEvents(out))
 }
