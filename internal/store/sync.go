@@ -575,7 +575,19 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		return pushErr
 	})
 	if err != nil {
-		return storage.SyncPushResult{}, err
+		// The pass above already ran, and a push failing afterwards does not
+		// un-rewrite the store. Reporting it only on the success path would
+		// lose a deep collection entirely whenever the push it preceded failed
+		// — and a deep pass is exactly what explains an attempt that took
+		// minutes before failing. The failure is where an operator looks when a
+		// command fails, so that is where the account goes.
+		// [LAW:no-silent-failure]
+		//
+		// This is deliberately not the prune's arrangement below, which is
+		// gated on the push succeeding for a real reason: the prune needs the
+		// push to have opened the live mirror so its derivation has something
+		// true to check against. Compaction depends on nothing the push does.
+		return storage.SyncPushResult{}, annotateWithMaintenance(err, compactionReport(depth, depthErr))
 	}
 	// DOLT_GC above compacts `noms`; this collects the other half of the store's
 	// local footprint, the abandoned git remote mirrors.

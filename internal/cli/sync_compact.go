@@ -102,9 +102,25 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 	}
 	defer closeStore()
 
+	compactThroughSession(timeoutCtx, ws, session)
+}
+
+// compactThroughSession asks the engine whether a pass is owed and records what
+// came back. It is split from opening the store because those are two jobs: the
+// caller above owns a session's lifetime, while everything here is the decision
+// about what the durable trail should say. [LAW:decomposition]
+//
+// The split is also what makes those decisions reachable. compactInline opens
+// its own session, so a test could only drive this through a real store whose
+// footprint had crossed a threshold — and reaching one from the command layer
+// would mean spelling the engine's on-disk layout here, which is exactly what
+// the storage seam exists to prevent. Taking the session as a parameter lets a
+// fake engine produce each outcome directly, the way runSyncCompact is already
+// tested.
+func compactThroughSession(ctx context.Context, ws workspace.Info, session syncSession) {
 	// Whether a pass is owed is the engine's judgment, not this caller's: it is
 	// a fact about how the engine stores data. [LAW:decomposition]
-	outcome, err := session.syncer.CompactIfDue(timeoutCtx)
+	outcome, err := session.syncer.CompactIfDue(ctx)
 	if err != nil {
 		recordCompactError(ws, err)
 		return
@@ -160,10 +176,22 @@ func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.
 // dropped by compactTraceMetadata, which already owns what an empty value
 // means, so this builder never re-decides it. [LAW:single-enforcer]
 func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]string {
-	return map[string]string{
-		"depth":  outcome.Depth.String(),
-		"detail": outcome.Detail,
-	}
+	metadata := compactionDepthMetadata(outcome.Depth)
+	metadata["detail"] = outcome.Detail
+	return metadata
+}
+
+// compactionDepthMetadata names the depth alone, for the outcome that has
+// nothing else to report: a pass that failed still knows which depth was asked
+// for, and an operator scheduling the deep form needs the trail to say which
+// one kept failing. Every sibling in this file carries its identifying value
+// into the error trace as well as the success one.
+//
+// It is a separate renderer rather than a literal at the failure site because
+// the key would then be spelled in three places, and this vocabulary has
+// already drifted twice when it was spelled in two. [LAW:one-source-of-truth]
+func compactionDepthMetadata(depth storage.GCMode) map[string]string {
+	return map[string]string{"depth": depth.String()}
 }
 
 // compactTraceCommand names the backstop in the automation trace. It is not a

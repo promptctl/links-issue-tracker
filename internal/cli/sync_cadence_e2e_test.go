@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -99,5 +100,32 @@ func TestDisabledAutoSyncSuppressesTheCompactionBackstop(t *testing.T) {
 
 	if _, err := os.Stat(marker); err == nil {
 		t.Fatal("the backstop ran with automatic sync disabled; the opt-out must cover automatic maintenance as well as automatic sync")
+	}
+}
+
+// An unreadable config stops sync and stops nothing else. Compaction reads no
+// configuration, so letting a broken file gate it withheld the backstop from
+// precisely the workspace that most needs one — a store nothing else collects,
+// now with a config nobody can read. This drives the cadence owner directly
+// rather than through the CLI, because what has to be proved is that the
+// compaction gate is REACHED after config fails, and the probe marker is
+// written before the store is opened: its presence is that proof, on a
+// workspace that has no real store at all.
+func TestUnreadableConfigStillReachesTheCompactionBackstop(t *testing.T) {
+	t.Setenv(DisableAutoSyncEnvVar, "0")
+	root := t.TempDir()
+	ws := workspace.Info{RootDir: root, Location: workspace.LocationFromStorageDir(filepath.Join(root, ".lit"))}
+	if err := os.MkdirAll(ws.StorageDir, 0o755); err != nil {
+		t.Fatalf("make storage dir error = %v", err)
+	}
+	// Malformed TOML, so config.Load returns an error rather than defaults.
+	if err := os.WriteFile(filepath.Join(ws.StorageDir, "config.toml"), []byte("this is = = not toml\n"), 0o644); err != nil {
+		t.Fatalf("write broken config error = %v", err)
+	}
+
+	maybeAutoSyncAfterCommand(t.Context(), app.AccessWrite, ws)
+
+	if _, err := os.Stat(compactMarkerPath(ws)); err != nil {
+		t.Fatalf("the compaction backstop was never reached after a config failure (%v); a config nobody can read must cost the mirror, not the collection", err)
 	}
 }
