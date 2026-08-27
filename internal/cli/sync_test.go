@@ -585,3 +585,53 @@ func TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
 		t.Fatalf("printSyncPushPayload() = %q, want only the push line", got)
 	}
 }
+
+// TestSyncPushTraceMetadataCarriesTheMaintenanceReport is the check the durable
+// trace needed and did not have. `lit sync push` backs the pre-push hook, where
+// stdout is routinely swallowed, so the trace is the channel a prune refusal
+// actually survives on — and until this job had a name, asserting anything about
+// it meant standing up a workspace, a ref-carrying remote and a live engine
+// session, which is why the line shipped unasserted.
+func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
+	t.Parallel()
+	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+
+	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+		Message:     "Everything up-to-date.",
+		Maintenance: refusal,
+	}, nil)
+
+	if metadata["maintenance"] != refusal {
+		t.Fatalf("metadata[maintenance] = %q, want the refusal %q", metadata["maintenance"], refusal)
+	}
+	if metadata["message"] != "Everything up-to-date." {
+		t.Fatalf("metadata[message] = %q, want the engine's push output", metadata["message"])
+	}
+	if metadata["remote"] != "origin" || metadata["sync_branch"] != "master" {
+		t.Fatalf("metadata = %v, want remote/sync_branch preserved", metadata)
+	}
+	if _, present := metadata["error"]; present {
+		t.Fatalf("metadata = %v, want no error key on a push that succeeded", metadata)
+	}
+}
+
+// TestSyncPushTraceMetadataOmitsWhatDidNotHappen pins the other half: the trace
+// says nothing about maintenance on an ordinary push, so a reader scanning
+// records for the key finds it exactly when there was something to report.
+func TestSyncPushTraceMetadataOmitsWhatDidNotHappen(t *testing.T) {
+	t.Parallel()
+	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+		Message: "Everything up-to-date.",
+	}, nil)
+	if _, present := metadata["maintenance"]; present {
+		t.Fatalf("metadata = %v, want no maintenance key when the prune found nothing", metadata)
+	}
+
+	failed := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{}, errors.New("push rejected"))
+	if failed["error"] != "push rejected" {
+		t.Fatalf("metadata[error] = %q, want the push failure recorded", failed["error"])
+	}
+	if _, present := failed["message"]; present {
+		t.Fatalf("metadata = %v, want no message key when the engine said nothing", failed)
+	}
+}

@@ -395,6 +395,37 @@ func (o syncPushOutcome) payload() map[string]any {
 // compaction branch and never compacts a push it skips.
 type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
 
+// syncPushTraceMetadata is everything the durable record says about one push
+// attempt beyond its decision: where it went, what the engine said, what local
+// maintenance rode along, and what went wrong.
+//
+// It is a function rather than a block inside performSyncPush because that is
+// what makes the question "does the trace carry this?" answerable. Inline, the
+// only way to ask was to stand up a workspace, a ref-carrying remote and a live
+// engine session and drive a real push — which is why the maintenance key
+// arrived untested. [LAW:decomposition] the job had no name, so it had no test.
+func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
+	metadata := map[string]string{
+		"remote":      remoteName,
+		"sync_branch": syncBranch,
+	}
+	if message := strings.TrimSpace(result.Message); message != "" {
+		metadata["message"] = message
+	}
+	// The prune's report reaches the durable trace as well as stdout, because
+	// this command backs the pre-push hook, and in a hook stdout is routinely
+	// swallowed or never watched. A refusal that exists to be loud reaching only
+	// a stream nobody reads is the failure it was written to prevent.
+	// [LAW:no-silent-failure]
+	if maintenance := strings.TrimSpace(result.Maintenance); maintenance != "" {
+		metadata["maintenance"] = maintenance
+	}
+	if pushErr != nil {
+		metadata["error"] = pushErr.Error()
+	}
+	return metadata
+}
+
 // performSyncPush reconciles Dolt remotes from git, resolves the remote and
 // branch, runs the supplied push step, and records an automation trace for the
 // attempt. The returned error is a "could not attempt" failure (reconcile or
@@ -479,27 +510,12 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
-	traceMetadata := map[string]string{
-		"remote":      remoteName,
-		"sync_branch": syncBranch,
-	}
-	if strings.TrimSpace(result.Message) != "" {
-		traceMetadata["message"] = strings.TrimSpace(result.Message)
-	}
-	// The prune's report goes to the durable trace as well as to stdout, because
-	// this command backs the pre-push hook, and in a hook stdout is routinely
-	// swallowed or never watched. A refusal that exists to be loud reaching only
-	// a stream nobody reads is the failure it was written to prevent.
-	// [LAW:no-silent-failure]
-	if strings.TrimSpace(result.Maintenance) != "" {
-		traceMetadata["maintenance"] = strings.TrimSpace(result.Maintenance)
-	}
+	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
 	if pushErr != nil {
 		traceStatus = "error"
 		traceReason = pushErr.Error()
-		traceMetadata["error"] = pushErr.Error()
 	}
 	syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
 	if setUpstream {
