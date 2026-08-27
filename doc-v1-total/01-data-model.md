@@ -2,7 +2,7 @@
 
 lit's unit of work is the **issue**. Epics are not a separate record type: an epic is an issue whose type is `epic`, and its open/closed state is computed from its children at read time, never stored. Around the issue sit six persisted record kinds — relations, comments, labels, events, event field-changes, and workspace metadata — plus several derived (never-stored) concepts: epic state, lanes, claims, and readiness annotations.
 
-This document covers the records and the value vocabularies they use. Where a rule has edge cases, the exact behavior is stated; `file:line` citations point at the defining source. The raw per-package inventory with verbatim error strings and test citations is `inventories/inventory-model.md`.
+This document covers the records and the value vocabularies they use. Where a rule has edge cases, the exact behavior is stated; `file:line` citations point at the defining source.
 
 ## The Issue record
 
@@ -66,7 +66,7 @@ Eight named actions, split across two independent axes (`lifecycle.go:46-58`):
 | `delete` | retention | live or archived → deleted |
 | `restore` | retention | deleted → live |
 
-Status transitions are **target-state**, not edge-guarded: an action names the destination state, and applying it from any state succeeds. There is no enforced precondition (e.g. `done` does not require `in_progress` — see the discrepancy note in `06-cli-issue-commands.md`). Applying an action whose target equals the current state returns the issue unchanged — in particular, re-closing a closed issue preserves its existing resolution and `closed_at` rather than rewriting them (`status_states.go:148-152`). Transitioning into `closed` stamps `closed_at = now (UTC)` (`status_states.go:154-156`).
+Status transitions are **target-state**, not edge-guarded: an action names the destination state, and applying it from any state succeeds. There is no enforced precondition (e.g. `done` does not require `in_progress` — see the discrepancy note in `06-issue-commands.md`). Applying an action whose target equals the current state returns the issue unchanged — in particular, re-closing a closed issue preserves its existing resolution and `closed_at` rather than rewriting them (`status_states.go:148-152`). Transitioning into `closed` stamps `closed_at = now (UTC)` (`status_states.go:154-156`).
 
 The type system separates the two axes: retention actions are not status actions, so applying `archive` to the status machine is unrepresentable rather than checked (`action.go:23-42`).
 
@@ -92,7 +92,7 @@ Retention is a second lifecycle axis, orthogonal to status: `live`, `archived`, 
 - **Archived**: hidden from default listings but still occupies rank space; reversible via `unarchive`.
 - **Deleted**: hidden from default listings and excluded from rank space; reversible via `restore`.
 
-The complete transition table (`retention.go:64-111`; error messages verbatim in the inventory):
+The complete transition table (`retention.go:64-111`):
 
 | current \ action | archive | unarchive | delete | restore |
 |---|---|---|---|---|
@@ -106,9 +106,9 @@ An issue that is archived or deleted is **frozen**. The single program-wide defi
 
 ## Lanes
 
-A **lane** partitions an epic's children into parallel, rank-ordered sub-sequences: children in the same lane are sequenced by rank (an earlier open sibling blocks a later one — see readiness in `06-cli-issue-commands.md`); children in different lanes proceed in parallel (`model.go:93-97`). The empty string is the default lane, so an epic that declares no lanes is one fully-sequential lane, not a special case.
+A **lane** partitions an epic's children into parallel, rank-ordered sub-sequences: children in the same lane are sequenced by rank (an earlier open sibling blocks a later one — see readiness in `06-issue-commands.md`); children in different lanes proceed in parallel (`model.go:93-97`). The empty string is the default lane, so an epic that declares no lanes is one fully-sequential lane, not a special case.
 
-Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go:212-217`). Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go:228-233`). The lane is the unit a checkout can claim (see `07-claims.md`).
+Lane identity is `(epic, lane-string)` — the same lane spelling under two different epics is two different lanes. An issue with no parent, or whose parent is not a container, is a "lane of one" keyed by its own ID (`model.go:212-217`). Lanes render as `epic#lane` (the default lane as `epic#`), a solo lane as the bare issue ID (`model.go:228-233`). The lane is the unit a checkout can claim (see `08-claims-and-identity.md`).
 
 ## Relations
 
@@ -135,7 +135,7 @@ Relation-type parsing trims but does not lowercase (`relation_type.go:26-33`).
 
 A label row is `(issue_id, name, created_at, created_by)` (`model.go:595-600`). Names are normalized to lowercase and trimmed; an empty result is rejected, and commas are forbidden because comma is the list separator on input surfaces (`internal/model/label.go:14-23`). There is no label registry — labels exist only as attachments to issues — and no label-rename operation exists anywhere in the store.
 
-One label has behavioral meaning: `needs-design` makes an issue not-ready (see readiness in `06-cli-issue-commands.md`).
+One label has behavioral meaning: `needs-design` makes an issue not-ready (see readiness in `06-issue-commands.md`).
 
 ## Events (history)
 
@@ -143,7 +143,7 @@ Every mutation to an issue produces one **IssueEvent**: `id`, `issue_id`, `actio
 
 ### Attribution
 
-Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go:631-634`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `07-claims.md`).
+Attribution answers "which checkout produced this event": an opaque pair of a per-checkout **stream token** and the per-store **workspace id** (`model.go:631-634`). It is the entire shared-data footprint of the claims feature — claims are derived from these stamps at read time and stored nowhere (see `08-claims-and-identity.md`).
 
 Rules enforced at every boundary (`model.go:656-713`):
 
@@ -161,7 +161,7 @@ Issue IDs have the shape `<prefix>-<topic>-<hash>` (`internal/issueid/generate.g
 
 Slug normalization lowercases, passes `a-z0-9` through, collapses every other rune (including Unicode) into a single dash, and trims edge dashes (`slug.go:15-29`).
 
-The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go:42-47`). Hash length adapts to workspace size: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for the current issue count, clamping at 8 (`generate.go:22-36`). On collision, up to 10 nonces are tried (`generate.go:12-18`). Byte-to-character mapping details (left-zero-padding, tail clamping) are in the inventory (§3.2).
+The hash is deterministic content addressing: SHA-256 over `topic|title|description|creator|createdAt.UnixNano()|nonce` (the prefix is *not* hashed), truncated and base-36-encoded to exactly the chosen length (`generate.go:42-47`). Hash length adapts to workspace size: the smallest length 3–8 whose birthday-bound collision probability stays ≤ 0.25 for the current issue count, clamping at 8 (`generate.go:22-36`). On collision, up to 10 nonces are tried (`generate.go:12-18`). Bytes map to characters with left-zero-padding and tail clamping (`generate.go:49-86`).
 
 Children created under a parent may instead get sequential `parent.N` IDs (see the storage layer, `02-storage-contract.md`).
 
@@ -172,7 +172,7 @@ Global ordering uses **lexicographic fractional indexing**: a rank is a string o
 - The first rank issued is `"V"` — the alphabet's midpoint (`rank.go:39-41`).
 - `Midpoint(a, b)` returns a string strictly between two ranks; either bound may be empty, meaning before-everything / after-everything (`rank.go:69-117`). Between adjacent characters the result grows one character longer, so insertion between any two ranks always succeeds without renumbering neighbors.
 - `SpacedRanks(n)` pre-allocates n evenly-spaced, fixed-width ranks with a minimum gap of 16 code points between neighbors, sized to leave room for later midpoint insertion (`rank.go:129-196`).
-- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go:120-126`); the smoothing operation itself lives in the store (`03-store-dolt.md`).
+- Rank strings reaching **8 characters** trigger local smoothing over a window of **32** items (`rank.go:120-126`); the smoothing operation itself lives in the store (`03-store-schema.md`).
 
 ## Export format
 

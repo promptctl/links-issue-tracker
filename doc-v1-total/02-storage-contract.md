@@ -1,10 +1,9 @@
 # Storage contract and the in-memory engine
 
-lit separates *what it needs from a storage engine* from *how any engine provides it*. The contract lives in `internal/storage`; two engines implement it — a pure in-memory engine (`internal/storage/memory`) and the Dolt-backed engine (`internal/store`, covered in `03-store-dolt.md`). A shared conformance suite (`internal/storage/conformance`) is stated in the package doc to be the actual specification; the interface is the vocabulary (`internal/storage/doc.go:48-55`).
+lit separates *what it needs from a storage engine* from *how any engine provides it*. The contract lives in `internal/storage`; two engines implement it — a pure in-memory engine (`internal/storage/memory`) and the Dolt-backed engine (`internal/store`, covered in `03-store-schema.md`). A shared conformance suite (`internal/storage/conformance`) is stated in the package doc to be the actual specification; the interface is the vocabulary (`internal/storage/doc.go:48-55`).
 
 Dependency and vocabulary rules: engine → contract → model, never back; no type crossing the `Store` boundary may name a SQL row, branch, commit, or schema version. Capability interfaces (below) are exempt — naming an engine artifact is what makes something a capability. One acknowledged leak: `SyncStatusReport.DoltVersion`, kept because it renders as the JSON key `dolt_version` (`internal/storage/doc.go:20-41`).
 
-The raw inventory with every method's full contract and verbatim error strings is `inventories/inventory-storage.md`.
 
 ## The Store interface
 
@@ -75,13 +74,13 @@ Seven optional capabilities, each a sealed generic asked for via `Of(engine)` wh
 | `import` | `Importer` | `ReplaceFromExport` |
 | `test-support` | `RawExecutor` | engine-native statement for tests |
 
-The full sync/reconcile result vocabulary (freshness states `never_synced`/`up_to_date`/`ahead`/`behind`/`diverged`; receive, pull, and reconcile state enums including `prose_pending`, `unrelated_histories`, `linearized`, `combined`, `took_local`/`took_remote`; `UnrelatedInventory` with its three disjoint sorted id-slices; `CompactionOutcome`; `HealthReport` JSON keys) is enumerated in the inventory §1.18–1.19. The memory engine offers **none** of the seven capabilities (`memory/doc.go:59-65`).
+The full sync/reconcile result vocabulary (freshness states `never_synced`/`up_to_date`/`ahead`/`behind`/`diverged`; receive, pull, and reconcile state enums including `prose_pending`, `unrelated_histories`, `linearized`, `combined`, `took_local`/`took_remote`; `UnrelatedInventory` with its three disjoint sorted id-slices; `CompactionOutcome`; `HealthReport` JSON keys) is defined in `internal/storage/sync.go` and `capabilities.go`. The memory engine offers **none** of the seven capabilities (`memory/doc.go:59-65`).
 
 ## The memory engine
 
 `internal/storage/memory` implements the contract with nothing but Go values: no disk, no file format, no schema; `Close()` is a no-op (`memory/doc.go:1-2`, `engine.go:126-129`). It shares no code with the Dolt engine — deliberately, so the conformance suite's proof means something (`memory/doc.go:15-25`). One plain mutex serializes everything; every exported method locks and delegates to unlocked internals.
 
-Behaviors that define the reference semantics (each mirrored by Dolt unless noted in `03-store-dolt.md`):
+Behaviors that define the reference semantics (each mirrored by Dolt unless noted in `03-store-schema.md`):
 
 **Create** (`memory/issues.go:18-98`): parent resolved before prefix (so a missing parent reports the missing issue); title required after trim; labels canonicalized (normalize, dedupe, sort); topic normalized; type defaults to `task`; all string fields trimmed; new issues start `open`/live. Top-level ids are minted with the adaptive hash (lengths tried up to 8, 10 nonces each); children of a parent get sequential `<parent>.N` ids counting only direct children. Placement zero-value appends (bottom); `RankTop` prepends. The create event records `status "" → "open"` for a leaf and no changes for a container.
 
@@ -104,7 +103,7 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 **Topics** (`memory/issues.go:246-267`): the distinct non-empty topics of non-deleted issues, sorted. Deletion removes a topic from the vocabulary; archival does not.
 
-**Bulk and import** (`memory/bulk.go`): both parse-validate the whole file before applying anything, topologically sort intra-batch references, create/update in that order, then wire `depends_on` edges (as `blocks`, dependent → dependency) in a second pass. Failure triggers **compensation, not rollback**: created issues are soft-deleted (reason `import rollback`), un-undoable ids are named in the error, and already-applied updates stay applied. Spec-validation rules (whitespace, duplicates, self-dependency, update-forbidden fields, create-required fields) are enumerated in the inventory §2.13. `ImportTree` references must all resolve inside the file; `BulkApply` references may name pre-existing real ids. Bulk files are multi-document YAML with unknown fields rejected; import trees are a single JSON array with unknown fields and trailing data rejected (`internal/storage/specs.go`).
+**Bulk and import** (`memory/bulk.go`): both parse-validate the whole file before applying anything, topologically sort intra-batch references, create/update in that order, then wire `depends_on` edges (as `blocks`, dependent → dependency) in a second pass. Failure triggers **compensation, not rollback**: created issues are soft-deleted (reason `import rollback`), un-undoable ids are named in the error, and already-applied updates stay applied. Spec validation rejects surrounding whitespace, duplicates, self-dependency, forbidden fields on updates, and missing required fields on creates (`internal/storage/specs.go`, `memory/bulk.go`). `ImportTree` references must all resolve inside the file; `BulkApply` references may name pre-existing real ids. Bulk files are multi-document YAML with unknown fields rejected; import trees are a single JSON array with unknown fields and trailing data rejected (`internal/storage/specs.go`).
 
 **Export** (`memory/export.go`): the whole store — archived and deleted included — with every collection in a total order (issues by rank, labels by issue+name, events by created_at+id, relations/comments in write order) so two stores holding the same facts serialize to the same bytes. Version 2.
 
@@ -112,9 +111,9 @@ Behaviors that define the reference semantics (each mirrored by Dolt unless note
 
 ## What conformance requires — and doesn't
 
-The suite runs 36 cases (full list and per-case invariants in inventory §3.2–3.3), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go:29-37`).
+The suite runs 36 cases (`conformance.go`), each against a fresh engine, asserting only what a caller can observe through the contract. Where behavior was ambiguous, Dolt's answer was the tie-break (`conformance.go:29-37`).
 
-Not required by the suite (each is engine-tested or unexercised) — relevant when judging what v1 actually guarantees across engines (`inventory §3.5`):
+Not required by the suite (each is engine-tested or unexercised) — relevant when judging what v1 actually guarantees across engines:
 
 - any of the seven capability interfaces
 - concurrency safety
