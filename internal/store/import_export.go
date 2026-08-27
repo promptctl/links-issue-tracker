@@ -111,23 +111,27 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 	return report, nil
 }
 
-func (s *Store) Fsck(ctx context.Context, repair bool) (storage.HealthReport, error) {
-	if repair {
-		if err := s.withMutation(ctx, "fsck repair", func(ctx context.Context, tx *sql.Tx) error {
-			if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
-				return fmt.Errorf("repair orphan events: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
-				return fmt.Errorf("repair self related rows: %w", err)
-			}
-			if _, err := tx.ExecContext(ctx, `UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id`); err != nil {
-				return fmt.Errorf("repair related ordering: %w", err)
-			}
-			return nil
-		}); err != nil {
-			return storage.HealthReport{}, err
+// FixIntegrity repairs what this engine can be structurally wrong about, then
+// re-examines. The repair always runs — the caller that only wanted a look
+// called Doctor. [LAW:dataflow-not-control-flow]
+func (s *Store) FixIntegrity(ctx context.Context) (storage.HealthReport, error) {
+	if err := s.withMutation(ctx, "fsck repair", func(ctx context.Context, tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
+			return fmt.Errorf("repair orphan events: %w", err)
 		}
+		if _, err := tx.ExecContext(ctx, `DELETE FROM relations WHERE type='related-to' AND src_id = dst_id`); err != nil {
+			return fmt.Errorf("repair self related rows: %w", err)
+		}
+		if _, err := tx.ExecContext(ctx, `UPDATE relations SET src_id = dst_id, dst_id = src_id WHERE type='related-to' AND src_id > dst_id`); err != nil {
+			return fmt.Errorf("repair related ordering: %w", err)
+		}
+		return nil
+	}); err != nil {
+		return storage.HealthReport{}, err
 	}
+	// The post-repair examination IS Doctor, not a copy of it, so what a repair
+	// reports and what an examination reports cannot drift.
+	// [LAW:one-source-of-truth]
 	return s.Doctor(ctx)
 }
 

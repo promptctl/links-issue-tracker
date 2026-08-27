@@ -15,9 +15,10 @@ import (
 // [LAW:single-enforcer] All Dolt branching for migration checkpoints routes
 // through this method; no other code calls DOLT_BRANCH directly for this.
 func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (storage.Checkpoint, error) {
-	// [LAW:one-source-of-truth] CommitSHA is captured from the one HEAD reader at
-	// creation so the caller has a stable reference independent of later branch
-	// movement.
+	// [LAW:one-source-of-truth] The anchor is captured from the one HEAD reader
+	// at creation so the caller has a stable reference independent of later
+	// branch movement. This engine spells it as a Dolt commit hash; the contract
+	// only requires that handing it back names this state again.
 	commitSHA, err := readDoltHead(ctx, s.db)
 	if err != nil {
 		return storage.Checkpoint{}, fmt.Errorf("checkpoint: %w", err)
@@ -31,7 +32,7 @@ func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (storage.Ch
 		Name:      name,
 		Prefix:    prefix,
 		CreatedAt: ts,
-		CommitSHA: commitSHA,
+		Anchor:    commitSHA,
 	}, nil
 }
 
@@ -69,7 +70,7 @@ func (s *Store) ListCheckpoints(ctx context.Context, prefix string) ([]storage.C
 		if !ok {
 			continue
 		}
-		cp.CommitSHA = hash
+		cp.Anchor = hash
 		cps = append(cps, cp)
 	}
 	if err := rows.Err(); err != nil {

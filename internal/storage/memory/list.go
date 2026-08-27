@@ -47,8 +47,9 @@ func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, err
 			selected = append(selected, issue)
 		}
 	}
-	// Sorting is stable over a slice that is already in rank order, so a sort
-	// on a field with ties resolves them by rank instead of arbitrarily.
+	// The ordering is total — every comparison ends in a distinct id — so the
+	// result does not depend on the order this slice arrived in, and sorting it
+	// twice cannot produce two answers.
 	slices.SortStableFunc(selected, order)
 	return capLimit(selected, filter.Limit), nil
 }
@@ -197,7 +198,7 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
 	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
+	"status":     compareStoredStatus,
 	"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
 	"rank":       func(a, b model.Issue) int { return strings.Compare(a.Rank, b.Rank) },
 	"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
@@ -207,11 +208,48 @@ var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
 }
 
-// issueOrdering composes the requested sort specs into one comparison. No
-// specs is the canonical ordering — rank ascending — which the caller already
-// holds, so it composes to "leave the order alone" rather than to a re-sort.
+// compareStoredStatus orders two issues by the status encoding a row holds,
+// which is what the Dolt engine's ORDER BY reads — and a container holds none.
+//
+// It deliberately does NOT compare model.Issue.State(). The derived state is
+// the better answer to "what state is this in", and it is what the status
+// FILTER reads; the SORT reads the stored column, and this engine reproduces
+// that so the two engines answer a listing identically. See storage.SortFields
+// for why the divergence is preserved rather than fixed here.
+func compareStoredStatus(a, b model.Issue) int {
+	aStored, aValue := storedStatus(a)
+	bStored, bValue := storedStatus(b)
+	// SQL orders NULL ahead of every value ascending, so "has no stored status"
+	// is the low key rather than a special case in the caller.
+	// [LAW:dataflow-not-control-flow]
+	return cmp.Or(cmp.Compare(aStored, bStored), strings.Compare(aValue, bValue))
+}
+
+// storedStatus reports whether the issue would occupy the status column at all
+// (0 for a container, whose state is derived) and the value it would hold.
+func storedStatus(issue model.Issue) (int, string) {
+	status := issue.Capabilities().Status
+	if status == nil {
+		return 0, ""
+	}
+	return 1, string(status.Value)
+}
+
+// issueOrdering composes the requested sort specs into one comparison.
+//
+// Two rules make the result a TOTAL order rather than a partial one, which is
+// what lets this engine and the Dolt engine agree row for row. No specs is the
+// canonical ordering, expressed as the spec list it stands for rather than as
+// a branch that skips the sort [LAW:dataflow-not-control-flow]; and id
+// ascending is appended as the final key always, so no tie is ever left for
+// the engine's incidental slice order to settle
+// [LAW:no-ambient-temporal-coupling]. Both are stated in the contract on
+// storage.IssueReader.ListIssues.
 func issueOrdering(specs []storage.SortSpec) (func(a, b model.Issue) int, error) {
-	compares := make([]func(a, b model.Issue) int, 0, len(specs))
+	if len(specs) == 0 {
+		specs = []storage.SortSpec{{Field: "rank"}}
+	}
+	compares := make([]func(a, b model.Issue) int, 0, len(specs)+1)
 	for _, spec := range specs {
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
 		compare, ok := issueSortKeys[field]
@@ -224,6 +262,7 @@ func issueOrdering(specs []storage.SortSpec) (func(a, b model.Issue) int, error)
 		}
 		compares = append(compares, compare)
 	}
+	compares = append(compares, func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) })
 	return func(a, b model.Issue) int {
 		for _, compare := range compares {
 			if result := compare(a, b); result != 0 {

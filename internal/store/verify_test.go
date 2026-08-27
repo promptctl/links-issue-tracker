@@ -40,7 +40,7 @@ func TestVerifyCandidateReconciledOnFaithfulRebuild(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	report, err := VerifyCandidate(ctx, dump, mustMap(t, dump), cand.Store())
+	report, err := VerifyCandidate(ctx, dump, mustMap(t, dump), cand.store)
 	if err != nil {
 		t.Fatalf("VerifyCandidate: %v", err)
 	}
@@ -69,7 +69,7 @@ func TestVerifyCandidateRejectsMisMappedRank(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	report, err := VerifyCandidate(ctx, dump, swapped, cand.Store())
+	report, err := VerifyCandidate(ctx, dump, swapped, cand.store)
 	if err != nil {
 		t.Fatalf("VerifyCandidate: %v", err)
 	}

@@ -229,7 +229,7 @@ func allDoctorFixNames() []string {
 // [LAW:one-source-of-truth] This map is the single authority for valid fix names.
 var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) error{
 	"integrity": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
-		report, err := repairer.Fsck(ctx, true)
+		report, err := repairer.FixIntegrity(ctx)
 		if err != nil {
 			return err
 		}

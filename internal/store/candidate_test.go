@@ -65,13 +65,13 @@ func TestRebuildCandidateValidMappingYieldsFreshWorkspace(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = cand.Discard() })
 
-	report, err := cand.Store().Doctor(ctx)
+	report, err := cand.store.Doctor(ctx)
 	if err != nil {
 		t.Fatalf("Doctor: %v", err)
 	}
 	mustClean(t, report)
 
-	export, err := cand.Store().Export(ctx)
+	export, err := cand.store.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestRebuildCandidateRejectLeavesZeroResidue(t *testing.T) {
 	// so no open store or workspace lock leaks into the rest of the package run.
 	// Idempotent with the explicit Discard the zero-residue assertion uses.
 	t.Cleanup(func() { _ = cand.Discard() })
-	export, err := cand.Store().Export(ctx)
+	export, err := cand.store.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export: %v", err)
 	}
@@ -158,7 +158,7 @@ func TestRebuildCandidateAttemptsAreIsolated(t *testing.T) {
 		t.Fatalf("second Discard of the same candidate: %v", err)
 	}
 
-	export, err := second.Store().Export(ctx)
+	export, err := second.store.Export(ctx)
 	if err != nil {
 		t.Fatalf("second candidate unusable after first was discarded: %v", err)
 	}
