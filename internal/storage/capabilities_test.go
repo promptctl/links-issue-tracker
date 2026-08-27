@@ -157,12 +157,18 @@ func TestAbsentCapabilityAnswersWithTypedAbsence(t *testing.T) {
 type syncOnlyReconcileless struct {
 	storage.Store
 	storage.Syncer
-	compacted bool
+	compacted   bool
+	compactedAt storage.GCMode
 }
 
-func (e *syncOnlyReconcileless) SyncCompact(context.Context) error {
+func (e *syncOnlyReconcileless) SyncCompact(_ context.Context, mode storage.GCMode) (storage.CompactionOutcome, error) {
 	e.compacted = true
-	return nil
+	e.compactedAt = mode
+	return storage.CompactionOutcome{Ran: true, Depth: mode}, nil
+}
+
+func (e *syncOnlyReconcileless) CompactIfDue(context.Context) (storage.CompactionOutcome, error) {
+	return storage.CompactionOutcome{}, nil
 }
 
 func TestSyncWithoutReconcileIsRepresentable(t *testing.T) {
@@ -178,11 +184,17 @@ func TestSyncWithoutReconcileIsRepresentable(t *testing.T) {
 
 	// Of hands back the engine itself, not a wrapper around it: calling
 	// through the capability must reach the engine's own method.
-	if err := syncer.SyncCompact(t.Context()); err != nil {
+	if _, err := syncer.SyncCompact(t.Context(), storage.GCFull); err != nil {
 		t.Fatalf("SyncCompact through the capability: %v", err)
 	}
 	if !engine.compacted {
 		t.Fatal("the call through the capability did not reach the engine")
+	}
+	// The depth is part of the contract, so it must survive the crossing —
+	// a capability that reached the engine but dropped the requested depth
+	// would silently collect at the wrong one.
+	if engine.compactedAt != storage.GCFull {
+		t.Fatalf("compaction depth through the capability = %v, want %v", engine.compactedAt, storage.GCFull)
 	}
 }
 
@@ -293,4 +305,47 @@ func names(capabilities []storage.Capability) []string {
 		out = append(out, c.Name())
 	}
 	return out
+}
+
+// GCMode is a closed set, and which values belong to it is a fact about this
+// contract rather than about any engine — so the rejection lives on the type,
+// where every engine reaches the same answer. Asserting both arms matters more
+// than it looks: a Valid that only ever said true would pass a test that
+// checked the legal depths alone, while admitting exactly the illegal ones it
+// exists to stop. [LAW:behavior-not-structure]
+func TestGCModeValidAcceptsOnlyTheContractsDepths(t *testing.T) {
+	t.Parallel()
+
+	for _, legal := range []storage.GCMode{storage.GCNewGen, storage.GCFull} {
+		if !legal.Valid() {
+			t.Fatalf("GCMode(%s).Valid() = false, want true — it is one of the contract's own depths", legal)
+		}
+	}
+	// The zero is in this list deliberately, and it is the one that matters: the
+	// depths are numbered from one so that an outcome which chose no depth
+	// carries a value no engine will act on, rather than defaulting to the cheap
+	// depth and reporting it as a decision nobody made. A renumbering back to
+	// iota turns this arm red.
+	for _, illegal := range []storage.GCMode{storage.GCMode(0), storage.GCMode(-1), storage.GCMode(3), storage.GCMode(99)} {
+		if illegal.Valid() {
+			t.Fatalf("GCMode(%d).Valid() = true, want false — an engine would collect at a depth nobody named", int(illegal))
+		}
+	}
+}
+
+// The zero GCMode is what a depth-less outcome carries, so it must not be a
+// depth. This pins the numbering itself rather than Valid's opinion of it: a
+// reader that asks "was a depth chosen" by testing Valid gets the wrong answer
+// the moment the constants start at zero again, and every failure trace then
+// reports `newgen` for passes that never chose one. [LAW:types-are-the-program]
+func TestTheZeroGCModeIsNotADepth(t *testing.T) {
+	t.Parallel()
+
+	var unset storage.GCMode
+	if unset == storage.GCNewGen || unset == storage.GCFull {
+		t.Fatalf("the zero GCMode is %s, a real depth — a chose-nothing outcome would report it as chosen", unset)
+	}
+	if (storage.CompactionOutcome{}).Depth.Valid() {
+		t.Fatal("a zero CompactionOutcome carries a valid Depth; 'no depth was chosen' must be distinguishable from a choice")
+	}
 }

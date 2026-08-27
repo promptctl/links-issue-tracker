@@ -27,16 +27,33 @@ const backgroundMirrorSubcommand = "__mirror-bg"
 const mirrorLogName = "mirror.log"
 
 const (
+	// parentPostSpawnTail is how long a HEALTHY parent can legitimately live
+	// after spawning the mirror: every bounded step maybeAutoSyncAfterCommand
+	// has scheduled for after the spawn, summed from those steps' own caps.
+	//
+	// It is a sum rather than a number because this was previously a hand-kept
+	// figure in prose ("15s + 10s + 1s, so ~26s"), and prose does not fail to
+	// compile when a fourth step joins the tail. It did: the compaction
+	// backstop was added after the spawn and, left unsummed here, a pass slower
+	// than the leftover margin would have let a perfectly healthy parent outlive
+	// the wait below — abandoning a mirror that owed a push, for work the parent
+	// was designed to do. Adding a step to the tail now means adding it here.
+	// [LAW:one-source-of-truth]
+	parentPostSpawnTail = receiveTimeout + // the inline receive
+		ownerNotifyHookTimeout + ownerNotifyPipeWaitDelay + // a divergence's owner-notify hook and its pipe
+		compactTimeout // the compaction backstop
+
+	// mirrorParentWaitMargin is the headroom above the parent's designed tail:
+	// scheduling slop on a loaded machine, not another step. A bound inside the
+	// tail would manufacture parent-wait failures out of the parent's own work,
+	// so the margin exists to keep the two clearly separated.
+	mirrorParentWaitMargin = 30 * time.Second
+
 	// mirrorParentWaitTimeout bounds the wait for the spawning command to
 	// release its engine. The wait ends the instant the parent exits; the cap
 	// only guards a parent that never exits (e.g. a long-lived REPL), in which
-	// case the mirror gives up rather than hang forever. Sized above the
-	// parent's own designed post-spawn tail — the spawn happens BEFORE the
-	// inline receive (15s cap) and any owner-notify hook a receive-detected
-	// divergence runs (10s cap + 1s pipe WaitDelay), so a healthy parent can
-	// legitimately live ~26s past the spawn; a bound inside that window would
-	// manufacture parent-wait failures out of the parent's own scheduled work.
-	mirrorParentWaitTimeout = 60 * time.Second
+	// case the mirror gives up rather than hang forever.
+	mirrorParentWaitTimeout = parentPostSpawnTail + mirrorParentWaitMargin
 	mirrorParentPollDelay   = 20 * time.Millisecond
 )
 

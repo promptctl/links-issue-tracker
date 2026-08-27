@@ -1,6 +1,10 @@
 package storage
 
-import "github.com/promptctl/links-issue-tracker/internal/merge"
+import (
+	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/merge"
+)
 
 // This file is the vocabulary the sync and reconcile capabilities speak. It
 // lives beside the contract rather than inside an engine because a capability
@@ -190,6 +194,115 @@ type SyncPullResult struct {
 	// no-common-ancestor divergence, so the pull surface enumerates the same
 	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
+}
+
+// GCMode is how deep a compaction pass collects. The depths nest rather than
+// divide: the deeper one reclaims everything the shallower one would and then
+// some, so a store owed both wants a single deep pass, never two.
+//
+// The caller still names the depth, because what separates them is cost, not
+// coverage — the deep pass is priced against the whole store while the shallow
+// one is priced against recent activity, so which is worth running is a
+// judgment about frequency that the engine cannot make alone.
+// [LAW:dataflow-not-control-flow]
+//
+// Reading the depths as disjoint would be the costly mistake here: an engine
+// that believed neither subsumed the other would run both to be thorough, and
+// pay for the whole store twice.
+//
+// It is engine-neutral vocabulary: the depths describe what is collected, not
+// how any particular engine spells the request. An engine with only one depth
+// implements both by doing its one thing.
+//
+// The depths are numbered from one so that the zero GCMode is not one of them.
+// An outcome that never chose a depth — a due-check that failed before it could
+// — would otherwise carry GCNewGen by default and report the cheap depth as a
+// fact nobody decided; numbering from zero made "no depth" and "the shallow
+// depth" the same value, which is a difference no reader could recover. Valid
+// already rejects the zero, so this needs no separate sentinel member and no
+// engine gains a third depth to implement.
+// [LAW:types-are-the-program] the illegal state stops being representable,
+// rather than every reader guarding against it.
+type GCMode int
+
+const (
+	// GCNewGen collects recent history that has not yet been archived. It is
+	// the cheap, routine depth, and it cannot reclaim anything already
+	// archived.
+	GCNewGen GCMode = iota + 1
+	// GCFull additionally rewrites the archived history, and is the only depth
+	// that reclaims what earlier passes left behind. It costs proportionally
+	// to the whole store rather than to recent activity.
+	GCFull
+)
+
+// Valid reports whether m is a depth an engine can be asked for. It is the door
+// guard a Syncer runs before collecting, so an out-of-range depth is rejected
+// loudly rather than silently collapsing to the shallower default — which is
+// the wrong work done quietly, not an error anyone would see.
+// [LAW:no-silent-failure]
+//
+// It lives on the type rather than inside one engine because which values are
+// legal is a fact about this contract vocabulary, not about how Dolt happens to
+// spell the request — a second engine offering Syncer must reject exactly the
+// same set, and a re-derived copy is a copy that can drift.
+// [LAW:single-enforcer]
+func (m GCMode) Valid() bool {
+	return m == GCNewGen || m == GCFull
+}
+
+// String names the depth for traces and operator-facing output.
+func (m GCMode) String() string {
+	switch m {
+	case GCNewGen:
+		return "newgen"
+	case GCFull:
+		return "full"
+	}
+	return fmt.Sprintf("unknown(%d)", int(m))
+}
+
+// CompactionOutcome reports what a compaction pass did, in terms every engine
+// can speak.
+type CompactionOutcome struct {
+	// Ran is whether a pass was actually performed. A due-check that found
+	// nothing owing returns false, which is an ordinary outcome and not a
+	// failure — the common case, in fact, since the check is cheap and the
+	// pass is not.
+	//
+	// It is independent of whether the call as a whole succeeded. An engine
+	// whose pass completed and whose follow-on work then failed reports Ran
+	// alongside its error, because the store was rewritten either way: a caller
+	// told otherwise would under-report a durable, possibly expensive side
+	// effect, and "the pass never happened" is the one thing it must not
+	// conclude from a failure. [LAW:no-silent-failure]
+	Ran bool
+	// Depth is the depth the pass was performed at — or attempted at, when this
+	// outcome accompanies an error.
+	//
+	// It is the zero GCMode, which Valid rejects, exactly when no depth was ever
+	// chosen: a due-check that failed before selecting one. That is why the
+	// depths are numbered from one. A reader can therefore tell "the shallow
+	// depth" from "no depth at all" instead of being handed the former by
+	// default, and needs no companion flag to do it.
+	// [LAW:types-are-the-program]
+	Depth GCMode
+	// Detail is the engine's own account of what the pass changed, already
+	// rendered. It is the engine's words because only the engine knows what it
+	// stores: journals and generations are one engine's vocabulary, not the
+	// contract's.
+	//
+	// An engine that could not measure its own reclaim says so here, naming
+	// what it could not measure. That failure is the account in that case, and
+	// blanking the field instead would hide it behind an outcome that still
+	// reports Ran — "a pass ran and there is nothing worth reporting" and "a
+	// pass ran and I cannot tell you what it reclaimed" are different facts,
+	// and one value meaning both is a void the caller can never pull apart.
+	// [LAW:no-silent-failure]
+	//
+	// Empty therefore belongs to the outcome that did nothing — the zero value
+	// CompactIfDue returns when no pass was owed — never to one that ran.
+	Detail string
 }
 
 // SyncPushResult reports what the peer said about the delivery.

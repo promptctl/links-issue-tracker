@@ -521,6 +521,7 @@ lit sync remote ls
 lit sync fetch [--remote <name>] [--prune] [--verbose]
 lit sync pull  [--remote <name>] [--verbose]
 lit sync push  [--remote <name>] [--force] [--set-upstream] [--verbose]
+lit sync compact [--full]                                       # reclaim local storage; needs no remote
 lit sync reconcile                                              # run the field-aware reconcile; surface any prose divergence
 lit sync reconcile resolve --resolve ID:FIELD:FINGERPRINT=TEXT … # finalize with the agent's merged text
 lit sync reconcile abort                                        # leave the clone diverged for now
@@ -531,6 +532,15 @@ lit sync reconcile take local|remote [--owner-approved TOKEN]   # unrelated hist
 Mirrors issue data through git remotes so one backlog is shared across clones — see
 [Sync and remotes](dolt-remote-sync.md). `pull`/`push` default the remote to the
 upstream remote, then to the single configured remote. A merge conflict exits 5.
+
+`compact` reclaims local storage and contacts no remote, so a solo workspace can
+run it. Two depths: the default collects recent history, while `--full` also
+rewrites the archived generation, which is the only way to reclaim what earlier
+passes left behind — at a cost proportional to the whole store rather than to
+recent activity. You rarely need to run it: a mutating command compacts on its
+own once the store's footprint warrants it, and `lit sync push` picks the depth
+its own accounting calls for. Run it explicitly to reclaim on demand, or to
+schedule maintenance on a workspace that goes long stretches without pushing.
 
 `reconcile` merges a diverged clone into linear history with the field-aware
 engine. When both sides rewrote the same free-text field (`title`, `description`,

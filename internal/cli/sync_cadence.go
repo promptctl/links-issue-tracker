@@ -16,14 +16,21 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// DisableAutoSyncEnvVar is the process-level kill switch for all automatic sync
-// (the on-change push mirror and the receive). When set to a truthy value, no
-// command schedules a mirror or runs a receive. It exists for environments that
-// must never trigger sync as a side effect of a lit command — CI, sandboxes, and
+// DisableAutoSyncEnvVar is the process-level kill switch for everything this
+// owner schedules after a command: the on-change push mirror, the receive, and
+// the compaction backstop. When set to a truthy value, no command schedules a
+// mirror, runs a receive, or compacts. It exists for environments that must
+// never trigger work as a side effect of a lit command — CI, sandboxes, and
 // lit's own test suite — and is distinct from `sync.receive = false` (which
 // disables only receive, via config). Exported so out-of-package callers (the
 // cmd/lit signal acceptance test) target the one canonical env-var name rather
 // than a drift-prone literal. [LAW:one-source-of-truth]
+//
+// Compaction is deliberately under this switch even though it is maintenance
+// rather than sync: the switch's real promise is that a lit command has no
+// scheduled side effects, and a sandbox that opted out of background work has
+// not opted into a store rewrite. A workspace that wants the reclaim without
+// the sync still has `lit sync compact`, which this never gates.
 const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
@@ -72,6 +79,36 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
 		return
 	}
+	syncOnPolicy(ctx, accessMode, ws)
+	// Compaction is gated on having WRITTEN, not on sync policy: only a
+	// mutation grows the store, and a workspace with no remote and no cadence
+	// is exactly the one with nothing else to collect it. It runs last so it
+	// collects whatever the receive above just brought in, and so its own
+	// stall is never charged against the receive's timeout.
+	//
+	// That independence is why the policy half is its own unit. It used to be
+	// inline, so an unreadable config returned early and took compaction with
+	// it — leaving the workspace whose config is broken, which is squarely the
+	// "nothing else collects this store" case, as the one workspace that
+	// silently lost its backstop. The gate above said so in prose while the
+	// code said otherwise; the cut puts the boundary where the sentence
+	// already claimed it was. [LAW:decomposition]
+	if accessMode == app.AccessWrite {
+		compactInline(ctx, ws)
+	}
+}
+
+// syncOnPolicy performs the two halves that sync policy selects: the push
+// mirror for a mutation under on-change cadence, and the receive when it is
+// enabled. Both read configuration, which is why an unreadable config stops
+// exactly these two and nothing else — the failure is scoped to the unit that
+// actually depends on the missing fact. [LAW:decomposition]
+//
+// The failure is reported and not returned: automatic sync is best-effort work
+// after a command that already succeeded, so a broken config costs the mirror,
+// never the command. Saying so on stderr is what keeps it from being silent.
+// [LAW:no-silent-failure]
+func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
 	cfg, err := config.Load(pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
