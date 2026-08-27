@@ -135,8 +135,13 @@ func (e *Engine) detach(id string) {
 	e.order = slices.DeleteFunc(e.order, func(existing string) bool { return existing == id })
 }
 
+// insertAt puts an id back at a position. It clamps nothing: the only caller
+// hands it an anchor's index — or one past it — taken after the moved id was
+// detached, so the position is in range by construction. A clamp here would
+// turn a resolution bug into a silent placement at the top of the backlog,
+// which is the one outcome nobody would report. [LAW:no-defensive-null-guards]
 func (e *Engine) insertAt(index int, id string) {
-	e.order = slices.Insert(e.order, min(max(index, 0), len(e.order)), id)
+	e.order = slices.Insert(e.order, index, id)
 }
 
 // --- frames ---------------------------------------------------------------
