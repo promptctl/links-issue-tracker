@@ -241,12 +241,27 @@ func clearMirrorPending(ws workspace.Info) {
 	}
 }
 
-// mirrorPendingSet reports whether any marker exists, live holder or not. Test
-// observability for the claim lifecycle; the mirror loop's own re-check is
+// MirrorOwed reports whether a spawn is still outstanding for this workspace:
+// the marker's bare existence, live holder or not. It is the claim protocol's
+// own question, exported because a caller joining a detached mirror before
+// tearing its workspace down needs exactly that question answered by the owner
+// of the marker's meaning, never re-derived from raw file state.
+// [LAW:one-source-of-truth] The mirror loop's own re-check is
 // recheckMirrorPending, which additionally proves the marker is a NEW claim.
-func mirrorPendingSet(ws workspace.Info) bool {
+//
+// An unreadable marker is an error, never a false. "I could not tell" and
+// "nothing is owed" are different facts, and a caller that gates a destructive
+// step on this must not receive the first wearing the shape of the second.
+// [LAW:no-silent-failure]
+func MirrorOwed(ws workspace.Info) (bool, error) {
 	_, err := os.Stat(mirrorPendingMarkerPath(ws))
-	return err == nil
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read mirror-pending marker: %w", err)
+	}
+	return true, nil
 }
 
 // recheckMirrorPending is the single-flight holder's post-release verdict:
