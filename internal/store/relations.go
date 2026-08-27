@@ -12,22 +12,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// IssueRelations is one issue together with its structural graph edges —
-// parent, children, dependencies (DependsOn), and dependents (Blocks) — each
-// hydrated, but WITHOUT the comment/event/related payload GetIssueDetail also
-// loads. It is the shared lightweight per-issue shape batch consumers read, so
-// neither the ready pipeline nor the epic view pays GetIssueDetail's per-row
-// comment/event cost.
-// [LAW:one-source-of-truth] One shape for "an issue's open blockers / parent
-// epic" across consumers; a second batch type would let them drift.
-type IssueRelations struct {
-	Issue     model.Issue
-	Parent    *model.Issue
-	Children  []model.Issue
-	DependsOn []model.Issue
-	Blocks    []model.Issue
-}
-
 // bucketRelations sorts the structural edges incident to focalID into the four
 // relation slices, hydrating counterparts from issuesByID. It is the single
 // definition of how a relation row maps to parent / child / depends-on / blocks
@@ -303,19 +287,6 @@ func mapKeys(set map[string]struct{}) []string {
 		out = append(out, k)
 	}
 	return out
-}
-
-type AddRelationInput struct {
-	SrcID     string
-	DstID     string
-	Type      model.RelationType
-	CreatedBy string
-}
-
-type SetParentInput struct {
-	ChildID   string
-	ParentID  string
-	CreatedBy string
 }
 
 func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Relation, error) {
