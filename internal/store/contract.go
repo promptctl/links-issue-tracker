@@ -5,10 +5,17 @@ import "github.com/promptctl/links-issue-tracker/internal/storage"
 // This file is where the Dolt engine meets lit's storage contract, and it is
 // deliberately the only place in this package that knows the contract exists.
 //
-// The assertion below is the load-bearing line: it fails the build the moment
-// this engine stops satisfying [storage.Store], which is what makes the
-// contract a constraint on the engine rather than a document about it.
-// [LAW:types-are-the-program]
+// The assertions below are the load-bearing lines: they fail the build the
+// moment this engine stops satisfying [storage.Store] or stops offering a
+// capability it claims, which is what makes the contract a constraint on the
+// engine rather than a document about it. [LAW:types-are-the-program]
+//
+// Dolt offers all seven capabilities, which is exactly why they are capabilities
+// and not contract methods: this engine is a versioned SQL database, and sync,
+// reconcile, checkpoints, repair, schema migration, import, and a raw query
+// surface are things it has because of what it is. Asserting them here rather
+// than declaring them in the contract is what leaves room for an engine that
+// has fewer. [storage.Offered] reads this set back at runtime.
 //
 // The aliases beneath it are a relocation, not a second copy. Every input and
 // result type lit's storage vocabulary needs now lives in internal/storage, so
@@ -25,7 +32,17 @@ import "github.com/promptctl/links-issue-tracker/internal/storage"
 // and are the same kind of scaffolding: they move when their callers do, not
 // before, because relocating them now would rewire callers this state is
 // defined by not rewiring.
-var _ storage.Store = (*Store)(nil)
+var (
+	_ storage.Store = (*Store)(nil)
+
+	_ storage.Syncer         = (*Store)(nil)
+	_ storage.Reconciler     = (*Store)(nil)
+	_ storage.Checkpointer   = (*Store)(nil)
+	_ storage.Repairer       = (*Store)(nil)
+	_ storage.SchemaMigrator = (*Store)(nil)
+	_ storage.Importer       = (*Store)(nil)
+	_ storage.RawExecutor    = (*Store)(nil)
+)
 
 type (
 	NotFoundError     = storage.NotFoundError
@@ -47,6 +64,27 @@ type (
 	BulkApplyResult   = storage.BulkApplyResult
 	ImportTreeSpec    = storage.ImportTreeSpec
 	ImportTreeResult  = storage.ImportTreeResult
+
+	// The capability vocabulary, relocated by links-store-seam-q35v.2 for the
+	// same reason and on the same terms as the core vocabulary above: a
+	// capability interface can only name types that are the contract's.
+	SyncState           = storage.SyncState
+	SyncRemote          = storage.SyncRemote
+	SyncStatusRow       = storage.SyncStatusRow
+	SyncStatusReport    = storage.SyncStatusReport
+	SyncFreshnessState  = storage.SyncFreshnessState
+	SyncFreshness       = storage.SyncFreshness
+	SyncReceiveState    = storage.SyncReceiveState
+	SyncReceiveResult   = storage.SyncReceiveResult
+	SyncPullState       = storage.SyncPullState
+	SyncPullResult      = storage.SyncPullResult
+	SyncPushResult      = storage.SyncPushResult
+	SyncReconcileState  = storage.SyncReconcileState
+	SyncReconcileResult = storage.SyncReconcileResult
+	UnrelatedInventory  = storage.UnrelatedInventory
+	UnrelatedResolution = storage.UnrelatedResolution
+	Checkpoint          = storage.Checkpoint
+	HealthReport        = storage.HealthReport
 )
 
 // A constant cannot be aliased, so the placement vocabulary is re-exported by
@@ -55,4 +93,35 @@ type (
 const (
 	RankBottom = storage.RankBottom
 	RankTop    = storage.RankTop
+
+	SyncNeverSynced = storage.SyncNeverSynced
+	SyncUpToDate    = storage.SyncUpToDate
+	SyncAhead       = storage.SyncAhead
+	SyncBehind      = storage.SyncBehind
+	SyncDiverged    = storage.SyncDiverged
+
+	SyncReceiveUpToDate      = storage.SyncReceiveUpToDate
+	SyncReceiveFastForwarded = storage.SyncReceiveFastForwarded
+	SyncReceiveAhead         = storage.SyncReceiveAhead
+	SyncReceiveDiverged      = storage.SyncReceiveDiverged
+	SyncReceiveNeverSynced   = storage.SyncReceiveNeverSynced
+
+	SyncPullUpToDate      = storage.SyncPullUpToDate
+	SyncPullFastForwarded = storage.SyncPullFastForwarded
+	SyncPullLinearized    = storage.SyncPullLinearized
+	SyncPullProsePending  = storage.SyncPullProsePending
+	SyncPullUnrelated     = storage.SyncPullUnrelated
+	SyncPullAhead         = storage.SyncPullAhead
+	SyncPullNeverSynced   = storage.SyncPullNeverSynced
+
+	SyncReconcileNotDiverged  = storage.SyncReconcileNotDiverged
+	SyncReconcileLinearized   = storage.SyncReconcileLinearized
+	SyncReconcileProsePending = storage.SyncReconcileProsePending
+	SyncReconcileUnrelated    = storage.SyncReconcileUnrelated
+	SyncReconcileTookLocal    = storage.SyncReconcileTookLocal
+	SyncReconcileTookRemote   = storage.SyncReconcileTookRemote
+	SyncReconcileCombined     = storage.SyncReconcileCombined
+
+	TakeLocal  = storage.TakeLocal
+	TakeRemote = storage.TakeRemote
 )

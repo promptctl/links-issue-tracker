@@ -654,12 +654,12 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 func TestUnrelatedResolutionValid(t *testing.T) {
 	t.Parallel()
 	for _, valid := range []UnrelatedResolution{TakeLocal, TakeRemote} {
-		if !valid.valid() {
+		if !valid.Valid() {
 			t.Errorf("%q reported invalid, want valid", valid)
 		}
 	}
 	for _, invalid := range []UnrelatedResolution{"", "combine", "mine", "REMOTE"} {
-		if UnrelatedResolution(invalid).valid() {
+		if UnrelatedResolution(invalid).Valid() {
 			t.Errorf("%q reported valid, want invalid", invalid)
 		}
 	}
