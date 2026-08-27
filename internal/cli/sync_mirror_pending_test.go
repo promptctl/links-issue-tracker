@@ -212,11 +212,40 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 	}
 }
 
-// TestMirrorPendingSetIgnoresLiveness pins the existence read's semantics:
+// TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable pins the arm that
+// separates "I could not tell" from "nothing is owed". A caller gating a
+// destructive step on this — the cmd/lit cleanup that sweeps a workspace
+// directory only once no mirror can still write into it — reads a false as
+// permission to proceed, so a read that FAILED must never wear that shape.
+// [LAW:no-silent-failure]
+//
+// The unreadable marker is made by putting a regular file where the storage
+// directory belongs, so the path traversal fails with ENOTDIR. A permission
+// bit would have been the reflex and is the wrong instrument: root ignores it,
+// and the test would quietly stop testing anything in a container that runs as
+// root while still passing.
+func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
+	t.Parallel()
+	storageDir := filepath.Join(t.TempDir(), ".lit")
+	if err := os.WriteFile(storageDir, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("write file in the storage dir's place: %v", err)
+	}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(storageDir)}
+
+	owed, err := MirrorOwed(ws)
+	if err == nil {
+		t.Fatalf("an unreadable marker returned owed=%t with no error; a caller cannot tell that apart from a truthful read", owed)
+	}
+	if owed {
+		t.Fatal("the error arm must not also claim a mirror is owed")
+	}
+}
+
+// TestMirrorOwedIgnoresLiveness pins the existence read's semantics:
 // ANY marker — its mirror alive or long dead — means a claim may sit behind
 // the last HEAD read and deserves a cycle. Liveness matters only to the claim
 // (who spawns), never to this read (whether a mirror is still owed).
-func TestMirrorPendingSetIgnoresLiveness(t *testing.T) {
+func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
 	if mirrorPendingSet(t, ws) {
