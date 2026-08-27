@@ -196,6 +196,21 @@ type SyncPullResult struct {
 type SyncPushResult struct {
 	Status  int64  `json:"status"`
 	Message string `json:"message"`
+
+	// Maintenance is what the engine did to reclaim local storage while
+	// servicing this push, in the engine's own words, and empty when it found
+	// nothing worth reporting — so an ordinary push carries no maintenance line
+	// at all. Every state a reader would act on (work performed, work declined,
+	// an I/O failure) is non-empty, so nothing actionable reaches the empty
+	// value. It is deliberately separate from Message: Message is the
+	// engine's verbatim push output and callers render it as `raw`, so folding
+	// a second subject into it would make `raw` no longer raw.
+	// [LAW:one-source-of-truth] one field, one subject.
+	//
+	// The vocabulary is engine-neutral on purpose — an engine that keeps no
+	// local caches leaves this empty rather than being obliged to describe
+	// maintenance it does not perform.
+	Maintenance string `json:"maintenance,omitempty"`
 }
 
 // SyncReconcileState classifies what a single foreground reconcile did with a
