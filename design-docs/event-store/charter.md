@@ -107,9 +107,10 @@ Decisions made while building land as dated `DECISION:` comments on the
 relevant lit ticket (campaign-wide rulings on the epic); the docs absorb the
 resolved position when the affected work closes. The docs themselves never
 carry work items or schedules — every sentence in design.md must stay true
-when any given ticket closes. Sections carry a status line
-(`destination` / `built (vX.Y.Z)` / `superseded → §anchor`) so the unbuilt
-frontier is greppable.
+when any given ticket closes. Sections carry a status line, so the unbuilt
+frontier is greppable; the forms it may take are defined once at the top of
+[design.md](design.md) rather than restated here, since a second list of them
+is a second thing to keep true.
 
 ## Status
 
