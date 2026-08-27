@@ -60,6 +60,17 @@ const (
 // it would not silence a late mirror — it would elect the one branch that still
 // creates lock files — and holding it through the sweep starves the marker's
 // only clearer, so the join could never complete.
+//
+// One residual, stated rather than implied, because the pair covers a single
+// spawn exactly and two overlapping ones only nearly: racing claims can put a
+// SECOND mirror in its spawn window while a FIRST one is running, and the
+// first's cycle-entry clear removes the one marker both are behind. A probe
+// landing after the first has exited and before the second has run an
+// instruction would read quiescent over a live process. It needs the second
+// mirror to stay unscheduled across the first's entire engine cycle, and it is
+// the same shape as the beacon's own documented residual — no observable state
+// can prove a process that has not run yet. Sequential mutations, which is what
+// these tests drive, produce one mirror at a time and never reach it.
 func awaitMirrorQuiescence(t *testing.T, root string) {
 	t.Helper()
 	t.Cleanup(func() {
