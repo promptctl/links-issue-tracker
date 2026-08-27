@@ -95,7 +95,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first remote-less mutation did not stamp the absence marker: %v", err)
 	}
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("a remote-less mutation left a mirror-pending claim behind")
 	}
 	// Claim and answering hold share one lifetime: the remote-less path
@@ -119,7 +119,7 @@ func TestEnsureMirrorCoverageDebouncesRemoteAbsent(t *testing.T) {
 	if !info.ModTime().Equal(stamped) {
 		t.Fatal("a mutation inside the recheck interval re-ran the absence confirmation; the debounce must short-circuit it")
 	}
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("a debounced remote-less mutation left a mirror-pending claim behind")
 	}
 }

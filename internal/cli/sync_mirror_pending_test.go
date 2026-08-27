@@ -24,6 +24,21 @@ func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit"))}
 }
 
+// mirrorPendingSet is the in-package spelling of MirrorOwed for tests that
+// assert on the marker's presence: the same question, with the error arm
+// spent on the spot so an assertion can be written as a plain bool. Fatal
+// rather than false — a test that cannot read the marker has learned nothing,
+// and a silent false would let it pass by asserting absence it never
+// observed. [LAW:no-silent-failure]
+func mirrorPendingSet(t *testing.T, ws workspace.Info) bool {
+	t.Helper()
+	owed, err := MirrorOwed(ws)
+	if err != nil {
+		t.Fatalf("MirrorOwed() = %v", err)
+	}
+	return owed
+}
+
 // filesystemNow reads the clock that actually stamps files in dir, by
 // stamping one and reading it back. Linux fills inode times from
 // ktime_get_coarse_real_ts64, which advances once per timer tick (1-4ms at
@@ -188,36 +203,65 @@ func TestClearMirrorPendingIdempotent(t *testing.T) {
 		t.Fatalf("claim: %v", err)
 	}
 	clearMirrorPending(ws)
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("clear left the marker in place")
 	}
 	clearMirrorPending(ws)
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("clearing an absent marker resurrected it")
 	}
 }
 
-// TestMirrorPendingSetIgnoresLiveness pins the existence read's semantics:
+// TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable pins the arm that
+// separates "I could not tell" from "nothing is owed". A caller gating a
+// destructive step on this — the cmd/lit cleanup that sweeps a workspace
+// directory only once no mirror can still write into it — reads a false as
+// permission to proceed, so a read that FAILED must never wear that shape.
+// [LAW:no-silent-failure]
+//
+// The unreadable marker is made by putting a regular file where the storage
+// directory belongs, so the path traversal fails with ENOTDIR. A permission
+// bit would have been the reflex and is the wrong instrument: root ignores it,
+// and the test would quietly stop testing anything in a container that runs as
+// root while still passing.
+func TestMirrorOwedRefusesToGuessWhenTheMarkerIsUnreadable(t *testing.T) {
+	t.Parallel()
+	storageDir := filepath.Join(t.TempDir(), ".lit")
+	if err := os.WriteFile(storageDir, []byte("not a directory\n"), 0o644); err != nil {
+		t.Fatalf("write file in the storage dir's place: %v", err)
+	}
+	ws := workspace.Info{Location: workspace.LocationFromStorageDir(storageDir)}
+
+	owed, err := MirrorOwed(ws)
+	if err == nil {
+		t.Fatalf("an unreadable marker returned owed=%t with no error; a caller cannot tell that apart from a truthful read", owed)
+	}
+	if owed {
+		t.Fatal("the error arm must not also claim a mirror is owed")
+	}
+}
+
+// TestMirrorOwedIgnoresLiveness pins the existence read's semantics:
 // ANY marker — its mirror alive or long dead — means a claim may sit behind
 // the last HEAD read and deserves a cycle. Liveness matters only to the claim
 // (who spawns), never to this read (whether a mirror is still owed).
-func TestMirrorPendingSetIgnoresLiveness(t *testing.T) {
+func TestMirrorOwedIgnoresLiveness(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("an absent marker read as set")
 	}
 	if _, _, err := claimMirrorPending(context.Background(), ws, time.Now()); err != nil {
 		t.Fatalf("claim: %v", err)
 	}
-	if !mirrorPendingSet(ws) {
+	if !mirrorPendingSet(t, ws) {
 		t.Fatal("a just-claimed marker read as unset")
 	}
 	longAgo := time.Now().Add(-24 * time.Hour)
 	if err := os.Chtimes(mirrorPendingMarkerPath(ws), longAgo, longAgo); err != nil {
 		t.Fatalf("backdate marker: %v", err)
 	}
-	if !mirrorPendingSet(ws) {
+	if !mirrorPendingSet(t, ws) {
 		t.Fatal("a dead claimant's residue read as unset; the re-check must cycle for it")
 	}
 }
@@ -241,7 +285,7 @@ func TestCompleteMirrorWithoutAttempt(t *testing.T) {
 		t.Fatalf("completeMirrorWithoutAttempt must be best-effort nil, got %v", err)
 	}
 
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("a dying mirror left its claim behind for the next claim's probe to recover; code-running endings must release it themselves")
 	}
 
@@ -308,7 +352,7 @@ func TestCompleteMirrorWithoutAttemptBusySkipsOwner(t *testing.T) {
 	if _, err := os.Stat(sink); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("a busy-workspace ending notified the owner (stat err=%v)", err)
 	}
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("a busy-workspace ending left its claim behind")
 	}
 }
@@ -444,7 +488,7 @@ func TestRunBackgroundMirrorRefusesWithoutBeacon(t *testing.T) {
 	if err := runBackgroundMirror(context.Background(), os.Stderr, ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror must be best-effort nil, got %v", err)
 	}
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("a beacon-refused mirror left its claim behind; the next mutation must re-claim at once")
 	}
 	rec, _, ok := lastPushOutcome(ws, time.Now())
@@ -474,7 +518,7 @@ func TestRunBackgroundMirrorTeardownReleasesClaim(t *testing.T) {
 	if err := runBackgroundMirror(ctx, os.Stderr, ws, nil); err != nil {
 		t.Fatalf("runBackgroundMirror teardown must be best-effort nil, got %v", err)
 	}
-	if mirrorPendingSet(ws) {
+	if mirrorPendingSet(t, ws) {
 		t.Fatal("teardown left the claim behind; mutations would falsely read as covered")
 	}
 	if _, _, ok := lastPushOutcome(ws, time.Now()); ok {

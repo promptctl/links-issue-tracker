@@ -99,9 +99,10 @@ func TestBurstOfMutationsNeverHitsEngineReadOnlyCollision(t *testing.T) {
 	// still owe a post-release re-check cycle (a claim stamped after the
 	// delivering cycle's entry-clear) when the commit count is already
 	// satisfied, and that no-op cycle's engine would race this test's TempDir
-	// sweep. The quiescence cleanup owns TempDir safety — it holds the
-	// single-flight lock through the sweep, so an in-cycle mirror is waited
-	// out and a pre-lock one exits silently. [LAW:no-ambient-temporal-coupling]
+	// sweep. The quiescence cleanup owns TempDir safety — it joins the mirror
+	// on the marker it has not yet cleared and the beacon it holds while it
+	// lives, so the sweep runs against no process at all.
+	// [LAW:no-ambient-temporal-coupling]
 	awaitMirrorQuiescence(t, root)
 	if out, err := runLit(t, root, self, isolatedEnv(xdgConfigHome, "1"),
 		"sync", "push", "--set-upstream"); err != nil {
