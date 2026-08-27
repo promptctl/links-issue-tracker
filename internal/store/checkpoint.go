@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"sort"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // CreateCheckpoint creates a Dolt branch at the current HEAD and returns the
@@ -12,20 +14,20 @@ import (
 //
 // [LAW:single-enforcer] All Dolt branching for migration checkpoints routes
 // through this method; no other code calls DOLT_BRANCH directly for this.
-func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (Checkpoint, error) {
+func (s *Store) CreateCheckpoint(ctx context.Context, prefix string) (storage.Checkpoint, error) {
 	// [LAW:one-source-of-truth] CommitSHA is captured from the one HEAD reader at
 	// creation so the caller has a stable reference independent of later branch
 	// movement.
 	commitSHA, err := readDoltHead(ctx, s.db)
 	if err != nil {
-		return Checkpoint{}, fmt.Errorf("checkpoint: %w", err)
+		return storage.Checkpoint{}, fmt.Errorf("checkpoint: %w", err)
 	}
 	ts := time.Now().UTC()
 	name := fmt.Sprintf("%s-%d", prefix, ts.UnixNano())
 	if _, err := s.db.ExecContext(ctx, "CALL DOLT_BRANCH(?)", name); err != nil {
-		return Checkpoint{}, fmt.Errorf("checkpoint: create branch %q: %w", name, err)
+		return storage.Checkpoint{}, fmt.Errorf("checkpoint: create branch %q: %w", name, err)
 	}
-	return Checkpoint{
+	return storage.Checkpoint{
 		Name:      name,
 		Prefix:    prefix,
 		CreatedAt: ts,
@@ -48,7 +50,7 @@ func (s *Store) ResetToCheckpoint(ctx context.Context, name string) error {
 
 // ListCheckpoints returns all checkpoint branches whose name matches
 // "<prefix>-<unix-nano>", sorted oldest first.
-func (s *Store) ListCheckpoints(ctx context.Context, prefix string) ([]Checkpoint, error) {
+func (s *Store) ListCheckpoints(ctx context.Context, prefix string) ([]storage.Checkpoint, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT name, hash FROM dolt_branches WHERE name LIKE ? ORDER BY name`,
 		prefix+"-%",
@@ -57,7 +59,7 @@ func (s *Store) ListCheckpoints(ctx context.Context, prefix string) ([]Checkpoin
 		return nil, fmt.Errorf("checkpoint: list branches: %w", err)
 	}
 	defer rows.Close()
-	var cps []Checkpoint
+	var cps []storage.Checkpoint
 	for rows.Next() {
 		var name, hash string
 		if err := rows.Scan(&name, &hash); err != nil {
@@ -100,17 +102,17 @@ func (s *Store) PruneCheckpoints(ctx context.Context, prefix string, retain int)
 
 // parseCheckpointName reconstructs a Checkpoint from a branch name. The name
 // must be "<prefix>-<unix-nano>"; returns false if the format doesn't match.
-func parseCheckpointName(name, prefix string) (Checkpoint, bool) {
+func parseCheckpointName(name, prefix string) (storage.Checkpoint, bool) {
 	needle := prefix + "-"
 	if len(name) <= len(needle) || name[:len(needle)] != needle {
-		return Checkpoint{}, false
+		return storage.Checkpoint{}, false
 	}
 	var ns int64
 	suffix := name[len(needle):]
 	if _, err := fmt.Sscanf(suffix, "%d", &ns); err != nil || fmt.Sprintf("%d", ns) != suffix {
-		return Checkpoint{}, false
+		return storage.Checkpoint{}, false
 	}
-	return Checkpoint{
+	return storage.Checkpoint{
 		Name:      name,
 		Prefix:    prefix,
 		CreatedAt: time.Unix(0, ns).UTC(),

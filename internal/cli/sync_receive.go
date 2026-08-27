@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -51,14 +51,14 @@ func receiveInline(ctx context.Context, ws workspace.Info) {
 
 	timeoutCtx, cancel := context.WithTimeout(ctx, receiveTimeout)
 	defer cancel()
-	syncStore, err := store.OpenSync(timeoutCtx, ws.DatabasePath, ws.WorkspaceID)
+	session, closeStore, err := openSyncSession(timeoutCtx, ws)
 	if err != nil {
 		recordReceiveError(ws, fmt.Errorf("open sync store: %w", err))
 		return
 	}
-	defer syncStore.Close()
+	defer closeStore()
 
-	outcome, err := performSyncReceive(timeoutCtx, syncStore, ws)
+	outcome, err := performSyncReceive(timeoutCtx, session, ws)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): record and stop.
 		recordReceiveError(ws, err)
@@ -116,7 +116,7 @@ func (o syncReceiveOutcome) settledCleanly() bool {
 		return true
 	}
 	return o.reconcile.err == nil &&
-		(o.reconcile.state == store.SyncReconcileLinearized || o.reconcile.state == store.SyncReconcileNotDiverged)
+		(o.reconcile.state == storage.SyncReconcileLinearized || o.reconcile.state == storage.SyncReconcileNotDiverged)
 }
 
 // inlineSyncFailure derives the sync-failure contract for an inline reconcile
@@ -150,11 +150,11 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 		base.Class = syncFailureDivergedUnresolved
 		base.Cause = o.reconcile.err
 		return base, true
-	case o.reconcile.state == store.SyncReconcileProsePending:
+	case o.reconcile.state == storage.SyncReconcileProsePending:
 		base.Class = syncFailureProseHeld
 		base.Fields = o.reconcile.pending
 		return base, true
-	case o.reconcile.state == store.SyncReconcileUnrelated:
+	case o.reconcile.state == storage.SyncReconcileUnrelated:
 		// A no-common-ancestor divergence is non-transient like a held prose conflict —
 		// it will NOT clear on the next receive — so it routes through the same contract
 		// rather than falling to the ok=false "settled cleanly" default, which would
@@ -176,7 +176,7 @@ type syncReceiveOutcome struct {
 	reason             string // set when status == "skipped"
 	remote             string
 	branch             string
-	state              store.SyncReceiveState
+	state              storage.SyncReceiveState
 	ahead              int64
 	behind             int64
 	oldestDivergedUnix int64 // Unix time the divergence began; 0 unless diverged
@@ -192,10 +192,10 @@ type syncReceiveOutcome struct {
 
 // reconcileOutcome is the inline reconcile result the diverged receive triggers.
 type reconcileOutcome struct {
-	state     store.SyncReconcileState
+	state     storage.SyncReconcileState
 	pending   []merge.ProsePending
-	unrelated *store.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
-	err       error                     // the reconcile failure; its trace is already recorded when set
+	unrelated *storage.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
+	err       error                       // the reconcile failure; its trace is already recorded when set
 }
 
 // performSyncReceive reconciles Dolt remotes from git, resolves the remote and
@@ -206,8 +206,8 @@ type reconcileOutcome struct {
 // carried in outcome.receiveErr with its trace already recorded, leaving local
 // data untouched. [LAW:single-enforcer] Receive and push share remote/branch
 // resolution and the trace writer so they cannot drift.
-func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspace.Info) (syncReceiveOutcome, error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, syncStore, ws)
+func performSyncReceive(ctx context.Context, session syncSession, ws workspace.Info) (syncReceiveOutcome, error) {
+	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
@@ -240,7 +240,7 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 		return syncReceiveOutcome{}, err
 	}
 
-	result, receiveErr := syncStore.SyncReceive(ctx, remoteName, syncBranch)
+	result, receiveErr := session.syncer.SyncReceive(ctx, remoteName, syncBranch)
 	if receiveErr == nil {
 		// SyncReceive's first step is DOLT_FETCH; a nil error means that fetch
 		// succeeded regardless of the resulting freshness state (up to date,
@@ -304,10 +304,29 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 	// The reconcile runs INLINE on this same engine because embedded Dolt permits
 	// only one read-write engine per path — a worker would collide with the next
 	// foreground command. [LAW:no-ambient-temporal-coupling]
-	if receiveErr == nil && result.State == store.SyncReceiveDiverged {
-		outcome.reconcile = performInlineReconcile(ctx, syncStore, ws, remoteName, syncBranch)
+	if receiveErr == nil && result.State == storage.SyncReceiveDiverged {
+		outcome.reconcile = performInlineReconcile(ctx, session, ws, remoteName, syncBranch)
 	}
 	return outcome, nil
+}
+
+// reconcileOnce resolves the reconcile capability and runs it.
+//
+// The receive that reached here has already fast-forwarded everything it could
+// and found a real divergence. An engine that offers sync but declines
+// reconcile therefore has nothing left to try, and the decline arrives at the
+// caller as an ordinary reconcile error — traced, surfaced, and never quietly
+// recorded as a settled divergence. [LAW:no-silent-failure]
+//
+// It is a unit of its own so that performInlineReconcile keeps one unbranched
+// path: the capability question is answered here and never re-asked below.
+// [LAW:parse-dont-validate]
+func reconcileOnce(ctx context.Context, session syncSession, remote, branch string) (storage.SyncReconcileResult, error) {
+	reconciler, err := storage.Reconcile.Of(session.engine)
+	if err != nil {
+		return storage.SyncReconcileResult{}, err
+	}
+	return reconciler.SyncReconcile(ctx, remote, branch)
 }
 
 // performInlineReconcile runs the field-aware reconcile on a diverged clone and
@@ -316,8 +335,8 @@ func performSyncReceive(ctx context.Context, syncStore *store.Store, ws workspac
 // prose-pending for the agent surface, never auto-committed by picking a side.
 // [LAW:single-enforcer] One reconcile entrypoint and one trace writer, whether
 // the receive was inline or foreground.
-func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws workspace.Info, remote, branch string) *reconcileOutcome {
-	result, reconcileErr := syncStore.SyncReconcile(ctx, remote, branch)
+func performInlineReconcile(ctx context.Context, session syncSession, ws workspace.Info, remote, branch string) *reconcileOutcome {
+	result, reconcileErr := reconcileOnce(ctx, session, remote, branch)
 	// "replayed" matches the explicit reconcile/take reporters: the durable
 	// trace carries the provenance-replay count for every outcome, zero
 	// included, so the trail can distinguish a granular fold from a no-op.
@@ -333,7 +352,7 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 		traceStatus = "error"
 		traceReason = reconcileErr.Error()
 		traceMetadata["error"] = reconcileErr.Error()
-	} else if result.State == store.SyncReconcileProsePending {
+	} else if result.State == storage.SyncReconcileProsePending {
 		traceMetadata["pending"] = strconv.Itoa(len(result.Pending))
 	}
 	if _, traceErr := maybeRecordAutomatedCommandTrace(
@@ -374,15 +393,15 @@ func performInlineReconcile(ctx context.Context, syncStore *store.Store, ws work
 
 // reconcileReasonForState maps a reconcile outcome to its automation-trace
 // reason. [LAW:one-source-of-truth] One mapping over the closed state set.
-func reconcileReasonForState(state store.SyncReconcileState) string {
+func reconcileReasonForState(state storage.SyncReconcileState) string {
 	switch state {
-	case store.SyncReconcileLinearized:
+	case storage.SyncReconcileLinearized:
 		return "automatic reconcile merged the divergence into linear history"
-	case store.SyncReconcileProsePending:
+	case storage.SyncReconcileProsePending:
 		return "automatic reconcile resolved every field but free-text diverged on both sides; held for the agent surface"
-	case store.SyncReconcileUnrelated:
+	case storage.SyncReconcileUnrelated:
 		return "automatic reconcile found unrelated histories (no common ancestor); held for wholesale/union resolution"
-	case store.SyncReconcileNotDiverged:
+	case storage.SyncReconcileNotDiverged:
 		return "automatic reconcile found the branch no longer diverged; nothing to do"
 	default:
 		return "automatic reconcile completed with state " + string(state)
@@ -393,17 +412,17 @@ func reconcileReasonForState(state store.SyncReconcileState) string {
 // its automation trace, so the trace describes what actually happened rather than
 // assuming a fast-forward. [LAW:one-source-of-truth] One mapping from state to
 // reason; an exhaustive switch over the closed SyncReceiveState set.
-func receiveReasonForState(state store.SyncReceiveState) string {
+func receiveReasonForState(state storage.SyncReceiveState) string {
 	switch state {
-	case store.SyncReceiveFastForwarded:
+	case storage.SyncReceiveFastForwarded:
 		return "automatic receive fast-forwarded the local store to the remote head"
-	case store.SyncReceiveUpToDate:
+	case storage.SyncReceiveUpToDate:
 		return "automatic receive found the local store already up to date with the remote"
-	case store.SyncReceiveAhead:
+	case storage.SyncReceiveAhead:
 		return "automatic receive found local ahead of the remote; nothing to receive"
-	case store.SyncReceiveDiverged:
+	case storage.SyncReceiveDiverged:
 		return "automatic receive found local diverged from the remote; left for foreground reconcile"
-	case store.SyncReceiveNeverSynced:
+	case storage.SyncReceiveNeverSynced:
 		return "automatic receive found no remote-tracking data on this branch yet"
 	default:
 		return "automatic receive completed with state " + string(state)

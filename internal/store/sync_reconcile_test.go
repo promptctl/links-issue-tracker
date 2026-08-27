@@ -10,6 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestSyncReconcileLinearizesDivergenceAndFastForwardPushes drives the ticket's
@@ -30,8 +31,8 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 
 	// A edits LANE and pushes; B edits PRIORITY locally (unpushed) — two different
 	// code-owned fields on the same issue, so B is diverged (ahead 1 / behind 1).
-	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("alpha")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("alpha")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -45,8 +46,8 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
-	if res.State != SyncReconcileLinearized {
-		t.Fatalf("reconcile state = %q (pending=%v), want %q", res.State, res.Pending, SyncReconcileLinearized)
+	if res.State != storage.SyncReconcileLinearized {
+		t.Fatalf("reconcile state = %q (pending=%v), want %q", res.State, res.Pending, storage.SyncReconcileLinearized)
 	}
 
 	// Both edits converged: A's lane AND B's priority survive on the merged row.
@@ -84,7 +85,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
 	}
-	if fresh.State() != SyncAhead || fresh.Ahead != 2 {
+	if fresh.State() != storage.SyncAhead || fresh.Ahead != 2 {
 		t.Fatalf("post-reconcile freshness = %q ahead=%d behind=%d, want ahead/2/0 (provenance commit + marker)", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
@@ -101,7 +102,7 @@ func TestSyncReconcileLinearizesDivergenceAndFastForwardPushes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	if recv.State != SyncReceiveFastForwarded {
+	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	convergedOnA := getIssueOrFatal(t, ctx, syncA, id)
@@ -128,8 +129,8 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 
-	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Title: strptr("A's rewritten title")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Title: strptr("B's rewritten title")})
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Title: strptr("A's rewritten title")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B's rewritten title")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -143,8 +144,8 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
-	if res.State != SyncReconcileProsePending {
-		t.Fatalf("reconcile state = %q, want %q", res.State, SyncReconcileProsePending)
+	if res.State != storage.SyncReconcileProsePending {
+		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileProsePending)
 	}
 	if got := headCommit(t, ctx, syncB); got != headBefore {
 		t.Fatalf("data branch moved during prose-pending reconcile: head %s -> %s (scratch reads leaked onto the live branch)", headBefore, got)
@@ -174,7 +175,7 @@ func TestSyncReconcileHoldsProseDivergenceForAgent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
-	if fresh.State() != SyncDiverged {
+	if fresh.State() != storage.SyncDiverged {
 		t.Fatalf("post-prose-pending freshness = %q, want still diverged", fresh.State())
 	}
 	if err := syncB.Close(); err != nil {
@@ -197,8 +198,8 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 
-	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Title: strptr("A's rewritten title")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Title: strptr("B's rewritten title")})
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Title: strptr("A's rewritten title")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B's rewritten title")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -220,8 +221,8 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
 	}
-	if res.State != SyncReconcileLinearized {
-		t.Fatalf("resolved state = %q, want %q", res.State, SyncReconcileLinearized)
+	if res.State != storage.SyncReconcileLinearized {
+		t.Fatalf("resolved state = %q, want %q", res.State, storage.SyncReconcileLinearized)
 	}
 	got := getIssueOrFatal(t, ctx, syncB, id)
 	if got.Title != "both A's and B's intent merged" {
@@ -232,7 +233,7 @@ func TestSyncReconcileResolvedFinalizesWithAgentText(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
-	if fresh.State() != SyncAhead {
+	if fresh.State() != storage.SyncAhead {
 		t.Fatalf("post-finalize freshness = %q, want ahead (linear, fast-forward-pushable)", fresh.State())
 	}
 }
@@ -253,8 +254,8 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 
-	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Title: strptr("A's rewritten title")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Title: strptr("B's rewritten title")})
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Title: strptr("A's rewritten title")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Title: strptr("B's rewritten title")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -269,8 +270,8 @@ func TestSyncReconcileResolvedRejectsStaleResolutions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B): %v", err)
 	}
-	if res.State != SyncReconcileProsePending {
-		t.Fatalf("stale-resolution state = %q, want %q (re-surfaced)", res.State, SyncReconcileProsePending)
+	if res.State != storage.SyncReconcileProsePending {
+		t.Fatalf("stale-resolution state = %q, want %q (re-surfaced)", res.State, storage.SyncReconcileProsePending)
 	}
 	if got := headCommit(t, ctx, syncB); got != headBefore {
 		t.Fatalf("data branch moved on a rejected finalize: %s -> %s", headBefore, got)
@@ -296,7 +297,7 @@ func seedReconcileRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
@@ -335,13 +336,13 @@ func adoptRemote(t *testing.T, ctx context.Context, root, remoteURL string) {
 }
 
 // updateLocal applies a field update to an issue and leaves it local (unpushed).
-func updateLocal(t *testing.T, ctx context.Context, root, id string, in UpdateIssueInput) {
+func updateLocal(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
 	st, err := Open(ctx, root, "ws")
 	if err != nil {
 		t.Fatalf("Open(update %s): %v", root, err)
 	}
-	if _, err := st.Apply(ctx, id, Change{Fields: in}); err != nil {
+	if _, err := st.Apply(ctx, id, storage.Change{Fields: in}); err != nil {
 		t.Fatalf("Apply(%s): %v", id, err)
 	}
 	if err := st.Close(); err != nil {
@@ -350,7 +351,7 @@ func updateLocal(t *testing.T, ctx context.Context, root, id string, in UpdateIs
 }
 
 // updateAndPush applies a field update and pushes it to the remote.
-func updateAndPush(t *testing.T, ctx context.Context, root, id string, in UpdateIssueInput) {
+func updateAndPush(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in)
 	sync := openSyncOrFatal(t, ctx, root)

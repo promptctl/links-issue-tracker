@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // captureStderr swaps os.Stderr for a pipe across fn and returns what was written.
@@ -234,7 +234,7 @@ func TestInlineSyncFailureMapping(t *testing.T) {
 	// Held prose conflict -> proseHeld with the pending fields.
 	held := base
 	held.reconcile = &reconcileOutcome{
-		state:   store.SyncReconcileProsePending,
+		state:   storage.SyncReconcileProsePending,
 		pending: []merge.ProsePending{{IssueID: "links-x.1", Field: merge.ProseTitle}},
 	}
 	heldFailure, ok := held.inlineSyncFailure(now)
@@ -244,7 +244,7 @@ func TestInlineSyncFailureMapping(t *testing.T) {
 
 	// A clean (linearized) reconcile surfaces nothing.
 	clean := base
-	clean.reconcile = &reconcileOutcome{state: store.SyncReconcileLinearized}
+	clean.reconcile = &reconcileOutcome{state: storage.SyncReconcileLinearized}
 	if _, ok := clean.inlineSyncFailure(now); ok {
 		t.Fatal("a linearized reconcile wrongly produced a sync failure")
 	}

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // lineForID returns the single `lit ls` output line whose first field is id.
@@ -37,33 +37,33 @@ func TestListRelationColumns(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Epic", Topic: "rel", IssueType: "epic", Priority: 1})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Epic", Topic: "rel", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic): %v", err)
 	}
-	child, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Child", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Child", Topic: "rel", IssueType: "task", Priority: 0, ParentID: epic.ID})
 	if err != nil {
 		t.Fatalf("CreateIssue(child): %v", err)
 	}
-	openBlocker, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0})
+	openBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Open blocker", Topic: "rel", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(openBlocker): %v", err)
 	}
-	blockedByOpen, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Blocked by open", Topic: "rel", IssueType: "task", Priority: 0})
+	blockedByOpen, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by open", Topic: "rel", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByOpen): %v", err)
 	}
-	closedBlocker, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0})
+	closedBlocker, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Closed blocker", Topic: "rel", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(closedBlocker): %v", err)
 	}
-	blockedByClosed, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "rel", Title: "Blocked by closed", Topic: "rel", IssueType: "task", Priority: 0})
+	blockedByClosed, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "rel", Title: "Blocked by closed", Topic: "rel", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue(blockedByClosed): %v", err)
 	}
 
 	// blocks convention: SrcID=dependent, DstID=dependency.
-	for _, edge := range []store.AddRelationInput{
+	for _, edge := range []storage.AddRelationInput{
 		{SrcID: blockedByOpen.ID, DstID: openBlocker.ID, Type: "blocks", CreatedBy: "test"},
 		{SrcID: blockedByClosed.ID, DstID: closedBlocker.ID, Type: "blocks", CreatedBy: "test"},
 	} {
@@ -71,7 +71,7 @@ func TestListRelationColumns(t *testing.T) {
 			t.Fatalf("AddRelation(%s->%s): %v", edge.SrcID, edge.DstID, err)
 		}
 	}
-	if _, err := ap.Store.Apply(ctx, closedBlocker.ID, store.Change{Action: model.Done{}, Actor: "test", Reason: "done"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, closedBlocker.ID, storage.Change{Action: model.Done{}, Actor: "test", Reason: "done"}); err != nil {
 		t.Fatalf("Apply(close): %v", err)
 	}
 
@@ -125,7 +125,7 @@ func TestListRelationColumns(t *testing.T) {
 func TestListRelationColumnsGating(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0})
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "gate", Title: "X", Topic: "gate", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}

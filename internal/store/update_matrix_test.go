@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func ptr[T any](v T) *T { return &v }
@@ -64,23 +65,23 @@ func TestApplyIssueTypeFlagMatrix(t *testing.T) {
 
 	combos := []struct {
 		name string
-		in   Change
+		in   storage.Change
 	}{
-		{name: "no_flags", in: Change{}},
-		{name: "title_only", in: Change{Fields: UpdateIssueInput{Title: ptr("Renamed")}}},
-		{name: "description_only", in: Change{Fields: UpdateIssueInput{Description: ptr("Rewritten body")}}},
-		{name: "priority_only", in: Change{Fields: UpdateIssueInput{Priority: ptr(model.PriorityUrgent)}}},
-		{name: "labels_only", in: Change{Fields: UpdateIssueInput{Labels: ptr([]string{"alpha"})}}},
-		{name: "status_open", in: Change{Action: model.Reopen{}}},
-		{name: "status_in_progress", in: Change{Action: model.Start{Assignee: "tester"}}},
-		{name: "status_closed", in: Change{Action: model.Done{}}},
-		{name: "title_and_status_open", in: Change{Fields: UpdateIssueInput{Title: ptr("Renamed")}, Action: model.Reopen{}}},
+		{name: "no_flags", in: storage.Change{}},
+		{name: "title_only", in: storage.Change{Fields: storage.UpdateIssueInput{Title: ptr("Renamed")}}},
+		{name: "description_only", in: storage.Change{Fields: storage.UpdateIssueInput{Description: ptr("Rewritten body")}}},
+		{name: "priority_only", in: storage.Change{Fields: storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)}}},
+		{name: "labels_only", in: storage.Change{Fields: storage.UpdateIssueInput{Labels: ptr([]string{"alpha"})}}},
+		{name: "status_open", in: storage.Change{Action: model.Reopen{}}},
+		{name: "status_in_progress", in: storage.Change{Action: model.Start{Assignee: "tester"}}},
+		{name: "status_closed", in: storage.Change{Action: model.Done{}}},
+		{name: "title_and_status_open", in: storage.Change{Fields: storage.UpdateIssueInput{Title: ptr("Renamed")}, Action: model.Reopen{}}},
 	}
 
 	for _, issueType := range model.IssueTypes() {
 		for _, combo := range combos {
 			t.Run(string(issueType)+"/"+combo.name, func(t *testing.T) {
-				created, err := st.CreateIssue(ctx, CreateIssueInput{
+				created, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix:      "test",
 					Title:       initialTitle,
 					Description: initialDescription,

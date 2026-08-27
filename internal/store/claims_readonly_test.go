@@ -7,6 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // dbState is everything about the store a write could move: the commit at HEAD,
@@ -37,7 +38,7 @@ func readDBState(t *testing.T, ctx context.Context, st *Store) dbState {
 // sit on a closed ticket.
 func deriveClaims(t *testing.T, ctx context.Context, st *Store) claims.Standings {
 	t.Helper()
-	issues, err := st.ListIssues(ctx, ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := st.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -116,13 +117,13 @@ func TestDerivedClaimSurvivesARoundTripThroughTheDatabase(t *testing.T) {
 	const token = "abc23456defgh"
 	st.AttributeTo(token)
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Claimable work", Topic: "claims", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.Apply(ctx, issue.ID, Change{
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{
 		Action: model.Start{Assignee: "tester"}, Actor: "tester", Reason: "begin",
 	}); err != nil {
 		t.Fatalf("Apply(start) error = %v", err)

@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // Pre-goose reconcile data-survival tests.
@@ -149,7 +151,7 @@ func TestReconcileAddsMissingIssueEventsTables(t *testing.T) {
 	}
 	// Seed real data so the migration's data-preservation contract is
 	// observable.
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Real issue", Topic: "real", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Real issue", Topic: "real", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -200,7 +202,7 @@ func TestReconcileRenamesPromptToAgentPrompt(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Has prompt", Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body"})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has prompt", Topic: "prompt", IssueType: "task", Priority: 0, Prompt: "the historical prompt body"})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -297,7 +299,7 @@ func TestReconcileNullsEpicStatus(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	epic, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "An epic", Topic: "container", IssueType: "epic", Priority: 1})
+	epic, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "An epic", Topic: "container", IssueType: "epic", Priority: 1})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("CreateIssue(epic) error = %v", err)
@@ -442,7 +444,7 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Survives history drop", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives history drop", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -662,7 +664,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has history", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -860,7 +862,7 @@ func TestReconcileTranslateSkipsOrphanedHistoryRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Existing", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Existing", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -913,7 +915,7 @@ func TestReconcileTranslateRunsAfterActorRename(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Has legacy events", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Has legacy events", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -997,7 +999,7 @@ func TestReconcileTranslateIsIdempotentWithExistingEvents(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Idem", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idem", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1116,7 +1118,7 @@ func TestReconcileRecoversFromFabricatedGooseRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Survives fabricated-goose recovery", Topic: "history", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1211,7 +1213,7 @@ func TestReconcileIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open(first) error = %v", err)
 	}
-	seeded, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Idempotent", Topic: "idem", IssueType: "task", Priority: 0})
+	seeded, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Idempotent", Topic: "idem", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
@@ -1345,7 +1347,7 @@ func TestReconcileTopicHasNoDefault(t *testing.T) {
 
 // TestReconcileRankBackfillCoexistsWithExistingRanks pins the mixed-
 // state contract: if some issues are already ranked and others have
-// item_rank = '', the rank backfill seeds from MAX(existing rank) so
+// item_rank = ”, the rank backfill seeds from MAX(existing rank) so
 // new ranks never collide. Without this seeding, ensureIssueRanks
 // would assign rank.Initial() to the first unranked row, which would
 // duplicate any existing rank.Initial() row and break the strict-
@@ -1367,7 +1369,7 @@ func TestReconcileRankBackfillCoexistsWithExistingRanks(t *testing.T) {
 	// mixed state where ensureIssueRanks must coexist with existing
 	// rank values. Capture the first issue's actual rank so we can
 	// assert no duplication.
-	ranked, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Already ranked", Topic: "rank", IssueType: "task", Priority: 0})
+	ranked, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Already ranked", Topic: "rank", IssueType: "task", Priority: 0})
 	if err != nil {
 		_ = first.Close()
 		t.Fatalf("seed ranked CreateIssue error = %v", err)

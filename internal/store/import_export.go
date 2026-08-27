@@ -9,10 +9,11 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func (s *Store) Export(ctx context.Context) (model.Export, error) {
-	issues, err := s.ListIssues(ctx, ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})
+	issues, err := s.ListIssues(ctx, storage.ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		return model.Export{}, err
 	}
@@ -38,8 +39,8 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	return model.Export{Version: 2, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
 }
 
-func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
-	report := HealthReport{
+func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
+	report := storage.HealthReport{
 		DependencyCycle: []string{},
 		Errors:          []string{},
 		Warnings:        []string{},
@@ -110,7 +111,7 @@ func (s *Store) Doctor(ctx context.Context) (HealthReport, error) {
 	return report, nil
 }
 
-func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
+func (s *Store) Fsck(ctx context.Context, repair bool) (storage.HealthReport, error) {
 	if repair {
 		if err := s.withMutation(ctx, "fsck repair", func(ctx context.Context, tx *sql.Tx) error {
 			if _, err := tx.ExecContext(ctx, `DELETE FROM issue_events WHERE issue_id NOT IN (SELECT id FROM issues)`); err != nil {
@@ -124,7 +125,7 @@ func (s *Store) Fsck(ctx context.Context, repair bool) (HealthReport, error) {
 			}
 			return nil
 		}); err != nil {
-			return HealthReport{}, err
+			return storage.HealthReport{}, err
 		}
 	}
 	return s.Doctor(ctx)

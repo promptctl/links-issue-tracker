@@ -9,9 +9,10 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
-func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error) {
+func (s *Store) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]string, error) {
 	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
 		return nil, err
 	}
@@ -52,7 +53,7 @@ func (s *Store) RemoveLabel(ctx context.Context, issueID, labelName string) ([]s
 			return err
 		}
 		if affected == 0 {
-			return NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}
+			return storage.NotFoundError{Entity: "label", ID: fmt.Sprintf("%s/%s", issueID, label)}
 		}
 		return nil
 	}); err != nil {

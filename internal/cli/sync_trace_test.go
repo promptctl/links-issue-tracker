@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -231,8 +231,8 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 			t.Errorf("record %d (%s) status = %q, want ok: %+v", i, rec.Command, rec.Status, rec)
 		}
 	}
-	if records[3].Decision != string(store.SyncReconcileNotDiverged) {
-		t.Errorf("reconcile decision = %q, want %q (consumer just adopted; nothing has diverged)", records[3].Decision, store.SyncReconcileNotDiverged)
+	if records[3].Decision != string(storage.SyncReconcileNotDiverged) {
+		t.Errorf("reconcile decision = %q, want %q (consumer just adopted; nothing has diverged)", records[3].Decision, storage.SyncReconcileNotDiverged)
 	}
 	// Regression guard: the durable push record must not carry the
 	// automation-trace's canned "managed automation requested sync push" —
@@ -249,8 +249,8 @@ func TestExplicitSyncCommandsLeaveDurableTracesInteractively(t *testing.T) {
 	// reconcileReasonForState's phrasing ("automatic reconcile...") belongs to
 	// the inline auto-reconcile path alone, never this one.
 	reconcileRecord := records[3]
-	if reconcileRecord.Reason != reconcileCommandReasonForState(store.SyncReconcileNotDiverged) {
-		t.Errorf("reconcile record reason = %q, want %q", reconcileRecord.Reason, reconcileCommandReasonForState(store.SyncReconcileNotDiverged))
+	if reconcileRecord.Reason != reconcileCommandReasonForState(storage.SyncReconcileNotDiverged) {
+		t.Errorf("reconcile record reason = %q, want %q", reconcileRecord.Reason, reconcileCommandReasonForState(storage.SyncReconcileNotDiverged))
 	}
 	if strings.Contains(reconcileRecord.Reason, "automatic reconcile") {
 		t.Errorf("explicit `lit sync reconcile`'s trace reason falsely attributes itself to automation: %q", reconcileRecord.Reason)
@@ -384,8 +384,8 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		if rec.Command != "lit sync reconcile take remote" {
 			t.Fatalf("command = %q, want %q", rec.Command, "lit sync reconcile take remote")
 		}
-		if rec.Decision != string(store.SyncReconcileTookRemote) {
-			t.Fatalf("decision = %q, want %q", rec.Decision, store.SyncReconcileTookRemote)
+		if rec.Decision != string(storage.SyncReconcileTookRemote) {
+			t.Fatalf("decision = %q, want %q", rec.Decision, storage.SyncReconcileTookRemote)
 		}
 		if rec.Trigger != "" {
 			t.Fatalf("trigger = %q, want empty — run directly, not under automation", rec.Trigger)
@@ -412,8 +412,8 @@ func TestReconcileTakeAndCombineLeaveDurableTracesInteractively(t *testing.T) {
 		if rec.Command != reconcileCombineCommand {
 			t.Fatalf("command = %q, want %q", rec.Command, reconcileCombineCommand)
 		}
-		if rec.Decision != string(store.SyncReconcileCombined) {
-			t.Fatalf("decision = %q, want %q", rec.Decision, store.SyncReconcileCombined)
+		if rec.Decision != string(storage.SyncReconcileCombined) {
+			t.Fatalf("decision = %q, want %q", rec.Decision, storage.SyncReconcileCombined)
 		}
 		if rec.Trigger != "" {
 			t.Fatalf("trigger = %q, want empty — run directly, not under automation", rec.Trigger)

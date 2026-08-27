@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/pressly/goose/v3"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 )
 
 // migrationDownForTest, if non-nil, replaces provider.Down(ctx) inside

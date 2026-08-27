@@ -8,6 +8,8 @@ import (
 	"io"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // A genuine RowsAffected() error must surface to the caller as the failure it
@@ -20,11 +22,11 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	parent, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "rows", IssueType: "epic", Priority: 1})
+	parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Parent", Topic: "rows", IssueType: "epic", Priority: 1})
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	child, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Child", Topic: "rows", IssueType: "task", Priority: 0, ParentID: parent.ID, Placement: RankBottom})
+	child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "rows", IssueType: "task", Priority: 0, ParentID: parent.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
@@ -36,7 +38,7 @@ func TestClearParentSurfacesGenuineRowsAffectedError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("ClearParent() error = nil, want the injected RowsAffected failure")
 	}
-	var notFound NotFoundError
+	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		t.Fatalf("ClearParent() masked a genuine RowsAffected error as NotFoundError: %v", err)
 	}
@@ -53,11 +55,11 @@ func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Labeled", Topic: "rows", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: issue.ID, Name: "critical", CreatedBy: "test"}); err != nil {
+	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: issue.ID, Name: "critical", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddLabel() error = %v", err)
 	}
 
@@ -68,7 +70,7 @@ func TestRemoveLabelSurfacesGenuineRowsAffectedError(t *testing.T) {
 	if err == nil {
 		t.Fatalf("RemoveLabel() error = nil, want the injected RowsAffected failure")
 	}
-	var notFound NotFoundError
+	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		t.Fatalf("RemoveLabel() masked a genuine RowsAffected error as NotFoundError: %v", err)
 	}

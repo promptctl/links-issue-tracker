@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -100,7 +100,7 @@ func syncStalenessLines(report doctorSyncReport, fetchAge time.Duration, fetchAg
 	var lines []string
 	f := report.Freshness
 	ref := f.Remote + "/" + f.Branch
-	if f.State() == store.SyncAhead {
+	if f.State() == storage.SyncAhead {
 		lines = append(lines, fmt.Sprintf(
 			"sync: %d local change(s) not pushed to %s, as of last fetch — run 'lit sync push'",
 			f.Ahead, ref,
@@ -183,7 +183,7 @@ func oneLineReason(reason string) string {
 // nothing rather than aborting the caller, because this banner is
 // supplementary, not itself a diagnostic. [LAW:no-silent-failure]
 // [LAW:effects-at-boundaries]
-func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st *store.Store, now time.Time) error {
+func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.Info, st storage.Store, now time.Time) error {
 	report := resolveDoctorSyncFreshness(ctx, ws, st)
 	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
 	// The push-failure line leads: it names the CAUSE (pushes are failing),

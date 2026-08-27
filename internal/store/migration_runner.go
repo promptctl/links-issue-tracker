@@ -11,11 +11,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
-	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
-	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/pressly/goose/v3"
 	"github.com/pressly/goose/v3/database"
+	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
 
 // producerBinaryVersionMetaKey names the meta row that records the lit
@@ -55,7 +56,7 @@ var migrationUpByOneForTest func(ctx context.Context, provider *goose.Provider) 
 type CheckpointResetError struct {
 	Version    int64
 	Name       string
-	Checkpoint Checkpoint
+	Checkpoint storage.Checkpoint
 	Cause      error
 }
 
@@ -612,7 +613,7 @@ func (s *Store) applyPendingMigrations(ctx context.Context) error {
 // Ordering: reset first, quarantine second — the reset discards all working-set
 // changes since the checkpoint, but the quarantine table itself was committed
 // before the checkpoint, so it survives and the post-reset INSERT lands cleanly.
-func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, checkpoint Checkpoint) error {
+func (s *Store) handleMigrationFailure(ctx context.Context, result *goose.MigrationResult, cause error, checkpoint storage.Checkpoint) error {
 	var version int64
 	var name string
 	if result != nil && result.Source != nil {
@@ -841,13 +842,13 @@ func (s *Store) refuseIfBaselineMissing(ctx context.Context, state migrationStat
 //   - phaseManaged: goose_db_version table present; goose owns the workspace.
 //   - phaseFresh:   no goose table AND no canonical tables; brand new.
 //   - phaseAdopt:   no goose table BUT at least one canonical table present.
-//                   The workspace is pre-goose at SOME historical canonical
-//                   shape (current or earlier). reconcileToBaseline (a
-//                   resurrected, idempotent, probe-driven forward migrator)
-//                   brings any earlier shape forward to v1 before adoption
-//                   stamps. There is no "partial-and-illegal" refusal —
-//                   any presence of canonical tables means "pre-goose
-//                   workspace, reconcile-then-adopt."
+//     The workspace is pre-goose at SOME historical canonical
+//     shape (current or earlier). reconcileToBaseline (a
+//     resurrected, idempotent, probe-driven forward migrator)
+//     brings any earlier shape forward to v1 before adoption
+//     stamps. There is no "partial-and-illegal" refusal —
+//     any presence of canonical tables means "pre-goose
+//     workspace, reconcile-then-adopt."
 //
 // [LAW:types-are-the-program] Three phases, each with a forward path. No
 // refusal branch. The "partial schema, restore or recreate" failure mode
@@ -1002,7 +1003,7 @@ func parseAddColumnTargets(name, up string) ([]tableColumnTarget, error) {
 // literal (e.g. a future migration's `DEFAULT ';'`) cannot truncate the
 // statement mid-value and hand repairVersionContentDrift invalid SQL.
 //
-// Like parenBlock/splitTopLevel, this recognizes only doubled-quote ('')
+// Like parenBlock/splitTopLevel, this recognizes only doubled-quote (”)
 // escaping, not backslash escapes (\') — the only form any migration in
 // this registry uses. A migration whose ADD COLUMN default contains a
 // backslash-escaped quote would toggle out of the string early and this

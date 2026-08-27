@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -220,11 +221,11 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 		{"fast-forwarded", syncReceiveOutcome{status: "ok"}, true},
 		{"skipped no remote", syncReceiveOutcome{status: "skipped", reason: "no_sync_remote"}, false},
 		{"receive failed", syncReceiveOutcome{status: "ok", receiveErr: errors.New("network")}, false},
-		{"reconcile linearized", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: store.SyncReconcileLinearized}}, true},
-		{"reconcile no longer diverged", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: store.SyncReconcileNotDiverged}}, true},
-		{"reconcile held prose", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: store.SyncReconcileProsePending}}, false},
-		{"reconcile unrelated", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: store.SyncReconcileUnrelated}}, false},
-		{"reconcile errored", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: store.SyncReconcileLinearized, err: errors.New("gc")}}, false},
+		{"reconcile linearized", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized}}, true},
+		{"reconcile no longer diverged", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileNotDiverged}}, true},
+		{"reconcile held prose", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileProsePending}}, false},
+		{"reconcile unrelated", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileUnrelated}}, false},
+		{"reconcile errored", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized, err: errors.New("gc")}}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.outcome.settledCleanly(); got != tc.want {
@@ -242,11 +243,11 @@ func TestOwnerApprovalRefusalBlock(t *testing.T) {
 	t.Parallel()
 	refusal := ownerApprovalRefusalError{
 		Approval: store.OwnerApprovalRequiredError{
-			Choice:        store.TakeLocal,
+			Choice:        storage.TakeLocal,
 			ApprovalToken: "deadbeef0123",
 			LocalHead:     "aaaaaaaaaaaaaaaaaaaa",
 			RemoteHead:    "bbbbbbbbbbbbbbbbbbbb",
-			Inventory: &store.UnrelatedInventory{
+			Inventory: &storage.UnrelatedInventory{
 				OnlyLocal:  []string{"proj-mine"},
 				OnlyRemote: []string{"proj-theirs"},
 			},

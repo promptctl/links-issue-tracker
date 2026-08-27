@@ -3,6 +3,7 @@ package cli
 import (
 	"errors"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -23,7 +24,7 @@ func ExitCode(err error) int {
 	if err == nil {
 		return ExitOK
 	}
-	var notFound store.NotFoundError
+	var notFound storage.NotFoundError
 	if errors.As(err, &notFound) {
 		return ExitNotFound
 	}
@@ -68,7 +69,7 @@ func ExitCode(err error) int {
 	if errors.As(err, &validation) {
 		return ExitValidation
 	}
-	var storeValidation store.ValidationError
+	var storeValidation storage.ValidationError
 	if errors.As(err, &storeValidation) {
 		return ExitValidation
 	}

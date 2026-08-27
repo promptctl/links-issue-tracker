@@ -14,7 +14,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -39,7 +39,7 @@ func printWorkspaceIdentity(w io.Writer, ws workspace.Info) error {
 // freshness could not be resolved) plus the resolved case, where the store's
 // SyncFreshness.State carries the inner ahead/behind classification. Keeping
 // these orthogonal to the store's states avoids a second enum that could drift
-// from store.SyncFreshnessState. [LAW:one-source-of-truth]
+// from storage.SyncFreshnessState. [LAW:one-source-of-truth]
 type doctorSyncKind int
 
 const (
@@ -53,7 +53,7 @@ const (
 // only when Kind is doctorSyncResolved and Detail only when doctorSyncUnresolved.
 type doctorSyncReport struct {
 	Kind      doctorSyncKind
-	Freshness store.SyncFreshness
+	Freshness storage.SyncFreshness
 	Detail    string
 	// Age is the divergence's age, computed at the resolve boundary from the
 	// freshness's oldest-divergent-commit timestamp. Zero unless diverged; it is
@@ -69,7 +69,7 @@ type doctorSyncReport struct {
 // for the resolveBuildStatusNote call, which reads this binary's build identity
 // at call time rather than from the report. [LAW:dataflow-not-control-flow]
 func (r doctorSyncReport) divergenceFailure() (SyncFailure, bool) {
-	if r.Kind != doctorSyncResolved || r.Freshness.State() != store.SyncDiverged {
+	if r.Kind != doctorSyncResolved || r.Freshness.State() != storage.SyncDiverged {
 		return SyncFailure{}, false
 	}
 	return SyncFailure{
@@ -102,7 +102,16 @@ func doctorDivergenceExit(report doctorSyncReport) error {
 // a loud doctorSyncUnresolved line carrying the reason [LAW:no-silent-failure]
 // rather than aborting doctor, because sync freshness is a best-effort
 // diagnostic distinct from the integrity health check it sits beside.
-func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *store.Store) doctorSyncReport {
+func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st storage.Store) doctorSyncReport {
+	// An engine that does not sync has no freshness to report, which is the same
+	// kind of answer as a git remote that cannot be read: unresolved, with the
+	// reason named. It reaches the reader through the one arm this function
+	// already has for that, rather than through a silent omission.
+	// [LAW:no-silent-failure]
+	syncer, err := storage.Sync.Of(st)
+	if err != nil {
+		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
+	}
 	gitRemotes, err := workspace.GitRemotes(ctx, ws.RootDir)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: fmt.Sprintf("read git remotes: %v", err)}
@@ -120,7 +129,7 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st *stor
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
-	freshness, err := st.SyncFreshness(ctx, remoteName, branch)
+	freshness, err := syncer.SyncFreshness(ctx, remoteName, branch)
 	if err != nil {
 		return doctorSyncReport{Kind: doctorSyncUnresolved, Detail: err.Error()}
 	}
@@ -173,19 +182,19 @@ func printSyncFreshness(w io.Writer, report doctorSyncReport) error {
 	f := report.Freshness
 	ref := f.Remote + "/" + f.Branch
 	switch f.State() {
-	case store.SyncNeverSynced:
+	case storage.SyncNeverSynced:
 		_, err := fmt.Fprintf(w, "sync: never synced with %s — run 'lit sync push' to publish local tickets ('lit sync pull' to receive remote ones)\n", ref)
 		return err
-	case store.SyncUpToDate:
+	case storage.SyncUpToDate:
 		_, err := fmt.Fprintf(w, "sync: up to date with %s (as of last fetch)\n", ref)
 		return err
-	case store.SyncAhead:
+	case storage.SyncAhead:
 		_, err := fmt.Fprintf(w, "sync: ahead of %s by %d local change(s) not pushed, as of last fetch — run 'lit sync push' [ahead=%d behind=0]\n", ref, f.Ahead, f.Ahead)
 		return err
-	case store.SyncBehind:
+	case storage.SyncBehind:
 		_, err := fmt.Fprintf(w, "sync: behind %s by %d change(s) not pulled, as of last fetch — run 'lit sync pull' [ahead=0 behind=%d]\n", ref, f.Behind, f.Behind)
 		return err
-	case store.SyncDiverged:
+	case storage.SyncDiverged:
 		_, err := fmt.Fprintf(w, "sync: diverged from %s as of last fetch — %d local change(s) not pushed, %d remote change(s) not pulled; run 'lit sync pull' to reconcile [ahead=%d behind=%d]\n", ref, f.Ahead, f.Behind, f.Ahead, f.Behind)
 		return err
 	}
@@ -218,9 +227,9 @@ func allDoctorFixNames() []string {
 
 // doctorFixes is the registry of available doctor fixes.
 // [LAW:one-source-of-truth] This map is the single authority for valid fix names.
-var doctorFixes = map[string]func(context.Context, io.Writer, *app.App) error{
-	"integrity": func(ctx context.Context, w io.Writer, ap *app.App) error {
-		report, err := ap.Store.Fsck(ctx, true)
+var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) error{
+	"integrity": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
+		report, err := repairer.Fsck(ctx, true)
 		if err != nil {
 			return err
 		}
@@ -228,8 +237,8 @@ var doctorFixes = map[string]func(context.Context, io.Writer, *app.App) error{
 			report.ForeignKeyIssues, report.InvalidRelatedRows, report.OrphanHistoryRows)
 		return err
 	},
-	"rank": func(ctx context.Context, w io.Writer, ap *app.App) error {
-		fixed, err := ap.Store.FixRankInversions(ctx)
+	"rank": func(ctx context.Context, w io.Writer, repairer storage.Repairer) error {
+		fixed, err := repairer.FixRankInversions(ctx)
 		if err != nil {
 			return err
 		}
@@ -247,6 +256,14 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
+	// [LAW:parse-dont-validate] Repair is a capability, not a duty every engine
+	// owes: what counts as a fault is engine-specific. Doctor asks once, here,
+	// and the fixes below take the interface rather than the app, so no fix can
+	// reach an engine that has nothing to repair.
+	repairer, err := storage.Repair.Of(ap.Store)
+	if err != nil {
+		return err
+	}
 	if *fix != "" {
 		fixNames := allDoctorFixNames()
 		if *fix != "all" {
@@ -258,12 +275,12 @@ func runDoctor(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 			if !ok {
 				return fmt.Errorf("unknown fix %q; available: %s", name, strings.Join(allDoctorFixNames(), ", "))
 			}
-			if err := fn(ctx, os.Stderr, ap); err != nil {
+			if err := fn(ctx, os.Stderr, repairer); err != nil {
 				return err
 			}
 		}
 	}
-	report, err := ap.Store.Doctor(ctx)
+	report, err := repairer.Doctor(ctx)
 	if err != nil {
 		return err
 	}

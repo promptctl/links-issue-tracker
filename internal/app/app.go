@@ -5,13 +5,14 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
 type App struct {
 	Workspace workspace.Info
-	Store     *store.Store
+	Store     storage.Store
 	// Stream is this checkout's opaque identity — the half of the attribution
 	// pair that distinguishes two worktrees of one repository, whose other half
 	// is Workspace.WorkspaceID. Under AccessWrite it is always present, minted
@@ -42,7 +43,7 @@ const (
 // [LAW:one-type-per-behavior] The modes differ only in these two values, so they
 // are two instances of one type, not two code paths.
 type accessContract struct {
-	openStore     func(ctx context.Context, databasePath string, workspaceID string) (*store.Store, error)
+	mode          engine.Mode
 	resolveStream func(privateGitDir string) (workspace.StreamID, error)
 }
 
@@ -54,8 +55,8 @@ type accessContract struct {
 // sites. [LAW:dataflow-not-control-flow] The variance is data in this map, not
 // branches in Open.
 var accessContracts = map[AccessMode]accessContract{
-	AccessRead:  {openStore: store.OpenForRead, resolveStream: workspace.ReadStream},
-	AccessWrite: {openStore: store.Open, resolveStream: workspace.EnsureStream},
+	AccessRead:  {mode: engine.ReadOnly, resolveStream: workspace.ReadStream},
+	AccessWrite: {mode: engine.ReadWrite, resolveStream: workspace.EnsureStream},
 }
 
 // Open is the single app construction path, parameterized by mode.
@@ -75,7 +76,7 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	st, err := contract.openStore(ctx, ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(ctx, contract.mode, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
 		return nil, err
 	}
@@ -112,21 +113,21 @@ func Open(ctx context.Context, cwd string, mode AccessMode) (*App, error) {
 // cd'd into. It is the cross-project open primitive — aggregation over many
 // stores opens each one through here.
 //
-// [LAW:single-enforcer] Store opening still routes through store.OpenForRead, the
-// one read path, so a foreign store gets exactly the shared lock and read
-// contract a local read gets — never a second read-write engine that the embedded
-// Dolt driver would reject as "database is read only" and that would contend with
-// the project's own writer.
+// [LAW:single-enforcer] Store opening still routes through the engine factory in
+// [engine.ReadOnly] mode, the one read path, so a foreign store gets exactly the
+// shared lock and read contract a local read gets — never a second read-write
+// engine that the embedded Dolt driver would reject as "database is read only"
+// and that would contend with the project's own writer.
 //
-// The workspace_id OpenForRead requires is not part of a Location — discovery
+// The workspace_id a read open requires is not part of a Location — discovery
 // reads no config — so it is read here from the store's own config.json via
 // ReadConfig, a pure read that never writes the foreign store.
-func OpenLocationForRead(ctx context.Context, loc workspace.Location) (*store.Store, error) {
+func OpenLocationForRead(ctx context.Context, loc workspace.Location) (storage.Store, error) {
 	cfg, err := workspace.ReadConfig(loc.ConfigPath)
 	if err != nil {
 		return nil, err
 	}
-	return store.OpenForRead(ctx, loc.DatabasePath, cfg.WorkspaceID)
+	return engine.Open(ctx, engine.ReadOnly, loc.DatabasePath, cfg.WorkspaceID)
 }
 
 func (a *App) Close() error { return a.Store.Close() }

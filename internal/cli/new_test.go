@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // firstIssueID returns the issue ID leading the first row of a mutation
@@ -34,7 +34,7 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cleanup",
 		Topic:     "renderer",
 		IssueType: "epic",
@@ -86,7 +86,7 @@ func TestRunNewAppendsByDefaultAndPromotesOnTopFlag(t *testing.T) {
 	second := runCreate("Second")              // default: appends after First
 	promoted := runCreate("Promoted", "--top") // explicit: jumps the queue
 
-	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{})
+	issues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
@@ -79,7 +79,7 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 // row, visible at the moment the commitment happens
 // (design-docs/work-claims.md, Routing step 3); an already-held claim
 // (ServedFromClaim) prints exactly as `next` always has.
-func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]store.IssueRelations, cc claimContext) (workflows.Occasion, error) {
+func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
 	switch o := outcome.(type) {

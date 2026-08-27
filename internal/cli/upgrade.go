@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/release"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -122,7 +124,7 @@ type workspaceSchemaReader struct {
 }
 
 func (r workspaceSchemaReader) ReadWorkspaceSchema(ctx context.Context) (schema workspaceSchema, err error) {
-	st, err := store.OpenForRead(ctx, r.ws.DatabasePath, r.ws.WorkspaceID)
+	st, err := engine.Open(ctx, engine.ReadOnly, r.ws.DatabasePath, r.ws.WorkspaceID)
 	if err != nil {
 		if v, ok := appliedVersionFromOpenErr(err); ok {
 			return workspaceSchema{AppliedVersion: v, Openable: false}, nil
@@ -138,7 +140,11 @@ func (r workspaceSchemaReader) ReadWorkspaceSchema(ctx context.Context) (schema 
 			err = cerr
 		}
 	}()
-	version, err := st.AppliedSchemaVersion(ctx)
+	migrator, err := storage.SchemaMigration.Of(st)
+	if err != nil {
+		return workspaceSchema{}, err
+	}
+	version, err := migrator.AppliedSchemaVersion(ctx)
 	if err != nil {
 		return workspaceSchema{}, err
 	}

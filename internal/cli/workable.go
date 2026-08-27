@@ -11,7 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 )
 
@@ -49,9 +49,9 @@ type workableView struct {
 	hasFilters bool // --type / --status / --labels
 	hasLimit   bool
 	hasColumns bool
-	order      func(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, knobs workableKnobs)
+	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations, cc claimContext) error
+	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -79,7 +79,7 @@ func (v workableView) usage() string {
 	return strings.Join(parts, " ")
 }
 
-func orderCanonical([]annotation.AnnotatedIssue, map[string]store.IssueRelations, workableKnobs) {}
+func orderCanonical([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, workableKnobs) {}
 
 func keepAll(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue { return rows }
 

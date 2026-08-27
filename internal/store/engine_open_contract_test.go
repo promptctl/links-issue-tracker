@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/dolthub/dolt/go/store/nbs"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/primitives/filelock"
 )
 
@@ -103,7 +104,7 @@ func TestOpenRecoversOnceForeignJournalHolderReleases(t *testing.T) {
 	defer reopened.Close()
 	// The store must be genuinely writable — the whole point of failing fast
 	// instead of accepting dolt's silent read-only fallback.
-	created, err := reopened.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "post-handoff write works", Topic: "sync"})
+	created, err := reopened.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-handoff write works", Topic: "sync"})
 	if err != nil {
 		t.Fatalf("CreateIssue() on the recovered store error = %v", err)
 	}
@@ -169,7 +170,7 @@ func TestOpenForReadToleratesForeignJournalHolder(t *testing.T) {
 	if err != nil {
 		t.Fatalf("initial Open() error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "visible to readers", Topic: "sync"}); err != nil {
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "visible to readers", Topic: "sync"}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {

@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -103,7 +104,7 @@ type SyncFailure struct {
 	// take one side wholesale or union the two, the operator must see what each side
 	// holds; this is that visibility, rendered as its own section of the block.
 	// [LAW:types-are-the-program] the field present names the class that produced it.
-	Inventory *store.UnrelatedInventory
+	Inventory *storage.UnrelatedInventory
 	// BuildNote is the dev-vs-release build status line, resolved once at the
 	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
 	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never

@@ -1,39 +1,14 @@
 package store
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
-
-// ParseImportTreeSpecs is the deserialization trust boundary for tree-import
-// files: raw bytes in, specs out. It rejects any field the spec schema does
-// not name and any trailing data after the array, so a drifted or typo'd spec
-// fails loudly here instead of silently losing the unrecognized data downstream.
-//
-// [LAW:single-enforcer] The store owns the ImportTreeSpec schema, so the store
-// owns its deserialization — the CLI hands bytes here rather than running its
-// own permissive decode.
-// [LAW:no-silent-failure] DisallowUnknownFields + trailing-data check make
-// the parse total: every byte stream that is not exactly one array of
-// known-field specs is an explicit error.
-func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
-	dec := json.NewDecoder(bytes.NewReader(data))
-	dec.DisallowUnknownFields()
-	var specs []ImportTreeSpec
-	if err := dec.Decode(&specs); err != nil {
-		return nil, fmt.Errorf("import: parse spec: %w", err)
-	}
-	if dec.More() {
-		return nil, errors.New("import: unexpected trailing data after spec array")
-	}
-	return specs, nil
-}
 
 // ImportTree validates and creates a tree of issues described by specs in
 // dependency order: parents and DependsOn referents are created first, then
@@ -48,13 +23,13 @@ func ParseImportTreeSpecs(data []byte) ([]ImportTreeSpec, error) {
 //
 // [LAW:single-enforcer] Atomic tree import is the one shared boundary that
 // owns ID resolution + topological create order.
-func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTreeSpec) (ImportTreeResult, error) {
+func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.ImportTreeSpec) (storage.ImportTreeResult, error) {
 	if err := validateImportTreeSpecs(specs); err != nil {
-		return ImportTreeResult{}, err
+		return storage.ImportTreeResult{}, err
 	}
 	order, err := topoSortImportSpecs(specs)
 	if err != nil {
-		return ImportTreeResult{}, err
+		return storage.ImportTreeResult{}, err
 	}
 	idMap := make(map[string]string, len(specs))
 	createdIDs := make([]string, 0, len(specs))
@@ -70,13 +45,13 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 		// typed value, not a second definition of validity.
 		issueType, err := model.ParseIssueType(spec.IssueType)
 		if err != nil {
-			return ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+			return storage.ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
 		priority, err := model.ParsePriority(spec.Priority)
 		if err != nil {
-			return ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
+			return storage.ImportTreeResult{}, fmt.Errorf("import: spec %q: %w", spec.LocalID, err)
 		}
-		issue, err := s.CreateIssue(ctx, CreateIssueInput{
+		issue, err := s.CreateIssue(ctx, storage.CreateIssueInput{
 			Title:       spec.Title,
 			Description: spec.Description,
 			Prompt:      spec.Prompt,
@@ -90,7 +65,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 		})
 		if err != nil {
 			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-			return ImportTreeResult{}, fmt.Errorf("import: create %q: %w (rollback leaked %d: %s)", spec.LocalID, err, len(leaked), strings.Join(leaked, ","))
+			return storage.ImportTreeResult{}, fmt.Errorf("import: create %q: %w (rollback leaked %d: %s)", spec.LocalID, err, len(leaked), strings.Join(leaked, ","))
 		}
 		idMap[spec.LocalID] = issue.ID
 		createdIDs = append(createdIDs, issue.ID)
@@ -101,13 +76,13 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 			dstID := idMap[dep]
 			// blocks convention in the store: src is dependent, dst is dependency.
 			// spec says "srcID depends_on dstID", so we pass src as dependent.
-			if _, err := s.AddRelation(ctx, AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return ImportTreeResult{}, fmt.Errorf("import: depends_on %q -> %q: %w (rollback leaked %d: %s)", spec.LocalID, dep, err, len(leaked), strings.Join(leaked, ","))
+				return storage.ImportTreeResult{}, fmt.Errorf("import: depends_on %q -> %q: %w (rollback leaked %d: %s)", spec.LocalID, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
 	}
-	return ImportTreeResult{IDMap: idMap}, nil
+	return storage.ImportTreeResult{IDMap: idMap}, nil
 }
 
 // rollbackCreatedIssues best-effort deletes issues already created by
@@ -119,14 +94,14 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []ImportTre
 func (s *Store) rollbackCreatedIssues(ctx context.Context, createdIDs []string) []string {
 	leaked := []string{}
 	for _, realID := range createdIDs {
-		if _, err := s.Apply(ctx, realID, Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"}); err != nil {
+		if _, err := s.Apply(ctx, realID, storage.Change{Action: model.Delete{}, Actor: "links", Reason: "import rollback"}); err != nil {
 			leaked = append(leaked, realID)
 		}
 	}
 	return leaked
 }
 
-func validateImportTreeSpecs(specs []ImportTreeSpec) error {
+func validateImportTreeSpecs(specs []storage.ImportTreeSpec) error {
 	if len(specs) == 0 {
 		return errors.New("import: no issues in input")
 	}
@@ -183,7 +158,7 @@ func validateImportTreeSpecs(specs []ImportTreeSpec) error {
 // topoSortImportSpecs returns indices of specs in an order such that for
 // every (i, j) where j depends on i (via Parent or DependsOn), i appears
 // first. Cycle in the graph is rejected with an error.
-func topoSortImportSpecs(specs []ImportTreeSpec) ([]int, error) {
+func topoSortImportSpecs(specs []storage.ImportTreeSpec) ([]int, error) {
 	localID := make([]string, len(specs))
 	parent := make([]string, len(specs))
 	dependsOn := make([][]string, len(specs))

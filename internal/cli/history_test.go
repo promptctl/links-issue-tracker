@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestRunHistoryPrintsMultiEditTransitionTrail exercises `lit history` on a
@@ -19,7 +19,7 @@ func TestRunHistoryPrintsMultiEditTransitionTrail(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Original title", Topic: "history", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

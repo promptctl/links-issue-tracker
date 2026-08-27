@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -76,27 +76,27 @@ func TestPrintSyncFreshness(t *testing.T) {
 		},
 		{
 			name:        "never synced",
-			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: false}},
+			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: false}},
 			wantSubstrs: []string{"sync:", "never synced with origin/master", "lit sync push"},
 		},
 		{
 			name:        "up to date is honest about staleness",
-			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true}},
+			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: true}},
 			wantSubstrs: []string{"sync:", "up to date with origin/master", "as of last fetch"},
 		},
 		{
 			name:        "ahead names push fix",
-			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Ahead: 2}},
+			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Ahead: 2}},
 			wantSubstrs: []string{"sync:", "ahead of origin/master by 2", "not pushed", "as of last fetch", "lit sync push", "ahead=2 behind=0"},
 		},
 		{
 			name:        "behind names pull fix and stays honest",
-			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Behind: 3}},
+			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Behind: 3}},
 			wantSubstrs: []string{"sync:", "behind origin/master by 3", "not pulled", "as of last fetch", "lit sync pull", "ahead=0 behind=3"},
 		},
 		{
 			name:        "diverged reports both directions",
-			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: store.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3}},
+			report:      doctorSyncReport{Kind: doctorSyncResolved, Freshness: storage.SyncFreshness{Remote: "origin", Branch: "master", Synced: true, Ahead: 2, Behind: 3}},
 			wantSubstrs: []string{"sync:", "diverged from origin/master", "2 local", "3 remote", "as of last fetch", "lit sync pull", "ahead=2 behind=3"},
 		},
 	}
