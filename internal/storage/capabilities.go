@@ -132,9 +132,15 @@ type Repairer interface {
 	// Doctor examines and reports; it changes nothing.
 	Doctor(ctx context.Context) (HealthReport, error)
 
-	// Fsck examines and, when repair is set, fixes what it can, reporting what
-	// it found either way.
-	Fsck(ctx context.Context, repair bool) (HealthReport, error)
+	// FixIntegrity repairs the structural faults Doctor can name — dangling
+	// rows, self-referential edges, edges stored in the wrong order — and
+	// reports the state it left behind.
+	//
+	// [LAW:no-mode-explosion] It takes no "actually repair" flag. The
+	// examine-only arm of such a flag is Doctor, so a bool here would be a
+	// second spelling of a method that already exists, and the two would be
+	// free to drift.
+	FixIntegrity(ctx context.Context) (HealthReport, error)
 
 	// FixRankInversions repairs orderings that contradict themselves and
 	// reports how many it corrected. It exists only because rank is stored as

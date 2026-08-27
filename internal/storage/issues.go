@@ -108,6 +108,39 @@ type SortSpec struct {
 	Desc  bool
 }
 
+// SortFields is the closed set of keys a listing may be ordered by, and the
+// contract's statement of what each one orders.
+//
+// [LAW:one-source-of-truth] It exists because each engine necessarily binds
+// these names to its own mechanism — the Dolt engine to SQL columns, the
+// memory engine to comparison functions — and two private copies of the same
+// closed set are two maps of one territory, free to drift into an engine that
+// accepts a key the other rejects. The set lives here; an engine's binding is
+// checked against it by the conformance suite rather than trusted.
+//
+// Every key orders the issue's own recorded value except one. "status" orders
+// the STORED status encoding, not the derived lifecycle state: a container has
+// no stored status — its state is a reading of its children — so containers
+// carry no value on this axis and order ahead of every leaf ascending, behind
+// every leaf descending, whatever state they derive to. That is a fault, not a
+// design: the same listing's status FILTER reads derived state, so filter and
+// sort disagree about what "status" means. It is stated here as shipped
+// behavior so both engines can be wrong identically and the differential
+// oracle stays quiet; correcting it moves observable output and is
+// links-store-seam-q35v.6.
+var SortFields = []string{
+	"id",
+	"title",
+	"status",
+	"priority",
+	"rank",
+	"type",
+	"topic",
+	"assignee",
+	"created_at",
+	"updated_at",
+}
+
 // ListIssuesFilter is the whole variability of the issue listing surface,
 // carried as one value. Every slice is an OR within itself and an AND against
 // the other criteria; every zero value means "do not constrain on this axis",

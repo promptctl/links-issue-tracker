@@ -20,10 +20,13 @@ type Checkpoint struct {
 	Name      string    // "<prefix>-<unix-nano>"
 	Prefix    string    // caller label, e.g. "pre-migrate"
 	CreatedAt time.Time // parsed from the unix-nano suffix in Name
-	// CommitSHA identifies the captured state to the engine that captured it.
+	// Anchor identifies the captured state to the engine that captured it.
 	// It is opaque to every caller: the contract requires only that handing it
 	// back names the same state, never that it is a hash or that it is a commit.
-	CommitSHA string
+	// [LAW:types-are-the-program] The name claims exactly what the contract
+	// promises — an engine that anchors a checkpoint by log offset or generation
+	// number is not obliged to invent a hash to fill a field called CommitSHA.
+	Anchor string
 }
 
 // HealthReport is what an engine found when it examined itself: the structural
