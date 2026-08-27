@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `TestRecheckMirrorPending` no longer races the kernel's coarse inode clock. The test failed intermittently in CI — most visibly on PR #404, a two-line `CHANGELOG.md` diff that cannot reach this code, which passed on rerun with no changes. The cause was two clocks of different resolution being compared as one: the test took `cycleStart` from `time.Now()` (nanosecond-precise) and then asserted that a marker created immediately afterwards was *newer*, but `recheckMirrorPending` reads `info.ModTime()`, and Linux fills inode times from `ktime_get_coarse_real_ts64`, which advances only once per timer tick (1-4ms at typical `CONFIG_HZ`). A marker minted microseconds after `cycleStart` gets an mtime rounded DOWN to the tick boundary, which can land *before* it — so the verdict took its `Before(cycleStart)` branch and returned the survived-the-clear error instead of `again=true`. The fix is entirely in the fixture: a new `filesystemNow` test helper stamps a scratch file in the marker's own directory and returns its `ModTime`, so both sides of the comparison are drawn from the one clock that actually stamps markers. Because that clock is non-decreasing and truncation applies to both readings alike, "the marker was created after `cycleStart`" now holds by construction at any tick rate, rather than by luck inside a one-tick window. `recheckMirrorPending`'s `Before(cycleStart)` comparison is deliberately UNCHANGED: the same tick-boundary skew exists in the real mirror loop, but there its consequence is a conservative stop that the next mutation's own claim recovers, and the error branch is load-bearing — it is what stops an unclearable marker from cycling forever. Relaxing it to a tolerance window would have traded a flaky test for a weakened invariant. (links-testing-tt0c.4)
+
 ## [0.8.0] - 2026-08-26
 
 ### Added
