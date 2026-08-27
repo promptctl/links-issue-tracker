@@ -84,7 +84,7 @@ func TestPlanRemoteCachePruneCollectsWhenNoRemoteIsConfigured(t *testing.T) {
 
 // TestRemoteCacheKeyPreservesHomeRelativePath pins the derivation against the
 // value Dolt actually produced for this repository's own remote — the URL whose
-// `/./` segment is the difference between naming the live 90 MB mirror and
+// `/./` segment is the difference between naming the live 97 MB mirror and
 // naming nothing at all.
 func TestRemoteCacheKeyPreservesHomeRelativePath(t *testing.T) {
 	t.Parallel()
@@ -139,6 +139,41 @@ func TestIsRemoteCacheKeyRejectsForeignNames(t *testing.T) {
 	} {
 		if isRemoteCacheKey(name) {
 			t.Fatalf("isRemoteCacheKey(%q) = true, want false", name)
+		}
+	}
+}
+
+// TestPruneOutcomeReportKeepsConfirmedWorkAfterAProblem pins the partial-progress
+// case. Removing a directory is not undone by a later error, so a run that
+// collected mirrors and then failed must report both facts — reporting only the
+// failure destroys the record of real disk that was really reclaimed, at the one
+// surface that reports it.
+func TestPruneOutcomeReportKeepsConfirmedWorkAfterAProblem(t *testing.T) {
+	t.Parallel()
+	got := remoteCachePruneOutcome{Removed: 2, Reclaimed: 3 << 20, Problem: "remove abandoned mirror abc: permission denied"}.Report()
+	for _, want := range []string{"removed 2", "3.0 MiB", "then failed", "permission denied"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("Report() = %q, want it to contain %q", got, want)
+		}
+	}
+}
+
+// TestPruneOutcomeReportIsEmptyOnlyWhenNothingHappened pins the silence
+// contract the CLI depends on: every state a reader would act on renders
+// non-empty, so an empty report can never hide one.
+func TestPruneOutcomeReportIsEmptyOnlyWhenNothingHappened(t *testing.T) {
+	t.Parallel()
+	if got := (remoteCachePruneOutcome{}).Report(); got != "" {
+		t.Fatalf("Report() on a no-op = %q, want empty", got)
+	}
+	for name, outcome := range map[string]remoteCachePruneOutcome{
+		"work performed": {Removed: 1, Reclaimed: 4096},
+		"declined":       {Problem: "declining to prune: ..."},
+		"io failure":     {Problem: "remove abandoned mirror abc: permission denied"},
+		"partial":        {Removed: 1, Reclaimed: 4096, Problem: "boom"},
+	} {
+		if outcome.Report() == "" {
+			t.Fatalf("Report() for %q was empty — an actionable state must never render silent", name)
 		}
 	}
 }

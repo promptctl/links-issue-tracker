@@ -748,6 +748,20 @@ func printSyncPushPayload(w io.Writer, payload map[string]any, verbose bool) err
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	raw, hasRaw := payload["raw"].(string)
 	reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))
+
+	// The engine's local-maintenance report is independent of which push line is
+	// chosen below, and every branch below returns — so it is emitted once, here,
+	// ahead of the cascade, rather than repeated into each arm where a future arm
+	// would forget it. It prints in both modes deliberately: the message this
+	// carries is a prune declining because its key derivation disagrees with the
+	// disk, and a warning reachable only behind --verbose is still silent where
+	// it counts. The engine leaves it empty when it found nothing worth saying,
+	// so an ordinary push gains no line. [LAW:no-silent-failure]
+	if maintenance, ok := payload["maintenance"].(string); ok && strings.TrimSpace(maintenance) != "" {
+		if _, err := fmt.Fprintln(w, strings.TrimSpace(maintenance)); err != nil {
+			return err
+		}
+	}
 	if status == "skipped" && reason == "remote_empty" {
 		// [LAW:dataflow-not-control-flow] exception: first-push skip message must always reach the caller so agents/humans see why sync did nothing.
 		_, err := fmt.Fprintln(w, firstPushSkipMessage)

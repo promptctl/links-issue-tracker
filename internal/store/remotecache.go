@@ -187,17 +187,31 @@ type remoteCachePruneOutcome struct {
 	Problem string
 }
 
-// String renders the one line a caller surfaces. It always says something, so a
-// prune can never pass unmentioned.
-func (o remoteCachePruneOutcome) String() string {
+// Report renders the line a caller surfaces, and is empty exactly when the prune
+// looked and found nothing to do.
+//
+// Empty is not a swallowed failure here: every state that matters — work
+// performed, work declined, I/O failure — renders non-empty, so nothing a reader
+// would act on can reach the empty value. The routine case earns silence because
+// this line rides on every push, and "nothing abandoned" repeated forever is how
+// a channel stops being read before the one message that mattered arrives.
+//
+// A problem does not erase confirmed work. Removing a directory is not undone by
+// a later error, so a run that collected two mirrors and then failed on the third
+// reports both facts in that order. [LAW:no-silent-failure] the earlier arm must
+// not swallow what the loop already proved.
+func (o remoteCachePruneOutcome) Report() string {
 	switch {
+	case o.Problem != "" && o.Removed > 0:
+		return fmt.Sprintf("remote-cache prune: removed %d abandoned mirror%s (%s), then failed: %s",
+			o.Removed, plural(o.Removed, "", "s"), humanBytes(o.Reclaimed), o.Problem)
 	case o.Problem != "":
 		return "remote-cache prune: " + o.Problem
-	case o.Removed == 0:
-		return "remote-cache prune: nothing abandoned"
-	default:
+	case o.Removed > 0:
 		return fmt.Sprintf("remote-cache prune: removed %d abandoned mirror%s, reclaimed %s",
 			o.Removed, plural(o.Removed, "", "s"), humanBytes(o.Reclaimed))
+	default:
+		return ""
 	}
 }
 

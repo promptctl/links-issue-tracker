@@ -486,26 +486,32 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 		}
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
-		if pushErr != nil {
-			return pushErr
-		}
-		// DOLT_GC above compacts `noms`; this collects the other half of the
-		// store's local footprint, the abandoned git remote mirrors, in the same
-		// locked run. It runs AFTER the push on purpose: the push has just
-		// opened the live mirror, so that directory provably exists and the
-		// prune's key derivation has something true to match itself against.
-		//
-		// Its outcome is carried, never raised. The push has already succeeded
-		// and its success is not the prune's to retract — a cache that failed to
-		// collect costs disk, while a failed `lit sync push` costs the user
-		// their sync. [LAW:dataflow-not-control-flow] the prune runs every time
-		// and reports as a value; nothing branches on whether it did.
-		result.Maintenance = s.pruneRemoteCache(ctx).String()
-		return nil
+		return pushErr
 	})
 	if err != nil {
 		return storage.SyncPushResult{}, err
 	}
+	// DOLT_GC above compacts `noms`; this collects the other half of the store's
+	// local footprint, the abandoned git remote mirrors.
+	//
+	// It runs AFTER the push, and OUTSIDE the commit lock, and both halves of
+	// that are load-bearing. After the push, because the push has just opened
+	// the live mirror — so that directory provably exists on disk and the key
+	// derivation has something true to check itself against. Outside the lock,
+	// because the lock was never what made the removal safe: a directory is
+	// eligible only when NO configured remote derives its key, and every open
+	// reaches a cache through a configured remote's key, so an abandoned mirror
+	// is unreachable by construction. Holding the cross-process writer-exclusion
+	// lock across an unbounded filesystem walk would block every other lit
+	// mutation on this workspace — `lit new`, `lit done`, all of them — to buy
+	// nothing. Nothing bounds how many mirrors a long-lived workspace accumulates.
+	//
+	// Its outcome is carried, never raised. The push has already succeeded and
+	// its success is not the prune's to retract — a cache that failed to collect
+	// costs disk, while a failed `lit sync push` costs the user their sync.
+	// [LAW:dataflow-not-control-flow] the prune runs every time and reports as a
+	// value; nothing branches on whether it did.
+	result.Maintenance = s.pruneRemoteCache(ctx).Report()
 	return result, nil
 }
 

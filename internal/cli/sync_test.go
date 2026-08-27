@@ -514,3 +514,54 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 		t.Fatalf("cancelled ctx must not surface the misleading unavailable message: %q", err.Error())
 	}
 }
+
+// TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes is the check the
+// remote-cache prune needs and did not originally have. The prune's whole safety
+// story rests on a refusal message reaching the operator when its key derivation
+// disagrees with the disk; plumbing that message into the payload and never
+// rendering it is the same silence, one layer further down. Both modes are
+// asserted because a warning visible only behind --verbose is still silent where
+// it counts.
+func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
+	t.Parallel()
+	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+
+	for _, verbose := range []bool{false, true} {
+		payload := map[string]any{
+			"status":      "ok",
+			"remote":      "origin",
+			"branch":      "master",
+			"raw":         "Everything up-to-date.",
+			"maintenance": refusal,
+		}
+		var out bytes.Buffer
+		if err := printSyncPushPayload(&out, payload, verbose); err != nil {
+			t.Fatalf("printSyncPushPayload(verbose=%v) error = %v", verbose, err)
+		}
+		if !strings.Contains(out.String(), refusal) {
+			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want it to contain the maintenance line %q",
+				verbose, out.String(), refusal)
+		}
+	}
+}
+
+// TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty pins the other half:
+// an ordinary push must not grow a line. The engine reports empty when it found
+// nothing to collect, and empty must render as nothing at all.
+func TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
+	t.Parallel()
+	payload := map[string]any{
+		"status":      "ok",
+		"remote":      "origin",
+		"branch":      "master",
+		"raw":         "Everything up-to-date.",
+		"maintenance": "",
+	}
+	var out bytes.Buffer
+	if err := printSyncPushPayload(&out, payload, true); err != nil {
+		t.Fatalf("printSyncPushPayload() error = %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "Everything up-to-date." {
+		t.Fatalf("printSyncPushPayload() = %q, want only the push line", got)
+	}
+}

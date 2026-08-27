@@ -127,8 +127,10 @@ func TestPruneRemoteCacheKeepsTheLiveMirror(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncCompactAndPush() error = %v", err)
 	}
-	if !strings.Contains(result.Maintenance, "nothing abandoned") {
-		t.Fatalf("Maintenance = %q, want it to report nothing abandoned", result.Maintenance)
+	// Nothing was abandoned, so the engine has nothing worth saying and an
+	// ordinary push gains no maintenance line at all.
+	if result.Maintenance != "" {
+		t.Fatalf("Maintenance = %q, want empty on a push with nothing to collect", result.Maintenance)
 	}
 
 	live, err := listRemoteCacheKeys(sync.remoteCacheBase())
