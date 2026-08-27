@@ -24,6 +24,38 @@ func mirrorPendingTestWorkspace(t *testing.T) workspace.Info {
 	return workspace.Info{Location: workspace.LocationFromStorageDir(filepath.Join(t.TempDir(), ".lit"))}
 }
 
+// filesystemNow reads the clock that actually stamps files in dir, by
+// stamping one and reading it back. Linux fills inode times from
+// ktime_get_coarse_real_ts64, which advances once per timer tick (1-4ms at
+// typical CONFIG_HZ), so an mtime is the creation instant rounded DOWN to a
+// tick boundary — while time.Now() is nanosecond-precise. Mixing the two
+// makes "was this file created after that instant" a coin flip inside a
+// one-tick window: a marker minted microseconds after a time.Now() reading
+// gets an mtime that can precede it. Every side of such a comparison must
+// come from this function, never from time.Now().
+// [LAW:one-source-of-truth] One clock, so ordering is monotone by
+// construction rather than by luck. [LAW:no-ambient-temporal-coupling] —
+// backdating a wall-clock reading past "a tick or two" would instead bet on
+// the kernel's tick rate, which is a flake made rarer, not a race removed.
+func filesystemNow(t *testing.T, dir string) time.Time {
+	t.Helper()
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("filesystem-clock probe dir: %v", err)
+	}
+	probe := filepath.Join(dir, "filesystem-clock-probe")
+	if err := os.WriteFile(probe, nil, 0o644); err != nil {
+		t.Fatalf("stamp filesystem-clock probe: %v", err)
+	}
+	info, err := os.Stat(probe)
+	if err != nil {
+		t.Fatalf("read filesystem-clock probe: %v", err)
+	}
+	if err := os.Remove(probe); err != nil {
+		t.Fatalf("remove filesystem-clock probe: %v", err)
+	}
+	return info.ModTime()
+}
+
 // TestClaimMirrorPendingStateMachine pins the claim's inputs and two outputs
 // under the beacon's kernel liveness proof (links-locking-il18.4): an absent
 // marker is claimed (creating it, and minting the claimant's own answering
@@ -352,7 +384,9 @@ func TestClaimMirrorPendingClockStepIrrelevant(t *testing.T) {
 func TestRecheckMirrorPending(t *testing.T) {
 	t.Parallel()
 	ws := mirrorPendingTestWorkspace(t)
-	cycleStart := time.Now()
+	// The verdict under test compares a marker's mtime against cycleStart, so
+	// cycleStart is read from the filesystem that will stamp that marker.
+	cycleStart := filesystemNow(t, ws.StorageDir)
 
 	again, err := recheckMirrorPending(ws, cycleStart)
 	if err != nil || again {
