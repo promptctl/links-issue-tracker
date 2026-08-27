@@ -11,12 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-type AddLabelInput struct {
-	IssueID   string
-	Name      string
-	CreatedBy string
-}
-
 func (s *Store) AddLabel(ctx context.Context, in AddLabelInput) ([]string, error) {
 	if _, err := s.GetIssue(ctx, in.IssueID); err != nil {
 		return nil, err

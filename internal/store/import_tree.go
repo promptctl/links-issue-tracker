@@ -11,29 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-// ImportTreeSpec is a single record in a declarative tree-import file. LocalID
-// is opaque — it's used inside the spec to wire Parent and DependsOn refs and
-// is replaced with the generated lit issue ID at import time.
-type ImportTreeSpec struct {
-	LocalID     string   `json:"local_id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description,omitempty"`
-	Prompt      string   `json:"prompt,omitempty"`
-	IssueType   string   `json:"type"`
-	Topic       string   `json:"topic"`
-	Priority    int      `json:"priority"`
-	Assignee    string   `json:"assignee,omitempty"`
-	Labels      []string `json:"labels,omitempty"`
-	Parent      string   `json:"parent,omitempty"`
-	DependsOn   []string `json:"depends_on,omitempty"`
-}
-
-// ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a
-// successful import.
-type ImportTreeResult struct {
-	IDMap map[string]string `json:"id_map"`
-}
-
 // ParseImportTreeSpecs is the deserialization trust boundary for tree-import
 // files: raw bytes in, specs out. It rejects any field the spec schema does
 // not name and any trailing data after the array, so a drifted or typo'd spec
