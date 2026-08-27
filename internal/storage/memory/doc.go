@@ -27,16 +27,26 @@
 // Where the suite under-pins a behavior, Dolt's current behavior is the
 // tiebreak rather than what would be tidier: S0's whole gate is that nothing
 // observable changes (design-docs/event-store/design.md §migration). Two
-// places where this engine deliberately answers better than Dolt — because
-// Dolt's answer is an artifact of storing what this engine derives — are
-// recorded on links-store-seam-q35v.5:
+// places where this engine once answered better than Dolt — because Dolt's
+// answer is an artifact of storing what this engine derives — were settled
+// against it on links-store-seam-q35v.5, and this engine now commits the same
+// fault deliberately:
 //
-//   - Ordering a listing by "status" reads the derived container state here,
-//     where Dolt sorts the stored status column that is NULL for every epic.
-//   - History comes back in the order it was recorded, where Dolt sorts by
-//     timestamp and breaks ties on a random event id — so on a coarse clock
-//     Dolt can hand back a title change ahead of the creation that preceded
-//     it.
+//   - Ordering a listing by "status" sorts the STORED status encoding. A
+//     container stores none, so it orders ahead of every leaf ascending
+//     whatever state it derives to, while the same listing's status FILTER
+//     reads derived state. Correcting that disagreement moves observable
+//     output and is links-store-seam-q35v.6.
+//   - History comes back ordered by (created_at, id) rather than by the order
+//     it was recorded. Event ids are random, so on a coarse clock both engines
+//     can hand back a title change ahead of the creation that preceded it.
+//     Ordering that actually carries happens-before arrives with the event
+//     store's Lamport positions.
+//
+// Answering better than the other engine still reads as divergence to the
+// differential oracle, which has no way to tell a correction from a defect.
+// Two engines wrong identically is the cheaper thing to hold until the fold
+// replaces the mechanism that produced the fault.
 //
 // # What it is for
 //

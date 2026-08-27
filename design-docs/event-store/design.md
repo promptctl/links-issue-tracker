@@ -6,10 +6,15 @@ them. Written 2026-08-25. Sections marked **OPEN** are decisions a later
 session must close; everything else is a position this draft commits to.
 
 Every system section carries a status line: `destination` (designed, not shipped),
+`built (unreleased)` (merged to `master`, carried by no tag yet),
 `built (vX.Y.Z)` (describes shipped reality as of that release), or
-`superseded → §anchor`. `grep 'status: destination'` lists the unbuilt
-frontier. Flipping a section's status is part of closing the work that ships
-it, not a separate act of documentation.
+`superseded → §anchor`. A version appears here only once a tag actually carries
+it: naming the release a state is *expected* to ship in makes this a second map
+of a number [`CHANGELOG.md`](../../CHANGELOG.md) and the tags already own, and
+it is wrong the moment the release is cut as a different version.
+`grep 'status: destination'` lists the unbuilt frontier. Flipping a section's
+status is part of closing the work that ships it, not a separate act of
+documentation.
 
 A section that describes several states — §migration is the only one — carries
 its status per state in its own table, and keeps the section-level line at
@@ -402,7 +407,7 @@ gates prove the fold against it, on real fleet data, at 10x.
 
 | State | The system is | Gate to advance | Status |
 |---|---|---|---|
-| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (v0.9.0) |
+| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (unreleased) |
 | S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x | destination |
 | S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x | destination |
 | S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
