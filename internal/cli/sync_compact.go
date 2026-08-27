@@ -97,7 +97,7 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 	defer cancel()
 	session, closeStore, err := openSyncSession(timeoutCtx, ws)
 	if err != nil {
-		recordCompactError(ws, fmt.Errorf("open store for compaction: %w", err))
+		recordBackstopFailure(ws, fmt.Errorf("open store for compaction: %w", err))
 		return
 	}
 	defer closeStore()
@@ -122,7 +122,11 @@ func compactThroughSession(ctx context.Context, ws workspace.Info, session syncS
 	// a fact about how the engine stores data. [LAW:decomposition]
 	outcome, err := session.syncer.CompactIfDue(ctx)
 	if err != nil {
-		recordCompactError(ws, err)
+		// The outcome goes with the error rather than being dropped for it: a
+		// pass whose reconnect failed still rewrote the store, and the depth is
+		// known here even when the pass never got that far. Neither survives
+		// anywhere else once this returns. [LAW:no-silent-failure]
+		recordCompactFailure(ws, compactTraceCommand, outcome, err)
 		return
 	}
 	if !outcome.Ran {
@@ -172,9 +176,11 @@ func recordCompactionSuccess(ws workspace.Info, command string, outcome storage.
 // account of what it reclaimed — the same reason syncPushTraceMetadata carries
 // the push's maintenance line. [LAW:no-silent-failure]
 //
-// An engine that could not measure leaves Detail empty; that key is then
-// dropped by compactTraceMetadata, which already owns what an empty value
-// means, so this builder never re-decides it. [LAW:single-enforcer]
+// An empty Detail is dropped by compactTraceMetadata, which already owns what an
+// empty metadata value means, so this builder never re-decides it.
+// [LAW:single-enforcer] What makes Detail empty is the contract's to say, and it
+// says so on CompactionOutcome.Detail; restating it here is what put an earlier
+// version of this comment at odds with it. [LAW:one-source-of-truth]
 func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]string {
 	metadata := compactionDepthMetadata(outcome.Depth)
 	metadata["detail"] = outcome.Detail
@@ -182,10 +188,9 @@ func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]strin
 }
 
 // compactionDepthMetadata names the depth alone, for the outcome that has
-// nothing else to report: a pass that failed still knows which depth was asked
-// for, and an operator scheduling the deep form needs the trail to say which
-// one kept failing. Every sibling in this file carries its identifying value
-// into the error trace as well as the success one.
+// nothing else to report: a pass that failed before reclaiming anything still
+// knows which depth was asked for, and an operator scheduling the deep form
+// needs the trail to say which one kept failing.
 //
 // It is a separate renderer rather than a literal at the failure site because
 // the key would then be spelled in three places, and this vocabulary has
@@ -194,16 +199,64 @@ func compactionDepthMetadata(depth storage.GCMode) map[string]string {
 	return map[string]string{"depth": depth.String()}
 }
 
+// recordCompactFailure is the one way a compaction that errored reaches the
+// durable trail, mirroring recordCompactionSuccess above: both entry points
+// record through it, both hand it an outcome, and neither spells a decision or
+// a metadata key of its own. [LAW:one-source-of-truth]
+//
+// It takes the outcome rather than the error alone because a failure still knows
+// things. The engine reports the depth whenever one was chosen, and reports Ran
+// when the pass itself completed and only the work after it failed — so a
+// reconnect that failed behind a finished deep collection is recorded as the
+// rewrite it was, rather than as an error that reads like nothing happened.
+// [LAW:no-silent-failure]
+func recordCompactFailure(ws workspace.Info, command string, outcome storage.CompactionOutcome, cause error) {
+	recordSyncCommandTrace(ws, command, "error", cause, compactionFailureMetadata(outcome))
+}
+
+// compactionFailureMetadata renders what is known about a pass that errored.
+//
+// A depth is recorded whenever one was chosen, and Valid is that test: the
+// contract numbers its depths from one precisely so an outcome that chose none
+// carries the zero rather than defaulting to the shallow depth. That case is
+// real — a due-check whose own measurement fails never reaches a depth — and
+// recording the default there would be worse than recording nothing, because a
+// fabricated fact in a diagnostic trail outlives the incident it misdescribes.
+// [LAW:no-silent-failure]
+//
+// The detail rides along only when the pass ran, since only then is there a
+// reclaim to describe; the contract reserves an empty Detail for the outcome
+// that did nothing, and this asks for it on exactly that outcome.
+func compactionFailureMetadata(outcome storage.CompactionOutcome) map[string]string {
+	if !outcome.Depth.Valid() {
+		return nil
+	}
+	metadata := compactionDepthMetadata(outcome.Depth)
+	if outcome.Ran {
+		metadata["detail"] = outcome.Detail
+	}
+	return metadata
+}
+
 // compactTraceCommand names the backstop in the automation trace. It is not a
 // real command line — no user typed it — and it is deliberately distinct from
 // `lit sync compact` so an operator reading traces can tell the automatic pass
 // from the one they ran themselves. [LAW:one-source-of-truth]
 const compactTraceCommand = "compaction backstop"
 
-// recordCompactError routes a backstop failure through the same trace seam as
+// syncCompactTraceCommand names the explicit command in the automation trace.
+// Its two records — the success and the failure — must agree on what they call
+// it, so the name is written once. [LAW:one-source-of-truth]
+const syncCompactTraceCommand = "lit sync compact"
+
+// recordBackstopFailure routes a backstop failure through the same trace seam as
 // every other automatic sync failure, so maintenance health is discoverable
 // exactly where sync health already is rather than in a channel of its own.
 // [LAW:single-enforcer]
-func recordCompactError(ws workspace.Info, cause error) {
-	recordSyncCommandTrace(ws, compactTraceCommand, "error", cause, nil)
+//
+// The zero outcome is the honest argument for a failure with no pass behind it —
+// a store that could not even be opened attempted nothing, and the renderer
+// records no depth for it rather than inventing one.
+func recordBackstopFailure(ws workspace.Info, cause error) {
+	recordCompactFailure(ws, compactTraceCommand, storage.CompactionOutcome{}, cause)
 }

@@ -402,6 +402,67 @@ func TestSyncCompactRefusesAnIllegalDepth(t *testing.T) {
 	if outcome.Ran {
 		t.Fatalf("SyncCompact() reported a pass it refused to run: %+v", outcome)
 	}
+	// A refusal at the door carries no depth at all, so an outcome never hands a
+	// reader an illegal one to render. The depth it was asked for is named in the
+	// error, where it belongs.
+	if outcome.Depth.Valid() {
+		t.Fatalf("a refused depth surfaced on the outcome as %v; an outcome must carry a legal depth or none", outcome.Depth)
+	}
+}
+
+// compactWithinLock is the only place that can observe whether DOLT_GC landed,
+// so the attempt it returns is the sole carrier of that fact — everything above
+// it sees one error and cannot tell a pass that never ran from a pass that ran
+// and was then followed by a failure.
+//
+// Both reachable arms are pinned here: a real pass reports Ran, and a depth Dolt
+// has no spelling for reports its depth without it. The third arm — DOLT_GC
+// completing and the reconnect after it failing — has no fault-injection seam in
+// this engine and is not driven from here. It differs from the tested success
+// arm by nothing but reconnect's return value, and the outcome it produces (Ran
+// set alongside an error) is driven end to end in the cli tests, which is where
+// its consequence lives.
+func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	syncStore, err := OpenSync(ctx, doltRoot, "compaction-attempt-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	var landed compactionAttempt
+	if err := syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
+		var compactErr error
+		landed, compactErr = syncStore.compactWithinLock(ctx, GCNewGen)
+		return compactErr
+	}); err != nil {
+		t.Fatalf("compactWithinLock() error = %v", err)
+	}
+	if !landed.Ran {
+		t.Fatal("a completed pass reported Ran = false; every caller downstream then reads a real rewrite as a pass that never happened")
+	}
+	if landed.Depth != GCNewGen {
+		t.Fatalf("attempt depth = %v, want %v", landed.Depth, GCNewGen)
+	}
+
+	var refused compactionAttempt
+	err = syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
+		var compactErr error
+		refused, compactErr = syncStore.compactWithinLock(ctx, GCMode(99))
+		return compactErr
+	})
+	if err == nil {
+		t.Fatal("compactWithinLock() accepted a depth Dolt has no spelling for")
+	}
+	if refused.Ran {
+		t.Fatal("a pass that never reached DOLT_GC reported Ran = true; the push path would then announce a collection that never happened")
+	}
+	if refused.Depth != GCMode(99) {
+		t.Fatalf("a refused attempt lost its depth (%v); the trail needs to say which one was asked for", refused.Depth)
+	}
 }
 
 // TestMeasureFootprintMatchesDoltsRealOldGenLayout is the pin that makes

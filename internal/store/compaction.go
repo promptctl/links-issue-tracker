@@ -17,13 +17,22 @@ import (
 //
 // Dolt collects in two depths and lit historically pinned the shallower one by
 // calling DOLT_GC with no arguments, which made the deeper one unreachable from
-// anywhere in this codebase. They are not interchangeable and neither reclaims
-// what the other does: measured on this repository's own store, the shallow
-// depth freed zero bytes while the deep one freed 12 MB and collapsed 148
-// archive files into 2; measured on a never-pushed workspace, the shallow depth
-// freed 69% and the deep one added nothing on top. Carrying the depth as a
-// value is what lets one implementation serve both.
-// [LAW:dataflow-not-control-flow]
+// anywhere in this codebase.
+//
+// How the two depths RELATE is storage.GCMode's to state, and is stated there.
+// This file is about what Dolt does and what its store looks like on disk. A
+// paraphrase of the contract here would be a second map of one fact — which is
+// exactly how this comment came to assert the depths were disjoint while the
+// contract said they nest. Correcting the copy would have left two maps and a
+// third drift; there is one map now. [LAW:one-source-of-truth]
+//
+// What each depth COSTS is engine knowledge and belongs here. Measured on this
+// repository's own store, the shallow depth freed zero bytes — its new
+// generation was already empty — while the deep one freed 12 MB and collapsed
+// 148 archive files into 2 in 1.36s; measured on a never-pushed workspace, the
+// shallow depth freed 69% in 0.26s. Each depth met the store where it happened
+// to be. Carrying the depth as a value is what lets one implementation serve
+// both. [LAW:dataflow-not-control-flow]
 
 // GCMode re-exports the contract's depth vocabulary under the engine's own
 // name, matching how this package already re-exports the rest of the sync
@@ -35,6 +44,46 @@ const (
 	GCNewGen = storage.GCNewGen
 	GCFull   = storage.GCFull
 )
+
+// compactionAttempt is what a compaction request knows about itself however the
+// work around it ended: which depth was asked for, and whether the mutating call
+// actually landed.
+//
+// It exists because "did the pass run" is observable only inside
+// compactWithinLock, and a bare error cannot carry it. The domain has three
+// outcomes — the pass never ran; the pass ran and the work after it failed; the
+// pass ran clean — while an error has two. Both callers used to reconstruct the
+// missing third by assuming, and they assumed OPPOSITE things: the push path
+// reported a deep pass that had never run, while the standalone path discarded
+// one that had. An assumption is worse than a branch here, because a branch
+// leaves something to read and an assumption leaves nothing.
+// [LAW:types-are-the-program] the discriminator is a value handed out by the one
+// function that can observe it, not a guess each caller makes from its own
+// position in the control flow. [LAW:dataflow-not-control-flow]
+type compactionAttempt struct {
+	// Depth is the depth asked for, set before anything can fail — so an
+	// attempt that Ran without a depth is not a state this can be in.
+	Depth GCMode
+	// Ran is whether DOLT_GC itself completed. It is set the instant the
+	// procedure returns and BEFORE the reconnect that follows, which is the
+	// whole point: a reconnect failure leaves behind a store that really was
+	// rewritten, and the rewrite is what a caller must not lose.
+	Ran bool
+}
+
+// outcome renders this attempt in the contract's terms, given the engine's
+// account of what changed.
+//
+// An attempt that did not run reports no detail: there is no reclaim to
+// describe, and the contract reserves an empty Detail for exactly the outcome
+// that did nothing. It still reports its depth, because "the deep pass is the
+// one failing" is the fact an operator needs and the only place it survives.
+func (a compactionAttempt) outcome(detail string) storage.CompactionOutcome {
+	if !a.Ran {
+		return storage.CompactionOutcome{Depth: a.Depth}
+	}
+	return storage.CompactionOutcome{Ran: true, Depth: a.Depth, Detail: detail}
+}
 
 // gcProcedureArgs renders a depth as DOLT_GC's own arguments. The flag spelling
 // comes from the constant Dolt's argument parser reads, so a rename breaks the
@@ -197,20 +246,29 @@ func footprintDelta(before, after storeFootprint, measureErr error) string {
 		before.OldGenArchives, after.OldGenArchives)
 }
 
-// compactionReport says what the push path's compaction did, and says nothing
-// about the shallow pass every push already runs — an operator does not need
-// telling that the routine thing happened routinely. A deep pass is worth a
-// line because it is rare and because it explains a push that took noticeably
-// longer than usual.
+// compactionReport says what a compaction did, and says nothing about the
+// shallow pass every push already runs — an operator does not need telling that
+// the routine thing happened routinely. A deep pass is worth a line because it
+// is rare and because it explains a call that took noticeably longer than usual.
 //
 // A failed measurement is reported even though the compaction still ran, and it
 // names the depth that ran, so "deep collection is overdue and I cannot tell"
 // never reads as "nothing needed doing". [LAW:no-silent-failure]
-func compactionReport(mode GCMode, measureErr error) string {
+//
+// It takes the attempt rather than a depth so that "did this actually run"
+// is answered HERE, once, instead of at each of the two failure paths that call
+// it. Both of those describe an error that may or may not have a completed pass
+// behind it, and one of them used to annotate unconditionally — announcing a
+// full pass in the same breath as the error saying the full pass failed. A
+// filter every caller has to remember is a filter one of them will forget.
+// [LAW:one-source-of-truth] [LAW:single-enforcer]
+func compactionReport(attempt compactionAttempt, measureErr error) string {
 	switch {
+	case !attempt.Ran:
+		return ""
 	case measureErr != nil:
-		return fmt.Sprintf("compaction: ran %s pass; could not measure whether a deeper one is due: %v", mode, measureErr)
-	case mode == GCFull:
+		return fmt.Sprintf("compaction: ran %s pass; could not measure whether a deeper one is due: %v", attempt.Depth, measureErr)
+	case attempt.Depth == GCFull:
 		return "compaction: ran full pass, rewriting the old generation"
 	default:
 		return ""

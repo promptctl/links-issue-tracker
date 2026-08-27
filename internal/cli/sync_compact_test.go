@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -262,7 +263,14 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	failure := errors.New("dolt gc: store is read-only")
 	var out bytes.Buffer
 
-	err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: &compactSyncer{err: failure}}, nil)
+	// The engine reports the depth it attempted even when the pass failed, which
+	// is what a real Store does: compactWithinLock sets it before anything can
+	// go wrong. The command no longer spells the depth itself, so this is the
+	// only place it can come from — and that is the point, since a second
+	// spelling is what let this vocabulary drift twice already.
+	syncer := &compactSyncer{outcome: storage.CompactionOutcome{Depth: storage.GCNewGen}, err: failure}
+
+	err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: syncer}, nil)
 
 	if !errors.Is(err, failure) {
 		t.Fatalf("runSyncCompact() error = %v, want the engine's own failure", err)
@@ -343,6 +351,81 @@ func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
 		}
 		if traces[0].Command != compactTraceCommand {
 			t.Fatalf("trace command = %q, want %q", traces[0].Command, compactTraceCommand)
+		}
+	})
+
+	// A due-check whose own measurement fails never reaches a depth, so the
+	// trail must say nothing about one. Before the depths were renumbered off
+	// zero, the zero outcome carried GCNewGen and this recorded `depth: newgen`
+	// — a decision nobody made, indistinguishable in the trail from a real
+	// shallow pass that failed. A missing key is recoverable; a fabricated one
+	// misleads whoever reads it during an incident.
+	t.Run("a failure that never chose a depth records none", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		compactThroughSession(context.Background(), ws,
+			syncSession{syncer: &compactSyncer{err: errors.New("measure store footprint: permission denied")}})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("recorded %d traces, want exactly one", len(traces))
+		}
+		if depth, ok := traces[0].Metadata["depth"]; ok {
+			t.Fatalf("trace carried depth %q for a pass that never chose one; the trail must not invent a decision", depth)
+		}
+	})
+
+	// The depth survives a pass that failed before reclaiming anything, which is
+	// the diagnostic the whole failure path exists for: an operator scheduling
+	// the deep form needs to know which depth keeps failing.
+	t.Run("a failure that chose a depth records it without a reclaim", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{
+			outcome: storage.CompactionOutcome{Depth: storage.GCFull},
+			err:     errors.New("compact dolt store (full): connection refused"),
+		}})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("recorded %d traces, want exactly one", len(traces))
+		}
+		if traces[0].Metadata["depth"] != storage.GCFull.String() {
+			t.Fatalf("trace depth = %q, want %q — a failing deep pass must be tellable from a failing shallow one",
+				traces[0].Metadata["depth"], storage.GCFull.String())
+		}
+		if detail, ok := traces[0].Metadata["detail"]; ok {
+			t.Fatalf("trace carried detail %q for a pass that never ran; there was no reclaim to describe", detail)
+		}
+	})
+
+	// The case this whole change exists for: the engine's pass completed and the
+	// work after it failed, so the store really was rewritten. Recording a bare
+	// error here would lose a durable — possibly minutes-long, possibly
+	// old-generation-rewriting — side effect behind an unrelated failure.
+	t.Run("a pass that ran and then failed is recorded as the rewrite it was", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{
+			outcome: storage.CompactionOutcome{
+				Ran: true, Depth: storage.GCFull, Detail: "journal 4.0 MiB -> 0 B, old-generation archives 148 -> 2",
+			},
+			err: errors.New("reopen dolt: context deadline exceeded"),
+		}})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 || traces[0].Status != "error" {
+			t.Fatalf("traces = %+v, want exactly one recorded error", traces)
+		}
+		if traces[0].Metadata["depth"] != storage.GCFull.String() {
+			t.Fatalf("trace depth = %q, want %q — the deep pass really ran and the trail is the only place that survives",
+				traces[0].Metadata["depth"], storage.GCFull.String())
+		}
+		if !strings.Contains(traces[0].Metadata["detail"], "148 -> 2") {
+			t.Fatalf("trace detail = %q, want the reclaim the completed pass reported", traces[0].Metadata["detail"])
 		}
 	})
 }

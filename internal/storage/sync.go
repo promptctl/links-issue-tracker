@@ -213,13 +213,23 @@ type SyncPullResult struct {
 // It is engine-neutral vocabulary: the depths describe what is collected, not
 // how any particular engine spells the request. An engine with only one depth
 // implements both by doing its one thing.
+//
+// The depths are numbered from one so that the zero GCMode is not one of them.
+// An outcome that never chose a depth — a due-check that failed before it could
+// — would otherwise carry GCNewGen by default and report the cheap depth as a
+// fact nobody decided; numbering from zero made "no depth" and "the shallow
+// depth" the same value, which is a difference no reader could recover. Valid
+// already rejects the zero, so this needs no separate sentinel member and no
+// engine gains a third depth to implement.
+// [LAW:types-are-the-program] the illegal state stops being representable,
+// rather than every reader guarding against it.
 type GCMode int
 
 const (
 	// GCNewGen collects recent history that has not yet been archived. It is
 	// the cheap, routine depth, and it cannot reclaim anything already
 	// archived.
-	GCNewGen GCMode = iota
+	GCNewGen GCMode = iota + 1
 	// GCFull additionally rewrites the archived history, and is the only depth
 	// that reclaims what earlier passes left behind. It costs proportionally
 	// to the whole store rather than to recent activity.
@@ -259,8 +269,23 @@ type CompactionOutcome struct {
 	// nothing owing returns false, which is an ordinary outcome and not a
 	// failure — the common case, in fact, since the check is cheap and the
 	// pass is not.
+	//
+	// It is independent of whether the call as a whole succeeded. An engine
+	// whose pass completed and whose follow-on work then failed reports Ran
+	// alongside its error, because the store was rewritten either way: a caller
+	// told otherwise would under-report a durable, possibly expensive side
+	// effect, and "the pass never happened" is the one thing it must not
+	// conclude from a failure. [LAW:no-silent-failure]
 	Ran bool
-	// Depth is the depth performed. Meaningful only when Ran.
+	// Depth is the depth the pass was performed at — or attempted at, when this
+	// outcome accompanies an error.
+	//
+	// It is the zero GCMode, which Valid rejects, exactly when no depth was ever
+	// chosen: a due-check that failed before selecting one. That is why the
+	// depths are numbered from one. A reader can therefore tell "the shallow
+	// depth" from "no depth at all" instead of being handed the former by
+	// default, and needs no companion flag to do it.
+	// [LAW:types-are-the-program]
 	Depth GCMode
 	// Detail is the engine's own account of what the pass changed, already
 	// rendered. It is the engine's words because only the engine knows what it

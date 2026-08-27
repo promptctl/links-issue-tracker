@@ -333,7 +333,15 @@ func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, se
 		// failing is indistinguishable in the trail from a failing shallow one
 		// unless the record says which was asked for, and the exit code that
 		// would have said so is not durable. [LAW:no-silent-failure]
-		recordSyncCommandTrace(ws, "lit sync compact", "error", err, compactionDepthMetadata(mode))
+		//
+		// It comes off the OUTCOME rather than from the local mode, even though
+		// this command knows the depth it asked for. The engine reports the
+		// depth it attempted, and it also reports a pass that ran and then hit a
+		// failure — which this call site cannot see and would record as a bare
+		// error. Handing the recorder the local mode would leave two places
+		// spelling one fact, and that is the drift this file has already had
+		// twice. [LAW:one-source-of-truth]
+		recordCompactFailure(ws, syncCompactTraceCommand, outcome, err)
 		return err
 	}
 	// Recorded before the write, so a stdout that has gone away cannot erase the
@@ -348,7 +356,7 @@ func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, se
 	// the outcome is gone. This records through the same seam the automatic pass
 	// uses, so the two cannot describe one event differently — only the command
 	// name distinguishes them. [LAW:one-source-of-truth]
-	recordCompactionSuccess(ws, "lit sync compact", outcome)
+	recordCompactionSuccess(ws, syncCompactTraceCommand, outcome)
 	// The engine reports what it reclaimed in its own vocabulary; this renders
 	// that account rather than re-deriving it from a storage layout the command
 	// layer has no business reading. [LAW:decomposition]

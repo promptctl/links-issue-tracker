@@ -445,16 +445,26 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 // The depth arrives as an argument rather than being decided here, so this
 // function has no policy in it and the two callers cannot drift on what a
 // given depth means. [LAW:dataflow-not-control-flow]
-func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) error {
+// It returns what the attempt knows about itself alongside any error, because
+// only this function can observe whether DOLT_GC landed — everything above it
+// sees one error and cannot tell a pass that never ran from a pass that ran and
+// was followed by a failure. [LAW:types-are-the-program]
+func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) (compactionAttempt, error) {
+	attempt := compactionAttempt{Depth: mode}
 	args, err := gcProcedureArgs(mode)
 	if err != nil {
-		return err
+		return attempt, err
 	}
 	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC", args...); err != nil {
-		return fmt.Errorf("compact dolt store (%s): %w", mode, err)
+		return attempt, fmt.Errorf("compact dolt store (%s): %w", mode, err)
 	}
+	// Recorded here, before the reconnect below and not after it: DOLT_GC has
+	// returned, so the store on disk is already rewritten and nothing that
+	// follows can un-rewrite it. A reconnect failure must not read as a pass
+	// that never happened. [LAW:no-silent-failure]
+	attempt.Ran = true
 	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
-	return s.reconnect(ctx)
+	return attempt, s.reconnect(ctx)
 }
 
 // SyncCompact compacts the store at the requested depth, with no remote
@@ -476,18 +486,41 @@ func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.Compactio
 		return storage.CompactionOutcome{}, fmt.Errorf("compact: illegal depth %d (want %q or %q)", int(mode), storage.GCNewGen, storage.GCFull)
 	}
 	before, beforeErr := s.measureFootprint()
+	var attempt compactionAttempt
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
-	if err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		return s.compactWithinLock(ctx, mode)
-	}); err != nil {
-		return storage.CompactionOutcome{}, err
-	}
+	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		var compactErr error
+		attempt, compactErr = s.compactWithinLock(ctx, mode)
+		return compactErr
+	})
+	// Measured on both paths, because a pass that ran and then failed to
+	// reconnect rewrote the store exactly as much as one that succeeded. The
+	// reading survives a dead connection: measureFootprint is one Stat and one
+	// ReadDir against the filesystem, with no engine and no lock involved.
 	after, afterErr := s.measureFootprint()
-	return storage.CompactionOutcome{
-		Ran:    true,
-		Depth:  mode,
-		Detail: footprintDelta(before, after, errors.Join(beforeErr, afterErr)),
-	}, nil
+	outcome := attempt.outcome(footprintDelta(before, after, errors.Join(beforeErr, afterErr)))
+	if err != nil {
+		// The outcome is returned populated ALONGSIDE the error, because it
+		// describes the compaction and the compaction may well have happened —
+		// compactWithinLock's last act is a reconnect, and a failure there
+		// leaves a store that really was collected. Reporting Ran: false would
+		// be this value lying about its own subject, and it is the one thing a
+		// caller must not conclude from a maintenance failure.
+		// [LAW:no-silent-failure]
+		//
+		// This is not the arrangement SyncCompactAndPush declines below. That
+		// method returns a SyncPushResult describing a PUSH that genuinely did
+		// not happen, so populating it would lie; this one describes a
+		// compaction that genuinely may have. A result must tell the truth about
+		// its own subject — which is a different rule from "never return a value
+		// beside an error", and the reason the two methods differ.
+		//
+		// The error carries the same account for whoever is reading stderr
+		// rather than the trail, through the filter compactionReport already
+		// owns: a routine shallow pass stays silent, a deep one speaks.
+		return outcome, annotateWithMaintenance(err, compactionReport(attempt, nil))
+	}
+	return outcome, nil
 }
 
 // CompactIfDue compacts only when this store's own footprint says a pass is
@@ -561,33 +594,43 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 // entrypoints, not one method with a compaction flag. [LAW:decomposition]
 func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	var result storage.SyncPushResult
-	var depth GCMode
+	var attempt compactionAttempt
 	var depthErr error
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
 		// Measured inside the lock, where no other mutation can grow the
 		// journal between the reading and the pass it selects.
+		var depth GCMode
 		depth, depthErr = s.chooseCompactionDepth()
-		if err := s.compactWithinLock(ctx, depth); err != nil {
-			return err
+		var compactErr error
+		attempt, compactErr = s.compactWithinLock(ctx, depth)
+		if compactErr != nil {
+			return compactErr
 		}
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
 		result = pushed
 		return pushErr
 	})
 	if err != nil {
-		// The pass above already ran, and a push failing afterwards does not
-		// un-rewrite the store. Reporting it only on the success path would
-		// lose a deep collection entirely whenever the push it preceded failed
-		// — and a deep pass is exactly what explains an attempt that took
-		// minutes before failing. The failure is where an operator looks when a
-		// command fails, so that is where the account goes.
-		// [LAW:no-silent-failure]
+		// A pass that ran is reported even though the call failed: a push
+		// failing afterwards does not un-rewrite the store, and reporting only
+		// on the success path would lose a deep collection entirely whenever
+		// the push it preceded failed — which is exactly what explains an
+		// attempt that took minutes before failing. The failure is where an
+		// operator looks when a command fails, so that is where the account
+		// goes. [LAW:no-silent-failure]
+		//
+		// Whether a pass ran is the attempt's to answer, not this call site's.
+		// The error arriving here may come from the compaction itself or from
+		// the push after it, and this code cannot tell them apart — it used to
+		// assume the latter, and so announced a full pass in the same breath as
+		// the error saying the full pass had failed. compactionReport holds that
+		// filter now. [LAW:one-source-of-truth]
 		//
 		// This is deliberately not the prune's arrangement below, which is
 		// gated on the push succeeding for a real reason: the prune needs the
 		// push to have opened the live mirror so its derivation has something
 		// true to check against. Compaction depends on nothing the push does.
-		return storage.SyncPushResult{}, annotateWithMaintenance(err, compactionReport(depth, depthErr))
+		return storage.SyncPushResult{}, annotateWithMaintenance(err, compactionReport(attempt, depthErr))
 	}
 	// DOLT_GC above compacts `noms`; this collects the other half of the store's
 	// local footprint, the abandoned git remote mirrors.
@@ -612,7 +655,7 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// Two maintenance jobs share one operator-facing channel, each reporting
 	// only what is worth saying. [LAW:one-type-per-behavior]
 	result.Maintenance = joinMaintenance(
-		compactionReport(depth, depthErr),
+		compactionReport(attempt, depthErr),
 		s.pruneRemoteCache(ctx).Report(),
 	)
 	return result, nil

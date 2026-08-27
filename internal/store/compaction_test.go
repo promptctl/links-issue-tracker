@@ -210,17 +210,66 @@ func TestGCProcedureArgsRefusesAnUnknownDepth(t *testing.T) {
 func TestCompactionReportSpeaksOnlyWhenItHasSomethingToSay(t *testing.T) {
 	t.Parallel()
 
-	if got := compactionReport(GCNewGen, nil); got != "" {
-		t.Fatalf("compactionReport(GCNewGen, nil) = %q, want empty — the routine pass is not news", got)
+	ran := func(depth GCMode) compactionAttempt {
+		return compactionAttempt{Depth: depth, Ran: true}
 	}
-	if got := compactionReport(GCFull, nil); got == "" {
-		t.Fatal("compactionReport(GCFull, nil) was empty; a deep pass explains a slow push and must be reported")
+
+	if got := compactionReport(ran(GCNewGen), nil); got != "" {
+		t.Fatalf("compactionReport(newgen ran, nil) = %q, want empty — the routine pass is not news", got)
+	}
+	if got := compactionReport(ran(GCFull), nil); got == "" {
+		t.Fatal("compactionReport(full ran, nil) was empty; a deep pass explains a slow push and must be reported")
 	}
 	// The compaction still ran, so the report must say so AND name the
 	// measurement failure — not imply nothing happened.
-	got := compactionReport(GCNewGen, errors.New("disk on fire"))
+	got := compactionReport(ran(GCNewGen), errors.New("disk on fire"))
 	if !strings.Contains(got, "newgen") || !strings.Contains(got, "disk on fire") {
 		t.Fatalf("compactionReport with a failed measurement = %q, want both the depth that ran and the cause", got)
+	}
+}
+
+// A pass that never ran must produce no report at ALL — not even the deep-pass
+// line, and not even when the measurement also failed. This is the arm that
+// stops the error path from announcing "ran full pass, rewriting the old
+// generation" beside the error saying the full pass failed, which is precisely
+// what it used to do when the caller decided this instead of the reporter.
+// [LAW:one-source-of-truth]
+func TestCompactionReportSaysNothingAboutAPassThatNeverRan(t *testing.T) {
+	t.Parallel()
+
+	for _, depth := range []GCMode{GCNewGen, GCFull} {
+		attempt := compactionAttempt{Depth: depth} // Ran stays false
+		if got := compactionReport(attempt, nil); got != "" {
+			t.Fatalf("compactionReport(%s not run, nil) = %q, want empty — nothing ran, so nothing is worth reporting", depth, got)
+		}
+		got := compactionReport(attempt, errors.New("disk on fire"))
+		if got != "" {
+			t.Fatalf("compactionReport(%s not run, measure err) = %q, want empty — this claims a pass ran that did not", depth, got)
+		}
+	}
+}
+
+// The attempt is the single carrier of "what happened", so the rendering of it
+// must not invent a reclaim for a pass that produced none. An attempt that ran
+// carries its detail; one that did not carries a depth and nothing else, which
+// is exactly what the contract reserves an empty Detail for.
+func TestCompactionAttemptRendersOnlyWhatHappened(t *testing.T) {
+	t.Parallel()
+
+	ran := compactionAttempt{Depth: GCFull, Ran: true}.outcome("journal 1 B -> 0 B")
+	if !ran.Ran || ran.Depth != GCFull || ran.Detail == "" {
+		t.Fatalf("a completed pass rendered as %+v; it must carry Ran, its depth, and its account", ran)
+	}
+
+	notRun := compactionAttempt{Depth: GCFull}.outcome("journal 1 B -> 0 B")
+	if notRun.Ran {
+		t.Fatalf("an attempt that never ran rendered Ran = true (%+v)", notRun)
+	}
+	if notRun.Detail != "" {
+		t.Fatalf("an attempt that never ran carried Detail %q; there was no reclaim to describe", notRun.Detail)
+	}
+	if notRun.Depth != GCFull {
+		t.Fatalf("an attempt that never ran lost its depth (%+v); the trail needs to say which one failed", notRun)
 	}
 }
 
