@@ -341,11 +341,34 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	}
 	defer syncStore.Close()
 
-	if err := syncStore.SyncCompact(ctx); err != nil {
-		t.Fatalf("SyncCompact() error = %v", err)
+	// Both depths, and each twice: the second call proves a depth is
+	// re-runnable against a store it already collected, which is the shape a
+	// backstop invoking it on a cadence actually exercises.
+	for _, mode := range []GCMode{GCNewGen, GCFull} {
+		outcome, err := syncStore.SyncCompact(ctx, mode)
+		if err != nil {
+			t.Fatalf("SyncCompact(%v) error = %v", mode, err)
+		}
+		if !outcome.Ran || outcome.Depth != mode {
+			t.Fatalf("SyncCompact(%v) outcome = %+v, want a pass at that depth", mode, outcome)
+		}
+		if outcome.Detail == "" {
+			t.Fatalf("SyncCompact(%v) reported no detail; a caller cannot tell what was reclaimed", mode)
+		}
+		if _, err := syncStore.SyncCompact(ctx, mode); err != nil {
+			t.Fatalf("second SyncCompact(%v) error = %v", mode, err)
+		}
 	}
-	if err := syncStore.SyncCompact(ctx); err != nil {
-		t.Fatalf("second SyncCompact() error = %v", err)
+
+	// A freshly compacted store is under every threshold, so the backstop's own
+	// entrypoint must decline rather than collect again — that decline is what
+	// keeps it cheap to ask often.
+	idle, err := syncStore.CompactIfDue(ctx)
+	if err != nil {
+		t.Fatalf("CompactIfDue() on a just-compacted store error = %v", err)
+	}
+	if idle.Ran {
+		t.Fatalf("CompactIfDue() ran a pass on a just-compacted store: %+v", idle)
 	}
 
 	got, err := syncStore.GetIssue(ctx, issue.ID)
@@ -354,6 +377,190 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	}
 	if got.Title != "gc target" {
 		t.Fatalf("GetIssue() after compact title = %q, want %q", got.Title, "gc target")
+	}
+}
+
+// The contract's door guard, exercised where callers actually enter. An illegal
+// depth reaching the pass would collect at the shallower default and report
+// success — the wrong work done quietly, which is worse than a refusal because
+// nothing downstream can tell it happened. [LAW:no-silent-failure]
+func TestSyncCompactRefusesAnIllegalDepth(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	syncStore, err := OpenSync(ctx, doltRoot, "illegal-depth-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	outcome, err := syncStore.SyncCompact(ctx, GCMode(99))
+	if err == nil {
+		t.Fatal("SyncCompact() accepted a depth outside the contract; it must refuse rather than collect at one nobody named")
+	}
+	if outcome.Ran {
+		t.Fatalf("SyncCompact() reported a pass it refused to run: %+v", outcome)
+	}
+	// A refusal at the door carries no depth at all, so an outcome never hands a
+	// reader an illegal one to render. The depth it was asked for is named in the
+	// error, where it belongs.
+	if outcome.Depth.Valid() {
+		t.Fatalf("a refused depth surfaced on the outcome as %v; an outcome must carry a legal depth or none", outcome.Depth)
+	}
+}
+
+// compactWithinLock is the only place that can observe whether DOLT_GC landed,
+// so the attempt it returns is the sole carrier of that fact — everything above
+// it sees one error and cannot tell a pass that never ran from a pass that ran
+// and was then followed by a failure.
+//
+// Both reachable arms are pinned here: a real pass reports Ran, and a depth Dolt
+// has no spelling for reports its depth without it. The third arm — DOLT_GC
+// completing and the reconnect after it failing — has no fault-injection seam in
+// this engine and is not driven from here. It differs from the tested success
+// arm by nothing but reconnect's return value, and the outcome it produces (Ran
+// set alongside an error) is driven end to end in the cli tests, which is where
+// its consequence lives.
+func TestCompactWithinLockReportsWhetherThePassLanded(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	syncStore, err := OpenSync(ctx, doltRoot, "compaction-attempt-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	var landed compactionAttempt
+	if err := syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
+		var compactErr error
+		landed, compactErr = syncStore.compactWithinLock(ctx, GCNewGen)
+		return compactErr
+	}); err != nil {
+		t.Fatalf("compactWithinLock() error = %v", err)
+	}
+	if !landed.Ran {
+		t.Fatal("a completed pass reported Ran = false; every caller downstream then reads a real rewrite as a pass that never happened")
+	}
+	if landed.Depth != GCNewGen {
+		t.Fatalf("attempt depth = %v, want %v", landed.Depth, GCNewGen)
+	}
+
+	var refused compactionAttempt
+	err = syncStore.runSyncMutation(ctx, func(ctx context.Context) error {
+		var compactErr error
+		refused, compactErr = syncStore.compactWithinLock(ctx, GCMode(99))
+		return compactErr
+	})
+	if err == nil {
+		t.Fatal("compactWithinLock() accepted a depth Dolt has no spelling for")
+	}
+	if refused.Ran {
+		t.Fatal("a pass that never reached DOLT_GC reported Ran = true; the push path would then announce a collection that never happened")
+	}
+	if refused.Depth != GCMode(99) {
+		t.Fatalf("a refused attempt lost its depth (%v); the trail needs to say which one was asked for", refused.Depth)
+	}
+}
+
+// TestMeasureFootprintMatchesDoltsRealOldGenLayout is the pin that makes
+// oldGenDirName and archiveFileExt safe to ship. Dolt exports no constant for
+// either, so lit spells them itself — and every other footprint test writes the
+// layout it then reads using those same two constants, so fixture and code
+// share one map and would agree with each other even if both were wrong about
+// Dolt. This is the test that checks the map against the territory: it runs a
+// REAL pass, lets Dolt lay the old generation down itself, and asserts the two
+// names describe what Dolt actually wrote.
+//
+// The failure it guards is silent, which is what earns it a real store. If an
+// embedded-Dolt bump moved either name, OldGenArchives would read 0 forever,
+// archivesDueCount would never fire, and the deep pass would simply stop
+// happening — no error, no red test, just a backstop quietly doing nothing.
+// [LAW:no-silent-failure] The same pinning TestRemoteCacheKeyMatchesDoltLayout
+// does for the remote-cache key.
+func TestMeasureFootprintMatchesDoltsRealOldGenLayout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "layout-ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// Enough history that a pass has something to archive; an empty store would
+	// leave an old generation Dolt never wrote, proving nothing.
+	for i := range 8 {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Prefix: "test", Title: fmt.Sprintf("layout %d", i), Topic: "layout", IssueType: "task", Priority: 0,
+		}); err != nil {
+			t.Fatalf("CreateIssue() error = %v", err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "layout-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+	if _, err := syncStore.SyncCompact(ctx, GCNewGen); err != nil {
+		t.Fatalf("SyncCompact(GCNewGen) error = %v", err)
+	}
+
+	// Everything below DISCOVERS the layout from disk. nomsDir is derived from
+	// Dolt's own exported dbfactory constants, so it is not part of the claim
+	// under test; oldGenDirName and archiveFileExt appear only as the thing
+	// being checked, never as the way anything is found.
+	noms := nomsDir(doltRoot)
+	entries, err := os.ReadDir(noms)
+	if err != nil {
+		t.Fatalf("read noms dir: %v", err)
+	}
+	var subdirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subdirs = append(subdirs, entry.Name())
+		}
+	}
+	if len(subdirs) != 1 {
+		t.Fatalf("noms holds subdirectories %v; expected exactly one (the old generation) to pin against", subdirs)
+	}
+	if subdirs[0] != oldGenDirName {
+		t.Fatalf("Dolt's old-generation directory is %q, but oldGenDirName says %q — the footprint counts a path Dolt does not write", subdirs[0], oldGenDirName)
+	}
+
+	// Dolt's manifest and LOCK carry no suffix; everything suffixed in here is
+	// an archive. Asserting the suffix rather than filtering by it is what
+	// catches a rename.
+	oldgen, err := os.ReadDir(filepath.Join(noms, subdirs[0]))
+	if err != nil {
+		t.Fatalf("read old generation: %v", err)
+	}
+	archives := 0
+	for _, entry := range oldgen {
+		ext := filepath.Ext(entry.Name())
+		if entry.IsDir() || ext == "" {
+			continue
+		}
+		if ext != archiveFileExt {
+			t.Fatalf("Dolt wrote %q in the old generation, but archiveFileExt says %q", entry.Name(), archiveFileExt)
+		}
+		archives++
+	}
+	if archives == 0 {
+		t.Fatal("a real pass left no archive in the old generation; this test can prove nothing about a layout Dolt did not write")
+	}
+
+	got, err := measureFootprint(doltRoot)
+	if err != nil {
+		t.Fatalf("measureFootprint() error = %v", err)
+	}
+	if got.OldGenArchives != archives {
+		t.Fatalf("OldGenArchives = %d, but Dolt wrote %d archive(s) — the footprint and the disk disagree", got.OldGenArchives, archives)
 	}
 }
 
@@ -649,6 +856,123 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	}
 	if got.State() != storage.SyncUpToDate {
 		t.Fatalf("after compact+push: state = %q (%+v), want up-to-date", got.State(), got)
+	}
+}
+
+// TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration drives the push
+// path's escalation, which nothing else in the suite reaches: every other
+// SyncCompactAndPush test uses a fresh store, so chooseCompactionDepth always
+// takes its GCNewGen floor and the deep branch never runs.
+// TestDueModeSelectsDepthByFootprint covers the decision as a pure function of
+// two numbers; this covers the composition that carries a decision through to
+// the operator — chooseCompactionDepth into compactWithinLock into
+// compactionReport into result.Maintenance — which is where a miswiring would
+// live and where the pure test cannot see.
+//
+// The old generation is seeded because crossing archivesDueCount honestly would
+// take hundreds of passes. Dolt tolerates entries absent from its manifest, so
+// the push still succeeds and the escalation is the only thing under test.
+// [LAW:behavior-not-structure] the assertion is what the operator is told, not
+// which internal chose it.
+func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	doltRoot := migratedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "fragmented", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldgen := filepath.Join(nomsDir(doltRoot), oldGenDirName)
+	if err := os.MkdirAll(oldgen, 0o755); err != nil {
+		t.Fatalf("make old generation: %v", err)
+	}
+	for i := range archivesDueCount {
+		if err := os.WriteFile(filepath.Join(oldgen, "seeded"+itoa(i)+archiveFileExt), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed archive: %v", err)
+		}
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+	if err := syncStore.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+
+	result, err := syncStore.SyncCompactAndPush(ctx, "origin", "master", true, false)
+	if err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+	if !strings.Contains(result.Maintenance, "full pass") {
+		t.Fatalf("Maintenance = %q, want it to report the deep pass the footprint owed", result.Maintenance)
+	}
+}
+
+// A pass that completed inside a call whose push then failed is still a pass
+// that rewrote the store — the push failing afterwards does not un-rewrite it.
+// Reporting maintenance only on the success path lost a deep collection whenever
+// the push it preceded failed, leaving an operator with "push failed" and no
+// account of the long full-store rewrite that had just happened, which is also
+// the only thing explaining why the failed attempt took so long.
+// [LAW:no-silent-failure]
+//
+// The push is failed by naming a remote that was never added, so the failure
+// lands in pushWithinLock — after compactWithinLock has already run inside the
+// same closure, which is precisely the ordering that makes the loss possible.
+func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "doomed push", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldgen := filepath.Join(nomsDir(doltRoot), oldGenDirName)
+	if err := os.MkdirAll(oldgen, 0o755); err != nil {
+		t.Fatalf("make old generation: %v", err)
+	}
+	for i := range archivesDueCount {
+		if err := os.WriteFile(filepath.Join(oldgen, "seeded"+itoa(i)+archiveFileExt), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed archive: %v", err)
+		}
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	_, err = syncStore.SyncCompactAndPush(ctx, "no-such-remote", "master", false, false)
+	if err == nil {
+		t.Fatal("SyncCompactAndPush() to a remote that does not exist succeeded; this test cannot say anything unless the push fails")
+	}
+	if !strings.Contains(err.Error(), "full pass") {
+		t.Fatalf("error = %v, want it to also name the deep pass that already rewrote the store before the push failed", err)
 	}
 }
 

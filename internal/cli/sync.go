@@ -84,13 +84,14 @@ func withSyncStore(run syncRunFn) wsRunFn {
 }
 
 var syncFamily = commandFamily[wsRunFn]{
-	usage: "usage: lit sync <status|remote|fetch|pull|push|reconcile> ...",
+	usage: "usage: lit sync <status|remote|fetch|pull|push|compact|reconcile> ...",
 	subcommands: []subcommandRow[wsRunFn]{
 		{name: "status", payload: withSyncStore(runSyncStatus)},
 		{name: "remote", payload: withSyncStore(runSyncRemote)},
 		{name: "fetch", payload: withSyncStore(runSyncFetch)},
 		{name: "pull", payload: withSyncStore(runSyncPull)},
 		{name: "push", payload: withSyncStore(runSyncPush)},
+		{name: "compact", payload: withSyncStore(runSyncCompact)},
 		{name: "reconcile", payload: withSyncStore(runSyncReconcile)},
 		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
 		// above, so it never shows in help; it manages its own store lifecycle
@@ -304,6 +305,67 @@ func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, n
 	default:
 		return SyncFailureError{}, false
 	}
+}
+
+// runSyncCompact reclaims local storage without contacting any remote. It is
+// the explicit, schedulable form of the maintenance the backstop performs on a
+// threshold, and the only way to reach the deep pass on demand.
+//
+// It deliberately requires no remote: a solo workspace that never pushes is
+// exactly the one with nothing else to collect its store, and gating
+// maintenance on a remote would leave that workspace no path at all.
+func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+	fs := newCobraFlagSet("sync compact")
+	full := fs.Bool("full", false, "Rewrite the old generation too — reclaims what earlier passes archived, at a cost proportional to the whole store")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	// [LAW:dataflow-not-control-flow] The flag selects a depth value; there is
+	// one compaction call, not one per depth.
+	mode := storage.GCNewGen
+	if *full {
+		mode = storage.GCFull
+	}
+
+	outcome, err := session.syncer.SyncCompact(ctx, mode)
+	if err != nil {
+		// The depth rides along here too: a scheduled deep pass that keeps
+		// failing is indistinguishable in the trail from a failing shallow one
+		// unless the record says which was asked for, and the exit code that
+		// would have said so is not durable. [LAW:no-silent-failure]
+		//
+		// It comes off the OUTCOME rather than from the local mode, even though
+		// this command knows the depth it asked for. The engine reports the
+		// depth it attempted, and it also reports a pass that ran and then hit a
+		// failure — which this call site cannot see and would record as a bare
+		// error. Handing the recorder the local mode would leave two places
+		// spelling one fact, and that is the drift this file has already had
+		// twice. [LAW:one-source-of-truth]
+		recordCompactFailure(ws, syncCompactTraceCommand, outcome, err)
+		return err
+	}
+	// Recorded before the write, so a stdout that has gone away cannot erase the
+	// record of a pass that really ran. Every sibling here traces success as
+	// well as failure, and the backstop traces its own, so a compact that stayed
+	// silent on success would split "when did compaction last succeed" across
+	// two half-populated trails — the manual one holding only failures, the
+	// automatic one only successes. [LAW:one-source-of-truth]
+	//
+	// The depth and the reclaim ride along because a shallow pass and a deep one
+	// answer different questions later, and the trail cannot recover either once
+	// the outcome is gone. This records through the same seam the automatic pass
+	// uses, so the two cannot describe one event differently — only the command
+	// name distinguishes them. [LAW:one-source-of-truth]
+	recordCompactionSuccess(ws, syncCompactTraceCommand, outcome)
+	// The engine reports what it reclaimed in its own vocabulary; this renders
+	// that account rather than re-deriving it from a storage layout the command
+	// layer has no business reading. [LAW:decomposition]
+	//
+	// The write's own failure is the command's failure, as in every sibling
+	// handler: a store that was compacted but could not say so is not a
+	// successful run. [LAW:no-silent-failure]
+	_, err = fmt.Fprintf(stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
+	return err
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
