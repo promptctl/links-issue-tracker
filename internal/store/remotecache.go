@@ -304,8 +304,14 @@ func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, e
 
 // pruneRemoteCache collects the mirrors no configured remote maps to.
 //
-// The caller holds the commit lock, so no concurrent open can be reading a
-// directory this removes. A directory removed in error costs a re-clone on the
+// It runs without the commit lock and needs no lock at all: a directory is
+// eligible only when NO configured remote derives its key, and every open
+// reaches a cache through a configured remote's key, so an abandoned mirror is
+// unreachable by construction rather than by exclusion.
+// [LAW:no-ambient-temporal-coupling] the eligibility rule is what owns this
+// safety, not a lock some caller has to remember to still be holding.
+//
+// A directory removed in error costs a re-clone on the
 // next open — dbfactory.ensureBareRepo re-creates a missing cache — and never a
 // lost commit: the store's own data lives in `.dolt/noms`, which this never
 // touches. That is why the prune reports rather than fails; it cannot damage
