@@ -11,17 +11,6 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 )
 
-type HealthReport struct {
-	IntegrityCheck     string   `json:"integrity_check"`
-	ForeignKeyIssues   int      `json:"foreign_key_issues"`
-	InvalidRelatedRows int      `json:"invalid_related_rows"`
-	OrphanHistoryRows  int      `json:"orphan_history_rows"`
-	RankInversions     int      `json:"rank_inversions"`
-	DependencyCycle    []string `json:"dependency_cycle"`
-	Errors             []string `json:"errors"`
-	Warnings           []string `json:"warnings"`
-}
-
 func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	issues, err := s.ListIssues(ctx, ListIssuesFilter{Limit: 0, IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
