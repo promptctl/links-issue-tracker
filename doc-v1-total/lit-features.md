@@ -1,0 +1,83 @@
+# lit: a feature overview
+
+lit is an issue tracker that lives inside a git repository and is designed to be operated by coding agents. There is no server, no accounts, no web UI, and nothing to host: lit is a single binary, the backlog is a database stored alongside the repository's git data, and the whole thing syncs between machines through the repository's ordinary git remote. Where a Jira-class tool separates the tracker from the code — a SaaS on one side, the repository on the other — lit collapses the two. Cloning the repo can bring the backlog with it; pushing your work pushes the tickets; two laptops with the same repo each hold a complete, independently usable copy of the tracker.
+
+The second departure from Jira is the intended operator. lit assumes most commands are run by an LLM coding agent working inside the repository, with a human in a supervisory role. Humans set the tracker up, resolve the rare situations that need an owner's judgment, and read the backlog; agents pull tickets, work them, and close them. The command surface is split along exactly that line, and the tool's output is written to be read by an agent mid-session: errors come with remediation instructions, and the tracker injects working guidance directly into command output at the moments an agent needs it.
+
+## Tickets
+
+The unit of work is the issue: a title, a description, an optional reusable working prompt for the agent that picks it up, a type (task, feature, bug, chore, or epic), a two-level priority (normal or urgent), a topic that groups related work and is baked into the issue's ID, free-form labels, an assignee, and comments. Issue IDs are human-readable — a project prefix, the topic, and a short unique suffix — so a ticket reference reads like `myapp-auth-k4f2` rather than a bare number.
+
+An epic is not a separate concept with its own rules; it is simply an issue of type epic that contains children. Its open, in-progress, or closed state is never set by anyone — it is computed from its children, so an epic closes itself when its last child closes and can never disagree with the work underneath it. Progress counts roll up the same way.
+
+Issues relate to each other three ways: parent–child (an issue belongs to at most one epic), blocks (a dependency edge — this must finish before that can start), and related-to (a free association carrying no rules). Dependency cycles are rejected when created, so the backlog always admits a valid working order.
+
+Every mutation to a ticket is recorded in an append-only history: who acted, what action, an optional stated reason, and the exact before-and-after value of every field that moved. The history is a first-class feature rather than an audit afterthought — lit's coordination model (described below) is derived entirely from it.
+
+## Lifecycle
+
+A ticket's status is a simple three-state machine — open, in progress, closed — but lit distinguishes *how* a ticket closes. `done` is the neutral success: the work happened. `close` is every other ending and requires a stated resolution: duplicate or superseded (each naming the canonical ticket the work redirects to) or obsolete or wontfix (terminal, no redirect). A closed ticket can be reopened.
+
+Orthogonal to status, a second axis — retention — moves tickets between live, archived, and deleted. Archiving hides a ticket from everyday views without touching its status; deletion hides it and removes it from the backlog's ordering; both are reversible. An archived or deleted ticket is frozen: it cannot change status until it is brought back. This lets teams sweep finished or irrelevant work out of sight without destroying the record.
+
+## One ranked queue, with lanes
+
+The backlog is a single, totally ordered queue. There are no sprints, boards, or per-column priorities; the order of the queue *is* the priority statement, and reordering is done relationally — put this above that, move this to the top — rather than by assigning numbers. Priority (urgent vs. normal) acts as a tiebreak within the ranked structure, not as a parallel system.
+
+Epics rank as a unit: an epic occupies one slot in the global queue, and its children are ordered privately inside it. Asking to rank a child of one epic against an outside ticket moves the whole epic, leaving its internal order intact — so the global queue stays a queue of coherent work packages.
+
+Inside an epic, lanes split the children into parallel tracks. Children in the same lane are strictly sequenced — the earlier one must finish before the later one becomes available — while children in different lanes can proceed simultaneously. An epic that declares no lanes is simply one fully sequential track. Lanes are how an epic expresses "these three workstreams can run in parallel, but each is ordered," and they are also the unit of coordination between concurrent agents.
+
+## The work loop
+
+An agent's session with lit follows a small, fixed loop.
+
+`lit quickstart` prints the workflow instructions for the repository — how tickets are found, worked, and closed here — and is the standing first move; `lit init` writes a note into the repo's agent-instruction files telling agents to start there.
+
+`lit backlog` shows the ranked queue, and every row is annotated with whether it is workable right now and, if not, why: an unfinished dependency, an earlier ticket in its lane, a required field the project's configuration demands, or a `needs-design` label that parks it pending design work. `lit next` goes one step further and routes to a single ticket — the highest-ranked ticket that is genuinely ready and not already being worked by another checkout. A `focus` label on a goal ticket pulls that goal's entire chain of prerequisites ahead of everything else, so a team can point the queue at an outcome rather than hand-ranking every step.
+
+`lit start` takes the ticket and records the taker as its assignee. During the work, `lit update`, `lit comment`, and the label and dependency commands record progress. `lit done` or `lit close` ends it — and the closing output shows the ticket's neighborhood (its epic, its remaining siblings, what it just unblocked) so the agent can see what its finish freed up. `lit followup` files a successor ticket attached to what just closed, capturing loose ends at the moment they surface instead of losing them.
+
+Throughout the loop, in-progress tickets that have gone untouched for hours are flagged as orphaned — visible evidence of an agent session that died mid-work — and surfaced for reclamation.
+
+## Coordination without a server: claims
+
+Concurrent work is the hard problem for a serverless tracker: two agents in two checkouts must not silently take the same work. lit solves it without any stored assignment table or lock service. Every checkout of the repository carries a small random identity token, every history event is stamped with it, and "who is working what" is *derived* from the recorded history whenever it is needed: whoever most recently started or finished a ticket in a lane holds that lane.
+
+A claim ages out. If the holder has done nothing in the lane for a day (configurable), the claim goes stale and other agents may step in — with a warning to check for unmerged work first. While a claim is fresh, `lit next` simply routes around the held lane, and `lit start` on a held ticket refuses unless the caller explicitly confirms the takeover; taking over someone's active work is always a deliberate act, never an accident. A checkout continues its own epics first: an agent that holds a lane in an epic is steered to that epic's remaining work before anything else, so work packages get finished rather than scattered.
+
+Because a claim is derived from history rather than stored, nothing needs cleaning up. Deleting a worktree releases its claims on that machine immediately; everywhere else they simply expire. And because the identity tokens are opaque random strings, nothing personal — no username, hostname, or path — ever enters the shared database. On the holder's own machine, lit resolves the token back to a real directory and branch for display; on any other machine, the holder is just an anonymous "elsewhere."
+
+Claims are deliberately separate from the assignee field. The assignee is the human-readable owner string on the ticket; the claim is the operational fact of which checkout is working the lane. When an agent runs under a Claude Code session, its session ID becomes its acting identity automatically, so ticket history attributes work to the specific agent session that did it.
+
+## Sharing the backlog: sync
+
+The backlog syncs through the repository's existing git remote — the ticket data travels alongside the code's refs, so adopting lit adds no infrastructure. In normal operation sync is invisible: after every change, lit spawns a short-lived background process that pushes; on a cadence it also pulls in what others pushed and compacts its own storage. If pushes start failing or the local copy hasn't heard from the remote in a day, read commands print a banner saying so, and an optional notification hook can page the owner. A managed git pre-push hook additionally syncs the backlog whenever code is pushed, without ever blocking the push.
+
+Because every machine holds a full copy, two machines can change the same backlog independently, and sync must merge. lit merges the way an engineer would want: field by field, per ticket, against the last common state, deterministically — both machines compute the identical result. Structured fields have sensible rules: a status conflict resolves toward the more-finished state, the higher priority wins, label sets merge per label (and a label one side deliberately removed stays removed), timestamps never decide winners. Free-text fields — title, description, the working prompt — are never auto-merged: a genuine prose conflict is held, with both versions intact, until an agent or human supplies the merged text. Local history is then replayed on top of the remote's, preserving each change's original author, message, and time, so the shared record stays a clean line rather than a tangle.
+
+One situation is reserved for the owner. If two backlogs turn out to share no common history — someone re-initialized, or two independent trackers meet — lit can combine them (a union; nothing lost; no approval needed) or keep one side and discard the other. The discard path is gated behind an approval token bound to the exact state of the fork and printed only in the refusal itself, a mechanism designed so that an autonomous agent cannot talk itself into destroying a backlog: obtaining the token requires reading the refusal, which spells out exactly which tickets would be lost, and any change on either side invalidates it. Choosing which side of a fork survives is a human decision, and the tool enforces that.
+
+## Guidance instead of automation: workflows
+
+lit's answer to Jira automation rules is deliberately not automation. A workflow is a markdown file whose text is injected into command output when a matching moment occurs — a ticket with a given label is shown, work starts, a ticket closes. Nothing executes: no scripts, no webhooks, no side effects. The injected text is instructions for the agent reading the output, which is the natural actuator in an agent-operated tracker — instead of a rule that runs code, you write the checklist the agent should follow at that moment, and lit puts it in front of the agent at exactly that moment.
+
+Workflow files match on any combination of labels, lifecycle states (entering or exiting), and named events, and they layer: a project's files override the user's global ones, which override the single built-in default (a post-close reminder to review related tickets and file follow-ups). A dry-run mode shows which guidance would fire for a hypothetical moment, and every real firing is recorded in a local trace.
+
+## Getting data in and out
+
+The entire backlog exports as a single self-describing JSON document — every ticket, relation, comment, label, and history event — and that one format is the interchange for everything: scripted export, timestamped backups, and full restore. For bulk authoring, lit imports a JSON tree of tickets (with parents and dependencies wired up by symbolic references, so a whole epic can be drafted in one file) and a YAML form that can both create and update tickets in bulk. Nothing is locked in: the export is complete enough to rebuild the tracker from scratch.
+
+## Safety and recovery
+
+Underneath, every mutation is a commit in a versioned embedded database, so the store carries its own full history independent of the ticket-level event log. On top of that sits a graduated recovery ladder. `lit doctor` checks the store's integrity, dependency graph, and sync health, and repairs what is safely repairable. Backups are plain JSON exports, pruned on a budget, with a restore that refuses to overwrite unsynced local work unless forced. Filesystem-level snapshots of the whole database are taken automatically before every risky operation — schema migrations, merges of diverged history, version downgrades — each with its own retention, and each failure message names the exact snapshot and command that undoes the damage. At the bottom of the ladder, for a store so damaged the normal engine refuses to open it, a "lifeboat" pipeline dumps the raw data, rebuilds a fresh store from it in isolation, verifies the rebuild conserves every ticket of the source, and only then swaps it into place — preserving the damaged original untouched beside it.
+
+Versioning is handled with the same caution. `lit upgrade` and `lit downgrade` move the binary and the database schema in lockstep, snapshotting first, and a binary that encounters a database from a newer version refuses cleanly and names the exact upgrade command — it never guesses at data it doesn't understand.
+
+## Setup and administration
+
+`lit init` is the whole installation. Run in a repository, it first checks whether the git remote already carries a backlog — if so, it adopts that backlog wholesale, so a new machine joins an existing tracker with one command — and otherwise creates an empty one. It also installs the pre-push sync hook and writes a managed section into the repo's agent-instruction files pointing agents at `lit quickstart`. All of the tracker's state lives under the repository's git directory; deleting the repo deletes the tracker, and nothing is written anywhere else on the machine beyond optional user-level configuration.
+
+Configuration is deliberately small: a project or user-level file can set the sync cadence, the claim freshness window, required-before-workable fields, a snapshot retention budget, and the owner-notification hook. The guidance templates — quickstart text, the agent-file section, the hook script — can all be overridden per project or per user, so a team can reshape what agents are told without forking the tool.
+
+The result is a tracker with Jira's essential vocabulary — tickets, epics, dependencies, priorities, lifecycle, history — but rebuilt around three commitments Jira never made: the tracker travels inside the repository, the primary operator is an autonomous agent, and every coordination problem that would normally need a server is solved with recorded history, derivation, and merge rules instead.
