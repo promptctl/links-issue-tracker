@@ -19,34 +19,6 @@ import (
 // remote-only issues the owner approved dropping.
 const takeLocalCommitMessage = "reconcile: take local backlog over unrelated remote history"
 
-// UnrelatedResolution is the whole-store choice that settles an unrelated-history
-// divergence: take the local backlog wholesale, or take the remote backlog
-// wholesale. It is the field-level resolve concept (internal/merge, twoTier's Tier-2
-// pick between two sides that both moved) lifted from field scope to the whole store:
-// with no merge-base every issue is "changed on both sides from empty", so the only
-// resolution is which side to take entire. The epic's later `combine` is a third
-// value of this same type, flowing through the same reconcile boundary, never a
-// parallel mode. [LAW:types-are-the-program] the value carries the whole decision;
-// there is no legal take with no side.
-type UnrelatedResolution string
-
-const (
-	// TakeLocal keeps the local backlog and discards the remote-only issues; the
-	// remote-tracking side converges to local on the next push.
-	TakeLocal UnrelatedResolution = "local"
-	// TakeRemote keeps the remote backlog and discards the local-only issues; local
-	// content becomes equal to the remote head.
-	TakeRemote UnrelatedResolution = "remote"
-)
-
-// valid reports whether r is a resolution this binary can apply. It is the boundary
-// guard SyncResolveUnrelated runs before touching the store, so an unknown side is
-// rejected loudly at the door rather than silently no-op'd at the dispatch.
-// [LAW:no-silent-failure]
-func (r UnrelatedResolution) valid() bool {
-	return r == TakeLocal || r == TakeRemote
-}
-
 // takeApprovalToken derives the owner-approval token that authorizes destroying
 // one side of THIS exact unrelated-history fork: a digest of both heads and the
 // chosen side, the prose-resolve Fingerprint device lifted from field scope to
@@ -126,7 +98,7 @@ func (s *Store) SyncResolveUnrelated(ctx context.Context, remote string, branch 
 	if err != nil {
 		return SyncReconcileResult{}, err
 	}
-	if !choice.valid() {
+	if !choice.Valid() {
 		// [LAW:no-silent-failure] an unknown side must never reach the dispatch and
 		// silently do nothing; reject it at the boundary with the legal values.
 		return SyncReconcileResult{}, fmt.Errorf("resolve unrelated histories: unknown side %q (want %q or %q)", choice, TakeLocal, TakeRemote)

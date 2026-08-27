@@ -80,11 +80,6 @@ type Store struct {
 	commitWorkingSetHookForTest func() error
 }
 
-type SyncState struct {
-	Path        string
-	ContentHash string
-}
-
 // applyTransition runs every guard a status transition must pass before it
 // writes — the archived/deleted refusal and the lifecycle Apply (which rejects
 // every action on a container, whose state is derived from children) — and
