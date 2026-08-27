@@ -339,9 +339,12 @@ func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, se
 	// two half-populated trails — the manual one holding only failures, the
 	// automatic one only successes. [LAW:one-source-of-truth]
 	//
-	// The depth rides along because a shallow pass and a deep one answer
-	// different questions later, and the trail cannot recover which ran.
-	recordSyncCommandTrace(ws, "lit sync compact", "compacted", nil, map[string]string{"depth": outcome.Depth.String()})
+	// The depth and the reclaim ride along because a shallow pass and a deep one
+	// answer different questions later, and the trail cannot recover either once
+	// the outcome is gone. Both paths render them through one function, so the
+	// automatic pass and this one cannot record the same fact under different
+	// keys. [LAW:one-source-of-truth]
+	recordSyncCommandTrace(ws, "lit sync compact", "compacted", nil, compactionTraceMetadata(outcome))
 	// The engine reports what it reclaimed in its own vocabulary; this renders
 	// that account rather than re-deriving it from a storage layout the command
 	// layer has no business reading. [LAW:decomposition]

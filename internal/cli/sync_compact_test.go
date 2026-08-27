@@ -177,7 +177,36 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 				t.Fatalf("trace depth = %q, want %q — the trail cannot tell a shallow pass from a deep one without it",
 					traces[0].Metadata["depth"], tc.want.String())
 			}
+			if traces[0].Metadata["detail"] != "journal 4.0 KiB -> 0 B" {
+				t.Fatalf("trace detail = %q, want the engine's own account — a scheduled pass may have nobody reading its stdout, leaving this the only record of what it reclaimed",
+					traces[0].Metadata["detail"])
+			}
 		})
+	}
+}
+
+// Both compaction paths record through one renderer, so the durable trail
+// carries a single shape whichever entry point ran. They previously spelled
+// their own keys and drifted — the backstop writing "mode", the explicit
+// command "depth", and only the backstop carrying the detail — so a reader had
+// to know which path ran before it knew which key to read. Pinning the
+// vocabulary here is what keeps a third call site from inventing a fourth
+// spelling. [LAW:one-source-of-truth]
+func TestCompactionTraceMetadataRendersOneShapeForEveryPath(t *testing.T) {
+	t.Parallel()
+
+	got := compactionTraceMetadata(storage.CompactionOutcome{
+		Ran: true, Depth: storage.GCFull, Detail: "journal 1.0 KiB -> 0 B",
+	})
+	want := map[string]string{"depth": "full", "detail": "journal 1.0 KiB -> 0 B"}
+
+	if len(got) != len(want) {
+		t.Fatalf("metadata = %v, want exactly the keys %v", got, want)
+	}
+	for key, value := range want {
+		if got[key] != value {
+			t.Fatalf("metadata[%q] = %q, want %q", key, got[key], value)
+		}
 	}
 }
 

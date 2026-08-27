@@ -43,9 +43,14 @@ const (
 // engine knowledge, while the depth itself is contract vocabulary.
 // [LAW:one-source-of-truth]
 //
-// A GCMode outside the enum can only arrive through a cast, and the honest
-// answer to one is a refusal: selecting a depth by falling through to the
-// shallower default is precisely the silent wrong-work this type exists to
+// The switch is exhaustive over the contract's depths, and its closing refusal
+// catches the one case GCMode.Valid cannot: a depth the CONTRACT has legalised
+// that this engine has no spelling for — a member added upstream without
+// extending this rendering. The two guards answer different questions and
+// neither is a copy of the other. Valid answers "is this a legal depth at all",
+// which every engine must answer identically and which the store checks at its
+// door; this answers "can Dolt say it", which only Dolt can. Falling through to
+// the shallower default instead would be the silent wrong-work both exist to
 // prevent. [LAW:no-silent-failure]
 func gcProcedureArgs(m GCMode) ([]string, error) {
 	switch m {
@@ -54,7 +59,7 @@ func gcProcedureArgs(m GCMode) ([]string, error) {
 	case GCFull:
 		return []string{"--" + cli.FullFlag}, nil
 	}
-	return nil, fmt.Errorf("unknown compaction mode %d", int(m))
+	return nil, fmt.Errorf("compaction depth %s has no Dolt spelling", m)
 }
 
 const (

@@ -33,12 +33,25 @@ import (
 // flows, rather than a panic, a nil check, or a stub that lies about having
 // done the work. [LAW:no-silent-failure]
 
-// Syncer exchanges the store's contents with peers.
+// Syncer exchanges the store's contents with peers, and reclaims what those
+// exchanges leave behind.
 //
-// It is deliberately transport and observation only: configure remotes, send,
-// receive, and report where local stands. Nothing here resolves a divergence —
-// that is [Reconciler], and keeping the two apart is what lets an engine whose
-// arrivals cannot conflict offer this and stop.
+// Transport and observation are most of it: configure remotes, send, receive,
+// and report where local stands. Compaction sits here rather than in a
+// capability of its own because SyncCompactAndPush compacts and pushes under a
+// single commit-lock acquisition — one atomic operation, so the push reflects
+// exactly the compacted state, and not something a caller could assemble from
+// SyncCompact plus SyncPush. Any engine offering this interface therefore
+// already owes compaction, so splitting the two explicit compaction methods out
+// would not let an engine decline one and keep the other; it would only move
+// them. Nor could SyncCompactAndPush follow them out, since it pushes and would
+// then owe both capabilities — that it fits on neither side of such a line is
+// what says the two concerns are genuinely joined here, at the store's write
+// path and its commit lock. [LAW:decomposition]
+//
+// Nothing here resolves a divergence — that is [Reconciler], and keeping the
+// two apart is what lets an engine whose arrivals cannot conflict offer this
+// and stop.
 type Syncer interface {
 	SyncAddRemote(ctx context.Context, name string, url string) error
 	SyncRemoveRemote(ctx context.Context, name string) error
