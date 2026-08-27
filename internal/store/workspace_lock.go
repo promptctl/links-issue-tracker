@@ -229,6 +229,24 @@ const (
 	BeaconObstructed
 )
 
+// String names the verdict for the diagnostics that report one. A message
+// carrying "beacon verdict: 1" sends its reader to this file to count iota;
+// the whole value of a verdict over raw lock mechanics is that it can say what
+// it saw. Exhaustive by construction: an unnamed value can only be one that
+// was added to the enum without being added here, so it reports itself as
+// exactly that rather than as any real state. [LAW:no-silent-failure]
+func (v MirrorBeaconVerdict) String() string {
+	switch v {
+	case BeaconUnheld:
+		return "unheld"
+	case BeaconAnswered:
+		return "answered"
+	case BeaconObstructed:
+		return "obstructed"
+	}
+	return fmt.Sprintf("unnamed MirrorBeaconVerdict(%d)", int(v))
+}
+
 // ProbeMirrorBeacon parses the beacon's kernel state into a
 // MirrorBeaconVerdict via two single-attempt probes, shared first, exclusive
 // LAST — the order is the correctness: the final, deciding attempt is the
