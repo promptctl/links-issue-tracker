@@ -12,19 +12,33 @@
 // GetIssue, so an engine with no schema and no merge would have inherited them
 // as if they were storage. This package is the line between the two. What is
 // here, every engine owes; what is not here, an engine may still offer, but it
-// offers it as a named capability rather than as storage (see
-// links-store-seam-q35v.2).
+// offers it as a named capability — see [Capability] and the interfaces beside
+// it, and [Offered] for how an engine is asked.
 //
 // # The vocabulary rule
 //
 // Every type crossing this boundary is a model type or a type declared here.
-// Nothing in this package may name a SQL row, a Dolt branch, a commit, a
-// schema version, or any other engine artifact. That rule is what makes the
-// interface a contract rather than a description of Dolt: a signature that
-// mentions an engine artifact silently obliges every future engine to grow
-// one. [LAW:one-way-deps] The dependency runs engine → contract → model, never
-// back; internal/store imports this package, and this package imports no
+// [Store] and the interfaces it composes may name no SQL row, no branch, no
+// commit, no schema version, and no other engine artifact. That rule is what
+// makes the core a contract rather than a description of Dolt: a signature
+// that mentions an engine artifact silently obliges every future engine to
+// grow one. [LAW:one-way-deps] The dependency runs engine → contract → model,
+// never back; internal/store imports this package, and this package imports no
 // engine.
+//
+// The capability interfaces are held to a different line, and deliberately:
+// naming an engine artifact is precisely what makes something a capability
+// instead of storage. [SchemaMigrator] must speak of schema versions or it
+// describes nothing; [Checkpointer] must hand back an anchor the engine can
+// resolve. What that buys is that the artifacts are quarantined behind an
+// interface an engine can decline, rather than mixed into the set every engine
+// owes.
+//
+// Two of the relocated types carry Dolt's spelling further than that argument
+// justifies — SyncStatusReport.DoltVersion, and Checkpoint.CommitSHA's name —
+// because renaming a field changes rendered output and S0's gate is that
+// nothing observable moves. They are recorded on links-store-seam-q35v.5, the
+// epic's circle-back, rather than quietly accepted here.
 //
 // # The conformance suite is the actual specification
 //

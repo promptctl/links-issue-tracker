@@ -11,90 +11,10 @@ import (
 
 	doltenv "github.com/dolthub/dolt/go/libraries/doltcore/env"
 	"golang.org/x/mod/semver"
-
-	"github.com/promptctl/links-issue-tracker/internal/merge"
 )
-
-type SyncRemote struct {
-	Name string `json:"name"`
-	URL  string `json:"url"`
-}
 
 const minEmbeddedDoltVersion = "v0.40.5-0.20260314011441-62975ef6bf36"
 const minEmbeddedDriverVersion = "v0.2.1-0.20260314000741-0fe74e7ee31a"
-
-type SyncStatusRow struct {
-	TableName string `json:"table_name"`
-	Staged    bool   `json:"staged"`
-	Status    string `json:"status"`
-}
-
-type SyncStatusReport struct {
-	DoltVersion string          `json:"dolt_version"`
-	Branch      string          `json:"branch"`
-	HeadCommit  string          `json:"head_commit"`
-	HeadMessage string          `json:"head_message"`
-	Status      []SyncStatusRow `json:"status"`
-	Remotes     []SyncRemote    `json:"remotes"`
-}
-
-// SyncPullState classifies what a single `lit sync pull` did, derived from the
-// receive (fetch + fast-forward) and, when the branch diverged, the field-aware
-// reconcile. [LAW:one-source-of-truth] one mapping from the underlying
-// receive/reconcile outcomes to a pull label; the CLI renders this, it never
-// re-derives it.
-type SyncPullState string
-
-const (
-	// SyncPullUpToDate: local already at the remote head; nothing to pull.
-	SyncPullUpToDate SyncPullState = "up_to_date"
-	// SyncPullFastForwarded: local was strictly behind and advanced to the
-	// remote head with no merge commit.
-	SyncPullFastForwarded SyncPullState = "fast_forwarded"
-	// SyncPullLinearized: local diverged and the field-aware reconcile merged
-	// the divergence into linear history — the same outcome the automatic
-	// receive produces, reached explicitly here.
-	SyncPullLinearized SyncPullState = "linearized"
-	// SyncPullProsePending: local diverged and every code-owned field settled,
-	// but a free-text field diverged on both sides. Nothing is committed; the
-	// prose conflicts are held for the agent surface. [LAW:no-silent-failure]
-	SyncPullProsePending SyncPullState = "prose_pending"
-	// SyncPullUnrelated: local diverged from a remote it shares no history with, so
-	// the reconcile found no common ancestor and merged nothing. Nothing is
-	// committed; the divergence is surfaced for wholesale/union resolution rather
-	// than merged through an absent base. [LAW:no-silent-failure]
-	SyncPullUnrelated SyncPullState = "unrelated_histories"
-	// SyncPullAhead: local has unpushed commits and the remote has nothing new;
-	// there is nothing to pull (push delivers local commits).
-	SyncPullAhead SyncPullState = "ahead"
-	// SyncPullNeverSynced: the remote has no ref for this branch even after a
-	// fetch — the branch has never been pushed, so there is nothing to pull.
-	SyncPullNeverSynced SyncPullState = "never_synced"
-)
-
-// SyncPullResult reports the pull outcome, the ahead/behind counts it was
-// decided from, and — for SyncPullProsePending only — the free-text conflicts
-// held for the agent surface.
-type SyncPullResult struct {
-	State   SyncPullState        `json:"state"`
-	Ahead   int64                `json:"ahead"`
-	Behind  int64                `json:"behind"`
-	Pending []merge.ProsePending `json:"pending,omitempty"`
-	// OldestDivergedUnix dates the divergence this pull observed (Unix seconds),
-	// so a held-conflict surface can escalate by age. Zero unless the pull met a
-	// divergence. Carried from the receive that classified the freshness.
-	OldestDivergedUnix int64 `json:"oldest_diverged_unix,omitempty"`
-	// Unrelated carries the both-sides issue-id partition, non-nil only for
-	// SyncPullUnrelated. Carried straight off the reconcile that detected the
-	// no-common-ancestor divergence, so the pull surface enumerates the same
-	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
-	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
-}
-
-type SyncPushResult struct {
-	Status  int64  `json:"status"`
-	Message string `json:"message"`
-}
 
 func OpenSync(ctx context.Context, doltRootDir string, workspaceID string) (_ *Store, err error) {
 	// [LAW:single-enforcer] Route through the one argument-validation boundary
@@ -459,41 +379,6 @@ func resetHardToRef(ctx context.Context, db *sql.DB, ref string) error {
 	return nil
 }
 
-// SyncReceiveState classifies what a single background receive did, derived
-// from the post-fetch freshness. [LAW:one-source-of-truth] One mapping from
-// freshness to outcome; the CLI renders this, it never re-derives it.
-type SyncReceiveState string
-
-const (
-	// SyncReceiveUpToDate: local already at the remote head; fetch found nothing.
-	SyncReceiveUpToDate SyncReceiveState = "up_to_date"
-	// SyncReceiveFastForwarded: local was strictly behind and advanced to the
-	// remote head with no merge commit — the only state that mutates local data.
-	SyncReceiveFastForwarded SyncReceiveState = "fast_forwarded"
-	// SyncReceiveAhead: local has unpushed commits and the remote has nothing
-	// new; there is nothing to receive (the push side delivers local commits).
-	SyncReceiveAhead SyncReceiveState = "ahead"
-	// SyncReceiveDiverged: both sides moved; a fast-forward is impossible and a
-	// real merge is required. The background receive deliberately does NOT merge
-	// here — that is the foreground, agent-present reconcile (links-multi-machine-ttde.2).
-	// Reported, never silently skipped. [LAW:no-silent-failure]
-	SyncReceiveDiverged SyncReceiveState = "diverged"
-	// SyncReceiveNeverSynced: no remote-tracking ref even after a fetch (the
-	// remote has no data on this branch yet); nothing to receive.
-	SyncReceiveNeverSynced SyncReceiveState = "never_synced"
-)
-
-// SyncReceiveResult reports the receive outcome and the ahead/behind counts it
-// was decided from, plus — when diverged — the Unix time the divergence began,
-// so the inline reconcile that follows a SyncReceiveDiverged can date the fork
-// it is about to heal without a second freshness read. Zero unless diverged.
-type SyncReceiveResult struct {
-	State              SyncReceiveState
-	Ahead              int64
-	Behind             int64
-	OldestDivergedUnix int64
-}
-
 // SyncReceive fetches the remote and, only when the local branch is strictly
 // behind, fast-forwards it to the remote head. It is purely lossless: it never
 // creates a merge commit, never merges a divergence, and never leaves a dirty
@@ -689,65 +574,6 @@ func (s *Store) SyncStatus(ctx context.Context) (SyncStatusReport, error) {
 		return SyncStatusReport{}, fmt.Errorf("iterate dolt status rows: %w", err)
 	}
 	return report, nil
-}
-
-// SyncFreshnessState classifies the local data branch's position relative to
-// the remote-tracking ref. It is derived solely from whether that ref exists
-// and the ahead/behind commit counts (see SyncFreshness.State), so there is one
-// mapping from observation to label and no caller re-derives it.
-// [LAW:one-source-of-truth]
-type SyncFreshnessState string
-
-const (
-	SyncNeverSynced SyncFreshnessState = "never_synced"
-	SyncUpToDate    SyncFreshnessState = "up_to_date"
-	SyncAhead       SyncFreshnessState = "ahead"
-	SyncBehind      SyncFreshnessState = "behind"
-	SyncDiverged    SyncFreshnessState = "diverged"
-)
-
-// SyncFreshness reports the local data branch's position relative to the
-// remote-tracking ref `remotes/<Remote>/<Branch>`. That ref reflects the remote
-// as of the last fetch or push, so Behind is "as of last fetch" — computing it
-// never contacts the network. Synced is false when the ref does not exist yet
-// (the remote has never been pushed to or fetched from); Ahead and Behind are
-// zero in that state, which is why State, not the raw counts, is the discriminant
-// a renderer switches on.
-type SyncFreshness struct {
-	Remote string `json:"remote"`
-	Branch string `json:"branch"`
-	Synced bool   `json:"synced"`
-	Ahead  int64  `json:"ahead"`
-	Behind int64  `json:"behind"`
-	// OldestDivergedUnix is the Unix time (seconds) of the OLDEST commit in the
-	// union of the two divergent ranges — i.e. when this fork first happened. It
-	// dates the divergence itself, so an escalation surface can distinguish a
-	// fresh divergence from one that has festered for days. Zero when nothing has
-	// diverged (both counts are 0) or the branch never synced. It is a raw
-	// timestamp, not an age: the clock that turns it into "N hours ago" lives at
-	// the rendering boundary, keeping this read a pure function of local refs.
-	// [LAW:effects-at-boundaries] [LAW:types-are-the-program] a stored age would
-	// let the value contradict "now"; a timestamp cannot.
-	OldestDivergedUnix int64 `json:"oldest_diverged_unix"`
-}
-
-// State derives the classification from the raw observations. Keeping it a
-// computed method (rather than a stored field) makes a label that contradicts
-// the counts unrepresentable. [LAW:types-are-the-program]
-func (f SyncFreshness) State() SyncFreshnessState {
-	if !f.Synced {
-		return SyncNeverSynced
-	}
-	switch {
-	case f.Ahead == 0 && f.Behind == 0:
-		return SyncUpToDate
-	case f.Behind == 0:
-		return SyncAhead
-	case f.Ahead == 0:
-		return SyncBehind
-	default:
-		return SyncDiverged
-	}
 }
 
 // SyncFreshness computes the local data branch's position relative to the

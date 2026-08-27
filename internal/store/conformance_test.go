@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"slices"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -22,4 +23,29 @@ func TestDoltEngineConformance(t *testing.T) {
 	conformance.Run(t, func(t *testing.T) storage.Store {
 		return openIssueStore(t, context.Background())
 	})
+}
+
+// TestDoltEngineOffersEveryCapability states, at runtime, what contract.go's
+// compile-time assertions state statically — but through the discovery
+// mechanism a caller actually uses, so the capability values are checked to be
+// wired to the interfaces this engine was asserted against.
+//
+// It is also the shape the second engine's test takes: an engine says which
+// capabilities it offers by being asked, and an engine that offers fewer says
+// so here rather than anywhere else. [LAW:one-source-of-truth]
+func TestDoltEngineOffersEveryCapability(t *testing.T) {
+	t.Parallel()
+	engine := openIssueStore(t, context.Background())
+
+	offered := []string{}
+	for _, capability := range storage.Offered(engine) {
+		offered = append(offered, capability.Name())
+	}
+	want := []string{}
+	for _, capability := range storage.Capabilities() {
+		want = append(want, capability.Name())
+	}
+	if !slices.Equal(offered, want) {
+		t.Fatalf("the Dolt engine offers %v, want every capability %v", offered, want)
+	}
 }

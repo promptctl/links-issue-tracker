@@ -6,20 +6,6 @@ import (
 	"fmt"
 )
 
-// UnrelatedInventory partitions issue ids across the two sides of an
-// unrelated-history divergence by which side holds each: ids only the local head
-// carries, ids only the remote head carries, and ids both carry. The three slices
-// are sorted and mutually disjoint by construction — every id present on either
-// side lands in exactly one — so the partition is total and a consumer renders or
-// resolves it without re-deriving membership. [LAW:types-are-the-program] the type
-// is the "what each side holds" answer; the take-one/union resolutions later in the
-// epic read the same partition rather than re-querying both heads.
-type UnrelatedInventory struct {
-	OnlyLocal  []string `json:"only_local,omitempty"`
-	OnlyRemote []string `json:"only_remote,omitempty"`
-	OnBoth     []string `json:"on_both,omitempty"`
-}
-
 // unrelatedInventory reads the issue-id set at each of the two unrelated heads and
 // partitions them by presence. It reads AS OF each commit hash — a pure read that
 // moves no branch and lifts no schema — so it preserves the detection's no-write

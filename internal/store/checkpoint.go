@@ -7,22 +7,6 @@ import (
 	"time"
 )
 
-// Checkpoint is a named Dolt branch created at a specific HEAD commit to
-// provide a lightweight revert point for migration failures. Not
-// migration-specific — any Store operation that needs a Dolt-native rollback
-// anchor can use a different prefix and reuse this primitive.
-//
-// [LAW:types-are-the-program] The type encodes the full description of a
-// revert point: name, prefix, creation time, and the commit it was created
-// at. The name encodes the prefix and timestamp so ListCheckpoints can
-// reconstruct the set without external metadata storage.
-type Checkpoint struct {
-	Name      string    // "<prefix>-<unix-nano>"
-	Prefix    string    // caller label, e.g. "pre-migrate"
-	CreatedAt time.Time // parsed from the unix-nano suffix in Name
-	CommitSHA string    // Dolt HEAD commit hash at creation time
-}
-
 // CreateCheckpoint creates a Dolt branch at the current HEAD and returns the
 // resulting Checkpoint.
 //

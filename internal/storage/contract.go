@@ -199,8 +199,9 @@ type Attributor interface {
 // interface; a new engine implements these pieces one joint at a time. What
 // is deliberately absent is as load-bearing as what is here — sync, schema
 // migration, checkpoints, fsck, and raw test access are engine capabilities,
-// named separately, so an engine with no schema and no remote does not
-// inherit obligations it has no meaning for.
+// named separately as [Syncer], [Reconciler], [Checkpointer], [Repairer],
+// [SchemaMigrator], [Importer], and [RawExecutor], so an engine with no schema
+// and no remote does not inherit obligations it has no meaning for.
 type Store interface {
 	IssueReader
 	IssueWriter
