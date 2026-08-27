@@ -320,3 +320,71 @@ func gitInDir(t *testing.T, dir string, args ...string) {
 		t.Fatalf("git %v in %s failed: %v\n%s", args, dir, err, string(out))
 	}
 }
+
+// TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot pins the
+// re-check the delete loop leans on. The plan answers "is this abandoned?" once,
+// for every key, at a moment that recedes as the loop runs; this asks it again of
+// the authority in the moment before a directory is removed. The third case is
+// the one that matters: the same key changes answer when the remote list
+// changes, which is exactly what a snapshot cannot do.
+func TestRemoteCacheKeyIsStillAbandonedFollowsTheRemotesNotASnapshot(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+
+	remote := seedBareGitRemote(t, base)
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "c1", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	sync, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer sync.Close()
+	if err := sync.SyncAddRemote(ctx, "origin", GitBackedRemoteURL(remote)); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+	if _, err := sync.SyncCompactAndPush(ctx, "origin", "master", true, false); err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+
+	keys, err := listRemoteCacheKeys(sync.remoteCacheBase())
+	if err != nil {
+		t.Fatalf("listRemoteCacheKeys() error = %v", err)
+	}
+	if len(keys) != 1 {
+		t.Fatalf("cache keys after push = %v, want exactly the live mirror", keys)
+	}
+	mirrorKey := keys[0]
+
+	// A key origin derives is not abandoned, whatever a stale plan believed.
+	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, mirrorKey); err != nil || abandoned {
+		t.Fatalf("remoteCacheKeyIsStillAbandoned(live) = (%v, %v), want (false, nil)", abandoned, err)
+	}
+	// A key no remote derives is.
+	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, strings.Repeat("ab", 32)); err != nil || !abandoned {
+		t.Fatalf("remoteCacheKeyIsStillAbandoned(orphan) = (%v, %v), want (true, nil)", abandoned, err)
+	}
+	// Drop the remote and the same key changes answer. A plan taken before this
+	// point still calls it live; the re-check does not, because it reads the
+	// remote list rather than remembering it.
+	if err := sync.SyncRemoveRemote(ctx, "origin"); err != nil {
+		t.Fatalf("SyncRemoveRemote() error = %v", err)
+	}
+	if abandoned, err := sync.remoteCacheKeyIsStillAbandoned(ctx, mirrorKey); err != nil || !abandoned {
+		t.Fatalf("after removing origin: remoteCacheKeyIsStillAbandoned(%s) = (%v, %v), want (true, nil) — "+
+			"the answer must follow the remotes, not a snapshot", mirrorKey, abandoned, err)
+	}
+}

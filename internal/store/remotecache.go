@@ -321,12 +321,21 @@ func expectedRemoteCacheKeys(remotes []storage.SyncRemote) (map[string]string, e
 
 // pruneRemoteCache collects the mirrors no configured remote maps to.
 //
-// It runs without the commit lock and needs no lock at all: a directory is
-// eligible only when NO configured remote derives its key, and every open
-// reaches a cache through a configured remote's key, so an abandoned mirror is
-// unreachable by construction rather than by exclusion.
-// [LAW:no-ambient-temporal-coupling] the eligibility rule is what owns this
+// It runs without the commit lock, and what makes a removal safe is the
+// eligibility rule rather than exclusion: a directory is eligible only when NO
+// configured remote derives its key, and every open reaches a cache through a
+// configured remote's key, so a mirror stays unreachable for exactly as long as
+// it stays abandoned. [LAW:no-ambient-temporal-coupling] the rule owns this
 // safety, not a lock some caller has to remember to still be holding.
+//
+// "For as long as it stays abandoned" is the entire caveat, and it is why
+// eligibility is re-asked per directory instead of trusted from the plan. The
+// plan is a snapshot and this loop has no bound on how long it runs; a sibling
+// process that re-spells a remote back to a spelling this cache still holds and
+// pushes through it makes Dolt write a LIVE mirror at a key this loop is already
+// carrying. Deleting on the snapshot would be the live-mirror deletion this
+// whole feature exists to prevent, reached through a clock instead of a bad
+// derivation.
 //
 // A directory removed in error costs a re-clone on the
 // next open — dbfactory.ensureBareRepo re-creates a missing cache — and never a
@@ -355,6 +364,17 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 	outcome := remoteCachePruneOutcome{}
 	var problems []string
 	for _, key := range plan.abandoned {
+		// Ask again, in the moment before deleting, against the remotes as they
+		// stand now rather than as the plan found them. A key that has come back
+		// to life since is somebody's live mirror.
+		abandoned, err := s.remoteCacheKeyIsStillAbandoned(ctx, key)
+		if err != nil {
+			problems = append(problems, err.Error())
+			continue
+		}
+		if !abandoned {
+			continue
+		}
 		reclaimed, collected, err := collectAbandonedMirror(base, key)
 		if err != nil {
 			problems = append(problems, err.Error())
@@ -377,6 +397,27 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 	return outcome
 }
 
+// remoteCacheKeyIsStillAbandoned re-asks the plan's question about one key
+// against the remote list as it stands right now. The plan answered it once, for
+// every key at once, at a time that recedes as the loop runs.
+//
+// [LAW:one-source-of-truth] the remote list is the authority on what is live,
+// and the plan is a derived copy of it that starts going stale the moment it is
+// taken — so the decision that actually deletes reads the authority, not the
+// copy.
+func (s *Store) remoteCacheKeyIsStillAbandoned(ctx context.Context, key string) (bool, error) {
+	remotes, err := s.SyncListRemotes(ctx)
+	if err != nil {
+		return false, fmt.Errorf("re-check abandoned mirror %s: %w", key, err)
+	}
+	expected, err := expectedRemoteCacheKeys(remotes)
+	if err != nil {
+		return false, fmt.Errorf("re-check abandoned mirror %s: %w", key, err)
+	}
+	_, wanted := expected[key]
+	return !wanted, nil
+}
+
 // collectAbandonedMirror measures and removes one abandoned mirror, and has
 // three things it can report: collected, with the bytes it reclaimed; already
 // gone; or a failure naming the key.
@@ -390,6 +431,16 @@ func (s *Store) pruneRemoteCache(ctx context.Context) remoteCachePruneOutcome {
 // here: the refusal this outcome carries only works if it is believed, and a
 // prune that cries wolf whenever two pushes overlap spends exactly the
 // credibility the refusal depends on.
+//
+// One window this deliberately does NOT close: a sibling that takes the
+// directory between the walk below and the unlink after it. os.RemoveAll returns
+// nil for a path that is already gone, so both prunes then report the same bytes
+// reclaimed, and the reclaim figure is knowingly approximate across concurrent
+// prunes. Proving ownership needs a rename-as-claim, and a crash between the
+// rename and the delete strands a staged directory that isRemoteCacheKey refuses
+// to classify and nothing ever collects — a permanent leak of exactly the kind
+// of directory this feature exists to collect, bought to correct a byte count.
+// links-storage-bd8w.1.1 carries the design that would make it exact.
 func collectAbandonedMirror(base, key string) (reclaimed int64, collected bool, err error) {
 	dir := filepath.Join(base, key)
 	// Size first: once the directory is gone there is nothing left to measure,
