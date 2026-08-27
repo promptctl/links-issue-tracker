@@ -436,21 +436,95 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 	return result, nil
 }
 
-// compactWithinLock runs DOLT_GC and rotates the connection. The caller must
-// already hold the commit lock; SyncCompact and SyncPush both compose over
-// this helper so the compact step has one implementation regardless of whether
-// it runs as a standalone mutation or as the first step of a larger one.
-func (s *Store) compactWithinLock(ctx context.Context) error {
-	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC"); err != nil {
-		return fmt.Errorf("compact dolt store: %w", err)
+// compactWithinLock runs DOLT_GC at the requested depth and rotates the
+// connection. The caller must already hold the commit lock; SyncCompact and
+// SyncCompactAndPush both compose over this helper so the compact step has one
+// implementation regardless of whether it runs as a standalone mutation or as
+// the first step of a larger one.
+//
+// The depth arrives as an argument rather than being decided here, so this
+// function has no policy in it and the two callers cannot drift on what a
+// given depth means. [LAW:dataflow-not-control-flow]
+func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) error {
+	args, err := gcProcedureArgs(mode)
+	if err != nil {
+		return err
+	}
+	if _, err := callIntProcedure(ctx, s.db, "DOLT_GC", args...); err != nil {
+		return fmt.Errorf("compact dolt store (%s): %w", mode, err)
 	}
 	// [LAW:single-enforcer] Online GC poisons the active SQL connection; the Store rotates it here so every downstream query contract is restored before lock release.
 	return s.reconnect(ctx)
 }
 
-func (s *Store) SyncCompact(ctx context.Context) error {
+// SyncCompact compacts the store at the requested depth, with no remote
+// involved. It is what a workspace that never pushes has to reach for, and the
+// depth is the caller's to choose.
+//
+// The before/after footprint is measured around the pass and returned already
+// rendered, so a caller learns what was reclaimed without having to read this
+// engine's on-disk layout for itself. The two readings straddle the lock rather
+// than sitting inside it: they are an account of what happened, never an input
+// to a decision, so a concurrent mutation nudging them costs accuracy in a
+// report and nothing else.
+func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.CompactionOutcome, error) {
+	before, beforeErr := s.measureFootprint()
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
-	return s.runSyncMutation(ctx, s.compactWithinLock)
+	if err := s.runSyncMutation(ctx, func(ctx context.Context) error {
+		return s.compactWithinLock(ctx, mode)
+	}); err != nil {
+		return storage.CompactionOutcome{}, err
+	}
+	after, afterErr := s.measureFootprint()
+	return storage.CompactionOutcome{
+		Ran:    true,
+		Depth:  mode,
+		Detail: footprintDelta(before, after, errors.Join(beforeErr, afterErr)),
+	}, nil
+}
+
+// CompactIfDue compacts only when this store's own footprint says a pass is
+// owed. It is the backstop's entrypoint: the judgment lives here, beside the
+// layout it reads, so a cadence owner never has to know what a journal is.
+// [LAW:decomposition]
+//
+// "Nothing was due" returns a zero outcome and no error, because it is the
+// ordinary result — the check is cheap and meant to be asked often, while the
+// pass is neither.
+func (s *Store) CompactIfDue(ctx context.Context) (storage.CompactionOutcome, error) {
+	footprint, err := s.measureFootprint()
+	if err != nil {
+		// "I could not measure" is not "nothing is due". Returning the error
+		// keeps an unreadable store from quietly ceasing to be maintained.
+		// [LAW:no-silent-failure]
+		return storage.CompactionOutcome{}, fmt.Errorf("measure store footprint: %w", err)
+	}
+	mode, due := dueMode(footprint)
+	if !due {
+		return storage.CompactionOutcome{}, nil
+	}
+	return s.SyncCompact(ctx, mode)
+}
+
+// chooseCompactionDepth picks the depth for the push path. The push always
+// compacts at least the new generation — that is this path's long-standing
+// contract and it does not become conditional on a measurement succeeding — so
+// the footprint can only ever deepen the pass, never cancel it.
+//
+// A measurement that fails therefore returns a usable depth AND its error: the
+// fallback is the exact behavior this path had before the footprint existed,
+// which makes it a safe floor rather than an invented one, and the caller
+// reports the problem instead of the store silently choosing for it.
+// [LAW:no-silent-failure]
+func (s *Store) chooseCompactionDepth() (GCMode, error) {
+	footprint, err := s.measureFootprint()
+	if err != nil {
+		return GCNewGen, err
+	}
+	if mode, due := dueMode(footprint); due {
+		return mode, nil
+	}
+	return GCNewGen, nil
 }
 
 // SyncPush mirrors the local branch to the remote. It only pushes — one path,
@@ -480,8 +554,13 @@ func (s *Store) SyncPush(ctx context.Context, remote string, branch string, setU
 // entrypoints, not one method with a compaction flag. [LAW:decomposition]
 func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (storage.SyncPushResult, error) {
 	var result storage.SyncPushResult
+	var depth GCMode
+	var depthErr error
 	err := s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if err := s.compactWithinLock(ctx); err != nil {
+		// Measured inside the lock, where no other mutation can grow the
+		// journal between the reading and the pass it selects.
+		depth, depthErr = s.chooseCompactionDepth()
+		if err := s.compactWithinLock(ctx, depth); err != nil {
 			return err
 		}
 		pushed, pushErr := s.pushWithinLock(ctx, remote, branch, setUpstream, force)
@@ -511,7 +590,12 @@ func (s *Store) SyncCompactAndPush(ctx context.Context, remote string, branch st
 	// costs disk, while a failed `lit sync push` costs the user their sync.
 	// [LAW:dataflow-not-control-flow] the prune runs every time and reports as a
 	// value; nothing branches on whether it did.
-	result.Maintenance = s.pruneRemoteCache(ctx).Report()
+	// Two maintenance jobs share one operator-facing channel, each reporting
+	// only what is worth saying. [LAW:one-type-per-behavior]
+	result.Maintenance = joinMaintenance(
+		compactionReport(depth, depthErr),
+		s.pruneRemoteCache(ctx).Report(),
+	)
 	return result, nil
 }
 

@@ -103,7 +103,7 @@ func TestCompletionSubcommandsDerivedFromFamilies(t *testing.T) {
 	bash := renderCompletion(t, "bash")
 	wants := []string{
 		`sync)
-      COMPREPLY=( $(compgen -W "status remote fetch pull push reconcile"`,
+      COMPREPLY=( $(compgen -W "status remote fetch pull push compact reconcile"`,
 		`remote)
       COMPREPLY=( $(compgen -W "ls"`,
 		`reconcile)

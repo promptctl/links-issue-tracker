@@ -232,6 +232,9 @@ func (o remoteCachePruneOutcome) Report() string {
 	}
 }
 
+// humanBytes renders a byte count for operator-facing output. Exported so the
+// CLI's maintenance output and the store's own maintenance reports cannot
+// disagree about how a size is spelled. [LAW:one-source-of-truth]
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {

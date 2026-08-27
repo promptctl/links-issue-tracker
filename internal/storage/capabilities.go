@@ -62,7 +62,17 @@ type Syncer interface {
 	// the foreground reconcile, never healed here. [LAW:no-silent-failure]
 	SyncReceive(ctx context.Context, remote string, branch string) (SyncReceiveResult, error)
 
-	SyncCompact(ctx context.Context) error
+	// SyncCompact reclaims local storage at the requested depth, with no
+	// remote involved — the entrypoint a workspace that never pushes needs.
+	SyncCompact(ctx context.Context, mode GCMode) (CompactionOutcome, error)
+
+	// CompactIfDue compacts only when the engine's own accounting says a pass
+	// is owed, and reports what it did. The engine owns that judgment because
+	// what makes a pass due is a fact about how it stores data — a caller that
+	// re-derived it would have to know the engine's on-disk shape, which is
+	// exactly what this contract exists to keep it from needing.
+	// [LAW:decomposition]
+	CompactIfDue(ctx context.Context) (CompactionOutcome, error)
 	SyncCompactAndPush(ctx context.Context, remote string, branch string, setUpstream bool, force bool) (SyncPushResult, error)
 
 	// GetSyncState and RecordSyncState carry the staleness marker across

@@ -84,13 +84,14 @@ func withSyncStore(run syncRunFn) wsRunFn {
 }
 
 var syncFamily = commandFamily[wsRunFn]{
-	usage: "usage: lit sync <status|remote|fetch|pull|push|reconcile> ...",
+	usage: "usage: lit sync <status|remote|fetch|pull|push|compact|reconcile> ...",
 	subcommands: []subcommandRow[wsRunFn]{
 		{name: "status", payload: withSyncStore(runSyncStatus)},
 		{name: "remote", payload: withSyncStore(runSyncRemote)},
 		{name: "fetch", payload: withSyncStore(runSyncFetch)},
 		{name: "pull", payload: withSyncStore(runSyncPull)},
 		{name: "push", payload: withSyncStore(runSyncPush)},
+		{name: "compact", payload: withSyncStore(runSyncCompact)},
 		{name: "reconcile", payload: withSyncStore(runSyncReconcile)},
 		// Hidden: the detached on-change mirror entrypoint. Absent from `usage`
 		// above, so it never shows in help; it manages its own store lifecycle
@@ -304,6 +305,38 @@ func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, n
 	default:
 		return SyncFailureError{}, false
 	}
+}
+
+// runSyncCompact reclaims local storage without contacting any remote. It is
+// the explicit, schedulable form of the maintenance the backstop performs on a
+// threshold, and the only way to reach the deep pass on demand.
+//
+// It deliberately requires no remote: a solo workspace that never pushes is
+// exactly the one with nothing else to collect its store, and gating
+// maintenance on a remote would leave that workspace no path at all.
+func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {
+	fs := newCobraFlagSet("sync compact")
+	full := fs.Bool("full", false, "Rewrite the old generation too — reclaims what earlier passes archived, at a cost proportional to the whole store")
+	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	// [LAW:dataflow-not-control-flow] The flag selects a depth value; there is
+	// one compaction call, not one per depth.
+	mode := storage.GCNewGen
+	if *full {
+		mode = storage.GCFull
+	}
+
+	outcome, err := session.syncer.SyncCompact(ctx, mode)
+	if err != nil {
+		recordSyncCommandTrace(ws, "lit sync compact", "error", err, nil)
+		return err
+	}
+	// The engine reports what it reclaimed in its own vocabulary; this renders
+	// that account rather than re-deriving it from a storage layout the command
+	// layer has no business reading. [LAW:decomposition]
+	fmt.Fprintf(stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
+	return nil
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {

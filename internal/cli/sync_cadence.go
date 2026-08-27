@@ -16,14 +16,21 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
-// DisableAutoSyncEnvVar is the process-level kill switch for all automatic sync
-// (the on-change push mirror and the receive). When set to a truthy value, no
-// command schedules a mirror or runs a receive. It exists for environments that
-// must never trigger sync as a side effect of a lit command — CI, sandboxes, and
+// DisableAutoSyncEnvVar is the process-level kill switch for everything this
+// owner schedules after a command: the on-change push mirror, the receive, and
+// the compaction backstop. When set to a truthy value, no command schedules a
+// mirror, runs a receive, or compacts. It exists for environments that must
+// never trigger work as a side effect of a lit command — CI, sandboxes, and
 // lit's own test suite — and is distinct from `sync.receive = false` (which
 // disables only receive, via config). Exported so out-of-package callers (the
 // cmd/lit signal acceptance test) target the one canonical env-var name rather
 // than a drift-prone literal. [LAW:one-source-of-truth]
+//
+// Compaction is deliberately under this switch even though it is maintenance
+// rather than sync: the switch's real promise is that a lit command has no
+// scheduled side effects, and a sandbox that opted out of background work has
+// not opted into a store rewrite. A workspace that wants the reclaim without
+// the sync still has `lit sync compact`, which this never gates.
 const DisableAutoSyncEnvVar = "LIT_DISABLE_AUTO_SYNC"
 
 // receiveDebounceInterval bounds how often an automatic receive runs: a command
@@ -82,6 +89,14 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	}
 	if cfg.Sync.Receive {
 		receiveInline(ctx, ws)
+	}
+	// Compaction is gated on having WRITTEN, not on sync policy: only a
+	// mutation grows the store, and a workspace with no remote and no cadence
+	// is exactly the one with nothing else to collect it. It runs last so it
+	// collects whatever the receive above just brought in, and so its own
+	// stall is never charged against the receive's timeout.
+	if accessMode == app.AccessWrite {
+		compactInline(ctx, ws)
 	}
 }
 
