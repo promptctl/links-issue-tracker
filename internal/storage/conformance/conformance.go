@@ -26,10 +26,15 @@
 // testing one implementation while claiming to define the contract, and the
 // next engine would have to grow the internal to pass. [LAW:behavior-not-structure]
 //
-// While the Dolt engine is lit's only implementation, its behavior IS the
-// specification: where a behavior was ambiguous, these cases were written to
-// record what Dolt does rather than what would be tidier, because the S0
-// migration state's whole gate is that nothing observable changes.
+// Dolt's behavior is the tiebreak — not because it is the only implementation,
+// which it stopped being when the memory engine shipped, but because the S0
+// migration state's whole gate is that nothing observable changes. Where a
+// behavior was ambiguous these cases record what Dolt does rather than what
+// would be tidier; where the second engine answered BETTER, it was moved to
+// match rather than the contract moved to meet it, because an engine that is
+// right where the other is arbitrary still reads as divergence to the
+// differential oracle. Correcting one of those faults moves observable output,
+// which makes it a ticket rather than a cleanup.
 package conformance
 
 import (
@@ -562,6 +567,27 @@ func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage
 			t.Errorf("sorting by %q is in storage.SortFields but the engine rejected it: %v", field, err)
 		}
 	}
+
+	// The other direction, without which storage.SortFields would be a lower
+	// bound on each engine's vocabulary rather than the whole of it, and the
+	// two private bindings could still differ by anything they both add.
+	//
+	// A closed set's complement cannot be enumerated, so these are the near
+	// misses that would actually happen: real model fields the contract omits
+	// (description, lane, labels), and the storage column names an engine
+	// binding its own schema reaches for instead of the contract's spelling
+	// (issue_type for "type", item_rank for "rank"). An arbitrary literal —
+	// list_sorts_and_limits probes one — only catches an engine that validates
+	// nothing at all; an engine whose private map holds "item_rank" rejects the
+	// literal and diverges anyway.
+	for _, field := range []string{"description", "lane", "labels", "issue_type", "item_rank", "state"} {
+		if slices.Contains(storage.SortFields, field) {
+			t.Fatalf("%q was added to storage.SortFields, which leaves this case probing a key the contract now names — move it to the accepted direction above", field)
+		}
+		if _, err := st.ListIssues(ctx, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}); err == nil {
+			t.Errorf("sorting by %q is not in storage.SortFields but the engine accepted it", field)
+		}
+	}
 }
 
 // listSortsStatusByStoredEncoding pins the one sort key that does not order
@@ -1050,6 +1076,31 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 		t.Fatalf("Apply archive error = %v", err)
 	}
 
+	// Same-tick ties are what make the export's ordering observable at all. An
+	// engine reads its clock once per change, so a change carrying an action
+	// AND fields records several events sharing one timestamp, and only the id
+	// tie-break separates them. With every timestamp distinct, recording order
+	// and (created_at, id) coincide, and this case would pass an engine that
+	// exported its raw recording order — which is the defect it exists to
+	// catch. One tie group leaves the ids in the right order half the time, so
+	// a single one makes this case a coin flip — measured at 10/20 against a
+	// deliberately broken export. Ten independent groups put agreement by
+	// coincidence at 2^-10, and the case cannot fail spuriously: a correct
+	// engine sorts the same events the same way on both reads, every run.
+	tied := make([]string, 0, 10)
+	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core"})
+		title := "started " + name
+		if _, err := st.Apply(ctx, issue.ID, storage.Change{
+			Action: model.Start{Assignee: "ada"},
+			Fields: storage.UpdateIssueInput{Title: &title},
+			Actor:  "ada",
+		}); err != nil {
+			t.Fatalf("Apply combined action-and-fields change to %q error = %v", name, err)
+		}
+		tied = append(tied, issue.ID)
+	}
+
 	export, err := st.Export(ctx)
 	if err != nil {
 		t.Fatalf("Export error = %v", err)
@@ -1057,7 +1108,7 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	// Export is the differential oracle's surface, so it is the WHOLE store —
 	// out-of-flow issues included. An export that honored the listing default
 	// would silently drop archived work from every backup and every diff.
-	assertIssueIDs(t, "exported issues", export.Issues, []string{epic.ID, child.ID, archived.ID})
+	assertIssueIDs(t, "exported issues", export.Issues, append([]string{epic.ID, child.ID, archived.ID}, tied...))
 	if len(export.Relations) != 1 || export.Relations[0].SrcID != child.ID {
 		t.Errorf("exported relations = %+v, want the one parent edge", export.Relations)
 	}
@@ -1070,9 +1121,34 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 	if len(export.Events) == 0 {
 		t.Error("exported events are empty; the history must travel with the state")
 	}
+	// Export and ListAllEvents are two reads of one ordered history, so they
+	// must agree. events_are_totally_ordered pins ListAllEvents to the
+	// contract's (created_at, id); this pins Export to ListAllEvents. Together
+	// they say the export is ordered without restating the ordering rule in a
+	// second place that could drift from it. An engine serving raw recording
+	// order here would diverge from ITSELF on any same-tick tie — before the
+	// oracle ever compared two engines. [LAW:one-source-of-truth]
+	listed, err := st.ListAllEvents(ctx)
+	if err != nil {
+		t.Fatalf("ListAllEvents error = %v", err)
+	}
+	if !slices.EqualFunc(export.Events, listed, func(a, b model.IssueEvent) bool { return a.ID == b.ID }) {
+		t.Errorf("Export's event order differs from ListAllEvents':\n  export = %v\n  list   = %v",
+			eventIDsOf(export.Events), eventIDsOf(listed))
+	}
 	if export.ExportedAt.IsZero() {
 		t.Error("ExportedAt is zero; an export must say when it was taken")
 	}
+}
+
+// eventIDsOf renders an event sequence as its ids, so an ordering failure names
+// the sequence instead of dumping whole structs.
+func eventIDsOf(events []model.IssueEvent) []string {
+	ids := make([]string, 0, len(events))
+	for _, event := range events {
+		ids = append(ids, event.ID)
+	}
+	return ids
 }
 
 func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.Store) {
