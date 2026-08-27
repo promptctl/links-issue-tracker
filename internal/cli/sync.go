@@ -348,15 +348,19 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 // on-change cadence owner both consume this one orchestration so their push
 // behavior cannot drift. [LAW:single-enforcer]
 type syncPushOutcome struct {
-	status     string // "ok" | "skipped"
-	reason     string // set when status == "skipped"
-	remote     string
-	branch     string
-	message    string
-	pushStatus int64
-	traceRef   *automationTraceRef
-	traceErr   error
-	pushErr    error // the push failure; the trace is already recorded when set
+	status  string // "ok" | "skipped"
+	reason  string // set when status == "skipped"
+	remote  string
+	branch  string
+	message string
+	// maintenance is what the engine reclaimed locally while servicing this
+	// push, rendered as its own payload key so `raw` stays the engine's
+	// verbatim push output. [LAW:one-source-of-truth]
+	maintenance string
+	pushStatus  int64
+	traceRef    *automationTraceRef
+	traceErr    error
+	pushErr     error // the push failure; the trace is already recorded when set
 }
 
 // payload renders the outcome into the map shape printSyncPushPayload consumes.
@@ -372,6 +376,9 @@ func (o syncPushOutcome) payload() map[string]any {
 		return payload
 	}
 	payload["push_status"] = o.pushStatus
+	if o.maintenance != "" {
+		payload["maintenance"] = o.maintenance
+	}
 	if o.traceRef != nil {
 		payload["trace_ref"] = o.traceRef.Path
 	}
@@ -387,6 +394,37 @@ func (o syncPushOutcome) payload() map[string]any {
 // The variant is a value the caller supplies, so performSyncPush carries no
 // compaction branch and never compacts a push it skips.
 type syncPushStep func(ctx context.Context, remote, branch string, setUpstream, force bool) (storage.SyncPushResult, error)
+
+// syncPushTraceMetadata is everything the durable record says about one push
+// attempt beyond its decision: where it went, what the engine said, what local
+// maintenance rode along, and what went wrong.
+//
+// It is a function rather than a block inside performSyncPush because that is
+// what makes the question "does the trace carry this?" answerable. Inline, the
+// only way to ask was to stand up a workspace, a ref-carrying remote and a live
+// engine session and drive a real push — which is why the maintenance key
+// arrived untested. [LAW:decomposition] the job had no name, so it had no test.
+func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPushResult, pushErr error) map[string]string {
+	metadata := map[string]string{
+		"remote":      remoteName,
+		"sync_branch": syncBranch,
+	}
+	if message := strings.TrimSpace(result.Message); message != "" {
+		metadata["message"] = message
+	}
+	// The prune's report reaches the durable trace as well as stdout, because
+	// this command backs the pre-push hook, and in a hook stdout is routinely
+	// swallowed or never watched. A refusal that exists to be loud reaching only
+	// a stream nobody reads is the failure it was written to prevent.
+	// [LAW:no-silent-failure]
+	if maintenance := strings.TrimSpace(result.Maintenance); maintenance != "" {
+		metadata["maintenance"] = maintenance
+	}
+	if pushErr != nil {
+		metadata["error"] = pushErr.Error()
+	}
+	return metadata
+}
 
 // performSyncPush reconciles Dolt remotes from git, resolves the remote and
 // branch, runs the supplied push step, and records an automation trace for the
@@ -472,19 +510,12 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	}
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
-	traceMetadata := map[string]string{
-		"remote":      remoteName,
-		"sync_branch": syncBranch,
-	}
-	if strings.TrimSpace(result.Message) != "" {
-		traceMetadata["message"] = strings.TrimSpace(result.Message)
-	}
+	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
 	if pushErr != nil {
 		traceStatus = "error"
 		traceReason = pushErr.Error()
-		traceMetadata["error"] = pushErr.Error()
 	}
 	syncCommandArgs := []string{"sync", "push", "--remote", remoteName}
 	if setUpstream {
@@ -526,14 +557,15 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 		Metadata:  traceMetadata,
 	})
 	return syncPushOutcome{
-		status:     "ok",
-		remote:     remoteName,
-		branch:     syncBranch,
-		message:    result.Message,
-		pushStatus: result.Status,
-		traceRef:   traceRef,
-		traceErr:   traceRecordErr,
-		pushErr:    pushErr,
+		status:      "ok",
+		remote:      remoteName,
+		branch:      syncBranch,
+		message:     result.Message,
+		maintenance: result.Maintenance,
+		pushStatus:  result.Status,
+		traceRef:    traceRef,
+		traceErr:    traceRecordErr,
+		pushErr:     pushErr,
 	}, nil
 }
 
@@ -740,6 +772,20 @@ func printSyncPushPayload(w io.Writer, payload map[string]any, verbose bool) err
 	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
 	raw, hasRaw := payload["raw"].(string)
 	reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))
+
+	// The engine's local-maintenance report is independent of which push line is
+	// chosen below, and every branch below returns — so it is emitted once, here,
+	// ahead of the cascade, rather than repeated into each arm where a future arm
+	// would forget it. It prints in both modes deliberately: the message this
+	// carries is a prune declining because its key derivation disagrees with the
+	// disk, and a warning reachable only behind --verbose is still silent where
+	// it counts. The engine leaves it empty when it found nothing worth saying,
+	// so an ordinary push gains no line. [LAW:no-silent-failure]
+	if maintenance, ok := payload["maintenance"].(string); ok && strings.TrimSpace(maintenance) != "" {
+		if _, err := fmt.Fprintln(w, strings.TrimSpace(maintenance)); err != nil {
+			return err
+		}
+	}
 	if status == "skipped" && reason == "remote_empty" {
 		// [LAW:dataflow-not-control-flow] exception: first-push skip message must always reach the caller so agents/humans see why sync did nothing.
 		_, err := fmt.Fprintln(w, firstPushSkipMessage)

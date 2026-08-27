@@ -514,3 +514,124 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 		t.Fatalf("cancelled ctx must not surface the misleading unavailable message: %q", err.Error())
 	}
 }
+
+// TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes is the check the
+// remote-cache prune needs and did not originally have. The prune's whole safety
+// story rests on a refusal message reaching the operator when its key derivation
+// disagrees with the disk; plumbing that message into the payload and never
+// rendering it is the same silence, one layer further down. Both modes are
+// asserted because a warning visible only behind --verbose is still silent where
+// it counts.
+//
+// The assertion is on position, not presence. Emitting the line above the
+// cascade is what keeps a later arm from forgetting it, and the CHANGELOG
+// states that placement as user-visible behavior — so `Contains` would pass for
+// exactly the arrangement this test exists to rule out, one where the line has
+// slipped back inside a branch and rides along only when that branch is taken.
+func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
+	t.Parallel()
+	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+
+	// Each mode renders its own push line — plain mode says "pushed", verbose
+	// echoes the engine's raw output — and the maintenance line must precede
+	// whichever one this mode chose.
+	for _, tc := range []struct {
+		verbose  bool
+		wantPush string
+	}{
+		{verbose: false, wantPush: "pushed"},
+		{verbose: true, wantPush: "Everything up-to-date."},
+	} {
+		payload := map[string]any{
+			"status":      "ok",
+			"remote":      "origin",
+			"branch":      "master",
+			"raw":         "Everything up-to-date.",
+			"maintenance": refusal,
+		}
+		var out bytes.Buffer
+		if err := printSyncPushPayload(&out, payload, tc.verbose); err != nil {
+			t.Fatalf("printSyncPushPayload(verbose=%v) error = %v", tc.verbose, err)
+		}
+		lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+		if lines[0] != refusal {
+			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want the maintenance line first, got %q",
+				tc.verbose, out.String(), lines[0])
+		}
+		if len(lines) < 2 || lines[1] != tc.wantPush {
+			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want %q to still follow the maintenance line",
+				tc.verbose, out.String(), tc.wantPush)
+		}
+	}
+}
+
+// TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty pins the other half:
+// an ordinary push must not grow a line. The engine reports empty when it found
+// nothing to collect, and empty must render as nothing at all.
+func TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
+	t.Parallel()
+	payload := map[string]any{
+		"status":      "ok",
+		"remote":      "origin",
+		"branch":      "master",
+		"raw":         "Everything up-to-date.",
+		"maintenance": "",
+	}
+	var out bytes.Buffer
+	if err := printSyncPushPayload(&out, payload, true); err != nil {
+		t.Fatalf("printSyncPushPayload() error = %v", err)
+	}
+	if got := strings.TrimSpace(out.String()); got != "Everything up-to-date." {
+		t.Fatalf("printSyncPushPayload() = %q, want only the push line", got)
+	}
+}
+
+// TestSyncPushTraceMetadataCarriesTheMaintenanceReport is the check the durable
+// trace needed and did not have. `lit sync push` backs the pre-push hook, where
+// stdout is routinely swallowed, so the trace is the channel a prune refusal
+// actually survives on — and until this job had a name, asserting anything about
+// it meant standing up a workspace, a ref-carrying remote and a live engine
+// session, which is why the line shipped unasserted.
+func TestSyncPushTraceMetadataCarriesTheMaintenanceReport(t *testing.T) {
+	t.Parallel()
+	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
+
+	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+		Message:     "Everything up-to-date.",
+		Maintenance: refusal,
+	}, nil)
+
+	if metadata["maintenance"] != refusal {
+		t.Fatalf("metadata[maintenance] = %q, want the refusal %q", metadata["maintenance"], refusal)
+	}
+	if metadata["message"] != "Everything up-to-date." {
+		t.Fatalf("metadata[message] = %q, want the engine's push output", metadata["message"])
+	}
+	if metadata["remote"] != "origin" || metadata["sync_branch"] != "master" {
+		t.Fatalf("metadata = %v, want remote/sync_branch preserved", metadata)
+	}
+	if _, present := metadata["error"]; present {
+		t.Fatalf("metadata = %v, want no error key on a push that succeeded", metadata)
+	}
+}
+
+// TestSyncPushTraceMetadataOmitsWhatDidNotHappen pins the other half: the trace
+// says nothing about maintenance on an ordinary push, so a reader scanning
+// records for the key finds it exactly when there was something to report.
+func TestSyncPushTraceMetadataOmitsWhatDidNotHappen(t *testing.T) {
+	t.Parallel()
+	metadata := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{
+		Message: "Everything up-to-date.",
+	}, nil)
+	if _, present := metadata["maintenance"]; present {
+		t.Fatalf("metadata = %v, want no maintenance key when the prune found nothing", metadata)
+	}
+
+	failed := syncPushTraceMetadata("origin", "master", storage.SyncPushResult{}, errors.New("push rejected"))
+	if failed["error"] != "push rejected" {
+		t.Fatalf("metadata[error] = %q, want the push failure recorded", failed["error"])
+	}
+	if _, present := failed["message"]; present {
+		t.Fatalf("metadata = %v, want no message key when the engine said nothing", failed)
+	}
+}
