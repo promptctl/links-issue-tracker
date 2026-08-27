@@ -861,6 +861,60 @@ func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
 	}
 }
 
+// A pass that completed inside a call whose push then failed is still a pass
+// that rewrote the store — the push failing afterwards does not un-rewrite it.
+// Reporting maintenance only on the success path lost a deep collection whenever
+// the push it preceded failed, leaving an operator with "push failed" and no
+// account of the long full-store rewrite that had just happened, which is also
+// the only thing explaining why the failed attempt took so long.
+// [LAW:no-silent-failure]
+//
+// The push is failed by naming a remote that was never added, so the failure
+// lands in pushWithinLock — after compactWithinLock has already run inside the
+// same closure, which is precisely the ordering that makes the loss possible.
+func TestSyncCompactAndPushNamesADeepPassInsideAFailedPush(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "doomed push", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldgen := filepath.Join(nomsDir(doltRoot), oldGenDirName)
+	if err := os.MkdirAll(oldgen, 0o755); err != nil {
+		t.Fatalf("make old generation: %v", err)
+	}
+	for i := range archivesDueCount {
+		if err := os.WriteFile(filepath.Join(oldgen, "seeded"+itoa(i)+archiveFileExt), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed archive: %v", err)
+		}
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	_, err = syncStore.SyncCompactAndPush(ctx, "no-such-remote", "master", false, false)
+	if err == nil {
+		t.Fatal("SyncCompactAndPush() to a remote that does not exist succeeded; this test cannot say anything unless the push fails")
+	}
+	if !strings.Contains(err.Error(), "full pass") {
+		t.Fatalf("error = %v, want it to also name the deep pass that already rewrote the store before the push failed", err)
+	}
+}
+
 // TestReconnectRotatorRecoversPoisonedOperation proves the links-sync-w3i3 fix
 // end to end against a REAL store: when an operation fails with Dolt's online-GC
 // connection-reset error, the retry boundary rotates the live connection via the

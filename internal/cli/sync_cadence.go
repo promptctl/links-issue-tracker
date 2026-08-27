@@ -79,6 +79,36 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	if isTruthyEnv(os.Getenv(DisableAutoSyncEnvVar)) {
 		return
 	}
+	syncOnPolicy(ctx, accessMode, ws)
+	// Compaction is gated on having WRITTEN, not on sync policy: only a
+	// mutation grows the store, and a workspace with no remote and no cadence
+	// is exactly the one with nothing else to collect it. It runs last so it
+	// collects whatever the receive above just brought in, and so its own
+	// stall is never charged against the receive's timeout.
+	//
+	// That independence is why the policy half is its own unit. It used to be
+	// inline, so an unreadable config returned early and took compaction with
+	// it — leaving the workspace whose config is broken, which is squarely the
+	// "nothing else collects this store" case, as the one workspace that
+	// silently lost its backstop. The gate above said so in prose while the
+	// code said otherwise; the cut puts the boundary where the sentence
+	// already claimed it was. [LAW:decomposition]
+	if accessMode == app.AccessWrite {
+		compactInline(ctx, ws)
+	}
+}
+
+// syncOnPolicy performs the two halves that sync policy selects: the push
+// mirror for a mutation under on-change cadence, and the receive when it is
+// enabled. Both read configuration, which is why an unreadable config stops
+// exactly these two and nothing else — the failure is scoped to the unit that
+// actually depends on the missing fact. [LAW:decomposition]
+//
+// The failure is reported and not returned: automatic sync is best-effort work
+// after a command that already succeeded, so a broken config costs the mirror,
+// never the command. Saying so on stderr is what keeps it from being silent.
+// [LAW:no-silent-failure]
+func syncOnPolicy(ctx context.Context, accessMode app.AccessMode, ws workspace.Info) {
 	cfg, err := config.Load(pathspec.New(ws.RootDir))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "lit: automatic sync skipped, config unreadable: %v\n", err)
@@ -89,14 +119,6 @@ func maybeAutoSyncAfterCommand(ctx context.Context, accessMode app.AccessMode, w
 	}
 	if cfg.Sync.Receive {
 		receiveInline(ctx, ws)
-	}
-	// Compaction is gated on having WRITTEN, not on sync policy: only a
-	// mutation grows the store, and a workspace with no remote and no cadence
-	// is exactly the one with nothing else to collect it. It runs last so it
-	// collects whatever the receive above just brought in, and so its own
-	// stall is never charged against the receive's timeout.
-	if accessMode == app.AccessWrite {
-		compactInline(ctx, ws)
 	}
 }
 

@@ -196,10 +196,19 @@ type SyncPullResult struct {
 	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
 }
 
-// GCMode is how deep a compaction pass collects. Engines that collect
-// generationally reclaim different things at different depths, and neither
-// depth subsumes the other's savings, so the caller names the depth it wants
-// rather than the engine inferring one. [LAW:dataflow-not-control-flow]
+// GCMode is how deep a compaction pass collects. The depths nest rather than
+// divide: the deeper one reclaims everything the shallower one would and then
+// some, so a store owed both wants a single deep pass, never two.
+//
+// The caller still names the depth, because what separates them is cost, not
+// coverage — the deep pass is priced against the whole store while the shallow
+// one is priced against recent activity, so which is worth running is a
+// judgment about frequency that the engine cannot make alone.
+// [LAW:dataflow-not-control-flow]
+//
+// Reading the depths as disjoint would be the costly mistake here: an engine
+// that believed neither subsumed the other would run both to be thorough, and
+// pay for the whole store twice.
 //
 // It is engine-neutral vocabulary: the depths describe what is collected, not
 // how any particular engine spells the request. An engine with only one depth

@@ -93,6 +93,13 @@ func (s *compactSyncer) SyncCompact(_ context.Context, mode storage.GCMode) (sto
 	return s.outcome, s.err
 }
 
+// CompactIfDue answers the backstop from the same configured outcome, so one
+// fake serves both compaction entry points and neither can be tested against a
+// engine the other never sees.
+func (s *compactSyncer) CompactIfDue(context.Context) (storage.CompactionOutcome, error) {
+	return s.outcome, s.err
+}
+
 // refusingWriter is a stdout that has gone away — a closed pipe, a full disk.
 type refusingWriter struct{}
 
@@ -270,6 +277,74 @@ func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
 	if traces[0].Reason != failure.Error() {
 		t.Fatalf("trace reason = %q, want the engine's message %q", traces[0].Reason, failure.Error())
 	}
+	if traces[0].Metadata["depth"] != storage.GCNewGen.String() {
+		t.Fatalf("failure trace depth = %q, want %q — a scheduled deep pass that keeps failing is indistinguishable from a shallow one unless the record says which was asked for",
+			traces[0].Metadata["depth"], storage.GCNewGen.String())
+	}
+}
+
+// compactThroughSession is what the backstop records with, and these are the
+// three things the durable trail can say about an automatic pass. None were
+// reachable before it was split out: the cadence e2e tests drive a fresh
+// workspace whose footprint is under every threshold, so CompactIfDue always
+// declines and every recording branch here sat unexecuted.
+// [LAW:behavior-not-structure]
+func TestCompactThroughSessionRecordsEachOutcome(t *testing.T) {
+	t.Parallel()
+
+	t.Run("a pass that ran is recorded under the backstop's own name", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+		syncer := &compactSyncer{outcome: storage.CompactionOutcome{
+			Ran: true, Depth: storage.GCFull, Detail: "journal 2.0 KiB -> 0 B",
+		}}
+
+		compactThroughSession(context.Background(), ws, syncSession{syncer: syncer})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("recorded %d traces, want exactly one", len(traces))
+		}
+		if traces[0].Command != compactTraceCommand {
+			t.Fatalf("trace command = %q, want %q — the automatic pass must stay tellable from the one an operator ran",
+				traces[0].Command, compactTraceCommand)
+		}
+		if traces[0].Decision != "compacted" {
+			t.Fatalf("trace decision = %q, want %q — the same decision the explicit command records", traces[0].Decision, "compacted")
+		}
+		if traces[0].Metadata["depth"] != storage.GCFull.String() {
+			t.Fatalf("trace depth = %q, want %q", traces[0].Metadata["depth"], storage.GCFull.String())
+		}
+	})
+
+	t.Run("a declined pass records nothing", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+
+		// The zero outcome: nothing was owed, which is the common case on every
+		// mutating command. A trace here would be one row per command forever.
+		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{}})
+
+		if traces := readSyncTraces(t, ws); len(traces) != 0 {
+			t.Fatalf("traces = %+v, want none — nothing was owed, and recording that would drown the trail", traces)
+		}
+	})
+
+	t.Run("an engine failure is recorded", func(t *testing.T) {
+		t.Parallel()
+		ws := compactWorkspace(t)
+		failure := errors.New("dolt gc: store is read-only")
+
+		compactThroughSession(context.Background(), ws, syncSession{syncer: &compactSyncer{err: failure}})
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 || traces[0].Status != "error" {
+			t.Fatalf("traces = %+v, want exactly one recorded error — a backstop that fails on every command must be discoverable", traces)
+		}
+		if traces[0].Command != compactTraceCommand {
+			t.Fatalf("trace command = %q, want %q", traces[0].Command, compactTraceCommand)
+		}
+	})
 }
 
 // A store that was compacted but could not say so is not a successful run, so

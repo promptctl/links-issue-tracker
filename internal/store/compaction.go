@@ -217,6 +217,26 @@ func compactionReport(mode GCMode, measureErr error) string {
 	}
 }
 
+// annotateWithMaintenance names work that already completed inside a call that
+// then failed. Maintenance runs before the operation it accompanies, so the
+// failure is reported to someone whose store has already been rewritten; saying
+// nothing would let a long, expensive, durable side effect vanish behind an
+// unrelated error. [LAW:no-silent-failure]
+//
+// A report with nothing to say leaves the error exactly as it was, so the
+// routine shallow pass adds no noise to an ordinary failure — the same "speak
+// only when it matters" filter compactionReport already applies on the success
+// path, reused rather than re-decided here. [LAW:one-source-of-truth]
+//
+// The wrap keeps %w, so errors.Is and every sentinel comparison upstream are
+// unaffected by the annotation.
+func annotateWithMaintenance(err error, report string) error {
+	if report == "" {
+		return err
+	}
+	return fmt.Errorf("%w (%s)", err, report)
+}
+
 // joinMaintenance combines the maintenance lines that have something to say and
 // drops the ones that do not, so a quiet run stays quiet and adds no output
 // noise to an ordinary push.

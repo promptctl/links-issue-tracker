@@ -329,7 +329,11 @@ func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, se
 
 	outcome, err := session.syncer.SyncCompact(ctx, mode)
 	if err != nil {
-		recordSyncCommandTrace(ws, "lit sync compact", "error", err, nil)
+		// The depth rides along here too: a scheduled deep pass that keeps
+		// failing is indistinguishable in the trail from a failing shallow one
+		// unless the record says which was asked for, and the exit code that
+		// would have said so is not durable. [LAW:no-silent-failure]
+		recordSyncCommandTrace(ws, "lit sync compact", "error", err, compactionDepthMetadata(mode))
 		return err
 	}
 	// Recorded before the write, so a stdout that has gone away cannot erase the
