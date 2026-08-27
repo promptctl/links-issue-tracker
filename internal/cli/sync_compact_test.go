@@ -192,6 +192,41 @@ func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
 // to know which path ran before it knew which key to read. Pinning the
 // vocabulary here is what keeps a third call site from inventing a fourth
 // spelling. [LAW:one-source-of-truth]
+// Both entry points describe a completed pass the same way, and only Command
+// says which one ran. The backstop previously recorded "ok" while the explicit
+// command recorded "compacted", so an operator filtering the trail for
+// successful compactions saw only the manual half — the automatic passes, which
+// are most of them, sat under a decision nobody would think to query. Asserting
+// both paths in one loop is the point: a test that only ever drove one is how
+// the divergence survived a round of review. [LAW:one-source-of-truth]
+func TestBothCompactionPathsRecordOneDecision(t *testing.T) {
+	t.Parallel()
+	outcome := storage.CompactionOutcome{
+		Ran: true, Depth: storage.GCNewGen, Detail: "journal 8.0 KiB -> 0 B",
+	}
+
+	for _, command := range []string{compactTraceCommand, "lit sync compact"} {
+		ws := compactWorkspace(t)
+		recordCompactionSuccess(ws, command, outcome)
+
+		traces := readSyncTraces(t, ws)
+		if len(traces) != 1 {
+			t.Fatalf("%s: recorded %d traces, want exactly one", command, len(traces))
+		}
+		if traces[0].Decision != "compacted" {
+			t.Fatalf("%s: decision = %q, want %q — a trail filtered on one decision must not miss the other path",
+				command, traces[0].Decision, "compacted")
+		}
+		if traces[0].Command != command {
+			t.Fatalf("%s: command = %q — Command is the only axis allowed to distinguish the two paths",
+				command, traces[0].Command)
+		}
+		if traces[0].Metadata["depth"] != outcome.Depth.String() {
+			t.Fatalf("%s: metadata depth = %q, want %q", command, traces[0].Metadata["depth"], outcome.Depth.String())
+		}
+	}
+}
+
 func TestCompactionTraceMetadataRendersOneShapeForEveryPath(t *testing.T) {
 	t.Parallel()
 
