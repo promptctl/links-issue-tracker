@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
+	"path/filepath"
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -67,5 +73,160 @@ func TestMirrorParentWaitExceedsThePostSpawnTail(t *testing.T) {
 	if mirrorParentWaitTimeout <= parentPostSpawnTail {
 		t.Fatalf("mirrorParentWaitTimeout (%s) is inside the parent's designed tail (%s); a healthy parent would be abandoned mid-tail",
 			mirrorParentWaitTimeout, parentPostSpawnTail)
+	}
+}
+
+// compactSyncer answers SyncCompact and nothing else. The interface is embedded
+// rather than hand-stubbed so that a handler reaching for any other capability
+// panics on the nil call instead of quietly receiving a zero value — the fake
+// fails loudly at exactly the point a stub would have lied.
+// [LAW:no-silent-failure]
+type compactSyncer struct {
+	storage.Syncer
+	gotMode storage.GCMode
+	outcome storage.CompactionOutcome
+	err     error
+}
+
+func (s *compactSyncer) SyncCompact(_ context.Context, mode storage.GCMode) (storage.CompactionOutcome, error) {
+	s.gotMode = mode
+	return s.outcome, s.err
+}
+
+// refusingWriter is a stdout that has gone away — a closed pipe, a full disk.
+type refusingWriter struct{}
+
+func (refusingWriter) Write([]byte) (int, error) { return 0, errors.New("stdout is gone") }
+
+// readSyncTraces returns every sync trace this workspace recorded, so a test can
+// assert the durable trail an operator or `lit doctor` would read later rather
+// than only the output that scrolled past.
+func readSyncTraces(t *testing.T, ws workspace.Info) []syncTraceRecord {
+	t.Helper()
+	dir := syncTraceDir(ws)
+	entries, err := os.ReadDir(dir)
+	if os.IsNotExist(err) {
+		return nil
+	}
+	if err != nil {
+		t.Fatalf("read sync trace dir: %v", err)
+	}
+	records := make([]syncTraceRecord, 0, len(entries))
+	for _, entry := range entries {
+		payload, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			t.Fatalf("read trace %s: %v", entry.Name(), err)
+		}
+		var record syncTraceRecord
+		if err := json.Unmarshal(payload, &record); err != nil {
+			t.Fatalf("parse trace %s: %v", entry.Name(), err)
+		}
+		records = append(records, record)
+	}
+	return records
+}
+
+func compactWorkspace(t *testing.T) workspace.Info {
+	t.Helper()
+	return workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
+}
+
+// The depth is the whole point of this command, so the flag that selects it, the
+// account it prints, and the record it leaves are its contract. Asserting all
+// three together is what makes the handler's behavior visible — the depth alone
+// would pass while the operator was told nothing, and the output alone would
+// pass while the durable trail stayed empty. [LAW:behavior-not-structure]
+func TestRunSyncCompactCarriesTheDepthAndReportsThePass(t *testing.T) {
+	t.Parallel()
+
+	for _, tc := range []struct {
+		name string
+		args []string
+		want storage.GCMode
+	}{
+		{"the bare form takes the shallow depth", nil, storage.GCNewGen},
+		{"--full reaches the deep one", []string{"--full"}, storage.GCFull},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ws := compactWorkspace(t)
+			syncer := &compactSyncer{outcome: storage.CompactionOutcome{
+				Ran: true, Depth: tc.want, Detail: "journal 4.0 KiB -> 0 B",
+			}}
+			var out bytes.Buffer
+
+			if err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: syncer}, tc.args); err != nil {
+				t.Fatalf("runSyncCompact() error = %v", err)
+			}
+
+			if syncer.gotMode != tc.want {
+				t.Fatalf("engine was asked for depth %v, want %v", syncer.gotMode, tc.want)
+			}
+			want := "compacted (" + tc.want.String() + "): journal 4.0 KiB -> 0 B\n"
+			if out.String() != want {
+				t.Fatalf("stdout = %q, want %q", out.String(), want)
+			}
+			traces := readSyncTraces(t, ws)
+			if len(traces) != 1 {
+				t.Fatalf("recorded %d traces, want exactly one", len(traces))
+			}
+			if traces[0].Decision != "compacted" || traces[0].Status != "ok" {
+				t.Fatalf("trace = %+v, want a recorded success", traces[0])
+			}
+			if traces[0].Metadata["depth"] != tc.want.String() {
+				t.Fatalf("trace depth = %q, want %q — the trail cannot tell a shallow pass from a deep one without it",
+					traces[0].Metadata["depth"], tc.want.String())
+			}
+		})
+	}
+}
+
+// A pass that failed has to reach both the caller and the durable trail: the
+// exit status is the operator's signal now, the trace is the record later, and a
+// failure present in only one of them leaves the other lying.
+// [LAW:no-silent-failure]
+func TestRunSyncCompactSurfacesAndTracesAFailedPass(t *testing.T) {
+	t.Parallel()
+	ws := compactWorkspace(t)
+	failure := errors.New("dolt gc: store is read-only")
+	var out bytes.Buffer
+
+	err := runSyncCompact(context.Background(), &out, ws, syncSession{syncer: &compactSyncer{err: failure}}, nil)
+
+	if !errors.Is(err, failure) {
+		t.Fatalf("runSyncCompact() error = %v, want the engine's own failure", err)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("stdout = %q, want nothing printed for a pass that never ran", out.String())
+	}
+	traces := readSyncTraces(t, ws)
+	if len(traces) != 1 || traces[0].Status != "error" {
+		t.Fatalf("traces = %+v, want exactly one recorded error", traces)
+	}
+	if traces[0].Reason != failure.Error() {
+		t.Fatalf("trace reason = %q, want the engine's message %q", traces[0].Reason, failure.Error())
+	}
+}
+
+// A store that was compacted but could not say so is not a successful run, so
+// the write's failure is the command's. The trace still has to survive it: the
+// pass really happened, and the record of it must not depend on stdout still
+// being there to hear about it — which is why the trace is written first.
+// [LAW:no-silent-failure]
+func TestRunSyncCompactFailsWhenItCannotReportThePass(t *testing.T) {
+	t.Parallel()
+	ws := compactWorkspace(t)
+	syncer := &compactSyncer{outcome: storage.CompactionOutcome{
+		Ran: true, Depth: storage.GCNewGen, Detail: "journal 4.0 KiB -> 0 B",
+	}}
+
+	err := runSyncCompact(context.Background(), refusingWriter{}, ws, syncSession{syncer: syncer}, nil)
+
+	if err == nil {
+		t.Fatal("runSyncCompact() = nil against a stdout that refused the write; a compacted store that could not report is not a success")
+	}
+	traces := readSyncTraces(t, ws)
+	if len(traces) != 1 || traces[0].Decision != "compacted" {
+		t.Fatalf("traces = %+v, want the pass recorded despite the failed write", traces)
 	}
 }

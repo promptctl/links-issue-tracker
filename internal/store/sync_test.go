@@ -380,6 +380,105 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	}
 }
 
+// TestMeasureFootprintMatchesDoltsRealOldGenLayout is the pin that makes
+// oldGenDirName and archiveFileExt safe to ship. Dolt exports no constant for
+// either, so lit spells them itself — and every other footprint test writes the
+// layout it then reads using those same two constants, so fixture and code
+// share one map and would agree with each other even if both were wrong about
+// Dolt. This is the test that checks the map against the territory: it runs a
+// REAL pass, lets Dolt lay the old generation down itself, and asserts the two
+// names describe what Dolt actually wrote.
+//
+// The failure it guards is silent, which is what earns it a real store. If an
+// embedded-Dolt bump moved either name, OldGenArchives would read 0 forever,
+// archivesDueCount would never fire, and the deep pass would simply stop
+// happening — no error, no red test, just a backstop quietly doing nothing.
+// [LAW:no-silent-failure] The same pinning TestRemoteCacheKeyMatchesDoltLayout
+// does for the remote-cache key.
+func TestMeasureFootprintMatchesDoltsRealOldGenLayout(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	st, err := Open(ctx, doltRoot, "layout-ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	// Enough history that a pass has something to archive; an empty store would
+	// leave an old generation Dolt never wrote, proving nothing.
+	for i := range 8 {
+		if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Prefix: "test", Title: fmt.Sprintf("layout %d", i), Topic: "layout", IssueType: "task", Priority: 0,
+		}); err != nil {
+			t.Fatalf("CreateIssue() error = %v", err)
+		}
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "layout-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+	if _, err := syncStore.SyncCompact(ctx, GCNewGen); err != nil {
+		t.Fatalf("SyncCompact(GCNewGen) error = %v", err)
+	}
+
+	// Everything below DISCOVERS the layout from disk. nomsDir is derived from
+	// Dolt's own exported dbfactory constants, so it is not part of the claim
+	// under test; oldGenDirName and archiveFileExt appear only as the thing
+	// being checked, never as the way anything is found.
+	noms := nomsDir(doltRoot)
+	entries, err := os.ReadDir(noms)
+	if err != nil {
+		t.Fatalf("read noms dir: %v", err)
+	}
+	var subdirs []string
+	for _, entry := range entries {
+		if entry.IsDir() {
+			subdirs = append(subdirs, entry.Name())
+		}
+	}
+	if len(subdirs) != 1 {
+		t.Fatalf("noms holds subdirectories %v; expected exactly one (the old generation) to pin against", subdirs)
+	}
+	if subdirs[0] != oldGenDirName {
+		t.Fatalf("Dolt's old-generation directory is %q, but oldGenDirName says %q — the footprint counts a path Dolt does not write", subdirs[0], oldGenDirName)
+	}
+
+	// Dolt's manifest and LOCK carry no suffix; everything suffixed in here is
+	// an archive. Asserting the suffix rather than filtering by it is what
+	// catches a rename.
+	oldgen, err := os.ReadDir(filepath.Join(noms, subdirs[0]))
+	if err != nil {
+		t.Fatalf("read old generation: %v", err)
+	}
+	archives := 0
+	for _, entry := range oldgen {
+		ext := filepath.Ext(entry.Name())
+		if entry.IsDir() || ext == "" {
+			continue
+		}
+		if ext != archiveFileExt {
+			t.Fatalf("Dolt wrote %q in the old generation, but archiveFileExt says %q", entry.Name(), archiveFileExt)
+		}
+		archives++
+	}
+	if archives == 0 {
+		t.Fatal("a real pass left no archive in the old generation; this test can prove nothing about a layout Dolt did not write")
+	}
+
+	got, err := measureFootprint(doltRoot)
+	if err != nil {
+		t.Fatalf("measureFootprint() error = %v", err)
+	}
+	if got.OldGenArchives != archives {
+		t.Fatalf("OldGenArchives = %d, but Dolt wrote %d archive(s) — the footprint and the disk disagree", got.OldGenArchives, archives)
+	}
+}
+
 func TestValidateEmbeddedSyncSupportAcceptsRequiredVersions(t *testing.T) {
 	t.Parallel()
 	err := validateEmbeddedSyncSupport(map[string]string{
@@ -672,6 +771,69 @@ func TestSyncCompactAndPushDelivers(t *testing.T) {
 	}
 	if got.State() != storage.SyncUpToDate {
 		t.Fatalf("after compact+push: state = %q (%+v), want up-to-date", got.State(), got)
+	}
+}
+
+// TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration drives the push
+// path's escalation, which nothing else in the suite reaches: every other
+// SyncCompactAndPush test uses a fresh store, so chooseCompactionDepth always
+// takes its GCNewGen floor and the deep branch never runs.
+// TestDueModeSelectsDepthByFootprint covers the decision as a pure function of
+// two numbers; this covers the composition that carries a decision through to
+// the operator — chooseCompactionDepth into compactWithinLock into
+// compactionReport into result.Maintenance — which is where a miswiring would
+// live and where the pure test cannot see.
+//
+// The old generation is seeded because crossing archivesDueCount honestly would
+// take hundreds of passes. Dolt tolerates entries absent from its manifest, so
+// the push still succeeds and the escalation is the only thing under test.
+// [LAW:behavior-not-structure] the assertion is what the operator is told, not
+// which internal chose it.
+func TestSyncCompactAndPushDeepensOnAFragmentedOldGeneration(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	doltRoot := migratedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	st, err := Open(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+		Prefix: "test", Title: "fragmented", Topic: "topic", IssueType: "task", Priority: 0,
+	}); err != nil {
+		t.Fatalf("CreateIssue() error = %v", err)
+	}
+	if err := st.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	oldgen := filepath.Join(nomsDir(doltRoot), oldGenDirName)
+	if err := os.MkdirAll(oldgen, 0o755); err != nil {
+		t.Fatalf("make old generation: %v", err)
+	}
+	for i := range archivesDueCount {
+		if err := os.WriteFile(filepath.Join(oldgen, "seeded"+itoa(i)+archiveFileExt), []byte("x"), 0o644); err != nil {
+			t.Fatalf("seed archive: %v", err)
+		}
+	}
+
+	syncStore, err := OpenSync(ctx, doltRoot, "ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+	if err := syncStore.SyncAddRemote(ctx, "origin", remoteURL); err != nil {
+		t.Fatalf("SyncAddRemote() error = %v", err)
+	}
+
+	result, err := syncStore.SyncCompactAndPush(ctx, "origin", "master", true, false)
+	if err != nil {
+		t.Fatalf("SyncCompactAndPush() error = %v", err)
+	}
+	if !strings.Contains(result.Maintenance, "full pass") {
+		t.Fatalf("Maintenance = %q, want it to report the deep pass the footprint owed", result.Maintenance)
 	}
 }
 
