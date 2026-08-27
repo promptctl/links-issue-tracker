@@ -332,11 +332,25 @@ func runSyncCompact(ctx context.Context, stdout io.Writer, ws workspace.Info, se
 		recordSyncCommandTrace(ws, "lit sync compact", "error", err, nil)
 		return err
 	}
+	// Recorded before the write, so a stdout that has gone away cannot erase the
+	// record of a pass that really ran. Every sibling here traces success as
+	// well as failure, and the backstop traces its own, so a compact that stayed
+	// silent on success would split "when did compaction last succeed" across
+	// two half-populated trails — the manual one holding only failures, the
+	// automatic one only successes. [LAW:one-source-of-truth]
+	//
+	// The depth rides along because a shallow pass and a deep one answer
+	// different questions later, and the trail cannot recover which ran.
+	recordSyncCommandTrace(ws, "lit sync compact", "compacted", nil, map[string]string{"depth": outcome.Depth.String()})
 	// The engine reports what it reclaimed in its own vocabulary; this renders
 	// that account rather than re-deriving it from a storage layout the command
 	// layer has no business reading. [LAW:decomposition]
-	fmt.Fprintf(stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
-	return nil
+	//
+	// The write's own failure is the command's failure, as in every sibling
+	// handler: a store that was compacted but could not say so is not a
+	// successful run. [LAW:no-silent-failure]
+	_, err = fmt.Fprintf(stdout, "compacted (%s): %s\n", outcome.Depth, outcome.Detail)
+	return err
 }
 
 func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, session syncSession, args []string) error {

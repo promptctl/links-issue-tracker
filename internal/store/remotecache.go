@@ -232,9 +232,13 @@ func (o remoteCachePruneOutcome) Report() string {
 	}
 }
 
-// humanBytes renders a byte count for operator-facing output. Exported so the
-// CLI's maintenance output and the store's own maintenance reports cannot
-// disagree about how a size is spelled. [LAW:one-source-of-truth]
+// humanBytes renders a byte count for operator-facing output. Package-private,
+// and shared by both of this package's maintenance reporters — compaction's
+// footprintDelta and the remote-cache prune's Report — so the two cannot
+// disagree about how a size is spelled. The CLI renders no size of its own; it
+// prints the accounts these reporters already produced, which is why one
+// spelling here is enough to make every spelling agree.
+// [LAW:one-source-of-truth]
 func humanBytes(n int64) string {
 	const unit = 1024
 	if n < unit {
