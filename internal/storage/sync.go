@@ -217,6 +217,21 @@ const (
 	GCFull
 )
 
+// Valid reports whether m is a depth an engine can be asked for. It is the door
+// guard a Syncer runs before collecting, so an out-of-range depth is rejected
+// loudly rather than silently collapsing to the shallower default — which is
+// the wrong work done quietly, not an error anyone would see.
+// [LAW:no-silent-failure]
+//
+// It lives on the type rather than inside one engine because which values are
+// legal is a fact about this contract vocabulary, not about how Dolt happens to
+// spell the request — a second engine offering Syncer must reject exactly the
+// same set, and a re-derived copy is a copy that can drift.
+// [LAW:single-enforcer]
+func (m GCMode) Valid() bool {
+	return m == GCNewGen || m == GCFull
+}
+
 // String names the depth for traces and operator-facing output.
 func (m GCMode) String() string {
 	switch m {

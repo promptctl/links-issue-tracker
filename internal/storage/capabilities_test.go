@@ -306,3 +306,24 @@ func names(capabilities []storage.Capability) []string {
 	}
 	return out
 }
+
+// GCMode is a closed set, and which values belong to it is a fact about this
+// contract rather than about any engine — so the rejection lives on the type,
+// where every engine reaches the same answer. Asserting both arms matters more
+// than it looks: a Valid that only ever said true would pass a test that
+// checked the legal depths alone, while admitting exactly the illegal ones it
+// exists to stop. [LAW:behavior-not-structure]
+func TestGCModeValidAcceptsOnlyTheContractsDepths(t *testing.T) {
+	t.Parallel()
+
+	for _, legal := range []storage.GCMode{storage.GCNewGen, storage.GCFull} {
+		if !legal.Valid() {
+			t.Fatalf("GCMode(%s).Valid() = false, want true — it is one of the contract's own depths", legal)
+		}
+	}
+	for _, illegal := range []storage.GCMode{storage.GCMode(-1), storage.GCMode(2), storage.GCMode(99)} {
+		if illegal.Valid() {
+			t.Fatalf("GCMode(%d).Valid() = true, want false — an engine would collect at a depth nobody named", int(illegal))
+		}
+	}
+}

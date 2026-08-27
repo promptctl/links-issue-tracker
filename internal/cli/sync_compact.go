@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -112,10 +113,35 @@ func compactInline(ctx context.Context, ws workspace.Info) {
 		// Nothing was owed. The common case, and not worth a trace.
 		return
 	}
-	recordSyncCommandTrace(ws, compactTraceCommand, "ok", nil, map[string]string{
-		"mode":   outcome.Depth.String(),
+	recordSyncCommandTrace(ws, compactTraceCommand, "ok", nil, compactionTraceMetadata(outcome))
+}
+
+// compactionTraceMetadata renders a finished pass into the trace's vocabulary.
+// Both compaction paths record through this one function — the backstop above
+// and the explicit `lit sync compact` — so the durable trail carries one shape
+// whichever entry point ran.
+//
+// It exists because the two paths spelled the keys themselves and drifted: one
+// wrote "mode" while the other wrote "depth", and only one carried the detail,
+// so a reader asking "what did the last compaction reclaim" had to know which
+// entry point ran before it could know which key to read. A single renderer
+// cannot disagree with itself. [LAW:one-source-of-truth]
+//
+// The depth is spelled "depth" because that is the contract's own name for it
+// (CompactionOutcome.Depth); "mode" was this file's older word for the same
+// fact. Detail rides along on both paths because a scheduled pass may have
+// nobody reading its stdout, which leaves the trace as the only surviving
+// account of what it reclaimed — the same reason syncPushTraceMetadata carries
+// the push's maintenance line. [LAW:no-silent-failure]
+//
+// An engine that could not measure leaves Detail empty; that key is then
+// dropped by compactTraceMetadata, which already owns what an empty value
+// means, so this builder never re-decides it. [LAW:single-enforcer]
+func compactionTraceMetadata(outcome storage.CompactionOutcome) map[string]string {
+	return map[string]string{
+		"depth":  outcome.Depth.String(),
 		"detail": outcome.Detail,
-	})
+	}
 }
 
 // compactTraceCommand names the backstop in the automation trace. It is not a

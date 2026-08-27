@@ -468,6 +468,13 @@ func (s *Store) compactWithinLock(ctx context.Context, mode GCMode) error {
 // to a decision, so a concurrent mutation nudging them costs accuracy in a
 // report and nothing else.
 func (s *Store) SyncCompact(ctx context.Context, mode GCMode) (storage.CompactionOutcome, error) {
+	if !mode.Valid() {
+		// [LAW:no-silent-failure] an illegal depth must never reach the pass and
+		// silently collapse to the shallower default; reject it at the door, with
+		// the legal values named. The contract owns which those are, so every
+		// engine refuses the same set. [LAW:single-enforcer]
+		return storage.CompactionOutcome{}, fmt.Errorf("compact: illegal depth %d (want %q or %q)", int(mode), storage.GCNewGen, storage.GCFull)
+	}
 	before, beforeErr := s.measureFootprint()
 	// [LAW:single-enforcer] Dolt garbage collection is exposed through a single Store entrypoint so every caller routes through the same commit-lock and retry wrapper.
 	if err := s.runSyncMutation(ctx, func(ctx context.Context) error {

@@ -380,6 +380,30 @@ func TestSyncCompactRunsCleanlyAndPreservesData(t *testing.T) {
 	}
 }
 
+// The contract's door guard, exercised where callers actually enter. An illegal
+// depth reaching the pass would collect at the shallower default and report
+// success — the wrong work done quietly, which is worse than a refusal because
+// nothing downstream can tell it happened. [LAW:no-silent-failure]
+func TestSyncCompactRefusesAnIllegalDepth(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := migratedDoltDir(t)
+
+	syncStore, err := OpenSync(ctx, doltRoot, "illegal-depth-ws")
+	if err != nil {
+		t.Fatalf("OpenSync() error = %v", err)
+	}
+	defer syncStore.Close()
+
+	outcome, err := syncStore.SyncCompact(ctx, GCMode(99))
+	if err == nil {
+		t.Fatal("SyncCompact() accepted a depth outside the contract; it must refuse rather than collect at one nobody named")
+	}
+	if outcome.Ran {
+		t.Fatalf("SyncCompact() reported a pass it refused to run: %+v", outcome)
+	}
+}
+
 // TestMeasureFootprintMatchesDoltsRealOldGenLayout is the pin that makes
 // oldGenDirName and archiveFileExt safe to ship. Dolt exports no constant for
 // either, so lit spells them itself — and every other footprint test writes the
