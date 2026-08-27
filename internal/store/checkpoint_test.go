@@ -31,8 +31,8 @@ func TestCheckpointCreateAndList(t *testing.T) {
 	if cp.Name == "" {
 		t.Fatal("Checkpoint.Name is empty")
 	}
-	if cp.CommitSHA == "" {
-		t.Fatal("Checkpoint.CommitSHA is empty")
+	if cp.Anchor == "" {
+		t.Fatal("Checkpoint.Anchor is empty")
 	}
 	if cp.Prefix != "pre-migrate" {
 		t.Errorf("Checkpoint.Prefix = %q, want %q", cp.Prefix, "pre-migrate")
@@ -53,8 +53,8 @@ func TestCheckpointCreateAndList(t *testing.T) {
 	for _, listed := range after {
 		if listed.Name == cp.Name {
 			found = true
-			if listed.CommitSHA != cp.CommitSHA {
-				t.Errorf("listed CommitSHA = %q, want %q", listed.CommitSHA, cp.CommitSHA)
+			if listed.Anchor != cp.Anchor {
+				t.Errorf("listed Anchor = %q, want %q", listed.Anchor, cp.Anchor)
 			}
 		}
 	}

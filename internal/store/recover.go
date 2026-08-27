@@ -166,7 +166,7 @@ func runAttempt(ctx context.Context, parentDir string, dump RawDump, mapper Mapp
 		}
 		return nil, "", fmt.Errorf("rebuild candidate from a valid mapping failed: %w", err)
 	}
-	report, err := VerifyCandidate(ctx, dump, mapping, cand.Store())
+	report, err := VerifyCandidate(ctx, dump, mapping, cand.store)
 	if err != nil {
 		return nil, "", errors.Join(fmt.Errorf("verify gate could not run: %w", err), cand.Discard())
 	}

@@ -23,9 +23,22 @@ type IssueReader interface {
 	// need only the edges for many issues use GetRelationsByIDs instead.
 	GetIssueDetail(ctx context.Context, id string) (model.IssueDetail, error)
 
-	// ListIssues returns the issues the filter selects. With no SortBy the
-	// order is rank ascending, ties broken by id — the canonical ordering, so
-	// an unsorted listing is reproducible rather than merely arbitrary.
+	// ListIssues returns the issues the filter selects, ordered by SortBy and
+	// then — always, as the last key — by id ascending. With no SortBy the
+	// order is rank ascending, ties broken by id: the canonical ordering, so an
+	// unsorted listing is reproducible rather than merely arbitrary.
+	//
+	// The trailing id key is contract, not an engine's convenience. Without it
+	// a sort on any field with duplicate values (two issues sharing a title, a
+	// priority, an assignee) leaves the tied rows in whatever order the engine
+	// happened to hold them, and two engines answering the same listing would
+	// disagree — which the campaign's differential oracle reads as divergence
+	// rather than as the under-specification it would actually be.
+	// [LAW:no-silent-failure]
+	//
+	// SortBy may name only a [SortFields] member; see it for what each key
+	// orders, and in particular for the one key — status — whose ordering is
+	// not the derived lifecycle state a reader would assume.
 	ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error)
 
 	// ListChildren returns one epic's children in rank order. An id with no
@@ -36,12 +49,25 @@ type IssueReader interface {
 	// ascending. It is a derived vocabulary, never a stored one.
 	ListTopics(ctx context.Context) ([]string, error)
 
-	// ListAllEvents reads the whole issue history, oldest first. Export uses it
-	// to serialize the history; claim derivation uses it because a claim is a
-	// reading of the history and there is no narrower slice that answers the
-	// question — the establishing event that decides a lane's holder can be
-	// arbitrarily old, so a recency cutoff would silently drop exactly the
-	// claims it was meant to speed up.
+	// ListAllEvents reads the whole issue history, oldest first — by creation
+	// time, ties broken by event id ascending. Export uses it to serialize the
+	// history; claim derivation uses it because a claim is a reading of the
+	// history and there is no narrower slice that answers the question — the
+	// establishing event that decides a lane's holder can be arbitrarily old,
+	// so a recency cutoff would silently drop exactly the claims it was meant
+	// to speed up.
+	//
+	// The id tie-break is stated because "oldest first" alone does not settle a
+	// tie, and a coarse clock produces ties routinely: two mutations inside one
+	// tick share a timestamp, and an engine free to order them as it likes is
+	// an engine the oracle cannot diff. It is deliberately NOT a happens-before
+	// claim — event ids are random, so same-tick events come back in an order
+	// unrelated to the order they were recorded in. Both engines are wrong
+	// about causality in the same way on purpose, so that they are wrong
+	// identically; ordering that actually carries happens-before arrives with
+	// the event store's Lamport positions
+	// (design-docs/event-store/design.md §events), which supersedes this rule
+	// rather than refining it.
 	ListAllEvents(ctx context.Context) ([]model.IssueEvent, error)
 
 	// LocalIssueCount reports how many issues this store holds. It is the
@@ -198,7 +224,7 @@ type Attributor interface {
 // IssueReader and cannot mutate; the S1 dual-write decorator wraps this whole
 // interface; a new engine implements these pieces one joint at a time. What
 // is deliberately absent is as load-bearing as what is here — sync, schema
-// migration, checkpoints, fsck, and raw test access are engine capabilities,
+// migration, checkpoints, repair, and raw test access are engine capabilities,
 // named separately as [Syncer], [Reconciler], [Checkpointer], [Repairer],
 // [SchemaMigrator], [Importer], and [RawExecutor], so an engine with no schema
 // and no remote does not inherit obligations it has no meaning for.

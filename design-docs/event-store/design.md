@@ -6,10 +6,21 @@ them. Written 2026-08-25. Sections marked **OPEN** are decisions a later
 session must close; everything else is a position this draft commits to.
 
 Every system section carries a status line: `destination` (designed, not shipped),
+`built (unreleased)` (merged to `master`, carried by no tag yet),
 `built (vX.Y.Z)` (describes shipped reality as of that release), or
-`superseded → §anchor`. `grep 'status: destination'` lists the unbuilt
-frontier. Flipping a section's status is part of closing the work that ships
-it, not a separate act of documentation.
+`superseded → §anchor`. A version appears here only once a tag actually carries
+it: naming the release a state is *expected* to ship in makes this a second map
+of a number [`CHANGELOG.md`](../../CHANGELOG.md) and the tags already own, and
+it is wrong the moment the release is cut as a different version.
+`grep 'status: destination'` lists the unbuilt frontier. Flipping a section's
+status is part of closing the work that ships it, not a separate act of
+documentation.
+
+A section that describes several states — §migration is the only one — carries
+its status per state in its own table, and keeps the section-level line at
+`destination` until the last of them is built. The frontier grep is the reason:
+a section holding four unshipped states must appear in it, and one holding a
+shipped state must still say so somewhere a reader will look.
 
 ## The shape in one paragraph
 
@@ -394,13 +405,49 @@ condition, not a date; a state whose gate hasn't passed is where the system
 rests. The strangler-fig discipline: the Dolt store is the oracle until the
 gates prove the fold against it, on real fleet data, at 10x.
 
-| State | The system is | Gate to advance |
-|---|---|---|
-| S0 seam | CLI depends on a storage interface; Dolt implements it | interface carved; behavior unchanged |
-| S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x |
-| S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x |
-| S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x |
-| S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped |
+| State | The system is | Gate to advance | Status |
+|---|---|---|---|
+| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (unreleased) |
+| S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x | destination |
+| S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x | destination |
+| S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
+| S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped | destination |
+
+S0 shipped as four things, and the shape matters to every state after it.
+`internal/storage` is the contract, stated in the model's vocabulary with no
+engine in any signature. Beside it sit seven **capabilities** — sync,
+reconcile, checkpoints, repair, schema migration, import, and raw test access —
+each an interface an engine may decline, asked for by a discovery call that
+returns the interface or a typed refusal naming the engine. The split rule is
+that two operations share a capability only when no engine could plausibly
+offer one without the other, which is why reconcile is not part of sync: this
+design's §sync says arrival needs no merge, so the event store will offer sync
+and decline reconcile, and it must be able to say so rather than stub a
+reconciliation it did not perform. What each state after S0 attaches to is
+therefore specific: S1's dual-write is a decorator installed at the engine
+factory, the one place a store is opened; the oracle diffs through the
+contract's whole-state export, which is core rather than a capability precisely
+so that two engines are comparable; and S4 deletes the capabilities the event
+store never offered.
+
+The **conformance suite** is what makes the contract a boundary rather than a
+description of Dolt. An interface pins shapes, and shapes are not behavior; the
+suite is a set of statements about behavior, parameterized over "give me a
+fresh engine," and an engine that satisfies the interface but fails the suite
+does not implement the contract. Both engines run it. Its second job starts at
+S1: the suite is where a behavior the two engines disagree about gets settled
+in writing, before the oracle meets the disagreement and reports it as
+divergence.
+
+Two such disagreements were settled at S0, and both are settled AGAINST the
+better answer on purpose, because an engine that is right where the other is
+arbitrary still reads as divergence. A listing's order ends in the issue id as
+its last key, always, so no tie is left to an engine's incidental row order.
+History is ordered by creation time and then by event id — not a happens-before
+claim, since ids are random and a coarse clock ties routinely, but a rule both
+engines can obey identically. Ordering that genuinely carries happens-before
+arrives with §events' Lamport positions, which supersedes this rule for both
+engines at once rather than refining it.
 
 S1 is also where history backfills: the existing backlog replays into events
 via export, with a provenance marker so pre-migration history is attributed

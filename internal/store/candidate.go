@@ -117,10 +117,15 @@ func RebuildCandidate(ctx context.Context, parentDir string, dump RawDump, mappi
 	return &Candidate{store: st, root: root, expectedHead: dump.DoltHead, workspaceID: dump.WorkspaceID}, nil
 }
 
-// Store hands out the built workspace so the verify gate can inspect it (Doctor,
-// conservation Export against the dump). The candidate is the owner; the gate is
-// a read-only consumer.
-func (c *Candidate) Store() *Store { return c.store }
+// The built workspace is reachable only as the unexported store field, and
+// deliberately: Candidate is one of the few engine-package types the CLI holds
+// (internal/cli/lifeboat.go carries one between Recover and PromoteCandidate),
+// so an exported accessor would hand every caller above internal/store a
+// concrete engine — the one thing the storage seam exists to prevent. The
+// verify gate is in-package and reads c.store directly.
+// [LAW:types-are-the-program] Unexported, the reach is unrepresentable rather
+// than merely unused; internal/cli/storage_seam_test.go's AST guard matches
+// store.X selectors and could never have caught cand.Store().
 
 // detachForPromotion closes the candidate's store and surrenders its Dolt
 // directory, transferring that directory out of the candidate's ownership so a

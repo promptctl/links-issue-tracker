@@ -34,13 +34,22 @@ feature or any presumed-breaking change, **patch** = a pure bugfix.
 A release is cut entirely by CI when a release-promotion merges to `master`.
 Releases ship **once per epic**, not per ticket: ticket PRs only add notes under
 `## [Unreleased]` and cut nothing on merge. When an epic's tickets are all merged,
-cut the release with a dedicated `chore(release)` PR that changes nothing but the
-changelog:
+cut the release with a dedicated `chore(release)` PR that promotes the changelog
+and flips the design-doc statuses that promotion makes true, and changes nothing
+else:
 
 1. **In the `chore(release)` PR:** rename `## [Unreleased]` in
    [`CHANGELOG.md`](CHANGELOG.md) to `## [<version>] - <YYYY-MM-DD>` (`<version>` =
    `scripts/next-version.sh <minor|patch>` without the leading `v`) and add a fresh
-   empty `## [Unreleased]` above it. This PR touches only the changelog.
+   empty `## [Unreleased]` above it. Then flip every `built (unreleased)` status
+   *value* under [`design-docs/`](design-docs/) to `built (v<version>)`: the bare
+   occurrences in a status line or a state table, never the backticked one in
+   design.md's convention paragraph, which defines the form and outlives every
+   release. A grep for the phrase returns both, and flipping the definition
+   turns it into gibberish. The version becomes a fact at this commit and
+   nowhere earlier, so this is the one place the two can be written down
+   together, and it is why a design doc never names the release it *expects* to
+   ship in.
 2. **Merge.** The master build
    ([`release-validate.yml`](.github/workflows/release-validate.yml)) sees the
    newest `CHANGELOG` version has no tag yet, builds + validates the real

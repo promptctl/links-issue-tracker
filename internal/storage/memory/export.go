@@ -46,7 +46,13 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 		Relations:   slices.Clone(e.relations),
 		Comments:    slices.Clone(e.comments),
 		Labels:      labels,
-		Events:      cloneEvents(e.events),
+		// sortEvents, not ListAllEvents: that method is this same expression
+		// wrapped in the lock Export is already holding, and calling it here
+		// deadlocks on a non-reentrant mutex. Routing through the one sort
+		// helper is what keeps the ordering rule single-copy — an export whose
+		// events differed from a listing's would be a divergence inside one
+		// engine, before the oracle ever compared two. [LAW:single-enforcer]
+		Events: sortEvents(cloneEvents(e.events)),
 	}, nil
 }
 
