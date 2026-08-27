@@ -407,7 +407,7 @@ gates prove the fold against it, on real fleet data, at 10x.
 
 | State | The system is | Gate to advance | Status |
 |---|---|---|---|
-| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (unreleased) |
+| S0 seam | CLI depends on a storage interface; Dolt implements it, and a second engine proves it is one | interface carved; behavior unchanged | built (v0.9.0) |
 | S1 shadow | every mutation dual-writes; differential oracle diffs fold vs Dolt after each command | oracle diff empty over sustained real use; budgets pass at 10x | destination |
 | S2 read-flip | reads serve from the fold behind a flag; Dolt still authoritative for writes | flag default-on with no regressions; oracle still clean; budgets re-green at 10x | destination |
 | S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
