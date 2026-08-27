@@ -8,6 +8,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // copyTree recursively copies the directory tree at src to dst (which must not
@@ -62,7 +64,7 @@ func seedRealWorkspace(t *testing.T, ctx context.Context, doltRoot string, title
 	t.Helper()
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		for _, title := range titles {
-			if _, err := st.CreateIssue(ctx, CreateIssueInput{
+			if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links",
 			}); err != nil {
 				t.Fatalf("seed issue %q: %v", title, err)
@@ -226,7 +228,7 @@ func TestPromoteCandidateAbortsOnConcurrentCommit(t *testing.T) {
 	// the candidate was rebuilt from.
 	var concurrentID string
 	withStore(t, ctx, canonical, func(st *Store) {
-		issue, err := st.CreateIssue(ctx, CreateIssueInput{
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: "landed during recovery", IssueType: "task", Topic: "recovery", Prefix: "links",
 		})
 		if err != nil {

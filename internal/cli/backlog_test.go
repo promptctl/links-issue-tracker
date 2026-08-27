@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // backlogTestHarness mirrors readyTestHarness so the two surfaces can be
@@ -29,7 +29,7 @@ func newBacklogTestHarness(t *testing.T) backlogTestHarness {
 	}
 }
 
-func (h backlogTestHarness) createIssue(input store.CreateIssueInput) (id string) {
+func (h backlogTestHarness) createIssue(input storage.CreateIssueInput) (id string) {
 	h.t.Helper()
 	if input.Prefix == "" {
 		input.Prefix = h.ap.Workspace.IssuePrefix.Value()
@@ -38,7 +38,7 @@ func (h backlogTestHarness) createIssue(input store.CreateIssueInput) (id string
 	// to make creation order equal rank order. Stated rather than inherited —
 	// this fixture's order is its own premise, not a reading of the product
 	// default it happens to agree with.
-	input.Placement = store.RankBottom
+	input.Placement = storage.RankBottom
 	issue, err := h.ap.Store.CreateIssue(h.ctx, input)
 	if err != nil {
 		h.t.Fatalf("CreateIssue(%q) error = %v", input.Title, err)
@@ -48,7 +48,7 @@ func (h backlogTestHarness) createIssue(input store.CreateIssueInput) (id string
 
 func (h backlogTestHarness) addDependency(dependentID, dependencyID string) {
 	h.t.Helper()
-	if _, err := h.ap.Store.AddRelation(h.ctx, store.AddRelationInput{
+	if _, err := h.ap.Store.AddRelation(h.ctx, storage.AddRelationInput{
 		SrcID: dependentID, DstID: dependencyID, Type: "blocks", CreatedBy: "agent",
 	}); err != nil {
 		h.t.Fatalf("AddRelation(blocks) error = %v", err)
@@ -76,9 +76,9 @@ func (h backlogTestHarness) runBacklogText(args ...string) string {
 // them to the bottom — that's the whole reason it exists alongside `lit ready`.
 func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	a := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1})
-	b := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B urgent", Topic: "blk", IssueType: "task", Priority: 1})
-	c := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0})
+	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A urgent", Topic: "blk", IssueType: "task", Priority: 1})
+	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B urgent", Topic: "blk", IssueType: "task", Priority: 1})
+	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C normal", Topic: "blk", IssueType: "task", Priority: 0})
 	h.addDependency(b, a) // b is blocked
 
 	got := h.runBacklogIDs()
@@ -95,9 +95,9 @@ func TestBacklogKeepsBlockedItemsInRankOrder(t *testing.T) {
 
 func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	blocker := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1})
-	blocked := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1})
-	flagged := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{NeedsDesignLabel}})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker", Topic: "blk", IssueType: "task", Priority: 1})
+	blocked := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocked", Topic: "blk", IssueType: "task", Priority: 1})
+	flagged := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Needs design", Topic: "blk", IssueType: "task", Priority: 0, Labels: []string{NeedsDesignLabel}})
 	h.addDependency(blocked, blocker)
 
 	text := h.runBacklogText()
@@ -114,7 +114,7 @@ func TestBacklogTextShowsBlockedReasonsInline(t *testing.T) {
 
 func TestBacklogTextShowsPreamble(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Anything", Topic: "any", IssueType: "task", Priority: 1})
 
 	text := h.runBacklogText()
 	if !strings.Contains(text, "full backlog in priority/rank order") {
@@ -136,7 +136,7 @@ func TestBacklogEmptyDataShowsMarker(t *testing.T) {
 func TestBacklogRespectsLimit(t *testing.T) {
 	h := newBacklogTestHarness(t)
 	for i := 0; i < 5; i++ {
-		h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1})
+		h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "T", Topic: "lim", IssueType: "task", Priority: 1})
 	}
 
 	got := h.runBacklogIDs("--limit", "2")
@@ -147,10 +147,10 @@ func TestBacklogRespectsLimit(t *testing.T) {
 
 func TestBacklogIncludesInProgressInline(t *testing.T) {
 	h := newBacklogTestHarness(t)
-	a := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1})
-	b := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B", Topic: "inp", IssueType: "task", Priority: 1})
-	c := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C", Topic: "inp", IssueType: "task", Priority: 1})
-	if _, err := h.ap.Store.Apply(h.ctx, b, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	a := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A", Topic: "inp", IssueType: "task", Priority: 1})
+	b := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B", Topic: "inp", IssueType: "task", Priority: 1})
+	c := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C", Topic: "inp", IssueType: "task", Priority: 1})
+	if _, err := h.ap.Store.Apply(h.ctx, b, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("start(%s) error = %v", b, err)
 	}
 

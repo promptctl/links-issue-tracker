@@ -22,6 +22,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 const doltDatabaseName = "links"
@@ -438,21 +439,21 @@ func (s *Store) reconnect(ctx context.Context) error {
 	return nil
 }
 
-func (s *Store) GetSyncState(ctx context.Context) (SyncState, error) {
-	state := SyncState{}
+func (s *Store) GetSyncState(ctx context.Context) (storage.SyncState, error) {
+	state := storage.SyncState{}
 	var err error
 	state.Path, err = s.getMeta(ctx, nil, "last_sync_path")
 	if err != nil {
-		return SyncState{}, err
+		return storage.SyncState{}, err
 	}
 	state.ContentHash, err = s.getMeta(ctx, nil, "last_sync_hash")
 	if err != nil {
-		return SyncState{}, err
+		return storage.SyncState{}, err
 	}
 	return state, nil
 }
 
-func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
+func (s *Store) RecordSyncState(ctx context.Context, state storage.SyncState) error {
 	return s.withMutation(ctx, "record sync state", func(ctx context.Context, tx *sql.Tx) error {
 		for key, value := range map[string]string{
 			"last_sync_path": strings.TrimSpace(state.Path),
@@ -466,7 +467,7 @@ func (s *Store) RecordSyncState(ctx context.Context, state SyncState) error {
 	})
 }
 
-func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Issue, error) {
+func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (model.Issue, error) {
 	if strings.TrimSpace(in.Title) == "" {
 		return model.Issue{}, errors.New("title is required")
 	}
@@ -509,7 +510,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 		if parentID != "" {
 			if err := tx.QueryRowContext(ctx, `SELECT id FROM issues WHERE id = ?`, parentID).Scan(new(string)); err != nil {
 				if errors.Is(err, sql.ErrNoRows) {
-					return NotFoundError{Entity: "issue", ID: parentID}
+					return storage.NotFoundError{Entity: "issue", ID: parentID}
 				}
 				return fmt.Errorf("lookup parent issue %q: %w", parentID, err)
 			}
@@ -567,7 +568,7 @@ func (s *Store) CreateIssue(ctx context.Context, in CreateIssueInput) (model.Iss
 	return issue, nil
 }
 
-func (s *Store) ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error) {
+func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error) {
 	query := `SELECT ` + issueColumnsQualified + ` FROM issues i`
 	var where []string
 	var args []any
@@ -914,7 +915,7 @@ func (s *Store) GetIssue(ctx context.Context, id string) (model.Issue, error) {
 	scanned, err := scanIssue(row)
 	if err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return model.Issue{}, NotFoundError{Entity: "issue", ID: id}
+			return model.Issue{}, storage.NotFoundError{Entity: "issue", ID: id}
 		}
 		return model.Issue{}, err
 	}
@@ -946,7 +947,7 @@ type fieldWrite struct {
 // not a second assignee change row. [LAW:effects-at-boundaries] A pure
 // function of (baseline, in, actor): no clock, no IO. The UpdatedAt stamp and
 // every write are deferred to applyFieldsTx.
-func planFieldUpdate(baseline model.Issue, in UpdateIssueInput, actor string) (fieldWrite, error) {
+func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor string) (fieldWrite, error) {
 	issue := baseline
 	priorTitle := issue.Title
 	priorDescription := issue.Description
@@ -1069,7 +1070,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 // mutations. A same-state start with a new assignee is the canonical agent-reclaim path and records
 // the assignee change with the calling Actor, which is the audit substrate for "who interacted with
 // this ticket" history queries.
-func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, error) {
+func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
 		return model.Issue{}, err
@@ -1135,7 +1136,7 @@ func (s *Store) Apply(ctx context.Context, id string, c Change) (model.Issue, er
 // issue row, so that read is the caller's answer too — never a second
 // round-trip to re-fetch what this call already has in hand.
 // [LAW:one-source-of-truth]
-func (s *Store) AddComment(ctx context.Context, in AddCommentInput) (model.Comment, model.Issue, error) {
+func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (model.Comment, model.Issue, error) {
 	issue, err := s.GetIssue(ctx, in.IssueID)
 	if err != nil {
 		return model.Comment{}, model.Issue{}, err
@@ -1175,7 +1176,7 @@ func (s *Store) DeleteComment(ctx context.Context, commentID string) (model.Comm
 			if errors.Is(err, sql.ErrNoRows) {
 				// [LAW:one-type-per-behavior] Typed not-found error matches GetIssue / relation removals,
 				// so callers detect not-found via errors.As instead of string-matching the message.
-				return NotFoundError{Entity: "comment", ID: id}
+				return storage.NotFoundError{Entity: "comment", ID: id}
 			}
 			return fmt.Errorf("read comment: %w", err)
 		}
@@ -1561,7 +1562,7 @@ func currentStatusTx(ctx context.Context, tx *sql.Tx, issueID string) (string, e
 	var status sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT status FROM issues WHERE id = ?`, issueID).Scan(&status); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return "", NotFoundError{Entity: "issue", ID: issueID}
+			return "", storage.NotFoundError{Entity: "issue", ID: issueID}
 		}
 		return "", fmt.Errorf("read issue status: %w", err)
 	}
@@ -1575,7 +1576,7 @@ func currentRetentionTx(ctx context.Context, tx *sql.Tx, issueID string) (model.
 	var archivedAt, deletedAt sql.NullString
 	if err := tx.QueryRowContext(ctx, `SELECT archived_at, deleted_at FROM issues WHERE id = ?`, issueID).Scan(&archivedAt, &deletedAt); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return nil, NotFoundError{Entity: "issue", ID: issueID}
+			return nil, storage.NotFoundError{Entity: "issue", ID: issueID}
 		}
 		return nil, fmt.Errorf("read issue retention: %w", err)
 	}
@@ -1603,7 +1604,7 @@ func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID string) error
 	var one int
 	if err := tx.QueryRowContext(ctx, `SELECT 1 FROM issues WHERE id = ?`, issueID).Scan(&one); err != nil {
 		if errors.Is(err, sql.ErrNoRows) {
-			return NotFoundError{Entity: "issue", ID: issueID}
+			return storage.NotFoundError{Entity: "issue", ID: issueID}
 		}
 		return fmt.Errorf("check issue exists: %w", err)
 	}
@@ -1733,7 +1734,7 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 	return true, nil
 }
 
-func buildIssueOrderClause(specs []SortSpec) (string, error) {
+func buildIssueOrderClause(specs []storage.SortSpec) (string, error) {
 	if len(specs) == 0 {
 		// [LAW:one-source-of-truth] rank is the canonical ordering authority.
 		return "i.item_rank ASC, i.id ASC", nil
@@ -2041,11 +2042,11 @@ type partialIssue struct {
 // placement. The single dispatch point on RankPlacement: the two edge helpers
 // stay branch-free, and the runtime variability (which edge the caller chose)
 // lives in this one exhaustive match.
-func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p RankPlacement) (string, error) {
+func nextRankForPlacement(ctx context.Context, tx *sql.Tx, p storage.RankPlacement) (string, error) {
 	switch p {
-	case RankTop:
+	case storage.RankTop:
 		return nextRankAtTop(ctx, tx)
-	case RankBottom:
+	case storage.RankBottom:
 		return nextRankAtBottom(ctx, tx)
 	default:
 		return "", fmt.Errorf("unknown rank placement: %d", p)

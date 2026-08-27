@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The skew tests in this file build their stores from nothing on purpose:
@@ -35,7 +36,7 @@ func TestLiftWorkingSetToRegistryRecoversDowngradedSchema(t *testing.T) {
 	}
 	defer st.Close()
 
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "orig", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "orig", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue: %v", err)
 	}
@@ -103,12 +104,12 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	// B adopts the old-schema base, then migrates locally and edits PRIORITY —
 	// this is "migrated local" with an unpushed commit.
 	adoptRemote(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	// A advances the remote with a divergent LANE edit, kept at the OLD schema:
 	// migrate to edit, then downgrade back below resolution before pushing. The
 	// remote head (the reconcile's theirs) is a second pre-migration commit.
-	advanceOldSchemaRemote(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("from-remote")})
+	advanceOldSchemaRemote(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("from-remote")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -120,7 +121,7 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
-	if fresh.State() != SyncDiverged {
+	if fresh.State() != storage.SyncDiverged {
 		t.Fatalf("pre-reconcile state = %v (ahead %d / behind %d), want diverged", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
@@ -130,8 +131,8 @@ func TestSyncReconcileHealsSchemaSkew(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile across schema skew: %v", err)
 	}
-	if res.State != SyncReconcileLinearized {
-		t.Fatalf("reconcile state = %q (pending=%v), want %q", res.State, res.Pending, SyncReconcileLinearized)
+	if res.State != storage.SyncReconcileLinearized {
+		t.Fatalf("reconcile state = %q (pending=%v), want %q", res.State, res.Pending, storage.SyncReconcileLinearized)
 	}
 
 	// Both sides' edits survive on the merged row, and the lifted row carries the
@@ -204,8 +205,8 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 
 	id := seedOldSchemaRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
-	advanceOldSchemaRemote(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("from-remote")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+	advanceOldSchemaRemote(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("from-remote")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -219,8 +220,8 @@ func TestSyncPullHealsSchemaSkewDivergence(t *testing.T) {
 		}
 		t.Fatalf("SyncPull across schema skew: %v", err)
 	}
-	if res.State != SyncPullLinearized {
-		t.Fatalf("pull state = %q, want %q", res.State, SyncPullLinearized)
+	if res.State != storage.SyncPullLinearized {
+		t.Fatalf("pull state = %q, want %q", res.State, storage.SyncPullLinearized)
 	}
 	// The reported counts describe the OUTCOME, not the healed divergence: the
 	// replayed spine sits on the remote head — the schema-lift commit (the
@@ -267,8 +268,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
-		if res.State != SyncPullUpToDate {
-			t.Fatalf("state = %q, want %q", res.State, SyncPullUpToDate)
+		if res.State != storage.SyncPullUpToDate {
+			t.Fatalf("state = %q, want %q", res.State, storage.SyncPullUpToDate)
 		}
 	})
 
@@ -280,15 +281,15 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// A advances the remote; B is now strictly behind and must fast-forward.
-		updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("ahead")})
+		updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("ahead")})
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
 		res, err := syncB.SyncPull(ctx, "origin", "master")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
-		if res.State != SyncPullFastForwarded {
-			t.Fatalf("state = %q, want %q", res.State, SyncPullFastForwarded)
+		if res.State != storage.SyncPullFastForwarded {
+			t.Fatalf("state = %q, want %q", res.State, storage.SyncPullFastForwarded)
 		}
 		if got := getIssueOrFatal(t, ctx, syncB, id); got.Lane != "ahead" {
 			t.Fatalf("fast-forward did not adopt remote edit: lane = %q", got.Lane)
@@ -302,15 +303,15 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		rootB := unrelatedDoltDir(t)
 		adoptRemote(t, ctx, rootB, remoteURL)
 		// B commits locally and does not push; the remote has nothing new.
-		updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("local")})
+		updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("local")})
 		syncB := openSyncOrFatal(t, ctx, rootB)
 		defer syncB.Close()
 		res, err := syncB.SyncPull(ctx, "origin", "master")
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
-		if res.State != SyncPullAhead {
-			t.Fatalf("state = %q, want %q", res.State, SyncPullAhead)
+		if res.State != storage.SyncPullAhead {
+			t.Fatalf("state = %q, want %q", res.State, storage.SyncPullAhead)
 		}
 	})
 
@@ -327,8 +328,8 @@ func TestSyncPullStateTransitions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SyncPull: %v", err)
 		}
-		if res.State != SyncPullNeverSynced {
-			t.Fatalf("state = %q, want %q", res.State, SyncPullNeverSynced)
+		if res.State != storage.SyncPullNeverSynced {
+			t.Fatalf("state = %q, want %q", res.State, storage.SyncPullNeverSynced)
 		}
 	})
 }
@@ -395,7 +396,7 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
@@ -422,7 +423,7 @@ func seedOldSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL stri
 // forward to edit), downgrades back below the resolution migration, and pushes —
 // so the remote advances to a SECOND pre-migration commit that diverges from the
 // base. This is the old-binary machine writing a stale-schema commit.
-func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, in UpdateIssueInput) {
+func advanceOldSchemaRemote(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // Open() migrates to registry max, then edits
 	st, err := Open(ctx, root, "ws")

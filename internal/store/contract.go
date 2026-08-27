@@ -17,21 +17,24 @@ import "github.com/promptctl/links-issue-tracker/internal/storage"
 // than declaring them in the contract is what leaves room for an engine that
 // has fewer. [storage.Offered] reads this set back at runtime.
 //
-// The aliases beneath it are a relocation, not a second copy. Every input and
-// result type lit's storage vocabulary needs now lives in internal/storage, so
-// the contract can name them without importing an engine; the names stay
-// spelled `store.X` here so that carving the seam rewired no caller — which is
-// this migration state's whole gate. A Go alias is the same type, not a
-// parallel one, so `errors.As(err, &store.NotFoundError{})` at any call site
-// still matches an error the contract package minted. [LAW:one-source-of-truth]
+// The alias block that stood here is gone, and its absence is the point.
+// links-store-seam-q35v.1 and .2 relocated lit's whole storage vocabulary into
+// internal/storage but kept it re-exported under its old `store.X` spelling, so
+// that carving the seam rewired no caller. This engine's own files now spell
+// those types `storage.X` like everyone else, which leaves the package
+// exporting no vocabulary a caller could reach for by habit — the engine is
+// reached through the contract or not at all. [LAW:one-source-of-truth]
 //
-// These aliases are scaffolding with a demolition date: links-store-seam-q35v.4
-// points app and CLI at the contract package directly, and this whole block
-// goes with that flip. The authored-file parsers still exported here —
-// ParseBulkSpecs, ParseImportTreeSpecs, ParseSortSpecs — produce contract types
-// and are the same kind of scaffolding: they move when their callers do, not
-// before, because relocating them now would rewire callers this state is
-// defined by not rewiring.
+// What remains exported here beyond the [Store] methods is Dolt-era workspace
+// machinery addressed by filesystem path rather than by engine handle: the
+// workspace and commit flocks, the mirror beacons, bootstrap and remote
+// adoption, snapshot naming, and lifeboat recovery. It is not contract
+// material and is deliberately not wrapped as if it were —
+// design-docs/event-store/design.md §migration schedules it for DELETION at
+// S4 rather than for a second implementation, and an interface built over
+// condemned machinery is carrying cost with no second implementer coming.
+// TestCLIAndAppReachStorageOnlyThroughTheContract in internal/cli enumerates
+// exactly what the CLI still reaches for, and that list only shrinks.
 var (
 	_ storage.Store = (*Store)(nil)
 
@@ -42,86 +45,4 @@ var (
 	_ storage.SchemaMigrator = (*Store)(nil)
 	_ storage.Importer       = (*Store)(nil)
 	_ storage.RawExecutor    = (*Store)(nil)
-)
-
-type (
-	NotFoundError     = storage.NotFoundError
-	ValidationError   = storage.ValidationError
-	RankPlacement     = storage.RankPlacement
-	CreateIssueInput  = storage.CreateIssueInput
-	UpdateIssueInput  = storage.UpdateIssueInput
-	Change            = storage.Change
-	SortSpec          = storage.SortSpec
-	ListIssuesFilter  = storage.ListIssuesFilter
-	AddCommentInput   = storage.AddCommentInput
-	AddLabelInput     = storage.AddLabelInput
-	AddRelationInput  = storage.AddRelationInput
-	SetParentInput    = storage.SetParentInput
-	IssueRelations    = storage.IssueRelations
-	RankMove          = storage.RankMove
-	RankSetResolution = storage.RankSetResolution
-	BulkIssueSpec     = storage.BulkIssueSpec
-	BulkApplyResult   = storage.BulkApplyResult
-	ImportTreeSpec    = storage.ImportTreeSpec
-	ImportTreeResult  = storage.ImportTreeResult
-
-	// The capability vocabulary, relocated by links-store-seam-q35v.2 for the
-	// same reason and on the same terms as the core vocabulary above: a
-	// capability interface can only name types that are the contract's.
-	SyncState           = storage.SyncState
-	SyncRemote          = storage.SyncRemote
-	SyncStatusRow       = storage.SyncStatusRow
-	SyncStatusReport    = storage.SyncStatusReport
-	SyncFreshnessState  = storage.SyncFreshnessState
-	SyncFreshness       = storage.SyncFreshness
-	SyncReceiveState    = storage.SyncReceiveState
-	SyncReceiveResult   = storage.SyncReceiveResult
-	SyncPullState       = storage.SyncPullState
-	SyncPullResult      = storage.SyncPullResult
-	SyncPushResult      = storage.SyncPushResult
-	SyncReconcileState  = storage.SyncReconcileState
-	SyncReconcileResult = storage.SyncReconcileResult
-	UnrelatedInventory  = storage.UnrelatedInventory
-	UnrelatedResolution = storage.UnrelatedResolution
-	Checkpoint          = storage.Checkpoint
-	HealthReport        = storage.HealthReport
-)
-
-// A constant cannot be aliased, so the placement vocabulary is re-exported by
-// value. The values are the contract's, never redeclared: writing `iota` here
-// would let the two orderings drift silently.
-const (
-	RankBottom = storage.RankBottom
-	RankTop    = storage.RankTop
-
-	SyncNeverSynced = storage.SyncNeverSynced
-	SyncUpToDate    = storage.SyncUpToDate
-	SyncAhead       = storage.SyncAhead
-	SyncBehind      = storage.SyncBehind
-	SyncDiverged    = storage.SyncDiverged
-
-	SyncReceiveUpToDate      = storage.SyncReceiveUpToDate
-	SyncReceiveFastForwarded = storage.SyncReceiveFastForwarded
-	SyncReceiveAhead         = storage.SyncReceiveAhead
-	SyncReceiveDiverged      = storage.SyncReceiveDiverged
-	SyncReceiveNeverSynced   = storage.SyncReceiveNeverSynced
-
-	SyncPullUpToDate      = storage.SyncPullUpToDate
-	SyncPullFastForwarded = storage.SyncPullFastForwarded
-	SyncPullLinearized    = storage.SyncPullLinearized
-	SyncPullProsePending  = storage.SyncPullProsePending
-	SyncPullUnrelated     = storage.SyncPullUnrelated
-	SyncPullAhead         = storage.SyncPullAhead
-	SyncPullNeverSynced   = storage.SyncPullNeverSynced
-
-	SyncReconcileNotDiverged  = storage.SyncReconcileNotDiverged
-	SyncReconcileLinearized   = storage.SyncReconcileLinearized
-	SyncReconcileProsePending = storage.SyncReconcileProsePending
-	SyncReconcileUnrelated    = storage.SyncReconcileUnrelated
-	SyncReconcileTookLocal    = storage.SyncReconcileTookLocal
-	SyncReconcileTookRemote   = storage.SyncReconcileTookRemote
-	SyncReconcileCombined     = storage.SyncReconcileCombined
-
-	TakeLocal  = storage.TakeLocal
-	TakeRemote = storage.TakeRemote
 )

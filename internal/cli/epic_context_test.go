@@ -7,7 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // epicFixture builds an epic and returns the app plus a helper to add children
@@ -23,7 +23,7 @@ func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
 	t.Helper()
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: epicTitle, Description: epicDesc, Topic: "epic-view", IssueType: "epic", Priority: 1,
 	})
 	if err != nil {
@@ -34,13 +34,13 @@ func newEpicFixture(t *testing.T, epicTitle, epicDesc string) epicFixture {
 
 func (f epicFixture) addChild(title string) string {
 	f.t.Helper()
-	child, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID,
 		// Author children top-to-bottom in call order: append at the bottom so
 		// creation order equals rank order. Stated rather than inherited — this
 		// fixture's order is its own premise, not a reading of the product
 		// default it happens to agree with.
-		Placement: store.RankBottom,
+		Placement: storage.RankBottom,
 	})
 	if err != nil {
 		f.t.Fatalf("CreateIssue(child %q) error = %v", title, err)
@@ -50,7 +50,7 @@ func (f epicFixture) addChild(title string) string {
 
 func (f epicFixture) transition(id string, action model.StatusAction) {
 	f.t.Helper()
-	if _, err := f.ap.Store.Apply(f.ctx, id, store.Change{Action: action, Actor: "test"}); err != nil {
+	if _, err := f.ap.Store.Apply(f.ctx, id, storage.Change{Action: action, Actor: "test"}); err != nil {
 		f.t.Fatalf("transition(%s, %s) error = %v", id, action.Name(), err)
 	}
 }
@@ -58,7 +58,7 @@ func (f epicFixture) transition(id string, action model.StatusAction) {
 // block makes blocked depend on blocker (blocks convention: src=dependent).
 func (f epicFixture) block(blocked, blocker string) {
 	f.t.Helper()
-	if _, err := f.ap.Store.AddRelation(f.ctx, store.AddRelationInput{SrcID: blocked, DstID: blocker, Type: "blocks", CreatedBy: "test"}); err != nil {
+	if _, err := f.ap.Store.AddRelation(f.ctx, storage.AddRelationInput{SrcID: blocked, DstID: blocker, Type: "blocks", CreatedBy: "test"}); err != nil {
 		f.t.Fatalf("AddRelation(blocks %s<-%s) error = %v", blocked, blocker, err)
 	}
 }
@@ -141,7 +141,7 @@ func TestRenderEpicContextMixedStatesWithFocus(t *testing.T) {
 // sub-sequence each child belongs to.
 func (f epicFixture) addChildLane(title, lane string) string {
 	f.t.Helper()
-	child, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+	child, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "epic-view", IssueType: "task", Priority: 0, ParentID: f.epicID, Lane: lane,
 	})
 	if err != nil {
@@ -188,7 +188,7 @@ func TestRenderEpicContextChildBlockedByNonChild(t *testing.T) {
 	f := newEpicFixture(t, "External block", "deps")
 	blocked := f.addChild("Blocked by outsider")
 	// An issue outside this epic (no ParentID).
-	outsider, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+	outsider, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Outsider", Topic: "other", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -228,7 +228,7 @@ func TestRenderEpicContextClosedBlockerUnblocks(t *testing.T) {
 // its id — the external endpoint for cross-epic edge tests.
 func (f epicFixture) outsider(title string) string {
 	f.t.Helper()
-	out, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+	out, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "other", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

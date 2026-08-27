@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
 
@@ -72,8 +73,8 @@ func (e ownerApprovalRefusalError) bindingLine() string {
 // takeSideEffects names which side a take keeps and which it destroys, so the
 // refusal's prose and the trace vocabulary agree on the same pair.
 // [LAW:one-source-of-truth]
-func takeSideEffects(choice store.UnrelatedResolution) (kept, dropped string) {
-	if choice == store.TakeRemote {
+func takeSideEffects(choice storage.UnrelatedResolution) (kept, dropped string) {
+	if choice == storage.TakeRemote {
 		return "remote", "local"
 	}
 	return "local", "remote"

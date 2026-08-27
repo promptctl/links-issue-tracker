@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // findTable returns the dumped table with the given name, failing the test if
@@ -53,7 +55,7 @@ func TestDumpRawReleasesDeadendedWorkspace(t *testing.T) {
 	var ids []string
 	withStore(t, ctx, doltRoot, func(st *Store) {
 		for _, title := range []string{"first rescue subject", "second rescue subject"} {
-			issue, err := st.CreateIssue(ctx, CreateIssueInput{
+			issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 				Title: title, IssueType: "task", Topic: "recovery", Prefix: "links",
 			})
 			if err != nil {
@@ -135,7 +137,7 @@ func TestDumpRawHealthyWorkspaceRoundTripsValues(t *testing.T) {
 
 	var id string
 	withStore(t, ctx, doltRoot, func(st *Store) {
-		issue, err := st.CreateIssue(ctx, CreateIssueInput{
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 			Title: "fidelity subject", IssueType: "task", Topic: "recovery", Prefix: "links",
 		})
 		if err != nil {

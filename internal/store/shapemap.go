@@ -680,11 +680,11 @@ func buildIssue(rec map[string]any) (model.Issue, error) {
 		// CHECK constraints already vouch for — the salvage-path convention.
 		Priority:  model.Priority(cellInt(rec["priority"])),
 		IssueType: model.IssueType(cellString(rec["issue_type"])),
-		Topic:       cellString(rec["topic"]),
-		Assignee:    cellString(rec["assignee"]),
-		Rank:        cellString(rec["rank"]),
-		CreatedAt:   cellTime(rec["created_at"]),
-		UpdatedAt:   cellTime(rec["updated_at"]),
+		Topic:     cellString(rec["topic"]),
+		Assignee:  cellString(rec["assignee"]),
+		Rank:      cellString(rec["rank"]),
+		CreatedAt: cellTime(rec["created_at"]),
+		UpdatedAt: cellTime(rec["updated_at"]),
 	}
 	issue.SetRetention(model.RetentionFromTimestamps(cellTimePtr(rec["archived_at"]), cellTimePtr(rec["deleted_at"])))
 	view := model.StatusView{}

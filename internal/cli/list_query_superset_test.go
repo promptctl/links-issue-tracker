@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestListQuerySupersetMatchesDiscreteFlags is the kkew.2 acceptance at the CLI
@@ -20,15 +20,15 @@ func TestListQuerySupersetMatchesDiscreteFlags(t *testing.T) {
 	// Three plainly-visible issues plus one archived and one deleted, so every
 	// dimension has an observable effect: sort orders them, limit truncates,
 	// and the visibility flags decide whether the last two appear at all.
-	a := h.createIssue(store.CreateIssueInput{Title: "alpha", IssueType: model.TypeTask, Topic: "sup"})
-	b := h.createIssue(store.CreateIssueInput{Title: "bravo", IssueType: model.TypeTask, Topic: "sup"})
-	c := h.createIssue(store.CreateIssueInput{Title: "charlie", IssueType: model.TypeTask, Topic: "sup"})
-	arch := h.createIssue(store.CreateIssueInput{Title: "archived one", IssueType: model.TypeTask, Topic: "sup"})
-	del := h.createIssue(store.CreateIssueInput{Title: "deleted one", IssueType: model.TypeTask, Topic: "sup"})
-	if _, err := h.ap.Store.Apply(h.ctx, arch.ID, store.Change{Action: model.Archive{}, Actor: "tester", Reason: "shelve"}); err != nil {
+	a := h.createIssue(storage.CreateIssueInput{Title: "alpha", IssueType: model.TypeTask, Topic: "sup"})
+	b := h.createIssue(storage.CreateIssueInput{Title: "bravo", IssueType: model.TypeTask, Topic: "sup"})
+	c := h.createIssue(storage.CreateIssueInput{Title: "charlie", IssueType: model.TypeTask, Topic: "sup"})
+	arch := h.createIssue(storage.CreateIssueInput{Title: "archived one", IssueType: model.TypeTask, Topic: "sup"})
+	del := h.createIssue(storage.CreateIssueInput{Title: "deleted one", IssueType: model.TypeTask, Topic: "sup"})
+	if _, err := h.ap.Store.Apply(h.ctx, arch.ID, storage.Change{Action: model.Archive{}, Actor: "tester", Reason: "shelve"}); err != nil {
 		t.Fatalf("Apply(archive) error = %v", err)
 	}
-	if _, err := h.ap.Store.Apply(h.ctx, del.ID, store.Change{Action: model.Delete{}, Actor: "tester", Reason: "drop"}); err != nil {
+	if _, err := h.ap.Store.Apply(h.ctx, del.ID, storage.Change{Action: model.Delete{}, Actor: "tester", Reason: "drop"}); err != nil {
 		t.Fatalf("Apply(delete) error = %v", err)
 	}
 

@@ -9,7 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 var bulkFamily = commandFamily[appSubcommand]{
@@ -84,7 +84,7 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 	usage: "usage: lit bulk label <add|rm> ...",
 	subcommands: []subcommandRow[bulkLabelOp]{
 		{name: "add", payload: func(ctx context.Context, ap *app.App, issueID, label, actor string) error {
-			_, err := ap.Store.AddLabel(ctx, store.AddLabelInput{
+			_, err := ap.Store.AddLabel(ctx, storage.AddLabelInput{
 				IssueID:   issueID,
 				Name:      label,
 				CreatedBy: actor,
@@ -152,7 +152,7 @@ func runBulkClose(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	}
 	actor := resolveActor()
 	return runBulkOver(stdout, issueIDs, func(issueID string) error {
-		_, err := ap.Store.Apply(ctx, issueID, store.Change{
+		_, err := ap.Store.Apply(ctx, issueID, storage.Change{
 			Action: model.Close{Outcome: outcome},
 			Actor:  actor,
 			Reason: *reason,
@@ -179,7 +179,7 @@ func runBulkTransition(action model.Action) appRunFn {
 		}
 		actor := resolveActor()
 		return runBulkOver(stdout, issueIDs, func(issueID string) error {
-			_, err := ap.Store.Apply(ctx, issueID, store.Change{Action: action, Actor: actor, Reason: *reason})
+			_, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 			return err
 		})
 	}

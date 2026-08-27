@@ -6,6 +6,8 @@ import (
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestBaselineSchemaParsesEmbeddedMigration pins the baseline parser against
@@ -71,7 +73,7 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("Open(first) error = %v", err)
 	}
 	// Seed a real issue so the forward migration must preserve it.
-	if _, err := first.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0}); err != nil {
+	if _, err := first.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Pre-migration issue", Topic: "fwd", IssueType: "task", Priority: 0}); err != nil {
 		_ = first.Close()
 		t.Fatalf("seed CreateIssue error = %v", err)
 	}
@@ -111,7 +113,7 @@ func TestOpenForwardMigratesPreConvergedColumnShape(t *testing.T) {
 		t.Fatalf("goose version = %d, want %d", v, headVersion(t))
 	}
 	// The seeded row survived the forward migration with its data intact.
-	issues, err := second.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"Pre-migration issue"}})
+	issues, err := second.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"Pre-migration issue"}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}

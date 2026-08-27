@@ -11,7 +11,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -54,7 +54,7 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 	// repository with even one deleted issue that ever carried an event
 	// (this one included) made NewEvidence fail outright on every `next` and
 	// `backlog` invocation before this widened the read.
-	allIssues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	allIssues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		return claimContext{}, err
 	}

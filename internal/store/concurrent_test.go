@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -34,7 +35,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 
 	for i := range goroutines {
 		eg.Go(func() error {
-			issue, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test",
+			issue, err := st.CreateIssue(egCtx, storage.CreateIssueInput{Prefix: "test",
 				Title:     fmt.Sprintf("Concurrent issue %d", i),
 				Topic:     "concurrent",
 				IssueType: "task",
@@ -78,7 +79,7 @@ func TestConcurrentMutationsCreateIssues(t *testing.T) {
 	}
 
 	// List must return exactly goroutines issues with the concurrent-test label.
-	all, err := st.ListIssues(ctx, ListIssuesFilter{
+	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{
 		LabelsAll: []string{"concurrent-test"},
 	})
 	if err != nil {
@@ -106,7 +107,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	const preCreateCount = 10
 	issues := make([]string, preCreateCount)
 	for i := range issues {
-		issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test",
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 			Title:     fmt.Sprintf("Pre-create %d", i),
 			Topic:     "mixed",
 			IssueType: "task",
@@ -130,13 +131,13 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 
 	// Plan: create new issues with the mixed-test label.
 	const newCount = 5
-	commentPlan := make(map[string]string, 5)            // issueID -> comment body
+	commentPlan := make(map[string]string, 5)                       // issueID -> comment body
 	priorityPlan := make(map[string]model.Priority, preCreateCount) // issueID -> expected priority
-	transitionPlan := map[string]string{}                // issueID -> expected status
+	transitionPlan := map[string]string{}                           // issueID -> expected status
 
 	for i := range newCount {
 		eg.Go(func() error {
-			_, err := st.CreateIssue(egCtx, CreateIssueInput{Prefix: "test",
+			_, err := st.CreateIssue(egCtx, storage.CreateIssueInput{Prefix: "test",
 				Title:     fmt.Sprintf("New issue %d", i),
 				Topic:     "mixed",
 				IssueType: "task",
@@ -152,7 +153,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		body := fmt.Sprintf("Concurrent comment %d", i)
 		commentPlan[id] = body
 		eg.Go(func() error {
-			_, _, err := st.AddComment(egCtx, AddCommentInput{
+			_, _, err := st.AddComment(egCtx, storage.AddCommentInput{
 				IssueID:   id,
 				Body:      body,
 				CreatedBy: "concurrent-tester",
@@ -167,7 +168,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		priorityPlan[id] = newPriority
 		eg.Go(func() error {
 			p := newPriority
-			_, err := st.Apply(egCtx, id, Change{Fields: UpdateIssueInput{
+			_, err := st.Apply(egCtx, id, storage.Change{Fields: storage.UpdateIssueInput{
 				Priority: &p,
 			}})
 			return err
@@ -182,7 +183,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 		}
 		transitionPlan[id] = string(action.Target())
 		eg.Go(func() error {
-			_, err := st.Apply(egCtx, id, Change{
+			_, err := st.Apply(egCtx, id, storage.Change{
 				Action: action,
 				Reason: "concurrent test",
 				Actor:  "concurrent-tester",
@@ -196,7 +197,7 @@ func TestConcurrentMutationsMixedOperations(t *testing.T) {
 	}
 
 	// Verify total label count first — establishes the issues are all readable.
-	all, err := st.ListIssues(ctx, ListIssuesFilter{
+	all, err := st.ListIssues(ctx, storage.ListIssuesFilter{
 		LabelsAll: []string{"mixed-test"},
 	})
 	if err != nil {

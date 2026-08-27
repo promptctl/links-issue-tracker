@@ -9,7 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -57,7 +57,7 @@ func openIn(t *testing.T, checkout string, mode AccessMode, body func(*App)) {
 func readEvidence(t *testing.T, ap *App) claims.Evidence {
 	t.Helper()
 	ctx := context.Background()
-	issues, err := ap.Store.ListIssues(ctx, store.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
+	issues, err := ap.Store.ListIssues(ctx, storage.ListIssuesFilter{IncludeArchived: true, IncludeDeleted: true})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -110,13 +110,13 @@ func TestDeletedCheckoutReleasesItsClaimHereAndAgesOutElsewhere(t *testing.T) {
 		if workerToken == "" {
 			t.Fatal("a write open must mint the checkout's identity")
 		}
-		issue, err := ap.Store.CreateIssue(context.Background(), store.CreateIssueInput{
+		issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 			Prefix: "test", Title: "Work the worker took", Topic: "claims", IssueType: "task",
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue() error = %v", err)
 		}
-		if _, err := ap.Store.Apply(context.Background(), issue.ID, store.Change{
+		if _, err := ap.Store.Apply(context.Background(), issue.ID, storage.Change{
 			Action: model.Start{Assignee: "worker"}, Actor: "worker", Reason: "begin",
 		}); err != nil {
 			t.Fatalf("Apply(start) error = %v", err)

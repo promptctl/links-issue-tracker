@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The scale the replay has to survive. The field incident folded tens of
@@ -136,8 +137,8 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 	t.Logf("combine folded %d commits over %d issues in %s; retained heap: baseline %d MiB, peak %d MiB, growth %d MiB",
 		res.Replayed, scaleBacklogIssues, elapsed.Round(time.Millisecond), peak.baseline>>20, peakHeap>>20, (peakHeap-peak.baseline)>>20)
 
-	if res.State != SyncReconcileCombined {
-		t.Fatalf("combine state = %q (pending=%d), want %q", res.State, len(res.Pending), SyncReconcileCombined)
+	if res.State != storage.SyncReconcileCombined {
+		t.Fatalf("combine state = %q (pending=%d), want %q", res.State, len(res.Pending), storage.SyncReconcileCombined)
 	}
 	if growth := peakHeap - peak.baseline; growth > scaleHeapGrowthBudget {
 		t.Errorf("combine grew retained heap by %d MiB, over the %d MiB budget: the replay is holding memory proportional to the folded chain again (a projected export per commit, alive at once) instead of streaming one step at a time",
@@ -257,7 +258,7 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 	}()
 	plantScaleBacklog(t, ctx, stB, issues)
 	for i := 0; i < commits; i++ {
-		if _, err := stB.Apply(ctx, scaleEditTarget(i), Change{Fields: UpdateIssueInput{Lane: strptr(fmt.Sprintf("lane-%d", i))}}); err != nil {
+		if _, err := stB.Apply(ctx, scaleEditTarget(i), storage.Change{Fields: storage.UpdateIssueInput{Lane: strptr(fmt.Sprintf("lane-%d", i))}}); err != nil {
 			t.Fatalf("Apply(B edit %d): %v", i, err)
 		}
 	}
@@ -270,7 +271,7 @@ func seedUnrelatedBacklogPair(t *testing.T, ctx context.Context, rootA, rootB, r
 // produced on its own.
 func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int) {
 	t.Helper()
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "seed", Topic: "scale", IssueType: "task"}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "scale", IssueType: "task"}); err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
 	export, err := st.Export(ctx)

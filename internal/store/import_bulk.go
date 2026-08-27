@@ -1,38 +1,14 @@
 package store
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"strings"
 
-	"gopkg.in/yaml.v3"
-
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
-
-// ParseBulkSpecs is the deserialization trust boundary for bulk-input files:
-// raw YAML bytes in, one spec per document out. It rejects any field the
-// spec schema does not name, so a typo'd key fails loudly here instead of
-// silently doing nothing. [LAW:single-enforcer] [LAW:no-silent-failure]
-func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-	var specs []BulkIssueSpec
-	for {
-		var spec BulkIssueSpec
-		if err := dec.Decode(&spec); err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			return nil, fmt.Errorf("bulk: parse spec: %w", err)
-		}
-		specs = append(specs, spec)
-	}
-	return specs, nil
-}
 
 // BulkApply creates or updates every issue named by specs: a document
 // without an ID creates (in dependency order, same as ImportTree); a
@@ -42,9 +18,9 @@ func ParseBulkSpecs(data []byte) ([]BulkIssueSpec, error) {
 // unwind). Run `lit doctor` after a failed batch to detect orphans left if
 // rollback itself failed. [LAW:single-enforcer] one boundary owns ID
 // resolution, create/update dispatch, and topological create order.
-func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []BulkIssueSpec) (BulkApplyResult, error) {
+func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []storage.BulkIssueSpec) (storage.BulkApplyResult, error) {
 	if err := validateBulkSpecs(specs); err != nil {
-		return BulkApplyResult{}, err
+		return storage.BulkApplyResult{}, err
 	}
 	localID := make([]string, len(specs))
 	parent := make([]string, len(specs))
@@ -56,10 +32,10 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 	}
 	order, err := topoSortLocalGraph(localID, parent, dependsOn)
 	if err != nil {
-		return BulkApplyResult{}, fmt.Errorf("bulk: %w", err)
+		return storage.BulkApplyResult{}, fmt.Errorf("bulk: %w", err)
 	}
 
-	result := BulkApplyResult{Created: map[string]string{}}
+	result := storage.BulkApplyResult{Created: map[string]string{}}
 	createdRealID := make([]string, len(specs))
 	createdIDs := make([]string, 0, len(specs))
 	localRealID := make(map[string]string, len(specs))
@@ -69,12 +45,12 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 		if spec.ID != "" {
 			change, err := bulkUpdateChange(spec, actor)
 			if err != nil {
-				return BulkApplyResult{}, err
+				return storage.BulkApplyResult{}, err
 			}
 			issue, err := s.Apply(ctx, spec.ID, change)
 			if err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
+				return storage.BulkApplyResult{}, fmt.Errorf("bulk: update %q: %w (rollback leaked %d: %s)", spec.ID, err, len(leaked), strings.Join(leaked, ","))
 			}
 			result.Updated = append(result.Updated, issue.ID)
 			continue
@@ -84,16 +60,16 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 		// is the same single gate producing the typed value.
 		issueType, err := model.ParseIssueType(*spec.IssueType)
 		if err != nil {
-			return BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
 		}
 		priority := model.PriorityNormal
 		if spec.Priority != nil {
 			priority, err = model.ParsePriority(*spec.Priority)
 			if err != nil {
-				return BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
+				return storage.BulkApplyResult{}, fmt.Errorf("bulk: doc %d: %w", idx, err)
 			}
 		}
-		issue, err := s.CreateIssue(ctx, CreateIssueInput{
+		issue, err := s.CreateIssue(ctx, storage.CreateIssueInput{
 			Title:       strings.TrimSpace(*spec.Title),
 			Description: derefOr(spec.Description, ""),
 			Prompt:      derefOr(spec.Prompt, ""),
@@ -113,7 +89,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 		})
 		if err != nil {
 			leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-			return BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", idx, err, len(leaked), strings.Join(leaked, ","))
+			return storage.BulkApplyResult{}, fmt.Errorf("bulk: create doc %d: %w (rollback leaked %d: %s)", idx, err, len(leaked), strings.Join(leaked, ","))
 		}
 		createdRealID[idx] = issue.ID
 		createdIDs = append(createdIDs, issue.ID)
@@ -133,9 +109,9 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []Bul
 			dstID := resolveBulkRef(dep, localRealID)
 			// blocks convention in the store: src is dependent, dst is
 			// dependency. spec says "srcID depends_on dstID", so src is dependent.
-			if _, err := s.AddRelation(ctx, AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
+			if _, err := s.AddRelation(ctx, storage.AddRelationInput{SrcID: srcID, DstID: dstID, Type: "blocks", CreatedBy: "links"}); err != nil {
 				leaked := s.rollbackCreatedIssues(ctx, createdIDs)
-				return BulkApplyResult{}, fmt.Errorf("bulk: depends_on doc %d -> %q: %w (rollback leaked %d: %s)", i, dep, err, len(leaked), strings.Join(leaked, ","))
+				return storage.BulkApplyResult{}, fmt.Errorf("bulk: depends_on doc %d -> %q: %w (rollback leaked %d: %s)", i, dep, err, len(leaked), strings.Join(leaked, ","))
 			}
 		}
 	}
@@ -162,8 +138,8 @@ func resolveBulkRef(ref string, localRealID map[string]string) string {
 // than discarded, the same trust-but-verify convention BulkApply's create
 // branch and ImportTree both use for the same already-validated fields.
 // [LAW:no-silent-failure]
-func bulkUpdateChange(spec BulkIssueSpec, actor string) (Change, error) {
-	fields := UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
+func bulkUpdateChange(spec storage.BulkIssueSpec, actor string) (storage.Change, error) {
+	fields := storage.UpdateIssueInput{Reason: strings.TrimSpace(spec.Reason)}
 	if spec.Title != nil {
 		v := strings.TrimSpace(*spec.Title)
 		fields.Title = &v
@@ -179,14 +155,14 @@ func bulkUpdateChange(spec BulkIssueSpec, actor string) (Change, error) {
 	if spec.IssueType != nil {
 		v, err := model.ParseIssueType(*spec.IssueType)
 		if err != nil {
-			return Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
+			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
 		}
 		fields.IssueType = &v
 	}
 	if spec.Priority != nil {
 		v, err := model.ParsePriority(*spec.Priority)
 		if err != nil {
-			return Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
+			return storage.Change{}, fmt.Errorf("bulk: update %q: %w", spec.ID, err)
 		}
 		fields.Priority = &v
 	}
@@ -202,7 +178,7 @@ func bulkUpdateChange(spec BulkIssueSpec, actor string) (Change, error) {
 		v := *spec.Labels
 		fields.Labels = &v
 	}
-	return Change{Actor: actor, Fields: fields}, nil
+	return storage.Change{Actor: actor, Fields: fields}, nil
 }
 
 func derefOr[T any](p *T, fallback T) T {
@@ -245,7 +221,7 @@ func derefOr[T any](p *T, fallback T) T {
 //
 // [LAW:types-are-the-program] the two branches below are exactly the two
 // legal document shapes; nothing outside them is representable as valid.
-func validateBulkSpecs(specs []BulkIssueSpec) error {
+func validateBulkSpecs(specs []storage.BulkIssueSpec) error {
 	if len(specs) == 0 {
 		return errors.New("bulk: no issues in input")
 	}
@@ -294,7 +270,7 @@ func validateBulkSpecs(specs []BulkIssueSpec) error {
 	return nil
 }
 
-func validateBulkCreateDoc(i int, spec BulkIssueSpec) error {
+func validateBulkCreateDoc(i int, spec storage.BulkIssueSpec) error {
 	if spec.Title == nil || strings.TrimSpace(*spec.Title) == "" {
 		return fmt.Errorf("bulk: doc %d missing title", i)
 	}
@@ -318,7 +294,7 @@ func validateBulkCreateDoc(i int, spec BulkIssueSpec) error {
 	return nil
 }
 
-func validateBulkUpdateDoc(i int, spec BulkIssueSpec) error {
+func validateBulkUpdateDoc(i int, spec storage.BulkIssueSpec) error {
 	if spec.LocalID != "" {
 		return fmt.Errorf("bulk: doc %d (id %q) sets local_id; local_id only applies to new tickets", i, spec.ID)
 	}
@@ -347,7 +323,7 @@ func validateBulkUpdateDoc(i int, spec BulkIssueSpec) error {
 	return nil
 }
 
-func bulkUpdateHasField(spec BulkIssueSpec) bool {
+func bulkUpdateHasField(spec storage.BulkIssueSpec) bool {
 	return spec.Title != nil || spec.Description != nil || spec.Prompt != nil ||
 		spec.IssueType != nil || spec.Priority != nil || spec.Assignee != nil ||
 		spec.Labels != nil || spec.Lane != nil

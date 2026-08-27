@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // countingGraphSource wraps a focusGraphSource and records every subject id
@@ -19,11 +19,11 @@ type countingGraphSource struct {
 	fetched []string
 }
 
-func (c *countingGraphSource) ListIssues(ctx context.Context, filter store.ListIssuesFilter) ([]model.Issue, error) {
+func (c *countingGraphSource) ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error) {
 	return c.inner.ListIssues(ctx, filter)
 }
 
-func (c *countingGraphSource) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]store.IssueRelations, error) {
+func (c *countingGraphSource) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
 	c.fetched = append(c.fetched, ids...)
 	return c.inner.GetRelationsByIDs(ctx, ids)
 }
@@ -54,13 +54,13 @@ func TestFocusPathWalkReusesFetchedRelations(t *testing.T) {
 	// A focused epic with two children, the later depending on the earlier, gives
 	// a multi-level walk: frontier [epic] -> children [c1, c2], whose parent-epic
 	// fetch re-references the epic one level after it was first loaded.
-	epic := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Focused epic", Topic: "goal", IssueType: "epic",
 	})
-	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Step 1", Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
-	c2 := h.createIssue(store.CreateIssueInput{Prefix: "test",
+	c2 := h.createIssue(storage.CreateIssueInput{Prefix: "test",
 		Title: "Step 2", Topic: "goal", IssueType: "task", ParentID: epic.ID,
 	})
 	h.addDependency(c2.ID, c1.ID)

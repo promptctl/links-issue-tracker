@@ -7,14 +7,14 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Renderer cache invalidation",
 		Topic:     "renderer",
 		IssueType: "task",
@@ -23,10 +23,10 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, parent.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, parent.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, parent.ID, store.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, parent.ID, storage.Change{Action: model.Done{}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(done) error = %v", err)
 	}
 
@@ -61,7 +61,7 @@ func TestRunFollowupRespectsExplicitOverrides(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Sync flow tightening",
 		Topic:     "sync",
 		IssueType: "task",
@@ -141,7 +141,7 @@ func TestRunFollowupWithoutAssigneeCreatesUnassigned(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-closer")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	parent, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	parent, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Closed work", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

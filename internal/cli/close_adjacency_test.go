@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // seedTaskUnder creates a task with the given title and parents it under
@@ -15,7 +15,7 @@ import (
 func seedTaskUnder(t *testing.T, ctx context.Context, ap *app.App, title, parentID string) string {
 	t.Helper()
 	id := seedOpenIssueRaw(t, ctx, ap, title)
-	if _, err := ap.Store.SetParent(ctx, store.SetParentInput{ChildID: id, ParentID: parentID, CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.SetParent(ctx, storage.SetParentInput{ChildID: id, ParentID: parentID, CreatedBy: "test"}); err != nil {
 		t.Fatalf("SetParent(%s under %s) error = %v", id, parentID, err)
 	}
 	return id
@@ -37,12 +37,12 @@ func TestCloseRendersLiveAdjacency(t *testing.T) {
 	dependent := seedOpenIssueRaw(t, ctx, ap, "Dependent ticket")
 
 	// related-to edge focal <-> related.
-	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: focal, DstID: related, Type: "related-to", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: focal, DstID: related, Type: "related-to", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(related) error = %v", err)
 	}
 	// blocks convention: SrcID=dependent, DstID=dependency. dependent depends on
 	// focal, so closing focal unblocks dependent.
-	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: dependent, DstID: focal, Type: "blocks", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dependent, DstID: focal, Type: "blocks", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)
 	}
 	// Close the sibling that must not appear as live adjacency.

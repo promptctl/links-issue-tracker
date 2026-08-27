@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	"github.com/pressly/goose/v3"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // killHelperDirEnvVar carries the store directory a re-exec'd helper test
@@ -44,7 +45,7 @@ func TestHelperKillMidCommit(t *testing.T) {
 		_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
 		select {} // unreachable if the kill lands; guards against any delay
 	}
-	_, _ = st.CreateIssue(ctx, CreateIssueInput{
+	_, _ = st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "mid-mutation kill target",
 		Topic:     "crash",
@@ -97,7 +98,7 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 	// its write is durably staged in the working set even though the
 	// process died before DOLT_COMMIT ran. A fresh process opening the same
 	// path must see it.
-	found, err := st.ListIssues(ctx, ListIssuesFilter{SearchTerms: []string{"mid-mutation kill target"}})
+	found, err := st.ListIssues(ctx, storage.ListIssuesFilter{SearchTerms: []string{"mid-mutation kill target"}})
 	if err != nil {
 		t.Fatalf("ListIssues() error = %v", err)
 	}
@@ -107,7 +108,7 @@ func TestMidMutationProcessKillRecovers(t *testing.T) {
 
 	// A fresh mutation must succeed — proves the store is not wedged behind
 	// a lock the dead holder failed to release.
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "post-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-commit kill error = %v", err)
 	}
@@ -197,7 +198,7 @@ func TestMidMigrationStepProcessKillRecovers(t *testing.T) {
 	// The schema must be fully usable: CreateIssue depends on the complete,
 	// current schema, so its success is the proof no partially-applied
 	// migration left the working set in a broken shape.
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "post-migration-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "post-migration-kill issue", Topic: "crash", IssueType: "task", Priority: 0})
 	if err != nil {
 		t.Fatalf("CreateIssue() after mid-migration-step kill error = %v", err)
 	}

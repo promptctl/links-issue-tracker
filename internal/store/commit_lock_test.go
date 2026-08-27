@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestAcquireCommitLockNeverEvictsLiveHolderByAge is the regression test for
@@ -173,7 +175,7 @@ func TestWithMutationResumesAtVersioningAfterStagedCommit(t *testing.T) {
 		return nil
 	}
 
-	created, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync"})
+	created, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "survives a versioning retry", Topic: "sync"})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}

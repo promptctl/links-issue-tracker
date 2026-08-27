@@ -9,7 +9,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // driveTransition runs a transition through the real CLI to completion. Every
@@ -26,13 +26,13 @@ func TestRunTransitionDoneClosesAndPrintsPostGuidance(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title: "Done guidance test", Topic: "guidance", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
-	if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("StartIssue() error = %v", err)
 	}
 
@@ -82,7 +82,7 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 		for _, from := range fromStates {
 			t.Run(verb.spec.name+"_from_"+string(from), func(t *testing.T) {
 				ap := newTestCLIApp(t)
-				issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+				issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 					Prefix: "test", Title: "matrix " + verb.spec.name, Topic: "lifecycle", IssueType: "task", Priority: 0,
 				})
 				if err != nil {
@@ -93,11 +93,11 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 				// the same owner) is a pure no-op rather than a claim transfer.
 				switch from {
 				case model.StateInProgress:
-					if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Start{Assignee: owner}, Actor: owner}); err != nil {
+					if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: owner}, Actor: owner}); err != nil {
 						t.Fatalf("setup start error = %v", err)
 					}
 				case model.StateClosed:
-					if _, err := ap.Store.Apply(ctx, issue.ID, store.Change{Action: model.Done{}, Actor: owner}); err != nil {
+					if _, err := ap.Store.Apply(ctx, issue.ID, storage.Change{Action: model.Done{}, Actor: owner}); err != nil {
 						t.Fatalf("setup close error = %v", err)
 					}
 				}
@@ -154,13 +154,13 @@ func TestRunTransitionTargetStateMatrix(t *testing.T) {
 func TestRunTransitionMatrixContainerCell(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Matrix epic", Topic: "lifecycle", IssueType: "epic", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	if _, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	if _, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Open child", Topic: "lifecycle", IssueType: "task", Priority: 0, ParentID: epic.ID,
 	}); err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
@@ -198,7 +198,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Contested claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -228,7 +228,7 @@ func TestRunTransitionStartClaimTransferEmitsNotice(t *testing.T) {
 func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Epic container",
 		Topic:     "lifecycle",
 		IssueType: "epic",
@@ -237,7 +237,7 @@ func TestRunTransitionRefusesEpicAndStartsLeaf(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	leaf, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	leaf, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Leaf work",
 		Topic:     "lifecycle",
 		IssueType: "task",
@@ -275,7 +275,7 @@ func TestRunUpdateRejectsStatusFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "No status via update",
 		Topic:     "status",
 		IssueType: "task",
@@ -322,7 +322,7 @@ func TestRunUpdateSupportsFieldMutations(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Update fields",
 		Topic:     "fields",
 		IssueType: "task",
@@ -392,7 +392,7 @@ func TestRunUpdateRejectsReasonWithNoChanges(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Validation",
 		Topic:     "validation",
 		IssueType: "task",
@@ -415,7 +415,7 @@ func TestRunUpdateContainerFieldsWithoutStatusFlag(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix:    "test",
 		Title:     "Original epic title",
 		Topic:     "container-update",
@@ -463,7 +463,7 @@ func TestRunUpdateRejectsEmptyStatusValue(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test",
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
 		Title:     "Empty status",
 		Topic:     "status",
 		IssueType: "task",
@@ -515,7 +515,7 @@ func TestRunTransitionStartWithoutAssigneeSucceeds(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "No assignee start", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -541,7 +541,7 @@ func TestRunTransitionStartStampsAssigneeFromSessionEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-abc")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Env-stamped start", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -589,7 +589,7 @@ func TestRunTransitionActorFromSessionEnv(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-actor")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Actor from session", Topic: "attribution", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -611,7 +611,7 @@ func TestRunTransitionActorFallsBackToByFlag(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Actor from by flag", Topic: "attribution", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -631,7 +631,7 @@ func TestRunUpdateClearAssigneeLeavesOpenIssueUnassigned(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-grooming")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Stale claim", Topic: "lifecycle", IssueType: "task", Priority: 0,
 		Assignee: "claude_abandoned-session",
 	})
@@ -658,7 +658,7 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "sess-me")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Hand off", Topic: "lifecycle", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
@@ -676,4 +676,3 @@ func TestRunUpdateExplicitAssigneeHonoredVerbatim(t *testing.T) {
 		t.Fatalf("updated.AssigneeValue() = %q, want %q: update must not rewrite an explicit assignee to the caller", got, want)
 	}
 }
-

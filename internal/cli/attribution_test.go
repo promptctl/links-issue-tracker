@@ -7,7 +7,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // The relation/label/bulk mutating verbs once wrote the raw --by flag (default
@@ -22,7 +22,7 @@ func attributionWantActor() string { return "claude_" + attributionSessionID }
 
 func newAttributionIssue(t *testing.T, ap *app.App, title string) string {
 	t.Helper()
-	issue, err := ap.Store.CreateIssue(context.Background(), store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: title, Topic: "attribution", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

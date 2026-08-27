@@ -6,6 +6,8 @@ import (
 	"errors"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // assertCommitLockFree proves the commit flock at lockPath is not held: a
@@ -45,7 +47,7 @@ func TestPanicDuringMutationReleasesLock(t *testing.T) {
 	assertCommitLockFree(t, st.commitLockPath)
 
 	// A subsequent mutation must succeed, proving the lock was released.
-	_, err := st.CreateIssue(context.Background(), CreateIssueInput{Prefix: "test",
+	_, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test",
 		Title:     "Post-panic issue",
 		Topic:     "crash",
 		IssueType: "task",
@@ -94,7 +96,7 @@ func TestWithMutationCommitWorkingSetReentrantPath(t *testing.T) {
 	// 2. begins tx, runs fn, commits tx
 	// 3. calls commitWorkingSet (which re-enters withCommitLock — short-circuits)
 	// If any step fails, CreateIssue returns an error.
-	issue, err := st.CreateIssue(context.Background(), CreateIssueInput{Prefix: "test",
+	issue, err := st.CreateIssue(context.Background(), storage.CreateIssueInput{Prefix: "test",
 		Title:     "Commit path exercise",
 		Topic:     "crash",
 		IssueType: "task",

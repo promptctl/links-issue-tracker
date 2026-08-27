@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/dolthub/dolt/go/store/chunks"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestLockDoltJournalExclusiveRefusesUninitializedWorkspace pins the refusal
@@ -150,7 +151,7 @@ func TestJournalLockHoldExcludesJournalRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Open() error = %v", err)
 	}
-	if _, err := s.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "journal payload", Topic: "sync"}); err != nil {
+	if _, err := s.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "journal payload", Topic: "sync"}); err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	if err := s.Close(); err != nil {

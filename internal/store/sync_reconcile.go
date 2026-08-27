@@ -12,6 +12,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/dbsnapshot"
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // reconcileCommitMessage labels the marker commit that settles a reconcile's
@@ -207,7 +208,7 @@ func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
 // CONSTRAINT (embedded Dolt one-RW-engine-per-path): this runs INLINE/foreground
 // on the caller's own engine after its command engine closed — never a background
 // worker.
-func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (SyncReconcileResult, error) {
+func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
 	return s.reconcile(ctx, remote, branch, autonomousSettle, detectOnly)
 }
 
@@ -224,7 +225,7 @@ func (s *Store) SyncReconcile(ctx context.Context, remote string, branch string)
 // It shares SyncReconcile's safe-replay verbatim: the replayed spine is built on a
 // unique scratch branch and the data branch advances with one atomic reset, so an
 // interrupted finalize can never orphan the clone's local work.
-func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (SyncReconcileResult, error) {
+func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch string, resolutions []merge.ProseResolution) (storage.SyncReconcileResult, error) {
 	// unionCombine: `lit sync reconcile resolve` is the ONE finalize command, so it must
 	// finalize whichever divergence the refs describe — a shared-history three-way (the
 	// base branch handles it) OR an unrelated combine (the !shared branch, with the agent's
@@ -245,7 +246,7 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // that degrades the merge to a two-way union. On a divergence WITH a common base it merges
 // through that base like an ordinary reconcile — combine is non-destructive, so it need not
 // refuse shared history the way the wholesale takes do.
-func (s *Store) SyncReconcileCombine(ctx context.Context, remote string, branch string) (SyncReconcileResult, error) {
+func (s *Store) SyncReconcileCombine(ctx context.Context, remote string, branch string) (storage.SyncReconcileResult, error) {
 	return s.reconcile(ctx, remote, branch, autonomousSettle, unionCombine)
 }
 
@@ -280,7 +281,7 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 		return reconcilePlan{}, err
 	}
 	plan.ahead, plan.behind = fresh.Ahead, fresh.Behind
-	if fresh.State() != SyncDiverged {
+	if fresh.State() != storage.SyncDiverged {
 		// Only a divergence needs a reconcile; every other state is the receive/push
 		// side's job. [LAW:dataflow-not-control-flow] the freshness value selects the
 		// outcome; a re-run that finds the divergence already resolved lands here.
@@ -307,17 +308,17 @@ func (s *Store) captureReconcilePlan(ctx context.Context, remote, branch string)
 	return plan, nil
 }
 
-func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (SyncReconcileResult, error) {
+func (s *Store) reconcile(ctx context.Context, remote string, branch string, settle settleFn, unrelated unrelatedHandling) (storage.SyncReconcileResult, error) {
 	trimmedRemote, err := requireSyncArg("remote", remote)
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 	trimmedBranch, err := requireSyncArg("branch", branch)
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 
-	var result SyncReconcileResult
+	var result storage.SyncReconcileResult
 	err = s.withCommitLock(ctx, func(ctx context.Context) error {
 		plan, err := s.captureReconcilePlan(ctx, trimmedRemote, trimmedBranch)
 		if err != nil {
@@ -325,7 +326,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 		}
 		result.Ahead, result.Behind = plan.ahead, plan.behind
 		if !plan.diverged {
-			result.State = SyncReconcileNotDiverged
+			result.State = storage.SyncReconcileNotDiverged
 			return nil
 		}
 		baseCommit, shared := plan.base.shared()
@@ -351,7 +352,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 				// and both stores are untouched (no partial write). [LAW:no-silent-failure] an
 				// unmergeable divergence is surfaced as its own state, never crashed through an
 				// absent merge-base; the union is reached only by the explicit combine choice.
-				result.State = SyncReconcileUnrelated
+				result.State = storage.SyncReconcileUnrelated
 				return nil
 			}
 			// unionCombine: replay the union of both sides. combine authors replay commits
@@ -370,7 +371,7 @@ func (s *Store) reconcile(ctx context.Context, remote string, branch string, set
 		})
 	})
 	if err != nil {
-		return SyncReconcileResult{}, err
+		return storage.SyncReconcileResult{}, err
 	}
 	return result, nil
 }
@@ -409,13 +410,13 @@ func (s *Store) replayUnderGuard(ctx context.Context, remote, branch, remoteHead
 // commits are never orphaned by a partial reconcile. It is idempotent: a retry
 // re-creates the scratch branch from the same fixed anchors and re-derives the
 // same result.
-func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
+func (s *Store) reconcileFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead, baseCommit string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
 		base, err := s.exportAtCommit(ctx, scratch.read, baseCommit)
 		if err != nil {
 			return err
 		}
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, base, reconcileCommitMessage, SyncReconcileLinearized)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, base, reconcileCommitMessage, storage.SyncReconcileLinearized)
 	})
 }
 
@@ -425,11 +426,11 @@ func (s *Store) reconcileFromAnchors(ctx context.Context, result *SyncReconcileR
 // held for the agent). It reuses the identical scratch lifecycle and safe-replay — the only
 // difference from the shared path is the empty base and the labels — so nothing is dropped
 // and no side is picked. [LAW:one-source-of-truth] one merge-and-replay tail, two producers.
-func (s *Store) combineFromAnchors(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
+func (s *Store) combineFromAnchors(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string) error {
 	return s.runOnReconcileScratch(ctx, dataBranch, scratch, localHead, func() error {
 		// [LAW:types-are-the-program] no merge-base is the empty export, which merge.ThreeWay
 		// reads as "both sides changed every field from empty" — exactly the two-way union.
-		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, model.Export{}, combineCommitMessage, SyncReconcileCombined)
+		return s.mergeAndReplay(ctx, result, settle, guard, dataBranch, scratch, localHead, remoteHead, model.Export{}, combineCommitMessage, storage.SyncReconcileCombined)
 	})
 }
 
@@ -661,7 +662,7 @@ func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitS
 // labels — the safety-critical replay is written once.
 // [LAW:single-enforcer] [LAW:dataflow-not-control-flow] base/message/state are values, not
 // a branch duplicated through the replay.
-func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, base model.Export, message string, settledState SyncReconcileState) error {
+func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcileResult, settle settleFn, guard *snapshotGuard, dataBranch string, scratch reconcileScratch, localHead, remoteHead string, base model.Export, message string, settledState storage.SyncReconcileState) error {
 	ours, err := s.exportAtCommit(ctx, scratch.read, localHead)
 	if err != nil {
 		return err
@@ -682,7 +683,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *SyncReconcileResult,
 		// surface. [LAW:no-silent-failure] never auto-committed by picking a side. The
 		// resolved finalize reaches here only when the agent's resolutions no longer
 		// match the live divergence, so this same path re-surfaces the CURRENT state.
-		result.State = SyncReconcileProsePending
+		result.State = storage.SyncReconcileProsePending
 		result.Pending = pending
 		return nil
 	}

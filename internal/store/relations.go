@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // bucketRelations sorts the structural edges incident to focalID into the four
@@ -18,8 +19,8 @@ import (
 // — shared by single-issue detail loading and batch relation loading so the
 // "blocks convention: src=dependent, dst=dependency" lives in exactly one place.
 // [LAW:single-enforcer] Relation-direction semantics decided once, here.
-func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) IssueRelations {
-	out := IssueRelations{
+func bucketRelations(focalID string, relations []model.Relation, issuesByID map[string]model.Issue) storage.IssueRelations {
+	out := storage.IssueRelations{
 		Children:  []model.Issue{},
 		DependsOn: []model.Issue{},
 		Blocks:    []model.Issue{},
@@ -102,10 +103,10 @@ func siblingsOf(focalID string, parentChildren []model.Issue) []model.Issue {
 // [LAW:dataflow-not-control-flow] One relations query plus one issue-hydration
 // query feed a pure bucketing pass — the per-subject work is map lookups, not
 // extra round-trips.
-func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]IssueRelations, error) {
+func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error) {
 	subjects := dedupeStrings(ids)
 	if len(subjects) == 0 {
-		return map[string]IssueRelations{}, nil
+		return map[string]storage.IssueRelations{}, nil
 	}
 	relations, err := s.listRelationsForIDs(ctx, subjects)
 	if err != nil {
@@ -132,7 +133,7 @@ func (s *Store) GetRelationsByIDs(ctx context.Context, ids []string) (map[string
 	if err != nil {
 		return nil, err
 	}
-	out := make(map[string]IssueRelations, len(subjects))
+	out := make(map[string]storage.IssueRelations, len(subjects))
 	for _, id := range subjects {
 		issue, ok := issuesByID[id]
 		if !ok {
@@ -289,7 +290,7 @@ func mapKeys(set map[string]struct{}) []string {
 	return out
 }
 
-func (s *Store) AddRelation(ctx context.Context, in AddRelationInput) (model.Relation, error) {
+func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (model.Relation, error) {
 	// [LAW:types-are-the-program] in.Type is sealed at the trust boundary by
 	// ParseRelationType; no string re-validation here.
 	if in.Type == model.RelRelatedTo && in.SrcID == in.DstID {
@@ -399,7 +400,7 @@ func (s *Store) RemoveRelation(ctx context.Context, srcID, dstID string, relType
 			return err
 		}
 		if affected == 0 {
-			return NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
+			return storage.NotFoundError{Entity: "relation", ID: fmt.Sprintf("src=%s dst=%s type=%s", srcID, dstID, relType)}
 		}
 		return nil
 	})
@@ -433,7 +434,7 @@ func (s *Store) ListRelationsForIssue(ctx context.Context, issueID string, types
 	return out, nil
 }
 
-func (s *Store) SetParent(ctx context.Context, in SetParentInput) (model.Relation, error) {
+func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model.Relation, error) {
 	if strings.TrimSpace(in.ChildID) == "" || strings.TrimSpace(in.ParentID) == "" {
 		return model.Relation{}, errors.New("child and parent ids are required")
 	}
@@ -484,7 +485,7 @@ func (s *Store) ClearParent(ctx context.Context, childID string) error {
 			return fmt.Errorf("rows affected: %w", err)
 		}
 		if affected == 0 {
-			return NotFoundError{Entity: "parent relation", ID: childID}
+			return storage.NotFoundError{Entity: "parent relation", ID: childID}
 		}
 		return nil
 	})

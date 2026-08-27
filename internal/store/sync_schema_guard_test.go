@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
 
@@ -29,7 +30,7 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL, 
 	if err != nil {
 		t.Fatalf("Open(seed %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "seed", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(seed): %v", err)
 	}
@@ -172,7 +173,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	id, _ := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
 	adoptRemote(t, ctx, rootB, remoteURL)
 	// B edits locally — a would-be fast-forward push onto the remote.
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("from-b")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
@@ -221,12 +222,12 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	// Remote starts at the CURRENT schema so both sides can build a real divergence.
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Lane: strptr("from-b")}) // B: 1 ahead
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")}) // B: 1 ahead
 
 	// A advances the remote divergently AND bumps it to a future schema in the same
 	// push. The push runs while the remote is still at the current schema, so the
 	// guard does not block the bump itself; only clones that fetch it are refused.
-	advanceRemoteToFutureSchema(t, ctx, rootA, id, "v9.9.0", UpdateIssueInput{Lane: strptr("from-a")})
+	advanceRemoteToFutureSchema(t, ctx, rootA, id, "v9.9.0", storage.UpdateIssueInput{Lane: strptr("from-a")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -237,7 +238,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness: %v", err)
 	}
-	if fresh.State() != SyncDiverged {
+	if fresh.State() != storage.SyncDiverged {
 		t.Fatalf("pre-reconcile state = %v, want diverged", fresh.State())
 	}
 	localHeadBefore := headCommit(t, ctx, syncB)
@@ -260,7 +261,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 // future goose schema version plus a producer, and pushes — all while the remote is
 // still at the current schema, so the push is not self-blocked. The remote head then
 // sits at a schema this binary cannot produce.
-func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id, producer string, in UpdateIssueInput) {
+func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id, producer string, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // commits the divergent edit
 	registryMax, err := migrations.MaxVersion()

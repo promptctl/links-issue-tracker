@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // backlogPreamble explains what the backlog view is so an agent reading top to
@@ -29,7 +29,7 @@ Use 'lit next' to pick the top workable item to start.`
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
 // suffix, unblocks). Empty data flows through the same path — the "(backlog
 // empty)" message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue, details map[string]store.IssueRelations, cc claimContext) error {
+func printBacklogOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error {
 	resolved := resolveColumns(columns)
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err

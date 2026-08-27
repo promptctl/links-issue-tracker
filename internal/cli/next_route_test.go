@@ -6,7 +6,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // These tests exercise routeNext directly against hand-built claims.Standings
@@ -26,7 +26,7 @@ func heldBy(who model.Attribution) claims.Standing {
 	return claims.Held{Tenure: claims.Tenure{By: who}}
 }
 
-func laneOf(t *testing.T, details map[string]store.IssueRelations, row annotation.AnnotatedIssue) model.LaneID {
+func laneOf(t *testing.T, details map[string]storage.IssueRelations, row annotation.AnnotatedIssue) model.LaneID {
 	t.Helper()
 	return model.LaneOf(row.Issue, details[row.ID].Parent)
 }
@@ -48,18 +48,18 @@ func rowByID(t *testing.T, rows []annotation.AnnotatedIssue, id string) annotati
 // rank); with the checkout's own claim on epic A, it must not.
 func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Start(A.1) error = %v", err)
 	}
 	// A.2 sits in its own lane so the lane gate does not block it behind the
 	// in_progress default-lane sibling A.1 — this test's contract is claim
 	// precedence over rank, not lane-gate membership.
-	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
@@ -83,11 +83,11 @@ func TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane(t *testing.T) {
 // actively driving is routed around, visible but not pullable."
 func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicC := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
@@ -114,18 +114,18 @@ func TestRouteNextRoutesAroundLaneHeldByAnother(t *testing.T) {
 // SHOULD BE SURFACED BEFORE ANY LANE FROM THE NEXT EPIC."
 func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Start(A.1) error = %v", err)
 	}
 	// A.2 sits in its own lane so the lane gate does not block it behind the
 	// in_progress default-lane sibling A.1 — this test's contract is
 	// epic-continuation, not lane-gate membership.
-	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
@@ -154,14 +154,14 @@ func TestRouteNextContinuesEpicBeforeHigherRankedOtherEpic(t *testing.T) {
 // hopped to epic B, repeatedly."
 func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Start(A.1) error = %v", err)
 	}
 
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {
@@ -195,13 +195,13 @@ func TestRouteNextExhaustionNeverFallsToAnotherEpic(t *testing.T) {
 // being served (correctly) but mislabeled as an ordinary global pick.
 func TestRouteNextOffersOnPathDependency(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicA := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
-	a1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
-	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID})
+	if _, err := h.ap.Store.Apply(h.ctx, a1.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Start(A.1) error = %v", err)
 	}
-	a2 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
-	dep := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
 	h.addDependency(a2.ID, dep.ID)
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
@@ -229,11 +229,11 @@ func TestRouteNextOffersOnPathDependency(t *testing.T) {
 // lane must be skipped exactly as a fresh foreign hold is.
 func TestRouteNextSkipsStaleLane(t *testing.T) {
 	h := newReadyTestHarness(t)
-	epicB := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
-	b1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
 
-	epicC := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
-	c1 := h.createIssue(store.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
 
 	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
 	if err != nil {

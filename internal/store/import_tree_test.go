@@ -4,13 +4,15 @@ import (
 	"context"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	specs := []ImportTreeSpec{
+	specs := []storage.ImportTreeSpec{
 		{LocalID: "e1", Title: "Epic", IssueType: "epic", Topic: "tree", Priority: 0},
 		{LocalID: "t1", Title: "First", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1"},
 		{LocalID: "t2", Title: "Second", IssueType: "task", Topic: "tree", Priority: 0, Parent: "e1", DependsOn: []string{"t1"}},
@@ -49,7 +51,7 @@ func TestImportTreeRejectsCycle(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	specs := []ImportTreeSpec{
+	specs := []storage.ImportTreeSpec{
 		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, DependsOn: []string{"b"}},
 		{LocalID: "b", Title: "B", IssueType: "task", Topic: "x", Priority: 0, DependsOn: []string{"a"}},
 	}
@@ -62,7 +64,7 @@ func TestImportTreeRejectsMissingReference(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	specs := []ImportTreeSpec{
+	specs := []storage.ImportTreeSpec{
 		{LocalID: "a", Title: "A", IssueType: "task", Topic: "x", Priority: 0, Parent: "ghost"},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "missing parent") {
@@ -74,32 +76,11 @@ func TestImportTreeRejectsInvalidType(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
-	specs := []ImportTreeSpec{
+	specs := []storage.ImportTreeSpec{
 		{LocalID: "a", Title: "A", IssueType: "ghost", Topic: "x", Priority: 0},
 	}
 	if _, err := st.ImportTree(ctx, "test", specs); err == nil || !strings.Contains(err.Error(), "invalid type") {
 		t.Fatalf("ImportTree(bad type) error = %v, want invalid-type error", err)
-	}
-}
-
-// A nested spec — hierarchy via a "children" array instead of the flat
-// local_id+parent form — is the canonical schema-drift case. The unknown
-// "children" field must be rejected by name, not silently dropped.
-func TestParseImportTreeSpecsRejectsUnknownField(t *testing.T) {
-	t.Parallel()
-	nested := []byte(`[{"local_id":"e1","title":"Epic","type":"epic","topic":"x","children":[{"local_id":"t1","title":"Child"}]}]`)
-	_, err := ParseImportTreeSpecs(nested)
-	if err == nil || !strings.Contains(err.Error(), "children") {
-		t.Fatalf("ParseImportTreeSpecs(nested) error = %v, want error naming \"children\"", err)
-	}
-}
-
-func TestParseImportTreeSpecsRejectsTrailingData(t *testing.T) {
-	t.Parallel()
-	doc := []byte(`[{"local_id":"a","title":"A","type":"task","topic":"x"}] [{"local_id":"b","title":"B","type":"task","topic":"x"}]`)
-	_, err := ParseImportTreeSpecs(doc)
-	if err == nil || !strings.Contains(err.Error(), "trailing data") {
-		t.Fatalf("ParseImportTreeSpecs(trailing) error = %v, want trailing-data error", err)
 	}
 }
 
@@ -114,7 +95,7 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 		{"local_id":"t1","title":"First","type":"task","topic":"tree","priority":0,"parent":"e1"},
 		{"local_id":"t2","title":"Second","type":"task","topic":"tree","priority":0,"parent":"e1","depends_on":["t1"]}
 	]`)
-	specs, err := ParseImportTreeSpecs(flat)
+	specs, err := storage.ParseImportTreeSpecs(flat)
 	if err != nil {
 		t.Fatalf("ParseImportTreeSpecs(flat) error = %v", err)
 	}

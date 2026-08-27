@@ -11,7 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // NeedsDesignLabel is the reserved label that flags an issue as awaiting
@@ -94,7 +94,7 @@ func newFieldAnnotator(requiredFields []string) (annotation.Annotator, error) {
 // "an issue's open blockers / parent epic" has one definition across consumers.
 // [LAW:dataflow-not-control-flow] The fetch is unconditional and happens once;
 // downstream stages are pure map lookups over the result.
-func fetchIssueRelations(ctx context.Context, st *store.Store, issues []model.Issue) (map[string]store.IssueRelations, error) {
+func fetchIssueRelations(ctx context.Context, st storage.Store, issues []model.Issue) (map[string]storage.IssueRelations, error) {
 	ids := make([]string, len(issues))
 	for i, issue := range issues {
 		ids[i] = issue.ID
@@ -109,7 +109,7 @@ func fetchIssueRelations(ctx context.Context, st *store.Store, issues []model.Is
 	// [LAW:no-defensive-null-guards] Fail loudly at the store boundary.
 	for _, issue := range issues {
 		if _, ok := relations[issue.ID]; !ok {
-			return nil, store.NotFoundError{Entity: "issue", ID: issue.ID}
+			return nil, storage.NotFoundError{Entity: "issue", ID: issue.ID}
 		}
 	}
 	return relations, nil
@@ -120,7 +120,7 @@ func fetchIssueRelations(ctx context.Context, st *store.Store, issues []model.Is
 // The annotator is pure: it reads from the shared relations map rather than
 // fetching from the store, so fetch cost is paid once upstream in
 // fetchIssueRelations.
-func newBlockerAnnotator(details map[string]store.IssueRelations) annotation.Annotator {
+func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.Annotator {
 	// [LAW:dataflow-not-control-flow] Dependency lookup runs for every issue;
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
@@ -170,7 +170,7 @@ func newBlockerAnnotator(details map[string]store.IssueRelations) annotation.Ann
 //
 // siblingsByEpic holds only unfinished siblings (the index builder applies that
 // predicate once), so the annotator compares lane and rank alone.
-func newSiblingGateAnnotator(details map[string]store.IssueRelations, siblingsByEpic map[string][]model.Issue) annotation.Annotator {
+func newSiblingGateAnnotator(details map[string]storage.IssueRelations, siblingsByEpic map[string][]model.Issue) annotation.Annotator {
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
 		parent := details[issue.ID].Parent
 		if parent == nil || !parent.IsContainer() {
@@ -202,7 +202,7 @@ func isEarlierSameLaneSibling(sib, leaf model.Issue) bool {
 // parentEpicIDs returns the distinct ids of the container parents referenced by
 // the workable leaves. These are the epics whose full child set the lane gate
 // must inspect.
-func parentEpicIDs(details map[string]store.IssueRelations) []string {
+func parentEpicIDs(details map[string]storage.IssueRelations) []string {
 	seen := make(map[string]struct{})
 	ids := make([]string, 0)
 	for _, rel := range details {
@@ -225,7 +225,7 @@ func parentEpicIDs(details map[string]store.IssueRelations) []string {
 // list — an unassigned earlier sibling still gates its later lane-mates.
 // [LAW:single-enforcer] "an earlier sibling still needs work" is decided over
 // every sibling, not only the ones this invocation's filters let through.
-func pendingSiblingsByEpic(relations map[string]store.IssueRelations) map[string][]model.Issue {
+func pendingSiblingsByEpic(relations map[string]storage.IssueRelations) map[string][]model.Issue {
 	out := make(map[string][]model.Issue, len(relations))
 	for epicID, rel := range relations {
 		for _, child := range rel.Children {
@@ -247,12 +247,12 @@ const FocusLabel = "focus"
 
 // focusGraphSource is the exact store surface the focus-path walk consumes:
 // listing the focus-labeled goals and batch-loading structural relations. The
-// walk depends on this two-method seam rather than the whole *store.Store, so
+// walk depends on this two-method seam rather than the whole storage.Store, so
 // its real input is nameable and a memo/decorator can stand in.
 // [LAW:decomposition] The seam carries the whole truth of what the part needs.
 type focusGraphSource interface {
-	ListIssues(ctx context.Context, filter store.ListIssuesFilter) ([]model.Issue, error)
-	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]store.IssueRelations, error)
+	ListIssues(ctx context.Context, filter storage.ListIssuesFilter) ([]model.Issue, error)
+	GetRelationsByIDs(ctx context.Context, ids []string) (map[string]storage.IssueRelations, error)
 }
 
 // fetchFocusPathGoals returns issueID -> focused-goal ID for every unfinished
@@ -274,15 +274,15 @@ type focusGraphSource interface {
 // read-only pass with no intervening writes, so a hit is byte-identical to a
 // refetch; an empty seed set leaves behavior unchanged.
 // [LAW:one-source-of-truth] The memo is derived, never authoritative.
-func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map[string]store.IssueRelations) (map[string]string, error) {
-	goals, err := src.ListIssues(ctx, store.ListIssuesFilter{
+func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map[string]storage.IssueRelations) (map[string]string, error) {
+	goals, err := src.ListIssues(ctx, storage.ListIssuesFilter{
 		Statuses:  []model.State{model.StateOpen, model.StateInProgress},
 		LabelsAll: []string{FocusLabel},
 	})
 	if err != nil {
 		return nil, err
 	}
-	cache := make(map[string]store.IssueRelations)
+	cache := make(map[string]storage.IssueRelations)
 	for _, seed := range seeds {
 		for id, rel := range seed {
 			cache[id] = rel
@@ -313,7 +313,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 			if !ok {
 				// Frontier ids are hydrated issues from this same connection;
 				// a hole means the store lied. [LAW:no-silent-failure]
-				return nil, store.NotFoundError{Entity: "issue", ID: id}
+				return nil, storage.NotFoundError{Entity: "issue", ID: id}
 			}
 			var prereqs []model.Issue
 			for _, dep := range rel.DependsOn {
@@ -355,7 +355,7 @@ func fetchFocusPathGoals(ctx context.Context, src focusGraphSource, seeds ...map
 // results are memoized.
 // [LAW:single-enforcer] Every relation load on the focus walk goes through this
 // one memo, so cross-level repeats and caller-donated subjects never re-query.
-func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]store.IssueRelations, ids []string) (map[string]store.IssueRelations, error) {
+func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]storage.IssueRelations, ids []string) (map[string]storage.IssueRelations, error) {
 	missing := make([]string, 0, len(ids))
 	for _, id := range ids {
 		if _, ok := cache[id]; !ok {
@@ -371,7 +371,7 @@ func relationsByID(ctx context.Context, src focusGraphSource, cache map[string]s
 			cache[id] = rel
 		}
 	}
-	out := make(map[string]store.IssueRelations, len(ids))
+	out := make(map[string]storage.IssueRelations, len(ids))
 	for _, id := range ids {
 		if rel, ok := cache[id]; ok {
 			out[id] = rel
@@ -465,7 +465,7 @@ func isRequiredFieldSet(value any) bool {
 // [LAW:dataflow-not-control-flow] Every row flows through the same lookup;
 // variability lives in whether the parent exists and its type, not in whether
 // the enrichment step runs. (links-agent-epic-model-uew.2)
-func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
+func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) {
 	for i := range rows {
 		detail := details[rows[i].ID]
 		if detail.Parent == nil || !detail.Parent.IsContainer() {
@@ -487,7 +487,7 @@ func enrichWithParentEpic(rows []annotation.AnnotatedIssue, details map[string]s
 // [LAW:dataflow-not-control-flow] The sort key is a pure function of each
 // row and the shared details map; variability lives in the values, not in
 // whether some rows skip the sort. (links-agent-epic-model-uew.4)
-func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]store.IssueRelations) {
+func sortByCompositeRank(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) {
 	epicRank := func(issue model.Issue) string {
 		parent := details[issue.ID].Parent
 		if parent != nil && parent.IsContainer() {

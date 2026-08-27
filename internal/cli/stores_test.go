@@ -10,8 +10,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -281,13 +282,13 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	storageDir = filepath.Join(repoDir, ".git", "links")
 	dbPath := filepath.Join(storageDir, "dolt")
 
-	st, err := store.Open(ctx, dbPath, workspaceID)
+	st, err := engine.Open(ctx, engine.ReadWrite, dbPath, workspaceID)
 	if err != nil {
-		t.Fatalf("store.Open(%q) error = %v", dbPath, err)
+		t.Fatalf("engine.Open(%q) error = %v", dbPath, err)
 	}
 	newLeaf := func(title string) model.Issue {
-		issue, err := st.CreateIssue(ctx, store.CreateIssueInput{
-			Title: title, Topic: "work", Prefix: prefix, Placement: store.RankBottom,
+		issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
+			Title: title, Topic: "work", Prefix: prefix, Placement: storage.RankBottom,
 		})
 		if err != nil {
 			t.Fatalf("CreateIssue(%q) error = %v", title, err)
@@ -297,13 +298,13 @@ func seedDiscoverableStore(t *testing.T, repoDir, prefix, workspaceID string) (s
 	newLeaf("ready one") // ready
 	newLeaf("ready two") // ready
 	wip := newLeaf("in flight")
-	if _, err := st.Apply(ctx, wip.ID, store.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
+	if _, err := st.Apply(ctx, wip.ID, storage.Change{Action: model.Start{Assignee: "tester"}, Actor: "tester"}); err != nil {
 		t.Fatalf("Apply(start) error = %v", err)
 	}
 	blocked := newLeaf("blocked")
 	// blocked depends on the still-unfinished in-progress leaf, so it is blocked
 	// without adding a second ready leaf that would perturb the asserted counts.
-	if _, err := st.AddRelation(ctx, store.AddRelationInput{
+	if _, err := st.AddRelation(ctx, storage.AddRelationInput{
 		SrcID: blocked.ID, DstID: wip.ID, Type: "blocks", CreatedBy: "tester",
 	}); err != nil {
 		t.Fatalf("AddRelation(blocks) error = %v", err)

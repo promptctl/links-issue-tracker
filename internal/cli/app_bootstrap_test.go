@@ -10,7 +10,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -75,9 +75,9 @@ func initBootstrapTestRepo(t *testing.T) (string, workspace.Info) {
 	if err != nil {
 		t.Fatalf("workspace.Resolve() error = %v", err)
 	}
-	st, err := store.Open(context.Background(), ws.DatabasePath, ws.WorkspaceID)
+	st, err := engine.Open(context.Background(), engine.ReadWrite, ws.DatabasePath, ws.WorkspaceID)
 	if err != nil {
-		t.Fatalf("store.Open() error = %v", err)
+		t.Fatalf("engine.Open() error = %v", err)
 	}
 	if err := st.Close(); err != nil {
 		t.Fatalf("store.Close() error = %v", err)

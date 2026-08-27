@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // captureStdout runs fn with the process stdout file descriptor redirected to a
@@ -107,7 +109,7 @@ func seedSecondChange(t *testing.T, ctx context.Context, root, remoteURL string)
 	if err != nil {
 		t.Fatalf("Open(second change): %v", err)
 	}
-	if _, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "second", Topic: "topic", IssueType: "task"}); err != nil {
+	if _, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "second", Topic: "topic", IssueType: "task"}); err != nil {
 		t.Fatalf("CreateIssue(second): %v", err)
 	}
 	if err := st.Close(); err != nil {

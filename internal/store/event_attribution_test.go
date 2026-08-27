@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // rawAttribution reads one event's attribution columns as the database actually
@@ -45,19 +46,19 @@ func allEvents(t *testing.T, ctx context.Context, st *Store) []model.IssueEvent 
 // rather than whichever one a single-mutation fixture happened to pick.
 func exerciseEveryEventKind(t *testing.T, ctx context.Context, st *Store) {
 	t.Helper()
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Attributed work", Topic: "claims", IssueType: "task", Priority: 0,
 	})
 	if err != nil {
 		t.Fatalf("CreateIssue() error = %v", err)
 	}
 	newTitle := "Attributed work, retitled"
-	if _, err := st.Apply(ctx, issue.ID, Change{
-		Fields: UpdateIssueInput{Title: &newTitle}, Actor: "tester", Reason: "retitle",
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{
+		Fields: storage.UpdateIssueInput{Title: &newTitle}, Actor: "tester", Reason: "retitle",
 	}); err != nil {
 		t.Fatalf("Apply(field update) error = %v", err)
 	}
-	if _, err := st.Apply(ctx, issue.ID, Change{
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{
 		Action: model.Start{Assignee: "tester"}, Actor: "tester", Reason: "begin",
 	}); err != nil {
 		t.Fatalf("Apply(start) error = %v", err)

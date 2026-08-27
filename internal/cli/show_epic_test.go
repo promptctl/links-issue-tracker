@@ -8,7 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // showOutput runs `lit show <id>` text rendering and returns the captured
@@ -76,7 +76,7 @@ func TestRunShowEpicRendersChildrenNoFocus(t *testing.T) {
 // A parentless non-epic issue is unchanged: no epic block at all.
 func TestRunShowParentlessTicketHasNoEpicBlock(t *testing.T) {
 	ap := newTestCLIApp(t)
-	free, err := ap.Store.CreateIssue(context.Background(), store.CreateIssueInput{
+	free, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

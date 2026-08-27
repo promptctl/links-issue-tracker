@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // unrelatedInventory reads the issue-id set at each of the two unrelated heads and
@@ -13,7 +15,7 @@ import (
 // as the reconcile classifies SyncReconcileUnrelated before any scratch, snapshot,
 // or reset. [LAW:effects-at-boundaries] the two reads are the only effect; the
 // partition itself is pure set arithmetic.
-func (s *Store) unrelatedInventory(ctx context.Context, localHead, remoteHead string) (*UnrelatedInventory, error) {
+func (s *Store) unrelatedInventory(ctx context.Context, localHead, remoteHead string) (*storage.UnrelatedInventory, error) {
 	local, err := issueIDsAtCommit(ctx, s.db, localHead)
 	if err != nil {
 		return nil, fmt.Errorf("read local issue inventory: %w", err)
@@ -22,7 +24,7 @@ func (s *Store) unrelatedInventory(ctx context.Context, localHead, remoteHead st
 	if err != nil {
 		return nil, fmt.Errorf("read remote issue inventory: %w", err)
 	}
-	return &UnrelatedInventory{
+	return &storage.UnrelatedInventory{
 		OnlyLocal:  setDifference(local, remote),
 		OnlyRemote: setDifference(remote, local),
 		OnBoth:     setIntersection(local, remote),

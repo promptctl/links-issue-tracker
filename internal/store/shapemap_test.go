@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // --- Validate: the single totality enforcer (acceptance #1) ---
@@ -285,7 +286,7 @@ func TestGooseUpSectionExcludesDownDrops(t *testing.T) {
 
 // --- The two known shapes produce valid total mappings (acceptance #3) ---
 
-func mustClean(t *testing.T, report HealthReport) {
+func mustClean(t *testing.T, report storage.HealthReport) {
 	t.Helper()
 	if report.IntegrityCheck != "ok" || len(report.Errors) != 0 {
 		t.Fatalf("rebuilt workspace is not clean: integrity=%q errors=%v", report.IntegrityCheck, report.Errors)
@@ -303,25 +304,25 @@ func TestDeterministicMapCleanAhead(t *testing.T) {
 
 	wantIDs := map[string]bool{}
 	withStore(t, ctx, src, func(st *Store) {
-		epic, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Epic", IssueType: "epic", Topic: "recovery", Prefix: "links"})
+		epic, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Epic", IssueType: "epic", Topic: "recovery", Prefix: "links"})
 		if err != nil {
 			t.Fatalf("create epic: %v", err)
 		}
-		child, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Child task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
+		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Child task", IssueType: "task", Topic: "recovery", Prefix: "links", ParentID: epic.ID})
 		if err != nil {
 			t.Fatalf("create child: %v", err)
 		}
-		solo, err := st.CreateIssue(ctx, CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links"})
+		solo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "Solo task", IssueType: "task", Topic: "recovery", Prefix: "links"})
 		if err != nil {
 			t.Fatalf("create solo: %v", err)
 		}
-		if _, _, err := st.AddComment(ctx, AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
+		if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "a note", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add comment: %v", err)
 		}
-		if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {
+		if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: child.ID, Name: "backend", CreatedBy: "claude"}); err != nil {
 			t.Fatalf("add label: %v", err)
 		}
-		if _, err := st.Apply(ctx, solo.ID, Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {
+		if _, err := st.Apply(ctx, solo.ID, storage.Change{Action: model.Start{Assignee: "claude"}, Actor: "claude", Reason: "begin"}); err != nil {
 			t.Fatalf("start solo: %v", err)
 		}
 		for _, id := range []string{epic.ID, child.ID, solo.ID} {

@@ -7,7 +7,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // seedOpenIssueRaw creates an issue through the CLI and returns its id.
@@ -133,7 +133,7 @@ func TestShowManualRelatedRendersUnchanged(t *testing.T) {
 	ap := newTestCLIApp(t)
 	focal := seedOpenIssueRaw(t, ctx, ap, "Focal")
 	peer := seedOpenIssueRaw(t, ctx, ap, "Peer")
-	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: focal, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: focal, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(related) error = %v", err)
 	}
 
@@ -160,7 +160,7 @@ func TestShowRedirectAlongsideManualPeers(t *testing.T) {
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	peer := seedOpenIssueRaw(t, ctx, ap, "Peer")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
-	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: dup, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dup, DstID: peer, Type: "related-to", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(related) error = %v", err)
 	}
 
@@ -204,7 +204,7 @@ func TestCloseDuplicateOfAlreadyRelatedTicketRoundTrip(t *testing.T) {
 	ap := newTestCLIApp(t)
 	canonical := seedOpenIssueRaw(t, ctx, ap, "Canonical")
 	dup := seedOpenIssueRaw(t, ctx, ap, "Duplicate")
-	if _, err := ap.Store.AddRelation(ctx, store.AddRelationInput{SrcID: dup, DstID: canonical, Type: "related-to", CreatedBy: "test"}); err != nil {
+	if _, err := ap.Store.AddRelation(ctx, storage.AddRelationInput{SrcID: dup, DstID: canonical, Type: "related-to", CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddRelation(related) error = %v", err)
 	}
 

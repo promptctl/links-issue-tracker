@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // A single --field request prints the bare value with no label, so it
@@ -76,7 +76,7 @@ func TestPrintIssueFieldsUnknownFieldReturnsUsageErrorWithNoOutput(t *testing.T)
 func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 	f := newEpicFixture(t, "Plan epic", "the epic's own long description")
 	sibling := f.addChild("Sibling")
-	focus, err := f.ap.Store.CreateIssue(f.ctx, store.CreateIssueInput{
+	focus, err := f.ap.Store.CreateIssue(f.ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Focused child", Topic: "epic-view", IssueType: "task", Priority: 0,
 		ParentID: f.epicID, Description: "the focused child's own description",
 	})
@@ -101,7 +101,7 @@ func TestRunShowFieldOmitsAllSurroundingContext(t *testing.T) {
 // fails clean instead of silently falling back to the full dump.
 func TestRunShowUnknownFieldReturnsUsageError(t *testing.T) {
 	ap := newTestCLIApp(t)
-	issue, err := ap.Store.CreateIssue(context.Background(), store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(context.Background(), storage.CreateIssueInput{
 		Prefix: "test", Title: "Free floating", Topic: "misc", IssueType: "task", Priority: 0,
 	})
 	if err != nil {

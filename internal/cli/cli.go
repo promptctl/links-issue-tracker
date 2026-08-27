@@ -18,7 +18,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
 	"github.com/promptctl/links-issue-tracker/internal/query"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workflows"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 	"github.com/spf13/cobra"
@@ -314,13 +314,13 @@ func unsupportedOutputFlagError() error {
 // rankPlacement translates the CLI's --top boolean into the domain placement
 // value at the boundary. The unflagged arm names no placement of its own — it
 // hands back the zero value, so the CLI cannot state a default that drifts
-// from the one store.RankPlacement defines for every other creation surface.
+// from the one storage.RankPlacement defines for every other creation surface.
 // [LAW:one-source-of-truth]
-func rankPlacement(top bool) store.RankPlacement {
+func rankPlacement(top bool) storage.RankPlacement {
 	if top {
-		return store.RankTop
+		return storage.RankTop
 	}
-	var unflagged store.RankPlacement
+	var unflagged storage.RankPlacement
 	return unflagged
 }
 
@@ -348,7 +348,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	if err != nil {
 		return err
 	}
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Title: *title, Description: *description, Prompt: *prompt, IssueType: issueTypeValue, Topic: *topic, ParentID: *parentID, Priority: priorityValue, Assignee: strings.TrimSpace(*assignee), Labels: splitCSV(*labels), Lane: *lane,
 		Placement: rankPlacement(*top),
 		Prefix:    ap.Workspace.IssuePrefix.Value(),
@@ -412,7 +412,7 @@ func runFollowup(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	issue, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	issue, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Title:       titleValue,
 		Description: resolvedDescription,
 		Prompt:      strings.TrimSpace(*prompt),
@@ -501,7 +501,7 @@ func extractAtDir(args []string) (string, bool) {
 	return "", false
 }
 
-func runListWithStore(ctx context.Context, stdout io.Writer, st *store.Store, args []string) error {
+func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, args []string) error {
 	fs := newCobraFlagSet("ls")
 	// --at is registered so the shared parse accepts it; the store it selects was
 	// already opened by runList, so its value is not re-read here.
@@ -535,7 +535,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st *store.Store, ar
 	if err != nil {
 		return fmt.Errorf("parse --type: %w", err)
 	}
-	filter := store.ListIssuesFilter{
+	filter := storage.ListIssuesFilter{
 		Statuses:        statuses,
 		IssueTypes:      issueTypes,
 		Assignees:       toSlice(strings.TrimSpace(*assignee)),
@@ -546,7 +546,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st *store.Store, ar
 	if strings.TrimSpace(*sortExpr) != "" {
 		// [LAW:one-source-of-truth] Reuse the one store sort parser; the
 		// --query sort: token routes through the same function.
-		sortSpecs, err := store.ParseSortSpecs(*sortExpr)
+		sortSpecs, err := storage.ParseSortSpecs(*sortExpr)
 		if err != nil {
 			return err
 		}
@@ -631,7 +631,7 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st *store.Store, ar
 // not a forked code path.
 // [LAW:one-source-of-truth] reuses fetchIssueRelations + the canonical graph
 // rather than reinterpreting parent/blocks edges for the list view.
-func listRelationColumns(ctx context.Context, st *store.Store, columns []string, issues []model.Issue) (map[string]relationColumns, error) {
+func listRelationColumns(ctx context.Context, st storage.Store, columns []string, issues []model.Issue) (map[string]relationColumns, error) {
 	if !projectsRelationColumn(resolveColumns(columns)) {
 		return nil, nil
 	}
@@ -651,7 +651,7 @@ func listRelationColumns(ctx context.Context, st *store.Store, columns []string,
 // blocks it. Blocked reuses liveIssues — the single liveness predicate — so the
 // list's "blocked" cannot drift from the close view's "unblocks".
 // [LAW:single-enforcer] liveness decided once, in model.Issue.InPlay.
-func deriveRelationColumns(rel store.IssueRelations) relationColumns {
+func deriveRelationColumns(rel storage.IssueRelations) relationColumns {
 	parentID := ""
 	if rel.Parent != nil {
 		parentID = rel.Parent.ID
@@ -690,7 +690,7 @@ type workableFilter struct {
 // [LAW:single-enforcer] `lit next` and `lit backlog` both
 // read from this single pipeline so their "what is workable, in what
 // order" model cannot drift.
-func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
+func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
 	cfg, err := config.Load(pathspec.New(ap.Workspace.RootDir))
 	if err != nil {
 		return nil, nil, err
@@ -711,14 +711,14 @@ func gatherWorkableAnnotated(ctx context.Context, ap *app.App, rf workableFilter
 // it, including a read-only foreign store the process is not cd'd into.
 // [LAW:one-source-of-truth] `lit next`/`backlog` and the cross-project
 // rollup share this one definition of "what is workable, annotated how".
-func classifyWorkable(ctx context.Context, st *store.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]store.IssueRelations, error) {
+func classifyWorkable(ctx context.Context, st storage.Store, requiredFields []string, rf workableFilter) ([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, error) {
 	statuses := []model.State{model.StateOpen, model.StateInProgress}
 	if rf.Status != "" {
 		statuses = []model.State{rf.Status}
 	}
 	// [LAW:one-source-of-truth] rank is the canonical ordering; no explicit SortBy
 	// needed — the store default is item_rank ASC.
-	listFilter := store.ListIssuesFilter{
+	listFilter := storage.ListIssuesFilter{
 		Statuses:        statuses,
 		IssueTypes:      toSlice(rf.IssueType),
 		Assignees:       toSlice(rf.Assignee),
@@ -796,7 +796,7 @@ func runOrphaned(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if fs.NArg() != 0 {
 		return UsageError{Message: "usage: lit orphaned [--assignee <user>]"}
 	}
-	listFilter := store.ListIssuesFilter{
+	listFilter := storage.ListIssuesFilter{
 		Statuses:        []model.State{model.StateInProgress},
 		Assignees:       toSlice(strings.TrimSpace(*assignee)),
 		IncludeArchived: false,
@@ -965,9 +965,9 @@ func runUpdate(ctx context.Context, stdout io.Writer, ap *app.App, args []string
 	// session wins, else --by/$USER — and is recorded on the field-change event.
 	// Fields.Reason annotates that event; with no action, there is no transition
 	// event for update to reason about. [LAW:single-enforcer]
-	in := store.Change{
+	in := storage.Change{
 		Actor: resolveActor(),
-		Fields: store.UpdateIssueInput{
+		Fields: storage.UpdateIssueInput{
 			Reason: strings.TrimSpace(*reason),
 		},
 	}
@@ -1075,7 +1075,7 @@ func runRank(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 	// child's stand-in is its epic); the move record carries what actually
 	// happened so the substitution is reported, never silent.
 	// [LAW:no-silent-failure]
-	move := store.RankMove{MovedID: issueID, AnchorID: issueID}
+	move := storage.RankMove{MovedID: issueID, AnchorID: issueID}
 	var err error
 	switch {
 	case visited["top"]:
@@ -1392,7 +1392,7 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// must record who actually performed the transition (claude_<session>), not
 	// the shell user, now that ownership survives close as an orthogonal field.
 	actor := resolveActor()
-	issue, err := ap.Store.Apply(ctx, issueID, store.Change{Action: action, Actor: actor, Reason: *reason})
+	issue, err := ap.Store.Apply(ctx, issueID, storage.Change{Action: action, Actor: actor, Reason: *reason})
 	if err != nil {
 		return err
 	}
@@ -1477,7 +1477,7 @@ func runCommentAdd(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	}
 	// [LAW:single-enforcer] A comment is a recorded event; its author resolves
 	// through the same identity rule as every other actor.
-	comment, issue, err := ap.Store.AddComment(ctx, store.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
+	comment, issue, err := ap.Store.AddComment(ctx, storage.AddCommentInput{IssueID: positional[0], Body: *body, CreatedBy: resolveActor()})
 	if err != nil {
 		return err
 	}
@@ -1577,7 +1577,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 // `lit doctor` after a failed import to detect any orphans left if rollback
 // itself failed.
 //
-// JSON shape (see store.ImportTreeSpec):
+// JSON shape (see storage.ImportTreeSpec):
 //
 //	[
 //	  {"local_id": "epic-x", "title": "Build X", "type": "epic", "topic": "x", "priority": 0},
@@ -1585,7 +1585,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 //	  {"local_id": "task-2", "parent": "epic-x", "depends_on": ["task-1"], "title": "Build", "type": "task", "topic": "x", "priority": 0}
 //	]
 func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data []byte) error {
-	specs, err := store.ParseImportTreeSpecs(data)
+	specs, err := storage.ParseImportTreeSpecs(data)
 	if err != nil {
 		return err
 	}
@@ -1606,7 +1606,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 
 // runImportBulk consumes a multi-document YAML bulk file and creates or
 // updates each document's issue (see Store.BulkApply and
-// store.BulkIssueSpec for the id-as-selector rule and the full field list).
+// storage.BulkIssueSpec for the id-as-selector rule and the full field list).
 //
 // YAML shape — one document per issue, documents separated by `---`:
 //
@@ -1624,7 +1624,7 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 //	title: Renamed
 //	labels: [reviewed]
 func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []byte, actor string, byChanged bool) error {
-	specs, err := store.ParseBulkSpecs(data)
+	specs, err := storage.ParseBulkSpecs(data)
 	if err != nil {
 		return err
 	}
@@ -1662,7 +1662,7 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 
 // bulkSpecsHaveUpdate reports whether any document in specs selects an
 // existing issue (id set) rather than creating one.
-func bulkSpecsHaveUpdate(specs []store.BulkIssueSpec) bool {
+func bulkSpecsHaveUpdate(specs []storage.BulkIssueSpec) bool {
 	for _, spec := range specs {
 		if spec.ID != "" {
 			return true

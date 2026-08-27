@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestRankCrossFrameReportsResolution verifies the rank command tells the
@@ -16,15 +16,15 @@ func TestRankCrossFrameReportsResolution(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
 
-	epic, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic", Placement: store.RankBottom})
+	epic, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "frame", IssueType: "epic", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(epic) error = %v", err)
 	}
-	child, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: store.RankBottom})
+	child, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Child", Topic: "frame", IssueType: "task", ParentID: epic.ID, Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(child) error = %v", err)
 	}
-	standalone, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task", Placement: store.RankBottom})
+	standalone, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "Standalone", Topic: "frame", IssueType: "task", Placement: storage.RankBottom})
 	if err != nil {
 		t.Fatalf("CreateIssue(standalone) error = %v", err)
 	}

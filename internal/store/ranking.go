@@ -11,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func (s *Store) RankToTop(ctx context.Context, issueID string) error {
@@ -61,7 +62,7 @@ func rankSetValidateIDs(ids []string) error {
 // no frame-coherent write can express — honoring part of the order while
 // silently discarding the rest would misrepresent the request.
 // [LAW:no-silent-failure]
-func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]RankSetResolution, error) {
+func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
 	chains := make([][]string, len(ids))
 	for i, id := range ids {
 		if _, err := s.GetIssue(ctx, id); err != nil {
@@ -77,14 +78,14 @@ func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]RankSetReso
 	if err != nil {
 		return nil, fmt.Errorf("rank set: %w", err)
 	}
-	resolutions := make([]RankSetResolution, len(ids))
+	resolutions := make([]storage.RankSetResolution, len(ids))
 	repToNamed := make(map[string]string, len(ids))
 	for i, id := range ids {
 		if prior, dup := repToNamed[reps[i]]; dup {
 			return nil, fmt.Errorf("rank set: %s and %s both resolve to %s — their relative order is internal to %s and cannot be set against outside issues; run rank set among siblings instead", prior, id, reps[i], reps[i])
 		}
 		repToNamed[reps[i]] = id
-		resolutions[i] = RankSetResolution{NamedID: id, RankedID: reps[i]}
+		resolutions[i] = storage.RankSetResolution{NamedID: id, RankedID: reps[i]}
 	}
 	return resolutions, nil
 }
@@ -98,7 +99,7 @@ func (s *Store) resolveRankSet(ctx context.Context, ids []string) ([]RankSetReso
 // Validates IDs exist and rejects duplicates before any write.
 // [LAW:single-enforcer] Multi-issue rank reassignment lives in this one
 // transaction so partial-application states cannot occur.
-func (s *Store) RankSet(ctx context.Context, ids []string) ([]RankSetResolution, error) {
+func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetResolution, error) {
 	if err := rankSetValidateIDs(ids); err != nil {
 		return nil, err
 	}
@@ -304,41 +305,41 @@ func resolveComparableFrame(issueChain, targetChain []string) (movedID, anchorID
 // midpoint math) and the move record.
 // [LAW:single-enforcer] Both relative rank ops route through this one
 // resolution so cross-frame semantics cannot drift between above and below.
-func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, RankMove, error) {
+func (s *Store) resolveRankPair(ctx context.Context, issueID, targetID string) (model.Issue, storage.RankMove, error) {
 	if issueID == targetID {
-		return model.Issue{}, RankMove{}, errors.New("cannot rank an issue relative to itself")
+		return model.Issue{}, storage.RankMove{}, errors.New("cannot rank an issue relative to itself")
 	}
 	if _, err := s.GetIssue(ctx, targetID); err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
 	if _, err := s.GetIssue(ctx, issueID); err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
 	issueChain, err := s.ancestorChain(ctx, issueID)
 	if err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
 	targetChain, err := s.ancestorChain(ctx, targetID)
 	if err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
 	movedID, anchorID, err := resolveComparableFrame(issueChain, targetChain)
 	if err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
 	anchor, err := s.GetIssue(ctx, anchorID)
 	if err != nil {
-		return model.Issue{}, RankMove{}, err
+		return model.Issue{}, storage.RankMove{}, err
 	}
-	return anchor, RankMove{MovedID: movedID, AnchorID: anchorID}, nil
+	return anchor, storage.RankMove{MovedID: movedID, AnchorID: anchorID}, nil
 }
 
 // RankAbove moves an issue to rank immediately above the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
-func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (RankMove, error) {
+func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
 	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
 	if err != nil {
-		return RankMove{}, err
+		return storage.RankMove{}, err
 	}
 	return move, s.withMutation(ctx, "rank above", func(ctx context.Context, tx *sql.Tx) error {
 		var aboveRank sql.NullString
@@ -365,10 +366,10 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (RankMo
 
 // RankBelow moves an issue to rank immediately below the target issue,
 // after resolving both to their comparable frame (see resolveComparableFrame).
-func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (RankMove, error) {
+func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storage.RankMove, error) {
 	target, move, err := s.resolveRankPair(ctx, issueID, targetID)
 	if err != nil {
-		return RankMove{}, err
+		return storage.RankMove{}, err
 	}
 	return move, s.withMutation(ctx, "rank below", func(ctx context.Context, tx *sql.Tx) error {
 		var belowRank sql.NullString
@@ -585,7 +586,7 @@ func filterLiveInversions(candidates []rankInversion, liveIDs map[string]struct{
 // [LAW:one-source-of-truth] State classification rides the lifecycle here,
 // the same predicate ready uses for its rank_inversion annotations.
 func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
-	issues, err := s.ListIssues(ctx, ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
+	issues, err := s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})
 	if err != nil {
 		return nil, fmt.Errorf("list live issues: %w", err)
 	}

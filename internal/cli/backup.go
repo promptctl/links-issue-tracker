@@ -14,7 +14,7 @@ import (
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/backup"
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/syncfile"
 )
 
@@ -125,6 +125,19 @@ func syncBasePath(ap *app.App) string {
 
 func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force bool) error {
 	restorePath := filepath.Clean(path)
+	// [LAW:parse-dont-validate] A restore needs two capabilities: the sync state
+	// it compares the local workspace against, and the import that replaces the
+	// contents. Both are asked for before anything is read, written, or backed
+	// up, so an engine offering one and not the other cannot strand a restore
+	// half-done. What comes back is the interface, so nothing below re-asks.
+	syncer, err := storage.Sync.Of(ap.Store)
+	if err != nil {
+		return err
+	}
+	importer, err := storage.Import.Of(ap.Store)
+	if err != nil {
+		return err
+	}
 	targetExport, _, err := syncfile.Read(restorePath)
 	if err != nil {
 		return err
@@ -133,7 +146,7 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 	if err != nil {
 		return err
 	}
-	state, err := ap.Store.GetSyncState(ctx)
+	state, err := syncer.GetSyncState(ctx)
 	if err != nil {
 		return err
 	}
@@ -158,7 +171,7 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 	if err := backup.Prune(ap.Workspace.StorageDir, 20); err != nil {
 		return err
 	}
-	if err := ap.Store.ReplaceFromExport(ctx, targetExport); err != nil {
+	if err := importer.ReplaceFromExport(ctx, targetExport); err != nil {
 		return err
 	}
 	// [LAW:single-enforcer] Restored sync base is serialized from the store so container lifecycles pass through the hydration boundary before JSON output.
@@ -173,7 +186,7 @@ func restoreFromExportPath(ctx context.Context, ap *app.App, path string, force 
 	if err != nil {
 		return err
 	}
-	return ap.Store.RecordSyncState(ctx, store.SyncState{
+	return syncer.RecordSyncState(ctx, storage.SyncState{
 		Path:        restorePath,
 		ContentHash: hash,
 	})

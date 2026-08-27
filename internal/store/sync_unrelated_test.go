@@ -12,6 +12,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // TestSyncReconcileDetectsUnrelatedHistories drives the ticket's acceptance: two
@@ -48,7 +49,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B): %v", err)
 	}
-	if fresh.State() != SyncDiverged {
+	if fresh.State() != storage.SyncDiverged {
 		t.Fatalf("precondition: freshness = %q ahead=%d behind=%d, want diverged", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
@@ -60,8 +61,8 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile(B) errored instead of classifying unrelated histories: %v", err)
 	}
-	if res.State != SyncReconcileUnrelated {
-		t.Fatalf("reconcile state = %q, want %q", res.State, SyncReconcileUnrelated)
+	if res.State != storage.SyncReconcileUnrelated {
+		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileUnrelated)
 	}
 
 	// The unrelated state carries the both-sides inventory read off the two anchors:
@@ -88,7 +89,7 @@ func TestSyncReconcileDetectsUnrelatedHistories(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after reconcile: %v", err)
 	}
-	if after.State() != SyncDiverged {
+	if after.State() != storage.SyncDiverged {
 		t.Fatalf("post-reconcile freshness = %q, want still diverged (nothing merged)", after.State())
 	}
 }
@@ -120,8 +121,8 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcile(B): %v", err)
 	}
-	if res.State != SyncReconcileUnrelated {
-		t.Fatalf("reconcile state = %q, want %q", res.State, SyncReconcileUnrelated)
+	if res.State != storage.SyncReconcileUnrelated {
+		t.Fatalf("reconcile state = %q, want %q", res.State, storage.SyncReconcileUnrelated)
 	}
 	if res.Unrelated == nil {
 		t.Fatalf("unrelated reconcile carried no both-sides inventory")
@@ -135,7 +136,7 @@ func TestSyncReconcileUnrelatedInventoryPartitionsAllThreeSides(t *testing.T) {
 // permitted take (links-sync-pgct.4): the bare call must refuse with a fresh
 // token and the destruction inventory, mutating nothing — the only way any test
 // (like any surface) obtains a token is by reading the refusal.
-func ownerApprovedTakeToken(t *testing.T, ctx context.Context, st *Store, remote, branch string, choice UnrelatedResolution) string {
+func ownerApprovedTakeToken(t *testing.T, ctx context.Context, st *Store, remote, branch string, choice storage.UnrelatedResolution) string {
 	t.Helper()
 	_, err := st.SyncResolveUnrelated(ctx, remote, branch, choice, "")
 	var approval OwnerApprovalRequiredError
@@ -172,13 +173,13 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
-	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeRemote)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, token)
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeRemote): %v", err)
 	}
-	if res.State != SyncReconcileTookRemote {
-		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookRemote)
+	if res.State != storage.SyncReconcileTookRemote {
+		t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookRemote)
 	}
 	// The discard is reported: the both-sides partition names the local-only issue that
 	// take-remote drops. [LAW:no-silent-failure]
@@ -198,7 +199,7 @@ func TestSyncResolveUnrelatedTakeRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after take-remote: %v", err)
 	}
-	if fresh.State() != SyncUpToDate {
+	if fresh.State() != storage.SyncUpToDate {
 		t.Fatalf("post-take-remote freshness = %q ahead=%d behind=%d, want up_to_date", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 	assertScratchBranchCleanedUp(t, ctx, syncB)
@@ -225,13 +226,13 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
 
-	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, token)
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
 	}
-	if res.State != SyncReconcileTookLocal {
-		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	if res.State != storage.SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookLocal)
 	}
 	if res.Unrelated == nil {
 		t.Fatalf("take-local carried no inventory to report the discard")
@@ -252,7 +253,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after take-local: %v", err)
 	}
-	if fresh.State() != SyncAhead {
+	if fresh.State() != storage.SyncAhead {
 		t.Fatalf("post-take-local freshness = %q ahead=%d behind=%d, want ahead", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 
@@ -270,7 +271,7 @@ func TestSyncResolveUnrelatedTakeLocal(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	if recv.State != SyncReceiveFastForwarded {
+	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
@@ -296,10 +297,10 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
 		t.Fatalf("SyncFetch(B): %v", err)
 	}
-	localToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
+	localToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
 
 	// Side binding: a take-local approval does not authorize take-remote.
-	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, localToken)
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, localToken)
 	var wrongSide OwnerApprovalRequiredError
 	if !errors.As(err, &wrongSide) || !wrongSide.Stale {
 		t.Fatalf("take-remote with a take-local token = %v, want a stale-approval refusal", err)
@@ -310,12 +311,12 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	if err := syncB.Close(); err != nil {
 		t.Fatalf("Close(B) before local mutation: %v", err)
 	}
-	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("moved")})
+	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("moved")})
 	syncB = openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
 	headAfterMove := headCommit(t, ctx, syncB)
 
-	_, err = syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, localToken)
+	_, err = syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, localToken)
 	var stale OwnerApprovalRequiredError
 	if !errors.As(err, &stale) || !stale.Stale {
 		t.Fatalf("take-local with a pre-move token = %v, want a stale-approval refusal", err)
@@ -328,12 +329,12 @@ func TestSyncResolveUnrelatedOwnerApprovalBindsForkAndSide(t *testing.T) {
 	}
 
 	// The re-minted token authorizes the take against the fork as it now stands.
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, stale.ApprovalToken)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, stale.ApprovalToken)
 	if err != nil {
 		t.Fatalf("take-local with the re-minted token: %v", err)
 	}
-	if res.State != SyncReconcileTookLocal {
-		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	if res.State != storage.SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookLocal)
 	}
 }
 
@@ -362,8 +363,8 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileCombine(B): %v", err)
 	}
-	if res.State != SyncReconcileCombined {
-		t.Fatalf("combine state = %q, want %q (pending=%+v)", res.State, SyncReconcileCombined, res.Pending)
+	if res.State != storage.SyncReconcileCombined {
+		t.Fatalf("combine state = %q, want %q (pending=%+v)", res.State, storage.SyncReconcileCombined, res.Pending)
 	}
 	// The union reports what it kept from each side — the partition read off the two anchors.
 	if res.Unrelated == nil {
@@ -384,7 +385,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncFreshness(B) after combine: %v", err)
 	}
-	if fresh.State() != SyncAhead {
+	if fresh.State() != storage.SyncAhead {
 		t.Fatalf("post-combine freshness = %q ahead=%d behind=%d, want ahead", fresh.State(), fresh.Ahead, fresh.Behind)
 	}
 	if _, err := syncB.SyncPush(ctx, "origin", "master", false, false); err != nil {
@@ -399,7 +400,7 @@ func TestSyncReconcileCombineUnionsBothSides(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	if recv.State != SyncReceiveFastForwarded {
+	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localOnly, remoteOnly, shared})
@@ -434,8 +435,8 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileCombine(B): %v", err)
 	}
-	if held.State != SyncReconcileProsePending {
-		t.Fatalf("combine state = %q, want %q", held.State, SyncReconcileProsePending)
+	if held.State != storage.SyncReconcileProsePending {
+		t.Fatalf("combine state = %q, want %q", held.State, storage.SyncReconcileProsePending)
 	}
 	if len(held.Pending) != 1 {
 		t.Fatalf("pending count = %d, want 1 (the shared id's title): %+v", len(held.Pending), held.Pending)
@@ -463,8 +464,8 @@ func TestSyncReconcileCombineHoldsAndFinalizesProse(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileResolved(B) finalizing combine: %v", err)
 	}
-	if res.State != SyncReconcileCombined {
-		t.Fatalf("finalized combine state = %q, want %q", res.State, SyncReconcileCombined)
+	if res.State != storage.SyncReconcileCombined {
+		t.Fatalf("finalized combine state = %q, want %q", res.State, storage.SyncReconcileCombined)
 	}
 	// The union is present AND the shared id carries the agent's merged title — nothing dropped.
 	assertLocalIssueIDs(t, ctx, syncB, []string{localOnly, remoteOnly, shared})
@@ -487,11 +488,11 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err != nil {
 		t.Fatalf("Open(A): %v", err)
 	}
-	remoteOnly, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task"})
+	remoteOnly, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "remote-only", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(A remote-only): %v", err)
 	}
-	shared, err := stA.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task"})
+	shared, err := stA.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "shared", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(A shared): %v", err)
 	}
@@ -517,7 +518,7 @@ func seedUnrelatedPairWithShared(t *testing.T, ctx context.Context, rootA, rootB
 	if err != nil {
 		t.Fatalf("Open(B): %v", err)
 	}
-	localOnly, err := stB.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task"})
+	localOnly, err := stB.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "local-only", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(B local-only): %v", err)
 	}
@@ -561,8 +562,8 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 
 	id := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
-	updateAndPush(t, ctx, rootA, id, UpdateIssueInput{Lane: strptr("alpha")})
-	updateLocal(t, ctx, rootB, id, UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
+	updateAndPush(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("alpha")})
+	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Priority: ptr(model.PriorityUrgent)})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer func() { _ = syncB.Close() }()
@@ -573,7 +574,7 @@ func TestSyncResolveUnrelatedRefusesSharedHistory(t *testing.T) {
 
 	// The shared-history refusal precedes the owner gate: a mergeable divergence is
 	// never takeable, approved or not, so no token is minted for it.
-	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, "")
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, "")
 	if err == nil {
 		t.Fatalf("SyncResolveUnrelated on a shared-history divergence returned nil, want a refusal")
 	}
@@ -608,7 +609,7 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 	// schema and pushes; B forks an UNRELATED clone (own root, own issue) and fetches,
 	// so B is unrelated-diverged from a schema-ahead remote head.
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, "v9.9.0", UpdateIssueInput{Lane: strptr("from-a")})
+	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, "v9.9.0", storage.UpdateIssueInput{Lane: strptr("from-a")})
 	forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
@@ -621,8 +622,8 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 	// take-local: owner-approved, then refused with the schema-ahead contract, no
 	// write — the approval gate governs WHO may run the destruction; the schema
 	// guard still governs whether the store may author the commit at all.
-	takeLocalToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
-	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, takeLocalToken)
+	takeLocalToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
+	_, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, takeLocalToken)
 	var ahead *RemoteSchemaAheadError
 	if !errors.As(err, &ahead) {
 		t.Fatalf("take-local onto schema-ahead remote = %v, want *RemoteSchemaAheadError", err)
@@ -635,13 +636,13 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 
 	// take-remote: exempt — it adopts the schema-ahead head wholesale (the recovery that
 	// gets a stale binary the newer data), so it proceeds rather than refusing.
-	takeRemoteToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeRemote)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeRemote, takeRemoteToken)
+	takeRemoteToken := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeRemote)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeRemote, takeRemoteToken)
 	if err != nil {
 		t.Fatalf("take-remote onto schema-ahead remote errored, want it exempt: %v", err)
 	}
-	if res.State != SyncReconcileTookRemote {
-		t.Fatalf("take-remote state = %q, want %q", res.State, SyncReconcileTookRemote)
+	if res.State != storage.SyncReconcileTookRemote {
+		t.Fatalf("take-remote state = %q, want %q", res.State, storage.SyncReconcileTookRemote)
 	}
 	if got := headCommit(t, ctx, syncB); got == headBefore {
 		t.Fatalf("take-remote did not adopt the remote head (local head unchanged at %s)", got)
@@ -653,13 +654,13 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 // reaching the dispatch and silently no-op'ing. [LAW:no-silent-failure]
 func TestUnrelatedResolutionValid(t *testing.T) {
 	t.Parallel()
-	for _, valid := range []UnrelatedResolution{TakeLocal, TakeRemote} {
+	for _, valid := range []storage.UnrelatedResolution{storage.TakeLocal, storage.TakeRemote} {
 		if !valid.Valid() {
 			t.Errorf("%q reported invalid, want valid", valid)
 		}
 	}
-	for _, invalid := range []UnrelatedResolution{"", "combine", "mine", "REMOTE"} {
-		if UnrelatedResolution(invalid).Valid() {
+	for _, invalid := range []storage.UnrelatedResolution{"", "combine", "mine", "REMOTE"} {
+		if storage.UnrelatedResolution(invalid).Valid() {
 			t.Errorf("%q reported valid, want invalid", invalid)
 		}
 	}
@@ -731,7 +732,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	// B's folded side: three data commits with distinct messages — create,
 	// update, add label — so each one is individually identifiable on the spine.
 	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
@@ -745,8 +746,8 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReconcileCombine(B): %v", err)
 	}
-	if res.State != SyncReconcileCombined {
-		t.Fatalf("combine state = %q (pending=%+v), want %q", res.State, res.Pending, SyncReconcileCombined)
+	if res.State != storage.SyncReconcileCombined {
+		t.Fatalf("combine state = %q (pending=%+v), want %q", res.State, res.Pending, storage.SyncReconcileCombined)
 	}
 	if res.Replayed != len(foldedMessages) {
 		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
@@ -780,7 +781,7 @@ func TestSyncReconcileCombinePreservesFoldedProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	if recv.State != SyncReceiveFastForwarded {
+	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID, remoteIssueID})
@@ -804,7 +805,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
-	updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+	updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 	addLabelLocal(t, ctx, rootB, localIssueID, "fold-label")
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
@@ -814,13 +815,13 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	foldedMessages := []string{"create issue", "apply update", "add label"}
 	originals := originalCommitsByMessage(t, ctx, syncB, foldedMessages...)
 
-	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", TakeLocal)
-	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", TakeLocal, token)
+	token := ownerApprovedTakeToken(t, ctx, syncB, "origin", "master", storage.TakeLocal)
+	res, err := syncB.SyncResolveUnrelated(ctx, "origin", "master", storage.TakeLocal, token)
 	if err != nil {
 		t.Fatalf("SyncResolveUnrelated(TakeLocal): %v", err)
 	}
-	if res.State != SyncReconcileTookLocal {
-		t.Fatalf("state = %q, want %q", res.State, SyncReconcileTookLocal)
+	if res.State != storage.SyncReconcileTookLocal {
+		t.Fatalf("state = %q, want %q", res.State, storage.SyncReconcileTookLocal)
 	}
 	if res.Replayed != len(foldedMessages) {
 		t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))
@@ -853,7 +854,7 @@ func TestSyncResolveUnrelatedTakeLocalPreservesFoldedProvenance(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SyncReceive(A): %v", err)
 	}
-	if recv.State != SyncReceiveFastForwarded {
+	if recv.State != storage.SyncReceiveFastForwarded {
 		t.Fatalf("A receive state = %q, want fast_forwarded", recv.State)
 	}
 	assertLocalIssueIDs(t, ctx, syncA, []string{localIssueID})
@@ -894,7 +895,7 @@ func addLabelLocal(t *testing.T, ctx context.Context, root, id, label string) {
 	if err != nil {
 		t.Fatalf("Open(label %s): %v", root, err)
 	}
-	if _, err := st.AddLabel(ctx, AddLabelInput{IssueID: id, Name: label, CreatedBy: "test"}); err != nil {
+	if _, err := st.AddLabel(ctx, storage.AddLabelInput{IssueID: id, Name: label, CreatedBy: "test"}); err != nil {
 		t.Fatalf("AddLabel(%s): %v", id, err)
 	}
 	if err := st.Close(); err != nil {
@@ -913,7 +914,7 @@ func forkUnrelatedClone(t *testing.T, ctx context.Context, root, remoteURL strin
 	if err != nil {
 		t.Fatalf("Open(fork %s): %v", root, err)
 	}
-	issue, err := st.CreateIssue(ctx, CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task"})
+	issue, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test", Title: "fork-local", Topic: "topic", IssueType: "task"})
 	if err != nil {
 		t.Fatalf("CreateIssue(fork): %v", err)
 	}
@@ -963,7 +964,7 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 
 			remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
 			localIssueID := forkUnrelatedClone(t, ctx, rootB, remoteURL)
-			updateLocal(t, ctx, rootB, localIssueID, UpdateIssueInput{Lane: strptr("fold-lane")})
+			updateLocal(t, ctx, rootB, localIssueID, storage.UpdateIssueInput{Lane: strptr("fold-lane")})
 
 			syncB := openSyncOrFatal(t, ctx, rootB)
 			defer func() { _ = syncB.Close() }()
@@ -990,8 +991,8 @@ func TestSyncReconcileCombineRecoversFromTransientFailureMidReplay(t *testing.T)
 			if fires <= tc.failAt {
 				t.Fatalf("commit hook fired %d time(s); want the injected failure at %d to have forced an outer retry", fires, tc.failAt)
 			}
-			if res.State != SyncReconcileCombined {
-				t.Fatalf("combine state = %q, want %q", res.State, SyncReconcileCombined)
+			if res.State != storage.SyncReconcileCombined {
+				t.Fatalf("combine state = %q, want %q", res.State, storage.SyncReconcileCombined)
 			}
 			if res.Replayed != len(foldedMessages) {
 				t.Fatalf("replayed provenance commits = %d, want %d", res.Replayed, len(foldedMessages))

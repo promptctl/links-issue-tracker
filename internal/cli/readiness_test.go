@@ -162,4 +162,3 @@ func TestClassifyReadinessComposite(t *testing.T) {
 		t.Errorf("RankInversions() = %v, want %v", got, want)
 	}
 }
-

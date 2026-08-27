@@ -6,14 +6,14 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func boolPtr(b bool) *bool { return &b }
 
 // TestQueryTokenSupersetOfDiscreteFlags is the kkew.2 acceptance: for every
 // filtering or list-shaping dimension `lit ls` exposes as a discrete flag, the
-// --query token form must produce the identical store.ListIssuesFilter the flag
+// --query token form must produce the identical storage.ListIssuesFilter the flag
 // produces. Each want filter below is exactly what runList assembles from the
 // named flag; the token column is the superset claim. The four new dimensions —
 // archived, deleted, sort, limit — sit alongside the ones that already had
@@ -29,21 +29,21 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 		name  string
 		flag  string // the discrete flag this token mirrors, for the failure message
 		query string
-		want  store.ListIssuesFilter
+		want  storage.ListIssuesFilter
 	}{
-		{"status", "--status open", "status:open", store.ListIssuesFilter{Statuses: []model.State{model.StateOpen}}},
-		{"type", "--type task", "type:task", store.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}}},
-		{"assignee", "--assignee bmf", "assignee:bmf", store.ListIssuesFilter{Assignees: []string{"bmf"}}},
-		{"search", "--search login", "login", store.ListIssuesFilter{SearchTerms: []string{"login"}}},
-		{"ids", "--ids issue-123", "id:issue-123", store.ListIssuesFilter{IDs: []string{"issue-123"}}},
-		{"labels", "--labels renderer", "label:renderer", store.ListIssuesFilter{LabelsAll: []string{"renderer"}}},
-		{"has-comments", "--has-comments", "has:comments", store.ListIssuesFilter{HasComments: boolPtr(true)}},
-		{"updated-after", "--updated-after 2026-03-07T10:00:00Z", "updated>=2026-03-07T10:00:00Z", store.ListIssuesFilter{UpdatedAfter: &updatedUTC}},
-		{"updated-before", "--updated-before 2026-03-07T10:00:00Z", "updated<=2026-03-07T10:00:00Z", store.ListIssuesFilter{UpdatedBefore: &updatedUTC}},
-		{"archived", "--include-archived", "archived", store.ListIssuesFilter{IncludeArchived: true}},
-		{"deleted", "--include-deleted", "deleted", store.ListIssuesFilter{IncludeDeleted: true}},
-		{"sort", "--sort rank:asc", "sort:rank:asc", store.ListIssuesFilter{SortBy: []store.SortSpec{{Field: "rank", Desc: false}}}},
-		{"limit", "--limit 5", "limit:5", store.ListIssuesFilter{Limit: 5}},
+		{"status", "--status open", "status:open", storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen}}},
+		{"type", "--type task", "type:task", storage.ListIssuesFilter{IssueTypes: []model.IssueType{model.TypeTask}}},
+		{"assignee", "--assignee bmf", "assignee:bmf", storage.ListIssuesFilter{Assignees: []string{"bmf"}}},
+		{"search", "--search login", "login", storage.ListIssuesFilter{SearchTerms: []string{"login"}}},
+		{"ids", "--ids issue-123", "id:issue-123", storage.ListIssuesFilter{IDs: []string{"issue-123"}}},
+		{"labels", "--labels renderer", "label:renderer", storage.ListIssuesFilter{LabelsAll: []string{"renderer"}}},
+		{"has-comments", "--has-comments", "has:comments", storage.ListIssuesFilter{HasComments: boolPtr(true)}},
+		{"updated-after", "--updated-after 2026-03-07T10:00:00Z", "updated>=2026-03-07T10:00:00Z", storage.ListIssuesFilter{UpdatedAfter: &updatedUTC}},
+		{"updated-before", "--updated-before 2026-03-07T10:00:00Z", "updated<=2026-03-07T10:00:00Z", storage.ListIssuesFilter{UpdatedBefore: &updatedUTC}},
+		{"archived", "--include-archived", "archived", storage.ListIssuesFilter{IncludeArchived: true}},
+		{"deleted", "--include-deleted", "deleted", storage.ListIssuesFilter{IncludeDeleted: true}},
+		{"sort", "--sort rank:asc", "sort:rank:asc", storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "rank", Desc: false}}}},
+		{"limit", "--limit 5", "limit:5", storage.ListIssuesFilter{Limit: 5}},
 	}
 
 	for _, tc := range cases {
@@ -54,7 +54,7 @@ func TestQueryTokenSupersetOfDiscreteFlags(t *testing.T) {
 			}
 			// Merge onto an empty base is the no-flags path: the query is the sole
 			// source, so the result must equal the flag-built filter for %s.
-			got, err := Merge(store.ListIssuesFilter{}, parsed.Filter)
+			got, err := Merge(storage.ListIssuesFilter{}, parsed.Filter)
 			if err != nil {
 				t.Fatalf("Merge(empty, Parse(%q)) error = %v", tc.query, err)
 			}
@@ -72,12 +72,12 @@ func TestQueryMultiTokenAppliesAllFourNewTokens(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
-	got, err := Merge(store.ListIssuesFilter{}, parsed.Filter)
+	got, err := Merge(storage.ListIssuesFilter{}, parsed.Filter)
 	if err != nil {
 		t.Fatalf("Merge() error = %v", err)
 	}
-	want := store.ListIssuesFilter{
-		SortBy:          []store.SortSpec{{Field: "rank", Desc: false}},
+	want := storage.ListIssuesFilter{
+		SortBy:          []storage.SortSpec{{Field: "rank", Desc: false}},
 		Limit:           5,
 		IncludeArchived: true,
 		IncludeDeleted:  true,

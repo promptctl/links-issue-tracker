@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 func writeImportFile(t *testing.T, name, content string) string {
@@ -66,7 +66,7 @@ parent: e1
 func TestRunImportYAMLUpdatesByID(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
 	})
 	if err != nil {
@@ -100,7 +100,7 @@ labels: [reviewed]
 func TestRunImportYAMLMixedFileIsLegal(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	existing, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	existing, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Old", Topic: "import", IssueType: "task",
 	})
 	if err != nil {
@@ -197,7 +197,7 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Before", Topic: "import", IssueType: "task",
 	})
 	if err != nil {
@@ -226,7 +226,7 @@ func TestRunImportYAMLUpdateHonorsByFlag(t *testing.T) {
 func TestRunImportYAMLUpdateTrimsReason(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)
-	created, err := ap.Store.CreateIssue(ctx, store.CreateIssueInput{
+	created, err := ap.Store.CreateIssue(ctx, storage.CreateIssueInput{
 		Prefix: "test", Title: "Reason trim", Topic: "import", IssueType: "task",
 	})
 	if err != nil {

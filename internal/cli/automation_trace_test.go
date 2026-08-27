@@ -90,4 +90,3 @@ func TestMaybeRecordAutomatedCommandTraceWritesTraceRefFile(t *testing.T) {
 		t.Fatalf("trace ref file = %q, want %q", got, traceRef.Path+"\n")
 	}
 }
-
