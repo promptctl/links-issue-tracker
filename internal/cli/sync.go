@@ -486,6 +486,14 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	if strings.TrimSpace(result.Message) != "" {
 		traceMetadata["message"] = strings.TrimSpace(result.Message)
 	}
+	// The prune's report goes to the durable trace as well as to stdout, because
+	// this command backs the pre-push hook, and in a hook stdout is routinely
+	// swallowed or never watched. A refusal that exists to be loud reaching only
+	// a stream nobody reads is the failure it was written to prevent.
+	// [LAW:no-silent-failure]
+	if strings.TrimSpace(result.Maintenance) != "" {
+		traceMetadata["maintenance"] = strings.TrimSpace(result.Maintenance)
+	}
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
 	if pushErr != nil {

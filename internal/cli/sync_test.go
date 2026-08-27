@@ -522,11 +522,26 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 // rendering it is the same silence, one layer further down. Both modes are
 // asserted because a warning visible only behind --verbose is still silent where
 // it counts.
+//
+// The assertion is on position, not presence. Emitting the line above the
+// cascade is what keeps a later arm from forgetting it, and the CHANGELOG
+// states that placement as user-visible behavior — so `Contains` would pass for
+// exactly the arrangement this test exists to rule out, one where the line has
+// slipped back inside a branch and rides along only when that branch is taken.
 func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
 	t.Parallel()
 	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
 
-	for _, verbose := range []bool{false, true} {
+	// Each mode renders its own push line — plain mode says "pushed", verbose
+	// echoes the engine's raw output — and the maintenance line must precede
+	// whichever one this mode chose.
+	for _, tc := range []struct {
+		verbose  bool
+		wantPush string
+	}{
+		{verbose: false, wantPush: "pushed"},
+		{verbose: true, wantPush: "Everything up-to-date."},
+	} {
 		payload := map[string]any{
 			"status":      "ok",
 			"remote":      "origin",
@@ -535,12 +550,17 @@ func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
 			"maintenance": refusal,
 		}
 		var out bytes.Buffer
-		if err := printSyncPushPayload(&out, payload, verbose); err != nil {
-			t.Fatalf("printSyncPushPayload(verbose=%v) error = %v", verbose, err)
+		if err := printSyncPushPayload(&out, payload, tc.verbose); err != nil {
+			t.Fatalf("printSyncPushPayload(verbose=%v) error = %v", tc.verbose, err)
 		}
-		if !strings.Contains(out.String(), refusal) {
-			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want it to contain the maintenance line %q",
-				verbose, out.String(), refusal)
+		lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
+		if lines[0] != refusal {
+			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want the maintenance line first, got %q",
+				tc.verbose, out.String(), lines[0])
+		}
+		if len(lines) < 2 || lines[1] != tc.wantPush {
+			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want %q to still follow the maintenance line",
+				tc.verbose, out.String(), tc.wantPush)
 		}
 	}
 }
