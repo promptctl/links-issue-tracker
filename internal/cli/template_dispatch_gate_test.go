@@ -12,9 +12,15 @@ package cli
 // pointer and exit 3), so any predicate of the form "does this token resolve?"
 // passes the exact string that caused the incident. The predicate here is
 // "resolves to a spec the registry marks live", read from CommandSpec.Retired.
+//
+// Scope is top-level command names. Retirement one level down (`lit bulk
+// import` — a family row marked only hidden, with a pointer runner) is not
+// yet legible as data in the family tables; making it so and extending the
+// gate to second tokens is links-workflow-mrb6.
 
 import (
 	"context"
+	"errors"
 	"io"
 	"path/filepath"
 	"regexp"
@@ -148,17 +154,28 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 	}
 }
 
-// TestRetiredSpecsStayHidden pins the registry-coherence half of the
-// retired/hidden distinction: Retired without Hidden would advertise a
-// command the templates are forbidden to teach. retiredSpec couples the two;
-// this refuses any future row that states one without the other.
-func TestRetiredSpecsStayHidden(t *testing.T) {
+// TestRetiredSpecsStayCoherent holds every Retired row to all three
+// retirement facets. The type cannot: CommandSpec's fields are open to any
+// same-package literal, so a row could state Retired without Hidden
+// (advertising a command templates may not teach) or without the pointer
+// runner (dispatching real work from a "retired" name). retiredSpec is the
+// authoring path; this test is the enforcement, and it asserts the runner's
+// behavior — the retirement error naming the command — not which closure the
+// row happens to hold. [LAW:behavior-not-structure]
+func TestRetiredSpecsStayCoherent(t *testing.T) {
 	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
-		if spec.Retired && !spec.Hidden {
+		if !spec.Retired {
+			continue
+		}
+		if !spec.Hidden {
 			t.Errorf("command %q is Retired but not Hidden; retired rows must go through retiredSpec", spec.Name)
 		}
-		if spec.Retired && !strings.HasPrefix(spec.Summary, "(retired) ") {
+		if !strings.HasPrefix(spec.Summary, "(retired) ") {
 			t.Errorf("command %q is Retired but its summary %q does not say so", spec.Name, spec.Summary)
+		}
+		var retired RetiredCommandError
+		if err := spec.Run(nil); !errors.As(err, &retired) || retired.Command != spec.Name {
+			t.Errorf("command %q is Retired but its runner answered %v, want a RetiredCommandError naming it", spec.Name, err)
 		}
 	}
 }

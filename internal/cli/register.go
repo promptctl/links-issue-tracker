@@ -43,8 +43,10 @@ type CommandSpec struct {
 	// this field, never Hidden and never exit codes, because a retired command
 	// exits 3 only at runtime while the gate runs at build time.
 	// [LAW:types-are-the-program] retirement is a stated property of the spec,
-	// not an inference from which runner it happens to hold. Set only by
-	// retiredSpec, which couples it to Hidden and the pointer runner.
+	// not an inference from which runner it happens to hold. retiredSpec is
+	// the one authoring path; the type cannot refuse a same-package literal
+	// that states this field alone, so the registry coherence test is what
+	// holds every retired row to all three retirement facets.
 	Retired bool
 }
 
@@ -450,10 +452,11 @@ const (
 // retiredSpec builds the whole registry row for a retired command. Retirement
 // has three inseparable facets — hidden from the advertised surface, marked
 // Retired for the template dispatch gate, dispatchable only to a pointer at
-// its replacement — and coupling them in one constructor means no row can
-// state one facet without the others. [LAW:single-enforcer] The summary is the
-// short pointer shown to a reader browsing hidden help; replacement is the
-// full guidance the runner returns on invocation.
+// its replacement — assembled here and nowhere else. [LAW:single-enforcer] Go
+// cannot stop a same-package literal from stating one facet without the
+// others, so the registry coherence test enforces the coupling the type
+// cannot. The summary is the short pointer shown to a reader browsing hidden
+// help; replacement is the full guidance the runner returns on invocation.
 func retiredSpec(name, groupID, summary, replacement string) CommandSpec {
 	return CommandSpec{
 		Name:    name,
