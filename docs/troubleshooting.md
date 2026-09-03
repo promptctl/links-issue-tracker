@@ -60,11 +60,11 @@ lit sync status
 
 ## Integrity errors
 
-Run:
+Diagnose, then repair:
 
 ```sh
 lit doctor
-lit fsck --repair
+lit doctor --fix
 ```
 
 ## Startup preflight blocked by Beads residue
