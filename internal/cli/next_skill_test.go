@@ -143,6 +143,37 @@ func TestEnsureNextSkillFileMarkerlessOverrideConverges(t *testing.T) {
 	}
 }
 
+// Any override shape other than "no markers" or "exactly one whole-content
+// BEGIN/END block" would duplicate part of itself on every reconcile, so it
+// fails loudly instead of being written.
+func TestEnsureNextSkillFileRejectsMalformedMarkerOverrides(t *testing.T) {
+	cases := map[string]string{
+		"begin only":           litAgentsBeginMarker + "\nbody without end\n",
+		"end only":             "body without begin\n" + litAgentsEndMarker + "\n",
+		"text outside markers": litAgentsBeginMarker + "\nbody\n" + litAgentsEndMarker + "\ntrailing user text\n",
+	}
+	for name, override := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+			repo := t.TempDir()
+			projectTemplates := filepath.Join(repo, ".lit", "templates")
+			if err := os.MkdirAll(projectTemplates, 0o755); err != nil {
+				t.Fatalf("MkdirAll(project templates) error = %v", err)
+			}
+			if err := os.WriteFile(filepath.Join(projectTemplates, templates.NextSkillTemplateName), []byte(override), 0o644); err != nil {
+				t.Fatalf("WriteFile(malformed override) error = %v", err)
+			}
+
+			if _, err := ensureNextSkillFile(repo); err == nil {
+				t.Fatal("malformed override accepted; want a loud error")
+			}
+			if _, err := os.Stat(filepath.Join(repo, filepath.FromSlash(nextSkillRelPath))); !os.IsNotExist(err) {
+				t.Fatalf("malformed override must write nothing; stat err = %v", err)
+			}
+		})
+	}
+}
+
 // A pre-existing hand-authored SKILL.md with no markers is adopted the way a
 // marker-less AGENTS.md is: the user's content stays, the managed section is
 // appended once, and subsequent runs reconcile in place.

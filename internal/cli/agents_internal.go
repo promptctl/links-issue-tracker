@@ -101,20 +101,29 @@ const nextSkillRelPath = ".claude/skills/next/SKILL.md"
 // afterward, while lit owns only the marker-delimited body below it.
 const nextSkillFrontmatter = "---\nname: next\ndescription: Pull the next ticket\n---\n\n"
 
-// wrapManagedSection normalizes resolved template content into a
-// marker-delimited managed section, wrapping it when the begin marker is
-// absent. [LAW:parse-dont-validate] writeManagedFile requires a section that
-// carries its own markers; an override authored as plain guidance text (the
-// quickstart-template convention) would otherwise strip the file's markers on
-// its first write and re-append itself on every run after.
-func wrapManagedSection(content, beginMarker, endMarker string) string {
-	if strings.Contains(content, beginMarker) {
-		return content
+// normalizeManagedSection parses resolved template content into a
+// marker-delimited managed section — the only shape upsertManagedSection
+// reconciles instead of growing. [LAW:parse-dont-validate] Exactly two shapes
+// are legal: no markers at all (plain guidance text, the quickstart-template
+// convention) is wrapped, and exactly one BEGIN/END pair spanning the whole
+// content passes through. Every other shape — a lone marker, a stray extra
+// one, text outside the pair — would duplicate part of itself on every
+// subsequent reconcile, so it is rejected loudly instead of laundered into a
+// file that grows without bound. [LAW:no-silent-failure]
+func normalizeManagedSection(content, beginMarker, endMarker string) (string, error) {
+	begins := strings.Count(content, beginMarker)
+	ends := strings.Count(content, endMarker)
+	if begins == 0 && ends == 0 {
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		return beginMarker + "\n" + content + endMarker + "\n", nil
 	}
-	if !strings.HasSuffix(content, "\n") {
-		content += "\n"
+	trimmed := strings.TrimSpace(content)
+	if begins == 1 && ends == 1 && strings.HasPrefix(trimmed, beginMarker) && strings.HasSuffix(trimmed, endMarker) {
+		return content, nil
 	}
-	return beginMarker + "\n" + content + endMarker + "\n"
+	return "", fmt.Errorf("content must either contain no %s/%s markers or be exactly one such block; found %d begin and %d end marker(s)", beginMarker, endMarker, begins, ends)
 }
 
 // ensureNextSkillFile writes the managed /next skill body to
@@ -126,7 +135,10 @@ func ensureNextSkillFile(rootDir string) (agentsInstallResult, error) {
 	if err != nil {
 		return agentsInstallResult{}, fmt.Errorf("load next skill template: %w", err)
 	}
-	section = wrapManagedSection(section, litAgentsBeginMarker, litAgentsEndMarker)
+	section, err = normalizeManagedSection(section, litAgentsBeginMarker, litAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, fmt.Errorf("next skill template (via %s): %w", source, err)
+	}
 	result, err := writeManagedFile(rootDir, filepath.FromSlash(nextSkillRelPath), nextSkillFrontmatter, section, litAgentsBeginMarker, litAgentsEndMarker)
 	if err != nil {
 		return agentsInstallResult{}, err
