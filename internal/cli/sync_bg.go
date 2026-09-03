@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -45,7 +47,12 @@ func rotateMirrorLog(path string) error {
 		// other stat failure will resurface loudly from OpenFile just after.
 		return nil
 	}
-	return os.Rename(path, path+".1")
+	if renameErr := os.Rename(path, path+".1"); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
+		// A missing source means a concurrent spawner rotated between the stat
+		// and the rename — the rotation happened, just not by this process.
+		return renameErr
+	}
+	return nil
 }
 
 const (
@@ -344,8 +351,11 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// the budget in the durable trail: the push-outcome record already carries
 	// the raw transport error, but "the holder cut itself loose" is the fact
 	// that explains it, and without this record the next hung-remote episode is
-	// as unattributable as the first. [LAW:no-silent-failure]
-	budgetCut := cycleCtx.Err() != nil && ctx.Err() == nil
+	// as unattributable as the first. [LAW:no-silent-failure] Gated on a session
+	// having existed: a budget that expires during the OPEN held no engine and
+	// reached no transport, and that branch's accurate record was already
+	// written through completeMirrorWithoutAttempt.
+	budgetCut := attempted && cycleCtx.Err() != nil && ctx.Err() == nil
 	if budgetCut {
 		recordMirrorTraceError(ws, fmt.Errorf(
 			"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",

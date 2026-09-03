@@ -45,6 +45,13 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) {
 		return nil
 	}
+	// A command starved by a co-resident store holder leaves a durable record
+	// alongside the sync traces the holder itself writes, so the two events can
+	// be correlated afterwards (links-sync-pgct.11.1's attribution gap).
+	// Recorded here because this is the one seam that knows the verbatim
+	// invocation; the mirror never reaches it — its busy errors complete
+	// through the push-outcome seam and it exits 0. [LAW:single-enforcer]
+	recordEngineOpenContentionTrace(normalizedArgs, err)
 	return err
 }
 
@@ -107,14 +114,6 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
-		}
-		// A store open starved by a co-resident holder leaves a durable record
-		// alongside the sync traces the holder itself writes, so the two events
-		// can be correlated afterwards (links-sync-pgct.11.1's attribution gap).
-		// The workspace resolves without an engine; if even that fails, the
-		// open error itself is the report. [LAW:no-silent-failure]
-		if ws, wsErr := workspace.Resolve(cwd); wsErr == nil {
-			recordEngineOpenContentionTrace(ws, err)
 		}
 		return err
 	}
