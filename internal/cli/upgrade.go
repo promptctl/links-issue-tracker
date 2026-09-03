@@ -6,10 +6,13 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -71,8 +74,12 @@ func (e *UpgradeTargetBehindError) Error() string {
 // (Resolver + Installer + currentBinaryPath). The schema step is owned by
 // whichever binary has the migrations; that is the ONLY thing the direction
 // changes, and it is why upgrade has no store schema call while downgrade does.
-// [LAW:no-mode-explosion] One flag (--to). No --dry-run/--force; each must earn
-// its way via a concrete user need.
+// [LAW:no-mode-explosion] One flag (--to), whose default value is the latest
+// published release (resolved through the release feed) — a default, not a
+// second mode; every stage below runs identically either way. No
+// --dry-run/--force; each must earn its way via a concrete user need.
+// Downgrade keeps requiring --to: a backward move stays deliberate, so
+// "latest" can never be a downgrade target.
 //
 // It is a WORKSPACE-mode command, not an app-mode one: upgrade must run in the
 // exact state it is FOR — a workspace whose schema is ahead of this binary, on
@@ -82,7 +89,19 @@ func (e *UpgradeTargetBehindError) Error() string {
 // store before this code runs. It also never writes the store — the only write
 // is to the binary on disk — so read-only best-effort access is exactly right.
 func runUpgrade(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
-	return runUpgradeWith(ctx, stdout, workspaceSchemaReader{ws: ws}, args, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+	current, err := version.Get()
+	if err != nil {
+		return fmt.Errorf("upgrade: read this binary's version info: %w", err)
+	}
+	return runUpgradeWith(ctx, stdout, workspaceSchemaReader{ws: ws}, args, current, &release.HTTPResolver{}, &release.HTTPInstaller{}, currentBinaryPath)
+}
+
+// upgradeResolver is upgrade's release-side dependency: tag→Target resolution
+// plus the latest-tag lookup that serves as --to's default value. Downgrade
+// depends on release.Resolver alone — it has no latest, by design.
+type upgradeResolver interface {
+	release.Resolver
+	release.LatestResolver
 }
 
 // workspaceSchema is what upgrade learns about the target workspace before it
@@ -169,38 +188,59 @@ func appliedVersionFromOpenErr(err error) (version int64, handled bool) {
 // runUpgradeWith is the body parameterised over the typed dependencies so tests
 // can substitute fakes. The exported runUpgrade picks the production
 // implementations: workspaceSchemaReader for the best-effort schema read,
-// HTTPResolver/HTTPInstaller for the release side, and currentBinaryPath for
-// binary-path resolution.
+// version.Get for this binary's identity, HTTPResolver/HTTPInstaller for the
+// release side, and currentBinaryPath for binary-path resolution.
 //
 // Sequence (each stage runs unconditionally; failure stops the pipeline):
-//  1. Resolve --to <tag> through the release manifest → typed Target.
-//  2. Read the workspace schema; refuse a target whose schema support ends below
+//  1. Resolve the target tag: the normalized --to value, or — when --to is
+//     omitted — the latest published release, from the release feed.
+//  2. Resolve the tag through the release manifest → typed Target.
+//  3. Read the workspace schema; refuse a target whose schema support ends below
 //     it (a backward move — UpgradeTargetBehindError names the right remedy from
 //     whether this binary can open the workspace: a reverse, or a newer target).
-//  3. Resolve the running binary's real path and atomically install the target.
-//  4. Print the result. The next lit invocation runs the installed binary, whose
+//  4. An unpinned invocation that is already on the resolved release keeps it:
+//     a friendly no-op naming the version. A pinned --to always installs — the
+//     explicit tag is a command (and the reinstall path for a damaged binary).
+//  5. Resolve the running binary's real path and atomically install the target.
+//  6. Print from → to. The next lit invocation runs the installed binary, whose
 //     Open() forward-migrates the workspace if it trails the new registry.
 //
 // [LAW:dataflow-not-control-flow] The pipeline runs the same stages every
-// invocation; --to and the applied/target versions are data, not mode toggles.
+// invocation; the tag, its origin (pinned or defaulted), and the
+// applied/target versions are data, not mode toggles.
 func runUpgradeWith(
 	ctx context.Context,
 	stdout io.Writer,
 	schema schemaReader,
 	args []string,
-	resolver release.Resolver,
+	current version.Info,
+	resolver upgradeResolver,
 	installer release.Installer,
 	binPathFn func() (string, error),
 ) error {
 	fs := newCobraFlagSet("upgrade")
-	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0)")
+	to := fs.String("to", "", "Target binary version (v-prefixed git tag, e.g. v0.9.0); omit to upgrade to the latest release")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
 	if fs.NArg() != 0 {
-		return UsageError{Message: "usage: lit upgrade --to <version>"}
+		return UsageError{Message: "usage: lit upgrade [--to <version>]"}
 	}
-	tag, err := normalizeReleaseTag(*to, "upgrade")
+	// [LAW:parse-dont-validate] --to's default value is the latest published
+	// release. The flag set carries omitted-vs-given as typed data (Changed),
+	// so only a truly omitted flag selects the feed as the tag's source — an
+	// explicitly empty --to (a broken shell expansion, say) still fails
+	// normalizeReleaseTag's validation loudly rather than silently installing
+	// an unrequested "latest". pinned also decides whether already-current is
+	// a no-op or a reinstall.
+	pinned := fs.Changed("to")
+	var tag string
+	var err error
+	if pinned {
+		tag, err = normalizeReleaseTag(*to, "upgrade")
+	} else {
+		tag, err = resolver.LatestTag(ctx)
+	}
 	if err != nil {
 		return err
 	}
@@ -229,6 +269,31 @@ func runUpgradeWith(
 		}
 	}
 
+	// An unpinned invocation asked for "current"; a binary at or ahead of the
+	// resolved latest already satisfies it. Ordering, not equality: the feed
+	// names the most recently CREATED release, so a backport tag for an older
+	// line can be "latest" while the installed binary is newer — moving
+	// backward stays a deliberate act (--to, or lit downgrade), never the
+	// default path's doing. A pinned --to falls through and installs — the
+	// explicit tag is a command, and the reinstall path for a damaged binary.
+	// A dev build always proceeds: IsDev is the typed fact, so the guarantee
+	// does not rest on version-string comparisons. The tag must be orderable
+	// (strict semver) for the no-op to fire at all: acceptTag deliberately
+	// admits looser v-tags, and semver.Compare sorts any invalid operand
+	// below every valid one, so without IsValid an unorderable feed tag would
+	// read as "behind" and a real release would be kept-past silently —
+	// unorderable installs as asked, failing toward action. This check runs
+	// AFTER the backward-move refusal: a workspace ahead of even the latest
+	// release must be refused loudly (naming both schema ranges), never
+	// soothed with "already current".
+	if !pinned && !current.IsDev && semver.IsValid(tag) && semver.Compare("v"+current.Version, tag) >= 0 {
+		_, err = fmt.Fprintf(stdout,
+			"already current: keeping v%s (latest published release is %s); nothing to install.\n",
+			current.Version, tag,
+		)
+		return err
+	}
+
 	binPath, err := binPathFn()
 	if err != nil {
 		return fmt.Errorf("upgrade: resolve current binary: %w", err)
@@ -248,8 +313,19 @@ func runUpgradeWith(
 	// migration (if the workspace trails the new registry) is the installed
 	// binary's job on its next Open — this command does not and cannot run it.
 	_, err = fmt.Fprintf(stdout,
-		"upgraded to %s (schema support through v%d) installed at %s\nthe next lit run migrates this workspace forward if it trails; re-run `lit version` to confirm.\n",
-		tag, target.Manifest.Schema.Max, binPath,
+		"upgraded %s → %s (schema support through v%d) installed at %s\nthe next lit run migrates this workspace forward if it trails; re-run `lit version` to confirm.\n",
+		fromLabel(current), tag, target.Manifest.Schema.Max, binPath,
 	)
 	return err
+}
+
+// fromLabel renders the running binary's identity for the from → to line: the
+// v-prefixed release version, or a dev-build marker when nothing was stamped
+// at link time (Info.IsDev is the typed form of that fact — no re-derivation
+// from an empty string here).
+func fromLabel(current version.Info) string {
+	if current.IsDev {
+		return "dev build"
+	}
+	return "v" + current.Version
 }
