@@ -3,6 +3,7 @@ package store
 import (
 	"io/fs"
 	"regexp"
+	"sort"
 
 	"github.com/promptctl/links-issue-tracker/internal/store/migrations"
 )
@@ -95,30 +96,25 @@ func dropAllColumns(table RawTable) TableMapping {
 	return TableMapping{Table: table.Name, Drops: drops}
 }
 
-// issueHistoryFanOut expresses the legacy issue_history shape: each row becomes
-// one issue_events row (always) plus — only for a real status transition — one
-// issue_event_changes row carrying field="status". This mirrors the reconcile's
-// translateIssueHistoryToEvents exactly: the event canonicalizers normalize
-// action/reason/actor as recordEvent does, the legacy-status transform
-// canonicalizes from/to, and WhenChanged on the (canonicalized) from/to is the
-// isLegacyStatusTransition predicate.
+// issueHistoryMapping is THE structural declaration of the legacy issue_history
+// fan-out: each row becomes one issue_events record (always) plus — only for a
+// real status transition — one issue_event_changes record carrying
+// field="status". Both resurrection paths consume this one declaration:
+// DeterministicMap (via issueHistoryFanOut) folds it through Apply for the
+// lifeboat, and the reconcile's translateIssueHistoryToEvents renders the same
+// emitters as SQL INSERTs during the pre-goose forward migration.
 //
-// [LAW:one-source-of-truth] The presence gate is legacyIssueHistoryColumns — the
-// same minimum column set the reconcile requires. A partial/synthetic
-// issue_history (missing a canonical column) declines to the operator path rather
-// than being guessed at; a strict superset declines too, because its extra
-// columns would be unaccounted-for under this fan-out and an operator must decide
-// their fate rather than have them silently dropped.
-func issueHistoryFanOut(table RawTable) (TableMapping, bool) {
-	cols := map[string]bool{}
-	for _, c := range table.Columns {
-		cols[c] = true
-	}
-	for _, c := range legacyIssueHistoryColumns {
-		if !cols[c] {
-			return TableMapping{}, false
-		}
-	}
+// [LAW:one-source-of-truth] The column/field correspondence and the conditional
+// change-row shape live here and nowhere else; the two paths were previously
+// independent hand-maintained mirrors coupled only by a comment. The value
+// semantics were already shared (the transforms delegate to the reconcile's
+// canonical* functions); this closes the structural half.
+//
+// Emitter ORDER is load-bearing for the SQL renderer: the parent record
+// (issue_events) must land before its conditional child (issue_event_changes)
+// or the child's foreign key rejects the insert. The Apply fold is
+// order-insensitive; keep the parent first regardless.
+func issueHistoryMapping() TableMapping {
 	return TableMapping{
 		Table: "issue_history",
 		Emitters: []Emitter{
@@ -145,7 +141,47 @@ func issueHistoryFanOut(table RawTable) (TableMapping, bool) {
 				},
 			},
 		},
-	}, true
+	}
+}
+
+// legacyIssueHistoryColumns is the minimum column set a legacy issue_history
+// table must carry for the canonical mapping to apply — derived from the
+// mapping's own referenced columns, so the gate cannot drift from the structure
+// it guards. [LAW:one-source-of-truth] Sorted for a deterministic order; both
+// consumers treat it as a set.
+//
+// The check both paths apply is presence-only, but their supersets diverge by
+// design: the reconcile translates a strict superset anyway (it reads only
+// these columns; extras fall to the drop step), while issueHistoryFanOut's
+// superset declines downstream — the extra columns are unaccounted-for under
+// the fan-out, which Validate rejects, routing the dump to the operator path
+// rather than silently dropping them.
+var legacyIssueHistoryColumns = legacyIssueHistoryColumnList()
+
+func legacyIssueHistoryColumnList() []string {
+	referenced := referencedColumns(issueHistoryMapping())
+	out := make([]string, 0, len(referenced))
+	for c := range referenced {
+		out = append(out, c)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// issueHistoryFanOut gates the shared mapping on the legacy table's shape: a
+// partial/synthetic issue_history (missing a canonical column) declines to the
+// operator path rather than being guessed at.
+func issueHistoryFanOut(table RawTable) (TableMapping, bool) {
+	cols := map[string]bool{}
+	for _, c := range table.Columns {
+		cols[c] = true
+	}
+	for _, c := range legacyIssueHistoryColumns {
+		if !cols[c] {
+			return TableMapping{}, false
+		}
+	}
+	return issueHistoryMapping(), true
 }
 
 // knownSourceColumns is the correspondence table: per domain source table, the
@@ -156,7 +192,7 @@ func issueHistoryFanOut(table RawTable) (TableMapping, bool) {
 // so this table is purely the source-name → domain-field correspondence.
 //
 // issue_history is NOT here: it is not a simple one-row-one-record table, so its
-// shape lives in issueHistoryFanOut.
+// shape lives in issueHistoryMapping.
 var knownSourceColumns = map[string]map[string]TargetKey{
 	"issues": {
 		"id":              "issues.id",

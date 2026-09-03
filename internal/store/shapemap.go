@@ -108,8 +108,9 @@ type Always struct{}
 // with SQL NULL counted as a distinct value — the "a real change occurred"
 // shape. It references the computed fields (not raw columns) so the comparison
 // runs on the post-transform values: with from/to carrying the legacy-status
-// transform this is exactly isLegacyStatusTransition, without restating the
-// transform (one source of truth for "what the canonical value is").
+// transform, a raw pair that canonicalizes to one spelling is correctly not a
+// transition, without restating the transform (one source of truth for "what
+// the canonical value is"). Both resurrection paths evaluate it through emits.
 type WhenChanged struct {
 	FieldA string
 	FieldB string
@@ -566,9 +567,10 @@ func emits(when EmitCondition, rec map[string]any) bool {
 }
 
 // cellsDiffer reports whether two computed cells represent different values, with
-// SQL NULL (nil) counted as a value distinct from any string. This is exactly the
-// status-transition predicate (isLegacyStatusTransition) when the cells are the
-// legacy-status-canonicalized from/to values.
+// SQL NULL (nil) counted as a value distinct from any string. When the cells are
+// the legacy-status-canonicalized from/to values this is THE status-transition
+// predicate — the reconcile's SQL bridge and the export fold both reach it
+// through emits. [LAW:single-enforcer]
 func cellsDiffer(a, b any) bool {
 	an, bn := a == nil, b == nil
 	if an != bn {

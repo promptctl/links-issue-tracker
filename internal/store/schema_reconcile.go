@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/model"
@@ -481,31 +482,21 @@ func (s *Store) verifyIssuesReconcilable(ctx context.Context) error {
 	return nil
 }
 
-// legacyIssueHistoryColumns is the minimum column set the deleted
-// issue_history table must include for the canonical mapping to
-// apply (every column the translation reads). The check is presence-
-// only: a workspace whose issue_history is a strict superset (extra
-// columns from an even-older shape) still translates correctly,
-// because the translation only reads the columns named here. A
-// table missing any of these columns (synthetic test fixture, half-
-// migrated legacy state) has nothing the canonical mapping can
-// express and is left for the drop step.
-//
-// [LAW:one-source-of-truth] Derived from the historical schema; if
-// the legacy shape were ever extended retroactively (it will not be —
-// the table is removed), this list would extend alongside.
-var legacyIssueHistoryColumns = []string{
-	"id", "issue_id", "action", "reason", "from_status", "to_status", "created_at", "created_by",
-}
-
 // translateIssueHistoryToEvents lifts legacy issue_history rows into
 // the canonical issue_events (+ issue_event_changes for status
-// transitions) before the table is dropped. Each issue_history row
-// becomes one issue_events row carrying the same id, issue_id,
-// action, reason, actor (mapped from created_by), and created_at.
-// Status transitions (from_status != to_status, with NULL on either
-// side counting as transition) emit one issue_event_changes row
-// with field='status'.
+// transitions) before the table is dropped. The row structure — which
+// source column feeds which target field, through which canonicalizer,
+// and the conditional change-row shape — is NOT encoded here: it is
+// rendered from issueHistoryMapping (shapemap_known.go), the same
+// declaration the lifeboat's dump→map→apply path folds through.
+// [LAW:one-source-of-truth] The two resurrection paths cannot
+// structurally diverge because there is one structure to diverge from.
+//
+// What stays reconcile-side is row selection: only rows whose issue
+// still exists (FK) and whose id is not already in issue_events
+// (idempotency) translate. The lifeboat deliberately has neither
+// filter — it conserves everything and lets restore-time constraints
+// judge.
 //
 // Translation is gated on three preconditions:
 //
@@ -593,11 +584,9 @@ func (s *Store) translateIssueHistoryToEvents(ctx context.Context, guard *snapsh
 	// instead of N times at each return site that might drift.
 	defer func() { _ = tx.Rollback() }()
 	// SELECT raw column values inside the tx so the read and the subsequent
-	// INSERTs see one atomic snapshot. Canonicalization (TrimSpace +
-	// empty→NULL for action, empty→'unknown' for actor, NULL→'' for reason)
-	// happens in Go so the rules use the literal-same strings.TrimSpace call
-	// recordEvent uses for live event writes — [LAW:one-source-of-truth]
-	// for the canonical event-row shape across both writers.
+	// INSERTs see one atomic snapshot. The SELECT list is the mapping's own
+	// referenced-column set, so a column the fan-out reads is by construction
+	// a column this bridge fetches.
 	//
 	// Buffer-then-loop (rather than interleaved row.Next() + tx.Exec on
 	// the same connection) matches ensureIssueRanks in this file: Go's
@@ -606,37 +595,31 @@ func (s *Store) translateIssueHistoryToEvents(ctx context.Context, guard *snapsh
 	// per workspace (PR #143's unreal-3d-maps recovery hit 184), so the
 	// memory cost is bounded; this is once-per-workspace recovery code,
 	// not a hot path.
-	const selectTranslatable = `
-		SELECT
-			h.id,
-			h.issue_id,
-			h.action,
-			h.reason,
-			h.created_by,
-			h.created_at,
-			h.from_status,
-			h.to_status
-		FROM issue_history h
-		WHERE EXISTS (SELECT 1 FROM issues i WHERE i.id = h.issue_id)
-		  AND NOT EXISTS (SELECT 1 FROM issue_events e WHERE e.id = h.id)
-	`
+	tm := issueHistoryMapping()
+	srcCols := legacyIssueHistoryColumns
+	selectTranslatable := "SELECT h.`" + strings.Join(srcCols, "`, h.`") + "` FROM issue_history h" +
+		" WHERE EXISTS (SELECT 1 FROM issues i WHERE i.id = h.issue_id)" +
+		" AND NOT EXISTS (SELECT 1 FROM issue_events e WHERE e.id = h.id)"
 	queryRows, err := tx.QueryContext(ctx, selectTranslatable)
 	if err != nil {
 		return false, fmt.Errorf("translate issue_history: query translatable rows: %w", err)
 	}
-	type translation struct {
-		id, issueID, createdAt    string
-		action, reason, createdBy sql.NullString
-		fromStatus, toStatus      sql.NullString
-	}
-	var pending []translation
+	var pending []map[string]sql.NullString
 	for queryRows.Next() {
-		var t translation
-		if err := queryRows.Scan(&t.id, &t.issueID, &t.action, &t.reason, &t.createdBy, &t.createdAt, &t.fromStatus, &t.toStatus); err != nil {
+		cells := make([]sql.NullString, len(srcCols))
+		scanArgs := make([]any, len(srcCols))
+		for i := range cells {
+			scanArgs[i] = &cells[i]
+		}
+		if err := queryRows.Scan(scanArgs...); err != nil {
 			queryRows.Close()
 			return false, fmt.Errorf("translate issue_history: scan row: %w", err)
 		}
-		pending = append(pending, t)
+		row := make(map[string]sql.NullString, len(srcCols))
+		for i, c := range srcCols {
+			row[c] = cells[i]
+		}
+		pending = append(pending, row)
 	}
 	if err := queryRows.Err(); err != nil {
 		queryRows.Close()
@@ -646,33 +629,57 @@ func (s *Store) translateIssueHistoryToEvents(ctx context.Context, guard *snapsh
 	if len(pending) == 0 {
 		return false, nil
 	}
-	insertEvent, err := tx.PrepareContext(ctx, `INSERT INTO issue_events (id, issue_id, action, reason, actor, created_at) VALUES (?, ?, ?, ?, ?, ?)`)
-	if err != nil {
-		return false, fmt.Errorf("translate issue_history: prepare event insert: %w", err)
+	// One prepared INSERT per emitter, in the mapping's declared order —
+	// parent (issue_events) before conditional child (issue_event_changes),
+	// which the child's foreign key requires.
+	type preparedEmitter struct {
+		emitter Emitter
+		fields  []string
+		stmt    *sql.Stmt
 	}
-	defer insertEvent.Close()
-	insertChange, err := tx.PrepareContext(ctx, `INSERT INTO issue_event_changes (event_id, field, from_value, to_value) VALUES (?, 'status', ?, ?)`)
-	if err != nil {
-		return false, fmt.Errorf("translate issue_history: prepare change insert: %w", err)
-	}
-	defer insertChange.Close()
-	for _, t := range pending {
-		actionArg := canonicalEventAction(t.action)
-		reasonArg := canonicalEventReason(t.reason)
-		actorArg := canonicalEventActor(t.createdBy)
-		if _, err := insertEvent.ExecContext(ctx, t.id, t.issueID, actionArg, reasonArg, actorArg, t.createdAt); err != nil {
-			return false, fmt.Errorf("translate issue_history: insert event %s: %w", t.id, err)
+	emitters := make([]preparedEmitter, 0, len(tm.Emitters))
+	for _, em := range tm.Emitters {
+		fields := make([]string, 0, len(em.Fields))
+		for f := range em.Fields {
+			fields = append(fields, f)
 		}
-		// Normalize legacy status spellings BEFORE the transition check —
-		// a 'in-progress' → 'in_progress' raw pair both normalize to
-		// 'in_progress', which is correctly NOT a transition. The change
-		// row's from_value/to_value carry the canonical normalized values
-		// so the event log matches issues.status post-ensureUnifiedStatusSchema.
-		fromCanon := canonicalLegacyStatus(t.fromStatus)
-		toCanon := canonicalLegacyStatus(t.toStatus)
-		if isLegacyStatusTransition(fromCanon, toCanon) {
-			if _, err := insertChange.ExecContext(ctx, t.id, nullableSQLString(fromCanon), nullableSQLString(toCanon)); err != nil {
-				return false, fmt.Errorf("translate issue_history: insert status change for %s: %w", t.id, err)
+		sort.Strings(fields)
+		stmt, err := tx.PrepareContext(ctx, legacyInsertStatement(em.Collection, fields))
+		if err != nil {
+			return false, fmt.Errorf("translate issue_history: prepare %s insert: %w", em.Collection, err)
+		}
+		defer stmt.Close()
+		emitters = append(emitters, preparedEmitter{emitter: em, fields: fields, stmt: stmt})
+	}
+	for _, row := range pending {
+		for _, pe := range emitters {
+			rec := make(map[string]any, len(pe.emitter.Fields))
+			for field, src := range pe.emitter.Fields {
+				switch s := src.(type) {
+				case FromColumn:
+					value, err := legacySQLValue(s.Transform, row[s.Column])
+					if err != nil {
+						return false, fmt.Errorf("translate issue_history: column %q: %w", s.Column, err)
+					}
+					rec[field] = value
+				case Constant:
+					rec[field] = s.Value
+				}
+			}
+			// WhenChanged compares the post-transform values, so a raw pair
+			// that canonicalizes to the same status ('in-progress' →
+			// 'in_progress') is correctly NOT a transition, and the change
+			// row carries the canonical spellings the issues table holds
+			// post-ensureUnifiedStatusSchema.
+			if !emits(pe.emitter.When, rec) {
+				continue
+			}
+			args := make([]any, len(pe.fields))
+			for i, f := range pe.fields {
+				args[i] = rec[f]
+			}
+			if _, err := pe.stmt.ExecContext(ctx, args...); err != nil {
+				return false, fmt.Errorf("translate issue_history: insert %s row for history %s: %w", pe.emitter.Collection, row["id"].String, err)
 			}
 		}
 	}
@@ -680,6 +687,74 @@ func (s *Store) translateIssueHistoryToEvents(ctx context.Context, guard *snapsh
 		return false, fmt.Errorf("translate issue_history: commit tx: %w", err)
 	}
 	return true, nil
+}
+
+// legacyInsertStatement renders one emitter's INSERT for the legacy bridge:
+// the collection's v1 table, the fields' v1 columns, one placeholder each.
+// The fields slice fixes the arg order the caller binds against.
+func legacyInsertStatement(coll collection, fields []string) string {
+	cols := make([]string, len(fields))
+	placeholders := make([]string, len(fields))
+	for i, f := range fields {
+		cols[i] = legacySQLColumn(coll, f)
+		placeholders[i] = "?"
+	}
+	return "INSERT INTO " + legacySQLTable(coll) + " (" + strings.Join(cols, ", ") + ") VALUES (" + strings.Join(placeholders, ", ") + ")"
+}
+
+// legacySQLTable and legacySQLColumn spell the fan-out's domain names in v1
+// SQL — the same write-direction knowledge the hand-written INSERT statements
+// this renderer replaced carried, now in one table-shaped place. Only
+// model.FieldChange's from/to differ from their columns (from_value/to_value);
+// every other fan-out field is stored under its own name.
+func legacySQLTable(coll collection) string {
+	switch coll {
+	case collEvents:
+		return "issue_events"
+	case collEventChanges:
+		return "issue_event_changes"
+	default:
+		// issueHistoryMapping only emits the two event collections; a new
+		// emitter must extend this spelling alongside. [LAW:no-silent-failure]
+		panic(fmt.Sprintf("legacy bridge has no v1 table spelling for collection %q", coll))
+	}
+}
+
+func legacySQLColumn(coll collection, field string) string {
+	if coll == collEventChanges {
+		switch field {
+		case "from":
+			return "from_value"
+		case "to":
+			return "to_value"
+		}
+	}
+	return field
+}
+
+// legacySQLValue renders one mapped cell for the SQL bridge. The value
+// semantics are the same as applyTransform's export fold — the canonicalizing
+// transforms delegate to the shared canonical* functions — but the structural
+// transforms (identity, timestamp) conserve the stored bytes verbatim: the
+// timestamp PARSE belongs to the export fold, whose target is a time.Time in
+// model.Export, not to a bridge copying between VARCHAR columns.
+func legacySQLValue(t Transform, v sql.NullString) (any, error) {
+	switch t {
+	case TransformIdentity, TransformTimestamp:
+		return nullableSQLString(v), nil
+	case TransformLegacyStatus:
+		return nullableSQLString(canonicalLegacyStatus(v)), nil
+	case TransformEventAction:
+		return canonicalEventAction(v), nil
+	case TransformEventReason:
+		return canonicalEventReason(v), nil
+	case TransformEventActor:
+		return canonicalEventActor(v), nil
+	default:
+		// [LAW:no-silent-failure] A transform this bridge cannot render must
+		// refuse loudly, not pass a raw value through as if canonicalized.
+		return nil, fmt.Errorf("no SQL rendering for transform %q", t)
+	}
 }
 
 // canonicalEventAction mirrors recordEvent's action canonicalization:
@@ -754,22 +829,6 @@ func canonicalLegacyStatus(v sql.NullString) sql.NullString {
 	default:
 		return sql.NullString{Valid: true, String: "open"}
 	}
-}
-
-// isLegacyStatusTransition reports whether a (from, to) status pair
-// describes a real workflow movement worth recording as a change row.
-// NULL→value and value→NULL both count; value→same-value and
-// NULL→NULL do not. [LAW:types-are-the-program] The status-change
-// shape is "the value moved" — the predicate makes that exact shape
-// the only thing the change-row INSERT can emit.
-func isLegacyStatusTransition(from, to sql.NullString) bool {
-	if !from.Valid && !to.Valid {
-		return false
-	}
-	if from.Valid && to.Valid && from.String == to.String {
-		return false
-	}
-	return true
 }
 
 // nullableSQLString converts a sql.NullString to a driver-friendly any:

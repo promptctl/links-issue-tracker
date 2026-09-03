@@ -479,37 +479,39 @@ func TestReconcileDropsLegacyIssueHistory(t *testing.T) {
 	}
 }
 
-// TestIsLegacyStatusTransition pins all four (from, to) discriminations
-// the predicate distinguishes. Without exhaustive coverage a regression
-// could silently flip the semantics in either direction — same-value
-// transitions starting to emit change rows, or NULL transitions getting
-// dropped.
+// TestStatusTransitionPredicate pins all four (from, to) discriminations
+// the status-transition predicate distinguishes. The predicate is
+// WhenChanged evaluated through emits over cellsDiffer — the one
+// definition both the reconcile's SQL bridge and the lifeboat's export
+// fold consume. Without exhaustive coverage a regression could silently
+// flip the semantics in either direction — same-value transitions
+// starting to emit change rows, or NULL transitions getting dropped.
 //
 // [LAW:types-are-the-program] The predicate is a function from
 // (Nullable × Nullable) → bool. Truth-table coverage is the only
 // proof its branches do what their names say.
-func TestIsLegacyStatusTransition(t *testing.T) {
+func TestStatusTransitionPredicate(t *testing.T) {
 	t.Parallel()
-	null := sql.NullString{}
-	open := sql.NullString{Valid: true, String: "open"}
-	openAlso := sql.NullString{Valid: true, String: "open"}
-	closed := sql.NullString{Valid: true, String: "closed"}
+	when := WhenChanged{FieldA: "from", FieldB: "to"}
+	open := "open"
+	closed := "closed"
+	openAlso := "open"
 	cases := []struct {
 		name     string
-		from, to sql.NullString
+		from, to any
 		want     bool
 	}{
-		{name: "null to null is not a transition", from: null, to: null, want: false},
+		{name: "null to null is not a transition", from: nil, to: nil, want: false},
 		{name: "value to same value is not a transition", from: open, to: openAlso, want: false},
-		{name: "null to value is a transition", from: null, to: open, want: true},
-		{name: "value to null is a transition", from: open, to: null, want: true},
+		{name: "null to value is a transition", from: nil, to: open, want: true},
+		{name: "value to null is a transition", from: open, to: nil, want: true},
 		{name: "value to different value is a transition", from: open, to: closed, want: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := isLegacyStatusTransition(c.from, c.to)
+			got := emits(when, map[string]any{"from": c.from, "to": c.to})
 			if got != c.want {
-				t.Errorf("isLegacyStatusTransition(%+v, %+v) = %v, want %v", c.from, c.to, got, c.want)
+				t.Errorf("emits(WhenChanged, from=%v, to=%v) = %v, want %v", c.from, c.to, got, c.want)
 			}
 		})
 	}
@@ -678,7 +680,7 @@ func TestReconcileTranslatesLegacyIssueHistoryToEvents(t *testing.T) {
 	//     post-translation to match recordEvent's convention)
 	//   - hist-close:         status transition, named action, different actor
 	//   - hist-same-status:   from_status == to_status — must NOT emit a
-	//     change row (isLegacyStatusTransition value→same-value branch)
+	//     change row (WhenChanged's value→same-value branch)
 	//   - hist-whitespace:    padded action/reason/created_by values — MUST
 	//     normalize via TrimSpace to byte-equivalence with recordEvent's
 	//     live-write canonicalization [LAW:one-source-of-truth]

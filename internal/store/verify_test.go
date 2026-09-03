@@ -117,12 +117,21 @@ func TestCountFindingsDetectsRowLoss(t *testing.T) {
 func TestCountFindingsExcludesConditionalFanOutChildren(t *testing.T) {
 	t.Parallel()
 	const created = "2026-01-01T10:00:00Z"
+	// Cells keyed by column name, ordered against the canonical column list, so
+	// the fixture cannot silently misalign if that list's order changes.
+	historyRow := func(cells map[string]any) []any {
+		out := make([]any, len(legacyIssueHistoryColumns))
+		for i, c := range legacyIssueHistoryColumns {
+			out[i] = cells[c]
+		}
+		return out
+	}
 	dump := RawDump{WorkspaceID: "w", Tables: []RawTable{
 		{Name: "issue_history",
 			Columns: legacyIssueHistoryColumns,
 			Rows: [][]any{
-				{"h1", "i1", "start", "began", "open", "in_progress", created, "alice"},
-				{"h2", "i1", "close", "shipped", "in_progress", "closed", created, "alice"},
+				historyRow(map[string]any{"id": "h1", "issue_id": "i1", "action": "start", "reason": "began", "from_status": "open", "to_status": "in_progress", "created_at": created, "created_by": "alice"}),
+				historyRow(map[string]any{"id": "h2", "issue_id": "i1", "action": "close", "reason": "shipped", "from_status": "in_progress", "to_status": "closed", "created_at": created, "created_by": "alice"}),
 			}},
 	}}
 	m, ok := DeterministicMap(dump)
