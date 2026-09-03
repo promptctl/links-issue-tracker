@@ -1,15 +1,33 @@
 package cli
 
 import (
+	"archive/tar"
 	"bytes"
+	"compress/gzip"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/store"
+	"github.com/promptctl/links-issue-tracker/internal/version"
 )
+
+// olderCurrentInfo is the running binary's identity in these tests: a release
+// older than every fake target, so already-current never fires unless a test
+// arranges the versions to match.
+func olderCurrentInfo() version.Info {
+	return version.Info{Version: "0.3.0", Schema: version.SchemaSupport{Min: 1, Max: 2}}
+}
 
 // appliedVersionFromOpenErr is the crux of the non-circular remediation: a
 // schema-ahead refusal — the exact state `lit upgrade` is advertised for — must
@@ -58,7 +76,7 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/usr/local/bin/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/usr/local/bin/lit", nil))
 	if err != nil {
 		t.Fatalf("runUpgradeWith: %v", err)
 	}
@@ -71,8 +89,10 @@ func TestRunUpgradeWithHappyPath(t *testing.T) {
 	if !inst.called || inst.gotTargetPath != "/usr/local/bin/lit" {
 		t.Errorf("installer called=%v path=%q; want called=true path=/usr/local/bin/lit", inst.called, inst.gotTargetPath)
 	}
-	if !strings.Contains(out.String(), "upgraded to v0.9.0") {
-		t.Errorf("stdout missing success line: %q", out.String())
+	// The success line reads from → to, so the user sees what they left as
+	// well as what they got.
+	if !strings.Contains(out.String(), "upgraded v0.3.0 → v0.9.0") {
+		t.Errorf("stdout missing from → to success line: %q", out.String())
 	}
 	// Upgrade never touches the schema — the target binary migrates forward on
 	// its next Open. The success line must say so rather than claim a migration
@@ -91,7 +111,7 @@ func TestRunUpgradeWithTargetBehindOpenableNamesDowngrade(t *testing.T) {
 	sr := &stubSchemaReader{version: 5, openable: true} // workspace ahead of the target, but openable
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -118,7 +138,7 @@ func TestRunUpgradeWithTargetBehindNotOpenableNamesNewerTarget(t *testing.T) {
 	sr := &stubSchemaReader{version: 7, openable: false} // workspace ahead; this binary can't open it
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	var behind *UpgradeTargetBehindError
 	if !errors.As(err, &behind) {
 		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
@@ -147,7 +167,7 @@ func TestRunUpgradeWithTargetEqualCurrentInstalls(t *testing.T) {
 	sr := &stubSchemaReader{version: 3, openable: true}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	if err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+	if err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil)); err != nil {
 		t.Fatalf("runUpgradeWith at equal schema: %v", err)
 	}
 	if !inst.called {
@@ -161,7 +181,7 @@ func TestRunUpgradeWithInstallFailureSurfacesRecovery(t *testing.T) {
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{err: errors.New("network down")}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil {
 		t.Fatal("expected install failure to surface as error")
 	}
@@ -185,7 +205,7 @@ func TestRunUpgradeWithResolverErrorSkipsReadAndInstall(t *testing.T) {
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "manifest 404") {
 		t.Fatalf("expected resolver error to propagate, got %v", err)
 	}
@@ -203,7 +223,7 @@ func TestRunUpgradeWithSchemaReadErrorSkipsInstall(t *testing.T) {
 	sr := &stubSchemaReader{err: errors.New("store closed")}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	if err == nil || !strings.Contains(err.Error(), "read workspace schema version") {
 		t.Fatalf("expected schema-read error to propagate, got %v", err)
 	}
@@ -218,12 +238,12 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 	sr := &stubSchemaReader{version: 2, openable: true}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, res, inst, fixedBinPath("/p/lit", nil))
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.9.0", "extra"}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
 	var usage UsageError
 	if !errors.As(err, &usage) {
 		t.Fatalf("err = %v (%T); want UsageError for an extra positional arg", err, err)
 	}
-	if !strings.Contains(usage.Error(), "usage: lit upgrade --to <version>") {
+	if !strings.Contains(usage.Error(), "usage: lit upgrade [--to <version>]") {
 		t.Errorf("usage error text = %q; want the upgrade usage line", usage.Error())
 	}
 	// The NArg guard runs before resolve/read/install — none must fire.
@@ -232,18 +252,185 @@ func TestRunUpgradeExtraArgsIsUsageError(t *testing.T) {
 	}
 }
 
-func TestRunUpgradeMissingTagIsRequired(t *testing.T) {
+// Bare `lit upgrade` resolves its own target — the latest published release —
+// and installs it. Nobody is sent hunting for a version tag, and the bare
+// invocation lit's own sync-failure remediation prints runs as printed
+// (links-upgrade-8ynx).
+func TestRunUpgradeBareResolvesLatestAndInstalls(t *testing.T) {
 	t.Parallel()
-	res := &stubResolver{target: newFakeTarget()}
+	res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	if err != nil {
+		t.Fatalf("bare runUpgradeWith: %v", err)
+	}
+	if !res.latestCalled {
+		t.Error("bare invocation must resolve the latest release tag")
+	}
+	if res.gotTag != "v0.9.0" {
+		t.Errorf("resolver got tag %q; want the latest-resolved v0.9.0", res.gotTag)
+	}
+	if !inst.called {
+		t.Error("installer must run for a bare invocation that is not current")
+	}
+	if !strings.Contains(out.String(), "upgraded v0.3.0 → v0.9.0") {
+		t.Errorf("stdout missing from → to success line: %q", out.String())
+	}
+}
+
+// A bare invocation already on the latest release is a friendly no-op: exit 0,
+// the kept version named, nothing installed.
+func TestRunUpgradeBareAlreadyCurrentKeepsBinary(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // manifest Version 0.4.1
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	if err != nil {
+		t.Fatalf("already-current must be a clean no-op, got %v", err)
+	}
+	if inst.called {
+		t.Error("installer must not run when already on the latest release")
+	}
+	if !strings.Contains(out.String(), "already current") || !strings.Contains(out.String(), "v0.4.1") {
+		t.Errorf("no-op line must say already current and name the kept version: %q", out.String())
+	}
+}
+
+// A pinned --to naming the running version still installs: the explicit tag is
+// a command, and the reinstall path for a damaged binary. Only the unpinned
+// default treats already-current as satisfied.
+func TestRunUpgradePinnedSameVersionStillInstalls(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{target: newFakeTarget()} // manifest Version 0.4.1
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{"--to", "v0.4.1"}, current, res, inst, fixedBinPath("/p/lit", nil))
+	if err != nil {
+		t.Fatalf("pinned reinstall: %v", err)
+	}
+	if !inst.called {
+		t.Error("installer must run for an explicit --to, even at the running version")
+	}
+}
+
+// When the workspace schema is ahead of even the latest release, the bare
+// invocation is refused loudly with both schema ranges named — never soothed
+// with "already current", even if the running binary matches the latest
+// release. The refusal outranks the no-op.
+func TestRunUpgradeBareLatestBehindWorkspaceRefused(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestTag: "v0.4.1", target: newFakeTarget()} // Schema.Max == 3
+	sr := &stubSchemaReader{version: 7, openable: false}               // workspace ahead of latest
+	inst := &stubInstaller{}
+	current := version.Info{Version: "0.4.1", Schema: version.SchemaSupport{Min: 1, Max: 3}}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	var behind *UpgradeTargetBehindError
+	if !errors.As(err, &behind) {
+		t.Fatalf("err = %v (%T); want *UpgradeTargetBehindError", err, err)
+	}
+	msg := behind.Error()
+	if !strings.Contains(msg, "v3") || !strings.Contains(msg, "v7") {
+		t.Errorf("refusal must name both the target's schema reach and the workspace's version: %q", msg)
+	}
+	if inst.called {
+		t.Error("installer must not run when latest cannot cover the workspace schema")
+	}
+	if strings.Contains(out.String(), "already current") {
+		t.Errorf("refusal must not be preceded by an already-current no-op: %q", out.String())
+	}
+}
+
+// The whole bare-upgrade pipeline composed from the REAL release components —
+// HTTPResolver (feed + manifest) and HTTPInstaller (download, checksum,
+// atomic swap) — over a local httptest server: the closest a test can get to
+// `lit upgrade` against the live feed without touching the network. The stub
+// tests above pin each stage's contract; this one pins that the stages
+// actually compose.
+func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
+	t.Parallel()
+	newBinary := "NEW-BINARY-BYTES"
+	var archive bytes.Buffer
+	gw := gzip.NewWriter(&archive)
+	tw := tar.NewWriter(gw)
+	if err := tw.WriteHeader(&tar.Header{Name: "lit", Mode: 0o755, Size: int64(len(newBinary)), Typeflag: tar.TypeReg}); err != nil {
+		t.Fatalf("tar header: %v", err)
+	}
+	if _, err := tw.Write([]byte(newBinary)); err != nil {
+		t.Fatalf("tar write: %v", err)
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("tar close: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("gzip close: %v", err)
+	}
+	sum := sha256.Sum256(archive.Bytes())
+
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	manifest := release.Manifest{
+		Info: version.Info{Version: "0.9.9", Schema: version.SchemaSupport{Min: 1, Max: 5}},
+		Artifacts: []release.Artifact{{
+			Platform: release.CurrentPlatform(),
+			URL:      srv.URL + "/dl/v0.9.9/lit.tar.gz",
+			SHA256:   hex.EncodeToString(sum[:]),
+		}},
+	}
+	mux.HandleFunc("/feed", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v0.9.9","draft":false,"prerelease":false}`))
+	})
+	mux.HandleFunc("/dl/v0.9.9/release-manifest.json", func(w http.ResponseWriter, r *http.Request) {
+		_ = json.NewEncoder(w).Encode(&manifest)
+	})
+	mux.HandleFunc("/dl/v0.9.9/lit.tar.gz", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write(archive.Bytes())
+	})
+
+	binPath := filepath.Join(t.TempDir(), "lit")
+	if err := os.WriteFile(binPath, []byte("OLD-BINARY"), 0o755); err != nil {
+		t.Fatalf("seed old binary: %v", err)
+	}
+
+	res := &release.HTTPResolver{BaseURL: srv.URL + "/dl", LatestURL: srv.URL + "/feed"}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, &release.HTTPInstaller{}, fixedBinPath(binPath, nil))
+	if err != nil {
+		t.Fatalf("bare end-to-end upgrade: %v", err)
+	}
+	got, err := os.ReadFile(binPath)
+	if err != nil {
+		t.Fatalf("read installed binary: %v", err)
+	}
+	if string(got) != newBinary {
+		t.Errorf("installed binary = %q; want the archive's payload", got)
+	}
+	if !strings.Contains(out.String(), "upgraded v0.3.0 → v0.9.9") {
+		t.Errorf("stdout missing from → to line: %q", out.String())
+	}
+}
+
+// A latest-lookup failure stops the pipeline before anything else runs.
+func TestRunUpgradeLatestTagErrorStopsPipeline(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestErr: errors.New("feed unreachable")}
 	sr := &stubSchemaReader{version: 2}
 	inst := &stubInstaller{}
 	var out bytes.Buffer
-	err := runUpgradeWith(context.Background(), &out, sr, []string{}, res, inst, fixedBinPath("/p/lit", nil))
-	if err == nil || !strings.Contains(err.Error(), "non-empty version") {
-		t.Fatalf("expected missing --to to be rejected as a non-empty-version error, got %v", err)
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+	if err == nil || !strings.Contains(err.Error(), "feed unreachable") {
+		t.Fatalf("expected latest-lookup error to propagate, got %v", err)
 	}
-	// The tag check precedes resolve AND the schema read, so none must fire.
 	if res.called || sr.called || inst.called {
-		t.Errorf("missing-tag guard leaked: resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
+		t.Errorf("latest-lookup failure leaked: resolve=%v read=%v install=%v; want all false", res.called, sr.called, inst.called)
 	}
 }

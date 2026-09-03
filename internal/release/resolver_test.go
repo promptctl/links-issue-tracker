@@ -137,6 +137,61 @@ func TestHTTPResolverRejectsURLMetacharsInTag(t *testing.T) {
 	}
 }
 
+// The release feed is a third-party API that grows fields freely; LatestTag
+// reads tag_name and ignores the rest.
+func TestHTTPResolverLatestTagResolvesFromFeed(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"url":"https://api.example/1","id":1,"tag_name":"v0.5.0","name":"v0.5.0","draft":false,"prerelease":false}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &HTTPResolver{LatestURL: srv.URL}
+	tag, err := r.LatestTag(context.Background())
+	if err != nil {
+		t.Fatalf("LatestTag: %v", err)
+	}
+	if tag != "v0.5.0" {
+		t.Errorf("LatestTag = %q; want v0.5.0", tag)
+	}
+}
+
+// A 200 with no tag_name is a feed-shape change, not "no releases" — refused
+// loudly rather than returned as an empty tag that fails far from its cause.
+func TestHTTPResolverLatestTagRefusesMissingTagName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"id":1,"name":"mystery"}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &HTTPResolver{LatestURL: srv.URL}
+	if _, err := r.LatestTag(context.Background()); err == nil || !strings.Contains(err.Error(), "tag_name") {
+		t.Fatalf("expected missing-tag_name refusal, got %v", err)
+	}
+}
+
+// A feed-served tag passes through the same accept shape as a user's --to;
+// a malformed one is refused, never interpolated into a manifest URL.
+func TestHTTPResolverLatestTagRefusesMalformedTag(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"0.5.0/../evil"}`))
+	}))
+	t.Cleanup(srv.Close)
+	r := &HTTPResolver{LatestURL: srv.URL}
+	if _, err := r.LatestTag(context.Background()); err == nil {
+		t.Fatal("expected malformed feed tag to be refused")
+	}
+}
+
+func TestHTTPResolverLatestTagSurfacesHTTPFailure(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "rate limited", http.StatusForbidden)
+	}))
+	t.Cleanup(srv.Close)
+	r := &HTTPResolver{LatestURL: srv.URL}
+	_, err := r.LatestTag(context.Background())
+	if err == nil || !strings.Contains(err.Error(), "403") {
+		t.Fatalf("expected HTTP failure to surface with its status, got %v", err)
+	}
+}
+
 func TestHTTPResolver404IsSurfaced(t *testing.T) {
 	srv := newManifestServer(t, "v0.4.2", fixtureManifest(), http.StatusNotFound)
 	r := &HTTPResolver{BaseURL: srv.URL}
