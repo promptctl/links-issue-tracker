@@ -753,8 +753,8 @@ github.com/prometheus/common v0.66.1 h1:h5E0h5/Y8niHc5DlaLlWLArTQI7tMrsfQjHV+d9Z
 github.com/prometheus/common v0.66.1/go.mod h1:gcaUsgf3KfRSwHY4dIMXLPV0K/Wg1oZ8+SbZk/HH/dA=
 github.com/prometheus/procfs v0.20.1 h1:XwbrGOIplXW/AU3YhIhLODXMJYyC1isLFfYCsTEycfc=
 github.com/prometheus/procfs v0.20.1/go.mod h1:o9EMBZGRyvDrSPH1RqdxhojkuXstoe4UlK79eF5TGGo=
-github.com/promptctl/dolt/go v0.40.5-0.20260821231005-4b80eac34485 h1:45tdJecxWnLhCYsBzwFhg9GN6TzfS1NUmnilAcBzqWs=
-github.com/promptctl/dolt/go v0.40.5-0.20260821231005-4b80eac34485/go.mod h1:at0T1Z8lNrfQGEpt8NT4g16m/MyinwHqSrpgPfLuBeI=
+github.com/promptctl/dolt/go v0.40.5-0.20260903200716-5c905af3d959 h1:P4Kc++PTm6/Kf/QqiWR2JRHAOM9JUJuith3fuBorwvY=
+github.com/promptctl/dolt/go v0.40.5-0.20260903200716-5c905af3d959/go.mod h1:at0T1Z8lNrfQGEpt8NT4g16m/MyinwHqSrpgPfLuBeI=
 github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69 h1:qub1qbK6dNacxXVnOo/hAtk+SXj/yR0myrzFhb6HSKA=
 github.com/promptctl/go-mysql-server v0.20.1-0.20260821032251-ab5cb9ec3b69/go.mod h1:FndJ0agFCU7ot2X77VDYE0VzXSPoBahpou+wUCQ/4+s=
 github.com/promptctl/primitives v0.2.0 h1:UL0LQXLlCYwgPz2zz6ffEwuKx0jsfqIlex2ZrOx+2Y0=

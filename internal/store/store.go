@@ -2606,6 +2606,21 @@ func ensureMasterDefaultBranch(ctx context.Context, db *sql.DB) error {
 // the production one.
 var engineOpenRetryMaxElapsed = 30 * time.Second
 
+// MirrorHoldBudget bounds one background-mirror engine session — open, push,
+// close — end to end. It lives beside engineOpenRetryMaxElapsed because the two
+// are one design: a foreground write open waits out a co-resident holder for at
+// most that budget, so the longest hold the detached mirror may impose must fit
+// inside it with headroom for the mirror's own engine close and the waiter's
+// retry granularity. A foreground command arriving the instant a mirror cycle
+// begins still opens within its own budget. [LAW:one-source-of-truth] the pair
+// is sized here, together; TestMirrorHoldBudgetFitsInsideOpenRetryBudget pins
+// the relation. The mirror's push traverses the network with no inherent bound
+// (links-sync-pgct.11.1: a hung SSH transport holds the journal lock for as
+// long as the remote cares to stall), so the bound has to be imposed from
+// outside, by the actor that owns the hold. A package variable so the mirror's
+// deadline regression test can shrink it without a 20-second wall-clock hang.
+var MirrorHoldBudget = 20 * time.Second
+
 // wrapEngineOpenContention attaches operator guidance to an engine open that
 // exhausted its retry budget against a held Dolt journal lock; every other
 // error passes through untouched. The wrap carries BOTH discriminators:

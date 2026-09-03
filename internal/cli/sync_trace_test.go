@@ -461,3 +461,26 @@ func TestRecordSyncCommandTraceErrorPath(t *testing.T) {
 		t.Fatalf("metadata[remote] = %q, want origin — the caller's metadata must still pass through on the error path", rec.Metadata["remote"])
 	}
 }
+
+// TestCommandPath pins the redaction contract of the dispatch contention
+// trace: the record names the command, never its payload — no flag values, no
+// trailing positionals, at most the two words a command family can be deep.
+func TestCommandPath(t *testing.T) {
+	t.Parallel()
+	cases := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"new", "--title", "pasted secret", "--body", "more"}, "lit new"},
+		{[]string{"snapshots", "new", "--label", "nightly"}, "lit snapshots new"},
+		{[]string{"snapshots", "restore", "prod-backup"}, "lit snapshots restore"},
+		{[]string{"ls", "--at", "/somewhere/links"}, "lit ls"},
+		{[]string{"sync", "push"}, "lit sync push"},
+		{[]string{}, "lit"},
+	}
+	for _, tc := range cases {
+		if got := formatCommand(commandPath(tc.args)); got != tc.want {
+			t.Errorf("commandPath(%v) = %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}

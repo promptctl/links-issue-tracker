@@ -419,6 +419,24 @@ func TestSnapshotsNew_RefusesWhileWorkspaceExclusive(t *testing.T) {
 		t.Fatalf("snapshots new error %v must wrap store.ErrWorkspaceBusy", err)
 	}
 
+	// The starved command leaves the durable dispatch trace a stamped open
+	// boundary earns — the attribution record links-sync-pgct.11.1 exists for.
+	// This path acquires the store directly (no runWithApp), so it pins that
+	// direct acquisitions stamp too.
+	traced := false
+	if entries, readErr := os.ReadDir(syncTraceDir(ws)); readErr == nil {
+		for _, entry := range entries {
+			content, fileErr := os.ReadFile(filepath.Join(syncTraceDir(ws), entry.Name()))
+			if fileErr == nil && strings.Contains(string(content), "lit snapshots new") {
+				traced = true
+				break
+			}
+		}
+	}
+	if !traced {
+		t.Fatalf("no sync trace records the starved `lit snapshots new`; the contention is unattributable")
+	}
+
 	// "Refuses rather than copying" — the refusal happens before any snapshot
 	// artifact (final dir, .tmp clone target, .reserve sentinel) is created,
 	// so the raw directory listing is byte-identical.

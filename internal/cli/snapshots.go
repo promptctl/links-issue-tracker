@@ -61,7 +61,12 @@ func isUserSnapshotName(name string) bool {
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (err error) {
 	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
 	if err != nil {
-		return err
+		// The snapshots family has no handler-level trace writer, so unlike
+		// the mutation family's mid-command commit contention this acquisition
+		// would otherwise leave no durable record: stamp it like the rest of
+		// the family's acquisition suite. Acquisition only — fn's own errors
+		// pass through below untouched.
+		return markEngineOpenContention(err, ws)
 	}
 	// [LAW:single-enforcer] store.SettleCommitLockRelease owns how a release
 	// failure combines with fn's outcome — joined beside a failure, demoted to
@@ -140,9 +145,12 @@ func runSnapshotsNew(ctx context.Context, stdout io.Writer, ws workspace.Info, a
 // and a write open fails fast after its bounded retry), and writer
 // serialization.
 func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (snap dbsnapshot.Snapshot, err error) {
+	// These direct acquisitions are open boundaries like any Store open, so
+	// holder contention is stamped for Run's dispatch trace exactly as
+	// runWithApp stamps app.Open.
 	releaseWorkspace, err := store.LockWorkspaceShared(ctx, ws.DatabasePath)
 	if err != nil {
-		return dbsnapshot.Snapshot{}, err
+		return dbsnapshot.Snapshot{}, markEngineOpenContention(err, ws)
 	}
 	// [LAW:no-silent-failure] Same release contract as runSnapshotsRestore: a
 	// failed release can leave the workspace stuck busy for later commands,
@@ -163,7 +171,7 @@ func takeUserSnapshot(ctx context.Context, ws workspace.Info, label string) (sna
 	}
 	releaseJournal, err := store.LockDoltJournalExclusive(ctx, ws.DatabasePath)
 	if err != nil {
-		return dbsnapshot.Snapshot{}, err
+		return dbsnapshot.Snapshot{}, markEngineOpenContention(err, ws)
 	}
 	// LIFO under the workspace release above; a failed release surfaces the
 	// same way. (The hold dies with the process regardless — kernel flock —
@@ -224,7 +232,9 @@ func runSnapshotsRestore(ctx context.Context, stdout io.Writer, ws workspace.Inf
 	// rotated so no Store — open or about to open — can observe the rename.
 	releaseWorkspace, err := store.LockWorkspaceExclusive(ctx, ws.DatabasePath)
 	if err != nil {
-		return err
+		// An open boundary like takeUserSnapshot's: stamp holder contention
+		// for Run's dispatch trace.
+		return markEngineOpenContention(err, ws)
 	}
 	// [LAW:no-silent-failure] A release failure is rare but real (e.g.
 	// EBADF on a torn FD) and signals workspace-lock state the operator

@@ -15,7 +15,7 @@ one below carries the condition that would let it be deleted.
 
 | Module in `go.mod` | Upstream | What `lit` builds | Branch | Current pin |
 | --- | --- | --- | --- | --- |
-| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260821231005-4b80eac34485` |
+| `github.com/dolthub/dolt/go` | [dolthub/dolt](https://github.com/dolthub/dolt) | [promptctl/dolt](https://github.com/promptctl/dolt) | `lit` | `v0.40.5-0.20260903200716-5c905af3d959` |
 | `github.com/dolthub/go-mysql-server` | [dolthub/go-mysql-server](https://github.com/dolthub/go-mysql-server) | [promptctl/go-mysql-server](https://github.com/promptctl/go-mysql-server) | `lit` | `v0.20.1-0.20260821032251-ab5cb9ec3b69` |
 | `github.com/dolthub/driver` | [dolthub/driver](https://github.com/dolthub/driver) | [`internal/vendor/dolthub-driver`](internal/vendor/dolthub-driver) | — | `v0.2.1-0.20260314000741-0fe74e7ee31a` |
 
@@ -209,6 +209,31 @@ the rest is go.mod-graph bookkeeping, explained in
 hand-run benchmark plot) and the `require` line moves past that change. A
 rebase that revives the plot import restores GPL to the fork's manifest, so
 treat a conflict here as a licensing decision, not a mechanical resolution.
+
+#### Patch 6 — make `emitStats` shutdown tolerate an already-gone stats consumer
+
+`go/store/datas/pull/puller.go`, plus
+`go/store/datas/pull/puller_emit_stats_shutdown_test.go` (a new file, not
+upstream's).
+
+`Puller.Pull` starts `emitStats`, whose sender goroutine writes progress to an
+unbuffered channel, and defers a cancel that `wg.Wait`s for it. The consumer
+(`pullerProgFunc` in `dolt_pull.go`, shared by DOLT_PUSH) is torn down by its
+own context, which nothing orders relative to emitStats's `done` signal. When
+the caller's context is canceled mid-push, the consumer exits first and the
+sender's plain sends block forever — the periodic ticker send pins the
+goroutine before it can see `done`, and the final post-`done` flush pins it
+during shutdown — so `Pull` never returns and the caller's database engine
+stays held. `lit` hit this the moment it bounded the background mirror's
+engine hold with a context deadline (`links-sync-pgct.11.1`): the deadline
+killed the hung push's git subprocess, and the shutdown deadlock then held the
+engine anyway. The patch makes the ticker send also select on `done` and the
+final flush best-effort (`select`/`default`), and the new test pins that
+`cancel()` returns with no consumer draining.
+
+**Retire it when** upstream fixes the emitStats shutdown ordering (no upstream
+PR exists yet) and the `require` line moves past it. Retiring the patch does
+not retire the fork.
 
 ### promptctl/go-mysql-server
 
