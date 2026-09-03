@@ -35,6 +35,19 @@ type CommandSpec struct {
 	// spec, declared once here and read by both the cobra registration and the
 	// completion model, so the two cannot disagree. [LAW:one-source-of-truth]
 	Hidden bool
+	// Retired marks a row kept only as a pointer: the command still dispatches
+	// (a stale invocation gets its documented replacement, not cobra's
+	// unknown-command noise) but it is withdrawn from the taught surface, so
+	// shipped templates must not name it. Distinct from Hidden, which conceals
+	// a live command without withdrawing it — the template dispatch gate reads
+	// this field, never Hidden and never exit codes, because a retired command
+	// exits 3 only at runtime while the gate runs at build time.
+	// [LAW:types-are-the-program] retirement is a stated property of the spec,
+	// not an inference from which runner it happens to hold. retiredSpec is
+	// the one authoring path; the type cannot refuse a same-package literal
+	// that states this field alone, so the registry coherence test is what
+	// holds every retired row to all three retirement facets.
+	Retired bool
 }
 
 // SubcommandSpec is one legal first-argument name plus its own nested tree
@@ -293,12 +306,10 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// queue, blocked inline) are the only named workable views. Kept as hidden,
 		// dispatchable specs so an old invocation gets the documented pointer, not
 		// cobra's bare unknown-command error. [LAW:no-silent-failure]
-		{Name: "ready", Summary: "(retired) use `lit backlog` or `lit next`", GroupID: "operations", Hidden: true,
-			Run: retiredCommandRun("ready", workableRetirementGuidance)},
+		retiredSpec("ready", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "backlog", Summary: "List the full workable backlog in priority/rank order (blocked items inline)", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, workableRun(backlogView))},
-		{Name: "queue", Summary: "(retired) use `lit backlog` or `lit next`", GroupID: "operations", Hidden: true,
-			Run: retiredCommandRun("queue", workableRetirementGuidance)},
+		retiredSpec("queue", "operations", "use `lit backlog` or `lit next`", workableRetirementGuidance),
 		{Name: "next", Summary: "Print the next workable leaf to lit start", GroupID: "operations",
 			Run: r.appCmd(app.AccessRead, runNext)},
 		{Name: "orphaned", Summary: "List in_progress issues with no recent updates", GroupID: "operations",
@@ -322,8 +333,7 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// assign is retired: reassigning is a single-field write folded into
 		// `lit update --assignee`. Hidden+dispatchable so an old invocation gets the
 		// documented pointer, not cobra's unknown-command error. [LAW:no-silent-failure]
-		{Name: "assign", Summary: "(retired) use `lit update <id> --assignee <name>`", GroupID: "operations", Hidden: true,
-			Run: retiredCommandRun("assign", assignRetirementGuidance)},
+		retiredSpec("assign", "operations", "use `lit update <id> --assignee <name>`", assignRetirementGuidance),
 		{Name: "done", Summary: "Finish claimed work (success path; requires in_progress)", GroupID: "operations",
 			Run: r.transitionCmd(doneSpec)},
 		{Name: "close", Summary: "Close without finishing (wontfix / obsolete / duplicate; from any non-closed state)", GroupID: "operations",
@@ -368,10 +378,8 @@ func commandSpecs(ctx context.Context, stdout io.Writer, stderr io.Writer) []Com
 		// ls-at is folded into `lit ls --at <store-dir>`; overview is folded into
 		// `lit stores --counts`. Both kept hidden+dispatchable for the documented
 		// pointer. [LAW:no-silent-failure]
-		{Name: "ls-at", Summary: "(retired) use `lit ls --at <store-dir>`", GroupID: "maintenance", Hidden: true,
-			Run: retiredCommandRun("ls-at", lsAtRetirementGuidance)},
-		{Name: "overview", Summary: "(retired) use `lit stores --counts`", GroupID: "maintenance", Hidden: true,
-			Run: retiredCommandRun("overview", overviewRetirementGuidance)},
+		retiredSpec("ls-at", "maintenance", "use `lit ls --at <store-dir>`", lsAtRetirementGuidance),
+		retiredSpec("overview", "maintenance", "use `lit stores --counts`", overviewRetirementGuidance),
 		{Name: "prefix", Summary: "Manage the cosmetic issue ID prefix", GroupID: "maintenance",
 			Run: r.wsCmd(func(_ context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 				return runPrefix(stdout, ws, args)
@@ -440,6 +448,25 @@ const (
 	overviewRetirementGuidance   = "use `lit stores --counts` — the cross-project ready / in-flight / blocked rollup is now a flag on `stores`"
 	bulkImportRetirementGuidance = "use `lit backup restore --path <export.json>` — it owns the same export-restore mechanism `bulk import` duplicated"
 )
+
+// retiredSpec builds the whole registry row for a retired command. Retirement
+// has three inseparable facets — hidden from the advertised surface, marked
+// Retired for the template dispatch gate, dispatchable only to a pointer at
+// its replacement — assembled here and nowhere else. [LAW:single-enforcer] Go
+// cannot stop a same-package literal from stating one facet without the
+// others, so the registry coherence test enforces the coupling the type
+// cannot. The summary is the short pointer shown to a reader browsing hidden
+// help; replacement is the full guidance the runner returns on invocation.
+func retiredSpec(name, groupID, summary, replacement string) CommandSpec {
+	return CommandSpec{
+		Name:    name,
+		Summary: "(retired) " + summary,
+		GroupID: groupID,
+		Hidden:  true,
+		Retired: true,
+		Run:     retiredCommandRun(name, replacement),
+	}
+}
 
 // retiredCommandRun builds the handler for a command retired from the surface:
 // it runs nothing and returns a RetiredCommandError naming its replacement. The
