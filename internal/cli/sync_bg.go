@@ -2,8 +2,10 @@ package cli
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,6 +27,33 @@ const backgroundMirrorSubcommand = "__mirror-bg"
 // process owns no terminal, so its stdout/stderr must land somewhere inspectable
 // rather than /dev/null — otherwise a trace-write failure or a panic vanishes.
 const mirrorLogName = "mirror.log"
+
+// mirrorLogMaxBytes caps mirror.log's growth now that every cycle logs a
+// start/end line (previously only failures wrote, which is why the field's log
+// sat at 0 bytes while mirrors had been pushing for weeks — the attribution
+// gap links-sync-pgct.11.1 closes). Rotation keeps one previous generation so
+// the recent window survives each cut; the log is diagnostics, not state, so
+// older lines are free to go.
+const mirrorLogMaxBytes = 256 * 1024
+
+// rotateMirrorLog moves an over-cap mirror.log aside (one kept generation)
+// before the next worker appends. A rotation problem is reported, never fatal:
+// the worst outcome of skipping it is a log that keeps growing, which must not
+// cost a mirror. [LAW:no-silent-failure]
+func rotateMirrorLog(path string) error {
+	st, err := os.Stat(path)
+	if err != nil || st.Size() <= mirrorLogMaxBytes {
+		// Absent is the common first-spawn case and needs no rotation; any
+		// other stat failure will resurface loudly from OpenFile just after.
+		return nil
+	}
+	if renameErr := os.Rename(path, path+".1"); renameErr != nil && !errors.Is(renameErr, fs.ErrNotExist) {
+		// A missing source means a concurrent spawner rotated between the stat
+		// and the rename — the rotation happened, just not by this process.
+		return renameErr
+	}
+	return nil
+}
 
 const (
 	// parentPostSpawnTail is how long a HEALTHY parent can legitimately live
@@ -76,7 +105,11 @@ func spawnBackgroundMirror(ws workspace.Info, parentPID int) error {
 	// If the log cannot be opened, surface that on the command's terminal-attached
 	// stderr and still spawn with discarded streams — the mirror matters more than
 	// its log, and the inability to log is itself loud here rather than swallowed.
-	logFile, logErr := os.OpenFile(filepath.Join(ws.StorageDir, mirrorLogName), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	logPath := filepath.Join(ws.StorageDir, mirrorLogName)
+	if rotateErr := rotateMirrorLog(logPath); rotateErr != nil {
+		fmt.Fprintf(os.Stderr, "lit: mirror log rotation failed (%v); the log keeps growing past its cap\n", rotateErr)
+	}
+	logFile, logErr := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if logErr != nil {
 		fmt.Fprintf(os.Stderr, "lit: on-change mirror log unavailable (%v); worker output will be discarded\n", logErr)
 	} else {
@@ -142,7 +175,7 @@ func mirrorEnv() []string {
 // Losing therefore never strands a claim, and the loser still exits without
 // opening a store, writing a trace, or creating a file — the quiescence
 // property test cleanups rely on.
-func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, args []string) error {
+func runBackgroundMirror(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 	fs := newCobraFlagSet("sync " + backgroundMirrorSubcommand)
 	parentPID := fs.Int("parent-pid", 0, "PID of the spawning command; the mirror waits for it to exit")
 	if err := parseFlagSet(fs, args, io.Discard); err != nil {
@@ -218,7 +251,7 @@ func runBackgroundMirror(ctx context.Context, _ io.Writer, ws workspace.Info, ar
 		// marker older than it existed before this cycle's entry-clear ran,
 		// so its survival means the clear is failing, not that a claim landed.
 		cycleStart := time.Now()
-		attempted := mirrorCycle(ctx, ws, stopAnswering)
+		attempted := mirrorCycle(ctx, stdout, ws, stopAnswering)
 		// Released only after the cycle's engine has closed (mirrorCycle's
 		// deferred Close), so the lock brackets the whole session. The kernel
 		// drops the flock on process exit, so an unlock error cannot strand
@@ -280,15 +313,78 @@ func teardownMirror(ws workspace.Info, cause error, stopAnswering func()) error 
 // attempt was reached; false means the failure was already completed through
 // the push-outcome seam and the caller must stop rather than loop on a broken
 // precondition.
-func mirrorCycle(ctx context.Context, ws workspace.Info, stopAnswering func()) (attempted bool) {
-	session, closeStore, err := openSyncSession(ctx, ws)
-	if err != nil {
-		_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err), stopAnswering)
-		return false
+//
+// The whole session runs under store.MirrorHoldBudget. The push crosses the
+// network while this process holds the store's one read-write engine (and its
+// journal lock), and nothing on the transport side bounds how long a hung
+// remote can stall it — so the bound is imposed here, by the holder
+// (links-sync-pgct.11.1). The deadline must wrap the ctx the session is OPENED
+// with, not just the push's: the embedded driver builds the connection's
+// execution context at Connect, and only a deadline present there reaches the
+// engine's git subprocesses; a per-query deadline is inert.
+// [LAW:no-ambient-temporal-coupling] the hold's owner declares its bound. A
+// mutation cut short loses nothing durable — the push-outcome record is loud
+// and the next mutation's mirror retries.
+//
+// log receives one line at cycle start and one at cycle end (the detached
+// worker's stdout is mirror.log), so a later store-open contention can be
+// correlated against whether a mirror was mid-cycle — the attribution gap that
+// made links-sync-pgct.11.1 unprovable in the field. Only a cycle that holds
+// the single-flight lock writes: a mirror that loses the race stays silent, as
+// the quiescence property requires.
+func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnswering func()) (attempted bool) {
+	start := time.Now()
+	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget)
+	cycleCtx, cancel := context.WithTimeout(ctx, store.MirrorHoldBudget)
+	defer cancel()
+	var onceErr error
+	attempted = func() bool {
+		session, closeStore, err := openSyncSession(cycleCtx, ws)
+		if err != nil {
+			_ = completeMirrorWithoutAttempt(ctx, ws, fmt.Errorf("open sync store: %w", err), stopAnswering)
+			return false
+		}
+		defer closeStore()
+		// Completion effects (the outcome marker, the owner-notify hook) run
+		// under the parent ctx: a cut cycle needs them most at exactly the
+		// moment its own budget has expired.
+		onceErr = mirrorOnce(cycleCtx, ctx, session, ws)
+		return true
+	}()
+	// A cycle that dies of ITS OWN deadline (not the process's teardown) names
+	// the budget in the durable trail — without that record the next
+	// hung-remote episode is as unattributable as the first.
+	// [LAW:no-silent-failure] Gated on a session having existed: a budget that
+	// expires during the OPEN held no engine and reached no transport, and that
+	// branch's accurate record was already written through
+	// completeMirrorWithoutAttempt. One trace owner per event: an attempt that
+	// RAN recorded itself inside performSyncPush (onceErr nil, the budget
+	// explanation folded in there), so the out-of-band record here exists only
+	// for a could-not-attempt failure, which nothing else recorded — the budget
+	// cause joins it instead of writing its own. [LAW:single-enforcer]
+	budgetCut := attempted && cycleCtx.Err() != nil && ctx.Err() == nil
+	if onceErr != nil {
+		var cause error
+		if budgetCut {
+			cause = holdBudgetCutExplanation()
+		}
+		recordMirrorTraceError(ws, errors.Join(cause, onceErr))
 	}
-	defer closeStore()
-	mirrorOnce(ctx, session, ws)
-	return true
+	fmt.Fprintf(log, "%s mirror cycle end attempted=%t hold_budget_cut=%t elapsed=%s\n",
+		time.Now().UTC().Format(time.RFC3339), attempted, budgetCut, time.Since(start).Round(time.Millisecond))
+	return attempted
+}
+
+// holdBudgetCutExplanation is the one wording of "the holder cut itself
+// loose": the fact that explains a raw transport error killed by the hold
+// budget. Both record owners — performSyncPush folding it into an attempt's
+// own record, mirrorCycle joining it to a could-not-attempt failure — say it
+// through this function, so the durable trail names the budget identically
+// wherever the cut landed. [LAW:one-source-of-truth]
+func holdBudgetCutExplanation() error {
+	return fmt.Errorf(
+		"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",
+		store.MirrorHoldBudget)
 }
 
 // mirrorOnce runs the one shared push path, without compaction. It is a single
@@ -303,16 +399,17 @@ func mirrorCycle(ctx context.Context, ws workspace.Info, stopAnswering func()) (
 // commit that lands after this session is a fresh mirror-pending claim, and
 // the caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx context.Context, session syncSession, ws workspace.Info) {
+func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws workspace.Info) error {
 	// The mirror pushes without compaction — plain SyncPush, never the
 	// compact-and-push variant the explicit command uses.
-	outcome, err := performSyncPush(ctx, session, ws, "", false, false, session.syncer.SyncPush)
+	outcome, err := performSyncPush(ctx, completionCtx, session, ws, "", false, false, session.syncer.SyncPush)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
-		// own deferred completion already recorded the outcome; this adds only
-		// the mirror's out-of-band automation trace.
-		recordMirrorTraceError(ws, err)
-		return
+		// own deferred completion already recorded the outcome. The cycle's
+		// single out-of-band automation trace is the caller's to write — it
+		// alone knows whether the hold budget is what cut this attempt short.
+		// [LAW:single-enforcer]
+		return err
 	}
 	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
 	// that trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
@@ -329,6 +426,7 @@ func mirrorOnce(ctx context.Context, session syncSession, ws workspace.Info) {
 	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
 		fmt.Fprintln(os.Stderr, failure.blockString())
 	}
+	return nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning

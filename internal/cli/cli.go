@@ -45,6 +45,13 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) {
 		return nil
 	}
+	// A command starved by a co-resident store holder leaves a durable record
+	// alongside the sync traces the holder itself writes, so the two events can
+	// be correlated afterwards (links-sync-pgct.11.1's attribution gap).
+	// Recorded here because this is the one seam that knows the verbatim
+	// invocation; the mirror never reaches it — its busy errors complete
+	// through the push-outcome seam and it exits 0. [LAW:single-enforcer]
+	recordEngineOpenContentionTrace(normalizedArgs, err)
 	return err
 }
 
@@ -107,6 +114,14 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 	if err != nil {
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
+		}
+		// The open boundary stamps holder contention so Run's trace can tell a
+		// starved OPEN from a handler-traced mid-command contention. cwd is
+		// definitionally the store this boundary opens; a cwd that cannot
+		// resolve cannot be busy (app.Open resolved it to get here), so the
+		// unstamped fall-through carries no contention.
+		if ws, wsErr := workspace.Resolve(cwd); wsErr == nil {
+			return markEngineOpenContention(err, ws)
 		}
 		return err
 	}
@@ -339,8 +354,12 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 		st, err := app.OpenLocationForRead(ctx, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
-			// store dir is an actionable error, not an empty list.
-			return fmt.Errorf("open store at %q read-only: %w", atDir, err)
+			// store dir is an actionable error, not an empty list. The open
+			// boundary stamps holder contention (inside the wrap — errors.As
+			// reaches through it) bound to the --at TARGET, so the trace files
+			// beside the traces of whatever holds that store — from any cwd,
+			// including no workspace at all.
+			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
 		return runListWithStore(ctx, stdout, st, args)

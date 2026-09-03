@@ -2,11 +2,13 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -111,6 +113,94 @@ func recordSyncCommandTrace(ws workspace.Info, command, decision string, err err
 		Reason:    reason,
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
+	})
+}
+
+// engineOpenContentionError marks a failure as a store acquisition starved by
+// a co-resident holder. The store's ErrWorkspaceBusy sentinel alone cannot
+// carry that fact — the mutation family's mid-command commit-lock contention
+// wraps the same sentinel and is traced by its own handlers — so the
+// acquisition boundaries stamp their failures with this type and the dispatch
+// boundary reads the stamp. The stamp also carries WHERE the contention
+// happened: only the boundary knows which store it failed against, and an
+// ambient cwd re-derivation downstream files `ls --at <foreign>` contention
+// under the wrong workspace or nowhere. [LAW:parse-dont-validate] the check's
+// proof — and its filing location — travel in the type, so neither can be
+// re-derived (wrongly) downstream.
+type engineOpenContentionError struct {
+	err error
+	ws  workspace.Info
+}
+
+func (e engineOpenContentionError) Error() string { return e.err.Error() }
+func (e engineOpenContentionError) Unwrap() error { return e.err }
+
+// markEngineOpenContention stamps an acquisition-boundary failure when it is
+// the holder-contention class, binding it to the workspace whose store was
+// contended; every other error passes through untouched.
+func markEngineOpenContention(err error, ws workspace.Info) error {
+	if err == nil || !errors.Is(err, store.ErrWorkspaceBusy) {
+		return err
+	}
+	return engineOpenContentionError{err: err, ws: ws}
+}
+
+// commandPath keeps the tokens that name a command — up to the first
+// flag-shaped token, capped at two, every family being at most two words
+// deep — and drops everything else: flag values and positionals are the
+// invocation's payload, not its name.
+func commandPath(args []string) []string {
+	path := args
+	for i, arg := range path {
+		if i == 2 || strings.HasPrefix(arg, "-") {
+			path = path[:i]
+			break
+		}
+	}
+	return path
+}
+
+// infoForLocation builds the trace-filing identity of a store addressed by
+// location alone — no checkout, no cwd: its path geometry plus the
+// workspace id its config records. A location whose config cannot be read
+// still files under the right storage dir, with the id left empty — the
+// filing location is the fact that matters.
+func infoForLocation(loc workspace.Location) workspace.Info {
+	info := workspace.Info{Location: loc}
+	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil {
+		info.WorkspaceID = cfg.WorkspaceID
+	}
+	return info
+}
+
+// recordEngineOpenContentionTrace leaves a durable sync-trace record when a
+// command's store acquisition failed against a co-resident holder — the
+// record that did not exist when links-sync-pgct.11.1 was hit in the field,
+// leaving the starved command uncorrelatable against the sync traces the
+// mirror DOES write. It fires only on the acquisition-boundary stamp above,
+// never on the bare busy sentinel — the mutation family's mid-command
+// commit-lock contention already leaves its handler's own trace, and a second
+// record here would give one event two stories. [LAW:single-enforcer] whether
+// an error earns this record is decided here, once, at the dispatch boundary
+// — the one seam where the verbatim invocation is known (never ambient
+// os.Args, which lies for the in-process Run callers the test suite uses).
+// The trace files under the workspace the stamp carries — the contended
+// store's own, which is where the holder's traces live. It records the
+// command PATH, never the full argv: attribution needs which command was
+// starved, and the verbatim invocation carries free-text payloads (titles,
+// bodies, pasted secrets) that never reached the store and must not be
+// durably persisted here as a side effect of the store being busy.
+func recordEngineOpenContentionTrace(args []string, err error) {
+	var open engineOpenContentionError
+	if !errors.As(err, &open) {
+		return
+	}
+	recordSyncTraceLogged(open.ws, syncTraceRecord{
+		Command:   formatCommand(commandPath(args)),
+		Decision:  commandErrorReason(err),
+		Status:    "error",
+		Reason:    err.Error(),
+		BuildNote: resolveBuildStatusNote(time.Now()),
 	})
 }
 

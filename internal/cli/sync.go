@@ -76,7 +76,9 @@ func withSyncStore(run syncRunFn) wsRunFn {
 	return func(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 		session, closeStore, err := openSyncSession(ctx, ws)
 		if err != nil {
-			return err
+			// The open boundary stamps holder contention so Run's trace can
+			// tell a starved OPEN from a handler-traced mid-command contention.
+			return markEngineOpenContention(err, ws)
 		}
 		defer closeStore()
 		return run(ctx, stdout, ws, session, args)
@@ -343,7 +345,7 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 	// backs) compacts atomically with the push; the on-change mirror pushes
 	// without compaction. The choice is the push step passed as a value, so
 	// performSyncPush has no compaction branch and a skipped push never compacts.
-	outcome, err := performSyncPush(ctx, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
+	outcome, err := performSyncPush(ctx, ctx, session, ws, strings.TrimSpace(*remote), *setUpstream, *force, session.syncer.SyncCompactAndPush)
 	if err != nil {
 		// A could-not-attempt failure (performSyncPush returned before reaching
 		// its own trace-recording push attempt) — traced here, matching the
@@ -437,7 +439,14 @@ func syncPushTraceMetadata(remoteName, syncBranch string, result storage.SyncPus
 // is that engine). The mirror-pending clear below is only sound inside an
 // engine session — that is what puts every commit whose command could have
 // observed the marker strictly before this session's HEAD read.
-func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
+// performSyncPush runs under two lifetimes, and the signature names both: ctx
+// bounds the push work (the mirror caps it with its hold budget), while
+// completionCtx bounds the completion effects — the outcome marker and the
+// owner-notify hook — which must not inherit an operation budget that has, by
+// definition, already expired whenever a cut push needs them most.
+// [LAW:no-ambient-temporal-coupling] A foreground caller passes the same
+// context twice: its one lifetime is both.
+func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws workspace.Info, remote string, setUpstream, force bool, push syncPushStep) (outcome syncPushOutcome, retErr error) {
 	// This attempt now answers for every mutation committed before this engine
 	// session opened: clear the mirror-pending marker so their commands (and
 	// later ones observing it) stop counting on a further mirror
@@ -460,10 +469,10 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	// [LAW:no-silent-failure]
 	defer func() {
 		if r := recover(); r != nil {
-			completePushAttempt(ctx, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
+			completePushAttempt(completionCtx, ws, outcome, fmt.Errorf("sync push panicked: %v", r))
 			panic(r)
 		}
-		completePushAttempt(ctx, ws, outcome, retErr)
+		completePushAttempt(completionCtx, ws, outcome, retErr)
 	}()
 	target, err := resolveSyncTarget(ctx, session, ws, remote)
 	if err != nil {
@@ -479,6 +488,14 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	remoteName, syncBranch := target.remote, target.branch
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
+	// A push killed by the operation lifetime while the completion lifetime
+	// lives is a hold-budget cut, and this attempt's record is the event's one
+	// trace owner — so the explanation folds in here, never as a second record
+	// upstream. Foreground callers pass one lifetime twice, so the predicate
+	// can never hold for them. [LAW:single-enforcer]
+	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
+		pushErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation(), pushErr)
+	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"
