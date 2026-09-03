@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -138,18 +139,31 @@ func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
 		t.Fatalf("ls --at error %v must wrap store.ErrWorkspaceBusy", err)
 	}
 
+	// The record names the command, never its payload: its command field is
+	// exactly `lit ls`, the --at path redacted — the filing location already
+	// carries the target.
 	traced := false
 	if entries, readErr := os.ReadDir(syncTraceDir(infoForLocation(loc))); readErr == nil {
 		for _, entry := range entries {
 			content, fileErr := os.ReadFile(filepath.Join(syncTraceDir(infoForLocation(loc)), entry.Name()))
-			if fileErr == nil && strings.Contains(string(content), "lit ls --at") {
-				traced = true
-				break
+			if fileErr != nil {
+				continue
 			}
+			var rec struct {
+				Command string `json:"command"`
+			}
+			if json.Unmarshal(content, &rec) != nil || !strings.HasPrefix(rec.Command, "lit ls") {
+				continue
+			}
+			if rec.Command != "lit ls" {
+				t.Fatalf("contention trace command = %q; the record carries only the command path `lit ls`, never the invocation's payload", rec.Command)
+			}
+			traced = true
+			break
 		}
 	}
 	if !traced {
-		t.Fatalf("no sync trace under the --at target records the starved `lit ls --at`; the contention is unattributable")
+		t.Fatalf("no sync trace under the --at target records the starved `lit ls`; the contention is unattributable")
 	}
 }
 
