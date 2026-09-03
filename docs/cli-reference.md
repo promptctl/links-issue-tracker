@@ -694,6 +694,25 @@ lit prefix set <new-prefix> [--apply]
 Renames the cosmetic issue-ID prefix. Preview-first: without `--apply` it prints what
 would change.
 
+### `lit upgrade`
+
+```text
+lit upgrade [--to <vX.Y.Z>]
+```
+
+Atomically installs a `lit` binary, checksum-verified against the release manifest.
+Bare `lit upgrade` resolves its own target — the latest published release — so every
+upgrade suggestion lit prints runs exactly as printed; `--to` pins any specific
+schema-compatible v-prefixed git tag instead, not necessarily a newer one (at the
+running version it doubles as a reinstall of a damaged binary). A bare invocation
+already at or ahead of the latest release is a no-op that names the version it kept —
+the feed names the most recently created release, so a backport tag can be "latest"
+while the installed binary is newer, and the default path never moves backward. A
+target whose schema support ends below the workspace's applied version is refused
+before anything is installed, with both schema ranges named. Upgrade never touches
+the workspace schema: the installed binary migrates the workspace forward on its
+next run if it trails.
+
 ### `lit downgrade`
 
 ```text
@@ -701,7 +720,9 @@ lit downgrade --to <vX.Y.Z>
 ```
 
 Reverses schema migrations and atomically installs the prior `lit` binary for the given
-v-prefixed git tag — the rollback path for a bad upgrade.
+v-prefixed git tag — the rollback path for a bad upgrade. Unlike `lit upgrade`, the
+target is always explicit: a backward move stays deliberate, so there is no "latest"
+to resolve.
 
 ### `lit version`
 

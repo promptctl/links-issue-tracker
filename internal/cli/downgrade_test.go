@@ -19,6 +19,11 @@ type stubResolver struct {
 	err    error
 	called bool
 	gotTag string
+	// latest-lookup side, exercised only by upgrade's bare invocation;
+	// downgrade never calls LatestTag (its dependency is Resolver alone).
+	latestTag    string
+	latestErr    error
+	latestCalled bool
 }
 
 func (s *stubResolver) Resolve(_ context.Context, tag, _ string) (*release.Target, error) {
@@ -28,6 +33,14 @@ func (s *stubResolver) Resolve(_ context.Context, tag, _ string) (*release.Targe
 		return nil, s.err
 	}
 	return s.target, nil
+}
+
+func (s *stubResolver) LatestTag(_ context.Context) (string, error) {
+	s.latestCalled = true
+	if s.latestErr != nil {
+		return "", s.latestErr
+	}
+	return s.latestTag, nil
 }
 
 type stubInstaller struct {
