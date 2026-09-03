@@ -145,6 +145,21 @@ func markEngineOpenContention(err error, ws workspace.Info) error {
 	return engineOpenContentionError{err: err, ws: ws}
 }
 
+// commandPath keeps the tokens that name a command — up to the first
+// flag-shaped token, capped at two, every family being at most two words
+// deep — and drops everything else: flag values and positionals are the
+// invocation's payload, not its name.
+func commandPath(args []string) []string {
+	path := args
+	for i, arg := range path {
+		if i == 2 || strings.HasPrefix(arg, "-") {
+			path = path[:i]
+			break
+		}
+	}
+	return path
+}
+
 // infoForLocation builds the trace-filing identity of a store addressed by
 // location alone — no checkout, no cwd: its path geometry plus the
 // workspace id its config records. A location whose config cannot be read
@@ -170,14 +185,18 @@ func infoForLocation(loc workspace.Location) workspace.Info {
 // — the one seam where the verbatim invocation is known (never ambient
 // os.Args, which lies for the in-process Run callers the test suite uses).
 // The trace files under the workspace the stamp carries — the contended
-// store's own, which is where the holder's traces live.
+// store's own, which is where the holder's traces live. It records the
+// command PATH, never the full argv: attribution needs which command was
+// starved, and the verbatim invocation carries free-text payloads (titles,
+// bodies, pasted secrets) that never reached the store and must not be
+// durably persisted here as a side effect of the store being busy.
 func recordEngineOpenContentionTrace(args []string, err error) {
 	var open engineOpenContentionError
 	if !errors.As(err, &open) {
 		return
 	}
 	recordSyncTraceLogged(open.ws, syncTraceRecord{
-		Command:   formatCommand(args),
+		Command:   formatCommand(commandPath(args)),
 		Decision:  commandErrorReason(err),
 		Status:    "error",
 		Reason:    err.Error(),
