@@ -59,13 +59,16 @@ func undispatchedLitTokens(templateName string, content []byte, live map[string]
 	return bad
 }
 
-// liveCommandNames projects the registry's dispatchable-and-not-retired
-// command set. Reading Retired from the spec — never help output, hidden
-// flags, or runtime exit codes — is what keeps a hidden-but-live command
-// (`lit workflows`) in and a retired-but-dispatchable one (`lit ready`) out.
-func liveCommandNames() map[string]bool {
+// liveCommandNames projects a spec list's dispatchable-and-not-retired
+// command set. The predicate reads Retired — never Hidden, help output, or
+// runtime exit codes — so a hidden-but-live spec stays teachable while a
+// retired-but-dispatchable one (`lit ready`) is out. A pure function over the
+// specs, so the Retired-vs-Hidden distinction is testable with synthetic rows:
+// today every Hidden row in the real registry is also Retired, and only a
+// synthetic row can catch a filter that conflates the two fields.
+func liveCommandNames(specs []CommandSpec) map[string]bool {
 	live := make(map[string]bool)
-	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+	for _, spec := range specs {
 		if !spec.Retired {
 			live[spec.Name] = true
 		}
@@ -73,12 +76,35 @@ func liveCommandNames() map[string]bool {
 	return live
 }
 
+// registryCommandNames is liveCommandNames over the real registry.
+func registryCommandNames() map[string]bool {
+	return liveCommandNames(commandSpecs(context.Background(), io.Discard, io.Discard))
+}
+
+// TestLiveCommandSetReadsRetiredNotHidden pins the field the projection reads.
+// The real registry cannot pin it — its Hidden and Retired rows currently
+// coincide — so a synthetic hidden-but-live row does: a future filter on
+// Hidden instead of Retired drops that row and fails here.
+func TestLiveCommandSetReadsRetiredNotHidden(t *testing.T) {
+	live := liveCommandNames([]CommandSpec{
+		{Name: "visible-live"},
+		{Name: "hidden-live", Hidden: true},
+		{Name: "retired", Hidden: true, Retired: true},
+	})
+	if !live["visible-live"] || !live["hidden-live"] {
+		t.Errorf("live set %v must keep visible-live and hidden-live: Hidden is not Retired", live)
+	}
+	if live["retired"] {
+		t.Errorf("live set %v must drop the retired row", live)
+	}
+}
+
 // TestShippedTemplatesNameOnlyDispatchedCommands is the gate: it walks every
 // managed template's embedded default and refuses any taught `lit <command>`
 // whose command is retired or unknown. Reintroducing `lit ready` into any
 // template turns this red.
 func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
-	live := liveCommandNames()
+	live := registryCommandNames()
 	for _, name := range templates.Names() {
 		content, err := templates.EmbeddedDefault(name)
 		if err != nil {
@@ -93,10 +119,10 @@ func TestShippedTemplatesNameOnlyDispatchedCommands(t *testing.T) {
 // TestGateRefusesRetiredAndUnknownTokens proves the gate can fail, on the same
 // code path the gate runs, before anyone needs to mutate a shipped template:
 // the retired `lit ready` — the incident string, which still dispatches — and
-// an unknown command are both refused, while live and hidden-but-live commands
-// and prose mentions of lit pass.
+// an unknown command are both refused, while live commands and prose mentions
+// of lit pass.
 func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
-	live := liveCommandNames()
+	live := registryCommandNames()
 	cases := []struct {
 		name     string
 		template string
@@ -108,7 +134,7 @@ func TestGateRefusesRetiredAndUnknownTokens(t *testing.T) {
 		{"retired command in shell text", "t.sh", "lit ready >/dev/null", []string{"ready"}},
 		{"live command", "t.md", "Run `lit next` and start the ticket.", nil},
 		{"live command with subcommand and flags", "t.md", "`lit quickstart work` then `lit sync push --remote origin`", nil},
-		{"hidden-but-live is not retired", "t.md", "`lit workflows` — see the lifecycle", nil},
+		{"guidance command taught by the quickstart", "t.md", "`lit workflows` — see the lifecycle", nil},
 		{"prose mention outside code span", "t.md", "use when lit errors or lit tracks something", nil},
 		{"placeholder and bare lit", "t.md", "`lit <id>` or just `lit`", nil},
 	}
