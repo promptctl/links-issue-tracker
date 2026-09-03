@@ -113,6 +113,7 @@ var doltWorkspaceMachinery = map[string][]string{
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
 	"typed engine failures": {
 		"ErrWorkspaceBusy", "ErrTransientGCContention", "WorkspaceWriteBlockedError",
+		"RemoteUnreachableError",
 		"UnsupportedSchemaVersionError", "RemoteSchemaAheadError",
 		"OwnerApprovalRequiredError",
 	},

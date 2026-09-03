@@ -39,6 +39,10 @@ func commandErrorReason(err error) string {
 	if errors.As(err, &syncFailure) {
 		return "sync_divergence"
 	}
+	var remoteUnreachable store.RemoteUnreachableError
+	if errors.As(err, &remoteUnreachable) {
+		return "remote_unreachable"
+	}
 	var ownerApproval ownerApprovalRefusalError
 	if errors.As(err, &ownerApproval) {
 		return "owner_approval_required"
@@ -58,6 +62,20 @@ func commandErrorReason(err error) string {
 	var usage UsageError
 	if errors.As(err, &usage) {
 		return "usage_error"
+	}
+	// Both validation types are one reason: a domain-constraint refusal
+	// (exit 3), deterministic for the command as issued. It must never fall to
+	// the default "Retry the command" — a refusal's message already names the
+	// rule (and often the alternative), and an agent that trusts remediation
+	// text over the error body will loop on a retry that can never succeed
+	// (links-sync-r779, defect 3). [LAW:one-type-per-behavior]
+	var validation ValidationError
+	if errors.As(err, &validation) {
+		return "validation_refused"
+	}
+	var storeValidation storage.ValidationError
+	if errors.As(err, &storeValidation) {
+		return "validation_refused"
 	}
 	var unsupported UnsupportedError
 	if errors.As(err, &unsupported) {
@@ -82,6 +100,9 @@ func commandErrorReason(err error) string {
 	var writeBlocked store.WorkspaceWriteBlockedError
 	if errors.As(err, &writeBlocked) {
 		return "workspace_write_blocked"
+	}
+	if errors.Is(err, store.ErrWorkspaceBusy) {
+		return "workspace_busy"
 	}
 	if errors.Is(err, store.ErrTransientGCContention) {
 		return "transient_gc_contention"
@@ -110,6 +131,18 @@ func commandErrorRemediation(reason string) string {
 		// The SyncFailureError message IS the full remediation (directive + steps +
 		// escalation), so a second remediation line here would be a drifting copy of
 		// it. Emit none. [LAW:one-source-of-truth]
+		return ""
+	case "remote_unreachable":
+		// Accurate for what actually happened: the network path failed and lit
+		// already spent its retry budget. Neither credentials nor `lit doctor`
+		// are involved — the workspace is healthy. [LAW:no-silent-failure] the
+		// guidance points at the real fault domain, not a generic retry.
+		return "The remote host was unreachable over the network; credentials are not the problem, and lit already retried with backoff. Check connectivity to the remote host (for SSH remotes: `ssh -o BatchMode=yes git@<host>`), then retry once the network path is restored."
+	case "validation_refused":
+		return "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
+	case "workspace_busy":
+		// Each contention wrapper carries its own retry guidance, so a remediation
+		// line would be a drifting copy of it. Emit none. [LAW:one-source-of-truth]
 		return ""
 	case "owner_approval_required":
 		// Same shape: the refusal block IS the remediation. [LAW:one-source-of-truth]

@@ -190,7 +190,13 @@ func (s *Store) SyncFetch(ctx context.Context, remote string, prune bool) error 
 		args = append([]string{"--prune"}, args...)
 	}
 	return s.runSyncMutation(ctx, func(ctx context.Context) error {
-		_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", args...)
+		// [LAW:single-enforcer] Remote transport retry wraps the one network-touching
+		// call, inside the mutation's own GC-contention retry: the two loops recover
+		// unrelated failures under separate budgets (see remote_io.go).
+		err := runRemoteIO(ctx, func(ctx context.Context) error {
+			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", args...)
+			return err
+		})
 		if err != nil {
 			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
 		}
@@ -403,8 +409,12 @@ func (s *Store) SyncReceive(ctx context.Context, remote string, branch string) (
 
 	var result storage.SyncReceiveResult
 	err = s.runSyncMutation(ctx, func(ctx context.Context) error {
-		if _, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", trimmedRemote); err != nil {
-			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, err)
+		fetchErr := runRemoteIO(ctx, func(ctx context.Context) error {
+			_, err := callIntProcedure(ctx, s.db, "DOLT_FETCH", trimmedRemote)
+			return err
+		})
+		if fetchErr != nil {
+			return fmt.Errorf("fetch remote %q: %w", trimmedRemote, fetchErr)
 		}
 		fresh, err := s.SyncFreshness(ctx, trimmedRemote, trimmedBranch)
 		if err != nil {
@@ -697,8 +707,15 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 	query := buildProcedureCall("DOLT_PUSH", len(args))
 	var result storage.SyncPushResult
 	var message sql.NullString
-	if err := s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message); err != nil {
-		return storage.SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, err)
+	// One dropped SSH connection must not fail the whole push: the transport
+	// retry absorbs it, and only a failure that survives the budget reaches the
+	// caller — as RemoteUnreachableError naming the transport symptom, never as
+	// the backend's misrendered authentication failure (links-sync-r779).
+	pushErr := runRemoteIO(ctx, func(ctx context.Context) error {
+		return s.db.QueryRowContext(ctx, query, stringArgsToAny(args)...).Scan(&result.Status, &message)
+	})
+	if pushErr != nil {
+		return storage.SyncPushResult{}, fmt.Errorf("push remote %q: %w", trimmedRemote, pushErr)
 	}
 	result.Message = nullStringValue(message)
 	return result, nil
