@@ -277,11 +277,16 @@ func runUpgradeWith(
 	// default path's doing. A pinned --to falls through and installs — the
 	// explicit tag is a command, and the reinstall path for a damaged binary.
 	// A dev build always proceeds: IsDev is the typed fact, so the guarantee
-	// does not rest on version-string comparisons. This check runs AFTER the
-	// backward-move refusal: a workspace ahead of even the latest release
-	// must be refused loudly (naming both schema ranges), never soothed with
-	// "already current".
-	if !pinned && !current.IsDev && semver.Compare("v"+current.Version, tag) >= 0 {
+	// does not rest on version-string comparisons. The tag must be orderable
+	// (strict semver) for the no-op to fire at all: acceptTag deliberately
+	// admits looser v-tags, and semver.Compare sorts any invalid operand
+	// below every valid one, so without IsValid an unorderable feed tag would
+	// read as "behind" and a real release would be kept-past silently —
+	// unorderable installs as asked, failing toward action. This check runs
+	// AFTER the backward-move refusal: a workspace ahead of even the latest
+	// release must be refused loudly (naming both schema ranges), never
+	// soothed with "already current".
+	if !pinned && !current.IsDev && semver.IsValid(tag) && semver.Compare("v"+current.Version, tag) >= 0 {
 		_, err = fmt.Fprintf(stdout,
 			"already current: keeping v%s (latest published release is %s); nothing to install.\n",
 			current.Version, tag,

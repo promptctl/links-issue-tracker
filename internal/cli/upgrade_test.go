@@ -326,6 +326,28 @@ func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
 	}
 }
 
+// A feed tag that passes acceptTag but is not strict semver cannot be ordered
+// against the running version; semver.Compare would sort it below any valid
+// version and the no-op would silently keep the binary past a real release.
+// Unorderable installs as asked — the guard fails toward action.
+func TestRunUpgradeBareUnorderableLatestStillInstalls(t *testing.T) {
+	t.Parallel()
+	res := &stubResolver{latestTag: "vnightly", target: newFakeTarget()}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
+	var out bytes.Buffer
+	if err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+		t.Fatalf("unorderable latest tag must install, got %v", err)
+	}
+	if !inst.called {
+		t.Error("installer must run for an unorderable feed tag; the no-op requires an orderable one")
+	}
+	if strings.Contains(out.String(), "already current") {
+		t.Errorf("unorderable tag wrongly treated as already current: %q", out.String())
+	}
+}
+
 // A pinned --to naming the running version still installs: the explicit tag is
 // a command, and the reinstall path for a damaged binary. Only the unpinned
 // default treats already-current as satisfied.
