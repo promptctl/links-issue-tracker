@@ -45,6 +45,15 @@ func Run(ctx context.Context, stdout io.Writer, stderr io.Writer, args []string)
 	if errors.Is(err, pflag.ErrHelp) || errors.Is(err, errHelpHandled) {
 		return nil
 	}
+	// A family help request surfaces here as a typed value because resolve has
+	// no writer; this seam owns stdout, so it performs the print the type
+	// describes and completes the request as the success it is — no error
+	// framing, no remediation, exit 0. [LAW:effects-at-boundaries]
+	var helpRequested HelpRequestedError
+	if errors.As(err, &helpRequested) {
+		_, printErr := fmt.Fprintln(stdout, helpRequested.Usage)
+		return printErr
+	}
 	// A command starved by a co-resident store holder leaves a durable record
 	// alongside the sync traces the holder itself writes, so the two events can
 	// be correlated afterwards (links-sync-pgct.11.1's attribution gap).

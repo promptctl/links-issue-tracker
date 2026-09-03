@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
@@ -119,20 +118,31 @@ type commandFamily[P any] struct {
 // Lookup is validation: a missing, unknown, or flag-shaped first argument
 // fails with the family usage before any app opens, so resolution cannot
 // depend on a validator having run earlier. [LAW:no-ambient-temporal-coupling]
+// The one flag-shaped exception is a help request, which is an answer, not a
+// failure: the family's usage IS its help, and recognizing -h/--help here — at
+// the one resolve every family, nested families included, routes through —
+// means no group can answer help with an error. [LAW:single-enforcer]
 // The match is exact — argv tokens arrive verbatim from the shell, and a
 // table that trimmed names would claim inputs as legal that no dispatch
 // ever honored. [FRAMING:representation]
 func (f commandFamily[P]) resolve(args []string) (P, error) {
 	var zero P
 	if len(args) == 0 {
-		return zero, errors.New(f.usage)
+		return zero, UsageError{Message: f.usage}
+	}
+	if args[0] == "-h" || args[0] == "--help" {
+		return zero, HelpRequestedError{Usage: f.usage}
 	}
 	for _, s := range f.subcommands {
 		if s.name == args[0] {
 			return s.payload, nil
 		}
 	}
-	return zero, errors.New(f.usage)
+	// [LAW:types-are-the-program] a typed usage refusal, not errors.New: the
+	// untyped form fell through every errors.As sink to the generic
+	// "command_failed" reason, whose retry-then-doctor remediation can never
+	// succeed for a bad path (links-cli-zc3r).
+	return zero, UsageError{Message: f.usage}
 }
 
 // visibleSubcommands projects the family's advertised first-argument names for

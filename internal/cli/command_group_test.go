@@ -1,8 +1,10 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"io"
+	"os"
 	"strings"
 	"testing"
 )
@@ -42,6 +44,76 @@ func renderedGrouping(t *testing.T) (groupOf map[string]string, headerLine map[s
 		}
 	}
 	return groupOf, headerLine
+}
+
+// commandGroupPaths derives every advertised command-group path — a command
+// whose surface is a set of subcommands, nested groups like `sync remote` and
+// `bulk label` included — from the registry the completion projection also
+// reads, so the help contract below covers exactly the groups lit advertises
+// and can never lag behind a newly registered one. [LAW:one-source-of-truth]
+func commandGroupPaths() [][]string {
+	var paths [][]string
+	var walk func(prefix []string, subs []SubcommandSpec)
+	walk = func(prefix []string, subs []SubcommandSpec) {
+		for _, sub := range subs {
+			if len(sub.Subcommands) == 0 {
+				continue
+			}
+			path := append(append([]string{}, prefix...), sub.Name)
+			paths = append(paths, path)
+			walk(path, sub.Subcommands)
+		}
+	}
+	for _, spec := range commandSpecs(context.Background(), io.Discard, io.Discard) {
+		if spec.Hidden || len(spec.Subcommands) == 0 {
+			continue
+		}
+		paths = append(paths, []string{spec.Name})
+		walk([]string{spec.Name}, spec.Subcommands)
+	}
+	return paths
+}
+
+// Asking a command group for help is answered as help: the group's usage on
+// stdout, nothing on stderr, and success — Run returning nil is what main maps
+// to exit 0 (links-cli-zc3r). The shape this pins out was an error-framed usage
+// line with a retry-then-doctor remediation and exit 1, an answer-shaped wrong
+// answer: the retry could never succeed, and doctor got run against a healthy
+// store. [LAW:behavior-not-structure] only the observable answer is asserted;
+// where the recognition lives is the implementation's business.
+func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(repo); err != nil {
+		t.Fatalf("Chdir(repo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	var initOut bytes.Buffer
+	if err := Run(context.Background(), &initOut, &initOut, []string{"init"}); err != nil {
+		t.Fatalf("Run(init) error = %v", err)
+	}
+
+	for _, path := range commandGroupPaths() {
+		for _, helpFlag := range []string{"-h", "--help"} {
+			args := append(append([]string{}, path...), helpFlag)
+			var stdout, stderr bytes.Buffer
+			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+				t.Fatalf("Run(%v) error = %v, want help answered as success", args, err)
+			}
+			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {
+				t.Fatalf("Run(%v) stdout = %q, want usage naming %q", args, got, path[len(path)-1])
+			}
+			if got := stderr.String(); got != "" {
+				t.Fatalf("Run(%v) stderr = %q, want empty — no error framing on a help answer", args, got)
+			}
+		}
+	}
 }
 
 // The state-transition surface splits across two help groups so the high-traffic

@@ -74,6 +74,19 @@ func (e RetiredCommandError) Error() string {
 	return fmt.Sprintf("the %q command has been retired; %s", e.Command, e.Replacement)
 }
 
+// HelpRequestedError signals that the caller asked a command family for help
+// (-h/--help as the first argument). It is an answer, not a failure: like
+// pflag.ErrHelp it travels the error channel only because that is the channel
+// resolve has, and Run — the seam that owns stdout — renders the carried usage
+// and maps it to success before any error sink sees it.
+// [LAW:effects-at-boundaries] resolve stays pure; the type carries the
+// description of the help action outward to the edge that performs it.
+type HelpRequestedError struct {
+	Usage string
+}
+
+func (e HelpRequestedError) Error() string { return e.Usage }
+
 // OutsideWorkspaceError signals that the command requires a git repository context.
 type OutsideWorkspaceError struct {
 	Message string

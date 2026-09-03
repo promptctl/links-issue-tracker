@@ -100,7 +100,18 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 
 func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New(bulkLabelFamily.usage)
+		return UsageError{Message: bulkLabelFamily.usage}
+	}
+	// Resolve once, up front; only the outcome's *use* is staged. A help request
+	// outranks everything — it is an answer, not a failure, and must not lose to
+	// a flag check (links-cli-zc3r) — while an unknown-action error is held back
+	// so the established precedence stands: missing --ids/--label surface before
+	// an unknown action does. [LAW:dataflow-not-control-flow] the one resolve
+	// always runs; its typed classification decides what flows where.
+	op, resolveErr := bulkLabelFamily.resolve(args)
+	var helpRequested HelpRequestedError
+	if errors.As(resolveErr, &helpRequested) {
+		return resolveErr
 	}
 	fs := newCobraFlagSet("bulk label")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
@@ -116,11 +127,8 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	if strings.TrimSpace(*label) == "" {
 		return ValidationError{Message: "--label is required"}
 	}
-	// Resolved after the flag checks to preserve the established error
-	// precedence: missing --ids/--label surface before an unknown action does.
-	op, err := bulkLabelFamily.resolve(args)
-	if err != nil {
-		return err
+	if resolveErr != nil {
+		return resolveErr
 	}
 	actor := resolveActor()
 	return runBulkOver(stdout, issueIDs, func(issueID string) error {
