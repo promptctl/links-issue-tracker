@@ -11,7 +11,7 @@ If the user provided specific information (e.g., a ticket id or area of the code
 
 ## Finding work
 
-Which command answers which question is the quickstart's job — run `lit quickstart work` for that reference.  This skill covers only the procedure: the sequence of checks before pulling fresh work (uncommitted changes, open PRs, orphans) and how to work a ticket once you hold one.  Now you need to decide whether you need to wrap up in-progress work or start new work.
+Which command answers which question is the quickstart's job — run `lit quickstart work` for that reference.  This skill covers only the procedure: the sequence of checks before pulling fresh work (uncommitted changes, open PRs, orphans), what `lit next`'s pick means, and how to work a ticket once you hold one.  Now you need to decide whether you need to wrap up in-progress work or start new work.
 
 ### In progress work
 
@@ -48,9 +48,15 @@ Run `lit orphaned`.  If there are any orphaned tickets, pull from those first �
 
 Otherwise, run `lit next` and start the ticket it hands you.
 
+#### What the pick means
+
+`lit next` is not showing you a menu.  Selection is epic-major: the epic in flight is finished before anything else starts.  Once this checkout has started work in an epic, `lit next` keeps handing you tickets from that same epic until it has nothing left to give — the ranked backlog is the rationale for that order, not a list you shop from.  Finishing a ticket does not open the field back up; run `lit next` again and it hands you the next thing in the same epic.  It is the order, and there is no knob.  (The exact routing precedence behind the pick is the quickstart's reference, not this skill's — `lit quickstart work` has it.)
+
+**When your epic has open work but none of it is workable**, `lit next` does not quietly hand you another epic's ticket.  It stops and says so: no ready work in your epic, naming the ticket ids blocking it — or, when nothing is queued behind work already in progress, saying that instead.  If it names a blocker you can work, `lit start` that blocker; it's on your epic's path.  Otherwise you will be tempted to think "nothing for me here — I'll just grab the next thing off the backlog."  Do not.  An agent that reads the blocked-epic message and goes shopping in the backlog has recreated, by hand, exactly the epic-hopping failure this order exists to prevent.  Report the blocker and stop.  Moving to a different epic is a deliberate re-focus the user directs — never a fallback you improvise around a diagnostic.
+
 ## Working the ticket
 
-However you arrived at a ticket — uncommitted work, an open PR, an orphan, or the ready queue — work it through these steps:
+However you arrived at a ticket — uncommitted work, an open PR, an orphan, or `lit next` — work it through these steps:
 
 1. **Read the ticket fully.** Title, description, acceptance criteria, comments, linked PRs, linked tickets. If the ticket references a spec, doc, or prior PR, read that too. You are about to author code that claims to satisfy this ticket — earn the right to claim it.
 
