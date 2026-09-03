@@ -10,12 +10,32 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
+
+// lockedBuffer is a bytes.Buffer whose every access holds one mutex, so the
+// test can read output while an abandoned in-process Run may still write it.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
 
 // TestMirrorHoldBudgetCutsHungPushAndReleasesEngine is the regression pin for
 // links-sync-pgct.11.1: the background mirror's push shells out to git while
@@ -73,18 +93,20 @@ func TestMirrorHoldBudgetCutsHungPushAndReleasesEngine(t *testing.T) {
 	t.Setenv("HOME", base)
 	t.Setenv("CODEX_HOME", filepath.Join(base, ".codex-home"))
 
-	runInProcess := func(timeout time.Duration, args ...string) (bytes.Buffer, error) {
-		var out bytes.Buffer
+	// The timeout branch reads the buffer while Run's goroutine may still be
+	// writing it, so every access goes through one lock.
+	runInProcess := func(timeout time.Duration, args ...string) (*lockedBuffer, error) {
+		out := &lockedBuffer{}
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		errCh := make(chan error, 1)
-		go func() { errCh <- Run(ctx, &out, &out, args) }()
+		go func() { errCh <- Run(ctx, out, out, args) }()
 		select {
 		case runErr := <-errCh:
 			return out, runErr
 		case <-ctx.Done():
 			t.Fatalf("Run(%v) still blocked after %s — the hold is unbounded:\noutput:\n%s", args, timeout, out.String())
-			return bytes.Buffer{}, nil
+			return out, nil
 		}
 	}
 

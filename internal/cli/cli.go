@@ -115,7 +115,9 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
-		return err
+		// The open boundary stamps holder contention so Run's trace can tell a
+		// starved OPEN from a handler-traced mid-command contention.
+		return markEngineOpenContention(err)
 	}
 	// Capture the workspace before running: auto-sync needs it after the engine
 	// is closed, and the close happens in the inner function below (including on

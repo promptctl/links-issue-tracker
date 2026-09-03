@@ -116,19 +116,42 @@ func recordSyncCommandTrace(ws workspace.Info, command, decision string, err err
 	})
 }
 
+// engineOpenContentionError marks a failure as an ENGINE OPEN starved by a
+// co-resident holder. The store's ErrWorkspaceBusy sentinel alone cannot carry
+// that fact — commit-lock contention mid-command wraps the same sentinel, and
+// those failures are already traced by their own handlers — so the open
+// boundaries stamp their failures with this type and the dispatch boundary
+// reads the stamp. [LAW:parse-dont-validate] the check's proof travels in the
+// type, so it cannot be re-derived (wrongly) from the sentinel downstream.
+type engineOpenContentionError struct{ err error }
+
+func (e engineOpenContentionError) Error() string { return e.err.Error() }
+func (e engineOpenContentionError) Unwrap() error { return e.err }
+
+// markEngineOpenContention stamps an open-boundary failure when it is the
+// holder-contention class; every other error passes through untouched.
+func markEngineOpenContention(err error) error {
+	if err == nil || !errors.Is(err, store.ErrWorkspaceBusy) {
+		return err
+	}
+	return engineOpenContentionError{err: err}
+}
+
 // recordEngineOpenContentionTrace leaves a durable sync-trace record when a
 // command's store open failed against a co-resident holder — the record that
 // did not exist when links-sync-pgct.11.1 was hit in the field, leaving the
 // starved command uncorrelatable against the sync traces the mirror DOES
-// write. It self-gates on the one contention sentinel every store lock stamps,
-// and Run hands it every escaping error, so exactly the contention class is
-// recorded. [LAW:single-enforcer] whether an error earns a durable record is
-// decided here, once, at the dispatch boundary — the one seam where the
-// verbatim invocation is known (never ambient os.Args, which lies for the
-// in-process Run callers the test suite uses). A workspace that cannot be
-// resolved has nowhere to file the trace; the open error itself is the report.
+// write. It fires only on the open-boundary stamp above, never on the bare
+// busy sentinel — a mid-command commit-lock contention already leaves its
+// handler's own trace, and a second record here would give one event two
+// stories. [LAW:single-enforcer] whether an error earns this record is decided
+// here, once, at the dispatch boundary — the one seam where the verbatim
+// invocation is known (never ambient os.Args, which lies for the in-process
+// Run callers the test suite uses). A workspace that cannot be resolved has
+// nowhere to file the trace; the open error itself is the report.
 func recordEngineOpenContentionTrace(args []string, err error) {
-	if !errors.Is(err, store.ErrWorkspaceBusy) {
+	var open engineOpenContentionError
+	if !errors.As(err, &open) {
 		return
 	}
 	cwd, cwdErr := os.Getwd()

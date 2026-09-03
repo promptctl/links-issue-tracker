@@ -337,6 +337,7 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	fmt.Fprintf(log, "%s mirror cycle start (hold budget %s)\n", start.UTC().Format(time.RFC3339), store.MirrorHoldBudget)
 	cycleCtx, cancel := context.WithTimeout(ctx, store.MirrorHoldBudget)
 	defer cancel()
+	var onceErr error
 	attempted = func() bool {
 		session, closeStore, err := openSyncSession(cycleCtx, ws)
 		if err != nil {
@@ -344,7 +345,10 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 			return false
 		}
 		defer closeStore()
-		mirrorOnce(cycleCtx, session, ws)
+		// Completion effects (the outcome marker, the owner-notify hook) run
+		// under the parent ctx: a cut cycle needs them most at exactly the
+		// moment its own budget has expired.
+		onceErr = mirrorOnce(cycleCtx, ctx, session, ws)
 		return true
 	}()
 	// A cycle that dies of ITS OWN deadline (not the process's teardown) names
@@ -354,12 +358,18 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 	// as unattributable as the first. [LAW:no-silent-failure] Gated on a session
 	// having existed: a budget that expires during the OPEN held no engine and
 	// reached no transport, and that branch's accurate record was already
-	// written through completeMirrorWithoutAttempt.
+	// written through completeMirrorWithoutAttempt. This is the cycle's ONE
+	// out-of-band automation trace — a could-not-attempt error joins the budget
+	// record instead of writing its own. [LAW:single-enforcer]
 	budgetCut := attempted && cycleCtx.Err() != nil && ctx.Err() == nil
+	var cause error
 	if budgetCut {
-		recordMirrorTraceError(ws, fmt.Errorf(
+		cause = fmt.Errorf(
 			"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",
-			store.MirrorHoldBudget))
+			store.MirrorHoldBudget)
+	}
+	if cause = errors.Join(cause, onceErr); cause != nil {
+		recordMirrorTraceError(ws, cause)
 	}
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t hold_budget_cut=%t elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, budgetCut, time.Since(start).Round(time.Millisecond))
@@ -378,16 +388,17 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 // commit that lands after this session is a fresh mirror-pending claim, and
 // the caller's post-release re-check answers it with another whole cycle. The
 // unsynced window shrinks toward zero without ever blocking a mutation.
-func mirrorOnce(ctx context.Context, session syncSession, ws workspace.Info) {
+func mirrorOnce(ctx, completionCtx context.Context, session syncSession, ws workspace.Info) error {
 	// The mirror pushes without compaction — plain SyncPush, never the
 	// compact-and-push variant the explicit command uses.
-	outcome, err := performSyncPush(ctx, session, ws, "", false, false, session.syncer.SyncPush)
+	outcome, err := performSyncPush(ctx, completionCtx, session, ws, "", false, false, session.syncer.SyncPush)
 	if err != nil {
 		// Could-not-attempt (reconcile/remote resolution): performSyncPush's
-		// own deferred completion already recorded the outcome; this adds only
-		// the mirror's out-of-band automation trace.
-		recordMirrorTraceError(ws, err)
-		return
+		// own deferred completion already recorded the outcome. The cycle's
+		// single out-of-band automation trace is the caller's to write — it
+		// alone knows whether the hold budget is what cut this attempt short.
+		// [LAW:single-enforcer]
+		return err
 	}
 	// performSyncPush records its own trace (push-ok, push-failure, or skip). If
 	// that trace write itself failed, surface it rather than drop it. [LAW:no-silent-failure]
@@ -404,6 +415,7 @@ func mirrorOnce(ctx context.Context, session syncSession, ws workspace.Info) {
 	if failure, ok := remoteSchemaAheadFailure(outcome.pushErr); ok {
 		fmt.Fprintln(os.Stderr, failure.blockString())
 	}
+	return nil
 }
 
 // waitForParentExit blocks until the spawning command has exited, returning
