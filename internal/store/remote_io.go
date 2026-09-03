@@ -32,6 +32,15 @@ import (
 // remote throttling this workspace's push cadence, a long retry storm makes
 // that worse, not better (links-sync-r779, "Not verified").
 //
+// The whole budget can sleep under the cross-process commit lock (every call
+// site runs inside runSyncMutation), extending a failing push's hold by at
+// most ~7s. That is accepted, not overlooked: a successful push already holds
+// the lock across unbounded network I/O — links-sync-pgct.11.1 owns that
+// larger hold — and releasing between attempts would break the one-lock
+// atomicity SyncCompactAndPush documents (the push reflects exactly the
+// compacted state). [LAW:no-ambient-temporal-coupling] the hold's owner and
+// bound are stated here, at the budget that creates them.
+//
 // A package variable (the delays stay const) so tests whose premise makes
 // exhaustion CERTAIN can shrink the budget instead of sleeping through the
 // production one — the same convention transientRetryMaxAttempts serves.
