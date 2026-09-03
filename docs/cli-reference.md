@@ -700,12 +700,12 @@ would change.
 lit upgrade [--to <vX.Y.Z>]
 ```
 
-Atomically installs a newer `lit` binary, checksum-verified against the release
-manifest. Bare `lit upgrade` resolves its own target — the latest published release —
-so every upgrade suggestion lit prints runs exactly as printed; `--to` pins a specific
-v-prefixed git tag instead (and, at the running version, doubles as a reinstall of a
-damaged binary). Already being on the latest release is a no-op that names the version
-it kept. A target whose schema support ends below the workspace's applied version is
+Atomically installs a `lit` binary, checksum-verified against the release manifest.
+Bare `lit upgrade` resolves its own target — the latest published release — so every
+upgrade suggestion lit prints runs exactly as printed; `--to` pins any specific
+schema-compatible v-prefixed git tag instead, not necessarily a newer one (at the
+running version it doubles as a reinstall of a damaged binary). Already being on the
+latest release is a no-op that names the version it kept. A target whose schema support ends below the workspace's applied version is
 refused before anything is installed, with both schema ranges named. Upgrade never
 touches the workspace schema: the installed binary migrates the workspace forward on
 its next run.

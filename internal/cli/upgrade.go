@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/release"
@@ -226,10 +225,13 @@ func runUpgradeWith(
 		return UsageError{Message: "usage: lit upgrade [--to <version>]"}
 	}
 	// [LAW:parse-dont-validate] --to's default value is the latest published
-	// release; an empty flag is not an error to guard against but the input
-	// that selects the feed as the tag's source. pinned records the origin —
-	// it decides only whether already-current is a no-op or a reinstall.
-	pinned := strings.TrimSpace(*to) != ""
+	// release. The flag set carries omitted-vs-given as typed data (Changed),
+	// so only a truly omitted flag selects the feed as the tag's source — an
+	// explicitly empty --to (a broken shell expansion, say) still fails
+	// normalizeReleaseTag's validation loudly rather than silently installing
+	// an unrequested "latest". pinned also decides whether already-current is
+	// a no-op or a reinstall.
+	pinned := fs.Changed("to")
 	var tag string
 	var err error
 	if pinned {
@@ -268,11 +270,12 @@ func runUpgradeWith(
 	// An unpinned invocation asked for "current"; being current already
 	// satisfies it. A pinned --to falls through and installs — the explicit
 	// tag is a command, and the reinstall path for a damaged binary. A dev
-	// build has no stamped Version, compares equal to no release, and so
-	// always proceeds. This check runs AFTER the backward-move refusal: a
-	// workspace ahead of even the latest release must be refused loudly
-	// (naming both schema ranges), never soothed with "already current".
-	if !pinned && target.Manifest.Version == current.Version {
+	// build always proceeds: IsDev is the typed fact, so the guarantee does
+	// not rest on manifests never carrying an empty Version. This check runs
+	// AFTER the backward-move refusal: a workspace ahead of even the latest
+	// release must be refused loudly (naming both schema ranges), never
+	// soothed with "already current".
+	if !pinned && !current.IsDev && target.Manifest.Version == current.Version {
 		_, err = fmt.Fprintf(stdout,
 			"already current: %s is the latest release; kept the installed binary.\n",
 			tag,

@@ -419,6 +419,55 @@ func TestRunUpgradeBareEndToEndOverHTTP(t *testing.T) {
 	}
 }
 
+// An explicitly empty --to (a broken shell expansion: --to "$VERSION" with
+// $VERSION unset) is a validation failure, exactly as before this feature —
+// never a silent upgrade to latest. Only a truly omitted flag means latest.
+func TestRunUpgradeExplicitEmptyToIsRejected(t *testing.T) {
+	t.Parallel()
+	for _, args := range [][]string{{"--to", ""}, {"--to", "   "}} {
+		res := &stubResolver{latestTag: "v0.9.0", target: newFakeTarget()}
+		sr := &stubSchemaReader{version: 2, openable: true}
+		inst := &stubInstaller{}
+		var out bytes.Buffer
+		err := runUpgradeWith(context.Background(), &out, sr, args, olderCurrentInfo(), res, inst, fixedBinPath("/p/lit", nil))
+		if err == nil || !strings.Contains(err.Error(), "non-empty version") {
+			t.Fatalf("args %v: expected the non-empty-version validation error, got %v", args, err)
+		}
+		if res.latestCalled {
+			t.Errorf("args %v: an explicit empty --to must not fall back to latest resolution", args)
+		}
+		if res.called || sr.called || inst.called {
+			t.Errorf("args %v: empty --to leaked past validation: resolve=%v read=%v install=%v", args, res.called, sr.called, inst.called)
+		}
+	}
+}
+
+// A dev build is never told "already current" — the guard is typed on IsDev,
+// so it holds even against a degenerate manifest whose Version is empty and
+// would compare equal to the dev build's unstamped one.
+func TestRunUpgradeBareDevBuildAlwaysInstalls(t *testing.T) {
+	t.Parallel()
+	tgt := newFakeTarget()
+	tgt.Manifest.Version = "" // degenerate: equal to the dev build's Version
+	res := &stubResolver{latestTag: "v0.9.0", target: tgt}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	current := version.Info{IsDev: true, Schema: version.SchemaSupport{Min: 1, Max: 5}}
+	var out bytes.Buffer
+	if err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil)); err != nil {
+		t.Fatalf("bare dev-build upgrade: %v", err)
+	}
+	if !inst.called {
+		t.Error("installer must run for a dev build; IsDev outranks any version equality")
+	}
+	if strings.Contains(out.String(), "already current") {
+		t.Errorf("dev build wrongly told already current: %q", out.String())
+	}
+	if !strings.Contains(out.String(), "upgraded dev build → v0.9.0") {
+		t.Errorf("stdout missing dev-build from → to line: %q", out.String())
+	}
+}
+
 // A latest-lookup failure stops the pipeline before anything else runs.
 func TestRunUpgradeLatestTagErrorStopsPipeline(t *testing.T) {
 	t.Parallel()
