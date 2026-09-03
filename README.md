@@ -64,7 +64,7 @@ lit new --title "Build the landing page" \
         --topic landing --type task                   # file your first issue
 lit backlog                                           # see what's workable, in priority order
 lit start <id>                                        # claim a ticket
-lit done <id>                                         # finish it (a two-step confirm follows)
+lit done <id>                                         # finish it (closes immediately)
 ```
 
 `lit init` also wires this repo for agents: it adds a short `lit` section to `AGENTS.md`
