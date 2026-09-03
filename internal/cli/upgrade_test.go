@@ -301,6 +301,31 @@ func TestRunUpgradeBareAlreadyCurrentKeepsBinary(t *testing.T) {
 	}
 }
 
+// The feed names the most recently CREATED release, not the highest version —
+// a backport tag for an older line can be "latest" while the installed binary
+// is newer. A bare invocation must keep the newer binary, never walk it
+// backward silently; the no-op is an ordering check, not an equality check.
+func TestRunUpgradeBareBinaryAheadOfLatestKeepsBinary(t *testing.T) {
+	t.Parallel()
+	tgt := newFakeTarget()
+	tgt.Manifest.Version = "0.9.5"
+	res := &stubResolver{latestTag: "v0.9.5", target: tgt}
+	sr := &stubSchemaReader{version: 2, openable: true}
+	inst := &stubInstaller{}
+	current := version.Info{Version: "0.10.0", Schema: version.SchemaSupport{Min: 1, Max: 5}}
+	var out bytes.Buffer
+	err := runUpgradeWith(context.Background(), &out, sr, []string{}, current, res, inst, fixedBinPath("/p/lit", nil))
+	if err != nil {
+		t.Fatalf("binary ahead of latest must be a clean no-op, got %v", err)
+	}
+	if inst.called {
+		t.Error("installer must not run when the binary is ahead of the feed's latest")
+	}
+	if !strings.Contains(out.String(), "keeping v0.10.0") || !strings.Contains(out.String(), "v0.9.5") {
+		t.Errorf("no-op line must name the kept version and the feed's latest: %q", out.String())
+	}
+}
+
 // A pinned --to naming the running version still installs: the explicit tag is
 // a command, and the reinstall path for a damaged binary. Only the unpinned
 // default treats already-current as satisfied.

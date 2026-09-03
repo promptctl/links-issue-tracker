@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 
+	"golang.org/x/mod/semver"
+
 	"github.com/promptctl/links-issue-tracker/internal/engine"
 	"github.com/promptctl/links-issue-tracker/internal/release"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -267,18 +269,22 @@ func runUpgradeWith(
 		}
 	}
 
-	// An unpinned invocation asked for "current"; being current already
-	// satisfies it. A pinned --to falls through and installs — the explicit
-	// tag is a command, and the reinstall path for a damaged binary. A dev
-	// build always proceeds: IsDev is the typed fact, so the guarantee does
-	// not rest on manifests never carrying an empty Version. This check runs
-	// AFTER the backward-move refusal: a workspace ahead of even the latest
-	// release must be refused loudly (naming both schema ranges), never
-	// soothed with "already current".
-	if !pinned && !current.IsDev && target.Manifest.Version == current.Version {
+	// An unpinned invocation asked for "current"; a binary at or ahead of the
+	// resolved latest already satisfies it. Ordering, not equality: the feed
+	// names the most recently CREATED release, so a backport tag for an older
+	// line can be "latest" while the installed binary is newer — moving
+	// backward stays a deliberate act (--to, or lit downgrade), never the
+	// default path's doing. A pinned --to falls through and installs — the
+	// explicit tag is a command, and the reinstall path for a damaged binary.
+	// A dev build always proceeds: IsDev is the typed fact, so the guarantee
+	// does not rest on version-string comparisons. This check runs AFTER the
+	// backward-move refusal: a workspace ahead of even the latest release
+	// must be refused loudly (naming both schema ranges), never soothed with
+	// "already current".
+	if !pinned && !current.IsDev && semver.Compare("v"+current.Version, tag) >= 0 {
 		_, err = fmt.Fprintf(stdout,
-			"already current: %s is the latest release; kept the installed binary.\n",
-			tag,
+			"already current: keeping v%s (latest published release is %s); nothing to install.\n",
+			current.Version, tag,
 		)
 		return err
 	}
