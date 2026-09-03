@@ -19,8 +19,10 @@ type initReport struct {
 	Hooks        string          `json:"hooks"`
 	Agents       string          `json:"agents"`
 	Claude       string          `json:"claude"`
+	NextSkill    string          `json:"next_skill"`
 	AgentsSource string          `json:"agents_source,omitempty"`
 	ClaudeSource string          `json:"claude_source,omitempty"`
+	SkillSource  string          `json:"next_skill_source,omitempty"`
 	Sync         initSyncOutcome `json:"sync"`
 }
 
@@ -95,6 +97,7 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		Hooks:        "skipped",
 		Agents:       "skipped",
 		Claude:       "skipped",
+		NextSkill:    "skipped",
 		Sync:         syncOutcome,
 	}
 
@@ -115,22 +118,16 @@ func runInit(ctx context.Context, stdout io.Writer, ws workspace.Info, args []st
 		if agentsErr != nil {
 			return agentsErr
 		}
+		skillResult, skillErr := ensureNextSkillFile(ws.RootDir)
+		if skillErr != nil {
+			return skillErr
+		}
 		report.AgentsSource = string(agentsResult.Source)
 		report.ClaudeSource = string(claudeResult.Source)
-		if agentsResult.Created {
-			report.Agents = "created"
-		} else if agentsResult.Changed {
-			report.Agents = "updated"
-		} else {
-			report.Agents = "unchanged"
-		}
-		if claudeResult.Created {
-			report.Claude = "created"
-		} else if claudeResult.Changed {
-			report.Claude = "updated"
-		} else {
-			report.Claude = "unchanged"
-		}
+		report.SkillSource = string(skillResult.Source)
+		report.Agents = managedAssetStatus(agentsResult.Changed, agentsResult.Created)
+		report.Claude = managedAssetStatus(claudeResult.Changed, claudeResult.Created)
+		report.NextSkill = managedAssetStatus(skillResult.Changed, skillResult.Created)
 	}
 
 	// Resolved for the human output, here at the boundary, and threaded through
@@ -177,6 +174,7 @@ func writeInitHumanOutput(w io.Writer, report initReport, buildNote string) erro
 		{"pre-push hook", report.Hooks, ""},
 		{"AGENTS.md", report.Agents, sourceDetail(report.AgentsSource, report.Agents)},
 		{"CLAUDE.md", report.Claude, sourceDetail(report.ClaudeSource, report.Claude)},
+		{"/next skill", report.NextSkill, sourceDetail(report.SkillSource, report.NextSkill)},
 	}
 
 	var updated, skipped, unchanged []string

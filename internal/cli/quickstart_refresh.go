@@ -22,6 +22,7 @@ type quickstartRefreshItem struct {
 type quickstartRefreshReport struct {
 	Agents     quickstartRefreshItem   `json:"agents"`
 	Claude     quickstartRefreshItem   `json:"claude"`
+	NextSkill  quickstartRefreshItem   `json:"next_skill"`
 	Hooks      quickstartRefreshItem   `json:"hooks"`
 	Quickstart []quickstartRefreshItem `json:"quickstart"`
 }
@@ -35,6 +36,10 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 	agentsResult, claudeResult, agentsErr := ensureLinksAgentFiles(ws.RootDir)
 	if agentsErr != nil {
 		return quickstartRefreshReport{}, agentsErr
+	}
+	skillResult, skillErr := ensureNextSkillFile(ws.RootDir)
+	if skillErr != nil {
+		return quickstartRefreshReport{}, skillErr
 	}
 	quickstartItems, qsErr := refreshQuickstartTemplates(ws.RootDir)
 	if qsErr != nil {
@@ -53,6 +58,12 @@ func refreshQuickstartManagedAssets(ws workspace.Info) (quickstartRefreshReport,
 			Status:  managedAssetStatus(claudeResult.Changed, claudeResult.Created),
 			Managed: true,
 			Source:  string(claudeResult.Source),
+		},
+		NextSkill: quickstartRefreshItem{
+			Path:    skillResult.Path,
+			Status:  managedAssetStatus(skillResult.Changed, skillResult.Created),
+			Managed: true,
+			Source:  string(skillResult.Source),
 		},
 		Quickstart: quickstartItems,
 	}, nil
@@ -130,6 +141,7 @@ func formatQuickstartRefreshSummary(refresh quickstartRefreshReport) string {
 		{"pre-push hook", refresh.Hooks.Status, refresh.Hooks.Reason},
 		{"AGENTS.md", refresh.Agents.Status, composeSourceReason(refresh.Agents.Reason, refresh.Agents.Source, refresh.Agents.Status)},
 		{"CLAUDE.md", refresh.Claude.Status, composeSourceReason(refresh.Claude.Reason, refresh.Claude.Source, refresh.Claude.Status)},
+		{"/next skill", refresh.NextSkill.Status, composeSourceReason(refresh.NextSkill.Reason, refresh.NextSkill.Source, refresh.NextSkill.Status)},
 	}
 	for _, q := range refresh.Quickstart {
 		items = append(items, labeledStatus{fmt.Sprintf("%s template", strings.TrimSuffix(q.Name, ".md")), q.Status, q.Reason})
