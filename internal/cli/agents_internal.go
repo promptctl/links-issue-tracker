@@ -40,6 +40,9 @@ func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, end
 			return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
 		}
 		initial := headerPrefix + section
+		if mkdirErr := os.MkdirAll(filepath.Dir(filePath), 0o755); mkdirErr != nil {
+			return agentsInstallResult{}, fmt.Errorf("create directory for %s: %w", filename, mkdirErr)
+		}
 		if writeErr := os.WriteFile(filePath, []byte(initial), 0o644); writeErr != nil {
 			return agentsInstallResult{}, fmt.Errorf("write %s: %w", filename, writeErr)
 		}
@@ -86,4 +89,30 @@ func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude a
 	claudeResult.Source = source
 
 	return agentsResult, claudeResult, nil
+}
+
+// nextSkillRelPath is where the harness discovers the project /next skill.
+const nextSkillRelPath = ".claude/skills/next/SKILL.md"
+
+// nextSkillFrontmatter is the harness-parsed skill identity. It must sit at
+// byte 0 of SKILL.md, so it cannot live inside the managed markers: like the
+// "# AGENTS" heading, it is written once at creation and is the user's
+// afterward, while lit owns only the marker-delimited body below it.
+const nextSkillFrontmatter = "---\nname: next\ndescription: Pull the next ticket\n---\n\n"
+
+// ensureNextSkillFile writes the managed /next skill body to
+// .claude/skills/next/SKILL.md, resolved project > global > embedded like
+// every managed template. [LAW:single-enforcer] All writes of the shipped
+// /next skill go through this one function.
+func ensureNextSkillFile(rootDir string) (agentsInstallResult, error) {
+	section, source, err := templates.LoadWithSource(templates.NextSkillTemplateName, rootDir)
+	if err != nil {
+		return agentsInstallResult{}, fmt.Errorf("load next skill template: %w", err)
+	}
+	result, err := writeManagedFile(rootDir, filepath.FromSlash(nextSkillRelPath), nextSkillFrontmatter, section, litAgentsBeginMarker, litAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, err
+	}
+	result.Source = source
+	return result, nil
 }
