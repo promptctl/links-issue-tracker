@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-09-03
+
 ### Added
 
 - The `/next` skill — the procedure an agent follows to pull the next ticket and start work — now ships from the lit binary itself: `lit init` (and `lit quickstart --refresh`) writes it to `.claude/skills/next/SKILL.md`, marker-delimited and reconciled on re-run like the `AGENTS.md` / `CLAUDE.md` sections, and it resolves project > global > embedded like every managed template, so a repo that wants a different `/next` overrides `next-skill.md` through the same layering as `quickstart-work.md` (the new short alias for `--eject` is `next-skill`) — with one added shape rule: the override must be either plain marker-free text or exactly one `BEGIN/END LIT INTEGRATION` block, and anything else fails init loudly rather than corrupting the managed file. Until now the skill lived in the separate `memento` plugin, versioned apart from the binary whose commands its every instruction names — which is how it kept teaching `lit ready` long after that command was retired, with nothing in either repository able to notice. The skill's YAML frontmatter must sit at byte 0 for the harness to parse it, so the managed markers sit inside the body rather than wrapping the file: the frontmatter is written once at creation and is the user's afterward, and lit owns only the marker-delimited body. The text lands byte-identical to the memento copy — still naming `lit ready` — deliberately: a move that also edits is a move nobody can review, and the corrections are this epic's later children. (links-workflow-rls7.1)
