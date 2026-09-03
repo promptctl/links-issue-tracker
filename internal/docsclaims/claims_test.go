@@ -70,6 +70,17 @@ func TestStateStatusesReadsRowsNotProse(t *testing.T) {
 	}
 }
 
+func TestStateStatusesToleratesEdgeWhitespace(t *testing.T) {
+	doc := "  | S2 read-flip | reads from fold | flag default-on | destination |  \n"
+	statuses, err := StateStatuses(doc)
+	if err != nil {
+		t.Fatalf("StateStatuses: %v — edge whitespace must not misreport the table as reshaped", err)
+	}
+	if statuses["S2"] != "destination" {
+		t.Errorf("state S2 = %q, want %q — an indented row must parse, not be skipped", statuses["S2"], "destination")
+	}
+}
+
 func TestStateStatusesRejectsMalformedTables(t *testing.T) {
 	cases := []struct {
 		name string

@@ -94,7 +94,10 @@ var stateCell = regexp.MustCompile(`^S\d+\b`)
 // duplicate-state error below surfaces it instead of last-row-wins hiding it.
 func StateStatuses(doc string) (map[string]string, error) {
 	statuses := map[string]string{}
-	for _, line := range strings.Split(doc, "\n") {
+	for _, raw := range strings.Split(doc, "\n") {
+		// Edge whitespace is the same non-fact as a re-wrap: a trailing space
+		// after the final pipe or a leading indent must not change the parse.
+		line := strings.TrimSpace(raw)
 		if !strings.HasPrefix(line, "|") {
 			continue
 		}
