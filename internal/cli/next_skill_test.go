@@ -143,6 +143,72 @@ func TestEnsureNextSkillFileMarkerlessOverrideConverges(t *testing.T) {
 	}
 }
 
+// A pre-existing empty (or whitespace-only) SKILL.md is the create case, not
+// the adopt case: it must still receive the frontmatter the harness needs at
+// byte 0, not a bare managed section reported as success.
+func TestEnsureNextSkillFileTreatsEmptyExistingFileAsCreate(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	skillPath := filepath.Join(repo, filepath.FromSlash(nextSkillRelPath))
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill dir) error = %v", err)
+	}
+	if err := os.WriteFile(skillPath, []byte("\n  \n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(whitespace-only skill) error = %v", err)
+	}
+
+	result, err := ensureNextSkillFile(repo)
+	if err != nil {
+		t.Fatalf("ensureNextSkillFile() error = %v", err)
+	}
+	if !result.Created {
+		t.Fatalf("whitespace-only file not treated as create: %+v", result)
+	}
+	first := readNextSkill(t, repo)
+	if !strings.HasPrefix(first, "---\nname: next\n") {
+		t.Fatalf("frontmatter missing from byte 0: %q", first[:min(len(first), 80)])
+	}
+	if result, err = ensureNextSkillFile(repo); err != nil || result.Changed {
+		t.Fatalf("second run: err=%v changed=%v, want converged", err, result.Changed)
+	}
+}
+
+// A well-formed override carrying whitespace outside the marker span must be
+// canonicalized, not passed through raw — the stray whitespace would sit
+// outside the reconciled region and compound a blank line per run.
+func TestEnsureNextSkillFileCanonicalizesOverrideWhitespace(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	projectTemplates := filepath.Join(repo, ".lit", "templates")
+	if err := os.MkdirAll(projectTemplates, 0o755); err != nil {
+		t.Fatalf("MkdirAll(project templates) error = %v", err)
+	}
+	override := "\n" + litAgentsBeginMarker + "\noverride body\n" + litAgentsEndMarker + "\n\n"
+	if err := os.WriteFile(filepath.Join(projectTemplates, templates.NextSkillTemplateName), []byte(override), 0o644); err != nil {
+		t.Fatalf("WriteFile(padded override) error = %v", err)
+	}
+
+	if _, err := ensureNextSkillFile(repo); err != nil {
+		t.Fatalf("ensureNextSkillFile() first run error = %v", err)
+	}
+	first := readNextSkill(t, repo)
+
+	for i := 0; i < 2; i++ {
+		result, err := ensureNextSkillFile(repo)
+		if err != nil {
+			t.Fatalf("ensureNextSkillFile() run %d error = %v", i+2, err)
+		}
+		if result.Changed {
+			t.Fatalf("run %d reported a change; padded override did not converge", i+2)
+		}
+	}
+	if got := readNextSkill(t, repo); got != first {
+		t.Fatalf("padded override grew the file:\nfirst: %q\nlater: %q", first, got)
+	}
+}
+
 // Any override shape other than "no markers" or "exactly one whole-content
 // BEGIN/END block" would duplicate part of itself on every reconcile, so it
 // fails loudly instead of being written.

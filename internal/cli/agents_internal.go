@@ -36,10 +36,14 @@ func renderLinksAgentsSection(workspaceRoot string) (string, templates.Source, e
 func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, endMarker string) (agentsInstallResult, error) {
 	filePath := filepath.Join(rootDir, filename)
 	content, err := os.ReadFile(filePath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
-		}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
+	}
+	// Create-vs-adopt keys on whether the file holds meaningful content, not on
+	// whether it exists: a whitespace-only file adopted as-is would receive the
+	// managed section without headerPrefix — for SKILL.md, a skill file with no
+	// frontmatter, which the harness cannot discover.
+	if strings.TrimSpace(string(content)) == "" {
 		initial := headerPrefix + section
 		if mkdirErr := os.MkdirAll(filepath.Dir(filePath), 0o755); mkdirErr != nil {
 			return agentsInstallResult{}, fmt.Errorf("create directory for %s: %w", filename, mkdirErr)
@@ -119,9 +123,12 @@ func normalizeManagedSection(content, beginMarker, endMarker string) (string, er
 		}
 		return beginMarker + "\n" + content + endMarker + "\n", nil
 	}
+	// The pass-through re-emits the trimmed block, not the raw bytes:
+	// whitespace outside the marker span would sit outside the region
+	// upsertManagedSection replaces and compound on every reconcile.
 	trimmed := strings.TrimSpace(content)
 	if begins == 1 && ends == 1 && strings.HasPrefix(trimmed, beginMarker) && strings.HasSuffix(trimmed, endMarker) {
-		return content, nil
+		return trimmed + "\n", nil
 	}
 	return "", fmt.Errorf("content must either contain no %s/%s markers or be exactly one such block; found %d begin and %d end marker(s)", beginMarker, endMarker, begins, ends)
 }
