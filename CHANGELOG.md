@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- AGENTS.md's managed `LIT INTEGRATION` block once again matches the current `lit init` template. The file's own preamble promises the block is "exactly what `lit init` writes", but it still carried an older, more forceful edition ("CRITICAL… You MUST run `lit quickstart` immediately… a **hard requirement that cannot be deferred or ignored**") that `internal/templates/defaults/agents-section.md` had since replaced with the current calmer wording — the one CLAUDE.md's copy already matched. The block was refreshed by running `lit init` itself, so the fix is the tool's own regeneration path doing exactly what the preamble claims it does. (links-docs-8mdb.4)
 - README.md's 60-second tour no longer claims `lit done` is followed by "a two-step confirm". There is no confirm: every lifecycle transition is single-phase, and `lit done` closes the ticket in the one invocation (the guidance it prints afterward never gates the close). The tour is a new reader's first mental model of finishing work, so its example now matches what the command does. (links-docs-8mdb.3)
 - `docs/troubleshooting.md`'s "Integrity errors" section no longer tells the reader to run `lit fsck --repair`, a command that doesn't exist — a dead end hit exactly when it hurts most, mid-incident. The section now gives the real path: `lit doctor` to diagnose, `lit doctor --fix` to repair. (links-docs-8mdb.2)
 
