@@ -586,38 +586,22 @@ func recordReconcileDecisionTrace(ws workspace.Info, command string, state stora
 
 // freshReconcileTarget fetches the latest remote and resolves the remote+branch
 // the reconcile reads, so the divergence it sees is current rather than stale from
-// a prior fetch. ok=false means there is nothing to reconcile against (no remote,
-// an empty remote, or this branch never synced). [LAW:single-enforcer] It resolves
-// the remote and branch through the same selectors push/pull/receive use, so the
-// four never disagree.
+// a prior fetch. ok=false means there is nothing to reconcile against (no remote
+// or an empty remote). [LAW:single-enforcer] It resolves the target through the
+// shared prologue push/pull/receive use, so the four never disagree.
 func freshReconcileTarget(ctx context.Context, session syncSession, ws workspace.Info) (remote string, branch string, ok bool, err error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+	target, err := resolveSyncTarget(ctx, session, ws, "")
 	if err != nil {
 		return "", "", false, err
 	}
-	remoteName, err := resolveSyncRemote("", workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
-	if err != nil {
-		return "", "", false, err
-	}
-	if remoteName == "" {
+	if target.skip != syncTargetReady {
 		return "", "", false, nil
 	}
-	hasRefs, err := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	if err != nil {
-		return "", "", false, fmt.Errorf("check remote refs %q: %w", remoteName, err)
-	}
-	if !hasRefs {
-		return "", "", false, nil
-	}
-	branchName, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
-	if err != nil {
-		return "", "", false, err
-	}
-	if err := session.syncer.SyncFetch(ctx, remoteName, false); err != nil {
-		return "", "", false, fmt.Errorf("fetch %q before reconcile: %w", remoteName, err)
+	if err := session.syncer.SyncFetch(ctx, target.remote, false); err != nil {
+		return "", "", false, fmt.Errorf("fetch %q before reconcile: %w", target.remote, err)
 	}
 	if err := markFetchSuccess(ws); err != nil {
 		fmt.Fprintf(os.Stderr, "lit: fetch-success marker not written: %v\n", err)
 	}
-	return remoteName, branchName, true, nil
+	return target.remote, target.branch, true, nil
 }
