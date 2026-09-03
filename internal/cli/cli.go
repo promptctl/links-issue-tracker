@@ -108,6 +108,14 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 		if errors.Is(err, workspace.ErrNotGitRepo) {
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
+		// A store open starved by a co-resident holder leaves a durable record
+		// alongside the sync traces the holder itself writes, so the two events
+		// can be correlated afterwards (links-sync-pgct.11.1's attribution gap).
+		// The workspace resolves without an engine; if even that fails, the
+		// open error itself is the report. [LAW:no-silent-failure]
+		if ws, wsErr := workspace.Resolve(cwd); wsErr == nil {
+			recordEngineOpenContentionTrace(ws, err)
+		}
 		return err
 	}
 	// Capture the workspace before running: auto-sync needs it after the engine

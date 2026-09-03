@@ -76,6 +76,9 @@ func withSyncStore(run syncRunFn) wsRunFn {
 	return func(ctx context.Context, stdout io.Writer, ws workspace.Info, args []string) error {
 		session, closeStore, err := openSyncSession(ctx, ws)
 		if err != nil {
+			// Same correlation record runWithApp leaves: a sync command starved
+			// by a co-resident holder is durably attributable afterwards.
+			recordEngineOpenContentionTrace(ws, err)
 			return err
 		}
 		defer closeStore()

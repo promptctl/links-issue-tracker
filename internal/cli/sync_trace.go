@@ -2,11 +2,13 @@ package cli
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/trace"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
@@ -111,6 +113,29 @@ func recordSyncCommandTrace(ws workspace.Info, command, decision string, err err
 		Reason:    reason,
 		BuildNote: resolveBuildStatusNote(time.Now()),
 		Metadata:  metadata,
+	})
+}
+
+// recordEngineOpenContentionTrace leaves a durable sync-trace record when a
+// command's store open failed against a co-resident holder — the record that
+// did not exist when links-sync-pgct.11.1 was hit in the field, leaving the
+// starved command uncorrelatable against the sync traces the mirror DOES
+// write. It self-gates on the one contention sentinel every store lock stamps,
+// so call sites hand it every open failure and exactly the contention class is
+// recorded. [LAW:single-enforcer] whether an open failure earns a durable
+// record is decided here, once. The command is read from the process's own
+// argv: this trace exists to say which command was starved, and argv is that
+// fact's only source at this seam.
+func recordEngineOpenContentionTrace(ws workspace.Info, err error) {
+	if !errors.Is(err, store.ErrWorkspaceBusy) {
+		return
+	}
+	recordSyncTraceLogged(ws, syncTraceRecord{
+		Command:   formatCommand(os.Args[1:]),
+		Decision:  commandErrorReason(err),
+		Status:    "error",
+		Reason:    err.Error(),
+		BuildNote: resolveBuildStatusNote(time.Now()),
 	})
 }
 

@@ -109,6 +109,14 @@ var doltWorkspaceMachinery = map[string][]string{
 		"ColumnRef", "FromColumn",
 		"Reconciled", "Unconverged", "UnexplainedDrop", "RequiresDrop",
 	},
+	// The detached mirror's engine-hold bound. It cannot go through the
+	// contract because it is not storage behavior: it is the sizing partner of
+	// the engine package's own open-retry budget — one design, pinned
+	// in-package by TestMirrorHoldBudgetFitsInsideOpenRetryBudget — and it is
+	// mirror machinery, deleted at S4 with the rest. [LAW:one-source-of-truth]
+	"mirror hold budget": {
+		"MirrorHoldBudget",
+	},
 	// Typed failures the CLI matches to choose an exit code and a message.
 	// [LAW:parse-dont-validate] — matched as types, never by message text.
 	"typed engine failures": {
