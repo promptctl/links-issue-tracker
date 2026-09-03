@@ -11,7 +11,7 @@ If the user provided specific information (e.g., a ticket id or area of the code
 
 ## Finding work
 
-Take a look at the backlog (`lit ready`) so you understand what work is in-progress or up next.  Now you need to decide whether you need to wrap up in-progress work or start new work.
+Which command answers which question is the quickstart's job — run `lit quickstart work` for that reference.  This skill covers only the procedure: the sequence of checks before pulling fresh work (uncommitted changes, open PRs, orphans) and how to work a ticket once you hold one.  Now you need to decide whether you need to wrap up in-progress work or start new work.
 
 ### In progress work
 
@@ -27,9 +27,9 @@ Examples:
 - Minor update to the readme to include some more instructions: commit it and proceed
 - Major update to the readme that is related to the work on the current branch: commit it and proceed
 - Major update to work that is clearly NOT on this branch: stash it and proceed
-- A half finished feature: find the ticket it's related to.  THIS TICKET IS YOUR ASSIGNED WORK. Skip the backlog scan and go straight to "Working the ticket". If it's not related to a ticket you see, do a quick code review.  does the code look experimental and temporary or high quality?  Does it look complete or barely started?  Then briefly explain the state of the code, what it does, and any other info you have (no ticket, etc).  Ask if they want you to create a ticket and continue the work, if they want it to committed to work as part of a different ticket, or whether they want you to stash or discard it.  Follow that instruction.
+- A half finished feature: find the ticket it's related to.  THIS TICKET IS YOUR ASSIGNED WORK. Skip the selection steps and go straight to "Working the ticket". If it's not related to a ticket you see, do a quick code review.  does the code look experimental and temporary or high quality?  Does it look complete or barely started?  Then briefly explain the state of the code, what it does, and any other info you have (no ticket, etc).  Ask if they want you to create a ticket and continue the work, if they want it to committed to work as part of a different ticket, or whether they want you to stash or discard it.  Follow that instruction.
 
-Before proceeding, confirm the uncommitted changes are now resolved (committed, stashed, or discarded per the above).  If anything you did previously resulted in a reference to a specific ticket, THAT IS YOUR TICKET ID and you should skip the backlog scan and go straight to "Working the ticket".
+Before proceeding, confirm the uncommitted changes are now resolved (committed, stashed, or discarded per the above).  If anything you did previously resulted in a reference to a specific ticket, THAT IS YOUR TICKET ID and you should skip the selection steps and go straight to "Working the ticket".
 
 Do NOT proceed without either:
 - no uncommitted changes
@@ -38,17 +38,15 @@ OR
 
 #### Open PRs
 
-Check for open PRs related to your current branch — `gh pr list --head "$(git branch --show-current)" --state open` (`lit ready` lists tickets, not GitHub PRs, so it won't surface one).  If there are, THIS IS YOUR TICKET!  Skip the backlog scan below and work that PR through the `address-pr-reviews` skill (that's the memento skill for taking a PR's review feedback to a clean, merged close-out), then pick up the working steps under "Working the ticket".
+Check for open PRs related to your current branch — `gh pr list --head "$(git branch --show-current)" --state open` (lit tracks tickets, not GitHub PRs, so no lit command will surface one).  If there are, THIS IS YOUR TICKET!  Skip the selection steps below and work that PR through the `address-pr-reviews` skill (that's the memento skill for taking a PR's review feedback to a clean, merged close-out), then pick up the working steps under "Working the ticket".
 
 **If there are no open PRs on the current branch:** we'll proceed with pulling from the backlog. Open PRs are still relevant, though — you want to check whether older open PRs overlap with your work, since rebuilding on top of stale code risks significant merge conflicts. Check this after you pull a ticket; if an older PR touches the same files, surface it to the user with both the ticket and PR references before starting, rather than silently building over it.
 
-#### lit ready
+#### Orphaned tickets
 
-Lit ready shows an overview of the epics and the top ticket in each epic, as well as any in-progress or orphaned tickets.
+Run `lit orphaned`.  If there are any orphaned tickets, pull from those first — those tickets are abandoned and need someone to finish them. An orphan is your ticket; skip ahead to "Working the ticket".
 
-If there are any orphaned tickets, pull from those first — those tickets are abandoned and need someone to finish them. An orphan is your ticket; skip ahead to "Working the ticket".
-
-Otherwise, take from the top of the ready queue.
+Otherwise, run `lit next` and start the ticket it hands you.
 
 ## Working the ticket
 
