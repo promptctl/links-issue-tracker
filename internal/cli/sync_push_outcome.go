@@ -28,8 +28,8 @@ func firstError(errs ...error) error {
 // Push decisions, shared by the durable sync trace and the push-outcome
 // marker so the two records can never spell one outcome two ways.
 // [LAW:one-source-of-truth] The skip decisions ("no_sync_remote",
-// "remote_empty") ride through pushOutcomeOf from syncPushOutcome.reason,
-// where they are already the trace's vocabulary.
+// "remote_empty") ride through pushOutcomeOf from syncPushOutcome.skip,
+// whose typed values are already the trace's vocabulary.
 //
 // "canceled" and "workspace_busy" exist because the FAILING banner and the
 // owner page key on the decision: an operator tearing an attempt down
@@ -109,8 +109,8 @@ func pushOutcomeOf(outcome syncPushOutcome, err error) pushOutcomeRecord {
 			Remote:   outcome.remote,
 			Branch:   outcome.branch,
 		}
-	case outcome.status == "skipped":
-		return pushOutcomeRecord{Decision: outcome.reason, Remote: outcome.remote}
+	case outcome.skip != syncTargetReady:
+		return pushOutcomeRecord{Decision: string(outcome.skip), Remote: outcome.remote}
 	default:
 		return pushOutcomeRecord{
 			Decision: pushDecisionPushed,

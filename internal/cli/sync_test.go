@@ -47,24 +47,25 @@ func TestMapGitRemotesByName(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPullPayloadNeverSyncedIsSkippedBranchMissing(t *testing.T) {
+func TestPrintSyncPullOutcomeNeverSyncedDirectsUpstreamSetup(t *testing.T) {
 	t.Parallel()
 	// A branch the remote has never seen is the typed never_synced state, not a
-	// parsed backend error string — the payload directs the caller to set the
-	// upstream with a deterministic command.
-	payload := buildSyncPullPayload("origin", "feature/local-only", storage.SyncPullResult{State: storage.SyncPullNeverSynced})
-	if payload["status"] != "skipped" {
-		t.Fatalf("status = %v, want skipped", payload["status"])
+	// parsed backend error string — the printer directs the caller to set the
+	// upstream with a deterministic command derived from the resolved remote.
+	outcome := syncPullOutcome{remote: "origin", branch: "feature/local-only", state: storage.SyncPullNeverSynced}
+	var out bytes.Buffer
+	if err := printSyncPullOutcome(&out, outcome, true); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
-	if payload["reason"] != "remote_branch_missing" {
-		t.Fatalf("reason = %v, want remote_branch_missing", payload["reason"])
+	text := out.String()
+	if !strings.Contains(text, "skipped pull origin/feature/local-only: remote branch missing") {
+		t.Fatalf("unexpected skipped text: %q", text)
 	}
-	if payload["branch"] != "feature/local-only" {
-		t.Fatalf("branch = %v, want feature/local-only", payload["branch"])
+	if !strings.Contains(text, "lit sync push --remote origin --set-upstream") {
+		t.Fatalf("missing deterministic next command: %q", text)
 	}
-	nextCommand := payload["next_command"].(string)
-	if !strings.Contains(nextCommand, "lit sync push --remote origin --set-upstream") {
-		t.Fatalf("next_command missing deterministic remediation: %q", nextCommand)
+	if !strings.Contains(text, "lit sync pull --remote origin") {
+		t.Fatalf("missing retry command: %q", text)
 	}
 }
 
@@ -110,111 +111,49 @@ func TestSyncFailureFromPullHoldsProseConflict(t *testing.T) {
 	}
 }
 
-func TestBuildSyncPullPayloadOKStates(t *testing.T) {
+func TestPrintSyncPullOutcomeNeverSyncedWithoutVerboseOmitsRemoteDetails(t *testing.T) {
 	t.Parallel()
-	for _, tc := range []struct {
-		state storage.SyncPullState
-		want  string
-	}{
-		{storage.SyncPullUpToDate, "up_to_date"},
-		{storage.SyncPullFastForwarded, "fast_forwarded"},
-		{storage.SyncPullLinearized, "linearized"},
-		{storage.SyncPullAhead, "ahead"},
-	} {
-		payload := buildSyncPullPayload("origin", "master", storage.SyncPullResult{State: tc.state})
-		if payload["status"] != "ok" {
-			t.Fatalf("state %q: status = %v, want ok", tc.state, payload["status"])
-		}
-		if payload["state"] != tc.want {
-			t.Fatalf("state %q: payload state = %v, want %q", tc.state, payload["state"], tc.want)
-		}
-	}
-}
-
-func TestBuildSyncPullPayloadUnknownStateSurfaces(t *testing.T) {
-	t.Parallel()
-	// A SyncPullState the renderer does not enumerate must not masquerade as ok.
-	payload := buildSyncPullPayload("origin", "master", storage.SyncPullResult{State: storage.SyncPullState("weird_new_state")})
-	if payload["status"] != "unknown" {
-		t.Fatalf("status = %v, want unknown (unmapped state must surface, not render ok)", payload["status"])
-	}
-	if payload["state"] != "weird_new_state" {
-		t.Fatalf("state = %v, want weird_new_state", payload["state"])
-	}
-}
-
-func TestPrintSyncPullPayloadSkippedText(t *testing.T) {
-	t.Parallel()
-	payload := map[string]any{
-		"status":        "skipped",
-		"remote":        "origin",
-		"branch":        "feature/local-only",
-		"next_command":  "lit sync push --remote origin --set-upstream",
-		"retry_command": "lit sync pull --remote origin",
-	}
+	outcome := syncPullOutcome{remote: "origin", branch: "feature/local-only", state: storage.SyncPullNeverSynced}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, true); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
-	}
-	text := out.String()
-	if !strings.Contains(text, "skipped pull origin/feature/local-only: remote branch missing") {
-		t.Fatalf("unexpected skipped text: %q", text)
-	}
-	if !strings.Contains(text, "lit sync push --remote origin --set-upstream") {
-		t.Fatalf("missing next command in text: %q", text)
-	}
-	if !strings.Contains(text, "lit sync pull --remote origin") {
-		t.Fatalf("missing retry command in text: %q", text)
-	}
-}
-
-func TestPrintSyncPullPayloadSkippedTextWithoutVerboseOmitsRemoteDetails(t *testing.T) {
-	t.Parallel()
-	payload := map[string]any{
-		"status":        "skipped",
-		"remote":        "origin",
-		"branch":        "feature/local-only",
-		"next_command":  "lit sync push --remote origin --set-upstream",
-		"retry_command": "lit sync pull --remote origin",
-	}
-	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	text := out.String()
 	if strings.Contains(text, "origin/feature/local-only") {
-		t.Fatalf("printSyncPullPayload() unexpectedly includes remote details: %q", text)
+		t.Fatalf("printSyncPullOutcome() unexpectedly includes remote details: %q", text)
 	}
 	if !strings.Contains(text, "sync pull skipped; run") {
-		t.Fatalf("printSyncPullPayload() missing terse skipped guidance: %q", text)
+		t.Fatalf("printSyncPullOutcome() missing terse skipped guidance: %q", text)
 	}
 }
 
-func TestPrintSyncPullPayloadVerboseOKShowsState(t *testing.T) {
+func TestPrintSyncPullOutcomeVerboseOKShowsState(t *testing.T) {
 	t.Parallel()
-	for _, state := range []string{"up_to_date", "fast_forwarded", "linearized", "ahead"} {
-		payload := map[string]any{"status": "ok", "state": state, "remote": "origin", "branch": "master"}
+	for _, state := range []storage.SyncPullState{
+		storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead,
+	} {
+		outcome := syncPullOutcome{remote: "origin", branch: "master", state: state}
 		var out bytes.Buffer
-		if err := printSyncPullPayload(&out, payload, true); err != nil {
-			t.Fatalf("printSyncPullPayload(%q) error = %v", state, err)
+		if err := printSyncPullOutcome(&out, outcome, true); err != nil {
+			t.Fatalf("printSyncPullOutcome(%q) error = %v", state, err)
 		}
 		text := out.String()
 		if !strings.Contains(text, "origin/master") {
 			t.Fatalf("verbose ok text missing remote/branch for %q: %q", state, text)
 		}
-		if !strings.Contains(text, "("+state+")") {
+		if !strings.Contains(text, "("+string(state)+")") {
 			t.Fatalf("verbose ok text missing (%s) suffix: %q", state, text)
 		}
 	}
 }
 
-func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
+func TestPrintSyncPullOutcomeUnknownStateAlwaysSurfaces(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{"status": "unknown", "state": "weird_new_state", "remote": "origin", "branch": "master"}
+	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullState("weird_new_state")}
 	// Must surface even in non-verbose mode — a bug must never hide behind "pulled".
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome error = %v", err)
 	}
 	text := out.String()
 	if !strings.Contains(text, "weird_new_state") || !strings.Contains(text, "bug") {
@@ -222,162 +161,130 @@ func TestPrintSyncPullPayloadUnknownStateAlwaysSurfaces(t *testing.T) {
 	}
 }
 
-// printSyncPullPayload no longer renders a prose_pending case: a held conflict is
-// a returned SyncFailureError (see TestSyncFailureFromPullHoldsProseConflict and
-// the contract-shape tests in sync_failure_test.go), never a status payload. This
-// pins the second layer of the guard: buildSyncPullPayload maps any unrecognized
-// pull state to status "unknown" carrying the raw state, and the printer renders
-// "unknown" as a reported bug, not a bland "pulled". prose_pending is the concrete
-// state used here because a prose_pending reaching the builder at all would be a
-// routing bug (runSyncPull intercepts it first) — exactly what must surface loudly.
-func TestPrintSyncPullPayloadSurfacesUnknownStateAsBug(t *testing.T) {
+// printSyncPullOutcome renders no prose_pending case: a held conflict is a
+// returned SyncFailureError (see TestSyncFailureFromPullHoldsProseConflict and
+// the contract-shape tests in sync_failure_test.go), never a printed outcome.
+// This pins the guard behind that routing: the printer's enumerated arms map any
+// unrecognized pull state to a reported bug, not a bland "pulled". prose_pending
+// is the concrete state used here because a prose_pending reaching the printer
+// at all would be a routing bug (runSyncPull intercepts it first) — exactly what
+// must surface loudly.
+func TestPrintSyncPullOutcomeSurfacesUnknownStateAsBug(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{"status": "unknown", "state": "prose_pending", "remote": "origin", "branch": "master"}
+	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullState("prose_pending")}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	if text := out.String(); !strings.Contains(text, "prose_pending") || !strings.Contains(text, "bug") {
 		t.Fatalf("stray prose_pending not surfaced as a bug: %q", text)
 	}
 }
 
-func TestPrintSyncPullPayloadNoRemoteSkippedText(t *testing.T) {
+func TestPrintSyncPullOutcomeNoRemoteSkippedText(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "no_sync_remote",
-	}
+	outcome := syncPullOutcome{skip: syncTargetNoRemote}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "" {
-		t.Fatalf("printSyncPullPayload() = %q, want empty output", got)
+		t.Fatalf("printSyncPullOutcome() = %q, want empty output", got)
 	}
 }
 
-func TestPrintSyncPullPayloadNoRemoteSkippedVerboseText(t *testing.T) {
+func TestPrintSyncPullOutcomeNoRemoteSkippedVerboseText(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "no_sync_remote",
-	}
+	outcome := syncPullOutcome{skip: syncTargetNoRemote}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, true); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, true); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "skipped sync pull: no eligible git remote" {
-		t.Fatalf("printSyncPullPayload() = %q, want verbose no-remote message", got)
+		t.Fatalf("printSyncPullOutcome() = %q, want verbose no-remote message", got)
 	}
 }
 
-func TestPrintSyncPushPayloadNoRemoteSkippedText(t *testing.T) {
+func TestPrintSyncPushOutcomeNoRemoteSkippedText(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "no_sync_remote",
-	}
+	outcome := syncPushOutcome{skip: syncTargetNoRemote}
 	var out bytes.Buffer
-	if err := printSyncPushPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPushPayload() error = %v", err)
+	if err := printSyncPushOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPushOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "" {
-		t.Fatalf("printSyncPushPayload() = %q, want empty output", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want empty output", got)
 	}
 }
 
-func TestPrintSyncPushPayloadNoRemoteSkippedVerboseText(t *testing.T) {
+func TestPrintSyncPushOutcomeNoRemoteSkippedVerboseText(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "no_sync_remote",
-	}
+	outcome := syncPushOutcome{skip: syncTargetNoRemote}
 	var out bytes.Buffer
-	if err := printSyncPushPayload(&out, payload, true); err != nil {
-		t.Fatalf("printSyncPushPayload() error = %v", err)
+	if err := printSyncPushOutcome(&out, outcome, true); err != nil {
+		t.Fatalf("printSyncPushOutcome() error = %v", err)
 	}
-	if got := strings.TrimSpace(out.String()); got != "skipped sync push: no eligible git remote" {
-		t.Fatalf("printSyncPushPayload() = %q, want verbose no-remote message", got)
+	if got := strings.TrimSpace(out.String()); got != "no upstream remote and no single configured remote; skipping sync push" {
+		t.Fatalf("printSyncPushOutcome() = %q, want verbose no-remote message", got)
 	}
 }
 
-func TestPrintSyncPushPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+func TestPrintSyncPushOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "remote_empty",
-		"remote": "origin",
-		"raw":    firstPushSkipMessage,
-	}
+	outcome := syncPushOutcome{skip: syncTargetRemoteEmpty, remote: "origin"}
 	var out bytes.Buffer
-	if err := printSyncPushPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPushPayload() error = %v", err)
+	if err := printSyncPushOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPushOutcome() error = %v", err)
 	}
 	got := out.String()
 	if !strings.Contains(got, "first push") {
-		t.Fatalf("printSyncPushPayload() = %q, want first-push message", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want first-push message", got)
 	}
 	if !strings.Contains(got, "ONLY") {
-		t.Fatalf("printSyncPushPayload() = %q, want emphasis that skip is only valid on first push", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want emphasis that skip is only valid on first push", got)
 	}
 	if !strings.Contains(got, "this message means something is wrong") {
-		t.Fatalf("printSyncPushPayload() = %q, want warning that non-initial skips are a problem", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want warning that non-initial skips are a problem", got)
 	}
 }
 
-func TestPrintSyncPullPayloadRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
+func TestPrintSyncPullOutcomeRemoteEmptyAlwaysEmitsFirstPushMessage(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "skipped",
-		"reason": "remote_empty",
-		"remote": "origin",
-		"raw":    firstPushSkipMessage,
-	}
+	outcome := syncPullOutcome{skip: syncTargetRemoteEmpty, remote: "origin"}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	got := out.String()
 	if !strings.Contains(got, "first push") {
-		t.Fatalf("printSyncPullPayload() = %q, want first-push message", got)
+		t.Fatalf("printSyncPullOutcome() = %q, want first-push message", got)
 	}
 	if !strings.Contains(got, "ONLY") {
-		t.Fatalf("printSyncPullPayload() = %q, want emphasis that skip is only valid on first push", got)
+		t.Fatalf("printSyncPullOutcome() = %q, want emphasis that skip is only valid on first push", got)
 	}
 }
 
-func TestPrintSyncPullPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
+func TestPrintSyncPullOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "ok",
-		"remote": "origin",
-		"branch": "master",
-		"raw":    "From origin",
-	}
+	outcome := syncPullOutcome{remote: "origin", branch: "master", state: storage.SyncPullFastForwarded}
 	var out bytes.Buffer
-	if err := printSyncPullPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPullPayload() error = %v", err)
+	if err := printSyncPullOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPullOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "pulled" {
-		t.Fatalf("printSyncPullPayload() = %q, want pulled", got)
+		t.Fatalf("printSyncPullOutcome() = %q, want pulled", got)
 	}
 }
 
-func TestPrintSyncPushPayloadDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
+func TestPrintSyncPushOutcomeDefaultSuccessTextHidesRemoteDetails(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status": "ok",
-		"remote": "origin",
-		"branch": "master",
-		"raw":    "Pushing to origin",
-	}
+	outcome := syncPushOutcome{remote: "origin", branch: "master", message: "Pushing to origin"}
 	var out bytes.Buffer
-	if err := printSyncPushPayload(&out, payload, false); err != nil {
-		t.Fatalf("printSyncPushPayload() error = %v", err)
+	if err := printSyncPushOutcome(&out, outcome, false); err != nil {
+		t.Fatalf("printSyncPushOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "pushed" {
-		t.Fatalf("printSyncPushPayload() = %q, want pushed", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want pushed", got)
 	}
 }
 
@@ -515,7 +422,7 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 	}
 }
 
-// TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes is the check the
+// TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes is the check the
 // remote-cache prune needs and did not originally have. The prune's whole safety
 // story rests on a refusal message reaching the operator when its key derivation
 // disagrees with the disk; plumbing that message into the payload and never
@@ -528,7 +435,7 @@ func TestResolveSyncBranchSurfacesCancellationNotMisleadingUnavailable(t *testin
 // states that placement as user-visible behavior — so `Contains` would pass for
 // exactly the arrangement this test exists to rule out, one where the line has
 // slipped back inside a branch and rides along only when that branch is taken.
-func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
+func TestPrintSyncPushOutcomeSurfacesMaintenanceInBothModes(t *testing.T) {
 	t.Parallel()
 	const refusal = "remote-cache prune: declining to prune: 3 cache directories match no configured remote"
 
@@ -542,47 +449,44 @@ func TestPrintSyncPushPayloadSurfacesMaintenanceInBothModes(t *testing.T) {
 		{verbose: false, wantPush: "pushed"},
 		{verbose: true, wantPush: "Everything up-to-date."},
 	} {
-		payload := map[string]any{
-			"status":      "ok",
-			"remote":      "origin",
-			"branch":      "master",
-			"raw":         "Everything up-to-date.",
-			"maintenance": refusal,
+		outcome := syncPushOutcome{
+			remote:      "origin",
+			branch:      "master",
+			message:     "Everything up-to-date.",
+			maintenance: refusal,
 		}
 		var out bytes.Buffer
-		if err := printSyncPushPayload(&out, payload, tc.verbose); err != nil {
-			t.Fatalf("printSyncPushPayload(verbose=%v) error = %v", tc.verbose, err)
+		if err := printSyncPushOutcome(&out, outcome, tc.verbose); err != nil {
+			t.Fatalf("printSyncPushOutcome(verbose=%v) error = %v", tc.verbose, err)
 		}
 		lines := strings.Split(strings.TrimRight(out.String(), "\n"), "\n")
 		if lines[0] != refusal {
-			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want the maintenance line first, got %q",
+			t.Fatalf("printSyncPushOutcome(verbose=%v) = %q, want the maintenance line first, got %q",
 				tc.verbose, out.String(), lines[0])
 		}
 		if len(lines) < 2 || lines[1] != tc.wantPush {
-			t.Fatalf("printSyncPushPayload(verbose=%v) = %q, want %q to still follow the maintenance line",
+			t.Fatalf("printSyncPushOutcome(verbose=%v) = %q, want %q to still follow the maintenance line",
 				tc.verbose, out.String(), tc.wantPush)
 		}
 	}
 }
 
-// TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty pins the other half:
+// TestPrintSyncPushOutcomeAddsNoLineWhenMaintenanceIsEmpty pins the other half:
 // an ordinary push must not grow a line. The engine reports empty when it found
 // nothing to collect, and empty must render as nothing at all.
-func TestPrintSyncPushPayloadAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
+func TestPrintSyncPushOutcomeAddsNoLineWhenMaintenanceIsEmpty(t *testing.T) {
 	t.Parallel()
-	payload := map[string]any{
-		"status":      "ok",
-		"remote":      "origin",
-		"branch":      "master",
-		"raw":         "Everything up-to-date.",
-		"maintenance": "",
+	outcome := syncPushOutcome{
+		remote:  "origin",
+		branch:  "master",
+		message: "Everything up-to-date.",
 	}
 	var out bytes.Buffer
-	if err := printSyncPushPayload(&out, payload, true); err != nil {
-		t.Fatalf("printSyncPushPayload() error = %v", err)
+	if err := printSyncPushOutcome(&out, outcome, true); err != nil {
+		t.Fatalf("printSyncPushOutcome() error = %v", err)
 	}
 	if got := strings.TrimSpace(out.String()); got != "Everything up-to-date." {
-		t.Fatalf("printSyncPushPayload() = %q, want only the push line", got)
+		t.Fatalf("printSyncPushOutcome() = %q, want only the push line", got)
 	}
 }
 

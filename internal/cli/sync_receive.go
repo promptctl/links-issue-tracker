@@ -109,7 +109,7 @@ func surfaceInlineOutcome(ctx context.Context, ws workspace.Info, outcome syncRe
 // information and leave the episode standing. [LAW:dataflow-not-control-flow]
 // the outcome's values decide; the caller runs unconditionally.
 func (o syncReceiveOutcome) settledCleanly() bool {
-	if o.status != "ok" || o.receiveErr != nil {
+	if o.skip != syncTargetReady || o.receiveErr != nil {
 		return false
 	}
 	if o.reconcile == nil {
@@ -172,8 +172,10 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 // was triggered. [LAW:decomposition] Resolving remotes, fetching, and fast-
 // forwarding are one part; the inline scheduling that invokes it is another.
 type syncReceiveOutcome struct {
-	status             string // "ok" | "skipped"
-	reason             string // set when status == "skipped"
+	// skip is the typed no-op discriminator shared with push and pull:
+	// syncTargetReady means the receive ran; a non-empty skip names why it did
+	// not. [LAW:types-are-the-program]
+	skip               syncTargetSkip
 	remote             string
 	branch             string
 	state              storage.SyncReceiveState
@@ -211,7 +213,7 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 		return syncReceiveOutcome{}, err
 	}
 	if target.skip != syncTargetReady {
-		return syncReceiveOutcome{status: "skipped", reason: string(target.skip), remote: target.remote}, nil
+		return syncReceiveOutcome{skip: target.skip, remote: target.remote}, nil
 	}
 	remoteName, syncBranch := target.remote, target.branch
 
@@ -266,7 +268,6 @@ func performSyncReceive(ctx context.Context, session syncSession, ws workspace.I
 		Metadata:  traceMetadata,
 	})
 	outcome := syncReceiveOutcome{
-		status:             "ok",
 		remote:             remoteName,
 		branch:             syncBranch,
 		state:              result.State,
