@@ -218,14 +218,14 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 		outcome syncReceiveOutcome
 		want    bool
 	}{
-		{"fast-forwarded", syncReceiveOutcome{status: "ok"}, true},
-		{"skipped no remote", syncReceiveOutcome{status: "skipped", reason: "no_sync_remote"}, false},
-		{"receive failed", syncReceiveOutcome{status: "ok", receiveErr: errors.New("network")}, false},
-		{"reconcile linearized", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized}}, true},
-		{"reconcile no longer diverged", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileNotDiverged}}, true},
-		{"reconcile held prose", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileProsePending}}, false},
-		{"reconcile unrelated", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileUnrelated}}, false},
-		{"reconcile errored", syncReceiveOutcome{status: "ok", reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized, err: errors.New("gc")}}, false},
+		{"fast-forwarded", syncReceiveOutcome{}, true},
+		{"skipped no remote", syncReceiveOutcome{skip: syncTargetNoRemote}, false},
+		{"receive failed", syncReceiveOutcome{receiveErr: errors.New("network")}, false},
+		{"reconcile linearized", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized}}, true},
+		{"reconcile no longer diverged", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileNotDiverged}}, true},
+		{"reconcile held prose", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileProsePending}}, false},
+		{"reconcile unrelated", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileUnrelated}}, false},
+		{"reconcile errored", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized, err: errors.New("gc")}}, false},
 	}
 	for _, tc := range cases {
 		if got := tc.outcome.settledCleanly(); got != tc.want {

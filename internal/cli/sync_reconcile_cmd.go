@@ -548,7 +548,7 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 		return err
 	default:
 		// An unrecognized state must not trace as a bland "ok" decision — it is the
-		// same class of bug buildSyncPullPayload's "unknown" status guards against.
+		// same class of bug printSyncPullOutcome's unrecognized-state arm guards against.
 		// [LAW:no-silent-failure]
 		recordSyncTraceLogged(ws, syncTraceRecord{
 			Command:   command,

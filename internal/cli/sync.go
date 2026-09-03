@@ -187,23 +187,12 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 		recordSyncCommandTrace(ws, "lit sync pull", "error", err, target.traceMetadata())
 		return err
 	}
-	switch target.skip {
-	case syncTargetNoRemote:
-		recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, nil)
-		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printSyncPullPayload(stdout, map[string]any{
-			"status": "skipped",
-			"reason": string(target.skip),
-			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
-		}, *verbose)
-	case syncTargetRemoteEmpty:
+	if target.skip != syncTargetReady {
+		// traceMetadata is nil before a remote was selected, so the no-remote and
+		// empty-remote skips trace exactly what resolution established.
 		recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
-		return printSyncPullPayload(stdout, map[string]any{
-			"status": "skipped",
-			"reason": string(target.skip),
-			"remote": target.remote,
-			"raw":    firstPushSkipMessage,
-		}, *verbose)
+		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+		return printSyncPullOutcome(stdout, syncPullOutcome{skip: target.skip, remote: target.remote}, *verbose)
 	}
 	remoteName, resolvedBranch := target.remote, target.branch
 	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
@@ -229,7 +218,7 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 	// resolve: it routes through the one sync-failure contract and is RETURNED, so
 	// the command exits ExitConflict — the same exit `lit sync reconcile` gives for
 	// the identical state, rather than a stdout line under a success exit. Every
-	// other pull outcome is a payload the printer renders. [LAW:single-enforcer]
+	// other pull outcome is rendered by the outcome printer. [LAW:single-enforcer]
 	if failure, held := syncFailureFromPull(remoteName, resolvedBranch, result, time.Now()); held {
 		recordSyncHeldTrace(ws, "lit sync pull", failure, pullTraceMetadata)
 		// A held pull is a detection moment: the owner hears out-of-band, the day
@@ -243,11 +232,11 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 	// A pull that completed without a held state converged (or found nothing to
 	// converge): the divergence episode, if one was notified, is over.
 	clearOwnerNotify(ws, ownerNotifyDivergenceKinds...)
-	return printSyncPullPayload(stdout, buildSyncPullPayload(remoteName, resolvedBranch, result), *verbose)
+	return printSyncPullOutcome(stdout, syncPullOutcome{remote: remoteName, branch: resolvedBranch, state: result.State}, *verbose)
 }
 
 // syncFailureFromPull builds the sync-failure contract for a pull outcome the
-// agent must resolve, or held=false for an outcome the payload printer renders. Two
+// agent must resolve, or held=false for an outcome the outcome printer renders. Two
 // pull outcomes are agent-actionable this way: a held free-text conflict and a
 // no-common-ancestor divergence — both non-transient, both routed through the one
 // contract so the exit code and the block match `lit sync reconcile`. A hard pull
@@ -366,61 +355,37 @@ func runSyncPush(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 	}
 	// [LAW:no-silent-failure] The push error surfaces as the command's exit
 	// status only after its trace has been recorded inside performSyncPush —
-	// the skipped/ok payload is never printed over a failed push.
+	// the skipped/ok outcome is never printed over a failed push.
 	if outcome.pushErr != nil {
 		// A remote schema ahead of this binary surfaces as the one sync-failure
 		// contract (exit ExitConflict, naming `lit upgrade`) rather than the raw
 		// non-fast-forward/refusal string. [LAW:single-enforcer]
 		return asSyncFailure(outcome.pushErr)
 	}
-	return printSyncPushPayload(stdout, outcome.payload(), *verbose)
+	return printSyncPushOutcome(stdout, outcome, *verbose)
 }
 
 // syncPushOutcome is the result of one push attempt, independent of CLI
 // presentation. [LAW:decomposition] Reconciling remotes, resolving
 // remote+branch, pushing, and recording the trace are one part; flag parsing
-// and payload rendering are another. The `lit sync push` command and the
+// and outcome rendering are another. The `lit sync push` command and the
 // on-change cadence owner both consume this one orchestration so their push
 // behavior cannot drift. [LAW:single-enforcer]
 type syncPushOutcome struct {
-	status  string // "ok" | "skipped"
-	reason  string // set when status == "skipped"
+	// skip is the typed no-op discriminator: syncTargetReady means the push ran
+	// (or failed running — see pushErr); a non-empty skip names why it did not.
+	// [LAW:types-are-the-program] "skipped" and its reason were one fact spelled
+	// as two fields; the skip carries both. [LAW:one-source-of-truth]
+	skip    syncTargetSkip
 	remote  string
 	branch  string
-	message string
+	message string // the engine's verbatim push output; empty on a skip
 	// maintenance is what the engine reclaimed locally while servicing this
-	// push, rendered as its own payload key so `raw` stays the engine's
-	// verbatim push output. [LAW:one-source-of-truth]
+	// push, rendered as its own line so message stays the engine's verbatim
+	// push output. [LAW:one-source-of-truth]
 	maintenance string
-	pushStatus  int64
-	traceRef    *automationTraceRef
 	traceErr    error
 	pushErr     error // the push failure; the trace is already recorded when set
-}
-
-// payload renders the outcome into the map shape printSyncPushPayload consumes.
-func (o syncPushOutcome) payload() map[string]any {
-	payload := map[string]any{
-		"status": o.status,
-		"remote": o.remote,
-		"branch": o.branch,
-		"raw":    o.message,
-	}
-	if o.status == "skipped" {
-		payload["reason"] = o.reason
-		return payload
-	}
-	payload["push_status"] = o.pushStatus
-	if o.maintenance != "" {
-		payload["maintenance"] = o.maintenance
-	}
-	if o.traceRef != nil {
-		payload["trace_ref"] = o.traceRef.Path
-	}
-	if o.traceErr != nil {
-		payload["trace_error"] = o.traceErr.Error()
-	}
-	return payload
 }
 
 // syncPushStep is the push the orchestrator runs once it has resolved the
@@ -504,23 +469,12 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
-	switch target.skip {
-	case syncTargetNoRemote:
-		recordSyncCommandTrace(ws, "lit sync push", string(target.skip), nil, nil)
-		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return syncPushOutcome{
-			status:  "skipped",
-			reason:  string(target.skip),
-			message: "no upstream remote and no single configured remote; skipping sync push",
-		}, nil
-	case syncTargetRemoteEmpty:
+	if target.skip != syncTargetReady {
+		// traceMetadata is nil before a remote was selected, so the no-remote and
+		// empty-remote skips trace exactly what resolution established.
 		recordSyncCommandTrace(ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
-		return syncPushOutcome{
-			status:  "skipped",
-			reason:  string(target.skip),
-			remote:  target.remote,
-			message: firstPushSkipMessage,
-		}, nil
+		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
+		return syncPushOutcome{skip: target.skip, remote: target.remote}, nil
 	}
 	remoteName, syncBranch := target.remote, target.branch
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
@@ -540,7 +494,9 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 		syncCommandArgs = append(syncCommandArgs, "--force")
 	}
 	// [LAW:one-source-of-truth] Hook-triggered sync traces reuse the shared automation trace writer instead of shell-local trace formats.
-	traceRef, traceRecordErr := maybeRecordAutomatedCommandTrace(
+	// The pre-push hook reads the trace ref through the ref-file the writer
+	// itself maintains, so only the write error is kept. [LAW:no-silent-failure]
+	_, traceRecordErr := maybeRecordAutomatedCommandTrace(
 		ws,
 		formatCommand(syncCommandArgs),
 		"mirror Dolt data to the configured git remote",
@@ -572,13 +528,10 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 		Metadata:  traceMetadata,
 	})
 	return syncPushOutcome{
-		status:      "ok",
 		remote:      remoteName,
 		branch:      syncBranch,
 		message:     result.Message,
 		maintenance: result.Maintenance,
-		pushStatus:  result.Status,
-		traceRef:    traceRef,
 		traceErr:    traceRecordErr,
 		pushErr:     pushErr,
 	}, nil
@@ -755,114 +708,71 @@ func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.In
 	return syncTarget{remote: remoteName, branch: branch}, nil
 }
 
-// buildSyncPullPayload renders a completed pull into the structured payload the
-// printer consumes. The outcome variance lives entirely in the result STATE, not
-// in error-string parsing: a branch the remote has never seen is the typed
-// never_synced state (not a raw "not found on remote" backend string). The one
-// agent-actionable outcome — a held free-text conflict — never reaches here: the
-// caller intercepts it into the sync-failure contract (syncFailureFromPull) before
-// building a payload, so this builder renders only the non-blocking outcomes.
-// [LAW:types-are-the-program] the state is the discriminator; [LAW:dataflow-not-control-flow]
-// one builder, the state selects the fields.
-func buildSyncPullPayload(remote string, branch string, result storage.SyncPullResult) map[string]any {
-	switch result.State {
-	case storage.SyncPullNeverSynced:
-		return map[string]any{
-			"status":        "skipped",
-			"reason":        "remote_branch_missing",
-			"remote":        remote,
-			"branch":        branch,
-			"next_command":  fmt.Sprintf("lit sync push --remote %s --set-upstream", remote),
-			"retry_command": fmt.Sprintf("lit sync pull --remote %s", remote),
-		}
-	case storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead:
-		return map[string]any{
-			"status": "ok",
-			"state":  string(result.State),
-			"remote": remote,
-			"branch": branch,
-		}
-	default:
-		// A SyncPullState this renderer does not enumerate must not masquerade as
-		// "ok" — that would hide a new state behind a bland success, the same gap
-		// SyncPull's loud store-side default guards against. Surface it. The states
-		// are enumerated, not lumped into a default, so adding one here is a
-		// deliberate act. [LAW:no-silent-failure]
-		return map[string]any{
-			"status": "unknown",
-			"state":  string(result.State),
-			"remote": remote,
-			"branch": branch,
-		}
-	}
+// syncPullOutcome is the result of one pull attempt, independent of CLI
+// presentation — pull's counterpart to syncPushOutcome, so neither sync verb
+// re-reads its own output through an untyped map. [LAW:types-are-the-program]
+// the target skip and the pull state are the discriminators the printer
+// switches on; there is no spelled-out status string to re-parse. The one
+// agent-actionable outcome — a held free-text conflict — never becomes an
+// outcome: the caller intercepts it into the sync-failure contract
+// (syncFailureFromPull) first, so the printer renders only non-blocking states.
+type syncPullOutcome struct {
+	// skip is the typed no-op discriminator shared with push: syncTargetReady
+	// means the pull ran and state carries its result.
+	skip   syncTargetSkip
+	remote string
+	branch string
+	state  storage.SyncPullState
 }
 
-func printSyncPullPayload(w io.Writer, payload map[string]any, verbose bool) error {
-	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
-	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
-	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
-	switch status {
-	case "skipped":
-		reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))
-		if reason == "no_sync_remote" {
-			if !verbose {
-				return nil
-			}
-			_, err := fmt.Fprintln(w, "skipped sync pull: no eligible git remote")
-			return err
-		}
-		if reason == "remote_empty" {
-			// [LAW:dataflow-not-control-flow] exception: first-push skip message must always reach the caller so agents/humans see why sync did nothing.
-			_, err := fmt.Fprintln(w, firstPushSkipMessage)
-			return err
-		}
-		nextCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["next_command"]))
-		retryCommand := strings.TrimSpace(fmt.Sprintf("%v", payload["retry_command"]))
+// printSyncPullOutcome renders a pull outcome. The variance lives entirely in
+// the typed discriminators, not in error-string parsing: a branch the remote
+// has never seen is the typed never_synced state (not a raw "not found on
+// remote" backend string). [LAW:dataflow-not-control-flow] one printer, the
+// state selects the line.
+func printSyncPullOutcome(w io.Writer, o syncPullOutcome, verbose bool) error {
+	switch o.skip {
+	case syncTargetNoRemote:
 		if !verbose {
-			_, err := fmt.Fprintf(
-				w,
-				"sync pull skipped; run `%s`, then retry `%s`\n",
-				nextCommand,
-				retryCommand,
-			)
+			return nil
+		}
+		_, err := fmt.Fprintln(w, "skipped sync pull: no eligible git remote")
+		return err
+	case syncTargetRemoteEmpty:
+		// [LAW:dataflow-not-control-flow] exception: first-push skip message must always reach the caller so agents/humans see why sync did nothing.
+		_, err := fmt.Fprintln(w, firstPushSkipMessage)
+		return err
+	}
+	switch o.state {
+	case storage.SyncPullNeverSynced:
+		nextCommand := fmt.Sprintf("lit sync push --remote %s --set-upstream", o.remote)
+		retryCommand := fmt.Sprintf("lit sync pull --remote %s", o.remote)
+		if !verbose {
+			_, err := fmt.Fprintf(w, "sync pull skipped; run `%s`, then retry `%s`\n", nextCommand, retryCommand)
 			return err
 		}
-		_, err := fmt.Fprintf(
-			w,
-			"skipped pull %s/%s: remote branch missing; run `%s`, then retry `%s`\n",
-			remote,
-			branch,
-			nextCommand,
-			retryCommand,
-		)
+		_, err := fmt.Fprintf(w, "skipped pull %s/%s: remote branch missing; run `%s`, then retry `%s`\n", o.remote, o.branch, nextCommand, retryCommand)
 		return err
-	case "unknown":
-		// buildSyncPullPayload emits this only for a SyncPullState it does not
-		// enumerate — a real gap, surfaced always (never suppressed by non-verbose)
-		// so a new state cannot slip out as a bland "pulled". [LAW:no-silent-failure]
-		state := strings.TrimSpace(fmt.Sprintf("%v", payload["state"]))
-		_, err := fmt.Fprintf(w, "sync pull produced an unrecognized state %q on %s/%s; this is a bug — please report it\n", state, remote, branch)
-		return err
-	default:
+	case storage.SyncPullUpToDate, storage.SyncPullFastForwarded, storage.SyncPullLinearized, storage.SyncPullAhead:
 		if !verbose {
 			_, err := fmt.Fprintln(w, "pulled")
 			return err
 		}
-		state := strings.TrimSpace(fmt.Sprintf("%v", payload["state"]))
-		if branch != "" {
-			_, err := fmt.Fprintf(w, "pulled %s/%s (%s)\n", remote, branch, state)
-			return err
-		}
-		_, err := fmt.Fprintf(w, "pulled %s (%s)\n", remote, state)
+		_, err := fmt.Fprintf(w, "pulled %s/%s (%s)\n", o.remote, o.branch, o.state)
+		return err
+	default:
+		// A SyncPullState this printer does not enumerate must not masquerade as
+		// "pulled" — that would hide a new state behind a bland success, the same
+		// gap SyncPull's loud store-side default guards against. Surfaced always
+		// (never suppressed by non-verbose). The states are enumerated, not lumped
+		// into a default, so adding one here is a deliberate act.
+		// [LAW:no-silent-failure]
+		_, err := fmt.Fprintf(w, "sync pull produced an unrecognized state %q on %s/%s; this is a bug — please report it\n", string(o.state), o.remote, o.branch)
 		return err
 	}
 }
 
-func printSyncPushPayload(w io.Writer, payload map[string]any, verbose bool) error {
-	status := strings.TrimSpace(fmt.Sprintf("%v", payload["status"]))
-	raw, hasRaw := payload["raw"].(string)
-	reason := strings.TrimSpace(fmt.Sprintf("%v", payload["reason"]))
-
+func printSyncPushOutcome(w io.Writer, o syncPushOutcome, verbose bool) error {
 	// The engine's local-maintenance report is independent of which push line is
 	// chosen below, and every branch below returns — so it is emitted once, here,
 	// ahead of the cascade, rather than repeated into each arm where a future arm
@@ -871,38 +781,32 @@ func printSyncPushPayload(w io.Writer, payload map[string]any, verbose bool) err
 	// disk, and a warning reachable only behind --verbose is still silent where
 	// it counts. The engine leaves it empty when it found nothing worth saying,
 	// so an ordinary push gains no line. [LAW:no-silent-failure]
-	if maintenance, ok := payload["maintenance"].(string); ok && strings.TrimSpace(maintenance) != "" {
-		if _, err := fmt.Fprintln(w, strings.TrimSpace(maintenance)); err != nil {
+	if maintenance := strings.TrimSpace(o.maintenance); maintenance != "" {
+		if _, err := fmt.Fprintln(w, maintenance); err != nil {
 			return err
 		}
 	}
-	if status == "skipped" && reason == "remote_empty" {
+	switch o.skip {
+	case syncTargetNoRemote:
+		if !verbose {
+			return nil
+		}
+		_, err := fmt.Fprintln(w, "no upstream remote and no single configured remote; skipping sync push")
+		return err
+	case syncTargetRemoteEmpty:
 		// [LAW:dataflow-not-control-flow] exception: first-push skip message must always reach the caller so agents/humans see why sync did nothing.
 		_, err := fmt.Fprintln(w, firstPushSkipMessage)
 		return err
-	}
-	if !verbose && status == "skipped" {
-		return nil
 	}
 	if !verbose {
 		_, err := fmt.Fprintln(w, "pushed")
 		return err
 	}
-	if hasRaw && strings.TrimSpace(raw) != "" {
-		_, err := fmt.Fprintln(w, strings.TrimSpace(raw))
+	if raw := strings.TrimSpace(o.message); raw != "" {
+		_, err := fmt.Fprintln(w, raw)
 		return err
 	}
-	if status == "skipped" {
-		_, err := fmt.Fprintln(w, "skipped sync push: no eligible git remote")
-		return err
-	}
-	remote := strings.TrimSpace(fmt.Sprintf("%v", payload["remote"]))
-	branch := strings.TrimSpace(fmt.Sprintf("%v", payload["branch"]))
-	if branch != "" {
-		_, err := fmt.Fprintf(w, "pushed %s/%s\n", remote, branch)
-		return err
-	}
-	_, err := fmt.Fprintf(w, "pushed %s\n", remote)
+	_, err := fmt.Fprintf(w, "pushed %s/%s\n", o.remote, o.branch)
 	return err
 }
 

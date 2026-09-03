@@ -32,24 +32,24 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "push that ran and failed records error with the resolved ref",
 			outcome: syncPushOutcome{
-				status: "ok", remote: "origin", branch: "master",
+				remote: "origin", branch: "master",
 				pushErr: errors.New("connection refused"),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionError, Reason: "connection refused", Remote: "origin", Branch: "master"},
 		},
 		{
 			name:    "no-remote skip records its own decision, not a failure",
-			outcome: syncPushOutcome{status: "skipped", reason: "no_sync_remote"},
+			outcome: syncPushOutcome{skip: syncTargetNoRemote},
 			want:    pushOutcomeRecord{Decision: "no_sync_remote"},
 		},
 		{
 			name:    "empty-remote skip records its own decision, not a failure",
-			outcome: syncPushOutcome{status: "skipped", reason: "remote_empty", remote: "origin"},
+			outcome: syncPushOutcome{skip: syncTargetRemoteEmpty, remote: "origin"},
 			want:    pushOutcomeRecord{Decision: "remote_empty", Remote: "origin"},
 		},
 		{
 			name:    "landed push records pushed",
-			outcome: syncPushOutcome{status: "ok", remote: "origin", branch: "master"},
+			outcome: syncPushOutcome{remote: "origin", branch: "master"},
 			want:    pushOutcomeRecord{Decision: pushDecisionPushed, Remote: "origin", Branch: "master"},
 		},
 		{
@@ -60,7 +60,7 @@ func TestPushOutcomeOf(t *testing.T) {
 		{
 			name: "cancellation mid-push records canceled with the resolved ref",
 			outcome: syncPushOutcome{
-				status: "ok", remote: "origin", branch: "master",
+				remote: "origin", branch: "master",
 				pushErr: fmt.Errorf("push: %w", context.Canceled),
 			},
 			want: pushOutcomeRecord{Decision: pushDecisionCanceled, Reason: "push: context canceled", Remote: "origin", Branch: "master"},
