@@ -78,7 +78,7 @@ func withSyncStore(run syncRunFn) wsRunFn {
 		if err != nil {
 			// The open boundary stamps holder contention so Run's trace can
 			// tell a starved OPEN from a handler-traced mid-command contention.
-			return markEngineOpenContention(err)
+			return markEngineOpenContention(err, ws)
 		}
 		defer closeStore()
 		return run(ctx, stdout, ws, session, args)

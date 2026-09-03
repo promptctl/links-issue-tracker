@@ -116,8 +116,14 @@ func runWithApp(ctx context.Context, stdout io.Writer, accessMode app.AccessMode
 			return OutsideWorkspaceError{Message: "links requires running inside a git repository/worktree"}
 		}
 		// The open boundary stamps holder contention so Run's trace can tell a
-		// starved OPEN from a handler-traced mid-command contention.
-		return markEngineOpenContention(err)
+		// starved OPEN from a handler-traced mid-command contention. cwd is
+		// definitionally the store this boundary opens; a cwd that cannot
+		// resolve cannot be busy (app.Open resolved it to get here), so the
+		// unstamped fall-through carries no contention.
+		if ws, wsErr := workspace.Resolve(cwd); wsErr == nil {
+			return markEngineOpenContention(err, ws)
+		}
+		return err
 	}
 	// Capture the workspace before running: auto-sync needs it after the engine
 	// is closed, and the close happens in the inner function below (including on
@@ -350,8 +356,10 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
 			// store dir is an actionable error, not an empty list. The open
 			// boundary stamps holder contention (inside the wrap — errors.As
-			// reaches through it) for Run's dispatch trace.
-			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err))
+			// reaches through it) bound to the --at TARGET, so the trace files
+			// beside the traces of whatever holds that store — from any cwd,
+			// including no workspace at all.
+			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err, infoForLocation(loc)))
 		}
 		defer func() { _ = st.Close() }()
 		return runListWithStore(ctx, stdout, st, args)

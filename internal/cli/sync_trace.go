@@ -116,53 +116,67 @@ func recordSyncCommandTrace(ws workspace.Info, command, decision string, err err
 	})
 }
 
-// engineOpenContentionError marks a failure as an ENGINE OPEN starved by a
-// co-resident holder. The store's ErrWorkspaceBusy sentinel alone cannot carry
-// that fact — commit-lock contention mid-command wraps the same sentinel, and
-// those failures are already traced by their own handlers — so the open
-// boundaries stamp their failures with this type and the dispatch boundary
-// reads the stamp. [LAW:parse-dont-validate] the check's proof travels in the
-// type, so it cannot be re-derived (wrongly) from the sentinel downstream.
-type engineOpenContentionError struct{ err error }
+// engineOpenContentionError marks a failure as a store acquisition starved by
+// a co-resident holder. The store's ErrWorkspaceBusy sentinel alone cannot
+// carry that fact — the mutation family's mid-command commit-lock contention
+// wraps the same sentinel and is traced by its own handlers — so the
+// acquisition boundaries stamp their failures with this type and the dispatch
+// boundary reads the stamp. The stamp also carries WHERE the contention
+// happened: only the boundary knows which store it failed against, and an
+// ambient cwd re-derivation downstream files `ls --at <foreign>` contention
+// under the wrong workspace or nowhere. [LAW:parse-dont-validate] the check's
+// proof — and its filing location — travel in the type, so neither can be
+// re-derived (wrongly) downstream.
+type engineOpenContentionError struct {
+	err error
+	ws  workspace.Info
+}
 
 func (e engineOpenContentionError) Error() string { return e.err.Error() }
 func (e engineOpenContentionError) Unwrap() error { return e.err }
 
-// markEngineOpenContention stamps an open-boundary failure when it is the
-// holder-contention class; every other error passes through untouched.
-func markEngineOpenContention(err error) error {
+// markEngineOpenContention stamps an acquisition-boundary failure when it is
+// the holder-contention class, binding it to the workspace whose store was
+// contended; every other error passes through untouched.
+func markEngineOpenContention(err error, ws workspace.Info) error {
 	if err == nil || !errors.Is(err, store.ErrWorkspaceBusy) {
 		return err
 	}
-	return engineOpenContentionError{err: err}
+	return engineOpenContentionError{err: err, ws: ws}
+}
+
+// infoForLocation builds the trace-filing identity of a store addressed by
+// location alone — no checkout, no cwd: its path geometry plus the
+// workspace id its config records. A location whose config cannot be read
+// still files under the right storage dir, with the id left empty — the
+// filing location is the fact that matters.
+func infoForLocation(loc workspace.Location) workspace.Info {
+	info := workspace.Info{Location: loc}
+	if cfg, err := workspace.ReadConfig(loc.ConfigPath); err == nil {
+		info.WorkspaceID = cfg.WorkspaceID
+	}
+	return info
 }
 
 // recordEngineOpenContentionTrace leaves a durable sync-trace record when a
-// command's store open failed against a co-resident holder — the record that
-// did not exist when links-sync-pgct.11.1 was hit in the field, leaving the
-// starved command uncorrelatable against the sync traces the mirror DOES
-// write. It fires only on the open-boundary stamp above, never on the bare
-// busy sentinel — a mid-command commit-lock contention already leaves its
-// handler's own trace, and a second record here would give one event two
-// stories. [LAW:single-enforcer] whether an error earns this record is decided
-// here, once, at the dispatch boundary — the one seam where the verbatim
-// invocation is known (never ambient os.Args, which lies for the in-process
-// Run callers the test suite uses). A workspace that cannot be resolved has
-// nowhere to file the trace; the open error itself is the report.
+// command's store acquisition failed against a co-resident holder — the
+// record that did not exist when links-sync-pgct.11.1 was hit in the field,
+// leaving the starved command uncorrelatable against the sync traces the
+// mirror DOES write. It fires only on the acquisition-boundary stamp above,
+// never on the bare busy sentinel — the mutation family's mid-command
+// commit-lock contention already leaves its handler's own trace, and a second
+// record here would give one event two stories. [LAW:single-enforcer] whether
+// an error earns this record is decided here, once, at the dispatch boundary
+// — the one seam where the verbatim invocation is known (never ambient
+// os.Args, which lies for the in-process Run callers the test suite uses).
+// The trace files under the workspace the stamp carries — the contended
+// store's own, which is where the holder's traces live.
 func recordEngineOpenContentionTrace(args []string, err error) {
 	var open engineOpenContentionError
 	if !errors.As(err, &open) {
 		return
 	}
-	cwd, cwdErr := os.Getwd()
-	if cwdErr != nil {
-		return
-	}
-	ws, wsErr := workspace.Resolve(cwd)
-	if wsErr != nil {
-		return
-	}
-	recordSyncTraceLogged(ws, syncTraceRecord{
+	recordSyncTraceLogged(open.ws, syncTraceRecord{
 		Command:   formatCommand(args),
 		Decision:  commandErrorReason(err),
 		Status:    "error",

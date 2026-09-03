@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/app"
 	"github.com/promptctl/links-issue-tracker/internal/engine"
+	"github.com/promptctl/links-issue-tracker/internal/store"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -99,6 +101,55 @@ func TestLsAtLeavesStoreWritable(t *testing.T) {
 	}
 	if id := seedOpenIssueRaw(t, ctx, ap, "Written after a foreign read"); id == "" {
 		t.Fatal("writer produced no issue id after a foreign read")
+	}
+}
+
+// TestLsAtContentionTraceFilesUnderTargetStore pins where a starved
+// `ls --at` files its contention trace: under the --at TARGET store — beside
+// the traces of whatever holds it — never resolved from the cwd, which for
+// --at is explicitly allowed to be no workspace at all. Pre-fix, a cwd-based
+// resolution silently dropped this exact record (no cwd workspace) or misfiled
+// it into an unrelated one.
+//
+// Not parallel: it chdirs.
+func TestLsAtContentionTraceFilesUnderTargetStore(t *testing.T) {
+	storeDir, _ := foreignStore(t, "ws-foreign", "proj")
+	loc := workspace.LocationFromStorageDir(storeDir)
+
+	// The --at cwd contract: no workspace anywhere near the cwd.
+	chdir(t, t.TempDir())
+
+	release, err := store.LockWorkspaceExclusive(context.Background(), loc.DatabasePath)
+	if err != nil {
+		t.Fatalf("LockWorkspaceExclusive: %v", err)
+	}
+	defer func() {
+		if relErr := release(); relErr != nil {
+			t.Errorf("release exclusive: %v", relErr)
+		}
+	}()
+
+	var out bytes.Buffer
+	err = Run(context.Background(), &out, &out, []string{"ls", "--at", storeDir})
+	if err == nil {
+		t.Fatalf("ls --at succeeded against an exclusively held store; expected workspace-busy refusal\noutput=%s", out.String())
+	}
+	if !errors.Is(err, store.ErrWorkspaceBusy) {
+		t.Fatalf("ls --at error %v must wrap store.ErrWorkspaceBusy", err)
+	}
+
+	traced := false
+	if entries, readErr := os.ReadDir(syncTraceDir(infoForLocation(loc))); readErr == nil {
+		for _, entry := range entries {
+			content, fileErr := os.ReadFile(filepath.Join(syncTraceDir(infoForLocation(loc)), entry.Name()))
+			if fileErr == nil && strings.Contains(string(content), "lit ls --at") {
+				traced = true
+				break
+			}
+		}
+	}
+	if !traced {
+		t.Fatalf("no sync trace under the --at target records the starved `lit ls --at`; the contention is unattributable")
 	}
 }
 
