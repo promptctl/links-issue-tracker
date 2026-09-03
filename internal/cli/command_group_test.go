@@ -116,6 +116,46 @@ func TestCommandGroupHelpExitsZeroWithUsageOnStdout(t *testing.T) {
 	}
 }
 
+// A nested group's help must be answered by the OUTER family resolve, before
+// the dispatch pipeline acquires the workspace, store, or app the real
+// subcommand needs — under store contention an acquisition-first help would
+// block for the open-retry budget and then fail busy instead of answering.
+// Running outside any git repository is the machine-checkable proxy: success
+// here is only possible if help acquired nothing. [LAW:verifiable-goals]
+// Paths are derived from the registry, so a future nested group added to the
+// completion tree without pre-acquisition help recognition fails this test.
+func TestNestedGroupHelpAnswersWithoutAcquiringResources(t *testing.T) {
+	prevWD, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("Getwd() error = %v", err)
+	}
+	if err := os.Chdir(t.TempDir()); err != nil {
+		t.Fatalf("Chdir(nonRepo) error = %v", err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(prevWD) })
+
+	tested := 0
+	for _, path := range commandGroupPaths() {
+		if len(path) < 2 {
+			continue
+		}
+		tested++
+		for _, helpFlag := range []string{"-h", "--help"} {
+			args := append(append([]string{}, path...), helpFlag)
+			var stdout, stderr bytes.Buffer
+			if err := Run(context.Background(), &stdout, &stderr, args); err != nil {
+				t.Fatalf("Run(%v) outside a repo error = %v, want help answered without any workspace/store/app", args, err)
+			}
+			if got := stdout.String(); !strings.Contains(got, path[len(path)-1]) {
+				t.Fatalf("Run(%v) stdout = %q, want usage naming %q", args, got, path[len(path)-1])
+			}
+		}
+	}
+	if tested == 0 {
+		t.Fatal("registry advertises no nested groups; the test asserted nothing")
+	}
+}
+
 // The state-transition surface splits across two help groups so the high-traffic
 // status lifecycle stands out: the core verbs stay in Agent Operations, the rare
 // retention verbs move to their own Issue Retention group rendered below it. This

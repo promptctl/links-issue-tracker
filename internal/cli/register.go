@@ -101,6 +101,15 @@ type subcommandRow[P any] struct {
 	// property here, not a name omitted from a usage string by convention.
 	// [LAW:types-are-the-program]
 	hidden bool
+	// nestedUsage, when non-empty, marks this subcommand as itself a command
+	// group and carries that group's usage — always set by reference to the
+	// nested family's own usage field, never restated. [LAW:one-source-of-truth]
+	// It lets the OUTER resolve answer `parent sub --help` itself: the dispatch
+	// pipeline between the outer resolve and the nested family's own resolve
+	// acquires the workspace, store, or app the real subcommand needs, and a
+	// help request must acquire nothing — under store contention the nested
+	// resolve would otherwise be reached only after a blocking open, or never.
+	nestedUsage string
 }
 
 // commandFamily is the single source of truth for a subcommand family: which
@@ -130,11 +139,14 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 	if len(args) == 0 {
 		return zero, UsageError{Message: f.usage}
 	}
-	if args[0] == "-h" || args[0] == "--help" {
+	if isHelpFlag(args[0]) {
 		return zero, HelpRequestedError{Usage: f.usage}
 	}
 	for _, s := range f.subcommands {
 		if s.name == args[0] {
+			if s.nestedUsage != "" && len(args) > 1 && isHelpFlag(args[1]) {
+				return zero, HelpRequestedError{Usage: s.nestedUsage}
+			}
 			return s.payload, nil
 		}
 	}
@@ -143,6 +155,12 @@ func (f commandFamily[P]) resolve(args []string) (P, error) {
 	// "command_failed" reason, whose retry-then-doctor remediation can never
 	// succeed for a bad path (links-cli-zc3r).
 	return zero, UsageError{Message: f.usage}
+}
+
+// isHelpFlag is the one definition of what a help-shaped argv token is; both
+// recognition points in resolve read it. [LAW:one-source-of-truth]
+func isHelpFlag(arg string) bool {
+	return arg == "-h" || arg == "--help"
 }
 
 // visibleSubcommands projects the family's advertised first-argument names for
