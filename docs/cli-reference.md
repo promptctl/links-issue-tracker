@@ -80,9 +80,10 @@ lit init [--skip-hooks] [--skip-agents]
 ```
 
 Initializes the issue store under `$(git rev-parse --git-common-dir)/links/`, adds
-managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git hook.
-Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
-suppress the respective side effects.
+managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, writes the managed `/next` skill
+to `.claude/skills/next/SKILL.md`, and installs the sync git hook. Idempotent:
+re-running reconciles the managed files. `--skip-hooks` and `--skip-agents` suppress
+the respective side effects.
 
 On a fresh clone, `lit init` detects whether the configured git remote already
 carries `lit` ticket data and adopts it automatically, so the clone transparently
@@ -754,7 +755,8 @@ guidance at the moment of need: `work` (finding and starting work), `new` (creat
 tickets), `update` (managing existing tickets), `done` (finishing work), `doctor`
 (troubleshooting). `--eject` copies the embedded default templates to the global
 override path so you can customize them (`LIST` is comma-separated short names, e.g.
-`quickstart,quickstart-work,agents,hook`; `--force` overwrites existing overrides);
+`quickstart,quickstart-work,agents,hook,next-skill`; `--force` overwrites existing
+overrides);
 `--refresh` re-syncs managed repo assets and reports override drift without touching
 overrides. Topics take no flags.
 

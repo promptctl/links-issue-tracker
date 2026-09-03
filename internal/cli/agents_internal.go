@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
@@ -35,11 +36,18 @@ func renderLinksAgentsSection(workspaceRoot string) (string, templates.Source, e
 func writeManagedFile(rootDir, filename, headerPrefix, section, beginMarker, endMarker string) (agentsInstallResult, error) {
 	filePath := filepath.Join(rootDir, filename)
 	content, err := os.ReadFile(filePath)
-	if err != nil {
-		if !errors.Is(err, os.ErrNotExist) {
-			return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
-		}
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return agentsInstallResult{}, fmt.Errorf("read %s: %w", filename, err)
+	}
+	// Create-vs-adopt keys on whether the file holds meaningful content, not on
+	// whether it exists: a whitespace-only file adopted as-is would receive the
+	// managed section without headerPrefix — for SKILL.md, a skill file with no
+	// frontmatter, which the harness cannot discover.
+	if strings.TrimSpace(string(content)) == "" {
 		initial := headerPrefix + section
+		if mkdirErr := os.MkdirAll(filepath.Dir(filePath), 0o755); mkdirErr != nil {
+			return agentsInstallResult{}, fmt.Errorf("create directory for %s: %w", filename, mkdirErr)
+		}
 		if writeErr := os.WriteFile(filePath, []byte(initial), 0o644); writeErr != nil {
 			return agentsInstallResult{}, fmt.Errorf("write %s: %w", filename, writeErr)
 		}
@@ -86,4 +94,62 @@ func ensureLinksAgentFiles(rootDir string) (agents agentsInstallResult, claude a
 	claudeResult.Source = source
 
 	return agentsResult, claudeResult, nil
+}
+
+// nextSkillRelPath is where the harness discovers the project /next skill.
+const nextSkillRelPath = ".claude/skills/next/SKILL.md"
+
+// nextSkillFrontmatter is the harness-parsed skill identity. It must sit at
+// byte 0 of SKILL.md, so it cannot live inside the managed markers: like the
+// "# AGENTS" heading, it is written once at creation and is the user's
+// afterward, while lit owns only the marker-delimited body below it.
+const nextSkillFrontmatter = "---\nname: next\ndescription: Pull the next ticket\n---\n\n"
+
+// normalizeManagedSection parses resolved template content into a
+// marker-delimited managed section — the only shape upsertManagedSection
+// reconciles instead of growing. [LAW:parse-dont-validate] Exactly two shapes
+// are legal: no markers at all (plain guidance text, the quickstart-template
+// convention) is wrapped, and exactly one BEGIN/END pair spanning the whole
+// content passes through. Every other shape — a lone marker, a stray extra
+// one, text outside the pair — would duplicate part of itself on every
+// subsequent reconcile, so it is rejected loudly instead of laundered into a
+// file that grows without bound. [LAW:no-silent-failure]
+func normalizeManagedSection(content, beginMarker, endMarker string) (string, error) {
+	begins := strings.Count(content, beginMarker)
+	ends := strings.Count(content, endMarker)
+	if begins == 0 && ends == 0 {
+		if !strings.HasSuffix(content, "\n") {
+			content += "\n"
+		}
+		return beginMarker + "\n" + content + endMarker + "\n", nil
+	}
+	// The pass-through re-emits the trimmed block, not the raw bytes:
+	// whitespace outside the marker span would sit outside the region
+	// upsertManagedSection replaces and compound on every reconcile.
+	trimmed := strings.TrimSpace(content)
+	if begins == 1 && ends == 1 && strings.HasPrefix(trimmed, beginMarker) && strings.HasSuffix(trimmed, endMarker) {
+		return trimmed + "\n", nil
+	}
+	return "", fmt.Errorf("content must either contain no %s/%s markers or be exactly one such block; found %d begin and %d end marker(s)", beginMarker, endMarker, begins, ends)
+}
+
+// ensureNextSkillFile writes the managed /next skill body to
+// .claude/skills/next/SKILL.md, resolved project > global > embedded like
+// every managed template. [LAW:single-enforcer] All writes of the shipped
+// /next skill go through this one function.
+func ensureNextSkillFile(rootDir string) (agentsInstallResult, error) {
+	section, source, err := templates.LoadWithSource(templates.NextSkillTemplateName, rootDir)
+	if err != nil {
+		return agentsInstallResult{}, fmt.Errorf("load next skill template: %w", err)
+	}
+	section, err = normalizeManagedSection(section, litAgentsBeginMarker, litAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, fmt.Errorf("next skill template (via %s): %w", source, err)
+	}
+	result, err := writeManagedFile(rootDir, filepath.FromSlash(nextSkillRelPath), nextSkillFrontmatter, section, litAgentsBeginMarker, litAgentsEndMarker)
+	if err != nil {
+		return agentsInstallResult{}, err
+	}
+	result.Source = source
+	return result, nil
 }

@@ -59,14 +59,16 @@ Run this from inside the target repository:
 lit init
 ```
 
-This creates the issue store under `$(git rev-parse --git-common-dir)/links/` and adds a
+This creates the issue store under `$(git rev-parse --git-common-dir)/links/`, adds a
 short `lit` section to `AGENTS.md` and `CLAUDE.md` so future agents know to run
-`lit quickstart`. If the repo's remote already carries `lit` ticket data, `init` adopts
+`lit quickstart`, and writes the `/next` skill to `.claude/skills/next/SKILL.md` so
+pulling the next ticket is a slash command away. If the repo's remote already carries
+`lit` ticket data, `init` adopts
 that backlog automatically, so a fresh clone starts with the project's real tickets
 rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
-- `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
+- `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md` / `.claude/skills/next/SKILL.md`
 
 Already initialized? `lit init` is safe to run again; it reconciles the integration blocks.
 
