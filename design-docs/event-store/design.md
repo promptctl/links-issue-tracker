@@ -413,6 +413,13 @@ gates prove the fold against it, on real fleet data, at 10x.
 | S3 write-flip | events are truth; sync is git refs; Dolt shadows as rollback | rollback window expires quiet; budgets re-green at 10x | destination |
 | S4 exit | Dolt, the vendored driver, reconcile, engine-serialization, mirror-flock machinery are **deleted**; the oracle retires with Dolt | deletions merged; budgets green as CI regression checks; docs' statuses flipped | destination |
 
+This table's Status column is load-bearing beyond this document: README.md and
+docs/architecture.md carry user-facing claims that Dolt is lit's storage —
+true today, falsified at S3 — and `internal/docsclaims` registers each one
+against this table. Flipping a state's status fails that gate test until those
+docs are rewritten, so the doc-update duty rides the same flip that closes the
+shipping work.
+
 S0 shipped as four things, and the shape matters to every state after it.
 `internal/storage` is the contract, stated in the model's vocabulary with no
 engine in any signature. Beside it sit seven **capabilities** — sync,
