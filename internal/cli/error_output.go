@@ -141,9 +141,8 @@ func commandErrorRemediation(reason string) string {
 	case "validation_refused":
 		return "Do not retry unchanged — this refusal is deterministic and will repeat until the command or the data changes. The error message above states the rule it enforces; adjust the command to satisfy it."
 	case "workspace_busy":
-		// The contention wrappers already end in "retry after it completes", so a
-		// remediation line would be a drifting copy of the message's own guidance.
-		// Emit none. [LAW:one-source-of-truth]
+		// Each contention wrapper carries its own retry guidance, so a remediation
+		// line would be a drifting copy of it. Emit none. [LAW:one-source-of-truth]
 		return ""
 	case "owner_approval_required":
 		// Same shape: the refusal block IS the remediation. [LAW:one-source-of-truth]

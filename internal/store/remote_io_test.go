@@ -162,6 +162,47 @@ func TestRetryTransientRemoteIOExhaustionReportsTransportTruth(t *testing.T) {
 	}
 }
 
+// The exhausted remote-I/O error bubbles up through runSyncMutation's outer
+// GC-contention retry; if that classifier ever treated it as GC contention the
+// two budgets would compound (up to 30 outer attempts x the inner 4-attempt
+// budget each). This pins the one-way relationship: the outer loop passes a
+// RemoteUnreachableError through unmodified and never re-retries it.
+func TestClassifyTransientGCErrorPassesRemoteUnreachableThrough(t *testing.T) {
+	t.Parallel()
+	unreachable := RemoteUnreachableError{
+		Attempts: remoteIORetryMaxAttempts,
+		Symptom:  "ssh: connect to host github.com port 22: Connection refused",
+		Cause:    errors.New(traceConnectionRefused),
+	}
+	classified := classifyTransientGCError(unreachable)
+	if classified != error(unreachable) {
+		t.Fatalf("classified = %v, want the RemoteUnreachableError unmodified", classified)
+	}
+	if errors.Is(classified, ErrTransientGCContention) {
+		t.Fatalf("RemoteUnreachableError must not classify as GC contention: %v", classified)
+	}
+}
+
+// The real backoff schedule the retry runs in production: 1s, 2s, 4s between
+// the four attempts, capped at the max delay, with sub-1 attempts clamped.
+func TestRemoteIORetryDelaySchedule(t *testing.T) {
+	t.Parallel()
+	want := []time.Duration{1 * time.Second, 2 * time.Second, 4 * time.Second}
+	for attempt := 1; attempt <= len(want); attempt++ {
+		if delay := remoteIORetryDelay(attempt); delay != want[attempt-1] {
+			t.Fatalf("delay(%d) = %v, want %v", attempt, delay, want[attempt-1])
+		}
+	}
+	for attempt := len(want) + 1; attempt <= 10; attempt++ {
+		if delay := remoteIORetryDelay(attempt); delay != remoteIORetryMaxDelay {
+			t.Fatalf("delay(%d) = %v, want the %v cap", attempt, delay, remoteIORetryMaxDelay)
+		}
+	}
+	if delay := remoteIORetryDelay(0); delay != remoteIORetryBaseDelay {
+		t.Fatalf("delay(0) = %v, want the clamped base %v", delay, remoteIORetryBaseDelay)
+	}
+}
+
 func TestRetryTransientRemoteIOAbortsOnCanceledSleep(t *testing.T) {
 	t.Parallel()
 	op := &fakeRetryOperation{results: []error{errors.New(traceConnectionRefused)}}
