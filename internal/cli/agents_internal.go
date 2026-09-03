@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/promptctl/links-issue-tracker/internal/templates"
 )
@@ -100,6 +101,22 @@ const nextSkillRelPath = ".claude/skills/next/SKILL.md"
 // afterward, while lit owns only the marker-delimited body below it.
 const nextSkillFrontmatter = "---\nname: next\ndescription: Pull the next ticket\n---\n\n"
 
+// wrapManagedSection normalizes resolved template content into a
+// marker-delimited managed section, wrapping it when the begin marker is
+// absent. [LAW:parse-dont-validate] writeManagedFile requires a section that
+// carries its own markers; an override authored as plain guidance text (the
+// quickstart-template convention) would otherwise strip the file's markers on
+// its first write and re-append itself on every run after.
+func wrapManagedSection(content, beginMarker, endMarker string) string {
+	if strings.Contains(content, beginMarker) {
+		return content
+	}
+	if !strings.HasSuffix(content, "\n") {
+		content += "\n"
+	}
+	return beginMarker + "\n" + content + endMarker + "\n"
+}
+
 // ensureNextSkillFile writes the managed /next skill body to
 // .claude/skills/next/SKILL.md, resolved project > global > embedded like
 // every managed template. [LAW:single-enforcer] All writes of the shipped
@@ -109,6 +126,7 @@ func ensureNextSkillFile(rootDir string) (agentsInstallResult, error) {
 	if err != nil {
 		return agentsInstallResult{}, fmt.Errorf("load next skill template: %w", err)
 	}
+	section = wrapManagedSection(section, litAgentsBeginMarker, litAgentsEndMarker)
 	result, err := writeManagedFile(rootDir, filepath.FromSlash(nextSkillRelPath), nextSkillFrontmatter, section, litAgentsBeginMarker, litAgentsEndMarker)
 	if err != nil {
 		return agentsInstallResult{}, err

@@ -108,6 +108,77 @@ func TestInitNextSkillProjectOverrideWins(t *testing.T) {
 	}
 }
 
+// An override authored as plain guidance text — the quickstart-template
+// convention, no markers — must converge exactly like the marker-carrying
+// default: one managed section, byte-idempotent across runs.
+func TestEnsureNextSkillFileMarkerlessOverrideConverges(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	projectTemplates := filepath.Join(repo, ".lit", "templates")
+	if err := os.MkdirAll(projectTemplates, 0o755); err != nil {
+		t.Fatalf("MkdirAll(project templates) error = %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(projectTemplates, templates.NextSkillTemplateName), []byte("plain override guidance\n"), 0o644); err != nil {
+		t.Fatalf("WriteFile(markerless override) error = %v", err)
+	}
+
+	if _, err := ensureNextSkillFile(repo); err != nil {
+		t.Fatalf("ensureNextSkillFile() first run error = %v", err)
+	}
+	first := readNextSkill(t, repo)
+
+	result, err := ensureNextSkillFile(repo)
+	if err != nil {
+		t.Fatalf("ensureNextSkillFile() second run error = %v", err)
+	}
+	if result.Changed {
+		t.Fatal("second run with an unchanged markerless override reported a change")
+	}
+	if got := readNextSkill(t, repo); got != first {
+		t.Fatalf("markerless override did not converge:\nfirst:  %q\nsecond: %q", first, got)
+	}
+	if strings.Count(first, "plain override guidance") != 1 || strings.Count(first, litAgentsBeginMarker) != 1 {
+		t.Fatalf("expected exactly one managed section from the markerless override, got: %q", first)
+	}
+}
+
+// A pre-existing hand-authored SKILL.md with no markers is adopted the way a
+// marker-less AGENTS.md is: the user's content stays, the managed section is
+// appended once, and subsequent runs reconcile in place.
+func TestEnsureNextSkillFileAdoptsMarkerlessExistingFile(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	repo := t.TempDir()
+
+	skillPath := filepath.Join(repo, filepath.FromSlash(nextSkillRelPath))
+	if err := os.MkdirAll(filepath.Dir(skillPath), 0o755); err != nil {
+		t.Fatalf("MkdirAll(skill dir) error = %v", err)
+	}
+	seeded := "---\nname: next\ndescription: Hand-authored skill\n---\n\nMy own procedure.\n"
+	if err := os.WriteFile(skillPath, []byte(seeded), 0o644); err != nil {
+		t.Fatalf("WriteFile(hand-authored skill) error = %v", err)
+	}
+
+	if _, err := ensureNextSkillFile(repo); err != nil {
+		t.Fatalf("ensureNextSkillFile() adoption run error = %v", err)
+	}
+	first := readNextSkill(t, repo)
+	if !strings.Contains(first, "My own procedure.") {
+		t.Fatalf("hand-authored content dropped on adoption: %q", first)
+	}
+	if strings.Count(first, litAgentsBeginMarker) != 1 || strings.Count(first, litAgentsEndMarker) != 1 {
+		t.Fatalf("expected exactly one appended managed section, got: %q", first)
+	}
+
+	result, err := ensureNextSkillFile(repo)
+	if err != nil {
+		t.Fatalf("ensureNextSkillFile() post-adoption run error = %v", err)
+	}
+	if result.Changed || readNextSkill(t, repo) != first {
+		t.Fatal("adopted file did not converge on the second run")
+	}
+}
+
 // lit owns only the marker-delimited body; the frontmatter and anything else
 // the user adds around it survive a refresh.
 func TestEnsureNextSkillFilePreservesUserContentOutsideMarkers(t *testing.T) {
