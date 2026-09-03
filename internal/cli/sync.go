@@ -178,61 +178,34 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 		return err
 	}
 	progressf("sync pull", "starting: reconciling remotes and resolving the sync source")
-	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+	target, err := resolveSyncTarget(ctx, session, ws, *remote)
 	if err != nil {
 		// A could-not-attempt failure — traced like every other decision this
 		// command reaches, matching the coverage recordMirrorTraceError/
 		// recordReceiveError give this same failure class on the mirror/receive
 		// paths. [LAW:no-silent-failure]
-		recordSyncCommandTrace(ws, "lit sync pull", "error", err, nil)
+		recordSyncCommandTrace(ws, "lit sync pull", "error", err, target.traceMetadata())
 		return err
 	}
-	remoteName, remoteErr := resolveSyncRemote(
-		strings.TrimSpace(*remote),
-		workspace.UpstreamRemote(ctx, ws.RootDir),
-		syncState.gitRemotes,
-	)
-	if remoteErr != nil {
-		recordSyncCommandTrace(ws, "lit sync pull", "error", remoteErr, nil)
-		return remoteErr
-	}
-	if remoteName == "" {
-		payload := map[string]any{
-			"status": "skipped",
-			"reason": "no_sync_remote",
-			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
-		}
-		recordSyncCommandTrace(ws, "lit sync pull", "no_sync_remote", nil, nil)
+	switch target.skip {
+	case syncTargetNoRemote:
+		recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, nil)
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
-		return printSyncPullPayload(stdout, payload, *verbose)
-	}
-	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface it so
-	// an explicit pull reports the real ls-remote cause (a cancelled ctx yields
-	// context.Canceled here) rather than falling through to the misleading "default
-	// branch unavailable" that DefaultRemoteBranch's swallowed error would produce.
-	// This matches the receive path, so receive/pull/push treat refsErr identically.
-	if refsErr != nil {
-		checkErr := fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
-		recordSyncCommandTrace(ws, "lit sync pull", "error", checkErr, map[string]string{"remote": remoteName})
-		return checkErr
-	}
-	if !hasRefs {
-		payload := map[string]any{
+		return printSyncPullPayload(stdout, map[string]any{
 			"status": "skipped",
-			"reason": "remote_empty",
-			"remote": remoteName,
+			"reason": string(target.skip),
+			"raw":    "no upstream remote and no single configured remote; skipping sync pull",
+		}, *verbose)
+	case syncTargetRemoteEmpty:
+		recordSyncCommandTrace(ws, "lit sync pull", string(target.skip), nil, target.traceMetadata())
+		return printSyncPullPayload(stdout, map[string]any{
+			"status": "skipped",
+			"reason": string(target.skip),
+			"remote": target.remote,
 			"raw":    firstPushSkipMessage,
-		}
-		recordSyncCommandTrace(ws, "lit sync pull", "remote_empty", nil, map[string]string{"remote": remoteName})
-		return printSyncPullPayload(stdout, payload, *verbose)
+		}, *verbose)
 	}
-	resolvedBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
-	if err != nil {
-		recordSyncCommandTrace(ws, "lit sync pull", "error", err, map[string]string{"remote": remoteName})
-		return err
-	}
+	remoteName, resolvedBranch := target.remote, target.branch
 	progressf("sync pull", "pulling lit data from %s/%s (transfer and apply may take a moment)", remoteName, resolvedBranch)
 	result, err := session.syncer.SyncPull(ctx, remoteName, resolvedBranch)
 	pullTraceMetadata := map[string]string{"remote": remoteName, "sync_branch": resolvedBranch}
@@ -527,49 +500,29 @@ func performSyncPush(ctx context.Context, session syncSession, ws workspace.Info
 		}
 		completePushAttempt(ctx, ws, outcome, retErr)
 	}()
-	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+	target, err := resolveSyncTarget(ctx, session, ws, remote)
 	if err != nil {
 		return syncPushOutcome{}, err
 	}
-	remoteName, remoteErr := resolveSyncRemote(
-		strings.TrimSpace(remote),
-		workspace.UpstreamRemote(ctx, ws.RootDir),
-		syncState.gitRemotes,
-	)
-	if remoteErr != nil {
-		return syncPushOutcome{}, remoteErr
-	}
-	if remoteName == "" {
-		recordSyncCommandTrace(ws, "lit sync push", "no_sync_remote", nil, nil)
+	switch target.skip {
+	case syncTargetNoRemote:
+		recordSyncCommandTrace(ws, "lit sync push", string(target.skip), nil, nil)
 		// [LAW:dataflow-not-control-flow] exception: explicit no-remote policy requires suppressing sync side effects when remote resolution yields empty input.
 		return syncPushOutcome{
 			status:  "skipped",
-			reason:  "no_sync_remote",
+			reason:  string(target.skip),
 			message: "no upstream remote and no single configured remote; skipping sync push",
 		}, nil
-	}
-	// [LAW:single-enforcer] First-push detection is centralized so pull and push share one definition of "remote is empty".
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	// [LAW:no-silent-failure] A failed refs check is not "remote empty": surface the
-	// original ls-remote cause (a cancelled ctx yields context.Canceled here) rather
-	// than dropping it and letting a later Dolt-store push error mask it. Mirrors the
-	// receive path so receive/pull/push treat refsErr identically.
-	if refsErr != nil {
-		return syncPushOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
-	}
-	if !hasRefs {
-		recordSyncCommandTrace(ws, "lit sync push", "remote_empty", nil, map[string]string{"remote": remoteName})
+	case syncTargetRemoteEmpty:
+		recordSyncCommandTrace(ws, "lit sync push", string(target.skip), nil, target.traceMetadata())
 		return syncPushOutcome{
 			status:  "skipped",
-			reason:  "remote_empty",
-			remote:  remoteName,
+			reason:  string(target.skip),
+			remote:  target.remote,
 			message: firstPushSkipMessage,
 		}, nil
 	}
-	syncBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
-	if err != nil {
-		return syncPushOutcome{}, err
-	}
+	remoteName, syncBranch := target.remote, target.branch
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
@@ -725,6 +678,81 @@ func resolveSyncBranch(ctx context.Context, rootDir string, remote string) (stri
 		)
 	}
 	return resolvedBranch, nil
+}
+
+// syncTargetSkip names the two "nothing to sync against" outcomes of
+// resolveSyncTarget. Its non-empty values are the canonical reason strings the
+// verbs trace and print, so a skip's identity and its spelling cannot drift
+// apart. [LAW:one-source-of-truth]
+type syncTargetSkip string
+
+const (
+	syncTargetReady       syncTargetSkip = ""
+	syncTargetNoRemote    syncTargetSkip = "no_sync_remote"
+	syncTargetRemoteEmpty syncTargetSkip = "remote_empty"
+)
+
+// syncTarget is what every sync verb starts from: either a remote+branch ready
+// to sync against (skip == syncTargetReady), or a typed skip naming why there
+// is nothing to sync. remote is set on every outcome that got past remote
+// selection — including errors and the remote_empty skip — so callers can
+// attach it to their traces. [LAW:types-are-the-program] the skip is the
+// discriminator; a caller that forgets to check it holds an empty branch, not
+// a plausible-looking wrong one.
+type syncTarget struct {
+	remote string
+	branch string
+	skip   syncTargetSkip
+}
+
+// traceMetadata renders the resolved remote as trace metadata — nil before one
+// was selected — so traces carry exactly what resolution had established.
+func (t syncTarget) traceMetadata() map[string]string {
+	if t.remote == "" {
+		return nil
+	}
+	return map[string]string{"remote": t.remote}
+}
+
+// resolveSyncTarget is the one prologue push, pull, receive, and reconcile all
+// run: reconcile Dolt remotes from git, select the sync remote, detect an
+// empty remote, and resolve the sync branch. It is a single implementation so
+// the four verbs cannot disagree about what they sync against, and so a new
+// skip or error state added here reaches all of them at once.
+// [LAW:single-enforcer]
+//
+// A failed refs check is not "remote empty": it surfaces as an error naming
+// the real ls-remote cause (a cancelled ctx yields context.Canceled here)
+// rather than falling through to the misleading "default branch unavailable"
+// that DefaultRemoteBranch's swallowed error would produce.
+// [LAW:no-silent-failure] That ls-remote is also the wedge point a SIGTERM
+// must be able to abandon: ctx flows to the subprocess so a network-hung fetch
+// cancels here rather than outliving the interrupt until the grace-timer
+// hard-exit. [LAW:no-ambient-temporal-coupling]
+func resolveSyncTarget(ctx context.Context, session syncSession, ws workspace.Info, requestedRemote string) (syncTarget, error) {
+	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+	if err != nil {
+		return syncTarget{}, err
+	}
+	remoteName, err := resolveSyncRemote(requestedRemote, workspace.UpstreamRemote(ctx, ws.RootDir), syncState.gitRemotes)
+	if err != nil {
+		return syncTarget{}, err
+	}
+	if remoteName == "" {
+		return syncTarget{skip: syncTargetNoRemote}, nil
+	}
+	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
+	if refsErr != nil {
+		return syncTarget{remote: remoteName}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
+	}
+	if !hasRefs {
+		return syncTarget{remote: remoteName, skip: syncTargetRemoteEmpty}, nil
+	}
+	branch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
+	if err != nil {
+		return syncTarget{remote: remoteName}, err
+	}
+	return syncTarget{remote: remoteName, branch: branch}, nil
 }
 
 // buildSyncPullPayload renders a completed pull into the structured payload the

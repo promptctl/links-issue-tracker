@@ -198,47 +198,22 @@ type reconcileOutcome struct {
 	err       error                       // the reconcile failure; its trace is already recorded when set
 }
 
-// performSyncReceive reconciles Dolt remotes from git, resolves the remote and
-// branch (the same selection push uses, so the two never disagree), then fetches
-// and fast-forwards when the local branch is strictly behind, recording an
-// automation trace for the attempt. The returned error is a "could not attempt"
-// failure (reconcile or remote resolution); a receive that ran and failed is
-// carried in outcome.receiveErr with its trace already recorded, leaving local
-// data untouched. [LAW:single-enforcer] Receive and push share remote/branch
-// resolution and the trace writer so they cannot drift.
+// performSyncReceive resolves the sync target through the shared prologue (the
+// same selection push, pull, and reconcile use, so the four never disagree),
+// then fetches and fast-forwards when the local branch is strictly behind,
+// recording an automation trace for the attempt. The returned error is a
+// "could not attempt" failure (reconcile or remote resolution); a receive that
+// ran and failed is carried in outcome.receiveErr with its trace already
+// recorded, leaving local data untouched. [LAW:single-enforcer]
 func performSyncReceive(ctx context.Context, session syncSession, ws workspace.Info) (syncReceiveOutcome, error) {
-	syncState, err := syncDoltRemotesFromGit(ctx, session, ws)
+	target, err := resolveSyncTarget(ctx, session, ws, "")
 	if err != nil {
 		return syncReceiveOutcome{}, err
 	}
-	remoteName, remoteErr := resolveSyncRemote(
-		"",
-		workspace.UpstreamRemote(ctx, ws.RootDir),
-		syncState.gitRemotes,
-	)
-	if remoteErr != nil {
-		return syncReceiveOutcome{}, remoteErr
+	if target.skip != syncTargetReady {
+		return syncReceiveOutcome{status: "skipped", reason: string(target.skip), remote: target.remote}, nil
 	}
-	if remoteName == "" {
-		return syncReceiveOutcome{status: "skipped", reason: "no_sync_remote"}, nil
-	}
-	// First-push detection: an empty remote has nothing to receive. A read error
-	// here is unexpected and must not be misread as "empty" — surface it as a
-	// could-not-attempt failure so the caller records a trace. [LAW:no-silent-failure]
-	// This ls-remote is the wedge point a SIGTERM must be able to abandon: ctx flows
-	// to the subprocess so a network-hung fetch cancels here rather than outliving the
-	// interrupt until the grace-timer hard-exit. [LAW:no-ambient-temporal-coupling]
-	hasRefs, refsErr := workspace.RemoteHasRefs(ctx, ws.RootDir, remoteName)
-	if refsErr != nil {
-		return syncReceiveOutcome{}, fmt.Errorf("check remote refs %q: %w", remoteName, refsErr)
-	}
-	if !hasRefs {
-		return syncReceiveOutcome{status: "skipped", reason: "remote_empty", remote: remoteName}, nil
-	}
-	syncBranch, err := resolveSyncBranch(ctx, ws.RootDir, remoteName)
-	if err != nil {
-		return syncReceiveOutcome{}, err
-	}
+	remoteName, syncBranch := target.remote, target.branch
 
 	result, receiveErr := session.syncer.SyncReceive(ctx, remoteName, syncBranch)
 	if receiveErr == nil {
