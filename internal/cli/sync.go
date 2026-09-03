@@ -488,6 +488,14 @@ func performSyncPush(ctx, completionCtx context.Context, session syncSession, ws
 	remoteName, syncBranch := target.remote, target.branch
 	// [LAW:dataflow-not-control-flow] Sync push runs one deterministic embedded mutation path from resolved remote+branch state.
 	result, pushErr := push(ctx, remoteName, syncBranch, setUpstream, force)
+	// A push killed by the operation lifetime while the completion lifetime
+	// lives is a hold-budget cut, and this attempt's record is the event's one
+	// trace owner — so the explanation folds in here, never as a second record
+	// upstream. Foreground callers pass one lifetime twice, so the predicate
+	// can never hold for them. [LAW:single-enforcer]
+	if pushErr != nil && ctx.Err() != nil && completionCtx.Err() == nil {
+		pushErr = fmt.Errorf("%w: %w", holdBudgetCutExplanation(), pushErr)
+	}
 	traceMetadata := syncPushTraceMetadata(remoteName, syncBranch, result, pushErr)
 	traceStatus := "ok"
 	traceReason := "managed automation requested sync push"

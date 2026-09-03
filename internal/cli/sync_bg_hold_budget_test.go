@@ -187,18 +187,21 @@ exec %q "$@"
 	if err != nil {
 		t.Fatalf("read sync trace dir: %v", err)
 	}
+	// One trace owner per event: the budget explanation must arrive folded
+	// into the push attempt's own record (the one carrying the push metadata),
+	// never as a second stand-alone record beside it.
 	found := false
 	for _, entry := range entries {
 		content, readErr := os.ReadFile(filepath.Join(syncTraceDir(ws), entry.Name()))
 		if readErr != nil {
 			continue
 		}
-		if strings.Contains(string(content), "hold budget") {
+		if strings.Contains(string(content), "hold budget") && strings.Contains(string(content), "sync_branch") {
 			found = true
 			break
 		}
 	}
 	if !found {
-		t.Fatalf("no sync trace names the hold budget cut; the episode is as unattributable as the field incident")
+		t.Fatalf("no push-attempt sync trace names the hold budget cut; the episode is as unattributable as the field incident")
 	}
 }

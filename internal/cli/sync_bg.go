@@ -352,28 +352,39 @@ func mirrorCycle(ctx context.Context, log io.Writer, ws workspace.Info, stopAnsw
 		return true
 	}()
 	// A cycle that dies of ITS OWN deadline (not the process's teardown) names
-	// the budget in the durable trail: the push-outcome record already carries
-	// the raw transport error, but "the holder cut itself loose" is the fact
-	// that explains it, and without this record the next hung-remote episode is
-	// as unattributable as the first. [LAW:no-silent-failure] Gated on a session
-	// having existed: a budget that expires during the OPEN held no engine and
-	// reached no transport, and that branch's accurate record was already
-	// written through completeMirrorWithoutAttempt. This is the cycle's ONE
-	// out-of-band automation trace — a could-not-attempt error joins the budget
-	// record instead of writing its own. [LAW:single-enforcer]
+	// the budget in the durable trail — without that record the next
+	// hung-remote episode is as unattributable as the first.
+	// [LAW:no-silent-failure] Gated on a session having existed: a budget that
+	// expires during the OPEN held no engine and reached no transport, and that
+	// branch's accurate record was already written through
+	// completeMirrorWithoutAttempt. One trace owner per event: an attempt that
+	// RAN recorded itself inside performSyncPush (onceErr nil, the budget
+	// explanation folded in there), so the out-of-band record here exists only
+	// for a could-not-attempt failure, which nothing else recorded — the budget
+	// cause joins it instead of writing its own. [LAW:single-enforcer]
 	budgetCut := attempted && cycleCtx.Err() != nil && ctx.Err() == nil
-	var cause error
-	if budgetCut {
-		cause = fmt.Errorf(
-			"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",
-			store.MirrorHoldBudget)
-	}
-	if cause = errors.Join(cause, onceErr); cause != nil {
-		recordMirrorTraceError(ws, cause)
+	if onceErr != nil {
+		var cause error
+		if budgetCut {
+			cause = holdBudgetCutExplanation()
+		}
+		recordMirrorTraceError(ws, errors.Join(cause, onceErr))
 	}
 	fmt.Fprintf(log, "%s mirror cycle end attempted=%t hold_budget_cut=%t elapsed=%s\n",
 		time.Now().UTC().Format(time.RFC3339), attempted, budgetCut, time.Since(start).Round(time.Millisecond))
 	return attempted
+}
+
+// holdBudgetCutExplanation is the one wording of "the holder cut itself
+// loose": the fact that explains a raw transport error killed by the hold
+// budget. Both record owners — performSyncPush folding it into an attempt's
+// own record, mirrorCycle joining it to a could-not-attempt failure — say it
+// through this function, so the durable trail names the budget identically
+// wherever the cut landed. [LAW:one-source-of-truth]
+func holdBudgetCutExplanation() error {
+	return fmt.Errorf(
+		"mirror cycle exceeded its %s hold budget (a hung or slow remote transport while holding the store's engine); the engine was released so foreground commands can proceed, and the next mutation's mirror retries the push",
+		store.MirrorHoldBudget)
 }
 
 // mirrorOnce runs the one shared push path, without compaction. It is a single

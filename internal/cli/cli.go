@@ -348,8 +348,10 @@ func runList(ctx context.Context, stdout io.Writer, args []string) error {
 		st, err := app.OpenLocationForRead(ctx, loc)
 		if err != nil {
 			// [LAW:no-silent-failure] Name the path so a wrong or un-initialized
-			// store dir is an actionable error, not an empty list.
-			return fmt.Errorf("open store at %q read-only: %w", atDir, err)
+			// store dir is an actionable error, not an empty list. The open
+			// boundary stamps holder contention (inside the wrap — errors.As
+			// reaches through it) for Run's dispatch trace.
+			return fmt.Errorf("open store at %q read-only: %w", atDir, markEngineOpenContention(err))
 		}
 		defer func() { _ = st.Close() }()
 		return runListWithStore(ctx, stdout, st, args)
