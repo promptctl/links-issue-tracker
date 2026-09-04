@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 
@@ -102,6 +101,15 @@ type subcommandRow[P any] struct {
 	// property here, not a name omitted from a usage string by convention.
 	// [LAW:types-are-the-program]
 	hidden bool
+	// nestedUsage, when non-empty, marks this subcommand as itself a command
+	// group and carries that group's usage — always set by reference to the
+	// nested family's own usage field, never restated. [LAW:one-source-of-truth]
+	// It lets the OUTER resolve answer `parent sub --help` itself: the dispatch
+	// pipeline between the outer resolve and the nested family's own resolve
+	// acquires the workspace, store, or app the real subcommand needs, and a
+	// help request must acquire nothing — under store contention the nested
+	// resolve would otherwise be reached only after a blocking open, or never.
+	nestedUsage string
 }
 
 // commandFamily is the single source of truth for a subcommand family: which
@@ -119,20 +127,40 @@ type commandFamily[P any] struct {
 // Lookup is validation: a missing, unknown, or flag-shaped first argument
 // fails with the family usage before any app opens, so resolution cannot
 // depend on a validator having run earlier. [LAW:no-ambient-temporal-coupling]
+// The one flag-shaped exception is a help request, which is an answer, not a
+// failure: the family's usage IS its help, and recognizing -h/--help here — at
+// the one resolve every family, nested families included, routes through —
+// means no group can answer help with an error. [LAW:single-enforcer]
 // The match is exact — argv tokens arrive verbatim from the shell, and a
 // table that trimmed names would claim inputs as legal that no dispatch
 // ever honored. [FRAMING:representation]
 func (f commandFamily[P]) resolve(args []string) (P, error) {
 	var zero P
 	if len(args) == 0 {
-		return zero, errors.New(f.usage)
+		return zero, UsageError{Message: f.usage}
+	}
+	if isHelpFlag(args[0]) {
+		return zero, HelpRequestedError{Usage: f.usage}
 	}
 	for _, s := range f.subcommands {
 		if s.name == args[0] {
+			if s.nestedUsage != "" && len(args) > 1 && isHelpFlag(args[1]) {
+				return zero, HelpRequestedError{Usage: s.nestedUsage}
+			}
 			return s.payload, nil
 		}
 	}
-	return zero, errors.New(f.usage)
+	// [LAW:types-are-the-program] a typed usage refusal, not errors.New: the
+	// untyped form fell through every errors.As sink to the generic
+	// "command_failed" reason, whose retry-then-doctor remediation can never
+	// succeed for a bad path (links-cli-zc3r).
+	return zero, UsageError{Message: f.usage}
+}
+
+// isHelpFlag is the one definition of what a help-shaped argv token is; both
+// recognition points in resolve read it. [LAW:one-source-of-truth]
+func isHelpFlag(arg string) bool {
+	return arg == "-h" || arg == "--help"
 }
 
 // visibleSubcommands projects the family's advertised first-argument names for

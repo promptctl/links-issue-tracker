@@ -25,14 +25,14 @@ func TestRunNestedInvalidPathsReturnUsageOutsideRepo(t *testing.T) {
 		wantErr string
 	}{
 		{args: []string{"comment"}, wantErr: "usage: lit comment <add|rm> ..."},
-		{args: []string{"label", "--help"}, wantErr: "usage: lit label <add|rm> ..."},
+		{args: []string{"label", "bogus"}, wantErr: "usage: lit label <add|rm> ..."},
 		{args: []string{"parent", "bogus"}, wantErr: "usage: lit parent <set|clear> ..."},
 		{args: []string{"dep", "unknown"}, wantErr: "usage: lit dep <add|rm|ls> ..."},
 		{args: []string{"sync", "unknown"}, wantErr: "usage: lit sync <status|remote|fetch|pull|push|compact|reconcile> ..."},
 		{args: []string{"hooks"}, wantErr: "usage: lit hooks install"},
 		{args: []string{"bulk"}, wantErr: "usage: lit bulk <label|close|archive> ..."},
 		{args: []string{"backup", "prune"}, wantErr: "usage: lit backup <create|list|restore> ..."},
-		{args: []string{"snapshots", "-h"}, wantErr: "usage: lit snapshots <new|list|restore> ..."},
+		{args: []string{"snapshots", "bogus"}, wantErr: "usage: lit snapshots <new|list|restore> ..."},
 		{args: []string{"lifeboat"}, wantErr: "usage: lit lifeboat <dump|recover> ..."},
 		{args: []string{"completion", "powershell"}, wantErr: "usage: lit completion <bash|zsh|fish>"},
 	}

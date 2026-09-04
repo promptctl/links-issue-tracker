@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -15,7 +14,7 @@ import (
 var bulkFamily = commandFamily[appSubcommand]{
 	usage: "usage: lit bulk <label|close|archive> ...",
 	subcommands: []subcommandRow[appSubcommand]{
-		{name: "label", payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
+		{name: "label", nestedUsage: bulkLabelFamily.usage, payload: appSubcommand{access: app.AccessWrite, run: runBulkLabel}},
 		{name: "close", payload: appSubcommand{access: app.AccessWrite, run: runBulkClose}},
 		{name: "archive", payload: appSubcommand{access: app.AccessWrite, run: runBulkTransition(model.Archive{})}},
 		// `bulk import` is retired: it was a second name for the export-restore
@@ -100,7 +99,7 @@ var bulkLabelFamily = commandFamily[bulkLabelOp]{
 
 func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []string) error {
 	if len(args) == 0 {
-		return errors.New(bulkLabelFamily.usage)
+		return UsageError{Message: bulkLabelFamily.usage}
 	}
 	fs := newCobraFlagSet("bulk label")
 	ids := fs.String("ids", "", "Comma-separated issue IDs")
@@ -118,6 +117,8 @@ func runBulkLabel(ctx context.Context, stdout io.Writer, ap *app.App, args []str
 	}
 	// Resolved after the flag checks to preserve the established error
 	// precedence: missing --ids/--label surface before an unknown action does.
+	// A help-shaped action never reaches here — the outer bulkFamily resolve
+	// answers `bulk label --help` before the app is even opened (links-cli-zc3r).
 	op, err := bulkLabelFamily.resolve(args)
 	if err != nil {
 		return err
