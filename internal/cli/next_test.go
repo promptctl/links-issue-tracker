@@ -15,7 +15,7 @@ import (
 // pipeline and claim routing — and returns the chosen annotated row. This
 // harness never mints a stream token or attributes a write (newTestCLIApp
 // opens the store directly, bypassing app.Open's AttributeTo), so every lane
-// derives Unclaimed and routing always lands on ServedFromGlobal — the
+// derives Unclaimed and routing always lands on ServedFromNewLane — the
 // claims-aware routing degenerating to exactly the pre-claims "first ready
 // row" pick these tests pin. [LAW:single-enforcer]
 func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
@@ -29,9 +29,9 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
 	outcome := routeNext(annotated, details, cc.standings, cc.self)
-	served, ok := outcome.(ServedFromGlobal)
+	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		h.t.Fatalf("routeNext = %#v (%T), want ServedFromGlobal (harness carries no claims)", outcome, outcome)
+		h.t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (harness carries no claims)", outcome, outcome)
 	}
 	return served.Row
 }
@@ -175,5 +175,54 @@ func TestRunNextCarriesParentEpic(t *testing.T) {
 	}
 	if got.ParentEpic.ID != epic.ID {
 		t.Fatalf("next.ParentEpic.ID = %q, want %q", got.ParentEpic.ID, epic.ID)
+	}
+}
+
+// Every announcement renderNextOutcome can print, asserted as bytes. The
+// outcome is constructed rather than routed to, which is what lets all four
+// served variants be reached from a harness that mints no stream token — the
+// routing that produces each one is pinned separately in next_route_test.go.
+// Standings are left empty deliberately: formatClaimLine stays on its
+// ("", false) arm, so nothing but the announcement is under assertion.
+func TestRenderNextOutcomeAnnouncesEachClaimEstablishingPick(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	h.transition(inFlight.ID, model.Start{Assignee: "other"})
+
+	rows, details := h.gather()
+	cc := claimContext{self: selfAttribution}
+	freshRow := rowByID(t, rows, fresh.ID)
+	inFlightRow := rowByID(t, rows, inFlight.ID)
+
+	for _, tc := range []struct {
+		name    string
+		outcome NextOutcome
+		want    string
+	}{
+		{"a lane already held says nothing", ServedFromClaim{Row: freshRow}, ""},
+		{"own work in flight is resumed, not started", ResumedOwnWork{Row: inFlightRow}, "resuming " + inFlight.ID + " — already in progress in a lane you hold"},
+		{"the epic's next lane names the claim it establishes", ServedFromEpicLane{Row: freshRow, Epic: epicA.ID, Lane: "A#1"}, "continuing epic " + epicA.ID + ": starting " + fresh.ID + " claims A#1"},
+		{"abandoned work is taken over, not started", ServedFromNewLane{Row: inFlightRow, Lane: "A#2"}, "taking over " + inFlight.ID + " (in progress, abandoned) — claims A#2"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var buf bytes.Buffer
+			if _, err := renderNextOutcome(&buf, tc.outcome, details, cc); err != nil {
+				t.Fatalf("renderNextOutcome(%T) error = %v", tc.outcome, err)
+			}
+			out := buf.String()
+			if tc.want == "" {
+				for _, verb := range []string{"resuming", "starting", "continuing", "taking over"} {
+					if strings.HasPrefix(out, verb) {
+						t.Fatalf("ServedFromClaim announced %q; its contract is that no claim is established and nothing is said", out)
+					}
+				}
+				return
+			}
+			if !strings.HasPrefix(out, tc.want+"\n") {
+				t.Fatalf("renderNextOutcome printed %q, want it to open with %q", out, tc.want)
+			}
+		})
 	}
 }
