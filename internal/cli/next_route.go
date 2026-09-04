@@ -78,18 +78,58 @@ type Exhausted struct {
 	Blocked []blockedDep
 }
 
-// blockedDep is an open dependency gating work in scope, carrying the one fact
-// its two consumers differ on: whether this checkout may take it. Bare ids
-// were not enough — exhaustedError asserted "unclaimed, `lit start` it" over
-// every one of them, so a dependency another checkout held fresh was routed
-// around by the pick (N2) and then recommended by the diagnostic a line later,
-// which is the same failure one level up. Takeable being true implies Row is
-// the gathered dependency; nothing reads Row otherwise.
+// blockerKind is what a gating dependency is to this checkout — the one fact
+// the exhaustion diagnostic needs, and the limit of what it may say. A bool
+// here read "takeable or not", so a blocker outside this run's filtered view,
+// or one not startable itself, rendered as the one reason the message named:
+// claimed by another checkout. The renderer picks a note per value rather than
+// asserting a cause it cannot see.
 // [LAW:types-are-the-program] [LAW:no-silent-failure]
+type blockerKind int
+
+const (
+	blockerTakeable blockerKind = iota
+	// blockerHeldFresh: another checkout holds its lane right now.
+	blockerHeldFresh
+	// blockerNotReady: gathered and not held elsewhere, but not startable —
+	// blocked by a further dependency, or in flight and not abandoned. One
+	// value for both, because the note says only what both share.
+	blockerNotReady
+	// blockerOutOfView: absent from the gathered rows, so this run knows
+	// nothing about it. --type/--labels/--assignee and leaf-only membership
+	// narrow the gather; the dependency annotation is read from the store and
+	// does not.
+	blockerOutOfView
+)
+
+// blockedDep is an open dependency gating work in scope, carrying what this
+// checkout may do about it. Row is the gathered dependency for every kind but
+// blockerOutOfView.
 type blockedDep struct {
-	ID       string
-	Row      annotation.AnnotatedIssue
-	Takeable bool
+	ID   string
+	Row  annotation.AnnotatedIssue
+	Kind blockerKind
+}
+
+// blockerKindFor classifies a gating dependency, consuming capacityFor rather
+// than re-deriving takeability so routing and the diagnostic read one
+// authority. [LAW:one-source-of-truth]
+//
+// Total by construction: relationOf covers four lane relations, and the
+// fallthrough takes every routeAround reached for a reason other than a
+// foreign hold. A blocker that is both held fresh and not ready reports as
+// held — ownership decides whether this checkout may act at all, readiness
+// only whether acting would get anywhere.
+func blockerKindFor(dep annotation.AnnotatedIssue, gathered bool, standing claims.Standing, self model.Attribution) blockerKind {
+	switch {
+	case !gathered:
+		return blockerOutOfView
+	case capacityFor(dep, standing, self) != routeAround:
+		return blockerTakeable
+	case relationOf(standing, self) == laneHeldForeign:
+		return blockerHeldFresh
+	}
+	return blockerNotReady
 }
 
 // NoWork is the truly empty backlog: nothing ready anywhere, claimed or not
@@ -223,6 +263,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	verdict := func(row annotation.AnnotatedIssue) capacity {
 		return capacityFor(row, standings.Of(laneOf(row)), self)
 	}
+	blockerOf := func(dep annotation.AnnotatedIssue, gathered bool) blockerKind {
+		return blockerKindFor(dep, gathered, standings.Of(laneOf(dep)), self)
+	}
 	// pick keeps the first row, in rank order, that sits in an admitted lane
 	// and carries one of the accepted verdicts.
 	//
@@ -256,7 +299,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// establishes a claim on a lane we do not hold, so it is announced as
 		// one (N3) and its own lane's standing is honoured rather than
 		// ignored (N2).
-		if dep, ok := onPathDependency(rows, laneOf, mine, verdict); ok {
+		if dep, ok := onPathDependency(rows, laneOf, mine, blockerOf); ok {
 			return ServedFromNewLane{Row: dep, Lane: laneOf(dep).String()}
 		}
 		// Step 2 — the rest of our epic, in lanes we do not already hold.
@@ -272,7 +315,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 			Epics: slices.Sorted(maps.Keys(ownEpics)),
 			Blocked: gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
 				return mine(lane) || ourEpic(lane)
-			}, verdict),
+			}, blockerOf),
 		}
 	}
 
@@ -290,7 +333,7 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 // all so the diagnostic can say which is which. They differ in the scope they
 // pass and in what they do with the answer — never in how it is found, and
 // neither re-derives it. [LAW:one-source-of-truth]
-func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, verdict func(annotation.AnnotatedIssue) capacity) []blockedDep {
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, blockerOf func(annotation.AnnotatedIssue, bool) blockerKind) []blockedDep {
 	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
 	for _, row := range rows {
 		byID[row.ID] = row
@@ -307,7 +350,7 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 			}
 			seen[id] = true
 			dep, gathered := byID[id]
-			deps = append(deps, blockedDep{ID: id, Row: dep, Takeable: gathered && verdict(dep) != routeAround})
+			deps = append(deps, blockedDep{ID: id, Row: dep, Kind: blockerOf(dep, gathered)})
 		}
 	}
 	return deps
@@ -326,9 +369,9 @@ func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation
 // longer re-checks that the gated row is unservable: step 1 accepts every
 // capacity an own lane can produce, so by the time we are here every row in
 // `mine` is routeAround by construction.
-func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, verdict func(annotation.AnnotatedIssue) capacity) (annotation.AnnotatedIssue, bool) {
-	for _, dep := range gatingDependencies(rows, laneOf, mine, verdict) {
-		if dep.Takeable {
+func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, blockerOf func(annotation.AnnotatedIssue, bool) blockerKind) (annotation.AnnotatedIssue, bool) {
+	for _, dep := range gatingDependencies(rows, laneOf, mine, blockerOf) {
+		if dep.Kind == blockerTakeable {
 			return dep.Row, true
 		}
 	}
@@ -345,26 +388,25 @@ func exhaustedError(o Exhausted) error {
 	if len(o.Blocked) == 0 {
 		return fmt.Errorf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
 	}
-	var takeable, held []string
+	byKind := map[blockerKind][]string{}
 	for _, dep := range o.Blocked {
-		if dep.Takeable {
-			takeable = append(takeable, dep.ID)
-			continue
-		}
-		held = append(held, dep.ID)
+		byKind[dep.Kind] = append(byKind[dep.Kind], dep.ID)
 	}
 	var parts []string
 	for _, group := range []struct {
-		ids  []string
+		kind blockerKind
 		note string
 	}{
-		{takeable, "on your path and yours to take — `lit start` it"},
-		{held, "on your path but claimed by another checkout right now"},
+		{blockerTakeable, "on your path and yours to take — `lit start` it"},
+		{blockerHeldFresh, "on your path but claimed by another checkout right now"},
+		{blockerNotReady, "on your path but not startable right now — `lit show` it"},
+		{blockerOutOfView, "on your path but outside this view — `lit show` it"},
 	} {
-		if len(group.ids) == 0 {
+		ids := byKind[group.kind]
+		if len(ids) == 0 {
 			continue
 		}
-		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", strings.Join(group.ids, ", "), group.note))
+		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", strings.Join(ids, ", "), group.note))
 	}
 	return fmt.Errorf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(parts, "; "))
 }

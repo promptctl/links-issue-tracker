@@ -449,8 +449,8 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 			continue
 		}
 		named = true
-		if blocked.Takeable {
-			t.Fatalf("blocked dependency %q reports Takeable, but another checkout holds its lane fresh", dep.ID)
+		if blocked.Kind != blockerHeldFresh {
+			t.Fatalf("blocked dependency %q classified %v, want blockerHeldFresh — another checkout holds its lane fresh", dep.ID, blocked.Kind)
 		}
 	}
 	if !named {
@@ -468,6 +468,153 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	}
 	if strings.Contains(msg, "`lit start` it") {
 		t.Fatalf("exhaustedError = %q, want no instruction to start %q — `lit start` would hit the fresh-takeover gate", msg, dep.ID)
+	}
+}
+
+// A blocker this run cannot see. gatherWorkableAnnotated narrows rows by
+// --type/--labels/--assignee and to leaves, while the OpenDependency
+// annotation comes from the store, so `lit next --type bug` can be gated by a
+// task it never gathered. The diagnostic then knows the id and nothing else,
+// and saying anything about its standing would be invention.
+func TestExhaustionNamesABlockerOutsideThisViewAsSuch(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, dep.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+	}
+	// The narrowed gather: the dependency is unclaimed and ready, and simply
+	// not in this run's rows.
+	var inView []annotation.AnnotatedIssue
+	for _, row := range rows {
+		if row.ID == dep.ID {
+			continue
+		}
+		inView = append(inView, row)
+	}
+
+	outcome := routeNext(inView, details, standings, selfAttribution)
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the gating dependency is not in view, so nothing here is startable", outcome, outcome)
+	}
+	named := false
+	for _, blocked := range exhausted.Blocked {
+		if blocked.ID != dep.ID {
+			continue
+		}
+		named = true
+		if blocked.Kind != blockerOutOfView {
+			t.Fatalf("blocked dependency %q classified %v, want blockerOutOfView — it is absent from the gathered rows", dep.ID, blocked.Kind)
+		}
+	}
+	if !named {
+		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
+	}
+	msg := exhaustedError(exhausted).Error()
+	if !strings.Contains(msg, "outside this view") {
+		t.Fatalf("exhaustedError = %q, want %q named as outside this view", msg, dep.ID)
+	}
+	if strings.Contains(msg, "claimed by another checkout") {
+		t.Fatalf("exhaustedError = %q, want no claim about who holds %q — this run never gathered it", msg, dep.ID)
+	}
+	if strings.Contains(msg, "`lit start` it") {
+		t.Fatalf("exhaustedError = %q, want no instruction to start %q", msg, dep.ID)
+	}
+}
+
+// A blocker nobody holds, blocked by a further dependency of its own. It is
+// unreachable for a readiness reason, not a claims reason, so the diagnostic
+// must not name a holder — the agent's next move is down the chain, not to
+// stand down.
+func TestExhaustionNamesAnUnreadyBlockerWithoutNamingAHolder(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	deeper := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Blocker's blocker", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, dep.ID)
+	h.addDependency(dep.ID, deeper.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): heldBy(selfAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency is itself blocked", outcome, outcome)
+	}
+	named := false
+	for _, blocked := range exhausted.Blocked {
+		if blocked.ID != dep.ID {
+			continue
+		}
+		named = true
+		if blocked.Kind != blockerNotReady {
+			t.Fatalf("blocked dependency %q classified %v, want blockerNotReady — nobody holds its lane; it is blocked by %q", dep.ID, blocked.Kind, deeper.ID)
+		}
+	}
+	if !named {
+		t.Fatalf("exhausted.Blocked = %v, want it to name %q", exhausted.Blocked, dep.ID)
+	}
+	msg := exhaustedError(exhausted).Error()
+	if !strings.Contains(msg, "not startable right now") {
+		t.Fatalf("exhaustedError = %q, want %q named as not startable", msg, dep.ID)
+	}
+	if strings.Contains(msg, "claimed by another checkout") {
+		t.Fatalf("exhaustedError = %q, want no holder named for %q — its lane is unclaimed", msg, dep.ID)
+	}
+	if strings.Contains(msg, "`lit start` it") {
+		t.Fatalf("exhaustedError = %q, want no instruction to start %q — it is blocked by %q", msg, dep.ID, deeper.ID)
+	}
+}
+
+// Step 2's other admission. Every stale-foreign test for this step uses an
+// open row, which reaches takeoverWork through the lane's staleness and
+// announces as a plain start; this is the orphaned-in-flight disjunct, which
+// is the case ServedFromEpicLane's doc comment actually asserts and the only
+// one that announces as a takeover.
+func TestRouteNextTakesOverAnAbandonedSiblingLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	h.transition(a2.ID, model.Start{Assignee: "other"})
+
+	rows, details := h.gather()
+	orphan(t, rows, a2.ID)
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	served, ok := outcome.(ServedFromEpicLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane — an abandoned sibling lane of our own epic is takeable", outcome, outcome)
+	}
+	if served.Row.ID != a2.ID || served.Epic != epicA.ID {
+		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Epic, a2.ID, epicA.ID)
+	}
+	announcement := claimAnnouncement(served.Row, served.Lane)
+	if !strings.Contains(announcement, "taking over") || !strings.Contains(announcement, "(in progress, abandoned)") {
+		t.Fatalf("claimAnnouncement = %q, want a takeover — this pick inherits %q's unfinished work rather than beginning it", announcement, a2.ID)
 	}
 }
 

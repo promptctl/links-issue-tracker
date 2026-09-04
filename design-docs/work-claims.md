@@ -212,9 +212,10 @@ the ordering rather than as a rule someone can forget to apply.
 Selection consults claims in a fixed precedence. Two rules hold across every
 step, so each step below says only which lanes it looks in:
 
-- **What a step may take** — the tickets that are ready, and the tickets
-  abandoned in flight (step 6). A lane another checkout holds fresh offers
-  neither (step 5).
+- **What a step may take** — the tickets that are ready, the tickets
+  abandoned in flight (step 6), and, in a lane of the checkout's own, the work
+  already in flight there, which is resumed rather than started. A lane
+  another checkout holds fresh offers none of the three (step 5).
 - **What a pick announces** — a pick that establishes a claim names the lane
   it claims, and says "taking over" only where the ticket was abandoned in
   flight: "taking over B.1 (in progress, abandoned) — claims B#1". A ready
@@ -234,8 +235,11 @@ step, so each step below says only which lanes it looks in:
    to continue into and falls straight to step 3 once its own lane has nothing
    left to serve or resume.
 3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, blocked on
-   E.4 (on your path and yours to take — start it?)", and a blocker another
-   checkout holds fresh is named as held rather than recommended. It fires only
+   E.4 (on your path and yours to take — start it?)". Each blocker is named by
+   what it is to this checkout — yours to take, held by another checkout,
+   not startable yet, or outside the view this run gathered — so the
+   diagnostic never recommends what `lit start` would refuse, and never
+   asserts a standing it did not read. It fires only
    once steps 1 and 2 have both found nothing — the epic's own claimed lane and
    the rest of its lanes — and it never falls through to a leaf outside the
    epic.
@@ -268,7 +272,7 @@ step, so each step below says only which lanes it looks in:
    to it to resume, never routed away from it. Taking over stays visible
    rather than silent: the announcement rule above says when the pick names
    itself a takeover, and a displaced holder's claim line prints under the row
-   committed to — "claimed by 7f3a, idle 3d, nothing completed" — so
+   committed to — "claimed: stream 7f3a (stale) · 3 days ago · 0/8 done" — so
    commitment and provenance arrive together. Overriding a claim that is
    still fresh requires the deliberate act of `lit start` on that ticket,
    with explicit confirmation. A claim is a well-founded default, never a lock.
