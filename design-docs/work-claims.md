@@ -123,8 +123,10 @@ Derived annotations accompany the predicate:
   establishing event holds the claim), both sides are notified the next time
   they look, and sync reconciliation surfaces it for judgment.
 - **Stale** — the holder's evidence has aged past T while L remains
-  unfinished. The lane is unclaimed again, and selection may offer it as a
-  takeover with provenance rather than serving it silently.
+  unfinished. To any *other* checkout the lane is available again, offered as
+  a takeover with provenance rather than served silently; to the holder itself
+  staleness is evidence it stepped away, not a loss of ownership. Routing step
+  6 draws the distinction.
 
 A claim dissolves by the predicate ceasing to hold: the lane finishes, the
 evidence ages out, or the holder's checkout is locally known to be gone.
@@ -215,9 +217,11 @@ Selection consults claims in a fixed precedence:
    in backlog order, including the prerequisite closure: a dependency outside
    the claimed lane that gates one inside it is on the path and is offered,
    announced as the second lane its start claims.
-2. **Then the rest of its epic**: the claimed lane's epic's other ready lanes
-   that no one else holds *right now* (a lane whose holder has gone stale is
-   no longer held — step 6), before any lane of any other epic — the
+2. **Then the rest of its epic**: the claimed lane's epic's other lanes that
+   no one else holds *right now*, taking their ready tickets and any ticket
+   abandoned in flight there (a lane whose holder has gone stale is no longer
+   held, and an abandoned ticket in it is takeable — step 6), before any lane
+   of any other epic — the
    GRANULARITY RULING above, expressed as a routing step rather than a bias.
    A parentless (solo) claim has no epic to continue into and falls straight
    to step 3 once its own ticket is no longer ready.
@@ -228,10 +232,12 @@ Selection consults claims in a fixed precedence:
    Completing the last ticket announces the epic's completion; the claim has
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
-4. **Then the global pool**: the top-ranked ready ticket in the lanes no
-   one else holds right now (unclaimed, or claimed by a holder who has gone
-   stale — step 6), labeled as what it is — "starting B.1 claims B#1" — so
-   the act of commitment is visible at the moment it happens. Reached
+4. **Then the global pool**: the top-ranked ticket that is ready, or that was
+   abandoned in flight, in the lanes no one else holds right now (unclaimed,
+   or claimed by a holder who has gone stale — step 6), labeled as what it
+   is — "starting B.1 claims B#1", or "taking over B.1 (in progress,
+   abandoned) — claims B#1" where the pick inherits work rather than beginning
+   it — so the act of commitment is visible at the moment it happens. Reached
    directly, with no detour through steps 1–3, by a checkout that holds no
    live claims at all — unfocus is the zero state, not a hop through the
    earlier steps.
@@ -253,9 +259,11 @@ Selection consults claims in a fixed precedence:
    checkout's *own* lane is not a loss of ownership at all: staleness there
    is evidence the checkout stepped away, so the lane's work is handed back
    to it to resume, never routed away from it. Taking over stays visible
-   rather than silent — the pick prints the displaced holder's claim line
-   under the row it commits to, "claimed by 7f3a, idle 3d, nothing completed"
-   — so commitment and provenance arrive together. Overriding a claim that is
+   rather than silent: the pick announces itself as a takeover, and where a
+   holder is being displaced its claim line prints under the row committed to
+   — "claimed by 7f3a, idle 3d, nothing completed" — so commitment and
+   provenance arrive together. Work abandoned in a lane nobody ever claimed
+   has no holder to name, and the announcement carries the whole of it. Overriding a claim that is
    still fresh requires the deliberate act of `lit start` on that ticket,
    with explicit confirmation. A claim is a well-founded default, never a lock.
 7. **Contested lanes** keep deterministic routing (latest establishing event

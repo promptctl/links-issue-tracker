@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"slices"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
@@ -411,5 +412,126 @@ func TestRouteNextKeepsOwnershipUnderADisplayFilter(t *testing.T) {
 	}
 	if len(exhausted.Epics) != 1 || exhausted.Epics[0] != epicA.ID {
 		t.Fatalf("exhausted.Epics = %v, want [%q]", exhausted.Epics, epicA.ID)
+	}
+}
+
+// The N2 regression: before this ticket, onPathDependency saw no standings at
+// all and offered a gating dependency sitting in a lane another checkout holds
+// fresh — which `lit start` then refused, so `next` recommended what `start`
+// blocked. The dependency is now routed around like any other fresh foreign
+// hold, and exhaustion still names it rather than going quiet about why there
+// is nothing to do. [LAW:no-silent-failure]
+func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, dep.ID)
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, dep.ID)): heldBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	exhausted, ok := outcome.(Exhausted)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency's lane is held fresh elsewhere, so `next` must not offer what `start` would refuse", outcome, outcome)
+	}
+	if !slices.Contains(exhausted.Blocked, dep.ID) {
+		t.Fatalf("exhausted.Blocked = %v, want it to name %q — routing around the dependency must not hide it", exhausted.Blocked, dep.ID)
+	}
+}
+
+// Design step 6 in its plainest form: a stale claim no longer vetoes an
+// otherwise-ready ticket. Nothing here is started and nothing is orphaned, so
+// the pick rests on staleness alone — the `!started && readiness.IsReady()`
+// half of capacityFor's takeability that every other stale-foreign test in
+// this file reaches only through an orphaned in-progress row.
+func TestRouteNextServesOpenTicketInForeignStaleLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+
+	epicC := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic C", Topic: "next", IssueType: "epic", Priority: 1})
+	c1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "C.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicC.ID})
+
+	rows, details := h.gather()
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, b1.ID)): staleBy(otherAttribution)}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the stale lane is admitted, not skipped)", outcome, outcome)
+	}
+	if served.Row.ID != b1.ID {
+		t.Fatalf("served = %q, want %q — a stale claim must not push a ready ticket behind the lower-ranked unclaimed %q", served.Row.ID, b1.ID, c1.ID)
+	}
+	if served.Row.State() != model.StateOpen {
+		t.Fatalf("served row state = %v, want open — this pick must rest on staleness alone, never on an orphan", served.Row.State())
+	}
+}
+
+// The same admission at the epic-continuation step, which is itself new here:
+// step 2 previously required an unclaimed lane, so a stale sibling lane of the
+// checkout's own epic was skipped in favour of exhaustion.
+func TestRouteNextContinuesEpicIntoForeignStaleLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicB.ID})
+
+	rows, details := h.gather()
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                    heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)): staleBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	served, ok := outcome.(ServedFromEpicLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromEpicLane (a stale sibling lane of our own epic is admitted)", outcome, outcome)
+	}
+	if served.Row.ID != a2.ID || served.Epic != epicA.ID {
+		t.Fatalf("served = %q in epic %q, want %q in %q", served.Row.ID, served.Epic, a2.ID, epicA.ID)
+	}
+	if served.Row.State() != model.StateOpen {
+		t.Fatalf("served row state = %v, want open — the pick must rest on staleness alone, never on an orphan", served.Row.State())
+	}
+}
+
+// The announcement is the visible half of the takeover verdicts above. An
+// in-progress row reaches a lane this checkout does not hold only once the
+// orphan annotation has refuted its holder's claim, so calling that "starting"
+// promises greenfield on a ticket that may carry another checkout's unmerged
+// working tree.
+func TestClaimAnnouncementDistinguishesTakeoverFromFreshStart(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	fresh := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	inFlight := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	h.transition(inFlight.ID, model.Start{Assignee: "other"})
+
+	rows, _ := h.gather()
+
+	for _, tc := range []struct{ name, id, want string }{
+		{"an open row begins the work", fresh.ID, "starting " + fresh.ID + " claims A#1"},
+		{"an in-flight row inherits it", inFlight.ID, "taking over " + inFlight.ID + " (in progress, abandoned) — claims A#1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := claimAnnouncement(rowByID(t, rows, tc.id), "A#1"); got != tc.want {
+				t.Fatalf("claimAnnouncement = %q, want %q", got, tc.want)
+			}
+		})
 	}
 }

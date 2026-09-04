@@ -58,11 +58,10 @@ type ServedFromEpicLane struct {
 // which left the one pick an agent is least likely to predict as the only
 // silent one (links-claims-1b0p, N3).
 //
-// A pick that takes over another checkout's stale lane arrives here too, and
-// its provenance is not re-announced above the row: printNextSummary prints
-// that lane's claim line — "claimed: stream 7f3a (stale) · 3 days ago · 2/8
-// done" — under every row it renders, so who held it and how long ago is
-// already visible at the moment of commitment.
+// A takeover arrives here too — of a stale lane, or of work abandoned in
+// flight — and says so in its own announcement rather than reading as a fresh
+// start. Whose it was stays with the row: printNextSummary prints the
+// displaced holder's claim line beneath it when there is a holder to name.
 type ServedFromNewLane struct {
 	Row  annotation.AnnotatedIssue
 	Lane string
@@ -108,8 +107,8 @@ const (
 	// back rather than started fresh — staleness of your own lane is evidence
 	// you stepped away, never evidence the work stopped being yours.
 	resumeWork
-	// takeoverWork: a lane whose foreign claim no longer deserves deference.
-	// Reachable, and the taker is always shown whose it was.
+	// takeoverWork: something is being displaced — a stale foreign claim, or
+	// in-flight work abandoned in a lane nobody holds. Announced, never silent.
 	takeoverWork
 )
 

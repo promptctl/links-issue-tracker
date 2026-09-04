@@ -93,10 +93,10 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		announce = fmt.Sprintf("resuming %s — already in progress in a lane you hold\n", o.Row.ID)
 	case ServedFromEpicLane:
 		row = o.Row
-		announce = fmt.Sprintf("continuing epic %s: starting %s claims %s\n", o.Epic, o.Row.ID, o.Lane)
+		announce = fmt.Sprintf("continuing epic %s: %s\n", o.Epic, claimAnnouncement(o.Row, o.Lane))
 	case ServedFromNewLane:
 		row = o.Row
-		announce = fmt.Sprintf("starting %s claims %s\n", o.Row.ID, o.Lane)
+		announce = claimAnnouncement(o.Row, o.Lane) + "\n"
 	case Exhausted:
 		return workflows.Occasion{}, exhaustedError(o)
 	case NoWork:
@@ -114,4 +114,17 @@ func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]stor
 		return workflows.Occasion{}, err
 	}
 	return nextPulledOccasion(row.Issue), nil
+}
+
+// claimAnnouncement is the line every claim-establishing pick prints above its
+// row. The verb turns on the row's own lifecycle state: routing admits an
+// in-progress row into a lane this checkout does not hold only once the orphan
+// annotation has proven its holder's claim self-refuting (capacityFor), so
+// "starting" would promise greenfield on a ticket that may carry another
+// checkout's unmerged working tree.
+func claimAnnouncement(row annotation.AnnotatedIssue, lane string) string {
+	if row.State() == model.StateInProgress {
+		return fmt.Sprintf("taking over %s (in progress, abandoned) — claims %s", row.ID, lane)
+	}
+	return fmt.Sprintf("starting %s claims %s", row.ID, lane)
 }
