@@ -71,14 +71,16 @@ jobs:
               exit 1
               ;;
           esac
-          # The pending clock starts at the commit that INTRODUCED the
-          # version's heading (the chore(release) promotion) — oldest -S hit,
-          # since `git log` lists newest first. Not CHANGELOG.md's latest
-          # commit: ticket PRs touch the file's [Unreleased] section too, and
-          # measuring from those would quietly reset the clock while the
-          # release stays stuck. [LAW:one-source-of-truth] the promotion
-          # commit is the one true origin of "pending since".
-          promoted_at=$(git log --format=%ct -S "## [$VER]" -- CHANGELOG.md | tail -1)
+          # The pending clock starts at the commit that added the version's
+          # heading (the chore(release) promotion) — the NEWEST -S hit: the
+          # heading exists at HEAD, so the newest occurrence-change is the
+          # addition that made it live, and a reverted-then-re-promoted
+          # version measures from its live promotion, not a stale first
+          # attempt. Not CHANGELOG.md's latest commit either: ticket PRs
+          # touch [Unreleased] too, and measuring from those would quietly
+          # reset the clock while the release stays stuck.
+          # [LAW:one-source-of-truth]
+          promoted_at=$(git log -1 --format=%ct -S "## [$VER]" -- CHANGELOG.md)
           if [ -z "$promoted_at" ]; then
             echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing." >&2
             exit 1
