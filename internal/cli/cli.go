@@ -14,6 +14,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
@@ -1279,10 +1280,14 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	// The pre-transition read feeds the claim-transfer notice below: `start` may
 	// take an issue over from a prior owner, and that hand-off must be surfaced.
-	prior, err := ap.Store.GetIssue(ctx, issueID)
+	// It reads the DETAIL because who owns a ticket is the (assignee, checkout)
+	// pair claims.ClaimantOf reads, and the checkout half lives on the history —
+	// the row alone cannot answer who holds this. [LAW:one-source-of-truth]
+	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
 	if err != nil {
 		return err
 	}
+	prior := detail.Issue
 
 	action, err := buildAction()
 	if err != nil {
@@ -1321,12 +1326,18 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
-	// issue over from an existing owner succeeds (intended target-state
-	// semantics) but must not do so silently.
+	// [LAW:no-silent-failure] start takes the ticket over; when it takes it from
+	// somebody, that hand-off is said out loud. The comparison is the whole
+	// claimant, matching the store's own record-or-no-op predicate exactly, so
+	// this line prints for every transfer the store wrote and its absence means
+	// nothing moved. Comparing assignees alone was silent for the two takeovers
+	// that matter most: between two human checkouts (both assignees empty) and
+	// between two worktrees of one agent session (both assignees identical).
 	if start, ok := action.(model.Start); ok {
-		if priorOwner := prior.AssigneeValue(); priorOwner != "" && priorOwner != start.Assignee {
-			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(start.Assignee)); err != nil {
+		priorClaimant := claims.ClaimantOf(prior, detail.Events)
+		taker := priorClaimant.After(start, ownAttribution(ap))
+		if priorClaimant != (claims.Claimant{}) && taker != priorClaimant {
+			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", describeClaimant(priorClaimant), describeClaimant(taker)); err != nil {
 				return err
 			}
 		}

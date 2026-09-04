@@ -100,11 +100,20 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 
 	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
 	standings := claims.Derive(evidence, fresh, local)
-	// NewAttribution collapses an absent stream (a checkout that has never
-	// mutated) to the zero Attribution, which is exactly "no live claims" —
-	// no branch needed here for the never-minted case.
-	self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
-	return claimContext{standings: standings, evidence: evidence, self: self, addresses: addresses}, nil
+	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: addresses}, nil
+}
+
+// ownAttribution is the attribution this checkout's own work carries — the
+// pair every claim comparison in this package tests against, spelled once.
+// [LAW:one-source-of-truth] The takeover gate and the transfer notice have to
+// mean the same checkout by "us", or a start could route as a takeover and then
+// report itself as nothing.
+//
+// NewAttribution collapses an absent stream (a checkout that has never mutated)
+// to the zero Attribution, which is exactly "no live claims" — no branch needed
+// here for the never-minted case.
+func ownAttribution(ap *app.App) model.Attribution {
+	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
 }
 
 // checkoutStreamTokens projects enumerated checkouts onto the tokens claim
