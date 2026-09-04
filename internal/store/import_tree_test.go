@@ -21,14 +21,11 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportTree() error = %v", err)
 	}
-	if len(result.IDMap) != 3 {
-		t.Fatalf("IDMap = %v, want 3 entries", result.IDMap)
+	if len(result.Created) != 3 {
+		t.Fatalf("Created = %v, want 3 entries", result.Created)
 	}
-	t2 := result.IDMap["t2"]
-	t1 := result.IDMap["t1"]
-	if t2 == "" || t1 == "" {
-		t.Fatalf("missing id mapping: %#v", result.IDMap)
-	}
+	t1 := createdIDByRef(t, result.Created, "t1")
+	t2 := createdIDByRef(t, result.Created, "t2")
 	detail, err := st.GetIssueDetail(ctx, t2)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(t2) error = %v", err)
@@ -42,7 +39,7 @@ func TestImportTreeCreatesEpicWithChildAndDep(t *testing.T) {
 	if !foundDep {
 		t.Fatalf("t2.DependsOn missing t1: %#v", detail.DependsOn)
 	}
-	if detail.Parent == nil || detail.Parent.ID != result.IDMap["e1"] {
+	if detail.Parent == nil || detail.Parent.ID != createdIDByRef(t, result.Created, "e1") {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
 	}
 }
@@ -103,19 +100,19 @@ func TestParseImportTreeSpecsValidFlatFormImports(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ImportTree() error = %v", err)
 	}
-	if len(result.IDMap) != 3 {
-		t.Fatalf("IDMap = %v, want 3 entries", result.IDMap)
+	if len(result.Created) != 3 {
+		t.Fatalf("Created = %v, want 3 entries", result.Created)
 	}
-	detail, err := st.GetIssueDetail(ctx, result.IDMap["t2"])
+	detail, err := st.GetIssueDetail(ctx, createdIDByRef(t, result.Created, "t2"))
 	if err != nil {
 		t.Fatalf("GetIssueDetail(t2) error = %v", err)
 	}
-	if detail.Parent == nil || detail.Parent.ID != result.IDMap["e1"] {
+	if detail.Parent == nil || detail.Parent.ID != createdIDByRef(t, result.Created, "e1") {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
 	}
 	foundDep := false
 	for _, d := range detail.DependsOn {
-		if d.ID == result.IDMap["t1"] {
+		if d.ID == createdIDByRef(t, result.Created, "t1") {
 			foundDep = true
 		}
 	}

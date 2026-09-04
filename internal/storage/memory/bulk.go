@@ -32,7 +32,7 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 	}
 
 	batch := newBatch(len(specs))
-	result := storage.BulkApplyResult{Created: map[string]string{}}
+	result := storage.BulkApplyResult{}
 	for _, index := range order {
 		spec := specs[index]
 		if spec.ID != "" {
@@ -56,14 +56,8 @@ func (e *Engine) BulkApply(ctx context.Context, prefix, actor string, specs []st
 			return storage.BulkApplyResult{}, e.compensate(batch, fmt.Errorf("bulk: create doc %d: %w", index, err))
 		}
 		batch.created(index, spec.LocalID, issue.ID)
-		// A create is nameable by the LocalID it chose, or by its own new id
-		// when the file gave it none — so every create is in the report.
-		if spec.LocalID != "" {
-			result.Created[spec.LocalID] = issue.ID
-			continue
-		}
-		result.Created[issue.ID] = issue.ID
 	}
+	result.Created = batch.createdMappings()
 	for index, spec := range specs {
 		for _, dep := range spec.DependsOn {
 			// depends_on reads "this issue depends on that one", and the store
@@ -130,7 +124,7 @@ func (e *Engine) ImportTree(ctx context.Context, prefix string, specs []storage.
 			}
 		}
 	}
-	return storage.ImportTreeResult{IDMap: batch.idMap()}, nil
+	return storage.ImportTreeResult{Created: batch.createdMappings()}, nil
 }
 
 func (e *Engine) wireDependency(dependent, dependency string) error {
@@ -163,6 +157,10 @@ type batchIDs struct {
 	// createdIDs is the compensation order's input: the ids this batch made,
 	// oldest first.
 	createdIDs []string
+	// mappings is the caller's report: every create as (ref, real id), in
+	// creation order, which is what keeps the rendered report identical run
+	// to run.
+	mappings []storage.IDMapping
 }
 
 func newBatch(size int) *batchIDs {
@@ -172,6 +170,7 @@ func newBatch(size int) *batchIDs {
 func (b *batchIDs) created(index int, localID, realID string) {
 	b.byIndex[index] = realID
 	b.createdIDs = append(b.createdIDs, realID)
+	b.mappings = append(b.mappings, storage.NewIDMapping(localID, realID))
 	if localID != "" {
 		b.byLocalID[localID] = realID
 	}
@@ -198,7 +197,7 @@ func (b *batchIDs) resolve(ref string) string {
 // validation, not this lookup, is what makes it total.
 func (b *batchIDs) resolveLocal(ref string) string { return b.byLocalID[ref] }
 
-func (b *batchIDs) idMap() map[string]string { return b.byLocalID }
+func (b *batchIDs) createdMappings() []storage.IDMapping { return b.mappings }
 
 // --- create inputs --------------------------------------------------------
 

@@ -63,6 +63,102 @@ parent: e1
 	}
 }
 
+// mappingRefs extracts, in printed order, the ref half of every
+// "  <ref> -> <id>" mapping line in an import report, requiring each line's
+// exact shape. The real ids hash the creation timestamp, so they differ
+// between two runs of the same file by construction; the refs and their
+// order are the file's own names and must not.
+func mappingRefs(t *testing.T, output string) []string {
+	t.Helper()
+	refs := []string{}
+	for _, line := range strings.Split(output, "\n") {
+		if !strings.HasPrefix(line, "  ") || !strings.Contains(line, " -> ") {
+			continue
+		}
+		ref, id, _ := strings.Cut(strings.TrimPrefix(line, "  "), " -> ")
+		if ref == "" || id == "" {
+			t.Fatalf("mapping line %q, want \"  <ref> -> <id>\"", line)
+		}
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
+// Both determinism tests print a five-issue mapping and require the exact
+// same ref sequence on every run: the engine's creation order (dependencies
+// before dependents — t1 before t2 even though the file lists t2 first),
+// not the file order and never Go's randomized map order (links-import-g329).
+// With five entries a map-ordered print would match by luck ~1/120 runs, so
+// a regression fails loudly rather than flaking.
+func TestRunImportTreeJSONMappingOrderIsDeterministic(t *testing.T) {
+	ctx := context.Background()
+	content := `[
+		{"local_id":"e1","title":"Epic","type":"epic","topic":"import","priority":0},
+		{"local_id":"t2","title":"Second","type":"task","topic":"import","priority":0,"parent":"e1","depends_on":["t1"]},
+		{"local_id":"t1","title":"First","type":"task","topic":"import","priority":0,"parent":"e1"},
+		{"local_id":"t3","title":"Third","type":"task","topic":"import","priority":0,"parent":"e1"},
+		{"local_id":"t4","title":"Fourth","type":"task","topic":"import","priority":0}
+	]`
+	want := "e1,t1,t2,t3,t4"
+	for run := 0; run < 2; run++ {
+		ap := newTestCLIApp(t)
+		path := writeImportFile(t, "tree.json", content)
+		var stdout bytes.Buffer
+		if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
+			t.Fatalf("run %d: runImportTree(json) error = %v", run, err)
+		}
+		if got := strings.Join(mappingRefs(t, stdout.String()), ","); got != want {
+			t.Fatalf("run %d: mapping order = %s, want %s\noutput:\n%s", run, got, want, stdout.String())
+		}
+	}
+}
+
+func TestRunImportYAMLMappingOrderIsDeterministic(t *testing.T) {
+	ctx := context.Background()
+	content := `
+local_id: e1
+title: Epic
+type: epic
+topic: import
+---
+local_id: t2
+title: Second
+type: task
+topic: import
+parent: e1
+depends_on: [t1]
+---
+local_id: t1
+title: First
+type: task
+topic: import
+parent: e1
+---
+local_id: t3
+title: Third
+type: task
+topic: import
+parent: e1
+---
+local_id: t4
+title: Fourth
+type: task
+topic: import
+`
+	want := "e1,t1,t2,t3,t4"
+	for run := 0; run < 2; run++ {
+		ap := newTestCLIApp(t)
+		path := writeImportFile(t, "batch.yaml", content)
+		var stdout bytes.Buffer
+		if err := runImportTree(ctx, &stdout, ap, []string{"--path", path}); err != nil {
+			t.Fatalf("run %d: runImportTree(yaml) error = %v", run, err)
+		}
+		if got := strings.Join(mappingRefs(t, stdout.String()), ","); got != want {
+			t.Fatalf("run %d: mapping order = %s, want %s\noutput:\n%s", run, got, want, stdout.String())
+		}
+	}
+}
+
 func TestRunImportYAMLUpdatesByID(t *testing.T) {
 	ctx := context.Background()
 	ap := newTestCLIApp(t)

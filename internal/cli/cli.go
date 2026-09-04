@@ -1477,7 +1477,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 // dependency order with best-effort rollback on failure (see
 // Store.ImportTree). The spec is an array of records; each carries a
 // local_id used inside the spec to wire parent/depends_on refs. Real issue
-// IDs are generated at create time and returned in the id_map result. Run
+// IDs are generated at create time and printed as an ordered mapping. Run
 // `lit doctor` after a failed import to detect any orphans left if rollback
 // itself failed.
 //
@@ -1497,11 +1497,11 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.IDMap)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
-	for local, real := range result.IDMap {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", local, real); err != nil {
+	for _, m := range result.Created {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
 			return err
 		}
 	}
@@ -1548,8 +1548,8 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
-	for ref, real := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", ref, real); err != nil {
+	for _, m := range result.Created {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
 			return err
 		}
 	}

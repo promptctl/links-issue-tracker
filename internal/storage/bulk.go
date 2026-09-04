@@ -36,14 +36,32 @@ type BulkIssueSpec struct {
 	Reason string `yaml:"reason,omitempty"`
 }
 
-// BulkApplyResult reports what a successful BulkApply did. Created maps each
-// create document's own reference — its LocalID if it set one, otherwise its
-// new real ID — to the real ID it was created under, so every create is
-// nameable in the report even when the file never gave it a LocalID.
-// Updated lists the real IDs of every updated issue, in the order they were
-// applied.
+// IDMapping records one created issue: Ref is the name the input file used
+// for it, ID is the real issue ID it was created under.
+//
+// [LAW:types-are-the-program] A result carries these in the engine's creation
+// order — an ordered slice, not a map — so the same input file reports the
+// same sequence on every run instead of Go's randomized map iteration.
+type IDMapping struct {
+	Ref string
+	ID  string
+}
+
+// NewIDMapping applies the one ref rule: a create is nameable by the LocalID
+// it chose, or by its own new real ID when the file gave it none — so every
+// create is in the report either way. [LAW:one-source-of-truth]
+func NewIDMapping(localID, realID string) IDMapping {
+	if localID == "" {
+		return IDMapping{Ref: realID, ID: realID}
+	}
+	return IDMapping{Ref: localID, ID: realID}
+}
+
+// BulkApplyResult reports what a successful BulkApply did. Created lists
+// every created issue in the order it was created; Updated lists the real IDs
+// of every updated issue, in the order they were applied.
 type BulkApplyResult struct {
-	Created map[string]string
+	Created []IDMapping
 	Updated []string
 }
 
@@ -65,7 +83,7 @@ type ImportTreeSpec struct {
 }
 
 // ImportTreeResult reports the local-ID → real-issue-ID mapping produced by a
-// successful import.
+// successful import, in the order the issues were created.
 type ImportTreeResult struct {
-	IDMap map[string]string `json:"id_map"`
+	Created []IDMapping
 }

@@ -35,7 +35,7 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		return storage.BulkApplyResult{}, fmt.Errorf("bulk: %w", err)
 	}
 
-	result := storage.BulkApplyResult{Created: map[string]string{}}
+	result := storage.BulkApplyResult{}
 	createdRealID := make([]string, len(specs))
 	createdIDs := make([]string, 0, len(specs))
 	localRealID := make(map[string]string, len(specs))
@@ -95,10 +95,8 @@ func (s *Store) BulkApply(ctx context.Context, prefix, actor string, specs []sto
 		createdIDs = append(createdIDs, issue.ID)
 		if spec.LocalID != "" {
 			localRealID[spec.LocalID] = issue.ID
-			result.Created[spec.LocalID] = issue.ID
-		} else {
-			result.Created[issue.ID] = issue.ID
 		}
+		result.Created = append(result.Created, storage.NewIDMapping(spec.LocalID, issue.ID))
 	}
 	for i, spec := range specs {
 		if spec.ID != "" {

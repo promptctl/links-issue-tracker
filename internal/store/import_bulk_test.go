@@ -26,15 +26,13 @@ func TestBulkApplyCreatesEpicWithChildAndDep(t *testing.T) {
 	if len(result.Created) != 3 {
 		t.Fatalf("Created = %v, want 3 entries", result.Created)
 	}
-	t1, t2 := result.Created["t1"], result.Created["t2"]
-	if t1 == "" || t2 == "" {
-		t.Fatalf("missing created mapping: %#v", result.Created)
-	}
+	t1 := createdIDByRef(t, result.Created, "t1")
+	t2 := createdIDByRef(t, result.Created, "t2")
 	detail, err := st.GetIssueDetail(ctx, t2)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(t2) error = %v", err)
 	}
-	if detail.Parent == nil || detail.Parent.ID != result.Created["e1"] {
+	if detail.Parent == nil || detail.Parent.ID != createdIDByRef(t, result.Created, "e1") {
 		t.Fatalf("t2.Parent = %#v, want epic e1", detail.Parent)
 	}
 	foundDep := false
@@ -69,10 +67,10 @@ func TestBulkApplyCreatesLandInFileOrder(t *testing.T) {
 		t.Fatalf("BulkApply() error = %v", err)
 	}
 	var first, second model.Issue
-	for ref, real := range result.Created {
-		issue, err := st.GetIssue(ctx, real)
+	for _, m := range result.Created {
+		issue, err := st.GetIssue(ctx, m.ID)
 		if err != nil {
-			t.Fatalf("GetIssue(%s) error = %v", ref, err)
+			t.Fatalf("GetIssue(%s) error = %v", m.Ref, err)
 		}
 		if issue.Title == "First" {
 			first = issue
@@ -103,11 +101,22 @@ func TestBulkApplyCreateWithoutLocalIDIsReportedByRealID(t *testing.T) {
 	if len(result.Created) != 1 {
 		t.Fatalf("Created = %v, want 1 entry", result.Created)
 	}
-	for ref, real := range result.Created {
-		if ref != real {
-			t.Fatalf("Created[%q] = %q, want self-keyed (no local_id given)", ref, real)
+	if m := result.Created[0]; m.Ref != m.ID {
+		t.Fatalf("Created[0] = %+v, want self-referenced (no local_id given)", m)
+	}
+}
+
+// createdIDByRef resolves one create's real id from a result's ordered
+// report, failing the test when the ref is not there.
+func createdIDByRef(t *testing.T, created []storage.IDMapping, ref string) string {
+	t.Helper()
+	for _, m := range created {
+		if m.Ref == ref {
+			return m.ID
 		}
 	}
+	t.Fatalf("created report %+v has no %q entry", created, ref)
+	return ""
 }
 
 func TestBulkApplyUpdatesExistingIssueByID(t *testing.T) {
@@ -300,11 +309,7 @@ func TestBulkApplyCreateChildOfExistingIssue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BulkApply() error = %v", err)
 	}
-	var childID string
-	for _, real := range result.Created {
-		childID = real
-	}
-	detail, err := st.GetIssueDetail(ctx, childID)
+	detail, err := st.GetIssueDetail(ctx, result.Created[0].ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail() error = %v", err)
 	}
