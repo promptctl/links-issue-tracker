@@ -463,8 +463,11 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	if !strings.Contains(msg, dep.ID) {
 		t.Fatalf("exhaustedError = %q, want it to name the blocker %q", msg, dep.ID)
 	}
-	if strings.Contains(msg, "yours to take") {
-		t.Fatalf("exhaustedError = %q, want it not to offer %q as takeable — another checkout holds its lane fresh", msg, dep.ID)
+	if !strings.Contains(msg, "claimed by another checkout") {
+		t.Fatalf("exhaustedError = %q, want it to name %q as held elsewhere rather than as work to pick up", msg, dep.ID)
+	}
+	if strings.Contains(msg, "`lit start` it") {
+		t.Fatalf("exhaustedError = %q, want no instruction to start %q — `lit start` would hit the fresh-takeover gate", msg, dep.ID)
 	}
 }
 
