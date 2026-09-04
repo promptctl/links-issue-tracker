@@ -1477,7 +1477,7 @@ func runImportTree(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 // dependency order with best-effort rollback on failure (see
 // Store.ImportTree). The spec is an array of records; each carries a
 // local_id used inside the spec to wire parent/depends_on refs. Real issue
-// IDs are generated at create time and returned in the id_map result. Run
+// IDs are generated at create time and printed as an ordered mapping. Run
 // `lit doctor` after a failed import to detect any orphans left if rollback
 // itself failed.
 //
