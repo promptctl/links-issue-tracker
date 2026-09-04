@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.12.2] - 2026-09-03
+
 ### Fixed
 
 - `lit import` now prints its local_id → real_id create mapping in the same order on every run of the same file — the order the issues were actually created in, dependencies before dependents — instead of a fresh shuffle per run. Both print paths rendered the mapping by ranging over a plain Go map (the JSON tree path over `ImportTreeResult.IDMap`, the YAML bulk path over `BulkApplyResult.Created`), and Go randomizes map iteration by design, so an agent or test diffing two runs of the same import saw every line reordered with nothing actually different underneath — attention burned on a non-problem, since the ids were real and creation had already happened in a deterministic topological order that only the result type discarded. The fix is at that one seam rather than per print site: both results now carry an ordered `[]IDMapping` (ref → real id, appended as each issue is created) in place of the map, so losing the order is unrepresentable in any engine, and the "a create is nameable by its local_id, or by its own new id when the file gave it none" rule lives once in the `NewIDMapping` constructor instead of once per engine loop. The conformance suite now pins creation-ordered reports for both storage engines, and CLI tests pin the printed mapping lines to the same exact sequence across repeated runs of both input formats — with a file that lists a dependent before its dependency, so the assertion proves creation order, not merely a stable shuffle. (links-import-g329)
