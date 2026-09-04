@@ -234,15 +234,14 @@ step, so each step below says only which lanes it looks in:
    as a routing step rather than a bias. A parentless (solo) claim has no epic
    to continue into and falls straight to step 3 once its own lane has nothing
    left to serve or resume.
-3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, blocked on
-   E.4 (on your path and yours to take — start it?)". Each blocker is named by
+3. **Exhaustion is loud and diagnostic**, never silent: "blocked on E.4 (on
+   your path and yours to take — `lit start` it)". Each blocker is named by
    what it is to this checkout — yours to take, held by another checkout,
    not startable yet, or outside the view this run gathered — so the
    diagnostic never recommends what `lit start` would refuse, and never
-   asserts a standing it did not read. It fires only
-   once steps 1 and 2 have both found nothing — the epic's own claimed lane and
-   the rest of its lanes — and it never falls through to a leaf outside the
-   epic.
+   asserts a standing it did not read. It fires only once steps 1 and 2 have
+   both found nothing — the epic's own claimed lane and the rest of its lanes
+   — and it never falls through to a leaf outside the epic.
    Completing the last ticket announces the epic's completion; the claim has
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
@@ -256,9 +255,12 @@ step, so each step below says only which lanes it looks in:
    `next` skips them silently; listings show everything with claim
    annotations. Visibility is not pullability. A lane whose holder has gone
    stale is not one of these — see step 6.
-6. **A stale claim is provenance, not a hold.** Steps 2 and 4 admit a lane
-   whose claim has aged past T; a lane another checkout holds fresh is
-   admitted by neither. That distinction is the entire content of the rule.
+6. **A stale claim is provenance, not a hold.** Wherever a step looks outside
+   the checkout's own lanes, a lane whose claim has aged past T is admitted,
+   and a lane another checkout holds fresh is not. That distinction is the
+   entire content of the rule. What makes an in-flight ticket takeable is that
+   its holder is gone — a claim that has gone stale, or a lane that never
+   carried one.
    The older exclusion — a stale lane withheld from bare `next` exactly as a
    fresh foreign hold is — is retired because it was never coherent, not
    because a tradeoff shifted. A claim is evidence of ownership; staleness is
