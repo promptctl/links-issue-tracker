@@ -15,7 +15,7 @@ import (
 // pipeline and claim routing — and returns the chosen annotated row. This
 // harness never mints a stream token or attributes a write (newTestCLIApp
 // opens the store directly, bypassing app.Open's AttributeTo), so every lane
-// derives Unclaimed and routing always lands on ServedFromGlobal — the
+// derives Unclaimed and routing always lands on ServedFromNewLane — the
 // claims-aware routing degenerating to exactly the pre-claims "first ready
 // row" pick these tests pin. [LAW:single-enforcer]
 func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
@@ -29,9 +29,9 @@ func (h readyTestHarness) runNextRow() annotation.AnnotatedIssue {
 		h.t.Fatalf("gatherClaimContext error = %v", err)
 	}
 	outcome := routeNext(annotated, details, cc.standings, cc.self)
-	served, ok := outcome.(ServedFromGlobal)
+	served, ok := outcome.(ServedFromNewLane)
 	if !ok {
-		h.t.Fatalf("routeNext = %#v (%T), want ServedFromGlobal (harness carries no claims)", outcome, outcome)
+		h.t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (harness carries no claims)", outcome, outcome)
 	}
 	return served.Row
 }

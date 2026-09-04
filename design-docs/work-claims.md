@@ -210,10 +210,14 @@ the ordering rather than as a rule someone can forget to apply.
 Selection consults claims in a fixed precedence:
 
 1. **The checkout's own live claims come first**: ready tickets within claimed
-   lanes, in backlog order, including the prerequisite closure — a dependency
-   outside the claimed lane that gates it is on the path and is offered.
+   lanes and the work already in flight there — a ticket in progress in the
+   checkout's own lane is handed back to resume rather than started fresh —
+   in backlog order, including the prerequisite closure: a dependency outside
+   the claimed lane that gates one inside it is on the path and is offered,
+   announced as the second lane its start claims.
 2. **Then the rest of its epic**: the claimed lane's epic's other ready lanes
-   that no one else holds, before any lane of any other epic — the
+   that no one else holds *right now* (a lane whose holder has gone stale is
+   no longer held — step 6), before any lane of any other epic — the
    GRANULARITY RULING above, expressed as a routing step rather than a bias.
    A parentless (solo) claim has no epic to continue into and falls straight
    to step 3 once its own ticket is no longer ready.
@@ -224,22 +228,36 @@ Selection consults claims in a fixed precedence:
    Completing the last ticket announces the epic's completion; the claim has
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
-4. **Then the global pool**: the top-ranked ready ticket in unclaimed lanes,
-   labeled as what it is — "starting B.1 claims B#1" — so the act of
-   commitment is visible at the moment it happens. Reached directly, with no
-   detour through steps 1–3, by a checkout that holds no live claims at all —
-   unfocus is the zero state, not a hop through the earlier steps.
-5. **Lanes claimed elsewhere are routed around, not hidden.** `next` skips
-   them silently; listings show everything with claim annotations.
-   Visibility is not pullability.
-6. **Stale claims surface as an option, never a default.** "A#1: claimed by
-   7f3a, idle 3d, nothing completed — available for takeover." Taking over is
-   the ordinary primitive — starting a ticket in the lane — explicitly
-   targeted, never reached by bare `next`. A stale lane is excluded from
-   steps 2 and 4 exactly as a fresh foreign hold is — "never reached by bare
-   `next`" admits no exception for staleness. Overriding a claim that is
-   still fresh requires explicit confirmation. A claim is a well-founded
-   default, never a lock.
+4. **Then the global pool**: the top-ranked ready ticket in the lanes no
+   one else holds right now (unclaimed, or claimed by a holder who has gone
+   stale — step 6), labeled as what it is — "starting B.1 claims B#1" — so
+   the act of commitment is visible at the moment it happens. Reached
+   directly, with no detour through steps 1–3, by a checkout that holds no
+   live claims at all — unfocus is the zero state, not a hop through the
+   earlier steps.
+5. **Lanes another checkout holds fresh are routed around, not hidden.**
+   `next` skips them silently; listings show everything with claim
+   annotations. Visibility is not pullability. A lane whose holder has gone
+   stale is not one of these — see step 6.
+6. **A stale claim is provenance, not a hold.** Steps 2 and 4 admit a lane
+   whose claim has aged past T; a lane another checkout holds fresh is
+   admitted by neither. That distinction is the entire content of the rule.
+   The older exclusion — a stale lane withheld from bare `next` exactly as a
+   fresh foreign hold is — is retired because it was never coherent, not
+   because a tradeoff shifted. A claim is evidence of ownership; staleness is
+   evidence that the evidence expired; and an orphaned ticket's claim refutes
+   itself, since the claim's entire content is "someone is working this" and
+   the orphan annotation is the proof that nobody is. Letting that claim veto
+   the ticket means trusting the claim over the proof that the claim is dead
+   (owner ruling, links-claims-1b0p, 2026-09-03). A stale claim on the
+   checkout's *own* lane is not a loss of ownership at all: staleness there
+   is evidence the checkout stepped away, so the lane's work is handed back
+   to it to resume, never routed away from it. Taking over stays visible
+   rather than silent — the pick prints the displaced holder's claim line
+   under the row it commits to, "claimed by 7f3a, idle 3d, nothing completed"
+   — so commitment and provenance arrive together. Overriding a claim that is
+   still fresh requires the deliberate act of `lit start` on that ticket,
+   with explicit confirmation. A claim is a well-founded default, never a lock.
 7. **Contested lanes** keep deterministic routing (latest establishing event
    holds), while the other party's selection stands down and says why:
    "claim on A#1 moved to 7f3a at 14:02 — coordinate or stand down."

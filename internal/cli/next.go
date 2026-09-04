@@ -75,20 +75,26 @@ func runNext(ctx context.Context, stdout io.Writer, ap *app.App, args []string) 
 
 // renderNextOutcome prints the row routeNext selected — or, for Exhausted
 // and NoWork, returns the loud diagnostic instead of printing a ticket that
-// was never picked. A fresh claim (EpicLane, Global) is announced before the
-// row, visible at the moment the commitment happens
-// (design-docs/work-claims.md, Routing step 3); an already-held claim
-// (ServedFromClaim) prints exactly as `next` always has.
+// was never picked. A claim this pick establishes (EpicLane, NewLane) is
+// announced before the row, visible at the moment the commitment happens
+// (design-docs/work-claims.md, Routing step 3); a lane already held announces
+// only what changed — nothing for ServedFromClaim, which prints exactly as
+// `next` always has, and the resumption itself for ResumedOwnWork, since being
+// handed back a ticket already in flight is the one pick that looks like a
+// fresh start but is not one.
 func renderNextOutcome(w io.Writer, outcome NextOutcome, details map[string]storage.IssueRelations, cc claimContext) (workflows.Occasion, error) {
 	var row annotation.AnnotatedIssue
 	var announce string
 	switch o := outcome.(type) {
 	case ServedFromClaim:
 		row = o.Row
+	case ResumedOwnWork:
+		row = o.Row
+		announce = fmt.Sprintf("resuming %s — already in progress in a lane you hold\n", o.Row.ID)
 	case ServedFromEpicLane:
 		row = o.Row
 		announce = fmt.Sprintf("continuing epic %s: starting %s claims %s\n", o.Epic, o.Row.ID, o.Lane)
-	case ServedFromGlobal:
+	case ServedFromNewLane:
 		row = o.Row
 		announce = fmt.Sprintf("starting %s claims %s\n", o.Row.ID, o.Lane)
 	case Exhausted:
