@@ -50,11 +50,25 @@ type Held struct {
 }
 
 // Stale is a lane whose holder's evidence has aged past the freshness window
-// while the lane remains unfinished. The lane is unclaimed again — nothing
-// routes around it — but unlike Unclaimed it carries provenance, because
-// "available for takeover, last touched by 7f3a three days ago" is a different
-// offer from "nobody has ever worked this" and the agent taking it over needs
-// to know which one it is reading.
+// while the lane remains unfinished. It is NOT Unclaimed carrying provenance:
+// the holder is still recorded, and who that holder is decides what the lane
+// means to whoever is reading it. To the checkout that holds it, staleness is
+// evidence it stepped away from work that is still its own, to be handed back
+// and resumed. To anyone else it is an offer — "available for takeover, last
+// touched by 7f3a three days ago", which is a different offer from "nobody has
+// ever worked this", and the agent taking it over needs to know which one it is
+// reading. Selection therefore no longer routes around a lane for staleness
+// alone; what a stale lane offers past that is the row's business, not this
+// variant's.
+//
+// That last sentence used to read "the lane is unclaimed again — nothing routes
+// around it", which was the opposite of what selection did and erased the
+// holder this variant exists to carry. Four consumers each decided for
+// themselves whether Stale behaved like Held or like Unclaimed, and decided
+// differently; the routing gates links-claims-1b0p deleted were the
+// compensation for it. Read this variant against an identity and the ambiguity
+// is gone — which is why exactly one place in the CLI does that reading, and
+// everything else consumes its verdict.
 type Stale struct {
 	Tenure
 }

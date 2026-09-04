@@ -32,20 +32,63 @@ const (
 	takeoverFreshConfirm
 )
 
-// classifyTakeover is the pure predicate behind the takeover gate: no I/O, no
-// flags, no TTY reads — those all live in authorizeStart, the one caller.
-// [LAW:effects-at-boundaries]
-func classifyTakeover(standing claims.Standing, self model.Attribution) takeoverRequirement {
+// laneRelation is what a lane's standing means TO THIS CHECKOUT — the single
+// reading of claims.Standing that every consumer in this package shares.
+//
+// It exists because Stale was modeled as a sibling of Held and Unclaimed
+// without carrying its own answer, so each consumer decided for itself which
+// of the two it behaved like, and they decided differently: `lit start` read a
+// stale lane as yours, `lit next` read it as nobody's, and the renderer sided
+// with start. Four readings of one type is the under-specification the gates
+// were compensating for (links-claims-1b0p, owner ruling 3). Resolving it once
+// here is what lets both the takeover gate and the routing verdict below stop
+// re-deriving it. [LAW:one-source-of-truth] [LAW:types-are-the-program]
+type laneRelation int
+
+const (
+	// laneUnclaimed: nobody holds it and nobody is recorded as having held it.
+	laneUnclaimed laneRelation = iota
+	// laneOurs: this checkout holds it — fresh or stale. Staleness of your OWN
+	// lane is not a loss of ownership; it is evidence you stepped away from
+	// work that is still yours to pick back up.
+	laneOurs
+	// laneStaleForeign: another checkout held it and its evidence has aged out.
+	// Available, but never silently — whoever takes it is told whose it was.
+	laneStaleForeign
+	// laneHeldForeign: another checkout holds it right now. Routed around.
+	laneHeldForeign
+)
+
+// relationOf is the one place a Standing is read against an identity.
+func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 	switch s := standing.(type) {
 	case claims.Held:
 		if s.By == self {
-			return takeoverNone
+			return laneOurs
 		}
-		return takeoverFreshConfirm
+		return laneHeldForeign
 	case claims.Stale:
 		if s.By == self {
-			return takeoverNone
+			return laneOurs
 		}
+		return laneStaleForeign
+	default:
+		return laneUnclaimed
+	}
+}
+
+// classifyTakeover is the pure predicate behind the takeover gate: no I/O, no
+// flags, no TTY reads — those all live in authorizeStart, the one caller.
+// [LAW:effects-at-boundaries]
+//
+// A lane that is ours or nobody's needs no ceremony, which is why both collapse
+// to takeoverNone here while staying distinct in laneRelation — routing needs
+// the difference, this gate does not. [LAW:decomposition]
+func classifyTakeover(standing claims.Standing, self model.Attribution) takeoverRequirement {
+	switch relationOf(standing, self) {
+	case laneHeldForeign:
+		return takeoverFreshConfirm
+	case laneStaleForeign:
 		return takeoverStaleInformed
 	default:
 		return takeoverNone
