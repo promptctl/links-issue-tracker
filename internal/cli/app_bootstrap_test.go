@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -109,21 +110,28 @@ func TestResolveDoctorAccessMode(t *testing.T) {
 func TestCommandFamilyResolve(t *testing.T) {
 	t.Parallel()
 	// [LAW:behavior-not-structure] Pins the contract: which subcommands open
-	// the app read-only vs writable, and that illegal paths fail with usage
-	// before any app opens.
+	// the app read-only vs writable, that a bad path is a typed usage refusal
+	// before any app opens, and that a help-shaped argument is classified as a
+	// help request — for the family itself, and for a nested group before its
+	// dispatch pipeline could acquire the app. The assertions are typed
+	// (errors.As), not string equality: HelpRequestedError.Error() coincides
+	// with the usage text, so a message check cannot tell an answered help
+	// from a rejected path.
 	cases := []struct {
-		name    string
-		family  commandFamily[appSubcommand]
-		args    []string
-		want    app.AccessMode
-		wantErr bool
+		name          string
+		family        commandFamily[appSubcommand]
+		args          []string
+		want          app.AccessMode
+		wantErr       bool
+		wantHelpUsage string
 	}{
 		{name: "dep ls is read", family: depFamily, args: []string{"ls"}, want: app.AccessRead},
 		{name: "dep add is write", family: depFamily, args: []string{"add", "a", "b"}, want: app.AccessWrite},
 		{name: "dep rm is write", family: depFamily, args: []string{"rm", "a", "b"}, want: app.AccessWrite},
 		{name: "dep unknown rejected", family: depFamily, args: []string{"bogus"}, wantErr: true},
 		{name: "dep empty rejected", family: depFamily, args: nil, wantErr: true},
-		{name: "dep help flag rejected", family: depFamily, args: []string{"--help"}, wantErr: true},
+		{name: "dep help flag answered as help", family: depFamily, args: []string{"--help"}, wantHelpUsage: depFamily.usage},
+		{name: "bulk nested group help answered before dispatch", family: bulkFamily, args: []string{"label", "--help"}, wantHelpUsage: bulkLabelFamily.usage},
 		{name: "backup create is read", family: backupFamily, args: []string{"create"}, want: app.AccessRead},
 		{name: "backup list is read", family: backupFamily, args: []string{"list"}, want: app.AccessRead},
 		{name: "backup restore is write", family: backupFamily, args: []string{"restore", "--latest"}, want: app.AccessWrite},
@@ -132,12 +140,23 @@ func TestCommandFamilyResolve(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			got, err := tc.family.resolve(tc.args)
-			if tc.wantErr {
-				if err == nil {
-					t.Fatalf("resolve(%v) error = nil, want usage error", tc.args)
+			if tc.wantHelpUsage != "" {
+				var help HelpRequestedError
+				if !errors.As(err, &help) {
+					t.Fatalf("resolve(%v) error = %v, want HelpRequestedError", tc.args, err)
 				}
-				if err.Error() != tc.family.usage {
-					t.Fatalf("resolve(%v) error = %q, want family usage %q", tc.args, err, tc.family.usage)
+				if help.Usage != tc.wantHelpUsage {
+					t.Fatalf("resolve(%v) help usage = %q, want %q", tc.args, help.Usage, tc.wantHelpUsage)
+				}
+				return
+			}
+			if tc.wantErr {
+				var usage UsageError
+				if !errors.As(err, &usage) {
+					t.Fatalf("resolve(%v) error = %v, want UsageError", tc.args, err)
+				}
+				if usage.Message != tc.family.usage {
+					t.Fatalf("resolve(%v) error = %q, want family usage %q", tc.args, usage.Message, tc.family.usage)
 				}
 				return
 			}
