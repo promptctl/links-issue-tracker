@@ -1,0 +1,124 @@
+# The loud half of the release pipeline's self-healing. release-validate.yml's
+# publish gate is repository state — "the newest CHANGELOG version has no tag
+# yet" — so an evicted or failed release run is rescued by ANY later master
+# run re-deriving that state. The one silent hole in that design: the burst's
+# surviving run fails or is cancelled and no further push arrives, leaving a
+# promoted version pending indefinitely with nothing signalling why (the
+# 2026-08-27 v0.9.0 eviction chain came one failed run away from exactly
+# this). This workflow watches for that state and goes red while it persists.
+# [LAW:no-silent-failure]
+#
+# A watchdog whose failures nobody sees is deletion with extra steps (the
+# nightly lane's rule), so a detection files (or extends) a GitHub issue
+# labeled `release-stuck` with the run URL and the recovery path.
+name: Release watchdog
+
+on:
+  schedule:
+    - cron: '23 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+# A dispatched run overlapping the scheduled one must queue, not race: two
+# concurrent failing runs would each see no open release-stuck issue and file
+# a duplicate. Never cancel-in-progress — a cancelled watchdog is a skipped
+# watchdog.
+concurrency:
+  group: release-watchdog
+  cancel-in-progress: false
+
+jobs:
+  watchdog:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      # How long a promoted version may sit untagged before this alarm trips.
+      # Sized against the healthy worst case: a promotion queued behind one
+      # full in-flight build (~35m) plus its own build + publish (~40m) is
+      # ~75m end to end; 120m clears that with slack, while still tripping the
+      # same day a release is genuinely stuck. Hourly checks put detection at
+      # most ~3h after promotion.
+      GRACE_MINUTES: 120
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # Full history: measuring how long the release has been pending
+          # means finding the commit that introduced the version's CHANGELOG
+          # heading (see below).
+          fetch-depth: 0
+
+      - name: Check for a stuck pending release
+        run: |
+          set -euo pipefail
+          # scripts/release-kind.sh is the one derivation of release state from
+          # (CHANGELOG × origin tags) — the same resolver release-validate.yml
+          # publishes by, so this alarm and the publisher cannot drift apart on
+          # what "pending" means. [LAW:one-source-of-truth]
+          verdict=$(scripts/release-kind.sh)
+          case "$verdict" in
+            snapshot|tagged\ *)
+              echo "release state: $verdict — nothing pending; all quiet."
+              exit 0
+              ;;
+            pending\ *)
+              VER=${verdict#pending }
+              ;;
+            *)
+              echo "::error::unrecognized verdict from scripts/release-kind.sh: '$verdict'" >&2
+              exit 1
+              ;;
+          esac
+          # The pending clock starts at the commit that added the version's
+          # heading (the chore(release) promotion) — the NEWEST -S hit: the
+          # heading exists at HEAD, so the newest occurrence-change is the
+          # addition that made it live, and a reverted-then-re-promoted
+          # version measures from its live promotion, not a stale first
+          # attempt. Not CHANGELOG.md's latest commit either: ticket PRs
+          # touch [Unreleased] too, and measuring from those would quietly
+          # reset the clock while the release stays stuck.
+          # [LAW:one-source-of-truth]
+          promoted_at=$(git log -1 --format=%ct -S "## [$VER]" -- CHANGELOG.md)
+          if [ -z "$promoted_at" ]; then
+            echo "::error::v$VER is pending but no commit introducing '## [$VER]' exists in CHANGELOG.md history — cannot measure how long; treating as stuck rather than guessing." >&2
+            exit 1
+          fi
+          age_minutes=$(( ( $(date +%s) - promoted_at ) / 60 ))
+          if [ "$age_minutes" -le "$GRACE_MINUTES" ]; then
+            echo "v$VER pending for ${age_minutes}m — inside the ${GRACE_MINUTES}m publish window; release-validate should still be working on it."
+            exit 0
+          fi
+          echo "::error::v$VER has been pending for ${age_minutes}m (grace: ${GRACE_MINUTES}m) — the promotion merged but no release-validate run has published its tag, and no master push has arrived to re-trigger the gate." >&2
+          exit 1
+
+      # failure() alone would miss the job-level timeout: GitHub marks a
+      # timed-out job cancelled, not failed. [LAW:no-silent-failure]
+      - name: Report the stuck release as a GitHub issue
+        if: failure() || cancelled()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          run_url="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+          body="The release watchdog went red: ${run_url}
+
+          Either a promoted CHANGELOG version has had no published tag for over the grace window, or the watchdog could not determine the release state at all — the run log names which, and the version.
+
+          What a stuck release means: the chore(release) promotion merged, but no surviving release-validate run published the tag. Usual cause: the promotion's run was evicted from the concurrency queue by later master pushes (GitHub keeps one pending slot per group), the burst's surviving run failed or was cancelled, and no later push has re-triggered the state-based publish gate.
+
+          Recovery (RELEASING.md, 'Re-running the pipeline on demand'): \`gh workflow run release-validate.yml --ref master\` re-derives the pending version and publishes it. Close this issue once the tag exists — the watchdog goes green on its own but does not close it for you."
+          gh label create release-stuck --force \
+            --description "A promoted CHANGELOG version has no published tag" --color B60205
+          # One open issue collects repeat detections; the next hour's red
+          # lands as a comment, not a duplicate issue.
+          existing=$(gh issue list --label release-stuck --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "A promoted release is stuck: no tag published" \
+              --label release-stuck --body "$body"
+          fi

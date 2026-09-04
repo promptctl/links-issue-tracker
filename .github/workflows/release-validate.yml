@@ -41,13 +41,28 @@ permissions:
                     # ICU cross-toolchain from source
 
 concurrency:
-  # [LAW:no-silent-failure] cancel-in-progress is FALSE on purpose. This workflow
-  # is also the release publisher: a pending-release run builds the real artifact,
-  # materializes the tag locally, and hands off to publish. Cancelling that mid-run
-  # would silently lose the validated artifact + tag and the release would never be
-  # cut — with nothing signalling why. A second master push therefore QUEUES behind
-  # an in-flight run rather than aborting it. The cost (serialized snapshot gates)
-  # is cheap; a silently-dropped release is not.
+  # One serialized lane per ref — but know what the queue actually does. GitHub
+  # keeps exactly ONE pending run per concurrency group: each newly queued run
+  # EVICTS (cancels) the previously queued one, and cancel-in-progress:false
+  # protects only the run already executing. So under a burst of master pushes,
+  # every intermediate run — a pending release's included — is cancelled from
+  # the queue and only the newest survives. That is safe HERE only because the
+  # publish gate is repository state, not push identity: every run re-derives
+  # "newest CHANGELOG version × origin tags" (scripts/release-kind.sh via
+  # steps.kind), so the burst's surviving run cuts any release an evicted run
+  # would have cut. Measured 2026-08-27: the v0.9.0 promotion run (33055020550)
+  # was evicted from this queue by later pushes, and the burst's last run
+  # (33055750392) re-derived the pending 0.9.0 and published it unaided.
+  # [LAW:one-source-of-truth] the pending-release fact lives in
+  # (CHANGELOG × tags), never in which run happened to survive — a trigger
+  # phrased as "this commit promoted a version" would lose evicted releases
+  # irrecoverably. The residual hole — the surviving run itself fails or is
+  # cancelled and no further push arrives — is release-watchdog.yml's job to
+  # catch, loudly. [LAW:no-silent-failure]
+  #
+  # cancel-in-progress stays FALSE for the executing run: a pending-release
+  # build cancelled mid-run loses the validated artifact until something
+  # re-triggers the gate, and the serialized snapshot gates it buys are cheap.
   group: release-validate-${{ github.ref }}
   cancel-in-progress: false
 
@@ -139,53 +154,36 @@ jobs:
         id: kind
         run: |
           set -euo pipefail
-          # The newest release section is the first '## [...]' heading that is not
-          # [Unreleased]. Three cases, kept distinct so a typo can't silently skip
-          # a release: none (only [Unreleased]) -> snapshot; a well-formed
-          # '## [X.Y.Z]' -> release or snapshot by whether its tag exists; a
-          # version-ish heading that is MALFORMED -> loud error, never a silent
-          # fall-through to snapshot. [LAW:no-silent-failure]
-          # [LAW:no-silent-failure] guard the file's existence FIRST, so a broken
-          # checkout or a moved/renamed CHANGELOG errors loudly instead of being
-          # swallowed by the pipeline's `|| true` and masquerading as "no releases
-          # yet". After this guard, `|| true` masks only the benign no-match (grep
-          # exit 1); a missing-file (grep exit 2) can no longer reach it.
-          test -f CHANGELOG.md || { echo "::error::CHANGELOG.md not found at repo root — broken checkout or moved file; refusing to resolve release kind." >&2; exit 1; }
-          CAND=$(grep -E '^## \[' CHANGELOG.md | grep -vE '^## \[Unreleased\]' | head -1 || true)
-          if [ -z "$CAND" ]; then
-            echo "CHANGELOG has no released version yet (only [Unreleased]); snapshot gate."
-            echo "release=false" >> "$GITHUB_OUTPUT"
-          elif ! echo "$CAND" | grep -qE '^## \[[0-9]+\.[0-9]+\.[0-9]+\]( - .*)?$'; then
-            echo "::error::newest CHANGELOG release heading is malformed: '$CAND' (expected '## [X.Y.Z] - <date>')"
-            exit 1
-          else
-            VER=$(echo "$CAND" | grep -oE '[0-9]+\.[0-9]+\.[0-9]+')
-            # [LAW:no-silent-failure] `git ls-remote --exit-code` is a three-way
-            # signal, not a boolean: 0 = tag present, 2 = no matching ref, anything
-            # else (128 network/auth/missing-remote) = a real failure. An `if`
-            # collapses 2 AND every error into "no tag" and would flag a spurious
-            # release the moment origin is unreachable. Capture the code and branch
-            # on the actual value; keep stderr visible so the error is loud.
-            set +e
-            git ls-remote --exit-code --tags origin "refs/tags/v$VER" >/dev/null
-            r=$?
-            set -e
-            case "$r" in
-              0)
-                echo "v$VER is already tagged; ordinary master push; snapshot gate."
-                echo "release=false" >> "$GITHUB_OUTPUT"
-                ;;
-              2)
-                echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
-                echo "release=true" >> "$GITHUB_OUTPUT"
-                echo "version=$VER" >> "$GITHUB_OUTPUT"
-                ;;
-              *)
-                echo "::error::git ls-remote failed (exit $r) probing refs/tags/v$VER — cannot determine release state; refusing to guess." >&2
-                exit 1
-                ;;
-            esac
-          fi
+          # scripts/release-kind.sh is the one derivation of release state from
+          # (CHANGELOG × origin tags) — shared with release-watchdog.yml so the
+          # publisher and the watchdog can never disagree about what "pending"
+          # means; its header documents the closed verdict grammar this case
+          # statement matches. [LAW:one-source-of-truth] [LAW:single-enforcer]
+          # An unrecognized verdict is a loud failure, never a default to
+          # snapshot — defaulting would silently skip a release, the exact
+          # failure the resolver's three-case split exists to prevent.
+          # [LAW:no-silent-failure]
+          verdict=$(scripts/release-kind.sh)
+          case "$verdict" in
+            snapshot)
+              echo "CHANGELOG has no released version yet (only [Unreleased]); snapshot gate."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              ;;
+            tagged\ *)
+              echo "v${verdict#tagged } is already tagged; ordinary master push; snapshot gate."
+              echo "release=false" >> "$GITHUB_OUTPUT"
+              ;;
+            pending\ *)
+              VER=${verdict#pending }
+              echo "v$VER has no tag yet — a release is PENDING on this commit; building the real artifact."
+              echo "release=true" >> "$GITHUB_OUTPUT"
+              echo "version=$VER" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "::error::unrecognized verdict from scripts/release-kind.sh: '$verdict'" >&2
+              exit 1
+              ;;
+          esac
 
       # Proven here on every master push so a broken license generator is caught
       # before a tag is cut, and re-used verbatim by the release build below.

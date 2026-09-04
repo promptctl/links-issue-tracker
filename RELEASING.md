@@ -94,6 +94,21 @@ a `workflow_dispatch` re-run) picks the pending version back up. A published tag
 also short-circuits it: once `v<version>` exists, the pending-release check is
 false, so re-runs never double-publish.
 
+That state-based gate is also what makes the master concurrency queue safe:
+GitHub keeps only one *pending* `release-validate` run per ref — each newly
+queued run cancels the previously queued one (`cancel-in-progress: false`
+protects only the run already executing) — so a burst of quick merges evicts
+every intermediate run, a pending promotion's included, and only the newest
+survives. The surviving run re-derives the pending version from repository
+state and publishes it (measured 2026-08-27: the v0.9.0 promotion run was
+evicted from the queue, and the burst's last run published v0.9.0 unaided).
+The residual failure — the surviving run goes red or is cancelled and no later
+push arrives — is caught by
+[`release-watchdog.yml`](.github/workflows/release-watchdog.yml): an hourly
+check that goes red and files (or extends) a `release-stuck` issue whenever a
+promoted version has had no tag for over two hours. Its recovery path is the
+`workflow_dispatch` re-run below.
+
 ### Dry-run a release locally (optional)
 
 Local dry-runs require a container runtime + the custom release-builder
