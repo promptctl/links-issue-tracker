@@ -1158,9 +1158,12 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 	issueType := "task"
 	epicType := "epic"
 
+	// leaf is deliberately listed before the root it parents to: creation must
+	// reorder to referent-first, so the asserted sequence below fails for an
+	// engine that reports file order — not just one that reports map order.
 	result, err := st.BulkApply(ctx, prefix, "ada", []storage.BulkIssueSpec{
-		{LocalID: "root", Title: &title, Topic: &topic, IssueType: &epicType},
 		{LocalID: "leaf", Title: &childTitle, Topic: &topic, IssueType: &issueType, Parent: "root"},
+		{LocalID: "root", Title: &title, Topic: &topic, IssueType: &epicType},
 	})
 	if err != nil {
 		t.Fatalf("BulkApply error = %v", err)
@@ -1224,10 +1227,14 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 }
 
 func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store) {
+	// The file lists dependents first: other depends on leaf, which parents to
+	// root, so creation must reverse the file order — the asserted sequence
+	// below fails for an engine that reports file order instead of creation
+	// order.
 	result, err := st.ImportTree(ctx, prefix, []storage.ImportTreeSpec{
-		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
-		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
 		{LocalID: "other", Title: "other", IssueType: "task", Topic: "core", DependsOn: []string{"leaf"}},
+		{LocalID: "leaf", Title: "leaf", IssueType: "task", Topic: "core", Parent: "root"},
+		{LocalID: "root", Title: "root", IssueType: "epic", Topic: "core"},
 	})
 	if err != nil {
 		t.Fatalf("ImportTree error = %v", err)
