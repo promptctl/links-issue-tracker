@@ -1166,12 +1166,15 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 		t.Fatalf("BulkApply error = %v", err)
 	}
 	// A create document is nameable by the LocalID it chose, which is what lets
-	// the batch wire its own internal references before any id exists.
-	rootID, ok := result.Created["root"]
+	// the batch wire its own internal references before any id exists — and the
+	// report lists creates in creation order (parent before child), so the same
+	// file reports the same sequence on every run.
+	assertStrings(t, "bulk created refs in creation order", refsOf(result.Created), []string{"root", "leaf"})
+	rootID, ok := createdID(result.Created, "root")
 	if !ok {
 		t.Fatalf("BulkApply Created = %+v, want a root entry", result.Created)
 	}
-	leafID, ok := result.Created["leaf"]
+	leafID, ok := createdID(result.Created, "leaf")
 	if !ok {
 		t.Fatalf("BulkApply Created = %+v, want a leaf entry", result.Created)
 	}
@@ -1229,20 +1232,52 @@ func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store)
 	if err != nil {
 		t.Fatalf("ImportTree error = %v", err)
 	}
-	if len(result.IDMap) != 3 {
-		t.Fatalf("IDMap = %+v, want an entry per spec", result.IDMap)
-	}
-	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, result.IDMap["root"]), []string{result.IDMap["leaf"]})
+	// The report lists creates in creation order — referents before the specs
+	// that name them — so the same file reports the same sequence on every run.
+	assertStrings(t, "imported refs in creation order", refsOf(result.Created), []string{"root", "leaf", "other"})
+	rootID := mustCreatedID(t, result.Created, "root")
+	leafID := mustCreatedID(t, result.Created, "leaf")
+	otherID := mustCreatedID(t, result.Created, "other")
+	assertIssueIDs(t, "imported children", mustChildren(t, ctx, st, rootID), []string{leafID})
 
 	// depends_on in the file means "this issue depends on that one", so the
 	// dependent is the edge's src.
-	edges, err := st.ListRelationsForIssue(ctx, result.IDMap["other"], model.RelBlocks)
+	edges, err := st.ListRelationsForIssue(ctx, otherID, model.RelBlocks)
 	if err != nil {
 		t.Fatalf("ListRelationsForIssue error = %v", err)
 	}
-	if len(edges) != 1 || edges[0].SrcID != result.IDMap["other"] || edges[0].DstID != result.IDMap["leaf"] {
+	if len(edges) != 1 || edges[0].SrcID != otherID || edges[0].DstID != leafID {
 		t.Errorf("imported dependency edges = %+v, want other→leaf", edges)
 	}
+}
+
+// createdID looks up one create's real id in a result's ordered report.
+func createdID(created []storage.IDMapping, ref string) (string, bool) {
+	for _, m := range created {
+		if m.Ref == ref {
+			return m.ID, true
+		}
+	}
+	return "", false
+}
+
+func mustCreatedID(t *testing.T, created []storage.IDMapping, ref string) string {
+	t.Helper()
+	id, ok := createdID(created, ref)
+	if !ok {
+		t.Fatalf("created report = %+v, want a %q entry", created, ref)
+	}
+	return id
+}
+
+// refsOf renders a created report as its refs, so an ordering failure names
+// the sequence instead of dumping whole structs.
+func refsOf(created []storage.IDMapping) []string {
+	refs := make([]string, 0, len(created))
+	for _, m := range created {
+		refs = append(refs, m.Ref)
+	}
+	return refs
 }
 
 func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store) {

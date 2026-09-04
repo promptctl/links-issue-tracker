@@ -1497,11 +1497,11 @@ func runImportTreeJSON(ctx context.Context, stdout io.Writer, ap *app.App, data 
 	if err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.IDMap)); err != nil {
+	if _, err := fmt.Fprintf(stdout, "imported %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
-	for local, real := range result.IDMap {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", local, real); err != nil {
+	for _, m := range result.Created {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
 			return err
 		}
 	}
@@ -1548,8 +1548,8 @@ func runImportBulk(ctx context.Context, stdout io.Writer, ap *app.App, data []by
 	if _, err := fmt.Fprintf(stdout, "created %d issues\n", len(result.Created)); err != nil {
 		return err
 	}
-	for ref, real := range result.Created {
-		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", ref, real); err != nil {
+	for _, m := range result.Created {
+		if _, err := fmt.Fprintf(stdout, "  %s -> %s\n", m.Ref, m.ID); err != nil {
 			return err
 		}
 	}
