@@ -103,6 +103,13 @@ func (h readyTestHarness) closeIssue(issueID, reason string) {
 	}
 }
 
+func (h readyTestHarness) applyAction(issueID string, action model.Action, reason string) {
+	h.t.Helper()
+	if _, err := h.ap.Store.Apply(h.ctx, issueID, storage.Change{Action: action, Actor: "tester", Reason: reason}); err != nil {
+		h.t.Fatalf("Apply(%T, %q) error = %v", action, issueID, err)
+	}
+}
+
 func (h readyTestHarness) backdateUpdatedAt(issueID string, age time.Duration) {
 	h.t.Helper()
 	backdated := time.Now().UTC().Add(-age).Format(time.RFC3339Nano)
@@ -217,6 +224,70 @@ func TestRunReadyAnnotatesBlockedIssues(t *testing.T) {
 	}
 	if blocker.Message != openA.ID {
 		t.Fatalf("open_dependency message = %q, want %q", blocker.Message, openA.ID)
+	}
+}
+
+// TestRunReadyBlocksOnlyOnDependenciesStillInPlay pins the readiness gate to
+// Issue.InPlay(): a dependency blocks while it is still work anyone might do,
+// and stops blocking the moment it leaves the flow — by any of the three exits.
+//
+// The archived and deleted arms are the regression (links-readiness-9no1). The
+// blocker predicate used to read the status axis alone, so a soft-deleted
+// dependency kept the edge alive while lit close/open/start all refused the
+// frozen row: the dependent was blocked forever by a ticket that appears in no
+// listing and that no command could discharge. Reverting the predicate to
+// State() != StateClosed fails exactly those two arms and passes the others.
+//
+// [LAW:behavior-not-structure] The assertion is the contract an agent depends on
+// — "is this ticket ready" through ClassifyReadiness — not the annotator's
+// internals, so any implementation honoring one definition of unfinished passes.
+func TestRunReadyBlocksOnlyOnDependenciesStillInPlay(t *testing.T) {
+	blocking := map[string]bool{"live": true, "closed": false, "archived": false, "deleted": false}
+	for _, tc := range []struct {
+		name   string
+		action model.Action
+	}{
+		{name: "live"},
+		{name: "closed", action: model.Done{}},
+		{name: "archived", action: model.Archive{}},
+		{name: "deleted", action: model.Delete{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			blocker := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+				Title:     "The blocker",
+				Topic:     "alpha",
+				IssueType: "task",
+			})
+			dependent := h.createIssue(storage.CreateIssueInput{Prefix: "test",
+				Title:     "The dependent",
+				Topic:     "alpha",
+				IssueType: "task",
+			})
+			h.addDependency(dependent.ID, blocker.ID)
+			// The live arm leaves the blocker where it started, so the four arms
+			// differ only in which exit the blocker took.
+			if tc.action != nil {
+				h.applyAction(blocker.ID, tc.action, "arm setup")
+			}
+
+			var row annotation.AnnotatedIssue
+			for _, candidate := range h.runWorkableAnnotated(workableFilter{}, 0) {
+				if candidate.ID == dependent.ID {
+					row = candidate
+				}
+			}
+			if row.ID != dependent.ID {
+				t.Fatalf("dependent %s absent from workable rows", dependent.ID)
+			}
+			_, annotated := findAnnotation(row.Annotations, annotation.OpenDependency)
+			if annotated != blocking[tc.name] {
+				t.Fatalf("open_dependency present = %v, want %v; annotations=%#v", annotated, blocking[tc.name], row.Annotations)
+			}
+			if ClassifyReadiness(row.Annotations).IsReady() == blocking[tc.name] {
+				t.Fatalf("ready = %v with a %s blocker; annotations=%#v", !blocking[tc.name], tc.name, row.Annotations)
+			}
+		})
 	}
 }
 

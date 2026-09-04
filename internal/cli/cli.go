@@ -1052,11 +1052,17 @@ func runRankSet(ctx context.Context, stdout io.Writer, ap *app.App, args []strin
 	return emitBreadcrumb(stdout, "update")
 }
 
+// filterWorkableIssues keeps the leaves that are still work anyone might do.
+// The nil-status test is the container test (an epic derives its state from its
+// children and owns no status of its own); InPlay is the unfinished test.
+// [LAW:one-source-of-truth] Reading status.Value != StateClosed here would be a
+// second spelling of "unfinished" that ignores retention — defended today only
+// by the callers' IncludeDeleted:false, which is a filter elsewhere, not an
+// invariant here.
 func filterWorkableIssues(issues []model.Issue) []model.Issue {
 	filtered := make([]model.Issue, 0, len(issues))
 	for _, issue := range issues {
-		status := issue.Capabilities().Status
-		if status != nil && status.Value != model.StateClosed {
+		if issue.Capabilities().Status != nil && issue.InPlay() {
 			filtered = append(filtered, issue)
 		}
 	}

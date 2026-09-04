@@ -302,14 +302,34 @@ func printIssueGroup(w io.Writer, label string, issues []model.Issue) error {
 		return err
 	}
 	for _, issue := range issues {
-		// State() is shape-agnostic: leaves return their owned status,
-		// containers return state derived from children. The agent reads the
-		// referenced issue's state inline without a second 'lit show'.
-		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", issue.ID, issue.State(), issue.Title); err != nil {
+		// The standing marker is why the group is worth reading at all: the
+		// agent learns where each referenced issue stands inline, without a
+		// second 'lit show' per id.
+		if _, err := fmt.Fprintf(w, "- %s [%s] %s\n", issue.ID, issueStanding(issue), issue.Title); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// issueStanding is the one word for where an issue stands, composed from the
+// two orthogonal lifecycle axes with retention dominating status.
+//
+// State() alone is shape-agnostic — leaves return their owned status, containers
+// return state derived from children — but it is only half the truth: a deleted
+// ticket's status is still "open", so rendering State() printed dead blockers as
+// "[open]" and sent readers hunting for an id that appears in no listing. A
+// frozen issue's status describes work nobody may do, which is why the retention
+// name replaces it rather than joining it.
+// [LAW:one-source-of-truth] Every surface that names a referenced issue's state
+// reads this, so the epic plan's markers and the relationship groups cannot
+// disagree about one ticket; Frozen and RetentionName stay the sole owners of
+// "out of the flow" and of the words for it.
+func issueStanding(issue model.Issue) string {
+	if model.Frozen(issue.Retention()) {
+		return model.RetentionName(issue.Retention())
+	}
+	return string(issue.State())
 }
 
 // relationColumns carries the per-issue relationship facts the relationship
