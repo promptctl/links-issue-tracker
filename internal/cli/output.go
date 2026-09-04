@@ -551,11 +551,12 @@ func formatIssueState(issue model.Issue) string {
 	// [LAW:types-are-the-program] Retention is a sum, so at most one tag applies;
 	// the old field pair could stack "+archived+deleted", a state the domain
 	// never had.
-	switch issue.Retention().(type) {
-	case model.Archived:
-		parts = append(parts, "archived")
-	case model.Deleted:
-		parts = append(parts, "deleted")
+	// [LAW:one-source-of-truth] Frozen owns the predicate and RetentionName the
+	// word; this surface picks only the composition — it appends where
+	// issueStanding replaces, because a ticket's own line carries both axes
+	// ("open+deleted") while a line naming another ticket carries one standing.
+	if model.Frozen(issue.Retention()) {
+		parts = append(parts, model.RetentionName(issue.Retention()))
 	}
 	return strings.Join(parts, "+")
 }

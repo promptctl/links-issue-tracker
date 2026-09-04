@@ -364,6 +364,46 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 	}
 }
 
+// A frozen endpoint drops a cross-epic edge exactly as a closed one does. This
+// is the seam the closed-side test above cannot reach: `collect`'s member test
+// and `inPlayExcluding`'s counterpart filter both moved from "not closed" to
+// InPlay in links-readiness-9no1, and closed is the arm that already passed
+// before that change — so only a frozen endpoint can catch a regression.
+// Deleted sits on the internal side and archived on the external side, which
+// puts both predicates under one assertion.
+func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
+	f := newEpicFixture(t, "Frozen sides", "deps")
+	openChild := f.addChild("Open inside")
+	deletedChild := f.addChild("Deleted inside")
+	archivedExt := f.outsider("Archived outside")
+	openExt := f.outsider("Open outside")
+
+	f.block(openChild, archivedExt) // external side archived => filtered
+	f.block(deletedChild, openExt)  // internal side deleted => filtered
+	f.transition(deletedChild, model.Delete{})
+	f.transition(archivedExt, model.Archive{})
+
+	out := f.render("")
+	if strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("every cross-epic edge has a frozen endpoint; section must be absent:\n%s", out)
+	}
+}
+
+// The mirror of the test above: a cross-epic edge between two live endpoints
+// still renders, so the frozen filter is proved to drop edges for the stated
+// reason rather than the section being absent for some unrelated one.
+func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
+	f := newEpicFixture(t, "Live sides", "deps")
+	child := f.addChild("Open inside")
+	ext := f.outsider("Open outside")
+	f.block(child, ext)
+
+	out := f.render("")
+	if !strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("both endpoints live; the section must render:\n%s", out)
+	}
+}
+
 func TestRenderEpicContextEdgeToOwnEpicNotCrossEpic(t *testing.T) {
 	f := newEpicFixture(t, "Epic self edge", "deps")
 	child := f.addChild("Inside")
