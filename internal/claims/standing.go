@@ -57,8 +57,9 @@ type Held struct {
 // and resumed. To anyone else it is an offer — "available for takeover, last
 // touched by 7f3a three days ago", which is a different offer from "nobody has
 // ever worked this", and the agent taking it over needs to know which one it is
-// reading. Selection therefore reaches a stale lane; only a hold that is still
-// fresh is routed around.
+// reading. Selection therefore no longer routes around a lane for staleness
+// alone; what a stale lane offers past that is the row's business, not this
+// variant's.
 //
 // That last sentence used to read "the lane is unclaimed again — nothing routes
 // around it", which was the opposite of what selection did and erased the

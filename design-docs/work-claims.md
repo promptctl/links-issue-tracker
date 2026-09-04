@@ -209,36 +209,42 @@ the ordering rather than as a rule someone can forget to apply.
 
 ## Routing
 
-Selection consults claims in a fixed precedence:
+Selection consults claims in a fixed precedence. Two rules hold across every
+step, so each step below says only which lanes it looks in:
+
+- **What a step may take** — the tickets that are ready, and the tickets
+  abandoned in flight (step 6). A lane another checkout holds fresh offers
+  neither (step 5).
+- **What a pick announces** — a pick that establishes a claim names the lane
+  it claims, and says "taking over" only where the ticket was abandoned in
+  flight: "taking over B.1 (in progress, abandoned) — claims B#1". A ready
+  ticket announces as a fresh start whatever its lane's history — "starting
+  B.1 claims B#1" — and the claim line printed beneath the row carries the
+  provenance of a lane whose holder has gone stale.
 
 1. **The checkout's own live claims come first**: ready tickets within claimed
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
    in backlog order, including the prerequisite closure: a dependency outside
-   the claimed lane that gates one inside it is on the path and is offered if
-   no one else holds its lane right now, announced as the second lane its
-   start claims.
-2. **Then the rest of its epic**: the claimed lane's epic's other lanes that
-   no one else holds *right now*, taking their ready tickets and any ticket
-   abandoned in flight there (a lane whose holder has gone stale is no longer
-   held, and an abandoned ticket in it is takeable — step 6), before any lane
-   of any other epic — the GRANULARITY RULING above, expressed as a routing
-   step rather than a bias. A parentless (solo) claim has no epic to continue
-   into and falls straight to step 3 once its own lane has nothing left to
-   serve or resume.
-3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, 2 blocked
-   on E.4 (unclaimed, on your path — start it?)". It fires only once steps 1
-   and 2 have both found nothing — the epic's own claimed lane and the rest of
-   its lanes — and it never falls through to a leaf outside the epic.
+   the claimed lane that gates one inside it is on the path and is offered on
+   the same terms, announced as the second lane its start claims.
+2. **Then the rest of its epic**: the claimed lane's epic's other lanes,
+   before any lane of any other epic — the GRANULARITY RULING above, expressed
+   as a routing step rather than a bias. A parentless (solo) claim has no epic
+   to continue into and falls straight to step 3 once its own lane has nothing
+   left to serve or resume.
+3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, blocked on
+   E.4 (on your path and yours to take — start it?)", and a blocker another
+   checkout holds fresh is named as held rather than recommended. It fires only
+   once steps 1 and 2 have both found nothing — the epic's own claimed lane and
+   the rest of its lanes — and it never falls through to a leaf outside the
+   epic.
    Completing the last ticket announces the epic's completion; the claim has
    dissolved by predicate, and the checkout is global again. Unfocus is not an
    action.
-4. **Then the global pool**: the top-ranked ticket that is ready, or that was
-   abandoned in flight, in the lanes no one else holds right now (unclaimed,
-   or claimed by a holder who has gone stale — step 6), labeled as what it
-   is — "starting B.1 claims B#1", or "taking over B.1 (in progress,
-   abandoned) — claims B#1" where the pick inherits work rather than beginning
-   it — so the act of commitment is visible at the moment it happens. Reached
+4. **Then the global pool**: the top-ranked candidate in any lane, labeled as
+   what it is, so the act of commitment is visible at the moment it happens.
+   Reached
    directly, with no detour through steps 1–3, by a checkout that holds no
    live claims at all — unfocus is the zero state, not a hop through the
    earlier steps.
@@ -260,11 +266,10 @@ Selection consults claims in a fixed precedence:
    checkout's *own* lane is not a loss of ownership at all: staleness there
    is evidence the checkout stepped away, so the lane's work is handed back
    to it to resume, never routed away from it. Taking over stays visible
-   rather than silent: the pick announces itself as a takeover, and where a
-   holder is being displaced its claim line prints under the row committed to
-   — "claimed by 7f3a, idle 3d, nothing completed" — so commitment and
-   provenance arrive together. Work abandoned in a lane nobody ever claimed
-   has no holder to name, and the announcement carries the whole of it. Overriding a claim that is
+   rather than silent: the announcement rule above says when the pick names
+   itself a takeover, and a displaced holder's claim line prints under the row
+   committed to — "claimed by 7f3a, idle 3d, nothing completed" — so
+   commitment and provenance arrive together. Overriding a claim that is
    still fresh requires the deliberate act of `lit start` on that ticket,
    with explicit confirmation. A claim is a well-founded default, never a lock.
 7. **Contested lanes** keep deterministic routing (latest establishing event

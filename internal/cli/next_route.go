@@ -71,11 +71,25 @@ type ServedFromNewLane struct {
 // Exhausted is the checkout's own claimed epic(s) having open work with none
 // of it reachable: not the held lanes, not an on-path dependency, not another
 // lane of the same epic. Routing step 3 — loud and diagnostic, never a
-// silent hop to a leaf outside the epic. Blocked names the open-dependency
-// ids gating that work, if any (an in-progress-only lane names none).
+// silent hop to a leaf outside the epic. Blocked names the open dependencies
+// gating that work, if any (an in-progress-only lane names none).
 type Exhausted struct {
 	Epics   []string
-	Blocked []string
+	Blocked []blockedDep
+}
+
+// blockedDep is an open dependency gating work in scope, carrying the one fact
+// its two consumers differ on: whether this checkout may take it. Bare ids
+// were not enough — exhaustedError asserted "unclaimed, `lit start` it" over
+// every one of them, so a dependency another checkout held fresh was routed
+// around by the pick (N2) and then recommended by the diagnostic a line later,
+// which is the same failure one level up. Takeable being true implies Row is
+// the gathered dependency; nothing reads Row otherwise.
+// [LAW:types-are-the-program] [LAW:no-silent-failure]
+type blockedDep struct {
+	ID       string
+	Row      annotation.AnnotatedIssue
+	Takeable bool
 }
 
 // NoWork is the truly empty backlog: nothing ready anywhere, claimed or not
@@ -256,9 +270,9 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 		// Step 3 — loud, and never a hop.
 		return Exhausted{
 			Epics: slices.Sorted(maps.Keys(ownEpics)),
-			Blocked: gatingDependencyIDs(rows, laneOf, func(lane model.LaneID) bool {
+			Blocked: gatingDependencies(rows, laneOf, func(lane model.LaneID) bool {
 				return mine(lane) || ourEpic(lane)
-			}),
+			}, verdict),
 		}
 	}
 
@@ -269,27 +283,34 @@ func routeNext(rows []annotation.AnnotatedIssue, details map[string]storage.Issu
 	return NoWork{}
 }
 
-// gatingDependencyIDs collects the distinct ids of the open dependencies that
-// gate the open rows whose lane inScope admits, in rank order. Both consumers
-// are this walk plus one question: onPathDependency asks which of these ids
-// this checkout may itself take, and Exhausted reports the whole list. They
-// differ in the scope they pass and in what they do with the ids — never in how
-// the ids are found. [LAW:one-source-of-truth]
-func gatingDependencyIDs(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool) []string {
+// gatingDependencies collects the distinct open dependencies that gate the open
+// rows whose lane inScope admits, in rank order, each already carrying whether
+// this checkout may take it. Both consumers are this walk plus one question:
+// onPathDependency offers the first takeable one, and Exhausted reports them
+// all so the diagnostic can say which is which. They differ in the scope they
+// pass and in what they do with the answer — never in how it is found, and
+// neither re-derives it. [LAW:one-source-of-truth]
+func gatingDependencies(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, inScope func(model.LaneID) bool, verdict func(annotation.AnnotatedIssue) capacity) []blockedDep {
+	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
 	seen := map[string]bool{}
-	var ids []string
+	var deps []blockedDep
 	for _, row := range rows {
 		if !inScope(laneOf(row)) || row.State() != model.StateOpen {
 			continue
 		}
-		for _, dep := range ClassifyReadiness(row.Annotations).DependencyIDs() {
-			if !seen[dep] {
-				seen[dep] = true
-				ids = append(ids, dep)
+		for _, id := range ClassifyReadiness(row.Annotations).DependencyIDs() {
+			if seen[id] {
+				continue
 			}
+			seen[id] = true
+			dep, gathered := byID[id]
+			deps = append(deps, blockedDep{ID: id, Row: dep, Takeable: gathered && verdict(dep) != routeAround})
 		}
 	}
-	return ids
+	return deps
 }
 
 // onPathDependency finds the first dependency gating one of our own lanes that
@@ -306,13 +327,9 @@ func gatingDependencyIDs(rows []annotation.AnnotatedIssue, laneOf func(annotatio
 // capacity an own lane can produce, so by the time we are here every row in
 // `mine` is routeAround by construction.
 func onPathDependency(rows []annotation.AnnotatedIssue, laneOf func(annotation.AnnotatedIssue) model.LaneID, mine func(model.LaneID) bool, verdict func(annotation.AnnotatedIssue) capacity) (annotation.AnnotatedIssue, bool) {
-	byID := make(map[string]annotation.AnnotatedIssue, len(rows))
-	for _, row := range rows {
-		byID[row.ID] = row
-	}
-	for _, id := range gatingDependencyIDs(rows, laneOf, mine) {
-		if dep, ok := byID[id]; ok && verdict(dep) != routeAround {
-			return dep, true
+	for _, dep := range gatingDependencies(rows, laneOf, mine, verdict) {
+		if dep.Takeable {
+			return dep.Row, true
 		}
 	}
 	return annotation.AnnotatedIssue{}, false
@@ -328,5 +345,26 @@ func exhaustedError(o Exhausted) error {
 	if len(o.Blocked) == 0 {
 		return fmt.Errorf("no ready work in %s — nothing else is queued behind what's already in progress; picking up other work is a deliberate re-focus, not a bare `next`", scope)
 	}
-	return fmt.Errorf("no ready work in %s — blocked on %s (unclaimed, on your path — `lit start` it); picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(o.Blocked, ", "))
+	var takeable, held []string
+	for _, dep := range o.Blocked {
+		if dep.Takeable {
+			takeable = append(takeable, dep.ID)
+			continue
+		}
+		held = append(held, dep.ID)
+	}
+	var parts []string
+	for _, group := range []struct {
+		ids  []string
+		note string
+	}{
+		{takeable, "on your path and yours to take — `lit start` it"},
+		{held, "on your path but claimed by another checkout right now"},
+	} {
+		if len(group.ids) == 0 {
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("blocked on %s (%s)", strings.Join(group.ids, ", "), group.note))
+	}
+	return fmt.Errorf("no ready work in %s — %s; picking up other work is a deliberate re-focus, not a bare `next`", scope, strings.Join(parts, "; "))
 }

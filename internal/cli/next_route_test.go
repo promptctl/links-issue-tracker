@@ -1,7 +1,7 @@
 package cli
 
 import (
-	"slices"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
@@ -443,8 +443,28 @@ func TestRouteNextRoutesAroundOnPathDependencyHeldFresh(t *testing.T) {
 	if !ok {
 		t.Fatalf("routeNext = %#v (%T), want Exhausted — the on-path dependency's lane is held fresh elsewhere, so `next` must not offer what `start` would refuse", outcome, outcome)
 	}
-	if !slices.Contains(exhausted.Blocked, dep.ID) {
+	named := false
+	for _, blocked := range exhausted.Blocked {
+		if blocked.ID != dep.ID {
+			continue
+		}
+		named = true
+		if blocked.Takeable {
+			t.Fatalf("blocked dependency %q reports Takeable, but another checkout holds its lane fresh", dep.ID)
+		}
+	}
+	if !named {
 		t.Fatalf("exhausted.Blocked = %v, want it to name %q — routing around the dependency must not hide it", exhausted.Blocked, dep.ID)
+	}
+	// The diagnostic must not undo the routing decision one line later: `lit
+	// start` on this dependency hits the fresh-takeover gate, so telling the
+	// agent to start it is N2 in the message instead of the pick.
+	msg := exhaustedError(exhausted).Error()
+	if !strings.Contains(msg, dep.ID) {
+		t.Fatalf("exhaustedError = %q, want it to name the blocker %q", msg, dep.ID)
+	}
+	if strings.Contains(msg, "yours to take") {
+		t.Fatalf("exhaustedError = %q, want it not to offer %q as takeable — another checkout holds its lane fresh", msg, dep.ID)
 	}
 }
 
@@ -582,5 +602,41 @@ func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) 
 				t.Fatalf("routeNext = %#v (%T), want ServedFromClaim on %q — composite rank decides, never a preference for resumable work", outcome, outcome, ready.ID)
 			}
 		})
+	}
+}
+
+// Step 1b applies the verdict itself rather than going through pick/accept, so
+// its admission of a takeover is a path of its own: a dependency gating our
+// lane, abandoned in flight by the checkout that holds its lane, is offered
+// here even though the global-pool step never sees it.
+func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a1"})
+	h.transition(a1.ID, model.Start{Assignee: "tester"})
+	h.transition(a1.ID, model.Done{})
+	a2 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.2", Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: "a2"})
+	dep := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "External blocker", Topic: "next", IssueType: "task", Priority: 0})
+	h.addDependency(a2.ID, dep.ID)
+	h.transition(dep.ID, model.Start{Assignee: "other"})
+
+	rows, details := h.gather()
+	orphan(t, rows, dep.ID)
+	standings := claims.Standings{
+		model.LaneOf(a1, &epicA):                     heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, a2.ID)):  heldBy(selfAttribution),
+		laneOf(t, details, rowByID(t, rows, dep.ID)): staleBy(otherAttribution),
+	}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane (the abandoned on-path dependency is takeable)", outcome, outcome)
+	}
+	if served.Row.ID != dep.ID {
+		t.Fatalf("served = %q, want %q (the dependency gating our own blocked lane)", served.Row.ID, dep.ID)
+	}
+	if served.Row.State() != model.StateInProgress {
+		t.Fatalf("served row state = %v, want in_progress — the point of this path is that step 1b admits a takeover", served.Row.State())
 	}
 }
