@@ -535,3 +535,52 @@ func TestClaimAnnouncementDistinguishesTakeoverFromFreshStart(t *testing.T) {
 		})
 	}
 }
+
+// Step 1 competes two capacities in one pick, and the comment above `pick`
+// warns that ranking them against each other "would quietly reintroduce this
+// ticket's headline symptom" — a warning earned, because an earlier draft
+// looped over `accept` in preference order and did exactly that. Run in both
+// rank orders: a preference for either capacity fails one arm.
+func TestRouteNextStep1RanksAcrossCapacitiesRatherThanBetweenThem(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		resumeFirst bool
+	}{
+		{"the resumable lane ranks first", true},
+		{"the servable lane ranks first", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+			mk := func(title, lane string) model.Issue {
+				return h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: title, Topic: "next", IssueType: "task", Priority: 0, ParentID: epicA.ID, Lane: lane})
+			}
+			var inFlight, ready model.Issue
+			if tc.resumeFirst {
+				inFlight, ready = mk("A.resume", "r"), mk("A.serve", "s")
+			} else {
+				ready, inFlight = mk("A.serve", "s"), mk("A.resume", "r")
+			}
+			h.transition(inFlight.ID, model.Start{Assignee: "tester"})
+
+			rows, details := h.gather()
+			standings := claims.Standings{
+				laneOf(t, details, rowByID(t, rows, inFlight.ID)): heldBy(selfAttribution),
+				laneOf(t, details, rowByID(t, rows, ready.ID)):    heldBy(selfAttribution),
+			}
+
+			outcome := routeNext(rows, details, standings, selfAttribution)
+			if tc.resumeFirst {
+				resumed, ok := outcome.(ResumedOwnWork)
+				if !ok || resumed.Row.ID != inFlight.ID {
+					t.Fatalf("routeNext = %#v (%T), want ResumedOwnWork on %q — composite rank decides, never a preference for servable work", outcome, outcome, inFlight.ID)
+				}
+				return
+			}
+			served, ok := outcome.(ServedFromClaim)
+			if !ok || served.Row.ID != ready.ID {
+				t.Fatalf("routeNext = %#v (%T), want ServedFromClaim on %q — composite rank decides, never a preference for resumable work", outcome, outcome, ready.ID)
+			}
+		})
+	}
+}

@@ -215,16 +215,17 @@ Selection consults claims in a fixed precedence:
    lanes and the work already in flight there — a ticket in progress in the
    checkout's own lane is handed back to resume rather than started fresh —
    in backlog order, including the prerequisite closure: a dependency outside
-   the claimed lane that gates one inside it is on the path and is offered,
-   announced as the second lane its start claims.
+   the claimed lane that gates one inside it is on the path and is offered if
+   no one else holds its lane right now, announced as the second lane its
+   start claims.
 2. **Then the rest of its epic**: the claimed lane's epic's other lanes that
    no one else holds *right now*, taking their ready tickets and any ticket
    abandoned in flight there (a lane whose holder has gone stale is no longer
    held, and an abandoned ticket in it is takeable — step 6), before any lane
-   of any other epic — the
-   GRANULARITY RULING above, expressed as a routing step rather than a bias.
-   A parentless (solo) claim has no epic to continue into and falls straight
-   to step 3 once its own ticket is no longer ready.
+   of any other epic — the GRANULARITY RULING above, expressed as a routing
+   step rather than a bias. A parentless (solo) claim has no epic to continue
+   into and falls straight to step 3 once its own lane has nothing left to
+   serve or resume.
 3. **Exhaustion is loud and diagnostic**, never silent: "5/9 done, 2 blocked
    on E.4 (unclaimed, on your path — start it?)". It fires only once steps 1
    and 2 have both found nothing — the epic's own claimed lane and the rest of

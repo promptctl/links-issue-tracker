@@ -39,10 +39,11 @@ type ServedFromClaim struct{ Row annotation.AnnotatedIssue }
 // working at that moment (N8).
 type ResumedOwnWork struct{ Row annotation.AnnotatedIssue }
 
-// ServedFromEpicLane is a ready ticket in a different lane of the same epic
-// this checkout already holds a lane in — the GRANULARITY RULING's new step 2,
-// epic-major before global. Starting it establishes a fresh claim on Lane,
-// which is why it carries the label to announce.
+// ServedFromEpicLane is a pick from a different lane of the same epic this
+// checkout already holds a lane in — the GRANULARITY RULING's new step 2,
+// epic-major before global. It establishes a fresh claim on Lane, which is why
+// it carries the label to announce, and admits a takeover exactly as
+// ServedFromNewLane does.
 type ServedFromEpicLane struct {
 	Row  annotation.AnnotatedIssue
 	Epic string
@@ -58,10 +59,10 @@ type ServedFromEpicLane struct {
 // which left the one pick an agent is least likely to predict as the only
 // silent one (links-claims-1b0p, N3).
 //
-// A takeover arrives here too — of a stale lane, or of work abandoned in
-// flight — and says so in its own announcement rather than reading as a fresh
-// start. Whose it was stays with the row: printNextSummary prints the
-// displaced holder's claim line beneath it when there is a holder to name.
+// A takeover arrives here too. Work abandoned in flight announces itself as
+// one — claimAnnouncement reads the row's state; a ready ticket in a stale
+// lane announces exactly like a fresh start, its provenance carried by the
+// claim line printNextSummary prints beneath the row.
 type ServedFromNewLane struct {
 	Row  annotation.AnnotatedIssue
 	Lane string
@@ -112,9 +113,10 @@ const (
 	takeoverWork
 )
 
-// capacityFor derives the verdict from the only three facts that bear on it:
-// the row's lifecycle state, its lane's relation to this checkout, and whether
-// the row is orphaned. Pure, total, and the one consumer of IsOrphaned() in
+// capacityFor derives the verdict from the only four facts that bear on it:
+// the row's lifecycle state, its lane's relation to this checkout, whether
+// anything blocks it, and whether it is orphaned. Pure, total, and the one
+// consumer of IsOrphaned() in
 // routing — the fact was computed on every gather and discarded here before
 // (links-claims-1b0p, F1).
 //
