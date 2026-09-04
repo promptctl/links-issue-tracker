@@ -48,7 +48,11 @@ func (f epicFixture) addChild(title string) string {
 	return child.ID
 }
 
-func (f epicFixture) transition(id string, action model.StatusAction) {
+// transition applies any lifecycle action — the status machine and the retention
+// machine are two axes of one lifecycle, and the store applies both through one
+// Apply. Taking model.Action rather than one sealed subset keeps the fixture from
+// growing a near-identical twin per axis. [LAW:one-type-per-behavior]
+func (f epicFixture) transition(id string, action model.Action) {
 	f.t.Helper()
 	if _, err := f.ap.Store.Apply(f.ctx, id, storage.Change{Action: action, Actor: "test"}); err != nil {
 		f.t.Fatalf("transition(%s, %s) error = %v", id, action.Name(), err)
@@ -70,6 +74,57 @@ func (f epicFixture) render(focused string) string {
 		f.t.Fatalf("buildEpicContext error = %v", err)
 	}
 	return renderEpicContext(ec)
+}
+
+// A child that has left the flow is labeled with the axis that took it out.
+// Rendering a deleted child as "[ready]" invited an agent to start a ticket that
+// lit start refuses, and named it as a live blocker of its siblings — the plan
+// then disagreed with the readiness gate about the same edge
+// (links-readiness-9no1).
+func TestRenderEpicContextLabelsFrozenChildrenByRetention(t *testing.T) {
+	f := newEpicFixture(t, "Retention epic", "children on both axes")
+	deleted := f.addChild("Dropped one")
+	archived := f.addChild("Shelved one")
+	live := f.addChild("Live one")
+
+	f.transition(deleted, model.Delete{})
+	f.transition(archived, model.Archive{})
+
+	out := f.render("")
+
+	wantLines := []string{
+		"    [deleted]     " + deleted + "  Dropped one",
+		"    [archived]    " + archived + "  Shelved one",
+		"    [ready]       " + live + "  Live one",
+	}
+	for _, want := range wantLines {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing line %q in:\n%s", want, out)
+		}
+	}
+}
+
+// The blocked marker and the readiness gate read one predicate, so a blocker
+// that has left the flow stops blocking on both surfaces at once. Before the
+// fix the dependent rendered "[blocked-by <deleted id>]" naming a ticket absent
+// from every listing, with no command able to clear the edge.
+func TestRenderEpicContextFrozenBlockerStopsBlocking(t *testing.T) {
+	f := newEpicFixture(t, "Blocker epic", "one dead blocker")
+	blocker := f.addChild("The blocker")
+	dependent := f.addChild("The dependent")
+	f.block(dependent, blocker)
+
+	f.transition(blocker, model.Delete{})
+
+	out := f.render("")
+
+	want := "    [ready]       " + dependent + "  The dependent"
+	if !strings.Contains(out, want) {
+		t.Errorf("missing line %q in:\n%s", want, out)
+	}
+	if strings.Contains(out, "[blocked-by "+blocker+"]") {
+		t.Errorf("deleted blocker %s should not block, got:\n%s", blocker, out)
+	}
 }
 
 func TestRenderEpicContextEmptyEpic(t *testing.T) {
@@ -306,6 +361,46 @@ func TestRenderEpicContextCrossEpicClosedSideFiltered(t *testing.T) {
 	out := f.render("")
 	if strings.Contains(out, "Cross-epic dependencies") {
 		t.Errorf("every cross-epic edge has a closed endpoint; section must be absent:\n%s", out)
+	}
+}
+
+// A frozen endpoint drops a cross-epic edge exactly as a closed one does. This
+// is the seam the closed-side test above cannot reach: `collect`'s member test
+// and `inPlayExcluding`'s counterpart filter both moved from "not closed" to
+// InPlay in links-readiness-9no1, and closed is the arm that already passed
+// before that change — so only a frozen endpoint can catch a regression.
+// Deleted sits on the internal side and archived on the external side, which
+// puts both predicates under one assertion.
+func TestRenderEpicContextCrossEpicFrozenSideFiltered(t *testing.T) {
+	f := newEpicFixture(t, "Frozen sides", "deps")
+	openChild := f.addChild("Open inside")
+	deletedChild := f.addChild("Deleted inside")
+	archivedExt := f.outsider("Archived outside")
+	openExt := f.outsider("Open outside")
+
+	f.block(openChild, archivedExt) // external side archived => filtered
+	f.block(deletedChild, openExt)  // internal side deleted => filtered
+	f.transition(deletedChild, model.Delete{})
+	f.transition(archivedExt, model.Archive{})
+
+	out := f.render("")
+	if strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("every cross-epic edge has a frozen endpoint; section must be absent:\n%s", out)
+	}
+}
+
+// The mirror of the test above: a cross-epic edge between two live endpoints
+// still renders, so the frozen filter is proved to drop edges for the stated
+// reason rather than the section being absent for some unrelated one.
+func TestRenderEpicContextCrossEpicLiveSidesRender(t *testing.T) {
+	f := newEpicFixture(t, "Live sides", "deps")
+	child := f.addChild("Open inside")
+	ext := f.outsider("Open outside")
+	f.block(child, ext)
+
+	out := f.render("")
+	if !strings.Contains(out, "Cross-epic dependencies") {
+		t.Errorf("both endpoints live; the section must render:\n%s", out)
 	}
 }
 

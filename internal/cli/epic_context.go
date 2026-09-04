@@ -41,6 +41,15 @@ type statusBlocked struct{ blocker string }
 
 func (s statusBlocked) marker() string { return "[blocked-by " + s.blocker + "]" }
 
+// statusFrozen is a child that has left the flow — archived or deleted. The
+// sum expressed four display states where the domain has five: a deleted child
+// rendered as "[ready]", inviting an agent to start a ticket every transition
+// refuses. The standing word is the payload rather than the retention value so
+// the marker cannot name a variant issueStanding did not produce.
+type statusFrozen struct{ standing string }
+
+func (s statusFrozen) marker() string { return "[" + s.standing + "]" }
+
 // epicChild pairs a child issue with its already-classified display status, so
 // rendering is pure formatting over resolved values.
 type epicChild struct {
@@ -89,21 +98,29 @@ type crossEpicEdges struct {
 // pushing every title rightward to accommodate the longest id.
 const statusMarkerWidth = len("[in_progress]")
 
-// classifyChildStatus maps a child issue and its open-blocker ids to a display
-// status. openBlockers is the child's open blocker ids in a deterministic
-// order; the first entry names the blocker in a blocked status.
+// classifyChildStatus maps a child issue and its live-blocker ids to a display
+// status. blockers is the child's live blocker ids in a deterministic order;
+// the first entry names the blocker in a blocked status.
 // [LAW:dataflow-not-control-flow] The match is over the child's discriminated
 // lifecycle state; open vs blocked is decided by the blocker-count value, not
 // by whether some branch runs.
-func classifyChildStatus(child model.Issue, openBlockers []string) childStatus {
+//
+// The retention axis is read first because it dominates: an archived or deleted
+// child's status describes work nobody may do, so reporting it as ready or
+// blocked would answer a question the reader did not ask. [LAW:one-source-of-truth]
+// The word comes from issueStanding, the one composer of the two axes.
+func classifyChildStatus(child model.Issue, blockers []string) childStatus {
+	if model.Frozen(child.Retention()) {
+		return statusFrozen{standing: issueStanding(child)}
+	}
 	switch child.State() {
 	case model.StateClosed:
 		return statusClosed{}
 	case model.StateInProgress:
 		return statusInProgress{}
 	}
-	if len(openBlockers) > 0 {
-		return statusBlocked{blocker: openBlockers[0]}
+	if len(blockers) > 0 {
+		return statusBlocked{blocker: blockers[0]}
 	}
 	return statusReady{}
 }
@@ -157,7 +174,7 @@ func buildEpicContext(ctx context.Context, st storage.Store, epicID, focusedChil
 		}
 		children = append(children, epicChild{
 			Issue:  childRel.Issue,
-			Status: classifyChildStatus(childRel.Issue, openBlockers(childRel)),
+			Status: classifyChildStatus(childRel.Issue, liveBlockers(childRel)),
 		})
 		cross.collect(childRel, internal)
 	}
@@ -225,14 +242,16 @@ func epicMemberIDs(epicID string, children []model.Issue) map[string]struct{} {
 	return set
 }
 
-// openBlockers returns the ids of a resolved issue's still-open direct
-// blockers, sorted by id so the blocker named in a blocked marker is
+// liveBlockers returns the ids of a resolved issue's direct blockers that are
+// still in play, sorted by id so the blocker named in a blocked marker is
 // deterministic. Same-epic blockers are kept — an inline blocked-by marker
-// names whichever open blocker comes first, sibling or not — so nothing is
-// excluded.
-func openBlockers(rel storage.IssueRelations) []string {
+// names whichever live blocker comes first, sibling or not — so nothing is
+// excluded. The set matches newBlockerAnnotator's exactly, so the epic plan's
+// blocked markers and the readiness gate never disagree about one edge.
+// [LAW:one-source-of-truth]
+func liveBlockers(rel storage.IssueRelations) []string {
 	var ids []string
-	for _, dep := range openExcluding(rel.DependsOn, nil) {
+	for _, dep := range inPlayExcluding(rel.DependsOn, nil) {
 		ids = append(ids, dep.ID)
 	}
 	sort.Strings(ids)
@@ -240,34 +259,40 @@ func openBlockers(rel storage.IssueRelations) []string {
 }
 
 // collect appends the boundary-crossing blocks edges incident to one epic
-// member — the epic node or any of its children. A closed member carries no
-// live plan context, so it contributes nothing; same-epic counterparts are
-// excluded because their ordering is already conveyed by rank in the children
-// list, and closed counterparts are dropped by openExcluding.
+// member — the epic node or any of its children. A member that has left the
+// flow carries no live plan context, so it contributes nothing; same-epic
+// counterparts are excluded because their ordering is already conveyed by rank
+// in the children list, and out-of-flow counterparts are dropped by
+// inPlayExcluding.
+// [LAW:one-source-of-truth] Both the member test and the counterpart filter ask
+// InPlay, so the two ends of an edge answer "still live" the same way.
 func (x *crossEpicEdges) collect(member storage.IssueRelations, internal map[string]struct{}) {
-	if member.Issue.State() == model.StateClosed {
+	if !member.Issue.InPlay() {
 		return
 	}
 	id := member.Issue.ID
-	for _, blocker := range openExcluding(member.DependsOn, internal) {
+	for _, blocker := range inPlayExcluding(member.DependsOn, internal) {
 		x.BlockedExternally = append(x.BlockedExternally, crossEpicEdge{Blocked: id, Blocker: blocker.ID})
 	}
-	for _, dependent := range openExcluding(member.Blocks, internal) {
+	for _, dependent := range inPlayExcluding(member.Blocks, internal) {
 		x.BlocksExternally = append(x.BlocksExternally, crossEpicEdge{Blocked: dependent.ID, Blocker: id})
 	}
 }
 
-// openExcluding keeps the issues that are still open and whose ids are not in
-// excluded. A nil excluded set drops nothing by membership, leaving the plain
-// open filter; passing the epic member ids (epic plus children) drops
+// inPlayExcluding keeps the issues that are still in play and whose ids are not
+// in excluded. A nil excluded set drops nothing by membership, leaving the plain
+// in-play filter; passing the epic member ids (epic plus children) drops
 // same-epic counterparts so only boundary-crossing ones remain.
-func openExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
+// [LAW:one-source-of-truth] InPlay, not State() != StateClosed: an archived or
+// deleted counterpart has left the flow exactly as a closed one has, and the
+// name says which question is asked so the old spelling cannot creep back.
+func inPlayExcluding(others []model.Issue, excluded map[string]struct{}) []model.Issue {
 	var out []model.Issue
 	for _, other := range others {
 		if _, skip := excluded[other.ID]; skip {
 			continue
 		}
-		if other.State() != model.StateClosed {
+		if other.InPlay() {
 			out = append(out, other)
 		}
 	}

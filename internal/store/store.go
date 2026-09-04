@@ -1505,7 +1505,7 @@ func (w retentionWrite) applyTx(ctx context.Context, s *Store, tx *sql.Tx) error
 		if lookupErr != nil {
 			return lookupErr
 		}
-		return fmt.Errorf("%s conflict: issue retention is %q", w.action, retentionWord(current))
+		return fmt.Errorf("%s conflict: issue retention is %q", w.action, model.RetentionName(current))
 	}
 	return s.recordEvent(ctx, tx, w.issueID, string(w.action), w.reason, w.actor, w.changes)
 }
@@ -1609,22 +1609,6 @@ func requireIssueExistsTx(ctx context.Context, tx *sql.Tx, issueID string) error
 		return fmt.Errorf("check issue exists: %w", err)
 	}
 	return nil
-}
-
-// retentionWord renders a Retention state for human-facing conflict messages.
-func retentionWord(r model.Retention) string {
-	switch r.(type) {
-	case model.Live:
-		return "live"
-	case model.Archived:
-		return "archived"
-	case model.Deleted:
-		return "deleted"
-	default:
-		// [LAW:no-silent-failure] Same refusal as RetentionTimestamps: an
-		// impostor named either way would mislabel the conflict.
-		panic(fmt.Sprintf("illegal Retention value %T", r))
-	}
 }
 
 func (s *Store) ListTopics(ctx context.Context) ([]string, error) {

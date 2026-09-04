@@ -125,16 +125,25 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.A
 	// empty blockers list means no annotations, not a skipped operation.
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
 		detail := details[issue.ID]
-		// Collect open blockers and sort by ID for stable annotation ordering.
-		var openDeps []model.Issue
+		// Collect the blocking deps and sort by ID for stable annotation
+		// ordering. The annotation kind keeps its registered name
+		// (open_dependency); the predicate below decides what it means.
+		// [LAW:one-source-of-truth] InPlay is the one definition of
+		// "unfinished", and it reads both axes. The prior spelling here —
+		// State() != StateClosed — consulted the status sum alone, so a
+		// soft-deleted dependency kept emitting OpenDependency while every
+		// transition that could discharge it (close/open/start all refuse a
+		// frozen issue) was unreachable: a dependent blocked forever by a
+		// blocker no listing shows. Read and write must agree on retention.
+		var blockingDeps []model.Issue
 		for _, dep := range detail.DependsOn {
-			if dep.State() != model.StateClosed {
-				openDeps = append(openDeps, dep)
+			if dep.InPlay() {
+				blockingDeps = append(blockingDeps, dep)
 			}
 		}
-		sort.Slice(openDeps, func(i, j int) bool { return openDeps[i].ID < openDeps[j].ID })
+		sort.Slice(blockingDeps, func(i, j int) bool { return blockingDeps[i].ID < blockingDeps[j].ID })
 		var annotations []annotation.Annotation
-		for _, dep := range openDeps {
+		for _, dep := range blockingDeps {
 			annotations = append(annotations, annotation.Annotation{
 				Kind:    annotation.OpenDependency,
 				Message: dep.ID,

@@ -173,6 +173,31 @@ func TestFrozen(t *testing.T) {
 	}
 }
 
+func TestRetentionName(t *testing.T) {
+	at := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	for _, tc := range []struct {
+		r    Retention
+		want string
+	}{
+		{Live{}, "live"},
+		{Archived{At: at}, "archived"},
+		{Deleted{At: at}, "deleted"},
+	} {
+		if got := RetentionName(tc.r); got != tc.want {
+			t.Fatalf("RetentionName(%#v) = %q, want %q", tc.r, got, tc.want)
+		}
+	}
+}
+
+func TestRetentionNameRefusesImpostors(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Fatalf("RetentionName((*Archived)(nil)) did not panic")
+		}
+	}()
+	RetentionName((*Archived)(nil))
+}
+
 func TestFrozenRefusesImpostors(t *testing.T) {
 	defer func() {
 		if recover() == nil {

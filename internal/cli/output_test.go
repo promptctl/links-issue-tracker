@@ -86,3 +86,49 @@ func TestShowOmitsHistoryTrailWhileHistoryViewRendersIt(t *testing.T) {
 		t.Fatalf("lit history missing timestamped event line %q in:\n%s", want, history.String())
 	}
 }
+
+// TestPrintIssueGroupNamesRetentionRatherThanStatus pins the relationship
+// groups to issueStanding: the two lifecycle axes are orthogonal, and a
+// soft-deleted ticket's status is still "open", so printing State() alone
+// rendered a dead blocker as "[open]" and sent the reader hunting for an id that
+// appears in no listing (links-readiness-9no1). Retention dominates because a
+// frozen issue's status describes work nobody may do.
+// [LAW:behavior-not-structure] The contract asserted is the rendered line a
+// reader acts on, not which accessor produced the word.
+func TestPrintIssueGroupNamesRetentionRatherThanStatus(t *testing.T) {
+	t.Parallel()
+	for _, tc := range []struct {
+		name      string
+		status    model.State
+		retention model.Retention
+		want      string
+	}{
+		{name: "open", status: model.StateOpen, retention: model.Live{}, want: "[open]"},
+		{name: "closed", status: model.StateClosed, retention: model.Live{}, want: "[closed]"},
+		{name: "archived", status: model.StateOpen, retention: model.Archived{At: time.Now()}, want: "[archived]"},
+		// The status axis reads open on both frozen arms: that disagreement is
+		// the whole bug, so the arms differ only in retention.
+		{name: "deleted", status: model.StateOpen, retention: model.Deleted{At: time.Now()}, want: "[deleted]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			dep, err := model.HydrateStatus(model.Issue{
+				ID: "links-test.1", Title: "The blocker", IssueType: "task", Topic: "readiness",
+			}, model.StatusView{Value: tc.status})
+			if err != nil {
+				t.Fatalf("HydrateStatus() error = %v", err)
+			}
+			dep.SetRetention(tc.retention)
+
+			var buf bytes.Buffer
+			if err := printIssueGroup(&buf, "depends_on", []model.Issue{dep}); err != nil {
+				t.Fatalf("printIssueGroup() error = %v", err)
+			}
+
+			want := "- links-test.1 " + tc.want + " The blocker\n"
+			if !strings.Contains(buf.String(), want) {
+				t.Fatalf("printIssueGroup() = %q, want a line %q", buf.String(), want)
+			}
+		})
+	}
+}

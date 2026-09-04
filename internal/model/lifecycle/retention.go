@@ -52,6 +52,27 @@ func Frozen(r Retention) bool {
 	}
 }
 
+// RetentionName is the one rendering of a retention variant as a word. Display
+// surfaces name the state an issue is in; without a single namer each surface
+// would match the variants itself and they would drift the day a fourth variant
+// arrives. [LAW:one-source-of-truth] Consumers ask this instead of matching
+// retention variants for their own labels, exactly as they ask Frozen instead of
+// matching them for the out-of-the-flow question.
+func RetentionName(r Retention) string {
+	switch r.(type) {
+	case Live:
+		return "live"
+	case Archived:
+		return "archived"
+	case Deleted:
+		return "deleted"
+	default:
+		// [LAW:no-silent-failure] Same refusal as Frozen: an impostor named
+		// either way would mislabel the issue on every surface that reads this.
+		panic(fmt.Sprintf("illegal Retention value %T", r))
+	}
+}
+
 // Retain is the total retention-transition function: the Retention that
 // applying action to cur at time at yields, or the reason the move is illegal.
 // Pure — no clock, no store; the caller supplies the stamp time.

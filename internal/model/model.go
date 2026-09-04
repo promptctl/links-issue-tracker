@@ -72,6 +72,7 @@ var (
 	RetentionTimestamps     = lifecycle.RetentionTimestamps
 	Retain                  = lifecycle.Retain
 	Frozen                  = lifecycle.Frozen
+	RetentionName           = lifecycle.RetentionName
 )
 
 // [LAW:one-type-per-behavior] Issues and epics are one record type; lifecycle
