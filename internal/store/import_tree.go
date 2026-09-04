@@ -32,6 +32,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 		return storage.ImportTreeResult{}, err
 	}
 	idMap := make(map[string]string, len(specs))
+	created := make([]storage.IDMapping, 0, len(specs))
 	createdIDs := make([]string, 0, len(specs))
 
 	for _, idx := range order {
@@ -68,6 +69,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 			return storage.ImportTreeResult{}, fmt.Errorf("import: create %q: %w (rollback leaked %d: %s)", spec.LocalID, err, len(leaked), strings.Join(leaked, ","))
 		}
 		idMap[spec.LocalID] = issue.ID
+		created = append(created, storage.NewIDMapping(spec.LocalID, issue.ID))
 		createdIDs = append(createdIDs, issue.ID)
 	}
 	for _, spec := range specs {
@@ -82,7 +84,7 @@ func (s *Store) ImportTree(ctx context.Context, prefix string, specs []storage.I
 			}
 		}
 	}
-	return storage.ImportTreeResult{IDMap: idMap}, nil
+	return storage.ImportTreeResult{Created: created}, nil
 }
 
 // rollbackCreatedIssues best-effort deletes issues already created by
