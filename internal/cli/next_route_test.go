@@ -790,3 +790,39 @@ func TestRouteNextTakesOverAnAbandonedOnPathDependency(t *testing.T) {
 		t.Fatalf("served row state = %v, want in_progress — the point of this path is that step 1b admits a takeover", served.Row.State())
 	}
 }
+
+// The shape links-claims-gxxw was reported against, pinned end to end: this
+// checkout's own lane holds the top-ranked open row, the claim on it has gone
+// stale, and another epic's unclaimed leaf sits below it. `next` serves the
+// top row and announces nothing — a stale claim of our own is evidence we
+// stepped away, never permission to start a lane somewhere else.
+//
+// The arm is capacityFor's laneOurs branch reached with an OPEN row, which no
+// other test drives under staleness: the fresh-hold case
+// (TestRouteNextServesOwnClaimOverHigherRankedUnclaimedLane) never goes stale,
+// and the stale case (TestRouteNextResumesOwnOrphanInStaleLane) reaches
+// resumeWork through an orphan. Between them sat the exact combination the
+// field report showed, untested.
+func TestRouteNextServesOpenWorkInOurOwnStaleLane(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "next", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicA.ID})
+
+	epicB := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic B", Topic: "next", IssueType: "epic", Priority: 1})
+	b1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "B.1", Topic: "next", IssueType: "task", Priority: 1, ParentID: epicB.ID})
+
+	rows, details := h.gather()
+	if rows[0].ID != a1.ID {
+		t.Fatalf("fixture rank order = %q first, want %q — this test's premise is that our own lane ranks top", rows[0].ID, a1.ID)
+	}
+	standings := claims.Standings{laneOf(t, details, rowByID(t, rows, a1.ID)): staleBy(selfAttribution)}
+
+	outcome := routeNext(rows, details, standings, selfAttribution)
+	served, ok := outcome.(ServedFromClaim)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromClaim — never a fresh lane in epic B (%s)", outcome, outcome, b1.ID)
+	}
+	if served.Row.ID != a1.ID {
+		t.Fatalf("served = %q, want %q (open work in our own lane, stale or not)", served.Row.ID, a1.ID)
+	}
+}

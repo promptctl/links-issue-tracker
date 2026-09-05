@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -231,4 +233,63 @@ func isIssueIDToken(s string) bool {
 		}
 	}
 	return true
+}
+
+// The sibling gate is a blocking annotation like any other, and the backlog
+// owes it a line. It had none: nonDependencyBlockingReasons had no phrasing
+// for EarlierSiblingPending, so a row held back by an earlier same-lane
+// sibling rendered with nothing under it — top of the queue, no visible reason
+// — while routing skipped it as unready. That gap is the whole of
+// links-claims-gxxw: the backlog is the surface that tells an agent what `lit
+// next` will serve, so this pins both halves at once, the rendered reason and
+// the pick it explains.
+func TestBacklogNamesTheSiblingGateAndNextAgreesWithIt(t *testing.T) {
+	h := newBacklogTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic", Topic: "gate", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "First", Topic: "gate", IssueType: "task", Priority: 1, ParentID: epic})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Second", Topic: "gate", IssueType: "task", Priority: 1, ParentID: epic})
+
+	text := h.runBacklogText()
+	if want := "blocked: earlier sibling " + first + " still open"; !strings.Contains(text, want) {
+		t.Fatalf("backlog does not say why %s is held back: want %q; got:\n%s", second, want, text)
+	}
+
+	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	if err != nil {
+		t.Fatalf("gatherWorkableAnnotated error = %v", err)
+	}
+	outcome := routeNext(rows, details, claims.Standings{}, selfAttribution)
+	served, ok := outcome.(ServedFromNewLane)
+	if !ok {
+		t.Fatalf("routeNext = %#v (%T), want ServedFromNewLane", outcome, outcome)
+	}
+	if served.Row.ID != first {
+		t.Fatalf("served = %q, want %q — the row the backlog ranks first and marks unblocked", served.Row.ID, first)
+	}
+}
+
+// The gate that keeps the omission from coming back, driven off the annotation
+// registry rather than a list maintained beside it: every kind the registry
+// classifies as blocking must reach the reader. OpenDependency is the one
+// deliberate silence here — printBacklogContext gives it its own "depends on:"
+// line — so it is named as the exception rather than left to a length check
+// that would pass for a kind nobody phrased.
+// [LAW:one-source-of-truth] [LAW:verifiable-goals]
+func TestBacklogPhrasesEveryBlockingKind(t *testing.T) {
+	for _, kind := range annotation.Kinds() {
+		if kind.ReadinessRole() != annotation.RoleBlocking {
+			continue
+		}
+		readiness := ClassifyReadiness([]annotation.Annotation{{Kind: kind, Message: "test-detail"}})
+		reasons := nonDependencyBlockingReasons(readiness)
+		if kind == annotation.OpenDependency {
+			if len(reasons) != 0 {
+				t.Errorf("kind %s rendered %v in the \"blocked:\" line; it belongs to \"depends on:\" alone", kind, reasons)
+			}
+			continue
+		}
+		if len(reasons) != 1 || reasons[0] == "" {
+			t.Errorf("kind %s rendered %v, want exactly one non-empty phrase — a blocking kind the backlog cannot phrase is a blocker the reader never sees", kind, reasons)
+		}
+	}
 }
