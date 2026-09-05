@@ -126,12 +126,23 @@ lit next [--type <t>] [--status open|in_progress] [--labels <csv>] [--assignee <
 ```
 
 Prints the single next workable leaf to `lit start`, narrowed by the same filters as
-`backlog` — so "the next workable bug" is `lit next --type bug`. Selection is
-claims-first: a ready lane this checkout already holds comes back before anything
-else, then another unclaimed lane of the same epic, then the global pool — see
-design-docs/work-claims.md for the full precedence. `--limit` and `--columns` do
-not apply to a single-row summary and are not accepted. `--continue` is retired —
-claim routing already keeps a checkout in its own epic first, unconditionally.
+`backlog` — so "the next workable bug" is `lit next --type bug`. `--limit` and
+`--columns` do not apply to a single-row summary and are not accepted. `--continue`
+is retired — claim routing already keeps a checkout in its own epic first,
+unconditionally.
+
+Selection is claims-first. A lane this checkout already holds comes back before
+anything else: startable work and work already in flight there alike, the latter
+handed back to resume rather than started fresh. Next comes a dependency outside
+those lanes that gates one of them. After that the epic continues into any of its
+other lanes no other checkout holds fresh, stale claims included: a stale claim is
+provenance, not a hold, and taking that lane transfers it to this checkout. Only a
+lane another checkout holds right now is passed over, and reaching one takes a
+deliberate `lit start` on it, which asks to confirm the takeover or requires
+`--take` when there is no terminal to ask. A checkout whose epic has open work it
+cannot reach gets a diagnostic naming what blocks it, never a silent hop out of the
+epic; a checkout holding no claims of its own starts straight at the global pool.
+See design-docs/work-claims.md for the full precedence.
 
 ### `lit orphaned`
 
@@ -338,7 +349,7 @@ Status lifecycle (Agent Operations):
 
 | Command | Transition | Flags | Notes |
 |---------|-----------|-------|-------|
-| `lit start` | any state → `in_progress` | `[--assignee <fallback>]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. |
+| `lit start` | any state → `in_progress` | `[--assignee <fallback>] [--take]` | Claims the issue and assigns it to you; from `closed` it is a reopen-and-claim. `--take` confirms taking over a lane another checkout holds fresh, and is how a caller with no terminal to prompt does it. |
 | `lit done` | any non-closed → `closed` | | Success path; prints post-close capture guidance. Transitions are target-state: the verb names the destination, whatever the current status. |
 | `lit close` | any non-closed → `closed` | `--resolution <duplicate\|superseded\|obsolete\|wontfix> [--of <canonical-id>]` | Closing without finishing; `--of` names the canonical ticket for the redirecting resolutions (required for those, unrepresentable otherwise). |
 | `lit open` | any non-open → `open` | | Returns the issue to the backlog; ownership (assignee) is untouched — only `start` rewrites it. |
