@@ -19,6 +19,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/rank"
@@ -784,7 +785,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	events, err := s.listEvents(ctx, id)
+	events, err := s.ListEvents(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
@@ -1066,10 +1067,12 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 // [LAW:types-are-the-program] Every target state is reachable by exactly one action variant;
 // no compound chains, no from-state preconditions. The 3x3 minus diagonal collapses to one call per change.
 // Same-state transitions flow through planStatusTransition unconditionally; the leaf decides what they
-// mean. A pure no-op (same state, same resulting assignee) records nothing — history reflects actual
-// mutations. A same-state start with a new assignee is the canonical agent-reclaim path and records
-// the assignee change with the calling Actor, which is the audit substrate for "who interacted with
-// this ticket" history queries.
+// mean. A pure no-op (same state, same resulting claimant) records nothing — history reflects actual
+// mutations. A same-state start that moves the claimant is the canonical reclaim path and records the
+// move with the calling Actor, which is the audit substrate for "who interacted with this ticket"
+// history queries. The claimant is the (assignee, checkout) pair, never the assignee alone: two
+// checkouts of one identity taking a lane from each other move nothing on the row and everything on
+// the record.
 func (s *Store) Apply(ctx context.Context, id string, c storage.Change) (model.Issue, error) {
 	current, err := s.GetIssue(ctx, id)
 	if err != nil {
@@ -1276,25 +1279,42 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if err != nil {
 		return transitionWrite{}, err
 	}
-	priorAssignee := issue.AssigneeValue()
-	// Only Start rewrites the assignee — it is the variant that carries the new
-	// owner. Every other transition preserves ownership: assignee is an
-	// issue-level field orthogonal to the status state machine, untouched by
-	// changing state. [LAW:types-are-the-program] The payload comes from the
-	// variant, not a loose parameter every other action had to ignore.
-	postAssignee := priorAssignee
-	if start, ok := action.(model.Start); ok {
-		postAssignee = strings.TrimSpace(start.Assignee)
+	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
+	// from this issue's own history — never the assignee alone. The history read
+	// is what makes the checkout half available: ownership is recorded on events,
+	// not on the row, so there is no column to compare. [LAW:one-source-of-truth]
+	// s.attribution is the taker for the same reason it is the right one to
+	// compare against: it is exactly what recordEvent will stamp on the event
+	// this plan is deciding whether to write.
+	//
+	// The pair spans two reads at two instants — issue came from Apply's own
+	// GetIssue, this is a separate query — so a concurrent writer can land
+	// between them. That window cannot drop a takeover, which is the direction
+	// that would matter: a no-op needs prior.Checkout to equal s.attribution,
+	// and a foreign write in the window can only make the freshly-read latest
+	// establisher somebody else, forcing the write. It can only stale the
+	// assignee half, which likewise pushes the pair toward inequality. What
+	// survives is a spurious write whose assignee FieldChange names a stale
+	// From — audit precision, not a lost claim. Closing it means computing the
+	// pair in-tx (links-claims-3cey).
+	events, err := s.ListEvents(ctx, issue.ID)
+	if err != nil {
+		return transitionWrite{}, err
 	}
-	updated.Assignee = postAssignee
+	prior := claims.ClaimantOf(issue, events)
+	post := prior.After(action, s.attribution)
+	updated.Assignee = post.Assignee
 	fromStatus := issue.StatusValue()
 	toStatus := updated.StatusValue()
 	// [LAW:one-source-of-truth] History records actual mutations only. A call
-	// whose target state and resulting assignee both match the current row is
-	// the documented leaf-state Apply no-op: no write, no event. The claim
-	// audit substrate survives because a reclaim (same state, new assignee)
-	// falls through and records the assignee change with the calling actor.
-	if toStatus == fromStatus && postAssignee == priorAssignee {
+	// whose target state and resulting claimant both match the record is the
+	// documented leaf-state Apply no-op: no write, no event. The claim audit
+	// substrate survives because a reclaim — same state, new assignee OR a new
+	// checkout taking the lane — moves the claimant and falls through, which is
+	// what keeps "who took this over" answerable. Comparing only the assignee
+	// dropped every takeover between two checkouts of one identity on the floor,
+	// silently and with exit 0. [LAW:no-silent-failure]
+	if toStatus == fromStatus && post == prior {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
 	now := time.Now().UTC()
@@ -1347,8 +1367,8 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if !stringPointersEqual(priorRedirect, postRedirect) {
 		changes = append(changes, model.FieldChange{Field: "redirect_target", From: formatNullableString(priorRedirect), To: formatNullableString(postRedirect)})
 	}
-	if priorAssignee != postAssignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: postAssignee})
+	if prior.Assignee != post.Assignee {
+		changes = append(changes, model.FieldChange{Field: "assignee", From: prior.Assignee, To: post.Assignee})
 	}
 	updated.UpdatedAt = now
 	// updated already carries the leaf the write will persist — the outcome
@@ -1358,7 +1378,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 		issueID:           issue.ID,
 		fromStatus:        fromStatus,
 		toStatus:          toStatus,
-		postAssignee:      postAssignee,
+		postAssignee:      post.Assignee,
 		now:               now,
 		closedAtArg:       closedAtArg,
 		resolutionArg:     resolutionArg,
@@ -1852,7 +1872,7 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
-func (s *Store) listEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
 	events, err := s.queryEvents(ctx, "e.issue_id = ?", issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)

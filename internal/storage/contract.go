@@ -70,6 +70,14 @@ type IssueReader interface {
 	// rather than refining it.
 	ListAllEvents(ctx context.Context) ([]model.IssueEvent, error)
 
+	// ListEvents reads one issue's history, ordered exactly as ListAllEvents
+	// orders the whole of it. It exists because "who does the record say holds
+	// this ticket" is a question about one issue, and the only reader that
+	// carried a history before this was GetIssueDetail — the single-issue view
+	// paid for in full, hydrating relations, comments and children a caller
+	// after the claimant never looks at.
+	ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error)
+
 	// LocalIssueCount reports how many issues this store holds. It is the
 	// adopt-safety signal for `lit init`: a store with zero issues has no work
 	// to lose. A store that has never been written is a true "no issues yet"

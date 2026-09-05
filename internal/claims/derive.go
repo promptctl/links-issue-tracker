@@ -96,7 +96,7 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 	// confidently the older the repository, is worse than admitting we cannot
 	// tell. Unclaimed is the honest reading, and it is also the pre-claims
 	// behavior, so the cost of admitting it is nil.
-	establisher, found := latestEstablisher(admissible)
+	establisher, found := LatestEstablisher(admissible)
 	if !found || !establisher.Attribution.Present() {
 		return Unclaimed{}
 	}
@@ -113,16 +113,6 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return Stale{Tenure: tenure}
 	}
 	return Held{Tenure: tenure, Contested: contestants(holder, activity, establishers, fresh)}
-}
-
-// latestEstablisher returns the last event that takes or transfers the lane.
-func latestEstablisher(events []model.IssueEvent) (model.IssueEvent, bool) {
-	for i := len(events) - 1; i >= 0; i-- {
-		if establishes(events[i]) {
-			return events[i], true
-		}
-	}
-	return model.IssueEvent{}, false
 }
 
 // trails folds the lane's events into the two facts the predicate needs about

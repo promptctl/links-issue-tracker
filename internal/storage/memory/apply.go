@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -81,7 +82,7 @@ func (e *Engine) planLifecycle(current model.Issue, actor, reason string, action
 
 // planStatus walks the status state machine. Every rejection it can produce is
 // the machine's own — frozen work is out of the flow, a container's state is
-// its children's — and the engine adds only the assignee rule and the
+// its children's — and the engine adds only the claimant rule and the
 // integrity floor under a redirecting close.
 func (e *Engine) planStatus(current model.Issue, actor, reason string, action model.StatusAction, now time.Time) (model.Issue, []eventSpec, error) {
 	if model.Frozen(current.Retention()) {
@@ -91,27 +92,26 @@ func (e *Engine) planStatus(current model.Issue, actor, reason string, action mo
 	if err != nil {
 		return model.Issue{}, nil, err
 	}
-	// Start is the one variant that carries a new owner, so it is the one
-	// transition that rewrites the assignee; every other one preserves
-	// ownership, which is an issue-level field the status machine never
-	// touches. [LAW:types-are-the-program] The payload comes from the variant,
-	// not a loose parameter every other action would have to ignore.
-	priorAssignee := current.Assignee
-	postAssignee := priorAssignee
-	if start, ok := action.(model.Start); ok {
-		postAssignee = strings.TrimSpace(start.Assignee)
-	}
-	updated.Assignee = postAssignee
-	// A call whose target state and resulting assignee both already hold is
+	// Who holds the ticket is the (assignee, checkout) pair claims owns, read
+	// from this issue's own history — never the assignee alone, because lane
+	// ownership is keyed on the checkout and the checkout is recorded on events
+	// rather than on the row. [LAW:one-source-of-truth] Start is the one action
+	// that takes a ticket, so it is the one that moves the pair; that rule lives
+	// in Claimant.After, where both engines read it.
+	prior := claims.ClaimantOf(current, e.eventsFor(current.ID))
+	post := prior.After(action, e.attribution)
+	updated.Assignee = post.Assignee
+	// A call whose target state and resulting claimant both already hold is
 	// the documented no-op: history records mutations that happened, not calls
-	// that were made. A same-state start with a NEW assignee is the agent
-	// reclaim path and falls through, recording the ownership change.
+	// that were made. A same-state start that moves the claimant — a new
+	// assignee, or a new checkout taking the lane from one that shares its
+	// identity — is the reclaim path and falls through, recording who took it.
 	//
 	// The no-op is decided BEFORE the redirect target is checked, because the
 	// check guards a write and there is no write here to guard. Checking first
 	// would make a call that changes nothing fail on the state of an issue it
 	// was never going to touch.
-	if updated.StatusValue() == current.StatusValue() && postAssignee == priorAssignee {
+	if updated.StatusValue() == current.StatusValue() && post == prior {
 		return current, nil, nil
 	}
 	if err := e.validateRedirectTarget(updated); err != nil {

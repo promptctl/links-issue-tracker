@@ -1277,8 +1277,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	issueID := remaining[0]
 
-	// The pre-transition read feeds the claim-transfer notice below: `start` may
-	// take an issue over from a prior owner, and that hand-off must be surfaced.
+	// The pre-transition read is the state `authorize` gates on and the
+	// before-half of the workflow occasion below. It is the ROW only: the
+	// claim-transfer notice needs the issue's history too, and reads it
+	// separately after authorization, because that is the read authorization
+	// can invalidate.
 	prior, err := ap.Store.GetIssue(ctx, issueID)
 	if err != nil {
 		return err
@@ -1294,6 +1297,17 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// `start`. See transitionSpec.authorize and authorizeStart
 	// (claims_takeover.go).
 	if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
+		return err
+	}
+
+	// Composed AFTER authorize, not beside the row above: authorizing a start
+	// walks every lane and, on a fresh foreign hold, waits on the operator at a
+	// prompt with no timeout. A claimant read before that wait describes whoever
+	// held the lane when the question was asked, which is not who holds it when
+	// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
+	// pre-Apply state and rendered below, so a failed Apply announces nothing.
+	transfer, err := transferNotice(ctx, ap, issueID, action)
+	if err != nil {
 		return err
 	}
 
@@ -1321,15 +1335,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	// [LAW:no-silent-failure] start rewrites the assignee column; taking an
-	// issue over from an existing owner succeeds (intended target-state
-	// semantics) but must not do so silently.
-	if start, ok := action.(model.Start); ok {
-		if priorOwner := prior.AssigneeValue(); priorOwner != "" && priorOwner != start.Assignee {
-			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", priorOwner, displayAssignee(start.Assignee)); err != nil {
-				return err
-			}
-		}
+	// A hand-off is said out loud; every other transition has nothing to say and
+	// says it as the empty string, so this write always runs and only its value
+	// varies. transferNotice holds the rule. [LAW:dataflow-not-control-flow]
+	if _, err := io.WriteString(stdout, transfer); err != nil {
+		return err
 	}
 
 	if err := printIssueSummary(stdout, issue); err != nil {
