@@ -33,7 +33,7 @@ type Clock func() time.Time
 // every timestamp in the contract carries.
 //
 // Engines call this rather than the function itself, so the normalization has
-// one home instead of one per stamp — there were seventeen of them across the
+// one home instead of one per stamp — there were eighteen of them across the
 // two engines before this existed. [LAW:single-enforcer]
 func (c Clock) Now() time.Time { return c().UTC() }
 
