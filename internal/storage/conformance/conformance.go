@@ -12,7 +12,7 @@
 // An engine's package writes one test:
 //
 //	func TestConformance(t *testing.T) {
-//		conformance.Run(t, func(t *testing.T) storage.Store { return openMyEngine(t) })
+//		conformance.Run(t, func(t *testing.T, clock storage.Clock) storage.Store { return openMyEngine(t, clock) })
 //	}
 //
 // The engine package supplies the factory, so this package imports no engine
@@ -38,7 +38,6 @@
 package conformance
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"slices"
@@ -688,9 +687,7 @@ func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent
 			mine = append(mine, event)
 		}
 	}
-	slices.SortFunc(mine, func(a, b model.IssueEvent) int {
-		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
-	})
+	slices.SortFunc(mine, storage.EventOrdering)
 	return mine
 }
 
@@ -1000,11 +997,18 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 	if len(events) < 7 {
 		t.Fatalf("got %d events, want at least the create plus six changes", len(events))
 	}
+	// Each key is asserted on its own rather than through one comparator, and
+	// deliberately not through [storage.EventOrdering]: that is what both
+	// engines sort by, so a case checking their output against it could not
+	// fail on a change to the rule itself — reverse it and engines and oracle
+	// reverse together. [LAW:behavior-not-structure]
 	for i := 1; i < len(events); i++ {
 		prev, cur := events[i-1], events[i]
-		if cmp.Or(prev.CreatedAt.Compare(cur.CreatedAt), strings.Compare(prev.ID, cur.ID)) > 0 {
-			t.Errorf("events step backwards at index %d: (%s, %s) after (%s, %s)",
-				i, cur.CreatedAt, cur.ID, prev.CreatedAt, prev.ID)
+		if cur.CreatedAt.Before(prev.CreatedAt) {
+			t.Errorf("events step backwards in time at index %d: %s after %s", i, cur.CreatedAt, prev.CreatedAt)
+		}
+		if cur.CreatedAt.Equal(prev.CreatedAt) && cur.ID <= prev.ID {
+			t.Errorf("events sharing an instant are not id-ascending at index %d: %s after %s", i, cur.ID, prev.ID)
 		}
 	}
 }
