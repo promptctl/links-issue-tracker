@@ -34,17 +34,6 @@
 // interface an engine can decline, rather than mixed into the set every engine
 // owes.
 //
-// One relocated field still carries Dolt's spelling further than that argument
-// justifies: [SyncStatusReport].DoltVersion, a field named for one engine
-// inside a type that any [Syncer] returns. It renders as the json key
-// dolt_version, so renaming it moves observable output and S0's gate is that
-// nothing observable moves. It is links-store-seam-q35v.7.
-//
-// Checkpoint's engine-side identity was the other one, and the epic's
-// circle-back resolved it: nothing outside the engine ever rendered it, so the
-// deferral had been reasoned from a cost that was not being paid. It is
-// [Checkpoint].Anchor now, which is what the contract always said it was.
-//
 // # The conformance suite is the actual specification
 //
 // An interface pins shapes; only behavior is a contract. The executable

@@ -574,7 +574,7 @@ func runSyncStatus(ctx context.Context, stdout io.Writer, ws workspace.Info, ses
 	_, err = fmt.Fprintf(
 		stdout,
 		"version=%v branch=%v head=%v git=%d dolt=%d added=%d updated=%d removed=%d\n",
-		report.DoltVersion,
+		report.EngineVersion,
 		report.Branch,
 		head,
 		len(syncState.gitRemotes),

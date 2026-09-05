@@ -14,9 +14,9 @@ Path prefix for all citations: `/Users/bmf/code/links-issue-tracker/`
 - Package `storage` declares what lit needs from a storage engine; no engine type appears in any signature (`internal/storage/doc.go:1-4`).
 - Vocabulary rule: every type crossing the `Store` boundary is a `model` type or a type declared in this package. `Store` and its constituent interfaces may name no SQL row, branch, commit, or schema version (`internal/storage/doc.go:20-27`).
 - Dependency direction: engine → contract → model, never back (`internal/storage/doc.go:25-27`).
-- Capability interfaces are deliberately exempt from the vocabulary rule; naming an engine artifact is what makes something a capability rather than storage (`internal/storage/doc.go:29-36`).
-- One acknowledged leak: `SyncStatusReport.DoltVersion`, engine-named, kept because it renders as the JSON key `dolt_version` and renaming moves observable output (`internal/storage/doc.go:37-41`; field at `internal/storage/sync.go:44`).
-- The conformance suite, not the interface, is stated as the actual specification (`internal/storage/doc.go:48-55`).
+- Capability interfaces are deliberately exempt from the vocabulary rule; naming an engine artifact is what makes something a capability rather than storage (`internal/storage/doc.go:29-35`).
+- The core names no engine artifact; the vocabulary rule is stated without exceptions (`internal/storage/doc.go:20-35`).
+- The conformance suite, not the interface, is stated as the actual specification (`internal/storage/doc.go:39-44`).
 
 ---
 
@@ -426,7 +426,7 @@ These types live in the contract, not in an engine, because a capability interfa
 - **`SyncState{Path, ContentHash string}`** — the store's on-disk content at a point in time: where it lives and a digest of what it held; the staleness signal (`internal/storage/sync.go:20-23`).
 - **`SyncRemote{Name, URL string}`** (json `name`, `url`) — `internal/storage/sync.go:26-29`.
 - **`SyncStatusRow{TableName string; Staged bool; Status string}`** (json `table_name`, `staged`, `status`) — one unit of pending local change; what a "table" is belongs to the engine, and the contract carries the row through uninterpreted (`internal/storage/sync.go:33-38`).
-- **`SyncStatusReport`** (`internal/storage/sync.go:43-50`) — `DoltVersion` (json `dolt_version`), `Branch`, `HeadCommit`, `HeadMessage`, `Status []SyncStatusRow`, `Remotes []SyncRemote`.
+- **`SyncStatusReport`** (`internal/storage/sync.go:43-57`) — `EngineVersion` (json `engine_version`; the build of whatever engine answered, singular because the whole report describes one engine), `Branch`, `HeadCommit`, `HeadMessage`, `Status []SyncStatusRow`, `Remotes []SyncRemote`.
 - **`SyncFreshnessState`** string enum (`internal/storage/sync.go:57-65`): `never_synced`, `up_to_date`, `ahead`, `behind`, `diverged`.
 - **`SyncFreshness`** (`internal/storage/sync.go:74-90`) — `Remote`, `Branch`, `Synced bool`, `Ahead int64`, `Behind int64`, `OldestDivergedUnix int64`.
   - Reports position relative to `remotes/<Remote>/<Branch>`, so `Behind` is "as of last fetch"; computing it never contacts the network (`internal/storage/sync.go:68-71`).
