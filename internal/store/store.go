@@ -591,7 +591,7 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	// Parsed before the query rather than after it, so an unsupported sort field
 	// costs nothing; the comparator it yields reads hydrated values, so the
 	// ordering itself cannot run until the rows are back and built.
-	ordering, err := issueOrdering(filter.SortBy)
+	ordering, err := storage.IssueOrdering(filter.SortBy, issueSortKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -1743,10 +1743,8 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 	return true, nil
 }
 
-// issueSortKeys is this engine's binding of the contract's sort vocabulary to
-// the comparison that reads each key; storage.SortFields says what each key
-// orders, and the conformance suite checks this binding against it rather than
-// trusting the two to stay in step.
+// issueSortKeys is this engine's reading of the contract's sort vocabulary; see
+// storage.SortFields for what each key orders.
 //
 // Every binding reads a HYDRATED model value, which is what forces a listing's
 // order out of the query and into this package: a container's state is a
@@ -1754,7 +1752,7 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 // past that boundary (see filterByState); leaving the sort on the query side of
 // it is what let one listing mean two different things by "status".
 // [LAW:one-source-of-truth]
-var issueSortKeys = map[string]func(a, b model.Issue) int{
+var issueSortKeys = storage.SortBindings{
 	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
 	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
 	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
@@ -1765,42 +1763,6 @@ var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
 	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-}
-
-// issueOrdering parses the requested sort specs into the single comparison a
-// listing is ordered by. It runs before the query so an unsupported field is a
-// boundary error rather than an ordering nobody asked for, and what it hands
-// back is a comparator — a thing that cannot exist until the specs have been
-// checked. [LAW:parse-dont-validate]
-//
-// The default ordering and the trailing id key are the contract's rules, stated
-// on storage.IssueReader.ListIssues.
-func issueOrdering(specs []storage.SortSpec) (func(a, b model.Issue) int, error) {
-	if len(specs) == 0 {
-		specs = []storage.SortSpec{{Field: "rank"}}
-	}
-	compares := make([]func(a, b model.Issue) int, 0, len(specs)+1)
-	for _, spec := range specs {
-		field := strings.ToLower(strings.TrimSpace(spec.Field))
-		compare, ok := issueSortKeys[field]
-		if !ok {
-			return nil, fmt.Errorf("unsupported sort field %q", spec.Field)
-		}
-		if spec.Desc {
-			ascending := compare
-			compare = func(a, b model.Issue) int { return -ascending(a, b) }
-		}
-		compares = append(compares, compare)
-	}
-	compares = append(compares, func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) })
-	return func(a, b model.Issue) int {
-		for _, compare := range compares {
-			if result := compare(a, b); result != 0 {
-				return result
-			}
-		}
-		return 0
-	}, nil
 }
 
 func sortIssuesByRank(issues []model.Issue) {

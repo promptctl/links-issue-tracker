@@ -37,8 +37,8 @@ type IssueReader interface {
 	// [LAW:no-silent-failure]
 	//
 	// SortBy may name only a [SortFields] member; see it for what each key
-	// orders, and in particular for the one key — status — whose ordering is
-	// not the derived lifecycle state a reader would assume.
+	// orders. The two rules above are applied by [IssueOrdering], which is
+	// where an engine gets them rather than restating them.
 	ListIssues(ctx context.Context, filter ListIssuesFilter) ([]model.Issue, error)
 
 	// ListChildren returns one epic's children in rank order. An id with no

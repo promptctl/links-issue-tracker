@@ -14,15 +14,27 @@
 //
 // # Independent by construction
 //
-// Nothing here is shared with the Dolt engine: not the field-patch diff, not
-// the transition planner, not the frame resolution behind the rank intents,
-// not the compensating bulk apply. Every one of those is a pure function of
-// model values living in internal/store, and lifting them into the contract
-// package would look like the obvious [LAW:one-source-of-truth] fix. It would
-// also quietly destroy the proof — two engines calling one implementation is
-// one implementation wearing two hats, and a green conformance run would then
-// say nothing at all about those paths. The suite is the shared definition of
-// behavior; the code is deliberately not. [LAW:behavior-not-structure]
+// No BEHAVIOR here is shared with the Dolt engine: not the field-patch diff,
+// not the transition planner, not the frame resolution behind the rank
+// intents, not the compensating bulk apply. Every one of those is a pure
+// function of model values living in internal/store, and lifting them into the
+// contract package would look like the obvious [LAW:one-source-of-truth] fix.
+// It would also quietly destroy the proof — two engines calling one
+// implementation is one implementation wearing two hats, and a green
+// conformance run would then say nothing at all about those paths. The suite
+// is the shared definition of behavior; the code is deliberately not.
+// [LAW:behavior-not-structure]
+//
+// The line falls at what the contract states versus what an engine decides. A
+// rule the contract writes down — a listing's default order, its trailing id
+// key — is normative rather than discovered, so both engines obey it through
+// one [storage.IssueOrdering] and neither restates it; duplicating THAT proves
+// nothing, because there was never a question of whether an engine would work
+// it out for itself. What this engine still answers alone is the part it could
+// get wrong alone: which comparison each sort key reads, passed in as its own
+// [storage.SortBindings] and checked against the contract's vocabulary by the
+// suite. Independence is the point everywhere the engine has a choice to make,
+// and nowhere it does not.
 //
 // Where the suite under-pins a behavior, Dolt's current behavior is the
 // tiebreak rather than what would be tidier: S0's whole gate is that nothing

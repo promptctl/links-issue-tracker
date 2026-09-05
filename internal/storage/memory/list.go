@@ -3,7 +3,6 @@ package memory
 import (
 	"cmp"
 	"context"
-	"fmt"
 	"slices"
 	"strings"
 
@@ -24,7 +23,7 @@ func (e *Engine) ListIssues(ctx context.Context, filter storage.ListIssuesFilter
 }
 
 func (e *Engine) listIssues(filter storage.ListIssuesFilter) ([]model.Issue, error) {
-	order, err := issueOrdering(filter.SortBy)
+	order, err := storage.IssueOrdering(filter.SortBy, issueSortKeys)
 	if err != nil {
 		return nil, err
 	}
@@ -191,13 +190,10 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 	return issues[:limit]
 }
 
-// issueSortKeys is the closed set of fields a listing may be ordered by, each
-// bound to the comparison that reads it. Membership here is what makes an
-// unknown sort field an error at the boundary rather than an ordering nobody
-// asked for. [LAW:parse-dont-validate] What each key orders is the contract's
-// to say, not this engine's; see storage.SortFields, which is why "status"
-// reads the derived state rather than a field.
-var issueSortKeys = map[string]func(a, b model.Issue) int{
+// issueSortKeys is this engine's reading of the contract's sort vocabulary; see
+// storage.SortFields for what each key orders, which is why "status" compares
+// derived state rather than a field.
+var issueSortKeys = storage.SortBindings{
 	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
 	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
 	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
@@ -208,42 +204,4 @@ var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
 	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-}
-
-// issueOrdering composes the requested sort specs into one comparison.
-//
-// Two rules make the result a TOTAL order rather than a partial one, which is
-// what lets this engine and the Dolt engine agree row for row. No specs is the
-// canonical ordering, expressed as the spec list it stands for rather than as
-// a branch that skips the sort [LAW:dataflow-not-control-flow]; and id
-// ascending is appended as the final key always, so no tie is ever left for
-// the engine's incidental slice order to settle
-// [LAW:no-ambient-temporal-coupling]. Both are stated in the contract on
-// storage.IssueReader.ListIssues.
-func issueOrdering(specs []storage.SortSpec) (func(a, b model.Issue) int, error) {
-	if len(specs) == 0 {
-		specs = []storage.SortSpec{{Field: "rank"}}
-	}
-	compares := make([]func(a, b model.Issue) int, 0, len(specs)+1)
-	for _, spec := range specs {
-		field := strings.ToLower(strings.TrimSpace(spec.Field))
-		compare, ok := issueSortKeys[field]
-		if !ok {
-			return nil, fmt.Errorf("unsupported sort field %q", spec.Field)
-		}
-		if spec.Desc {
-			ascending := compare
-			compare = func(a, b model.Issue) int { return -ascending(a, b) }
-		}
-		compares = append(compares, compare)
-	}
-	compares = append(compares, func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) })
-	return func(a, b model.Issue) int {
-		for _, compare := range compares {
-			if result := compare(a, b); result != 0 {
-				return result
-			}
-		}
-		return 0
-	}, nil
 }
