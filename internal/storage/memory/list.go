@@ -194,11 +194,13 @@ func capLimit(issues []model.Issue, limit int) []model.Issue {
 // issueSortKeys is the closed set of fields a listing may be ordered by, each
 // bound to the comparison that reads it. Membership here is what makes an
 // unknown sort field an error at the boundary rather than an ordering nobody
-// asked for. [LAW:parse-dont-validate]
+// asked for. [LAW:parse-dont-validate] What each key orders is the contract's
+// to say, not this engine's; see storage.SortFields, which is why "status"
+// reads the derived state rather than a field.
 var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
 	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
-	"status":     compareStoredStatus,
+	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
 	"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
 	"rank":       func(a, b model.Issue) int { return strings.Compare(a.Rank, b.Rank) },
 	"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
@@ -206,33 +208,6 @@ var issueSortKeys = map[string]func(a, b model.Issue) int{
 	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
 	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
 	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
-}
-
-// compareStoredStatus orders two issues by the status encoding a row holds,
-// which is what the Dolt engine's ORDER BY reads — and a container holds none.
-//
-// It deliberately does NOT compare model.Issue.State(). The derived state is
-// the better answer to "what state is this in", and it is what the status
-// FILTER reads; the SORT reads the stored column, and this engine reproduces
-// that so the two engines answer a listing identically. See storage.SortFields
-// for why the divergence is preserved rather than fixed here.
-func compareStoredStatus(a, b model.Issue) int {
-	aStored, aValue := storedStatus(a)
-	bStored, bValue := storedStatus(b)
-	// SQL orders NULL ahead of every value ascending, so "has no stored status"
-	// is the low key rather than a special case in the caller.
-	// [LAW:dataflow-not-control-flow]
-	return cmp.Or(cmp.Compare(aStored, bStored), strings.Compare(aValue, bValue))
-}
-
-// storedStatus reports whether the issue would occupy the status column at all
-// (0 for a container, whose state is derived) and the value it would hold.
-func storedStatus(issue model.Issue) (int, string) {
-	status := issue.Capabilities().Status
-	if status == nil {
-		return 0, ""
-	}
-	return 1, string(status.Value)
 }
 
 // issueOrdering composes the requested sort specs into one comparison.

@@ -118,16 +118,12 @@ type SortSpec struct {
 // accepts a key the other rejects. The set lives here; an engine's binding is
 // checked against it by the conformance suite rather than trusted.
 //
-// Every key orders the issue's own recorded value except one. "status" orders
-// the STORED status encoding, not the derived lifecycle state: a container has
-// no stored status — its state is a reading of its children — so containers
-// carry no value on this axis and order ahead of every leaf ascending, behind
-// every leaf descending, whatever state they derive to. That is a fault, not a
-// design: the same listing's status FILTER reads derived state, so filter and
-// sort disagree about what "status" means. It is stated here as shipped
-// behavior so both engines can be wrong identically and the differential
-// oracle stays quiet; correcting it moves observable output and is
-// links-store-seam-q35v.6.
+// Every key orders the issue's own recorded value except "status", which
+// orders the DERIVED lifecycle state — the same reading the status FILTER
+// takes, so one listing means one thing by the word. [LAW:one-source-of-truth]
+// A container holds no stored status; its state is a reading of its children,
+// so an engine that ordered on the column would file every container at an end
+// of the listing whatever state it derives to.
 var SortFields = []string{
 	"id",
 	"title",

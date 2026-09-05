@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
@@ -587,6 +588,13 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
+	// Parsed before the query rather than after it, so an unsupported sort field
+	// costs nothing; the comparator it yields reads hydrated values, so the
+	// ordering itself cannot run until the rows are back and built.
+	ordering, err := issueOrdering(filter.SortBy)
+	if err != nil {
+		return nil, err
+	}
 	// [LAW:types-are-the-program] Filter types are already-parsed vocabulary;
 	// the defensive trim/skip that the raw-string filter needed is gone with it.
 	if len(filter.IssueTypes) > 0 {
@@ -673,11 +681,6 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if len(where) > 0 {
 		query += " WHERE " + strings.Join(where, " AND ")
 	}
-	orderClause, err := buildIssueOrderClause(filter.SortBy)
-	if err != nil {
-		return nil, err
-	}
-	query += " ORDER BY " + orderClause
 	rows, err := s.db.QueryContext(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list issues: %w (query=%s)", err, query)
@@ -698,8 +701,10 @@ func (s *Store) ListIssues(ctx context.Context, filter storage.ListIssuesFilter)
 	if err != nil {
 		return nil, err
 	}
-	// [LAW:dataflow-not-control-flow] Filter and cap always run; the helpers absorb
-	// "no filter" and "no limit" as data so the body stays a straight pipe.
+	// [LAW:dataflow-not-control-flow] Sort, filter and cap always run; the helpers
+	// absorb "no order", "no filter" and "no limit" as data so the body stays a
+	// straight pipe.
+	slices.SortStableFunc(hydrated, ordering)
 	return capLimit(filterByResolution(filterByState(hydrated, allowedStates), filter.Resolutions), filter.Limit), nil
 }
 
@@ -1738,38 +1743,64 @@ func (s *Store) ensureMetaDefault(ctx context.Context, guard *snapshotGuard, key
 	return true, nil
 }
 
-func buildIssueOrderClause(specs []storage.SortSpec) (string, error) {
+// issueSortKeys is this engine's binding of the contract's sort vocabulary to
+// the comparison that reads each key; storage.SortFields says what each key
+// orders, and the conformance suite checks this binding against it rather than
+// trusting the two to stay in step.
+//
+// Every binding reads a HYDRATED model value, which is what forces a listing's
+// order out of the query and into this package: a container's state is a
+// reading of its children that no column holds. The status FILTER already lives
+// past that boundary (see filterByState); leaving the sort on the query side of
+// it is what let one listing mean two different things by "status".
+// [LAW:one-source-of-truth]
+var issueSortKeys = map[string]func(a, b model.Issue) int{
+	"id":         func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) },
+	"title":      func(a, b model.Issue) int { return strings.Compare(a.Title, b.Title) },
+	"status":     func(a, b model.Issue) int { return strings.Compare(string(a.State()), string(b.State())) },
+	"priority":   func(a, b model.Issue) int { return cmp.Compare(a.Priority, b.Priority) },
+	"rank":       func(a, b model.Issue) int { return strings.Compare(a.Rank, b.Rank) },
+	"type":       func(a, b model.Issue) int { return strings.Compare(string(a.IssueType), string(b.IssueType)) },
+	"topic":      func(a, b model.Issue) int { return strings.Compare(a.Topic, b.Topic) },
+	"assignee":   func(a, b model.Issue) int { return strings.Compare(a.Assignee, b.Assignee) },
+	"created_at": func(a, b model.Issue) int { return a.CreatedAt.Compare(b.CreatedAt) },
+	"updated_at": func(a, b model.Issue) int { return a.UpdatedAt.Compare(b.UpdatedAt) },
+}
+
+// issueOrdering parses the requested sort specs into the single comparison a
+// listing is ordered by. It runs before the query so an unsupported field is a
+// boundary error rather than an ordering nobody asked for, and what it hands
+// back is a comparator — a thing that cannot exist until the specs have been
+// checked. [LAW:parse-dont-validate]
+//
+// The default ordering and the trailing id key are the contract's rules, stated
+// on storage.IssueReader.ListIssues.
+func issueOrdering(specs []storage.SortSpec) (func(a, b model.Issue) int, error) {
 	if len(specs) == 0 {
-		// [LAW:one-source-of-truth] rank is the canonical ordering authority.
-		return "i.item_rank ASC, i.id ASC", nil
+		specs = []storage.SortSpec{{Field: "rank"}}
 	}
-	allowed := map[string]string{
-		"id":         "i.id",
-		"title":      "i.title",
-		"status":     "i.status",
-		"priority":   "i.priority",
-		"rank":       "i.item_rank",
-		"type":       "i.issue_type",
-		"topic":      "i.topic",
-		"assignee":   "i.assignee",
-		"created_at": "i.created_at",
-		"updated_at": "i.updated_at",
-	}
-	order := make([]string, 0, len(specs))
+	compares := make([]func(a, b model.Issue) int, 0, len(specs)+1)
 	for _, spec := range specs {
 		field := strings.ToLower(strings.TrimSpace(spec.Field))
-		column, ok := allowed[field]
+		compare, ok := issueSortKeys[field]
 		if !ok {
-			return "", fmt.Errorf("unsupported sort field %q", spec.Field)
+			return nil, fmt.Errorf("unsupported sort field %q", spec.Field)
 		}
-		direction := "ASC"
 		if spec.Desc {
-			direction = "DESC"
+			ascending := compare
+			compare = func(a, b model.Issue) int { return -ascending(a, b) }
 		}
-		order = append(order, column+" "+direction)
+		compares = append(compares, compare)
 	}
-	order = append(order, "i.id ASC")
-	return strings.Join(order, ", "), nil
+	compares = append(compares, func(a, b model.Issue) int { return strings.Compare(a.ID, b.ID) })
+	return func(a, b model.Issue) int {
+		for _, compare := range compares {
+			if result := compare(a, b); result != 0 {
+				return result
+			}
+		}
+		return 0
+	}, nil
 }
 
 func sortIssuesByRank(issues []model.Issue) {
