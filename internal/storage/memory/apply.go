@@ -37,7 +37,7 @@ func (e *Engine) apply(id string, c storage.Change) (model.Issue, error) {
 	if actor == "" {
 		actor = "unknown"
 	}
-	now := e.now()
+	now := e.clock.Now()
 
 	// The field write baselines on the POST-action issue, so a start's new
 	// assignee is what the patch diffs against rather than a second assignee

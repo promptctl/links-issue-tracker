@@ -2198,7 +2198,7 @@ func TestRetentionUsesOptimisticConcurrency(t *testing.T) {
 	// win the race. (Apply itself re-reads, which would turn the loser into the
 	// already-archived rejection — the contention window under test is
 	// plan-vs-write.)
-	w, err := planRetentionTransition(issue, "tester", "", model.Archive{})
+	w, err := planRetentionTransition(issue, "tester", "", model.Archive{}, st.clock.Now())
 	if err != nil {
 		t.Fatalf("planRetentionTransition(live) error = %v", err)
 	}

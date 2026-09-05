@@ -36,7 +36,7 @@ func (e *Engine) AddComment(ctx context.Context, in storage.AddCommentInput) (mo
 		ID:        "cmt-" + uuid.NewString(),
 		IssueID:   in.IssueID,
 		Body:      body,
-		CreatedAt: e.now(),
+		CreatedAt: e.clock.Now(),
 		CreatedBy: authorOr(in.CreatedBy),
 	}
 	e.comments = append(e.comments, comment)
@@ -91,7 +91,7 @@ func (e *Engine) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]stri
 	}
 	rows := e.labels[in.IssueID]
 	if !slices.ContainsFunc(rows, func(l model.Label) bool { return l.Name == name }) {
-		rows = append(rows, model.Label{IssueID: in.IssueID, Name: name, CreatedAt: e.now(), CreatedBy: authorOr(in.CreatedBy)})
+		rows = append(rows, model.Label{IssueID: in.IssueID, Name: name, CreatedAt: e.clock.Now(), CreatedBy: authorOr(in.CreatedBy)})
 		slices.SortFunc(rows, func(a, b model.Label) int { return strings.Compare(a.Name, b.Name) })
 		e.labels[in.IssueID] = rows
 	}
@@ -134,7 +134,7 @@ func (e *Engine) ReplaceLabels(ctx context.Context, issueID string, labels []str
 	if err != nil {
 		return err
 	}
-	e.setLabels(issueID, canonical, e.now(), createdBy)
+	e.setLabels(issueID, canonical, e.clock.Now(), createdBy)
 	return nil
 }
 
@@ -193,7 +193,7 @@ func (e *Engine) addRelation(in storage.AddRelationInput) (model.Relation, error
 			return model.Relation{}, err
 		}
 	}
-	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.now(), CreatedBy: authorOr(in.CreatedBy)}
+	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: e.clock.Now(), CreatedBy: authorOr(in.CreatedBy)}
 	// A single-valued type's src holds at most one such edge, so writing one
 	// replaces any it already had. The cardinality is read off the type, not
 	// off which method the caller reached for. [LAW:dataflow-not-control-flow]

@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -57,7 +56,7 @@ func (e *Engine) createIssue(in storage.CreateIssueInput) (model.Issue, error) {
 	if err != nil {
 		return model.Issue{}, fmt.Errorf("normalize issue prefix: %w", err)
 	}
-	now := e.now()
+	now := e.clock.Now()
 	id, err := e.mintID(prefix, topic, title, strings.TrimSpace(in.Description), now, parentID)
 	if err != nil {
 		return model.Issue{}, err
@@ -290,13 +289,12 @@ func (e *Engine) ListEvents(ctx context.Context, issueID string) ([]model.IssueE
 	return e.eventsFor(issueID), nil
 }
 
-// sortEvents imposes the contract's total order: creation time ascending, ties
-// broken by id. It is the one place this engine orders history, so ListAllEvents
-// and a single issue's history cannot drift. [LAW:single-enforcer]
+// sortEvents imposes the contract's total order. It is the one place this
+// engine orders history, so ListAllEvents and a single issue's history cannot
+// drift, and the order it imposes is [storage.EventOrdering] rather than a
+// second spelling of the same rule. [LAW:single-enforcer]
 func sortEvents(events []model.IssueEvent) []model.IssueEvent {
-	slices.SortStableFunc(events, func(a, b model.IssueEvent) int {
-		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
-	})
+	slices.SortStableFunc(events, storage.EventOrdering)
 	return events
 }
 

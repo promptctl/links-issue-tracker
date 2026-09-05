@@ -39,6 +39,12 @@ type Engine struct {
 	workspaceID string
 	attribution model.Attribution
 
+	// clock is where this engine learns the instant it stamps a write with.
+	// It is taken at construction rather than read from the write path, so a
+	// caller that needs two issues whose timestamps no real clock would hand
+	// out in that order can say so. [LAW:effects-at-boundaries]
+	clock storage.Clock
+
 	issues map[string]*record
 
 	// order is THE total rank order, top first. Issue.Rank is rendered from a
@@ -102,13 +108,21 @@ const createdBy = "links"
 // looks like it is stamping and is not. [LAW:parse-dont-validate] The check is
 // here, at the one place an Engine comes into existence, so no method below
 // asks again.
-func New(workspaceID string) (*Engine, error) {
+func New(workspaceID string, clock storage.Clock) (*Engine, error) {
 	id := strings.TrimSpace(workspaceID)
 	if id == "" {
 		return nil, errors.New("workspace id is required")
 	}
+	// An engine with no clock could not stamp anything, so the absence is
+	// refused here rather than surviving to the first write as a nil call.
+	// [LAW:parse-dont-validate] construction is the boundary; nothing below
+	// re-asks.
+	if clock == nil {
+		return nil, errors.New("clock is required")
+	}
 	return &Engine{
 		workspaceID: id,
+		clock:       clock,
 		issues:      map[string]*record{},
 		labels:      map[string][]model.Label{},
 	}, nil
@@ -321,7 +335,3 @@ func cloneEvents(events []model.IssueEvent) []model.IssueEvent {
 	}
 	return out
 }
-
-// now is the engine's clock, read at the write boundary so nothing that plans
-// a mutation has to reach for one. [LAW:effects-at-boundaries]
-func (e *Engine) now() time.Time { return time.Now().UTC() }

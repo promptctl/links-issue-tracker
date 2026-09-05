@@ -12,7 +12,7 @@
 // An engine's package writes one test:
 //
 //	func TestConformance(t *testing.T) {
-//		conformance.Run(t, func(t *testing.T) storage.Store { return openMyEngine(t) })
+//		conformance.Run(t, func(t *testing.T, clock storage.Clock) storage.Store { return openMyEngine(t, clock) })
 //	}
 //
 // The engine package supplies the factory, so this package imports no engine
@@ -38,11 +38,11 @@
 package conformance
 
 import (
-	"cmp"
 	"context"
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -51,16 +51,25 @@ import (
 )
 
 // NewEngine mints a fresh, empty engine for one case, already registered for
-// cleanup with t. Every case gets its own: a suite whose cases shared a store
-// would be pinning the order they run in as much as the contract.
-type NewEngine func(t *testing.T) storage.Store
+// cleanup with t and stamping its writes from clock. Every case gets its own: a
+// suite whose cases shared a store would be pinning the order they run in as
+// much as the contract.
+//
+// The clock is a parameter of the factory rather than something a case reaches
+// for, and that is what makes honoring it mandatory: an engine that cannot be
+// told what time it is cannot supply this signature, and an engine that takes
+// the clock and ignores it fails the cases that pin one. No capability gates
+// it, so no engine can opt out of the statements it makes reachable.
+// [LAW:types-are-the-program]
+type NewEngine func(t *testing.T, clock storage.Clock) storage.Store
 
 // Run executes the whole suite against engines newEngine produces.
 func Run(t *testing.T, newEngine NewEngine) {
 	t.Helper()
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.run(t, context.Background(), newEngine(t))
+			clk := newClock()
+			c.run(t, context.Background(), newEngine(t, clk.read), clk)
 		})
 	}
 }
@@ -70,13 +79,78 @@ func Run(t *testing.T, newEngine NewEngine) {
 // adding a statement is adding data — never another arm in Run.
 type engineCase struct {
 	name string
-	run  func(t *testing.T, ctx context.Context, st storage.Store)
+	run  func(t *testing.T, ctx context.Context, st storage.Store, clk *clock)
+}
+
+// clock is the instant the engine under test stamps its writes with.
+//
+// It runs on the real clock until a case pins it, so the great majority of
+// cases — which say nothing about time — behave exactly as they did before this
+// seam existed. Pinning is what makes two facts constructible that no real
+// clock will hand out on demand: a run of writes sharing one instant, which is
+// the tie the (created_at, id) rule exists to settle, and a pair of instants
+// whose TEXT order is the reverse of their instant order, which is how an
+// engine that sorts a timestamp by its spelling gets caught.
+//
+// [LAW:dataflow-not-control-flow] Pinning replaces the function rather than
+// setting a "pinned" flag some branch consults, so there is one read path
+// whatever a case has asked for.
+type clock struct {
+	mu  sync.Mutex
+	now storage.Clock
+}
+
+func newClock() *clock { return &clock{now: storage.SystemClock} }
+
+// Pin fixes the instant every subsequent stamp reads. It is not an advancing
+// sequence: one contract operation may stamp several rows, and a clock that
+// moved between them would make what a case asserts depend on how many times
+// the engine happened to read it. [LAW:no-ambient-temporal-coupling]
+func (c *clock) Pin(instant time.Time) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = func() time.Time { return instant }
+}
+
+// read is the [storage.Clock] the engine under test holds. The lock is here
+// because the case writes what the engine reads, and that is shared mutable
+// state however single-threaded a given case happens to be.
+// [LAW:no-shared-mutable-globals]
+func (c *clock) read() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.now()
 }
 
 // prefix is the cosmetic id prefix every case creates under. Cases assert on
 // ids only by comparing ids the engine returned, never by predicting their
 // shape — id minting is engine business.
 const prefix = "conf"
+
+// earlierInstant and laterInstant are the pair every case that pins time uses,
+// and their SPELLING is why this exact pair: RFC3339Nano trims trailing zeros,
+// so the earlier instant renders as the shorter string, and at the character
+// where that string ends the other is still going — "Z" (0x5A) outranks any
+// digit. ".12Z" therefore sorts after ".123456789Z" while denoting an instant
+// three milliseconds before it.
+//
+// An engine that round-trips a stamp through text and then compares the text
+// orders this pair backwards. That is not hypothetical: the Dolt engine keeps
+// created_at in a varchar and did exactly that in its listings until
+// links-store-seam-q35v.6, and in its history reads until links-store-seam-8yv2
+// — which the first run of these cases is what caught. An engine holding a real
+// instant passes without noticing there was anything to get wrong. Left to a live nanosecond clock the collision arises
+// about once in ten million pairs, which is why no case could state it before
+// the contract had a clock seam.
+//
+// They are fixed values rather than offsets from the real clock because a case
+// that pins time is asserting about an exact stamp, and deriving one from
+// time.Now would hand part of that assertion back to the clock it just took
+// away. [LAW:no-ambient-temporal-coupling]
+var (
+	earlierInstant = time.Date(2026, 1, 1, 0, 0, 0, 120_000_000, time.UTC)
+	laterInstant   = time.Date(2026, 1, 1, 0, 0, 0, 123_456_789, time.UTC)
+)
 
 var cases = []engineCase{
 	{"create_read_roundtrip", createReadRoundtrip},
@@ -101,6 +175,8 @@ var cases = []engineCase{
 	{"list_breaks_sort_ties_by_id", listBreaksSortTiesByID},
 	{"list_accepts_exactly_the_contract_sort_fields", listAcceptsContractSortFields},
 	{"list_sorts_status_by_derived_state", listSortsStatusByDerivedState},
+	{"stamps_come_from_the_clock_the_engine_was_given", stampsComeFromTheClock},
+	{"list_orders_timestamps_by_instant_not_spelling", listOrdersTimestampsByInstant},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
@@ -120,7 +196,7 @@ var cases = []engineCase{
 	{"local_issue_count_tracks_creates", localIssueCountTracksCreates},
 }
 
-func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
+func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	created := mustCreate(t, ctx, st, storage.CreateIssueInput{
 		Title:       "  Renderer cleanup  ",
 		Description: "  drop the legacy pass  ",
@@ -180,7 +256,7 @@ func createReadRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
-func createDefaults(t *testing.T, ctx context.Context, st storage.Store) {
+func createDefaults(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Saying nothing about type or placement must reach the product defaults,
 	// since that is the path every non-interactive creation surface takes.
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unspecified", Topic: "core"})
@@ -202,7 +278,7 @@ func createDefaults(t *testing.T, ctx context.Context, st storage.Store) {
 	assertOrder(t, ctx, st, "RankTop leads", top.ID, issue.ID, second.ID)
 }
 
-func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store) {
+func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Whitespace is not a title: the trim happens before the requirement, so a
 	// blank-looking title cannot slip in as a non-empty string.
 	for _, title := range []string{"", "   "} {
@@ -217,7 +293,7 @@ func createRequiresTitle(t *testing.T, ctx context.Context, st storage.Store) {
 // reached storage in one spelling could never be found under another — so
 // normalizing is the store's job, not each caller's, and a name too short to
 // be one is refused rather than stored. [LAW:parse-dont-validate]
-func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store) {
+func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "shaped", Topic: "  Renderer Cleanup  "})
 	if issue.Topic != "renderer-cleanup" {
 		t.Errorf("Topic = %q, want the normalized renderer-cleanup", issue.Topic)
@@ -235,12 +311,12 @@ func createNormalizesTopic(t *testing.T, ctx context.Context, st storage.Store) 
 	}
 }
 
-func createUnderMissingParent(t *testing.T, ctx context.Context, st storage.Store) {
+func createUnderMissingParent(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	_, err := st.CreateIssue(ctx, storage.CreateIssueInput{Title: "orphan", Topic: "core", ParentID: "no-such-issue"})
 	assertNotFound(t, err, "issue", "CreateIssue under a missing parent")
 }
 
-func getMissingIssue(t *testing.T, ctx context.Context, st storage.Store) {
+func getMissingIssue(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	_, err := st.GetIssue(ctx, "no-such-issue")
 	assertNotFound(t, err, "issue", "GetIssue")
 
@@ -248,7 +324,7 @@ func getMissingIssue(t *testing.T, ctx context.Context, st storage.Store) {
 	assertNotFound(t, err, "issue", "GetIssueDetail")
 }
 
-func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store) {
+func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "before", Topic: "core", Assignee: "ada"})
 
 	title := "after"
@@ -278,7 +354,7 @@ func applyFieldPatch(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
-func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store) {
+func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "work", Topic: "core"})
 
 	started, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"})
@@ -311,12 +387,12 @@ func applyStatusTransition(t *testing.T, ctx context.Context, st storage.Store) 
 	}
 }
 
-func applyMissingIssue(t *testing.T, ctx context.Context, st storage.Store) {
+func applyMissingIssue(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	_, err := st.Apply(ctx, "no-such-issue", storage.Change{Action: model.Start{}, Actor: "ada"})
 	assertNotFound(t, err, "issue", "Apply")
 }
 
-func applyToContainer(t *testing.T, ctx context.Context, st storage.Store) {
+func applyToContainer(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 
@@ -338,7 +414,7 @@ func applyToContainer(t *testing.T, ctx context.Context, st storage.Store) {
 // in the flow, so archiving the last unfinished child finishes the epic; a
 // container that is itself out of the flow keeps its whole child set, so an
 // archived epic stays the state it had when it left instead of collapsing.
-func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st storage.Store) {
+func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	finished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "finished", Topic: "core", ParentID: epic.ID})
 	unfinished := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "unfinished", Topic: "core", ParentID: epic.ID})
@@ -363,7 +439,7 @@ func containerStateFollowsLiveChildren(t *testing.T, ctx context.Context, st sto
 	assertState(t, ctx, st, epic.ID, model.StateInProgress, "an archived epic keeps its whole child set")
 }
 
-func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store) {
+func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tracked", Topic: "core"})
 	title := "retitled"
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: storage.UpdateIssueInput{Title: &title}}); err != nil {
@@ -444,7 +520,7 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 // So this walks the whole editable set rather than the one field that was
 // missing. A per-field case would have passed for the seven that worked and
 // never been written for the eighth, which is exactly how the hole got in.
-func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st storage.Store) {
+func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	newType := model.TypeBug
 	priority := model.PriorityUrgent
 	labels := []string{"beta"}
@@ -502,7 +578,7 @@ func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st stor
 // checkout's start as a repeat of the first, writes nothing, and exits 0 — so
 // the lane stays with the first checkout while the second believes it holds it,
 // and both work the same ticket. [LAW:no-silent-failure]
-func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store) {
+func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core"})
 
 	st.AttributeTo("checkout-a")
@@ -561,7 +637,7 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 // sequence would agree with neither reader the moment an engine changed what it
 // records, and would then be pinning this test's memory of the engine rather
 // than the contract. [LAW:one-source-of-truth]
-func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store) {
+func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core"})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core"})
 
@@ -611,13 +687,11 @@ func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent
 			mine = append(mine, event)
 		}
 	}
-	slices.SortFunc(mine, func(a, b model.IssueEvent) int {
-		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
-	})
+	slices.SortFunc(mine, storage.EventOrdering)
 	return mine
 }
 
-func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store) {
+func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "first", Topic: "core"})
 	second := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "second", Topic: "core"})
 	third := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "third", Topic: "core"})
@@ -627,7 +701,7 @@ func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store
 	assertOrder(t, ctx, st, "default listing", first.ID, second.ID, third.ID)
 }
 
-func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store) {
+func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	bug := mustCreate(t, ctx, st, storage.CreateIssueInput{
 		Title: "alpha widget", Topic: "renderer", IssueType: model.TypeBug, Assignee: "ada", Labels: []string{"perf", "ui"},
 	})
@@ -673,7 +747,7 @@ func listFiltersSelect(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
-func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store) {
+func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	live := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "live", Topic: "core"})
 	archived := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "archived", Topic: "core"})
 	deleted := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "deleted", Topic: "core"})
@@ -696,7 +770,7 @@ func listHidesArchivedAndDeleted(t *testing.T, ctx context.Context, st storage.S
 		[]string{live.ID, archived.ID, deleted.ID})
 }
 
-func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store) {
+func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
 	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
@@ -724,7 +798,7 @@ func listSortsAndLimits(t *testing.T, ctx context.Context, st storage.Store) {
 // an engine that leaves tied rows in whatever order it held them — and two
 // engines holding them differently is what the differential oracle would read
 // as divergence.
-func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store) {
+func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// One title across three issues: the sort key cannot separate them, so the
 	// contract's tie-break is the only thing deciding the order.
 	first := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "same", Topic: "core"})
@@ -750,7 +824,7 @@ func listBreaksSortTiesByID(t *testing.T, ctx context.Context, st storage.Store)
 // accepts a key the contract does not name has grown a private vocabulary the
 // other engine will reject. Neither shows up in a case that sorts by one
 // hand-picked field. [LAW:one-source-of-truth]
-func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage.Store) {
+func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
 
@@ -787,7 +861,7 @@ func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage
 // listing's status FILTER takes — so one listing means one thing by the word,
 // and a container, holding no stored status at all, is the row that makes an
 // engine which regressed to the column visible.
-func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage.Store) {
+func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "closed leaf", Topic: "core"})
 	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "open leaf", Topic: "core"})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
@@ -821,19 +895,98 @@ func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage
 		[]string{openLeaf.ID, epic.ID, closedLeaf.ID})
 }
 
-// eventsAreTotallyOrdered pins the history ordering to (created_at, id).
+// stampsComeFromTheClock states the clock seam itself: an engine stamps what
+// the clock it was built with reads, not what the wall clock reads.
 //
-// It cannot manufacture a same-tick tie — the engine stamps the clock, and the
-// contract gives no way to reach it — so it asserts the property that holds
-// tie or no tie: the sequence never steps backwards under the full comparison.
-// An engine returning recording order passes on a fine clock and fails the
-// moment a coarse one produces the tie this rule exists to settle, which is
-// the strongest statement available from outside the engine.
-func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store) {
+// It is the case every other pinned case rests on. An engine that took a clock
+// and ignored it would still pass most of them — pin two instants in creation
+// order and a real clock produces the same relative order by itself — so
+// without this one, "the suite pins time" would be a claim about the suite
+// rather than about the engine. Here the pinned instant is nowhere near now,
+// so a wall-clock stamp cannot coincide with it. [LAW:verifiable-goals]
+func stampsComeFromTheClock(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	clk.Pin(earlierInstant)
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "stamped", Topic: "clock"})
+
+	// Both columns, because a create reads the clock once and an engine that
+	// stamped only one of them from it would be half-honoring the seam.
+	if !issue.CreatedAt.Equal(earlierInstant) {
+		t.Errorf("CreatedAt = %s, want the pinned %s", issue.CreatedAt, earlierInstant)
+	}
+	if !issue.UpdatedAt.Equal(earlierInstant) {
+		t.Errorf("UpdatedAt = %s, want the pinned %s", issue.UpdatedAt, earlierInstant)
+	}
+
+	// And it is the STORED stamp, not something the create's return value
+	// carried out of a value the engine never wrote.
+	read, err := st.GetIssue(ctx, issue.ID)
+	if err != nil {
+		t.Fatalf("GetIssue error = %v", err)
+	}
+	if !read.CreatedAt.Equal(earlierInstant) {
+		t.Errorf("stored CreatedAt = %s, want the pinned %s", read.CreatedAt, earlierInstant)
+	}
+}
+
+// listOrdersTimestampsByInstant states that a timestamp sort key orders by the
+// instant a stamp denotes, never by the text an engine happens to hold it as.
+//
+// Both timestamp columns carry the pair, so neither sort key is pinned by
+// accident of the other, and both directions are asserted because an engine
+// comparing the wrong thing is wrong symmetrically. See [earlierInstant] for
+// what makes this pair the one worth writing down.
+func listOrdersTimestampsByInstant(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The later instant is created FIRST, so recording order and instant order
+	// disagree. Creating them in instant order would let an engine that ignored
+	// the clock entirely pass — its real stamps would land in the same relative
+	// order the case asserts — and the case would be pinning nothing.
+	// CreateIssue stamps created_at and updated_at from one read of the clock,
+	// so pinning before each create sets both columns for that issue.
+	clk.Pin(laterInstant)
+	later := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "later instant", Topic: "clock"})
+	clk.Pin(earlierInstant)
+	earlier := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "earlier instant", Topic: "clock"})
+
+	for _, field := range []string{"created_at", "updated_at"} {
+		assertIssueIDs(t, "sorted by "+field+" ascending",
+			mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field}}}),
+			[]string{earlier.ID, later.ID})
+		assertIssueIDs(t, "sorted by "+field+" descending",
+			mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: field, Desc: true}}}),
+			[]string{later.ID, earlier.ID})
+	}
+}
+
+// eventsAreTotallyOrdered pins the history ordering to (created_at, id), and
+// pins each key against a run of events the other one cannot separate.
+//
+// Two pinned instants, several events inside each. Across the groups only the
+// timestamp key can order them, and it does so against the pair whose text
+// order is the reverse of their instant order, so an engine comparing the
+// spelling fails here as well as in the listing. Inside a group every event
+// shares one stamp, so only the id tie-break is left — which is the whole
+// reason the rule names a second key, and it was unreachable while the engine
+// alone decided what time it was: on a live nanosecond clock the tie this
+// settles simply never occurred, and an engine returning raw recording order
+// passed.
+func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// The create is inside the first group, not before it: an unpinned create
+	// would stamp the real instant, which is later than either pinned one, and
+	// the sequence would step backwards for a reason unrelated to the rule.
+	clk.Pin(earlierInstant)
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "audited", Topic: "core"})
-	for _, title := range []string{"first", "second", "third"} {
-		if _, err := st.Apply(ctx, issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
-			t.Fatalf("apply %q: %v", title, err)
+	for _, group := range []struct {
+		at     time.Time
+		titles []string
+	}{
+		{earlierInstant, []string{"first", "second", "third"}},
+		{laterInstant, []string{"fourth", "fifth", "sixth"}},
+	} {
+		clk.Pin(group.at)
+		for _, title := range group.titles {
+			if _, err := st.Apply(ctx, issue.ID, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
+				t.Fatalf("apply %q: %v", title, err)
+			}
 		}
 	}
 
@@ -841,19 +994,26 @@ func eventsAreTotallyOrdered(t *testing.T, ctx context.Context, st storage.Store
 	if err != nil {
 		t.Fatalf("ListAllEvents: %v", err)
 	}
-	if len(events) < 4 {
-		t.Fatalf("got %d events, want at least the create plus three changes", len(events))
+	if len(events) < 7 {
+		t.Fatalf("got %d events, want at least the create plus six changes", len(events))
 	}
+	// Each key is asserted on its own rather than through one comparator, and
+	// deliberately not through [storage.EventOrdering]: that is what both
+	// engines sort by, so a case checking their output against it could not
+	// fail on a change to the rule itself — reverse it and engines and oracle
+	// reverse together. [LAW:behavior-not-structure]
 	for i := 1; i < len(events); i++ {
 		prev, cur := events[i-1], events[i]
-		if cmp.Or(prev.CreatedAt.Compare(cur.CreatedAt), strings.Compare(prev.ID, cur.ID)) > 0 {
-			t.Errorf("events step backwards at index %d: (%s, %s) after (%s, %s)",
-				i, cur.CreatedAt, cur.ID, prev.CreatedAt, prev.ID)
+		if cur.CreatedAt.Before(prev.CreatedAt) {
+			t.Errorf("events step backwards in time at index %d: %s after %s", i, cur.CreatedAt, prev.CreatedAt)
+		}
+		if cur.CreatedAt.Equal(prev.CreatedAt) && cur.ID <= prev.ID {
+			t.Errorf("events sharing an instant are not id-ascending at index %d: %s after %s", i, cur.ID, prev.ID)
 		}
 	}
 }
 
-func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store) {
+func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
@@ -900,7 +1060,7 @@ func rankIntentsReorder(t *testing.T, ctx context.Context, st storage.Store) {
 // against its frame-mates — so an intent naming two issues from different
 // frames is honored against the containing ancestors that ARE comparable, and
 // the substitution comes back so the caller can say so.
-func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storage.Store) {
+func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 	standalone := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "standalone", Topic: "core"})
@@ -930,7 +1090,7 @@ func rankIntentsResolveAcrossFrames(t *testing.T, ctx context.Context, st storag
 	}
 }
 
-func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store) {
+func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	a := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "a", Topic: "core"})
 	b := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "b", Topic: "core"})
 	c := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "c", Topic: "core"})
@@ -960,7 +1120,7 @@ func rankSetImposesOrder(t *testing.T, ctx context.Context, st storage.Store) {
 // outcome records both the resolution and the ticket the work moved to, a
 // reopen clears all of it at once, and a redirect to an issue that is not
 // there is refused rather than stored as a dangling pointer.
-func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Store) {
+func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	canonical := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "canonical", Topic: "core"})
 	duplicate := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "duplicate", Topic: "core"})
 
@@ -1008,7 +1168,7 @@ func closeRedirectsToCanonical(t *testing.T, ctx context.Context, st storage.Sto
 	}
 }
 
-func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
+func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "discussed", Topic: "core"})
 
 	comment, withComment, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: issue.ID, Body: "first", CreatedBy: "ada"})
@@ -1057,7 +1217,7 @@ func commentsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
 	assertNotFound(t, err, "issue", "AddComment on a missing issue")
 }
 
-func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
+func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tagged", Topic: "core"})
 
 	// Every mutating verb returns the resulting set, so "what does it have now"
@@ -1108,7 +1268,7 @@ func labelsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
 	assertNotFound(t, err, "issue", "AddLabel on a missing issue")
 }
 
-func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
+func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	dependent := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependent", Topic: "core"})
 	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core"})
 	peer := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "peer", Topic: "core"})
@@ -1172,7 +1332,7 @@ func relationsRoundtrip(t *testing.T, ctx context.Context, st storage.Store) {
 	}
 }
 
-func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.Store) {
+func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 	dependency := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "dependency", Topic: "core"})
@@ -1213,7 +1373,7 @@ func relationsBatchBucketsEdges(t *testing.T, ctx context.Context, st storage.St
 	}
 }
 
-func parentWiring(t *testing.T, ctx context.Context, st storage.Store) {
+func parentWiring(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core"})
@@ -1247,7 +1407,7 @@ func parentWiring(t *testing.T, ctx context.Context, st storage.Store) {
 	assertNotFound(t, err, "issue", "SetParent under a missing parent")
 }
 
-func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store) {
+func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "one", Topic: "renderer"})
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "two", Topic: "renderer"})
 	mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "three", Topic: "parser"})
@@ -1261,7 +1421,10 @@ func topicsDeriveFromIssues(t *testing.T, ctx context.Context, st storage.Store)
 	assertStrings(t, "topics", topics, []string{"parser", "renderer"})
 }
 
-func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store) {
+func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
+	// One instant for the whole case, so every event this store holds shares a
+	// stamp and the export's order is decided entirely by the id tie-break.
+	clk.Pin(earlierInstant)
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID, Labels: []string{"perf"}})
 	if _, _, err := st.AddComment(ctx, storage.AddCommentInput{IssueID: child.ID, Body: "note", CreatedBy: "ada"}); err != nil {
@@ -1272,19 +1435,21 @@ func exportCarriesWholeStore(t *testing.T, ctx context.Context, st storage.Store
 		t.Fatalf("Apply archive error = %v", err)
 	}
 
-	// Same-tick ties are what make the export's ordering observable at all. An
-	// engine reads its clock once per change, so a change carrying an action
-	// AND fields records several events sharing one timestamp, and only the id
-	// tie-break separates them. With every timestamp distinct, recording order
-	// and (created_at, id) coincide, and this case would pass an engine that
-	// exported its raw recording order — which is the defect it exists to
-	// catch. One tie group leaves the ids in the right order half the time, so
-	// a single one makes this case a coin flip — measured at 10/20 against a
-	// deliberately broken export. Ten independent groups put agreement by
-	// coincidence at 2^-10, and the case cannot fail spuriously: a correct
-	// engine sorts the same events the same way on both reads, every run.
-	tied := make([]string, 0, 10)
-	for _, name := range []string{"a", "b", "c", "d", "e", "f", "g", "h", "i", "j"} {
+	// Same-tick ties are what make the export's ordering observable at all: with
+	// every timestamp distinct, recording order and (created_at, id) coincide,
+	// and this case would pass an engine that exported its raw recording order,
+	// which is the defect it exists to catch.
+	//
+	// The pinned clock is what supplies the tie. Before the contract had one,
+	// ties could only be coaxed out of a live clock by recording several events
+	// per change and hoping — one group left the ids right half the time, so
+	// this case needed TEN independent groups to push agreement-by-coincidence
+	// down to 2^-10, and even then it was a probability rather than a
+	// statement. Every event below now shares one instant, so a broken export
+	// fails every run instead of 1023 times in 1024, and three groups say what
+	// ten used to.
+	tied := make([]string, 0, 3)
+	for _, name := range []string{"a", "b", "c"} {
 		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "tied " + name, Topic: "core"})
 		title := "started " + name
 		if _, err := st.Apply(ctx, issue.ID, storage.Change{
@@ -1347,7 +1512,7 @@ func eventIDsOf(events []model.IssueEvent) []string {
 	return ids
 }
 
-func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.Store) {
+func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	title := "parent doc"
 	childTitle := "child doc"
 	topic := "core"
@@ -1403,7 +1568,7 @@ func bulkApplyCreatesAndUpdates(t *testing.T, ctx context.Context, st storage.St
 // are undone, and what could not be undone is named in the error. A batch that
 // left its early creates standing and said nothing would be the worst of both.
 // [LAW:no-silent-failure]
-func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.Store) {
+func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	kept := "created before the failure"
 	orphan := "parented to nothing"
 	topic := "core"
@@ -1422,7 +1587,7 @@ func bulkApplyCompensatesFailure(t *testing.T, ctx context.Context, st storage.S
 	assertIssueIDs(t, "issues after a compensated batch", mustList(t, ctx, st, storage.ListIssuesFilter{}), nil)
 }
 
-func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store) {
+func importTreeMapsLocalIDs(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// The file lists dependents first: other depends on leaf, which parents to
 	// root, so creation must reverse the file order — the asserted sequence
 	// below fails for an engine that reports file order instead of creation
@@ -1483,7 +1648,7 @@ func refsOf(created []storage.IDMapping) []string {
 	return refs
 }
 
-func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store) {
+func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// Before attribution is named, work is recorded unattributed rather than
 	// half-attributed — the read-mode open of a never-mutated checkout.
 	before := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "anonymous", Topic: "core"})
@@ -1521,7 +1686,7 @@ func attributionStampsEvents(t *testing.T, ctx context.Context, st storage.Store
 	}
 }
 
-func localIssueCountTracksCreates(t *testing.T, ctx context.Context, st storage.Store) {
+func localIssueCountTracksCreates(t *testing.T, ctx context.Context, st storage.Store, clk *clock) {
 	// A store with nothing in it reports zero rather than failing: "no issues
 	// yet" is a real state, not a fault.
 	count, err := st.LocalIssueCount(ctx)

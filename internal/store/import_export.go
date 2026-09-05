@@ -36,7 +36,7 @@ func (s *Store) Export(ctx context.Context) (model.Export, error) {
 	// hydrateIssues guarantees every Issue it returns is fully hydrated
 	// (post-condition in store.go), so Export does not re-check. Issue.MarshalJSON
 	// remains the boundary that rejects partial values from any other source.
-	return model.Export{Version: 2, WorkspaceID: s.workspaceID, ExportedAt: time.Now().UTC(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
+	return model.Export{Version: 2, WorkspaceID: s.workspaceID, ExportedAt: s.clock.Now(), Issues: issues, Relations: rels, Comments: comments, Labels: labels, Events: events}, nil
 }
 
 func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {

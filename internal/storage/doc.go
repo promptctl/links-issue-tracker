@@ -39,8 +39,11 @@
 // An interface pins shapes; only behavior is a contract. The executable
 // meaning of everything declared here lives in
 // [internal/storage/conformance], a suite parameterized over "give me a fresh
-// engine" that every implementation runs. An engine that satisfies the
-// interface and fails the suite does not implement this package.
+// engine stamping from this clock" that every implementation runs. An engine
+// that satisfies the interface and fails the suite does not implement this
+// package. The clock is in that parameterization rather than behind a
+// capability because time ordering is a rule every engine owes and only some
+// engines can get wrong; see [Clock].
 // [LAW:behavior-not-structure]
 //
 // # Where this sits in the campaign
