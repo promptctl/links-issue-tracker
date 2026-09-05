@@ -31,9 +31,3 @@ func newEngine(t *testing.T, clock storage.Clock) *memory.Engine {
 	})
 	return engine
 }
-
-// newEngineWithWorkspace is the bare constructor call, kept separate so the
-// construction refusals can be tested without a t.Cleanup that would never run.
-func newEngineWithWorkspace(workspaceID string) (*memory.Engine, error) {
-	return memory.New(workspaceID, storage.SystemClock)
-}

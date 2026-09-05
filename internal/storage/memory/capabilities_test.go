@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
+	"github.com/promptctl/links-issue-tracker/internal/storage/memory"
 )
 
 // TestMemoryEngineOffersNoCapability is the mirror of the Dolt engine's
@@ -48,15 +49,28 @@ func TestMemoryEngineOffersNoCapability(t *testing.T) {
 	}
 }
 
-// TestNewRequiresWorkspaceID pins the one thing an engine cannot be built
-// without. Attribution is a complete pair or nothing, so an engine with no
-// workspace to scope its stream token could only record unattributed events —
-// and it would do so silently, which is the failure this refusal deletes.
-func TestNewRequiresWorkspaceID(t *testing.T) {
+// TestNewRefusesIncompleteConstruction pins both halves an engine cannot come
+// into existence without. Either absence surviving construction would surface
+// at the first write instead — an unattributed event, or a nil clock call — and
+// construction is the one place either can be refused once for every method
+// below. [LAW:parse-dont-validate]
+//
+// The two are one table because they differ in values and not in structure: a
+// third precondition is a row here, never another test function.
+// [LAW:dataflow-not-control-flow]
+func TestNewRefusesIncompleteConstruction(t *testing.T) {
 	t.Parallel()
-	for _, workspaceID := range []string{"", "   "} {
-		if _, err := newEngineWithWorkspace(workspaceID); err == nil {
-			t.Errorf("New(%q) succeeded; want an error", workspaceID)
+	for _, refusal := range []struct {
+		name        string
+		workspaceID string
+		clock       storage.Clock
+	}{
+		{"empty workspace id", "", storage.SystemClock},
+		{"blank workspace id", "   ", storage.SystemClock},
+		{"no clock", "memory-refusals", nil},
+	} {
+		if _, err := memory.New(refusal.workspaceID, refusal.clock); err == nil {
+			t.Errorf("New with %s succeeded; want an error", refusal.name)
 		}
 	}
 }
