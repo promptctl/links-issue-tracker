@@ -83,6 +83,28 @@ func formatLaneProgress(progress claims.LaneProgress) string {
 	return fmt.Sprintf("%d/%d done", progress.Done, progress.Total)
 }
 
+// describeClaimant names a holder in the transfer notice, rendering the
+// identity halves it actually carries: the assignee when there is one, the
+// stream label when the checkout is recorded, both when both are.
+//
+// Both halves are shown together rather than the "better" one alone because
+// either half can be the only one that moved. Two agent sessions transfer under
+// distinct assignees; two worktrees of ONE session, and two human checkouts
+// (which resolve no assignee at all), transfer under identical ones — and a
+// notice that printed only the assignee would render those as "X -> X" or
+// "(unassigned) -> (unassigned)", saying a transfer happened while showing
+// nothing that changed.
+func describeClaimant(c claims.Claimant) string {
+	if !c.Checkout.Present() {
+		return displayAssignee(c.Assignee)
+	}
+	stream := "stream " + shortStream(c.Checkout)
+	if c.Assignee == "" {
+		return stream
+	}
+	return fmt.Sprintf("%s (%s)", c.Assignee, stream)
+}
+
 // shortStream trims an opaque stream token to a readable label. Truncation
 // is a display nicety, not a privacy measure — the full token is already
 // opaque and carries nothing identifying — so a shorter label is never wrong

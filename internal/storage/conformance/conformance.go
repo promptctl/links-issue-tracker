@@ -91,6 +91,8 @@ var cases = []engineCase{
 	{"apply_to_container_is_refused", applyToContainer},
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
+	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
+	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
@@ -377,10 +379,12 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 		t.Errorf("no-op Apply wrote %d events, want none", len(after)-before)
 	}
 
-	// A status action whose target state AND resulting assignee already hold
-	// is the same no-op: the ticket did not move, so the log does not say it
-	// did. A same-state start naming a NEW owner is the reclaim path and does
-	// record, which is what keeps "who took this over" answerable.
+	// A status action whose target state AND resulting claimant already hold is
+	// the same no-op: the ticket did not move, so the log does not say it did. A
+	// same-state start naming a NEW owner is the reclaim path and does record,
+	// which is what keeps "who took this over" answerable. This case moves the
+	// assignee half; the checkout half is its own case below, and it has to be,
+	// because a takeover routinely moves ONLY the checkout.
 	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
@@ -423,6 +427,133 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 			t.Fatalf("events are not oldest-first at index %d", i)
 		}
 	}
+}
+
+// takeoverByANewCheckoutRecords is the two-checkout takeover reduced to what a
+// storage engine can see: one store, told it is a different checkout between
+// two starts, with the SAME assignee named both times.
+//
+// That sameness is the whole test, and it is the common case rather than a
+// corner one. A checkout driving no agent session resolves no assignee at all,
+// so every checkout one person runs starts work under the identical (empty)
+// identity, and two worktrees of one agent session share theirs. An engine that
+// decides "did anything change" on the assignee alone reads the second
+// checkout's start as a repeat of the first, writes nothing, and exits 0 — so
+// the lane stays with the first checkout while the second believes it holds it,
+// and both work the same ticket. [LAW:no-silent-failure]
+func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage.Store) {
+	issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "contested", Topic: "core"})
+
+	st.AttributeTo("checkout-a")
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply start from checkout a error = %v", err)
+	}
+	before := len(mustEvents(t, ctx, st))
+
+	// The holding checkout starting again still records nothing: the claimant
+	// it would install is the one already standing, on both halves.
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply repeated start from checkout a error = %v", err)
+	}
+	if repeated := len(mustEvents(t, ctx, st)); repeated != before {
+		t.Errorf("a start from the holding checkout wrote %d events, want none", repeated-before)
+	}
+
+	st.AttributeTo("checkout-b")
+	if _, err := st.Apply(ctx, issue.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply takeover start from checkout b error = %v", err)
+	}
+	// Found by attribution rather than by position: the assertion is that the
+	// taking checkout is ON the record, which is what a claim derivation reads,
+	// and that is true regardless of how two same-instant events sort.
+	var takeover model.IssueEvent
+	var found bool
+	for _, event := range mustEvents(t, ctx, st) {
+		if event.Attribution.Stream() == "checkout-b" {
+			takeover, found = event, true
+		}
+	}
+	if !found {
+		t.Fatal("a takeover by a second checkout wrote no event carrying its stream: the record still names the first checkout, and nothing says otherwise")
+	}
+	if takeover.IssueID != issue.ID {
+		t.Errorf("takeover event issue = %q, want %q", takeover.IssueID, issue.ID)
+	}
+	// The verb matters as much as the stream: claim derivation transfers a lane
+	// only on an establishing verb, so a takeover recorded under any other one
+	// would leave the lane where it was.
+	if takeover.Action != string(model.ActionStart) {
+		t.Errorf("takeover event action = %q, want %q", takeover.Action, model.ActionStart)
+	}
+}
+
+// oneIssuesHistoryMatchesTheWholeLog holds ListEvents to the promise its
+// contract doc makes: one issue's events, "ordered exactly as ListAllEvents
+// orders the whole of it". Two engines answer it independently — the memory one
+// scans its event slice under a lock, the SQL one queries with a predicate — and
+// a divergence (the wrong issue's rows, an unsorted return, a dropped id
+// tie-break) would otherwise surface only as strange claim-transfer behavior
+// three layers up, never as a failure against the contract that promised it.
+//
+// The expectation is DERIVED from ListAllEvents rather than written down,
+// because agreeing with ListAllEvents is the entire promise: a hand-written
+// sequence would agree with neither reader the moment an engine changed what it
+// records, and would then be pinning this test's memory of the engine rather
+// than the contract. [LAW:one-source-of-truth]
+func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store) {
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core"})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core"})
+
+	// Interleaved on purpose. A reader that returns the wrong issue's events,
+	// and one that returns the right issue's in the wrong order, both survive a
+	// history in which one issue's events happen to be contiguous.
+	for _, title := range []string{"one", "two", "three"} {
+		for _, id := range []string{subject.ID, other.ID} {
+			if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
+				t.Fatalf("Apply title %q to %s error = %v", title, id, err)
+			}
+		}
+	}
+	// A lifecycle verb as well as field edits, so the history under test is the
+	// mixed kind a claimant is actually read out of.
+	for _, id := range []string{subject.ID, other.ID} {
+		if _, err := st.Apply(ctx, id, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+			t.Fatalf("Apply start to %s error = %v", id, err)
+		}
+	}
+
+	whole := mustEvents(t, ctx, st)
+	want := sameIssueInOrder(whole, subject.ID)
+	if len(want) == len(whole) {
+		t.Fatalf("all %d logged events belong to %s: the case seeded nothing for a filter to exclude, so it cannot tell a filtered reader from an unfiltered one", len(whole), subject.ID)
+	}
+
+	got, err := st.ListEvents(ctx, subject.ID)
+	if err != nil {
+		t.Fatalf("ListEvents error = %v", err)
+	}
+	if !slices.EqualFunc(got, want, func(a, b model.IssueEvent) bool { return a.ID == b.ID }) {
+		t.Errorf("ListEvents(%s) disagrees with the whole log narrowed to that issue:\n  listed = %v\n  narrowed = %v",
+			subject.ID, eventIDsOf(got), eventIDsOf(want))
+	}
+}
+
+// sameIssueInOrder narrows the whole log to one issue and puts it in the order
+// the contract names — oldest first, ties broken by id. Sorting a slice that
+// arrived sorted is a no-op; stating the order here is what keeps the
+// expectation from inheriting ListAllEvents' ordering as an assumption instead
+// of asserting the contract's own rule.
+func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent {
+	mine := make([]model.IssueEvent, 0, len(all))
+	for _, event := range all {
+		if event.IssueID == issueID {
+			mine = append(mine, event)
+		}
+	}
+	slices.SortFunc(mine, func(a, b model.IssueEvent) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	return mine
 }
 
 func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store) {

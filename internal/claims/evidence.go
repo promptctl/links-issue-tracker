@@ -12,6 +12,14 @@
 // No store, no time.Now, no filesystem. Deriving a claim writes nothing, and
 // the shape of this package is what makes that true rather than a promise.
 // [LAW:effects-at-boundaries]
+//
+// The write side reads from here too, and that is deliberate rather than a
+// layering slip: Claimant is what a storage engine compares to decide whether a
+// transition moved ownership. Ownership had two definitions once — the row's
+// assignee on the write side, the establishing event's checkout here — and a
+// takeover between two checkouts sharing one assignee fell into the gap between
+// them and recorded nothing. One home for "who holds this" is the repair.
+// [LAW:one-source-of-truth]
 package claims
 
 import (
@@ -67,17 +75,24 @@ func NewEvidence(issues []model.Issue, parents map[string]*model.Issue, events [
 		}
 		ev.events[lane] = append(ev.events[lane], event)
 	}
-	// One ordering for every lane, established once here so that "the latest
-	// establishing event" is a fact about the data rather than about the order a
-	// caller happened to read it in. Two events sharing a timestamp are ordered
-	// by id — arbitrary, but total and stable, which is what the predicate needs.
+	// One ordering for every lane, imposed once here so that trails' fold —
+	// which takes the LAST write to a checkout's activity as its latest — reads
+	// the data rather than the order a caller happened to read it in.
 	// [LAW:single-enforcer]
 	for lane := range ev.events {
-		slices.SortFunc(ev.events[lane], func(a, b model.IssueEvent) int {
-			return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
-		})
+		slices.SortFunc(ev.events[lane], byRecency)
 	}
 	return ev, nil
+}
+
+// byRecency is the total order over events this package means by "newer": when
+// it happened, then by id to break a tie — arbitrary, but total and stable,
+// which is what a predicate reading "the latest" needs. It is one function
+// because NewEvidence's sort and LatestEstablisher's scan must agree on which
+// of two events is later; two spellings of that could differ on a tie and hand
+// one lane two holders. [LAW:single-enforcer]
+func byRecency(a, b model.IssueEvent) int {
+	return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), cmp.Compare(a.ID, b.ID))
 }
 
 // Lanes lists every lane the evidence covers, in no particular order.

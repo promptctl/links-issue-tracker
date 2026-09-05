@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -17,12 +18,11 @@ import (
 // stub.
 func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	// resolveIdentity prefers CLAUDE_CODE_SESSION_ID over --assignee whenever
-	// it is set, which would flatten alpha's and bravo's assignees to one
-	// value if this process inherited it from an agent's own shell — and a
-	// same-state start whose assignee does not change is store.Apply's
-	// documented no-op, so the claim would never actually transfer. Clearing
-	// it makes --assignee the real identity source, as CLAUDE_CODE_SESSION_ID
-	// is for a real agent session.
+	// it is set, which would flatten alpha's and bravo's assignees to one value
+	// if this process inherited it from an agent's own shell. Clearing it makes
+	// --assignee the real identity source, as CLAUDE_CODE_SESSION_ID is for a
+	// real agent session, so this test drives the two-distinct-identities case.
+	// The shared-identity case is its own test below, and it transfers too.
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
 	base := t.TempDir()
 	runGit(t, base, "init", "--bare", "remote.git")
@@ -69,6 +69,18 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent", "--take")
 	if !strings.Contains(out, "taking over") {
 		t.Fatalf("start %s --take = %q, want it to announce the takeover", ticket, out)
+	}
+	// The transfer line itself, composed, not sampled: this is the only test
+	// where the two claimants differ in BOTH halves, so it is the only one that
+	// can pin describeClaimant's both-halves render. Substring checks would pass
+	// on a swapped order or a dropped stream.
+	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent \(stream ([a-z0-9]+)\) -> bravo-agent \(stream ([a-z0-9]+)\)`)
+	streams := bothHalves.FindStringSubmatch(out)
+	if streams == nil {
+		t.Fatalf("start %s --take = %q, want the transfer line naming both assignees and both streams", ticket, out)
+	}
+	if streams[1] == streams[2] {
+		t.Fatalf("transfer notice = %q, want two different streams: alpha and bravo are different checkouts", out)
 	}
 
 	// The lane is now bravo's: starting it again, still as bravo-agent, is
@@ -144,5 +156,118 @@ func writeTinyFreshnessWindow(t *testing.T, dir string) {
 	config := "[claims]\nfreshness_window = \"1ms\"\n"
 	if err := os.WriteFile(filepath.Join(litDir, "config.toml"), []byte(config), 0o644); err != nil {
 		t.Fatalf("write config.toml error = %v", err)
+	}
+}
+
+// TestStartTakesOverAStaleLaneUnderOneSharedIdentity is links-claims-6ghp: the
+// takeover that carries no assignee change at all.
+//
+// Both checkouts name the SAME assignee, which is not a contrived case but the
+// ordinary one — a checkout driving no agent session resolves no assignee
+// whatsoever, so every checkout one person runs looks identical on that axis,
+// and two worktrees of one agent session share a session id. Ownership is keyed
+// on the checkout, not the assignee, so this IS a transfer; a write side that
+// compared assignees read it as a repeated self-start, exited 0, recorded
+// nothing, and left both checkouts believing they held the lane.
+// [LAW:no-silent-failure]
+func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	alpha := filepath.Join(base, "alpha")
+	runGit(t, base, "clone", remote, "alpha")
+	runGit(t, alpha, "config", "user.email", "a@a.co")
+	runGit(t, alpha, "config", "user.name", "alpha")
+	if err := os.WriteFile(filepath.Join(alpha, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, alpha, "add", "-A")
+	runGit(t, alpha, "commit", "-m", "seed")
+	runGit(t, alpha, "push", "origin", "HEAD")
+	runCLIInDir(t, alpha, "init", "--skip-hooks", "--skip-agents")
+
+	// One identity, both checkouts. Every start below names it.
+	const shared = "one-identity"
+	ticket := extractTicketID(t, runCLIInDir(t, alpha, "new", "--title", "solo ticket", "--topic", "takeover-e2e", "--type", "task"))
+	runCLIInDir(t, alpha, "start", ticket, "--assignee", shared)
+	runCLIInDir(t, alpha, "sync", "push", "--set-upstream")
+
+	bravo := filepath.Join(base, "bravo")
+	runGit(t, base, "clone", remote, "bravo")
+	runGit(t, bravo, "config", "user.email", "b@b.co")
+	runGit(t, bravo, "config", "user.name", "bravo")
+	runCLIInDir(t, bravo, "init", "--skip-hooks", "--skip-agents")
+
+	writeTinyFreshnessWindow(t, bravo)
+	waitPastFreshnessWindow(t)
+
+	out := runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
+	if !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s over a stale lane of the same identity = %q, want the transfer announced", ticket, out)
+	}
+	// The assignee is identical on both sides, so the stream labels are the only
+	// thing in that line that can say anything moved.
+	if !strings.Contains(out, "stream ") {
+		t.Fatalf("transfer notice = %q, want the checkouts named: the assignee is the same on both sides and names nothing", out)
+	}
+
+	// The lane is now bravo's, and that is a fact about the RECORD rather than
+	// about the line just printed: a second start finds no foreign hold to warn
+	// about, which is only true if the first one wrote the establishing event.
+	// Bravo's own claim is stale too under the 1ms window — a stale lane of your
+	// own is still yours — so a surviving advisory here means the takeover was
+	// discarded.
+	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", shared)
+	if strings.Contains(out, "check for unmerged branches or PRs") {
+		t.Fatalf("start %s on bravo's own lane = %q, want no takeover ceremony: the lane never moved", ticket, out)
+	}
+	if strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s on bravo's own lane = %q, want no transfer notice: nothing moved", ticket, out)
+	}
+}
+
+// TestStartOnAPresetAssigneeAnnouncesNoTransfer pins the distinction between an
+// assignee and a holder. `lit new --assignee X` writes a row field and no
+// establishing event, so nobody holds the lane — claims.Derive reads that state
+// as Unclaimed and authorizeStart asks for no ceremony. The first start must
+// agree and stay silent.
+//
+// The regression this pins was real: comparing the whole Claimant against its
+// zero value read "assignee set at creation" as "previously held", and printed
+// `claim transferred: alice -> alice` for a ticket's first-ever start. Every
+// other test here creates its ticket without --assignee, so the prior claimant
+// is the exact zero value and the branch never fires.
+func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	repo := filepath.Join(base, "solo")
+	runGit(t, base, "clone", remote, "solo")
+	runGit(t, repo, "config", "user.email", "a@a.co")
+	runGit(t, repo, "config", "user.name", "solo")
+	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "seed")
+	runGit(t, repo, "push", "origin", "HEAD")
+	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+
+	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--assignee", "alice"))
+
+	out := runCLIInDir(t, repo, "start", ticket, "--assignee", "alice")
+	if strings.Contains(out, "claim transferred") {
+		t.Fatalf("first start of %s = %q, want no transfer notice: an assignee set at creation is a field, not a hold", ticket, out)
+	}
+
+	// The same command once the lane IS held announces the change, so the
+	// silence above is the preset case specifically and not a dead notice.
+	out = runCLIInDir(t, repo, "start", ticket, "--assignee", "bob")
+	if !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s over a held lane = %q, want the transfer announced", ticket, out)
 	}
 }

@@ -100,11 +100,79 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 
 	fresh := claims.Freshness{Now: time.Now(), Window: cfg.Claims.FreshnessWindow}
 	standings := claims.Derive(evidence, fresh, local)
-	// NewAttribution collapses an absent stream (a checkout that has never
-	// mutated) to the zero Attribution, which is exactly "no live claims" —
-	// no branch needed here for the never-minted case.
-	self := model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
-	return claimContext{standings: standings, evidence: evidence, self: self, addresses: addresses}, nil
+	return claimContext{standings: standings, evidence: evidence, self: ownAttribution(ap), addresses: addresses}, nil
+}
+
+// ownAttribution is the attribution this checkout's own work carries — the
+// pair every claim comparison in this package tests against, spelled once.
+// [LAW:one-source-of-truth] The takeover gate and the transfer notice have to
+// mean the same checkout by "us", or a start could route as a takeover and then
+// report itself as nothing.
+//
+// NewAttribution collapses an absent stream (a checkout that has never mutated)
+// to the zero Attribution, which is exactly "no live claims" — no branch needed
+// here for the never-minted case.
+func ownAttribution(ap *app.App) model.Attribution {
+	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
+}
+
+// readClaimant reads who the record currently names as holding one ticket. The
+// two halves come from two places — the assignee from the row, the checkout
+// from the history — so this is the one unit that gathers the pair, and callers
+// get a Claimant rather than the raw reads it took to build one.
+func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Claimant, error) {
+	issue, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return claims.Claimant{}, err
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return claims.Claimant{}, err
+	}
+	return claims.ClaimantOf(issue, events), nil
+}
+
+// transferNotice is the line a start owes when it takes the ticket FROM
+// somebody, and the empty string when it owes none — the identity value for
+// "nothing to say", so the caller writes the result unconditionally instead of
+// guarding the write. [LAW:dataflow-not-control-flow]
+//
+// Asking is what costs: the claimant is two round trips, and `start` is the one
+// verb whose result anything reads. The other three status verbs cannot take a
+// ticket, and the four retention verbs (archive/unarchive/delete/restore) are
+// not status transitions at all — they move an issue on the orthogonal axis. So
+// which actions owe the read is a fact about the sealed sum, and this is where
+// it is stated: once, beside the read, rather than as another type assertion in
+// runTransition's body. [LAW:effects-at-boundaries]
+//
+// The decision is composed here, before Apply, because every input to it is a
+// fact about the state Apply is about to change — the prior claimant and the
+// action taking it. The caller renders the result afterwards, so a failed Apply
+// still announces nothing.
+//
+// [LAW:no-silent-failure] Both conditions on the notice are load-bearing and
+// neither implies the other: Held is whether anything ever established a hold —
+// a fact NEITHER identity half carries, since both go empty on real holders, so
+// a ticket carrying `lit new --assignee X` that nobody has started is silent
+// (reading it off the checkout instead is the wrong definition this fix already
+// tried and reverted; claimant.go says why) — and the claimant comparison is
+// whether that holder changed. Comparing assignees alone was silent for the two
+// takeovers that matter most: between two human checkouts (both assignees
+// empty) and between two worktrees of one agent session (both identical).
+func transferNotice(ctx context.Context, ap *app.App, issueID string, action model.Action) (string, error) {
+	start, takes := action.(model.Start)
+	if !takes {
+		return "", nil
+	}
+	prior, err := readClaimant(ctx, ap, issueID)
+	if err != nil {
+		return "", err
+	}
+	taker := prior.After(start, ownAttribution(ap))
+	if !prior.Held() || taker == prior {
+		return "", nil
+	}
+	return fmt.Sprintf("claim transferred: %s -> %s\n", describeClaimant(prior), describeClaimant(taker)), nil
 }
 
 // checkoutStreamTokens projects enumerated checkouts onto the tokens claim

@@ -282,6 +282,14 @@ func (e *Engine) ListAllEvents(ctx context.Context) ([]model.IssueEvent, error) 
 	return sortEvents(cloneEvents(e.events)), nil
 }
 
+// ListEvents is eventsFor behind the lock, for callers outside the engine.
+// Callers already holding e.mu — the apply path — use eventsFor directly.
+func (e *Engine) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	return e.eventsFor(issueID), nil
+}
+
 // sortEvents imposes the contract's total order: creation time ascending, ties
 // broken by id. It is the one place this engine orders history, so ListAllEvents
 // and a single issue's history cannot drift. [LAW:single-enforcer]

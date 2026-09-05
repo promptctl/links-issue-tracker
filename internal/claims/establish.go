@@ -54,3 +54,23 @@ var establishing = map[model.ActionName]bool{
 func establishes(event model.IssueEvent) bool {
 	return establishing[model.ActionName(event.Action)]
 }
+
+// LatestEstablisher returns the newest event among events that takes or
+// transfers a lane, and reports whether there was one. "Newest" is byRecency,
+// the one order this package means by later.
+//
+// It scans for the maximum rather than walking a sorted slice backwards, so it
+// answers the same for a lane's ordered run as for a caller holding an issue's
+// events in whatever order it read them. That independence is what lets the
+// write side ask this question: ClaimantOf reads one issue's history straight
+// out of the store, with no Evidence to have ordered it first.
+func LatestEstablisher(events []model.IssueEvent) (model.IssueEvent, bool) {
+	var latest model.IssueEvent
+	found := false
+	for _, event := range events {
+		if establishes(event) && (!found || byRecency(latest, event) < 0) {
+			latest, found = event, true
+		}
+	}
+	return latest, found
+}
