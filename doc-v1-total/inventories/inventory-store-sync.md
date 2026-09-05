@@ -139,7 +139,7 @@ Tests: `TestSyncPushDelivers` (`sync_test.go:689`), `TestSyncCompactAndPushDeliv
 ### 1.9 `SyncStatus`
 
 `SyncStatus(ctx)` (`sync.go:652`) runs, in order:
-- `SELECT DOLT_VERSION()` → `report.DoltVersion`; error `"read dolt version: %w"`.
+- `SELECT DOLT_VERSION()` → `report.EngineVersion`; error `"read dolt version: %w"`.
 - `SELECT ACTIVE_BRANCH()` → `report.Branch`; error `"read active branch: %w"`.
 - `SELECT commit_hash, message FROM dolt_log() LIMIT 1` → `HeadCommit`, `HeadMessage` (NULL→`""` trimmed); error `"read head commit: %w"`.
 - `SyncListRemotes`.

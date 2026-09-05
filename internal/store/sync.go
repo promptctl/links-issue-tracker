@@ -723,7 +723,7 @@ func (s *Store) pushWithinLock(ctx context.Context, remote string, branch string
 
 func (s *Store) SyncStatus(ctx context.Context) (storage.SyncStatusReport, error) {
 	report := storage.SyncStatusReport{}
-	if err := s.db.QueryRowContext(ctx, `SELECT DOLT_VERSION()`).Scan(&report.DoltVersion); err != nil {
+	if err := s.db.QueryRowContext(ctx, `SELECT DOLT_VERSION()`).Scan(&report.EngineVersion); err != nil {
 		return storage.SyncStatusReport{}, fmt.Errorf("read dolt version: %w", err)
 	}
 	if err := s.db.QueryRowContext(ctx, `SELECT ACTIVE_BRANCH()`).Scan(&report.Branch); err != nil {
