@@ -2,7 +2,7 @@
 
 lit separates *what it needs from a storage engine* from *how any engine provides it*. The contract lives in `internal/storage`; two engines implement it — a pure in-memory engine (`internal/storage/memory`) and the Dolt-backed engine (`internal/store`, covered in `03-store-schema.md`). A shared conformance suite (`internal/storage/conformance`) is stated in the package doc to be the actual specification; the interface is the vocabulary (`internal/storage/doc.go:48-55`).
 
-Dependency and vocabulary rules: engine → contract → model, never back; no type crossing the `Store` boundary may name a SQL row, branch, commit, or schema version. Capability interfaces (below) are exempt — naming an engine artifact is what makes something a capability. One acknowledged leak: `SyncStatusReport.DoltVersion`, kept because it renders as the JSON key `dolt_version` (`internal/storage/doc.go:20-41`).
+Dependency and vocabulary rules: engine → contract → model, never back; no type crossing the `Store` boundary may name a SQL row, branch, commit, or schema version. Capability interfaces (below) are exempt — naming an engine artifact is what makes something a capability. No type in the core names an engine artifact (`internal/storage/doc.go:20-35`).
 
 
 ## The Store interface

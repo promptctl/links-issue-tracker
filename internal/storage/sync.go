@@ -41,12 +41,19 @@ type SyncStatusRow struct {
 // engine build is running, where the store's history stands, what is uncommitted,
 // and who the peers are.
 type SyncStatusReport struct {
-	DoltVersion string          `json:"dolt_version"`
-	Branch      string          `json:"branch"`
-	HeadCommit  string          `json:"head_commit"`
-	HeadMessage string          `json:"head_message"`
-	Status      []SyncStatusRow `json:"status"`
-	Remotes     []SyncRemote    `json:"remotes"`
+	// EngineVersion is the build of whatever engine answered this report.
+	// [LAW:types-are-the-program] Singular because the whole report is
+	// singular: Branch, HeadCommit and Status describe one engine's local side
+	// too, so a report carrying two versions would still be claiming one branch
+	// and one head. Where several engines are live, the plurality resolves at
+	// the [Syncer] that answers — one report per engine — rather than inside
+	// one report's fields.
+	EngineVersion string          `json:"engine_version"`
+	Branch        string          `json:"branch"`
+	HeadCommit    string          `json:"head_commit"`
+	HeadMessage   string          `json:"head_message"`
+	Status        []SyncStatusRow `json:"status"`
+	Remotes       []SyncRemote    `json:"remotes"`
 }
 
 // SyncFreshnessState classifies the local data branch's position relative to
