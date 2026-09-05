@@ -1300,12 +1300,13 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		return err
 	}
 
-	// Read AFTER authorize, not beside the row above: authorizing a start walks
-	// every lane and, on a fresh foreign hold, waits on the operator at a prompt
-	// with no timeout. A claimant read before that wait describes whoever held
-	// the lane when the question was asked, which is not who holds it when the
-	// answer arrives. [LAW:no-ambient-temporal-coupling]
-	priorClaimant, err := readClaimant(ctx, ap, issueID)
+	// Composed AFTER authorize, not beside the row above: authorizing a start
+	// walks every lane and, on a fresh foreign hold, waits on the operator at a
+	// prompt with no timeout. A claimant read before that wait describes whoever
+	// held the lane when the question was asked, which is not who holds it when
+	// the answer arrives. [LAW:no-ambient-temporal-coupling] Decided here on
+	// pre-Apply state and rendered below, so a failed Apply announces nothing.
+	transfer, err := transferNotice(ctx, ap, issueID, action)
 	if err != nil {
 		return err
 	}
@@ -1334,24 +1335,11 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	// [LAW:no-silent-failure] start takes the ticket over; when it takes it FROM
-	// SOMEBODY, that hand-off is said out loud. Both conditions are load-bearing
-	// and neither implies the other: Held is whether anything ever established a
-	// hold — a fact NEITHER identity half carries, because both go empty on real
-	// holders, so a ticket carrying `lit new --assignee X` that nobody has
-	// started is silent — and the claimant comparison is whether that holder
-	// changed. Reading it off the checkout instead is the wrong definition this
-	// PR already tried and reverted; claimant.go says why. Comparing assignees
-	// alone was silent for the two takeovers that matter most: between two human
-	// checkouts (both assignees empty) and between two worktrees of one agent
-	// session (both assignees identical).
-	if start, ok := action.(model.Start); ok {
-		taker := priorClaimant.After(start, ownAttribution(ap))
-		if priorClaimant.Held() && taker != priorClaimant {
-			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", describeClaimant(priorClaimant), describeClaimant(taker)); err != nil {
-				return err
-			}
-		}
+	// A hand-off is said out loud; every other transition has nothing to say and
+	// says it as the empty string, so this write always runs and only its value
+	// varies. transferNotice holds the rule. [LAW:dataflow-not-control-flow]
+	if _, err := io.WriteString(stdout, transfer); err != nil {
+		return err
 	}
 
 	if err := printIssueSummary(stdout, issue); err != nil {
