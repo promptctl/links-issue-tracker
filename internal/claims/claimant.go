@@ -21,8 +21,16 @@ import (
 // only assignees read that transfer as a repeated self-start and discarded it.
 // [LAW:one-source-of-truth]
 type Claimant struct {
-	Assignee string
-	Checkout model.Attribution
+	// Established reports that somebody took this ticket — that the history
+	// carries an establishing event at all. It is its own fact because BOTH
+	// identity halves go empty on real holders: a checkout driving no agent
+	// session resolves no assignee, and an event recorded before attribution
+	// existed carries no checkout. Reading a holder off either half alone
+	// therefore reads "assignee set by `lit new --assignee`, never started" as
+	// a hold, or a genuine pre-attribution hold as nobody.
+	Established bool
+	Assignee    string
+	Checkout    model.Attribution
 }
 
 // ClaimantOf reads the claimant a ticket's own record names: the assignee on the
@@ -35,9 +43,22 @@ type Claimant struct {
 // establishing event predates attribution, carries the absent checkout: the
 // same "the record does not say who" that Derive reports as Unclaimed.
 func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
-	establisher, _ := LatestEstablisher(events)
-	return Claimant{Assignee: issue.AssigneeValue(), Checkout: establisher.Attribution}
+	establisher, found := LatestEstablisher(events)
+	return Claimant{Established: found, Assignee: issue.AssigneeValue(), Checkout: establisher.Attribution}
 }
+
+// Held reports that the record names a holder, so a caller asking "was this
+// ticket already taken" reads it here rather than spelling the question again.
+// [LAW:one-source-of-truth]
+//
+// Note what it does NOT read: the identity halves. An empty assignee is the
+// ordinary state of a human checkout, and an absent checkout is the ordinary
+// state of a record older than attribution — either one read as "nobody" makes
+// a real holder vanish. Derive answers a different question and is right to
+// insist on the checkout: it routes lanes, and a hold it cannot address is one
+// it must call Unclaimed. Announcing a hand-off only needs a predecessor to
+// have existed.
+func (c Claimant) Held() bool { return c.Established }
 
 // After returns the claimant a status action installs, taken by the checkout
 // performing it. Start is the act of taking a ticket, so it is the only action
@@ -56,5 +77,5 @@ func (c Claimant) After(action model.StatusAction, taker model.Attribution) Clai
 	if !ok {
 		return c
 	}
-	return Claimant{Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
+	return Claimant{Established: true, Assignee: strings.TrimSpace(start.Assignee), Checkout: taker}
 }

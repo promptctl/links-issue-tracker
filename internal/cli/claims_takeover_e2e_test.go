@@ -3,6 +3,7 @@ package cli
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -68,6 +69,18 @@ func TestStartRefusesAndThenTakesOverAFreshForeignClaim(t *testing.T) {
 	out = runCLIInDir(t, bravo, "start", ticket, "--assignee", "bravo-agent", "--take")
 	if !strings.Contains(out, "taking over") {
 		t.Fatalf("start %s --take = %q, want it to announce the takeover", ticket, out)
+	}
+	// The transfer line itself, composed, not sampled: this is the only test
+	// where the two claimants differ in BOTH halves, so it is the only one that
+	// can pin describeClaimant's both-halves render. Substring checks would pass
+	// on a swapped order or a dropped stream.
+	bothHalves := regexp.MustCompile(`claim transferred: alpha-agent \(stream ([a-z0-9]+)\) -> bravo-agent \(stream ([a-z0-9]+)\)`)
+	streams := bothHalves.FindStringSubmatch(out)
+	if streams == nil {
+		t.Fatalf("start %s --take = %q, want the transfer line naming both assignees and both streams", ticket, out)
+	}
+	if streams[1] == streams[2] {
+		t.Fatalf("transfer notice = %q, want two different streams: alpha and bravo are different checkouts", out)
 	}
 
 	// The lane is now bravo's: starting it again, still as bravo-agent, is
@@ -212,5 +225,49 @@ func TestStartTakesOverAStaleLaneUnderOneSharedIdentity(t *testing.T) {
 	}
 	if strings.Contains(out, "claim transferred") {
 		t.Fatalf("start %s on bravo's own lane = %q, want no transfer notice: nothing moved", ticket, out)
+	}
+}
+
+// TestStartOnAPresetAssigneeAnnouncesNoTransfer pins the distinction between an
+// assignee and a holder. `lit new --assignee X` writes a row field and no
+// establishing event, so nobody holds the lane — claims.Derive reads that state
+// as Unclaimed and authorizeStart asks for no ceremony. The first start must
+// agree and stay silent.
+//
+// The regression this pins was real: comparing the whole Claimant against its
+// zero value read "assignee set at creation" as "previously held", and printed
+// `claim transferred: alice -> alice` for a ticket's first-ever start. Every
+// other test here creates its ticket without --assignee, so the prior claimant
+// is the exact zero value and the branch never fires.
+func TestStartOnAPresetAssigneeAnnouncesNoTransfer(t *testing.T) {
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "")
+	base := t.TempDir()
+	runGit(t, base, "init", "--bare", "remote.git")
+	remote := filepath.Join(base, "remote.git")
+
+	repo := filepath.Join(base, "solo")
+	runGit(t, base, "clone", remote, "solo")
+	runGit(t, repo, "config", "user.email", "a@a.co")
+	runGit(t, repo, "config", "user.name", "solo")
+	if err := os.WriteFile(filepath.Join(repo, "readme.md"), []byte("hi\n"), 0o644); err != nil {
+		t.Fatalf("write readme error = %v", err)
+	}
+	runGit(t, repo, "add", "-A")
+	runGit(t, repo, "commit", "-m", "seed")
+	runGit(t, repo, "push", "origin", "HEAD")
+	runCLIInDir(t, repo, "init", "--skip-hooks", "--skip-agents")
+
+	ticket := extractTicketID(t, runCLIInDir(t, repo, "new", "--title", "preset", "--topic", "takeover-e2e", "--type", "task", "--assignee", "alice"))
+
+	out := runCLIInDir(t, repo, "start", ticket, "--assignee", "alice")
+	if strings.Contains(out, "claim transferred") {
+		t.Fatalf("first start of %s = %q, want no transfer notice: an assignee set at creation is a field, not a hold", ticket, out)
+	}
+
+	// The same command once the lane IS held announces the change, so the
+	// silence above is the preset case specifically and not a dead notice.
+	out = runCLIInDir(t, repo, "start", ticket, "--assignee", "bob")
+	if !strings.Contains(out, "claim transferred") {
+		t.Fatalf("start %s over a held lane = %q, want the transfer announced", ticket, out)
 	}
 }

@@ -116,6 +116,22 @@ func ownAttribution(ap *app.App) model.Attribution {
 	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
 }
 
+// readClaimant reads who the record currently names as holding one ticket. The
+// two halves come from two places — the assignee from the row, the checkout
+// from the history — so this is the one unit that gathers the pair, and callers
+// get a Claimant rather than the raw reads it took to build one.
+func readClaimant(ctx context.Context, ap *app.App, issueID string) (claims.Claimant, error) {
+	issue, err := ap.Store.GetIssue(ctx, issueID)
+	if err != nil {
+		return claims.Claimant{}, err
+	}
+	events, err := ap.Store.ListEvents(ctx, issueID)
+	if err != nil {
+		return claims.Claimant{}, err
+	}
+	return claims.ClaimantOf(issue, events), nil
+}
+
 // checkoutStreamTokens projects enumerated checkouts onto the tokens claim
 // derivation's liveness leg compares evidence against. Mirrors
 // app.streamTokens: a checkout that has never mutated carries no token and

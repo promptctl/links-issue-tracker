@@ -785,7 +785,7 @@ func (s *Store) GetIssueDetail(ctx context.Context, id string) (model.IssueDetai
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
-	events, err := s.listEvents(ctx, id)
+	events, err := s.ListEvents(ctx, id)
 	if err != nil {
 		return model.IssueDetail{}, err
 	}
@@ -1285,10 +1285,19 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	// not on the row, so there is no column to compare. [LAW:one-source-of-truth]
 	// s.attribution is the taker for the same reason it is the right one to
 	// compare against: it is exactly what recordEvent will stamp on the event
-	// this plan is deciding whether to write. The read is as fresh as the
-	// assignee beside it — both come off the same pre-lock snapshot — so the
-	// pair opens no window the predicate did not already have.
-	events, err := s.listEvents(ctx, issue.ID)
+	// this plan is deciding whether to write.
+	//
+	// The pair spans two reads at two instants — issue came from Apply's own
+	// GetIssue, this is a separate query — so a concurrent writer can land
+	// between them. That window cannot drop a takeover, which is the direction
+	// that would matter: a no-op needs prior.Checkout to equal s.attribution,
+	// and a foreign write in the window can only make the freshly-read latest
+	// establisher somebody else, forcing the write. It can only stale the
+	// assignee half, which likewise pushes the pair toward inequality. What
+	// survives is a spurious write whose assignee FieldChange names a stale
+	// From — audit precision, not a lost claim. Closing it means computing the
+	// pair in-tx (links-claims-3cey).
+	events, err := s.ListEvents(ctx, issue.ID)
 	if err != nil {
 		return transitionWrite{}, err
 	}
@@ -1863,7 +1872,7 @@ func (s *Store) listComments(ctx context.Context, issueID string) ([]model.Comme
 	return out, rows.Err()
 }
 
-func (s *Store) listEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
+func (s *Store) ListEvents(ctx context.Context, issueID string) ([]model.IssueEvent, error) {
 	events, err := s.queryEvents(ctx, "e.issue_id = ?", issueID)
 	if err != nil {
 		return nil, fmt.Errorf("list issue events: %w", err)

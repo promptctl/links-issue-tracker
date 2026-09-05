@@ -14,7 +14,6 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/app"
-	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/config"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/pathspec"
@@ -1278,16 +1277,15 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	issueID := remaining[0]
 
-	// The pre-transition read feeds the claim-transfer notice below: `start` may
-	// take an issue over from a prior owner, and that hand-off must be surfaced.
-	// It reads the DETAIL because who owns a ticket is the (assignee, checkout)
-	// pair claims.ClaimantOf reads, and the checkout half lives on the history —
-	// the row alone cannot answer who holds this. [LAW:one-source-of-truth]
-	detail, err := ap.Store.GetIssueDetail(ctx, issueID)
+	// The pre-transition read is the state `authorize` gates on and the
+	// before-half of the workflow occasion below. It is the ROW only: the
+	// claim-transfer notice needs the issue's history too, and reads it
+	// separately after authorization, because that is the read authorization
+	// can invalidate.
+	prior, err := ap.Store.GetIssue(ctx, issueID)
 	if err != nil {
 		return err
 	}
-	prior := detail.Issue
 
 	action, err := buildAction()
 	if err != nil {
@@ -1299,6 +1297,16 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 	// `start`. See transitionSpec.authorize and authorizeStart
 	// (claims_takeover.go).
 	if err := authorize(ctx, stdout, ap, issueID, prior); err != nil {
+		return err
+	}
+
+	// Read AFTER authorize, not beside the row above: authorizing a start walks
+	// every lane and, on a fresh foreign hold, waits on the operator at a prompt
+	// with no timeout. A claimant read before that wait describes whoever held
+	// the lane when the question was asked, which is not who holds it when the
+	// answer arrives. [LAW:no-ambient-temporal-coupling]
+	priorClaimant, err := readClaimant(ctx, ap, issueID)
+	if err != nil {
 		return err
 	}
 
@@ -1326,17 +1334,18 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 		}
 	}
 
-	// [LAW:no-silent-failure] start takes the ticket over; when it takes it from
-	// somebody, that hand-off is said out loud. The comparison is the whole
-	// claimant, matching the store's own record-or-no-op predicate exactly, so
-	// this line prints for every transfer the store wrote and its absence means
-	// nothing moved. Comparing assignees alone was silent for the two takeovers
-	// that matter most: between two human checkouts (both assignees empty) and
-	// between two worktrees of one agent session (both assignees identical).
+	// [LAW:no-silent-failure] start takes the ticket over; when it takes it FROM
+	// SOMEBODY, that hand-off is said out loud. Both conditions are load-bearing
+	// and neither implies the other: Held is whether there was a holder at all —
+	// claims' own reading, the checkout and never the assignee, so a ticket
+	// carrying `lit new --assignee X` that nobody has started is silent — and the
+	// claimant comparison is whether that holder changed. Comparing assignees
+	// alone was silent for the two takeovers that matter most: between two human
+	// checkouts (both assignees empty) and between two worktrees of one agent
+	// session (both assignees identical).
 	if start, ok := action.(model.Start); ok {
-		priorClaimant := claims.ClaimantOf(prior, detail.Events)
 		taker := priorClaimant.After(start, ownAttribution(ap))
-		if priorClaimant != (claims.Claimant{}) && taker != priorClaimant {
+		if priorClaimant.Held() && taker != priorClaimant {
 			if _, err := fmt.Fprintf(stdout, "claim transferred: %s -> %s\n", describeClaimant(priorClaimant), describeClaimant(taker)); err != nil {
 				return err
 			}
