@@ -14,29 +14,36 @@
 //
 // # Independent by construction
 //
-// Nothing here is shared with the Dolt engine: not the field-patch diff, not
-// the transition planner, not the frame resolution behind the rank intents,
-// not the compensating bulk apply. Every one of those is a pure function of
-// model values living in internal/store, and lifting them into the contract
-// package would look like the obvious [LAW:one-source-of-truth] fix. It would
-// also quietly destroy the proof — two engines calling one implementation is
-// one implementation wearing two hats, and a green conformance run would then
-// say nothing at all about those paths. The suite is the shared definition of
-// behavior; the code is deliberately not. [LAW:behavior-not-structure]
+// No BEHAVIOR here is shared with the Dolt engine: not the field-patch diff,
+// not the transition planner, not the frame resolution behind the rank
+// intents, not the compensating bulk apply. Every one of those is a pure
+// function of model values living in internal/store, and lifting them into the
+// contract package would look like the obvious [LAW:one-source-of-truth] fix.
+// It would also quietly destroy the proof — two engines calling one
+// implementation is one implementation wearing two hats, and a green
+// conformance run would then say nothing at all about those paths. The suite
+// is the shared definition of behavior; the code is deliberately not.
+// [LAW:behavior-not-structure]
+//
+// The line falls at what the contract states versus what an engine decides. A
+// rule the contract writes down — a listing's default order, its trailing id
+// key — is normative rather than discovered, so both engines obey it through
+// one [storage.IssueOrdering] and neither restates it; duplicating THAT proves
+// nothing, because there was never a question of whether an engine would work
+// it out for itself. What this engine still answers alone is the part it could
+// get wrong alone: which comparison each sort key reads, passed in as its own
+// [storage.SortBindings] and checked against the contract's vocabulary by the
+// suite. Independence is the point everywhere the engine has a choice to make,
+// and nowhere it does not.
 //
 // Where the suite under-pins a behavior, Dolt's current behavior is the
 // tiebreak rather than what would be tidier: S0's whole gate is that nothing
-// observable changes (design-docs/event-store/design.md §migration). Two
-// places where this engine once answered better than Dolt — because Dolt's
-// answer is an artifact of storing what this engine derives — were settled
-// against it on links-store-seam-q35v.5, and this engine now commits the same
-// fault deliberately:
+// observable changes (design-docs/event-store/design.md §migration). One place
+// where this engine once answered better than Dolt — because Dolt's answer is
+// an artifact of storing what this engine derives — was settled against it on
+// links-store-seam-q35v.5, and this engine now commits the same fault
+// deliberately:
 //
-//   - Ordering a listing by "status" sorts the STORED status encoding. A
-//     container stores none, so it orders ahead of every leaf ascending
-//     whatever state it derives to, while the same listing's status FILTER
-//     reads derived state. Correcting that disagreement moves observable
-//     output and is links-store-seam-q35v.6.
 //   - History comes back ordered by (created_at, id) rather than by the order
 //     it was recorded. Event ids are random, so on a coarse clock both engines
 //     can hand back a title change ahead of the creation that preceded it.

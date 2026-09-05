@@ -99,7 +99,7 @@ var cases = []engineCase{
 	{"list_sorts_and_limits", listSortsAndLimits},
 	{"list_breaks_sort_ties_by_id", listBreaksSortTiesByID},
 	{"list_accepts_exactly_the_contract_sort_fields", listAcceptsContractSortFields},
-	{"list_sorts_status_by_stored_encoding", listSortsStatusByStoredEncoding},
+	{"list_sorts_status_by_derived_state", listSortsStatusByDerivedState},
 	{"events_are_totally_ordered", eventsAreTotallyOrdered},
 	{"rank_intents_reorder", rankIntentsReorder},
 	{"rank_intents_resolve_across_frames", rankIntentsResolveAcrossFrames},
@@ -721,39 +721,43 @@ func listAcceptsContractSortFields(t *testing.T, ctx context.Context, st storage
 	}
 }
 
-// listSortsStatusByStoredEncoding pins the one sort key that does not order
-// what its name suggests, and it pins it to the wrong answer on purpose.
-//
-// Sorting by status reads the STORED status encoding. A container has none —
-// its state is derived from its children — so it sorts ahead of every leaf
-// ascending no matter what state it derives to. The listing's status FILTER,
-// meanwhile, reads derived state. Filter and sort therefore disagree, which is
-// a fault; this case exists so that both engines commit the same fault, in
-// writing, until links-store-seam-q35v.6 corrects it deliberately. Deleting
-// this case is the first step of that ticket, not a cleanup.
-func listSortsStatusByStoredEncoding(t *testing.T, ctx context.Context, st storage.Store) {
+// listSortsStatusByDerivedState pins the one sort key that does not read a
+// field. "status" orders the derived lifecycle state — the same reading the
+// listing's status FILTER takes — so one listing means one thing by the word,
+// and a container, holding no stored status at all, is the row that makes an
+// engine which regressed to the column visible.
+func listSortsStatusByDerivedState(t *testing.T, ctx context.Context, st storage.Store) {
+	closedLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "closed leaf", Topic: "core"})
+	openLeaf := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "open leaf", Topic: "core"})
 	epic := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "epic", Topic: "core", IssueType: model.TypeEpic})
 	child := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "child", Topic: "core", ParentID: epic.ID})
 
-	// The child is in progress, so the epic derives in_progress too — putting
-	// them in the same bucket if the sort read derived state, and in different
-	// ones because it does not.
-	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Start{}, Actor: "ada"}); err != nil {
+	if _, err := st.Apply(ctx, closedLeaf.ID, storage.Change{Action: model.Done{}, Actor: "ada"}); err != nil {
+		t.Fatalf("Apply done error = %v", err)
+	}
+	if _, err := st.Apply(ctx, child.ID, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
 		t.Fatalf("Apply start error = %v", err)
 	}
 	assertState(t, ctx, st, epic.ID, model.StateInProgress, "its only child is in progress")
 
-	// Ascending: the epic's absent stored status is the low key, so it leads —
-	// even though "in_progress" would not sort before "in_progress".
-	assertIssueIDs(t, "container leads ascending on stored status",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "status"}}}),
-		[]string{epic.ID, child.ID})
+	// The child is excluded from the listing so the epic shares its bucket with
+	// nothing: every row here derives a DIFFERENT state, so the epic's position
+	// is decided by the sort key alone and no id tie-break can supply the right
+	// answer by luck. Reading the stored column instead puts the epic at an END
+	// of the listing — leading ascending on its absent value, trailing
+	// descending — so both directions below fail loudly on the old behavior
+	// rather than one of them passing either way.
+	onlyLeavesAndEpic := []string{closedLeaf.ID, openLeaf.ID, epic.ID}
 
-	// Descending reverses it, which is the tell that the epic is being ordered
-	// by an absent value rather than by the state it derives.
-	assertIssueIDs(t, "container trails descending on stored status",
-		mustList(t, ctx, st, storage.ListIssuesFilter{SortBy: []storage.SortSpec{{Field: "status", Desc: true}}}),
-		[]string{child.ID, epic.ID})
+	// "closed" < "in_progress" < "open" as tokens, and the epic derives
+	// in_progress, so it sorts BETWEEN the two leaves in both directions.
+	assertIssueIDs(t, "container sorts among the leaves ascending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status"}}}),
+		[]string{closedLeaf.ID, epic.ID, openLeaf.ID})
+
+	assertIssueIDs(t, "container sorts among the leaves descending",
+		mustList(t, ctx, st, storage.ListIssuesFilter{IDs: onlyLeavesAndEpic, SortBy: []storage.SortSpec{{Field: "status", Desc: true}}}),
+		[]string{openLeaf.ID, epic.ID, closedLeaf.ID})
 }
 
 // eventsAreTotallyOrdered pins the history ordering to (created_at, id).
