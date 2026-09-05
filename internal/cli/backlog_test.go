@@ -236,8 +236,8 @@ func isIssueIDToken(s string) bool {
 }
 
 // The sibling gate is a blocking annotation like any other, and the backlog
-// owes it a line. It had none: nonDependencyBlockingReasons phrased two of the
-// registry's three blocking kinds, so a row held back by an earlier same-lane
+// owes it a line. It had none: nonDependencyBlockingReasons had no phrasing
+// for EarlierSiblingPending, so a row held back by an earlier same-lane
 // sibling rendered with nothing under it — top of the queue, no visible reason
 // — while routing skipped it as unready. That gap is the whole of
 // links-claims-gxxw: the backlog is the surface that tells an agent what `lit
