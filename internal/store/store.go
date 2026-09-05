@@ -10,7 +10,6 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -946,92 +945,24 @@ type fieldWrite struct {
 	changes       []model.FieldChange
 }
 
-// planFieldUpdate validates in against baseline and computes the post-write
-// issue plus its field-change rows, without touching the store. baseline is
-// Apply's read of the row, or the post-action issue when the change also
-// carries a lifecycle action — so a start's new assignee is the diff's prior,
-// not a second assignee change row. [LAW:effects-at-boundaries] A pure
-// function of (baseline, in, actor): no clock, no IO. The UpdatedAt stamp and
-// every write are deferred to applyFieldsTx.
+// planFieldUpdate dresses the contract's field decision as this engine's write
+// plan. What a patch means — which fields it may touch, what they validate to,
+// which of them history reports — is [storage.ApplyIssueFields], because every
+// engine owes lit the same answer there; what is left here is the Dolt-side
+// packaging. baseline is Apply's read of the row, or the post-action issue when
+// the change also carries a lifecycle action — so a start's new assignee is the
+// diff's prior, not a second assignee change row. [LAW:effects-at-boundaries] A
+// pure function of (baseline, in, actor): no clock, no IO. The UpdatedAt stamp
+// and every write are deferred to applyFieldsTx.
 func planFieldUpdate(baseline model.Issue, in storage.UpdateIssueInput, actor string) (fieldWrite, error) {
-	issue := baseline
-	priorTitle := issue.Title
-	priorDescription := issue.Description
-	priorIssueType := issue.IssueType
-	priorPriority := issue.Priority
-	priorAssignee := issue.AssigneeValue()
-	priorLane := issue.Lane
-	priorLabels := strings.Join(issue.Labels, ",")
-	if in.Title != nil {
-		issue.Title = strings.TrimSpace(*in.Title)
-		if issue.Title == "" {
-			return fieldWrite{}, errors.New("title cannot be empty")
-		}
+	issue, changes, err := storage.ApplyIssueFields(baseline, in)
+	if err != nil {
+		return fieldWrite{}, err
 	}
-	if in.Description != nil {
-		issue.Description = strings.TrimSpace(*in.Description)
-	}
-	if in.Prompt != nil {
-		issue.Prompt = strings.TrimSpace(*in.Prompt)
-	}
-	if in.IssueType != nil {
-		// [LAW:single-enforcer] Container vs leaf is encoded in the lifecycle
-		// expression at hydration time. Switching across that boundary would
-		// orphan the lifecycle: epic → leaf would leave AllOf attached to a
-		// row whose schema requires a leaf status, and leaf → epic would
-		// silently drop the leaf's status/closed_at. Refuse here
-		// instead of patching it up downstream with an invented default.
-		if issue.IssueType.IsContainer() != in.IssueType.IsContainer() {
-			return fieldWrite{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())
-		}
-		issue.IssueType = *in.IssueType
-	}
-	if in.Priority != nil {
-		issue.Priority = *in.Priority
-	}
-	if in.Assignee != nil {
-		// [LAW:decomposition] Assignee is an issue-level field independent of the
-		// lifecycle; reassigning is a plain field write, not a status mutation.
-		issue.Assignee = strings.TrimSpace(*in.Assignee)
-	}
-	if in.Lane != nil {
-		issue.Lane = strings.TrimSpace(*in.Lane)
-	}
-	if in.Labels != nil {
-		labels, err := canonicalizeLabels(*in.Labels)
-		if err != nil {
-			return fieldWrite{}, err
-		}
-		issue.Labels = labels
-	}
-	// [LAW:dataflow-not-control-flow] Every field write emits one event with a
-	// field-change row per actually-changed field.
-	var changes []model.FieldChange
-	if priorTitle != issue.Title {
-		changes = append(changes, model.FieldChange{Field: "title", From: priorTitle, To: issue.Title})
-	}
-	if priorDescription != issue.Description {
-		changes = append(changes, model.FieldChange{Field: "description", From: priorDescription, To: issue.Description})
-	}
-	if priorIssueType != issue.IssueType {
-		changes = append(changes, model.FieldChange{Field: "issue_type", From: string(priorIssueType), To: string(issue.IssueType)})
-	}
-	if priorPriority != issue.Priority {
-		// [LAW:one-source-of-truth] History rows keep the numeric wire encoding
-		// the column stores, not the display name.
-		changes = append(changes, model.FieldChange{Field: "priority", From: strconv.Itoa(int(priorPriority)), To: strconv.Itoa(int(issue.Priority))})
-	}
-	newAssignee := issue.AssigneeValue()
-	if priorAssignee != newAssignee {
-		changes = append(changes, model.FieldChange{Field: "assignee", From: priorAssignee, To: newAssignee})
-	}
-	if priorLane != issue.Lane {
-		changes = append(changes, model.FieldChange{Field: "lane", From: priorLane, To: issue.Lane})
-	}
-	newLabels := strings.Join(issue.Labels, ",")
-	if priorLabels != newLabels {
-		changes = append(changes, model.FieldChange{Field: "labels", From: priorLabels, To: newLabels})
-	}
+	// [LAW:dataflow-not-control-flow] replaceLabels asks whether the patch
+	// STATED a label set, which is not the question the diff answers: a patch
+	// restating the set it already had rewrites the label rows — authorship and
+	// timestamps included — while changing nothing history would report.
 	return fieldWrite{issue: issue, replaceLabels: in.Labels != nil, actor: actor, reason: in.Reason, changes: changes}, nil
 }
 

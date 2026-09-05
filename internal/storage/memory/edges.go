@@ -161,21 +161,7 @@ func (e *Engine) setLabels(issueID string, names []string, now time.Time, create
 // what comes back could not have existed before it ran, so nothing downstream
 // re-normalizes. [LAW:parse-dont-validate]
 func canonicalLabels(labels []string) ([]string, error) {
-	out := make([]string, 0, len(labels))
-	seen := map[string]struct{}{}
-	for _, label := range labels {
-		name, err := model.NormalizeLabel(label)
-		if err != nil {
-			return nil, err
-		}
-		if _, dup := seen[name]; dup {
-			continue
-		}
-		seen[name] = struct{}{}
-		out = append(out, name)
-	}
-	slices.Sort(out)
-	return out, nil
+	return model.CanonicalizeLabels(labels)
 }
 
 // --- relations ------------------------------------------------------------

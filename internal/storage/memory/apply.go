@@ -2,9 +2,7 @@ package memory
 
 import (
 	"context"
-	"errors"
 	"fmt"
-	"strconv"
 	"strings"
 	"time"
 
@@ -193,80 +191,25 @@ type fieldPatch struct {
 
 // planFields computes the post-patch issue and the field-change rows it owes,
 // as a pure function of (baseline, patch, actor): no clock beyond the stamp it
-// is handed, no store, no writes. A nil pointer means "leave this alone",
-// which is the whole reason the patch is pointers — and an empty patch plans
-// no change at all without anyone testing for one.
+// is handed, no store, no writes. What a patch MEANS is the contract's
+// [storage.ApplyIssueFields] rather than this engine's own reading of it — an
+// engine free to decide that for itself is an engine free to disagree, and the
+// differential oracle would read the disagreement as divergence instead of as
+// the duplicated logic it was. [LAW:one-source-of-truth]
 func planFields(baseline model.Issue, in storage.UpdateIssueInput, actor string, now time.Time) (fieldPatch, error) {
-	issue := baseline
-	if in.Title != nil {
-		issue.Title = strings.TrimSpace(*in.Title)
-		if issue.Title == "" {
-			return fieldPatch{}, errors.New("title cannot be empty")
-		}
-	}
-	if in.Description != nil {
-		issue.Description = strings.TrimSpace(*in.Description)
-	}
-	if in.Prompt != nil {
-		issue.Prompt = strings.TrimSpace(*in.Prompt)
-	}
-	if in.IssueType != nil {
-		// Container-vs-leaf is what decides which lifecycle expression backs
-		// the issue, so switching across that line would orphan the one it
-		// has: an epic turned leaf keeps a state derived from children it no
-		// longer claims, and a leaf turned epic drops its status. Refuse it
-		// here rather than inventing a default downstream.
-		if issue.IssueType.IsContainer() != in.IssueType.IsContainer() {
-			return fieldPatch{}, fmt.Errorf("cannot change issue_type between container (%v) and leaf types: lifecycle capability would change", model.ContainerTypes())
-		}
-		issue.IssueType = *in.IssueType
-	}
-	if in.Priority != nil {
-		issue.Priority = *in.Priority
-	}
-	if in.Assignee != nil {
-		issue.Assignee = strings.TrimSpace(*in.Assignee)
-	}
-	if in.Lane != nil {
-		issue.Lane = strings.TrimSpace(*in.Lane)
-	}
-	if in.Labels != nil {
-		labels, err := canonicalLabels(*in.Labels)
-		if err != nil {
-			return fieldPatch{}, err
-		}
-		issue.Labels = labels
+	issue, changes, err := storage.ApplyIssueFields(baseline, in)
+	if err != nil {
+		return fieldPatch{}, err
 	}
 	patch := fieldPatch{issue: issue, statesLabels: in.Labels != nil, actor: actor}
-	changes := fieldChanges(baseline, issue)
+	// An empty patch plans no change without anyone testing for one: no field
+	// moved, so there are no rows, so there is no event to owe.
 	if len(changes) == 0 {
 		return patch, nil
 	}
 	patch.issue.UpdatedAt = now
 	patch.events = []eventSpec{{reason: in.Reason, actor: actor, changes: changes}}
 	return patch, nil
-}
-
-// fieldChanges reports the field axis's change rows: one per field that
-// actually moved, in a fixed order so two reads of one mutation describe it
-// identically.
-func fieldChanges(before, after model.Issue) []model.FieldChange {
-	var changes []model.FieldChange
-	appendIfMoved := func(field, from, to string) {
-		if from != to {
-			changes = append(changes, model.FieldChange{Field: field, From: from, To: to})
-		}
-	}
-	appendIfMoved("title", before.Title, after.Title)
-	appendIfMoved("description", before.Description, after.Description)
-	appendIfMoved("issue_type", string(before.IssueType), string(after.IssueType))
-	// The numeric wire encoding, not the display name: history keeps what the
-	// field stores so a replay reads back the value that was written.
-	appendIfMoved("priority", strconv.Itoa(int(before.Priority)), strconv.Itoa(int(after.Priority)))
-	appendIfMoved("assignee", before.Assignee, after.Assignee)
-	appendIfMoved("lane", before.Lane, after.Lane)
-	appendIfMoved("labels", strings.Join(before.Labels, ","), strings.Join(after.Labels, ","))
-	return changes
 }
 
 // statusChanges reports the status axis's change rows — the whole close
