@@ -91,6 +91,7 @@ var cases = []engineCase{
 	{"apply_to_container_is_refused", applyToContainer},
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
+	{"every_editable_field_records_history", everyEditableFieldRecordsHistory},
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
 	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
@@ -425,6 +426,66 @@ func historyRecordsMutations(t *testing.T, ctx context.Context, st storage.Store
 	for i := 1; i < len(after); i++ {
 		if after[i].CreatedAt.Before(after[i-1].CreatedAt) {
 			t.Fatalf("events are not oldest-first at index %d", i)
+		}
+	}
+}
+
+// everyEditableFieldRecordsHistory holds the field axis to its own promise:
+// every field a patch can write, history reports. Not "the fields somebody
+// remembered" — every one of them.
+//
+// The case exists because the exception was real. Both engines wrote prompt and
+// neither recorded it, so an agent could rewrite the instruction another agent
+// would execute and leave nothing behind saying it had changed
+// (links-store-seam-q35v.8). Nothing about that omission was decided; it was a
+// field added to two apply blocks and to neither diff, in engines whose only
+// tie between those blocks was that one author edited both.
+//
+// So this walks the whole editable set rather than the one field that was
+// missing. A per-field case would have passed for the seven that worked and
+// never been written for the eighth, which is exactly how the hole got in.
+func everyEditableFieldRecordsHistory(t *testing.T, ctx context.Context, st storage.Store) {
+	newType := model.TypeBug
+	priority := model.PriorityUrgent
+	labels := []string{"beta"}
+	title, description, prompt, assignee, lane := "retitled", "described", "render at 1024x768", "ada", "left"
+
+	// One patch per field, each moving exactly that field, so a recorded row
+	// can only have come from the field the case names.
+	for _, edit := range []struct {
+		field string
+		patch storage.UpdateIssueInput
+		want  string
+	}{
+		{"title", storage.UpdateIssueInput{Title: &title}, "retitled"},
+		{"description", storage.UpdateIssueInput{Description: &description}, "described"},
+		{"prompt", storage.UpdateIssueInput{Prompt: &prompt}, "render at 1024x768"},
+		{"issue_type", storage.UpdateIssueInput{IssueType: &newType}, "bug"},
+		{"priority", storage.UpdateIssueInput{Priority: &priority}, "1"},
+		{"assignee", storage.UpdateIssueInput{Assignee: &assignee}, "ada"},
+		{"lane", storage.UpdateIssueInput{Lane: &lane}, "left"},
+		{"labels", storage.UpdateIssueInput{Labels: &labels}, "beta"},
+	} {
+		issue := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "recorded", Topic: "core", IssueType: model.TypeTask})
+		if _, err := st.Apply(ctx, issue.ID, storage.Change{Actor: "ada", Fields: edit.patch}); err != nil {
+			t.Errorf("Apply %s patch error = %v", edit.field, err)
+			continue
+		}
+		events, err := st.ListEvents(ctx, issue.ID)
+		if err != nil {
+			t.Fatalf("ListEvents after %s patch error = %v", edit.field, err)
+		}
+		var got []model.FieldChange
+		for _, event := range events {
+			got = append(got, event.Changes...)
+		}
+		index := slices.IndexFunc(got, func(c model.FieldChange) bool { return c.Field == edit.field })
+		if index < 0 {
+			t.Errorf("patching %s recorded %v; the write left no history of itself", edit.field, got)
+			continue
+		}
+		if row := got[index]; row.To != edit.want {
+			t.Errorf("%s change row To = %q, want %q", edit.field, row.To, edit.want)
 		}
 	}
 }
