@@ -92,6 +92,7 @@ var cases = []engineCase{
 	{"container_state_follows_live_children", containerStateFollowsLiveChildren},
 	{"history_records_mutations", historyRecordsMutations},
 	{"a_new_checkout_taking_a_ticket_records", takeoverByANewCheckoutRecords},
+	{"one_issues_history_matches_the_whole_log", oneIssuesHistoryMatchesTheWholeLog},
 	{"list_defaults_to_rank_order", listDefaultsToRankOrder},
 	{"list_filters_select", listFiltersSelect},
 	{"list_hides_archived_and_deleted", listHidesArchivedAndDeleted},
@@ -484,6 +485,75 @@ func takeoverByANewCheckoutRecords(t *testing.T, ctx context.Context, st storage
 	if takeover.Action != string(model.ActionStart) {
 		t.Errorf("takeover event action = %q, want %q", takeover.Action, model.ActionStart)
 	}
+}
+
+// oneIssuesHistoryMatchesTheWholeLog holds ListEvents to the promise its
+// contract doc makes: one issue's events, "ordered exactly as ListAllEvents
+// orders the whole of it". Two engines answer it independently — the memory one
+// scans its event slice under a lock, the SQL one queries with a predicate — and
+// a divergence (the wrong issue's rows, an unsorted return, a dropped id
+// tie-break) would otherwise surface only as strange claim-transfer behavior
+// three layers up, never as a failure against the contract that promised it.
+//
+// The expectation is DERIVED from ListAllEvents rather than written down,
+// because agreeing with ListAllEvents is the entire promise: a hand-written
+// sequence would agree with neither reader the moment an engine changed what it
+// records, and would then be pinning this test's memory of the engine rather
+// than the contract. [LAW:one-source-of-truth]
+func oneIssuesHistoryMatchesTheWholeLog(t *testing.T, ctx context.Context, st storage.Store) {
+	subject := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "subject", Topic: "core"})
+	other := mustCreate(t, ctx, st, storage.CreateIssueInput{Title: "other", Topic: "core"})
+
+	// Interleaved on purpose. A reader that returns the wrong issue's events,
+	// and one that returns the right issue's in the wrong order, both survive a
+	// history in which one issue's events happen to be contiguous.
+	for _, title := range []string{"one", "two", "three"} {
+		for _, id := range []string{subject.ID, other.ID} {
+			if _, err := st.Apply(ctx, id, storage.Change{Fields: storage.UpdateIssueInput{Title: &title}, Actor: "conformance"}); err != nil {
+				t.Fatalf("Apply title %q to %s error = %v", title, id, err)
+			}
+		}
+	}
+	// A lifecycle verb as well as field edits, so the history under test is the
+	// mixed kind a claimant is actually read out of.
+	for _, id := range []string{subject.ID, other.ID} {
+		if _, err := st.Apply(ctx, id, storage.Change{Action: model.Start{Assignee: "ada"}, Actor: "ada"}); err != nil {
+			t.Fatalf("Apply start to %s error = %v", id, err)
+		}
+	}
+
+	whole := mustEvents(t, ctx, st)
+	want := sameIssueInOrder(whole, subject.ID)
+	if len(want) == len(whole) {
+		t.Fatalf("all %d logged events belong to %s: the case seeded nothing for a filter to exclude, so it cannot tell a filtered reader from an unfiltered one", len(whole), subject.ID)
+	}
+
+	got, err := st.ListEvents(ctx, subject.ID)
+	if err != nil {
+		t.Fatalf("ListEvents error = %v", err)
+	}
+	if !slices.EqualFunc(got, want, func(a, b model.IssueEvent) bool { return a.ID == b.ID }) {
+		t.Errorf("ListEvents(%s) disagrees with the whole log narrowed to that issue:\n  listed = %v\n  narrowed = %v",
+			subject.ID, eventIDsOf(got), eventIDsOf(want))
+	}
+}
+
+// sameIssueInOrder narrows the whole log to one issue and puts it in the order
+// the contract names — oldest first, ties broken by id. Sorting a slice that
+// arrived sorted is a no-op; stating the order here is what keeps the
+// expectation from inheriting ListAllEvents' ordering as an assumption instead
+// of asserting the contract's own rule.
+func sameIssueInOrder(all []model.IssueEvent, issueID string) []model.IssueEvent {
+	mine := make([]model.IssueEvent, 0, len(all))
+	for _, event := range all {
+		if event.IssueID == issueID {
+			mine = append(mine, event)
+		}
+	}
+	slices.SortFunc(mine, func(a, b model.IssueEvent) int {
+		return cmp.Or(a.CreatedAt.Compare(b.CreatedAt), strings.Compare(a.ID, b.ID))
+	})
+	return mine
 }
 
 func listDefaultsToRankOrder(t *testing.T, ctx context.Context, st storage.Store) {
