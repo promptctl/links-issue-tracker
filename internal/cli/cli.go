@@ -1336,10 +1336,12 @@ func runTransition(ctx context.Context, stdout io.Writer, ap *app.App, args []st
 
 	// [LAW:no-silent-failure] start takes the ticket over; when it takes it FROM
 	// SOMEBODY, that hand-off is said out loud. Both conditions are load-bearing
-	// and neither implies the other: Held is whether there was a holder at all —
-	// claims' own reading, the checkout and never the assignee, so a ticket
-	// carrying `lit new --assignee X` that nobody has started is silent — and the
-	// claimant comparison is whether that holder changed. Comparing assignees
+	// and neither implies the other: Held is whether anything ever established a
+	// hold — a fact NEITHER identity half carries, because both go empty on real
+	// holders, so a ticket carrying `lit new --assignee X` that nobody has
+	// started is silent — and the claimant comparison is whether that holder
+	// changed. Reading it off the checkout instead is the wrong definition this
+	// PR already tried and reverted; claimant.go says why. Comparing assignees
 	// alone was silent for the two takeovers that matter most: between two human
 	// checkouts (both assignees empty) and between two worktrees of one agent
 	// session (both assignees identical).
