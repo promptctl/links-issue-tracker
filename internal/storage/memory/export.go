@@ -41,7 +41,7 @@ func (e *Engine) Export(ctx context.Context) (model.Export, error) {
 	return model.Export{
 		Version:     exportVersion,
 		WorkspaceID: e.workspaceID,
-		ExportedAt:  e.now(),
+		ExportedAt:  e.clock.Now(),
 		Issues:      issues,
 		Relations:   slices.Clone(e.relations),
 		Comments:    slices.Clone(e.comments),

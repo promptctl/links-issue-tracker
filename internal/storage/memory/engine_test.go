@@ -22,7 +22,7 @@ import (
 // `-race` this test is where that shows up. [LAW:verifiable-goals]
 func TestConcurrentUseIsSerialized(t *testing.T) {
 	t.Parallel()
-	engine := newEngine(t)
+	engine := newEngine(t, storage.SystemClock)
 	ctx := context.Background()
 
 	const writers = 8

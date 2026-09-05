@@ -297,7 +297,7 @@ func (s *Store) AddRelation(ctx context.Context, in storage.AddRelationInput) (m
 		return model.Relation{}, errors.New("related-to cannot target itself")
 	}
 	srcID, dstID := in.Type.CanonicalEndpoints(in.SrcID, in.DstID)
-	now := time.Now().UTC()
+	now := s.clock.Now()
 	rel := model.Relation{SrcID: srcID, DstID: dstID, Type: in.Type, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
 	if rel.CreatedBy == "" {
 		rel.CreatedBy = "unknown"
@@ -445,7 +445,7 @@ func (s *Store) SetParent(ctx context.Context, in storage.SetParentInput) (model
 		SrcID:     in.ChildID,
 		DstID:     in.ParentID,
 		Type:      model.RelParentChild,
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: s.clock.Now(),
 		CreatedBy: strings.TrimSpace(in.CreatedBy),
 	}
 	if rel.CreatedBy == "" {

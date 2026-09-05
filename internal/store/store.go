@@ -51,6 +51,14 @@ type Store struct {
 	telemetryDir         string
 	releaseWorkspaceLock func() error
 
+	// clock is where this store learns the instant it stamps a write with. It
+	// is a construction-time dependency rather than a read from inside the
+	// write path, so a caller that needs two rows whose timestamps no real
+	// clock would hand out in that order can say so — which is what lets the
+	// conformance suite state a time-ordering rule at all.
+	// [LAW:effects-at-boundaries]
+	clock storage.Clock
+
 	// attribution stamps every event this store records with the checkout that
 	// produced it. It is deliberately NOT an Open() parameter: identity is
 	// resolved only after the store opens, so that a command which cannot reach
@@ -394,6 +402,7 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 		workspaceID:    workspaceID,
 		doltRootDir:    doltRootDir,
 		access:         access,
+		clock:          storage.SystemClock,
 		commitLockPath: commitLockPathForDolt(doltRootDir),
 		telemetryDir:   filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}, nil
@@ -479,7 +488,7 @@ func (s *Store) CreateIssue(ctx context.Context, in storage.CreateIssueInput) (m
 	if issueType == "" {
 		issueType = model.TypeTask
 	}
-	now := time.Now().UTC()
+	now := s.clock.Now()
 	labels, err := canonicalizeLabels(in.Labels)
 	if err != nil {
 		return model.Issue{}, err
@@ -979,7 +988,7 @@ func (s *Store) applyFieldsTx(ctx context.Context, tx *sql.Tx, w fieldWrite) err
 	issue := w.issue
 	// [LAW:effects-at-boundaries] The clock is read here, at the write boundary,
 	// not in planFieldUpdate — so the plan stays a pure function of its inputs.
-	issue.UpdatedAt = time.Now().UTC()
+	issue.UpdatedAt = s.clock.Now()
 	if _, err := tx.ExecContext(ctx, `UPDATE issues SET
 		title = ?, description = ?, agent_prompt = ?, priority = ?, issue_type = ?, assignee = ?, lane = ?, updated_at = ?
 		WHERE id = ?`, issue.Title, issue.Description, nullableString(issue.Prompt), issue.Priority, issue.IssueType, issue.AssigneeValue(), issue.Lane, issue.UpdatedAt.Format(time.RFC3339Nano), issue.ID); err != nil {
@@ -1084,7 +1093,7 @@ func (s *Store) AddComment(ctx context.Context, in storage.AddCommentInput) (mod
 	if body == "" {
 		return model.Comment{}, model.Issue{}, errors.New("comment body is required")
 	}
-	now := time.Now().UTC()
+	now := s.clock.Now()
 	comment := model.Comment{ID: "cmt-" + uuid.NewString(), IssueID: in.IssueID, Body: body, CreatedAt: now, CreatedBy: strings.TrimSpace(in.CreatedBy)}
 	if comment.CreatedBy == "" {
 		comment.CreatedBy = "unknown"
@@ -1164,7 +1173,7 @@ func (s *Store) planLifecycleAction(ctx context.Context, issue model.Issue, acto
 		}
 		return w, nil
 	case model.RetentionAction:
-		w, err := planRetentionTransition(issue, actor, reason, a)
+		w, err := planRetentionTransition(issue, actor, reason, a, s.clock.Now())
 		if err != nil {
 			return nil, err
 		}
@@ -1253,7 +1262,7 @@ func (s *Store) planStatusTransition(ctx context.Context, issue model.Issue, act
 	if toStatus == fromStatus && post == prior {
 		return transitionWrite{noop: true, post: issue}, nil
 	}
-	now := time.Now().UTC()
+	now := s.clock.Now()
 	var closedAtArg any
 	if value := updated.ClosedAtValue(); value != nil {
 		closedAtArg = value.Format(time.RFC3339Nano)
@@ -1399,13 +1408,16 @@ func (w retentionWrite) postIssue() model.Issue { return w.post }
 // planned retention transition owes a write.
 func (w retentionWrite) isNoop() bool { return false }
 
-// planRetentionTransition plans a retention action against issue. The whole
-// retention state machine — legal moves, rejection reasons, the
+// planRetentionTransition plans a retention action against issue as of now. The
+// whole retention state machine — legal moves, rejection reasons, the
 // delete-on-archived stamp drop — is the pure Retain transition table; this
-// plan supplies the clock and projects the result into column values.
+// plan projects the result into column values.
 // [LAW:single-enforcer]
-func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction) (retentionWrite, error) {
-	now := time.Now().UTC()
+//
+// [LAW:effects-at-boundaries] The instant arrives as an argument because this
+// is the compute half: it decides nothing about when, so it reads no clock and
+// stays testable with no store at all.
+func planRetentionTransition(issue model.Issue, actor string, reason string, action model.RetentionAction, now time.Time) (retentionWrite, error) {
 	priorArchivedAt, priorDeletedAt := model.RetentionTimestamps(issue.Retention())
 	priorArchived, priorDeleted := retentionColumns(issue)
 	next, err := model.Retain(issue.Retention(), action, now)
@@ -1740,7 +1752,7 @@ func (s *Store) recordEvent(ctx context.Context, tx *sql.Tx, issueID, action, re
 		Action:    strings.TrimSpace(action),
 		Reason:    strings.TrimSpace(reason),
 		Actor:     strings.TrimSpace(actor),
-		CreatedAt: time.Now().UTC(),
+		CreatedAt: s.clock.Now(),
 		// The stamp is read off the store rather than passed in, so it is the
 		// same for every event this command writes and cannot be forgotten at a
 		// call site. Unattributed stores stamp nothing, which is how a store
@@ -1882,7 +1894,12 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 	// TOTAL order over them rather than merely a tighter one. Enforcing it here
 	// rather than in the comparison is deliberate: every consumer of this read
 	// gets the guarantee, and none of them grows its own. [LAW:single-enforcer]
-	q += " ORDER BY e.created_at ASC, e.id ASC, c.field ASC"
+	//
+	// e.id groups an event's change rows together for the collapse below. It is
+	// NOT the event order the contract asks for — created_at is a varchar here,
+	// so ordering events in SQL would sort each stamp by its spelling. The
+	// events are ordered after hydration instead, where they are instants.
+	q += " ORDER BY e.id ASC, c.field ASC"
 	rows, err := s.db.QueryContext(ctx, q, args...)
 	if err != nil {
 		return nil, err
@@ -1936,7 +1953,23 @@ func (s *Store) queryEvents(ctx context.Context, whereClause string, args ...any
 			out[i].Changes = append(out[i].Changes, change)
 		}
 	}
-	return out, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	// The contract's history order, applied to hydrated values rather than to
+	// the column: created_at is stored as RFC3339Nano text, and text comparison
+	// puts ".12Z" — three milliseconds EARLIER — after ".123456789Z", because
+	// the trimmed encoding runs out at a character where "Z" outranks a digit.
+	// A SQL sort on that column therefore disagrees with any engine holding a
+	// real instant, on a collision no test could construct until the contract
+	// grew a clock seam (links-store-seam-utz7).
+	//
+	// [LAW:one-source-of-truth] The comparison is the contract's, not this
+	// engine's: storage.EventOrdering is what the memory engine sorts by too,
+	// so the rule cannot be edited into disagreement again. The sort is stable,
+	// so the id grouping above survives it untouched.
+	slices.SortStableFunc(out, storage.EventOrdering)
+	return out, nil
 }
 
 type issueScanner interface{ Scan(dest ...any) error }

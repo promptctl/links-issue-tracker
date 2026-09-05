@@ -20,8 +20,14 @@ import (
 // [LAW:behavior-not-structure]
 func TestDoltEngineConformance(t *testing.T) {
 	t.Parallel()
-	conformance.Run(t, func(t *testing.T) storage.Store {
-		return openIssueStore(t, context.Background())
+	conformance.Run(t, func(t *testing.T, clock storage.Clock) storage.Store {
+		st := openIssueStore(t, context.Background())
+		// Open() builds every store on the real clock, which is what a person
+		// running lit gets; the suite's clock is installed here, in this
+		// engine's own package, so the production entry point grows no
+		// parameter that only a test would ever vary.
+		st.clock = clock
+		return st
 	})
 }
 
