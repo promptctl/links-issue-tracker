@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.13.0] - 2026-09-05
+
 ### Added
 
 - The storage contract has a clock. `storage.Clock` is where an engine reads the instant it stamps a write with, supplied when the engine is built rather than reached for from inside the write path, and `storage.Clock.Now` is the one place a stamp is normalized to UTC — there were eighteen `time.Now().UTC()` calls across the two engines saying it separately, and now there are none. Production is unchanged: `store.Open` and `store.OpenForRead` grow no parameter, every store they build takes `storage.SystemClock`, and `internal/engine`'s factory and its call sites are untouched. The one constructor whose signature moved is `memory.New`, which had exactly one caller.
