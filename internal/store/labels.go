@@ -26,7 +26,7 @@ func (s *Store) AddLabel(ctx context.Context, in storage.AddLabelInput) ([]strin
 	if err := s.withMutation(ctx, "add label", func(ctx context.Context, tx *sql.Tx) error {
 		_, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by)
 			VALUES (?, ?, ?, ?)
-			ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, time.Now().UTC().Format(time.RFC3339Nano), createdBy)
+			ON DUPLICATE KEY UPDATE issue_id = issue_id`, in.IssueID, label, s.clock.Now().Format(time.RFC3339Nano), createdBy)
 		if err != nil {
 			return fmt.Errorf("insert label: %w", err)
 		}
@@ -99,7 +99,7 @@ func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string,
 	if author == "" {
 		author = "unknown"
 	}
-	timestamp := time.Now().UTC().Format(time.RFC3339Nano)
+	timestamp := s.clock.Now().Format(time.RFC3339Nano)
 	for _, label := range labels {
 		if _, err := tx.ExecContext(ctx, `INSERT INTO labels(issue_id, label, created_at, created_by) VALUES (?, ?, ?, ?)`, issueID, label, timestamp, author); err != nil {
 			return fmt.Errorf("insert label %q: %w", label, err)

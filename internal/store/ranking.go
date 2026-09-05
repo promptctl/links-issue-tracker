@@ -30,7 +30,7 @@ func (s *Store) RankToTop(ctx context.Context, issueID string) error {
 		} else {
 			newRank = rank.Before(firstRank.String)
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := s.clock.Now().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
 			return fmt.Errorf("rank-to-top: update: %w", err)
 		}
@@ -130,7 +130,7 @@ func (s *Store) RankSet(ctx context.Context, ids []string) ([]storage.RankSetRes
 		// The last ID (idx N-1) is anchored just above the existing top; each
 		// earlier ID is anchored just above the previously-assigned rank, so the
 		// final order is ids[0] < ids[1] < ... < ids[N-1] < (existing top).
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := s.clock.Now().Format(time.RFC3339Nano)
 		cursor := topRank.String
 		hasCursor := topRank.Valid && topRank.String != ""
 		newRanks := make([]string, len(ranked))
@@ -174,7 +174,7 @@ func (s *Store) RankToBottom(ctx context.Context, issueID string) error {
 		} else {
 			newRank = rank.After(lastRank.String)
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := s.clock.Now().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, issueID); err != nil {
 			return fmt.Errorf("rank-to-bottom: update: %w", err)
 		}
@@ -356,7 +356,7 @@ func (s *Store) RankAbove(ctx context.Context, issueID, targetID string) (storag
 				return fmt.Errorf("rank-above: midpoint: %w", err)
 			}
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := s.clock.Now().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
 			return fmt.Errorf("rank-above: update: %w", err)
 		}
@@ -386,7 +386,7 @@ func (s *Store) RankBelow(ctx context.Context, issueID, targetID string) (storag
 				return fmt.Errorf("rank-below: midpoint: %w", err)
 			}
 		}
-		now := time.Now().UTC().Format(time.RFC3339Nano)
+		now := s.clock.Now().Format(time.RFC3339Nano)
 		if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, move.MovedID); err != nil {
 			return fmt.Errorf("rank-below: update: %w", err)
 		}
@@ -865,7 +865,7 @@ func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
 						return fmt.Errorf("fix rank inversions: midpoint: %w", err)
 					}
 				}
-				now := time.Now().UTC().Format(time.RFC3339Nano)
+				now := s.clock.Now().Format(time.RFC3339Nano)
 				if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, target.depID); err != nil {
 					return fmt.Errorf("fix rank inversions: update %s: %w", target.depID, err)
 				}

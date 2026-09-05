@@ -19,7 +19,7 @@ import (
 // happen. [LAW:no-silent-failure]
 func TestMemoryEngineOffersNoCapability(t *testing.T) {
 	t.Parallel()
-	engine := newEngine(t)
+	engine := newEngine(t, storage.SystemClock)
 
 	if offered := storage.Offered(engine); len(offered) != 0 {
 		t.Fatalf("the memory engine offers %v, want none", offered)
