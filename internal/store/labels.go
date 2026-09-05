@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -109,22 +108,11 @@ func (s *Store) replaceLabelsTx(ctx context.Context, tx *sql.Tx, issueID string,
 	return nil
 }
 
+// canonicalizeLabels delegates to the domain's canonical label-set form.
+// [LAW:single-enforcer] The definition lives in model.CanonicalizeLabels; this
+// wrapper only keeps the store's callsites short.
 func canonicalizeLabels(labels []string) ([]string, error) {
-	out := make([]string, 0, len(labels))
-	seen := map[string]struct{}{}
-	for _, label := range labels {
-		normalized, err := normalizeLabel(label)
-		if err != nil {
-			return nil, err
-		}
-		if _, exists := seen[normalized]; exists {
-			continue
-		}
-		seen[normalized] = struct{}{}
-		out = append(out, normalized)
-	}
-	sort.Strings(out)
-	return out, nil
+	return model.CanonicalizeLabels(labels)
 }
 
 // normalizeLabel delegates to the domain's canonical label form.
