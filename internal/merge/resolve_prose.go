@@ -55,7 +55,8 @@ type proseKey struct {
 // [LAW:no-silent-failure] An incomplete or mismatched resolution never produces a
 // committable export, so a provisional prose value can never be published by
 // omission, and the agent can never silently overwrite a field whose divergence
-// changed underneath it.
+// changed underneath it. A merge holding an id collision has no export to splice
+// into at all, which Provisional reports rather than this function re-deriving.
 //
 // It is pure: the live pending set comes from the MergeResult, the merged text
 // from the agent — no IO, no clock. [LAW:effects-at-boundaries]
@@ -96,7 +97,10 @@ func ApplyProseResolutions(result MergeResult, resolutions []ProseResolution) (m
 		return model.Export{}, false
 	}
 
-	export := result.Provisional()
+	export, ok := result.Provisional()
+	if !ok {
+		return model.Export{}, false
+	}
 	issues := make([]model.Issue, len(export.Issues))
 	copy(issues, export.Issues)
 	for i := range issues {
