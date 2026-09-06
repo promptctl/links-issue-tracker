@@ -68,8 +68,14 @@ func TestColumnsRejectsUnknownName(t *testing.T) {
 			if got := ExitCode(err); got != ExitUsage {
 				t.Errorf("--columns %q exit code = %d, want %d (ExitUsage)", tc.expr, got, ExitUsage)
 			}
-			if !strings.Contains(err.Error(), tc.unknown) {
-				t.Errorf("--columns %q error %q does not name the offending column %q", tc.expr, err, tc.unknown)
+			// Matched against the QUOTED offender, not the bare word. The
+			// message always carries the full valid-columns list, so a bare
+			// substring check is satisfied by an unrelated part of it — "stat"
+			// is inside the "state" this very message advertises, and that row
+			// passed no matter what the code echoed as the offender. Requiring
+			// the quotes puts the match on the one span only the offender fills.
+			if quoted := fmt.Sprintf("%q", tc.unknown); !strings.Contains(err.Error(), quoted) {
+				t.Errorf("--columns %q error %q does not name the offending column as %s", tc.expr, err, quoted)
 			}
 			// The rejection has to hand back the whole accepted vocabulary;
 			// a bare "unknown column" leaves the caller guessing the spelling
