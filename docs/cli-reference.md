@@ -186,11 +186,17 @@ explicitly included. Output-shaping flags (`--columns`, `--format`) have no toke
 they are not filter concerns.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
-issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `title`, `assignee`,
-`labels`, `created_at`, `updated_at`) two opt-in columns surface relationships from
-the canonical graph: `parent` (the parent/epic id, `-` if none) and `blocked`
-(`blocked` when a still-open dependency blocks the ticket, else `-`). Default output
-is unchanged unless a relationship column is selected.
+issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `rank`, `title`,
+`assignee`, `labels`, `created_at`, `updated_at`) two opt-in columns surface
+relationships from the canonical graph: `parent` (the parent/epic id, `-` if none) and
+`blocked` (`blocked` when a still-open dependency blocks the ticket, else `-`).
+`rank` prints the issue's own rank string, the key `ls` orders by. Default output is
+unchanged unless a relationship column is selected. A name outside that set is a usage
+error (exit 2) that quotes the offending word and lists the valid columns — the same
+list the flag's `--help` prints — and the command exits before any row is fetched or
+printed. Two near-misses: the status column is spelled `state`, and `description` and
+`prompt` are multi-line, so they are read with `lit show --field` rather than projected
+into a table.
 
 ### `lit show`
 

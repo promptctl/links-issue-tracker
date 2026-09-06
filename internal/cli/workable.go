@@ -37,7 +37,7 @@ type workableKnobs struct {
 	status    model.State
 	labels    []string
 	limit     int
-	columns   []string
+	columns   []columnSpec
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -51,7 +51,7 @@ type workableView struct {
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error
+	render     func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -114,7 +114,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
-	columnsExpr := optionalString(fs, view.hasColumns, "columns", "Comma-separated output columns")
+	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -126,6 +126,13 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	issueTypeValue, err := parseWorkableType(*issueType)
+	if err != nil {
+		return err
+	}
+	// Parsed alongside the other flag boundaries, and so before the staleness
+	// warning below prints: a bad column name must not reach the caller as a
+	// rejection that already emitted output.
+	columns, err := parseColumnSelection(*columnsExpr)
 	if err != nil {
 		return err
 	}
@@ -143,7 +150,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		status:    statusState,
 		labels:    splitCSV(*labels),
 		limit:     *limit,
-		columns:   parseColumns(*columnsExpr),
+		columns:   columns,
 	}
 	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  knobs.assignee,
