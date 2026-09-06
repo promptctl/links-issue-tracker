@@ -196,12 +196,19 @@ func newSiblingGateAnnotator(details map[string]storage.IssueRelations, siblings
 //
 // One witness, not all of them, because the gate is an existential: "∃ an
 // earlier unfinished lane-mate" is proved by one, and the rest of the prefix is
-// the lane's own rank order, which every consumer already has.
+// the lane's own rank order.
 // [LAW:one-source-of-truth] The lane order is the authority on the prefix; the
 // annotation carries the edge, never a second copy of the order. Carrying all of
 // them made a sequential lane's blocking text grow quadratically down the epic —
 // the tenth child restating the nine facts its nine predecessors had each
 // already stated — which is the noise links-listing-x943 was filed for.
+//
+// The lane order is not always in front of the reader: the pending set is
+// deliberately unfiltered (pendingSiblingsByEpic), so under a filtered or
+// limited `lit backlog` the named sibling can be absent from the visible list.
+// It is still the true prerequisite — a gate that consulted only the rows a
+// filter let through would call a blocked leaf ready, which is the worse
+// failure — so the edge is named either way and no view promises the chain.
 //
 // The nearest predecessor, not the earliest, because it is the edge that is
 // locally true and locally actionable: close it and this leaf is next. The

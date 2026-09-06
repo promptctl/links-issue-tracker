@@ -8,6 +8,7 @@ import (
 
 	"github.com/promptctl/links-issue-tracker/internal/annotation"
 	"github.com/promptctl/links-issue-tracker/internal/claims"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -200,6 +201,75 @@ func TestBacklogSaysWhenARunOpensUnderNoEpic(t *testing.T) {
 	if got := blockedOrEpicLines(out.String(), loner); strings.Contains(got, "epic: none") {
 		t.Errorf("%s opens the list and states %q; nothing above it could claim it", loner, got)
 	}
+}
+
+// A lane's identity is the LaneID, never its rendering. LaneID.String exists
+// "for logs and test failures" and is lossy — it joins epic and lane with "#",
+// so epic "AB" lane "C#D" spells the same as epic "AB#C" lane "D" — and a run
+// tracker that compared those spellings would treat the second row as
+// continuing the first's run and swallow a claim line the reader is owed.
+//
+// Built from model.Issue values rather than through the store, because the
+// store will not mint an epic id containing "#": the point is that the
+// comparison cannot depend on that, not that the ids are reachable.
+func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
+	epicOne := model.Issue{ID: "AB", IssueType: model.TypeEpic, Title: "Epic AB"}
+	epicTwo := model.Issue{ID: "AB#C", IssueType: model.TypeEpic, Title: "Epic AB#C"}
+	rowOne := openLeaf(t, "one", "In lane C#D of AB", "C#D")
+	rowTwo := openLeaf(t, "two", "In lane D of AB#C", "D")
+
+	laneOne := model.LaneOf(rowOne, &epicOne)
+	laneTwo := model.LaneOf(rowTwo, &epicTwo)
+	if laneOne == laneTwo {
+		t.Fatalf("fixture is wrong: the two lanes must differ, both are %#v", laneOne)
+	}
+	if laneOne.String() != laneTwo.String() {
+		t.Fatalf("fixture is wrong: the two lanes must spell the same, got %q and %q", laneOne, laneTwo)
+	}
+
+	details := map[string]storage.IssueRelations{
+		rowOne.ID: {Parent: &epicOne},
+		rowTwo.ID: {Parent: &epicTwo},
+	}
+	rows := []annotation.AnnotatedIssue{
+		{Issue: rowOne, ParentEpic: &annotation.ParentEpicRef{ID: epicOne.ID, Title: epicOne.Title}},
+		{Issue: rowTwo, ParentEpic: &annotation.ParentEpicRef{ID: epicTwo.ID, Title: epicTwo.Title}},
+	}
+	cc := claimContext{
+		standings: claims.Standings{laneOne: heldBy(otherAttribution), laneTwo: heldBy(otherAttribution)},
+		self:      selfAttribution,
+	}
+
+	var out bytes.Buffer
+	if err := printBacklogOutput(&out, nil, rows, details, cc); err != nil {
+		t.Fatalf("printBacklogOutput error = %v", err)
+	}
+	text := out.String()
+
+	claimed := 0
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, contextIndent+"claimed") {
+			claimed++
+		}
+	}
+	if claimed != 2 {
+		t.Fatalf("claim line appears %d times, want 2 — %s and %s are different lanes that spell alike:\n%s", claimed, rowOne.ID, rowTwo.ID, text)
+	}
+}
+
+// openLeaf builds an open task in the named lane, hydrated so it can report its
+// own state — the store is not involved, so the fixture can spell ids and lanes
+// the store would never mint.
+func openLeaf(t *testing.T, id, title, lane string) model.Issue {
+	t.Helper()
+	issue, err := model.HydrateStatus(
+		model.Issue{ID: id, Title: title, Lane: lane, IssueType: model.TypeTask},
+		model.StatusView{Value: model.StateOpen},
+	)
+	if err != nil {
+		t.Fatalf("HydrateStatus(%q) error = %v", id, err)
+	}
+	return issue
 }
 
 // blockedOrEpicLines returns the context lines rendered under one row, joined,

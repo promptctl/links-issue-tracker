@@ -29,7 +29,8 @@ Read every row: each carries its dependencies, blocking reasons, and what closin
 That context is the ordering rationale — the dependency graph IS the priority story.
 An epic line and a claim line describe a whole run of rows and are printed once, on the row that
 opens the run, so a row without one continues the run above it. 'blocked: earlier sibling X' names
-the one row directly ahead of it in its lane, not every row ahead of it.
+the one ticket directly ahead of it in its lane, not every ticket ahead of it — and X is the true
+prerequisite even when a filter or --limit keeps X's own row out of this list.
 Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
@@ -119,7 +120,7 @@ func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext,
 	here := backlogRun{epicID: epicID(epic), lane: lane}
 	return backlogRowContext{
 		epic:  openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
-		claim: openingRun(claim, here.lane.String(), above.lane.String()),
+		claim: openingRun(claim, here.lane, above.lane),
 		run:   here,
 	}
 }
@@ -150,7 +151,16 @@ func backlogEpicLine(epic *annotation.ParentEpicRef) string {
 // stated, and the zero value when the run continues. Suppressing a repeated
 // epic line and a repeated claim line is one behavior over two data types, so
 // it is one function. [LAW:one-type-per-behavior]
-func openingRun[T any](value T, subject, above string) T {
+//
+// A subject need only be comparable, never a string. Requiring a string forced
+// callers to hand over a rendering of the value instead of the value, and
+// LaneID.String — which exists "for logs and test failures" — is lossy: it
+// joins epic and lane with "#", so epic "AB" lane "C#D" reads the same as epic
+// "AB#C" lane "D", and a solo lane renders as a bare issue id that an
+// epic-scoped lane can also spell. Two distinct lanes comparing equal would
+// swallow a claim line the reader is owed. [LAW:types-are-the-program] the
+// constraint is comparability, so that is what the signature asks for.
+func openingRun[T any, S comparable](value T, subject, above S) T {
 	if subject == above {
 		var restated T
 		return restated
