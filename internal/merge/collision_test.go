@@ -145,21 +145,64 @@ func TestClassifySharedRowsAcrossUnrelatedHistories(t *testing.T) {
 	}
 }
 
-// TestClassifyAncestryOutranksBirthCertificate pins the evidence order: a
-// merge-base row whose birth instant one side still carries proves the two sides
-// descend from one creation, so they are one ticket even if the other side's
-// created_at has drifted — the birth certificate is the fallback for when there
-// is no such ancestry, never an override of it.
-func TestClassifyAncestryOutranksBirthCertificate(t *testing.T) {
+// TestClassifyRefusesAReMintBesideASurvivingRow is the reused id at its most
+// reachable: only ONE store deletes epic.3 and mints a fresh one, so the base
+// commit's row is still our own ancestor while theirs is a stranger. A rule that
+// let a base matching EITHER side prove sameness would read this as one drifted
+// ticket and field-merge two jobs — and one-sided is the common shape, since two
+// stores independently dropping the same id is the rare one.
+func TestClassifyRefusesAReMintBesideASurvivingRow(t *testing.T) {
+	base := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t0 })
+	ours := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "ship the exporter"
+		i.CreatedAt = t0
+	})
+	theirs := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "rewrite the parser"
+		i.CreatedAt = t2
+	})
+
+	if _, collision := Classify(&base, ours, theirs, "wsA", "wsB"); collision == nil {
+		t.Fatal("a base matching one side passed as proof of one entity; a survivor and a re-mint would be field-merged")
+	}
+}
+
+// TestClassifyDropsABaseFromAReusedID is the same reuse when both sides agree:
+// they are one ticket, but the base commit's row belongs to the ticket that used
+// to wear the id. Keeping it would hand ResolveIssue a three-way whose every
+// twoTier call diffs against a stranger's fields, so the base is dropped and the
+// merge falls back to the two rows that do agree.
+func TestClassifyDropsABaseFromAReusedID(t *testing.T) {
+	stranger := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "the ticket that used to wear this id"
+		i.CreatedAt = t0
+	})
+	ours := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
+	theirs := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
+
+	same, collision := Classify(&stranger, ours, theirs, "wsA", "wsB")
+	if collision != nil {
+		t.Fatalf("two rows sharing a birth instant were read as two tickets: %+v", collision)
+	}
+	if same.base != nil {
+		t.Fatalf("base %q survived from a reused id; the three-way would diff against it", same.base.Title)
+	}
+}
+
+// TestClassifyKeepsATrueAncestor is the other side of that filter: a base sharing
+// the birth instant is the real ancestor and must reach the three-way, or every
+// ordinary merge silently demotes itself to a two-way.
+func TestClassifyKeepsATrueAncestor(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t2 })
+	theirs := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t1 })
 
-	if _, collision := Classify(&base, ours, theirs, "wsA", "wsB"); collision != nil {
-		t.Fatalf("a row present in the merge-base reported as a collision; shared ancestry is proof of one entity")
+	same, collision := Classify(&base, ours, theirs, "wsA", "wsB")
+	if collision != nil {
+		t.Fatalf("a true ancestor was read as a collision: %+v", collision)
 	}
-	if _, collision := Classify(nil, ours, theirs, "wsA", "wsB"); collision == nil {
-		t.Fatalf("the same two rows with no ancestry must fall back to the birth certificate and collide")
+	if same.base == nil {
+		t.Fatal("the true ancestor was dropped; the three-way lost its base")
 	}
 }
 

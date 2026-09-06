@@ -37,32 +37,25 @@ type SameEntity struct {
 // tickets, there is nothing to merge, and the caller must report rather than
 // resolve.
 //
-// It reads the strongest evidence available, in order.
-//
-// ANCESTRY, when the base row can be the ancestor. A merge-base row for this id
-// means both sides descend from one creation, so they are one ticket however far
-// their fields have drifted. But a merge-base is a COMMIT-level ancestor, and an
-// id can be hard-deleted (the import delta's deleteIssueTx) and re-minted, since
-// newChildIssueID counts live rows only. Delete the highest child on two diverged
-// stores, mint a fresh one on each, and the base commit still holds the OLD row:
-// base != nil while the base row is a stranger that used to wear this id. So
-// ancestry is proof only while the base row shares a birth instant with a side —
-// created_at is written once at mint, so a real ancestor carries its descendants'.
-// Matching neither means both sides were minted after it, and the reading below
-// decides instead.
-//
-// THE BIRTH CERTIFICATE, when there is not. created_at is fixed when a ticket is
+// THE BIRTH CERTIFICATE decides it, alone. created_at is fixed when a ticket is
 // minted, never edited afterwards, and rides every replication path unchanged, so
-// two base-less rows carrying one id are the same ticket exactly when they were
-// born at the same instant. Two `lit new` calls on two machines are two instants;
-// a replica of one ticket is one instant twice.
+// two rows carrying one id are the same ticket exactly when they were born at the
+// same instant. Two `lit new` calls on two machines are two instants; a replica of
+// one ticket is one instant twice.
 //
-// Base-absence alone CANNOT decide it, which is the whole trap: the
-// unrelated-history combine (Store.combineFromAnchors) feeds this engine an empty
-// base by construction, so "no merge-base" is uniform on that path and would
-// condemn every legitimately shared row. The second reading is what makes a nil
-// base mean one thing again. [LAW:parse-dont-validate] the ambiguity the old
-// signature carried is resolved here, once, rather than downstream.
+// A merge-base row is NOT the stronger evidence it looks like. A merge-base is a
+// COMMIT-level ancestor, while an id is hard-deleted (the import delta's
+// deleteIssueTx) and re-minted from the live-row maximum (newChildIssueID), so the
+// base commit can still hold the row a deleted ticket wore: present, and a stranger
+// to both sides. A base that disagrees with the birth certificates is that re-mint,
+// never a drift to see past, so ancestorOf drops it instead of letting it answer
+// this question or seed the three-way.
+//
+// Base presence cannot stand in for it either: the unrelated-history combine
+// (Store.combineFromAnchors) feeds this engine an empty base by construction, so
+// "no merge-base" is uniform on that path and would condemn every legitimately
+// shared row. [LAW:parse-dont-validate] the ambiguity the old signature carried is
+// resolved here, once, rather than downstream.
 //
 // The rule errs toward the loud side by construction: two instants that are
 // genuinely one ticket would be reported to an operator (recoverable), where one
@@ -71,19 +64,24 @@ type SameEntity struct {
 func Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision) {
 	// Equal, not ==: created_at round-trips through RFC3339Nano, so two encodings
 	// of one instant may differ in offset while naming the same moment.
-	if !ancestryProves(base, ours, theirs) && !ours.CreatedAt.Equal(theirs.CreatedAt) {
+	if !ours.CreatedAt.Equal(theirs.CreatedAt) {
 		return SameEntity{}, &Collision{IssueID: ours.ID, Ours: ours, Theirs: theirs}
 	}
-	return SameEntity{base: base, ours: ours, theirs: theirs, oursWS: oursWS, theirsWS: theirsWS}, nil
+	return SameEntity{base: ancestorOf(base, ours), ours: ours, theirs: theirs, oursWS: oursWS, theirsWS: theirsWS}, nil
 }
 
-// ancestryProves reports whether the base row is evidence that ours and theirs
-// are one ticket. A row reached through a reused id answers no: it is present in
-// the base commit, but its birth instant belongs to the ticket that was deleted,
-// not to either row now wearing the id.
-func ancestryProves(base *model.Issue, ours, theirs model.Issue) bool {
-	return base != nil &&
-		(base.CreatedAt.Equal(ours.CreatedAt) || base.CreatedAt.Equal(theirs.CreatedAt))
+// ancestorOf returns the base row only when it is this ticket's own ancestor —
+// the birth instant Classify just proved both sides share. A base reached through
+// a reused id carries the deleted ticket's instant instead, and every twoTier call
+// in ResolveIssue diffs both sides against whatever base it is handed, so admitting
+// that stranger would merge this ticket against another one's fields.
+// [LAW:single-enforcer] the admissibility test lives here, at the one place a
+// SameEntity is built, rather than at each base read downstream.
+func ancestorOf(base *model.Issue, ours model.Issue) *model.Issue {
+	if base == nil || !base.CreatedAt.Equal(ours.CreatedAt) {
+		return nil
+	}
+	return base
 }
 
 // SortCollisions orders collisions by issue id so every surface — report, trace,

@@ -520,30 +520,28 @@ func TestThreeWayLabelTableHonorsConcurrentRemoval(t *testing.T) {
 	}
 }
 
-// TestResolveIssueImmutableIDAndCreatedAt pins that the resolver takes the base's
-// created_at and neither side's. Exactly one side drifts per case: a triple where
-// BOTH sides drift off the base is no longer a divergence at all — Classify reads
-// it as an id minted twice into one slot — so the two cases together cover what a
-// single two-sided fixture used to, without asking `same` for an entity that is
-// really a collision.
+// TestResolveIssueImmutableIDAndCreatedAt pins that the resolver reproduces the id
+// and the birth instant instead of merging them as fields. Both bases that can
+// reach it are covered: a true ancestor, and the stranger Classify drops when an id
+// was reused — where the instant can only come from the two rows that agree on it.
 func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
 	for _, tc := range []struct {
-		name             string
-		oursAt, theirsAt time.Time
+		name   string
+		baseAt time.Time
 	}{
-		{"ours drifts", t2, t0},
-		{"theirs drifts", t0, t1},
+		{"true ancestor", t0},
+		{"base dropped as a reused id", t2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil) // created_at = t0
-			ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = tc.oursAt })
-			theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = tc.theirsAt })
+			base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = tc.baseAt })
+			ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t0 })
+			theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t0 })
 			got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 			if got.Provisional().ID != "i1" {
 				t.Fatalf("id = %q, want i1", got.Provisional().ID)
 			}
 			if !got.Provisional().CreatedAt.Equal(t0) {
-				t.Fatalf("created_at = %v, want immutable base %v", got.Provisional().CreatedAt, t0)
+				t.Fatalf("created_at = %v, want the shared birth instant %v", got.Provisional().CreatedAt, t0)
 			}
 		})
 	}
