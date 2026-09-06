@@ -22,7 +22,6 @@ const (
 	QuickstartUpdateTemplateName = "quickstart-update.md"
 	QuickstartDoneTemplateName   = "quickstart-done.md"
 	QuickstartDoctorTemplateName = "quickstart-doctor.md"
-	NextSkillTemplateName        = "next-skill.md"
 )
 
 var (
@@ -38,7 +37,6 @@ var (
 		QuickstartUpdateTemplateName,
 		QuickstartDoneTemplateName,
 		QuickstartDoctorTemplateName,
-		NextSkillTemplateName,
 	}
 
 	// shortAliases maps user-facing short names (CLI tokens) to canonical filenames.
@@ -52,7 +50,6 @@ var (
 		"quickstart-doctor": QuickstartDoctorTemplateName,
 		"agents":            AgentsSectionTemplateName,
 		"hook":              PrePushHookTemplateName,
-		"next-skill":        NextSkillTemplateName,
 	}
 )
 

@@ -59,16 +59,14 @@ Run this from inside the target repository:
 lit init
 ```
 
-This creates the issue store under `$(git rev-parse --git-common-dir)/links/`, adds a
+This creates the issue store under `$(git rev-parse --git-common-dir)/links/` and adds a
 short `lit` section to `AGENTS.md` and `CLAUDE.md` so future agents know to run
-`lit quickstart`, and writes the `/next` skill to `.claude/skills/next/SKILL.md` so
-pulling the next ticket is a slash command away. If the repo's remote already carries
-`lit` ticket data, `init` adopts
+`lit quickstart`. If the repo's remote already carries `lit` ticket data, `init` adopts
 that backlog automatically, so a fresh clone starts with the project's real tickets
 rather than an empty store. Useful flags:
 
 - `--skip-hooks` — don't install the git sync hook
-- `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md` / `.claude/skills/next/SKILL.md`
+- `--skip-agents` — don't touch `AGENTS.md` / `CLAUDE.md`
 
 Already initialized? `lit init` is safe to run again; it reconciles the integration blocks.
 
@@ -78,7 +76,40 @@ To install the per-clone sync automation separately:
 lit hooks install
 ```
 
-## 4. The core work loop
+## 4. Install the `/next` skill (optional, recommended)
+
+`lit init` sets up the workspace's data and docs, but the `/next` skill — the slash
+command that pulls and starts the next ticket — ships separately, from the `links`
+Claude Code plugin declared at this repo's own root
+(`.claude-plugin/marketplace.json`, plugin `claude-plugin/`). It is not written into
+the target repo; install the plugin once and `/next` (namespaced `/links:next`) is
+available in every session:
+
+```text
+/plugin marketplace add promptctl/links-issue-tracker
+/plugin install links@links-marketplace
+```
+
+For a team, wire it up automatically instead of asking everyone to run the two
+commands above — add to the repo's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "links-marketplace": {
+      "source": { "source": "github", "repo": "promptctl/links-issue-tracker" }
+    }
+  },
+  "enabledPlugins": {
+    "links@links-marketplace": true
+  }
+}
+```
+
+The same plugin also carries the `SessionStart`/`PreCompact` hooks that run
+`lit quickstart --refresh`, so installing it is the one step that gets both.
+
+## 5. The core work loop
 
 In a repo that's already set up, **your first action is always:**
 
@@ -111,7 +142,7 @@ lit followup --on <closed-id> --title "..."   # capture surfaced work while cont
 lit doctor [--fix]        # health check; run --fix yourself before escalating any error
 ```
 
-## 5. Two things that will bite you
+## 6. Two things that will bite you
 
 - **The store you see depends on your current directory.** `lit` selects the database from
   `git rev-parse --git-common-dir` of your cwd. If you `cd` into a different repo (or a
@@ -121,7 +152,7 @@ lit doctor [--fix]        # health check; run --fix yourself before escalating a
   the installed binary is older than the source. Rebuild it onto your `PATH`:
   `go build -o "$(which lit)" ./cmd/lit` from the checkout.
 
-## 6. Finishing
+## 7. Finishing
 
 Always commit your code changes. A ticket is done when the work is validated, reviewed, and
 merged — not merely when the code compiles. When in doubt, leave the ticket `in_progress`

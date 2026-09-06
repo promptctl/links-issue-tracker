@@ -203,7 +203,6 @@ func TestNamesReturnsAllManagedTemplates(t *testing.T) {
 		QuickstartUpdateTemplateName: false,
 		QuickstartDoneTemplateName:   false,
 		QuickstartDoctorTemplateName: false,
-		NextSkillTemplateName:        false,
 	}
 	for _, name := range names {
 		if _, ok := want[name]; !ok {
