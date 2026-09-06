@@ -194,9 +194,9 @@ relationships from the canonical graph: `parent` (the parent/epic id, `-` if non
 unchanged unless a relationship column is selected. A name outside that set is a usage
 error (exit 2) that quotes the offending word and lists the valid columns — the same
 list the flag's `--help` prints — and the command exits before any row is fetched or
-printed. Two near-misses: the status column is spelled `state`, and `description` and
-`prompt` are multi-line, so they are read with `lit show --field` rather than projected
-into a table.
+printed. Watch for near-misses: the status column is spelled `state`, `lane` is a
+`lit show --field` name but not a column, and `description` and `prompt` are
+multi-line, so they are read with `--field` rather than projected into a table.
 
 ### `lit show`
 
