@@ -238,15 +238,16 @@ func runSyncPull(ctx context.Context, stdout io.Writer, ws workspace.Info, sessi
 }
 
 // syncFailureFromPull builds the sync-failure contract for a pull outcome the
-// agent must resolve, or held=false for an outcome the outcome printer renders. Two
-// pull outcomes are agent-actionable this way: a held free-text conflict and a
-// no-common-ancestor divergence — both non-transient, both routed through the one
-// contract so the exit code and the block match `lit sync reconcile`. A hard pull
-// error is already surfaced as a returned error upstream. It is a mostly-pure
-// mapping — the clock is supplied as an argument, so the contract SHAPE is
-// unit-testable without a live store — but it also reads this binary's build
-// identity via resolveBuildStatusNote (link-time version vars plus the embedded
-// migration registry), so it is not safe to memoize or assume side-effect-free.
+// agent must resolve, or held=false for an outcome the outcome printer renders. Three
+// pull outcomes are agent-actionable this way: a held free-text conflict, a
+// no-common-ancestor divergence, and an id naming two different tickets — none
+// transient, all routed through the one contract so the exit code and the block
+// match `lit sync reconcile`. A hard pull error is already surfaced as a returned
+// error upstream. It is a mostly-pure mapping — the clock is supplied as an
+// argument, so the contract SHAPE is unit-testable without a live store — but it
+// also reads this binary's build identity via resolveBuildStatusNote (link-time
+// version vars plus the embedded migration registry), so it is not safe to
+// memoize or assume side-effect-free.
 // [LAW:dataflow-not-control-flow]
 func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, now time.Time) (SyncFailureError, bool) {
 	base := SyncFailure{
@@ -265,6 +266,10 @@ func syncFailureFromPull(remote, branch string, result storage.SyncPullResult, n
 	case storage.SyncPullUnrelated:
 		base.Class = syncFailureUnrelatedHistories
 		base.Inventory = result.Unrelated
+		return SyncFailureError{Failure: base}, true
+	case storage.SyncPullIDCollision:
+		base.Class = syncFailureIDCollision
+		base.Collisions = result.Collisions
 		return SyncFailureError{Failure: base}, true
 	default:
 		return SyncFailureError{}, false

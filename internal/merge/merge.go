@@ -40,8 +40,46 @@ func (r MergeResult) Settled() (model.Export, bool) {
 // the reconcile boundary that persists the code-resolved fields while holding
 // the Pending prose for the agent surface. The name marks the callsite that has
 // accepted responsibility for the unresolved prose.
-func (r MergeResult) Provisional() model.Export {
-	return r.export
+//
+// ok=false when an id collided: no level of provisionality makes two tickets under
+// one name mergeable, so the export is withheld here rather than by the order in
+// which a caller happens to check Collisions. [LAW:no-silent-failure]
+func (r MergeResult) Provisional() (model.Export, bool) {
+	return r.export, len(r.Collisions) == 0
+}
+
+// side names which of the two exports a child row came from. It is a set so that
+// one value spells "both sides" — the ordinary case — without a second type.
+type side uint8
+
+const (
+	fromLocal side = 1 << iota
+	fromRemote
+	bothSides = fromLocal | fromRemote
+)
+
+// issueScope says, per surviving issue id, which sides' child rows describe it.
+// Every merged id takes both, except one whose two sides were different tickets:
+// there the surviving row is ours alone, so their relations, comments, labels and
+// events describe work it never did and unioning them would fuse the pair one
+// level below the fields. [LAW:types-are-the-program] which rows belong is a fact
+// about (id, side), so that is the shape the child merges read.
+type issueScope map[string]side
+
+// admits reports whether a child row of issueID, read from that side, belongs to
+// the merged export. An id the merge dropped admits neither side.
+func (s issueScope) admits(issueID string, from side) bool { return s[issueID]&from != 0 }
+
+// sidedRows is one side's rows together with the side they came from.
+type sidedRows[T any] struct {
+	from side
+	rows []T
+}
+
+// bothSidesOf walks locals then remotes, the order that keeps a remote row the
+// tie-winner on a shared key.
+func bothSidesOf[T any](locals, remotes []T) []sidedRows[T] {
+	return []sidedRows[T]{{from: fromLocal, rows: locals}, {from: fromRemote, rows: remotes}}
 }
 
 func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeResult {
@@ -86,14 +124,14 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			// genuine row removal, and presence is a collection fact, not a field.)
 			switch {
 			case hasLocal && hasRemote:
-				same, collision := Classify(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+				same, collision := Classify(basePtr, localIssue, remoteIssue, local.WorkspaceID, remote.WorkspaceID)
 				if collision != nil {
 					// Two tickets, one id. Report both and leave OUR row exactly as it
 					// stands: a field merge here would return an answer-shaped void —
 					// a well-formed ticket carrying one job's title over another job's
 					// description, with the loser gone and nothing said.
-					// [LAW:parse-dont-validate] Settled() refuses the export while this
-					// is unresolved, so the surviving local row is never a silent pick.
+					// [LAW:parse-dont-validate] No accessor hands out the export while
+					// this is unresolved, so the surviving row is never a silent pick.
 					collisions = append(collisions, *collision)
 					mergedIssues = append(mergedIssues, localIssue)
 					continue
@@ -113,9 +151,12 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	}
 
 	sort.Slice(mergedIssues, func(i, j int) bool { return mergedIssues[i].ID < mergedIssues[j].ID })
-	issueSet := make(map[string]struct{}, len(mergedIssues))
+	scope := make(issueScope, len(mergedIssues))
 	for _, issue := range mergedIssues {
-		issueSet[issue.ID] = struct{}{}
+		scope[issue.ID] = bothSides
+	}
+	for _, collision := range collisions {
+		scope[collision.IssueID] = fromLocal
 	}
 
 	merged := model.Export{
@@ -123,10 +164,10 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		WorkspaceID: local.WorkspaceID,
 		ExportedAt:  local.ExportedAt,
 		Issues:      mergedIssues,
-		Relations:   mergeRelations(issueSet, local.Relations, remote.Relations),
-		Comments:    mergeComments(issueSet, local.Comments, remote.Comments),
-		Labels:      mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels),
-		Events:      mergeEvents(issueSet, local.Events, remote.Events),
+		Relations:   mergeRelations(scope, local.Relations, remote.Relations),
+		Comments:    mergeComments(scope, local.Comments, remote.Comments),
+		Labels:      mergeLabels(scope, base.Labels, local.Labels, remote.Labels),
+		Events:      mergeEvents(scope, local.Events, remote.Events),
 	}
 	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
@@ -223,20 +264,19 @@ func issueProjectionFrom(issue model.Issue) issueProjection {
 	}
 }
 
-func mergeRelations(issueSet map[string]struct{}, locals, remotes []model.Relation) []model.Relation {
+func mergeRelations(scope issueScope, locals, remotes []model.Relation) []model.Relation {
 	type key struct {
 		Src, Dst string
 		Type     model.RelationType
 	}
 	merged := map[key]model.Relation{}
-	for _, relation := range append(locals, remotes...) {
-		if _, ok := issueSet[relation.SrcID]; !ok {
-			continue
+	for _, sided := range bothSidesOf(locals, remotes) {
+		for _, relation := range sided.rows {
+			if !scope.admits(relation.SrcID, sided.from) || !scope.admits(relation.DstID, sided.from) {
+				continue
+			}
+			merged[key{Src: relation.SrcID, Dst: relation.DstID, Type: relation.Type}] = relation
 		}
-		if _, ok := issueSet[relation.DstID]; !ok {
-			continue
-		}
-		merged[key{Src: relation.SrcID, Dst: relation.DstID, Type: relation.Type}] = relation
 	}
 	out := make([]model.Relation, 0, len(merged))
 	for _, relation := range merged {
@@ -330,13 +370,15 @@ func maxString(items []string) string {
 	return out
 }
 
-func mergeComments(issueSet map[string]struct{}, locals, remotes []model.Comment) []model.Comment {
+func mergeComments(scope issueScope, locals, remotes []model.Comment) []model.Comment {
 	merged := map[string]model.Comment{}
-	for _, comment := range append(locals, remotes...) {
-		if _, ok := issueSet[comment.IssueID]; !ok {
-			continue
+	for _, sided := range bothSidesOf(locals, remotes) {
+		for _, comment := range sided.rows {
+			if !scope.admits(comment.IssueID, sided.from) {
+				continue
+			}
+			merged[comment.ID] = comment
 		}
-		merged[comment.ID] = comment
 	}
 	out := make([]model.Comment, 0, len(merged))
 	for _, comment := range merged {
@@ -353,9 +395,19 @@ func mergeComments(issueSet map[string]struct{}, locals, remotes []model.Comment
 // "which side changed" causality. [LAW:one-source-of-truth] The label table is
 // authoritative (issue.Labels is a derived view); this is where removal must be
 // honored.
-func mergeLabels(issueSet map[string]struct{}, base, locals, remotes []model.Label) []model.Label {
+func mergeLabels(scope issueScope, base, locals, remotes []model.Label) []model.Label {
 	type key struct{ IssueID, Name string }
 	keyOf := func(l model.Label) key { return key{IssueID: l.IssueID, Name: l.Name} }
+	admitted := func(rows []model.Label, from side) []model.Label {
+		out := make([]model.Label, 0, len(rows))
+		for _, label := range rows {
+			if scope.admits(label.IssueID, from) {
+				out = append(out, label)
+			}
+		}
+		return out
+	}
+	locals, remotes = admitted(locals, fromLocal), admitted(remotes, fromRemote)
 	keySet := func(labels []model.Label) map[key]struct{} {
 		out := make(map[key]struct{}, len(labels))
 		for _, label := range labels {
@@ -384,7 +436,7 @@ func mergeLabels(issueSet map[string]struct{}, base, locals, remotes []model.Lab
 
 	out := make([]model.Label, 0, len(rows))
 	for k := range candidates {
-		if _, ok := issueSet[k.IssueID]; !ok {
+		if !scope.admits(k.IssueID, bothSides) {
 			continue
 		}
 		_, inBase := baseSet[k]
@@ -407,13 +459,15 @@ func mergeLabels(issueSet map[string]struct{}, base, locals, remotes []model.Lab
 	return out
 }
 
-func mergeEvents(issueSet map[string]struct{}, locals, remotes []model.IssueEvent) []model.IssueEvent {
+func mergeEvents(scope issueScope, locals, remotes []model.IssueEvent) []model.IssueEvent {
 	merged := map[string]model.IssueEvent{}
-	for _, event := range append(locals, remotes...) {
-		if _, ok := issueSet[event.IssueID]; !ok {
-			continue
+	for _, sided := range bothSidesOf(locals, remotes) {
+		for _, event := range sided.rows {
+			if !scope.admits(event.IssueID, sided.from) {
+				continue
+			}
+			merged[event.ID] = event
 		}
-		merged[event.ID] = event
 	}
 	out := make([]model.IssueEvent, 0, len(merged))
 	for _, event := range merged {

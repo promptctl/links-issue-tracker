@@ -58,7 +58,7 @@ func TestApplyProseResolutionsSplicesExactBijection(t *testing.T) {
 	}
 	// [LAW:no-silent-failure] the splice must not mutate the original provisional
 	// export the caller still holds.
-	if result.Provisional().Issues[0].Title == "merged-title" {
+	if provisional(t, result).Issues[0].Title == "merged-title" {
 		t.Fatalf("splice mutated the provisional export in place")
 	}
 }

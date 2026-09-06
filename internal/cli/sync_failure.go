@@ -440,18 +440,18 @@ func (f SyncFailure) collisionLines() []string {
 	out := []string{fmt.Sprintf("WHAT COLLIDED (%d id(s), each naming a different ticket on each side):", len(f.Collisions))}
 	for _, c := range merge.SortCollisions(f.Collisions) {
 		out = append(out, "  "+c.IssueID)
-		out = append(out, describeCollisionSide("yours ", c.OursWS, c.Ours)...)
-		out = append(out, describeCollisionSide("theirs", c.TheirsWS, c.Theirs)...)
+		out = append(out, describeCollisionSide("yours  (local) ", c.Ours)...)
+		out = append(out, describeCollisionSide("theirs (remote)", c.Theirs)...)
 	}
 	return append(out, "")
 }
 
-// describeCollisionSide renders one side of a collision: where it came from, when
-// it was minted, and the ticket itself. An empty description is stated rather than
-// rendered as a blank line the reader would have to interpret.
-func describeCollisionSide(label, workspace string, issue model.Issue) []string {
-	lines := []string{fmt.Sprintf("    %s (workspace %s, created %s): %s",
-		label, workspace, issue.CreatedAt.UTC().Format(time.RFC3339Nano), issue.Title)}
+// describeCollisionSide renders one side of a collision: when it was minted and
+// the ticket itself. local/remote, not a workspace id: a reconcile stamps every
+// export it reads with its own. An empty description is stated, never left blank.
+func describeCollisionSide(label string, issue model.Issue) []string {
+	lines := []string{fmt.Sprintf("    %s (created %s): %s",
+		label, issue.CreatedAt.UTC().Format(time.RFC3339Nano), issue.Title)}
 	body := strings.TrimSpace(issue.Description)
 	if body == "" {
 		body = "(no description)"

@@ -176,6 +176,11 @@ const (
 	// committed; the divergence is surfaced for wholesale/union resolution rather
 	// than merged through an absent base. [LAW:no-silent-failure]
 	SyncPullUnrelated SyncPullState = "unrelated_histories"
+	// SyncPullIDCollision: local diverged and at least one id names a DIFFERENT
+	// ticket on each side. Nothing is committed; the two rows are surfaced whole,
+	// because no text and no side-pick resolves two independently minted tickets
+	// wearing one name. [LAW:no-silent-failure]
+	SyncPullIDCollision SyncPullState = "id_collision"
 	// SyncPullAhead: local has unpushed commits and the remote has nothing new;
 	// there is nothing to pull (push delivers local commits).
 	SyncPullAhead SyncPullState = "ahead"
@@ -201,6 +206,11 @@ type SyncPullResult struct {
 	// no-common-ancestor divergence, so the pull surface enumerates the same
 	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
+	// Collisions carries the ids that name a different ticket on each side, both
+	// rows whole, non-empty only for SyncPullIDCollision. Carried straight off the
+	// reconcile that refused the merge, so the pull surface prints the same two
+	// tickets `lit sync reconcile` does. [LAW:one-source-of-truth]
+	Collisions []merge.Collision `json:"collisions,omitempty"`
 }
 
 // GCMode is how deep a compaction pass collects. The depths nest rather than

@@ -190,7 +190,9 @@ func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
 // the log reads as a single continuous stream and the subsequent push always
 // fast-forwards. When a free-text field diverged on both sides it commits
 // nothing, leaves the local branch untouched, and returns the prose conflicts
-// for the agent surface.
+// for the agent surface. When an id names a DIFFERENT ticket on each side it
+// likewise commits nothing and returns both rows: that pair has no merge to
+// hold, so it is refused rather than settled.
 //
 // [LAW:effects-at-boundaries] This method owns the effects (read/reset/commit);
 // the merge DECISION is the pure engine. The reconciling machine knows only its
@@ -237,8 +239,9 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // SyncReconcileCombine resolves an unrelated-history divergence by COMBINING both sides:
 // the union of every issue, with ids present on both field-merged against an empty base.
 // It is the explicit combine choice — autonomous prose policy (an on-both prose conflict is
-// HELD for the agent, never picked), landing SyncReconcileCombined when everything settled
-// or SyncReconcileProsePending when a shared id's free text diverged. The held prose is
+// HELD for the agent, never picked), landing SyncReconcileCombined when everything settled,
+// SyncReconcileProsePending when a shared id's free text diverged, or
+// SyncReconcileIDCollision when a shared id names two different tickets. The held prose is
 // finalized through the same `lit sync reconcile resolve` path as a three-way divergence.
 //
 // It shares SyncReconcile's boundary verbatim (lock, captured anchors, schema-ahead refusal,
@@ -555,8 +558,15 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	if err != nil {
 		return replayStep{}, err
 	}
+	// mergeAndReplay's refusal classified ours@localHead; a row a folded commit
+	// still held and localHead no longer does reaches Classify only here, so the
+	// step refuses rather than landing a fused row in committed history.
+	export, ok := merge.ThreeWay(f.base, at, f.theirs).Provisional()
+	if !ok {
+		return replayStep{}, fmt.Errorf("replay folded commit %s: an id names a different ticket on each side", c.hash)
+	}
 	return replayStep{
-		export: merge.ThreeWay(f.base, at, f.theirs).Provisional(),
+		export: export,
 		stamp:  commitStamp{Message: c.message, Date: c.date, Author: c.author},
 	}, nil
 }
@@ -655,8 +665,9 @@ func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitS
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
 // merges them against base (a real merge-base export, or the empty export for a combine),
-// and either holds the prose divergence for the agent or replays the folded chain forward
-// onto remoteHead — each folded commit under its own provenance, settled by the marker
+// and either refuses an id that names two tickets, holds the prose divergence for the
+// agent, or replays the folded chain forward onto remoteHead — each folded commit under
+// its own provenance, settled by the marker
 // commit carrying message — landing settledState. The caller has already read base (or left
 // it empty), so the ONLY difference between the two producers is that value and the two
 // labels — the safety-critical replay is written once.

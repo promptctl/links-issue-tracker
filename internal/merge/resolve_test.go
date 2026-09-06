@@ -39,7 +39,7 @@ func open(t *testing.T, id string) model.Issue {
 // fixture accidentally plants two birth certificates.
 func same(t *testing.T, base, ours, theirs *model.Issue, oursWS, theirsWS string) SameEntity {
 	t.Helper()
-	in, collision := Classify(base, ours, theirs, oursWS, theirsWS)
+	in, collision := Classify(base, *ours, *theirs, oursWS, theirsWS)
 	if collision != nil {
 		t.Fatalf("fixture %s is a collision, not a divergence: born %v (ours) vs %v (theirs)",
 			collision.IssueID, collision.Ours.CreatedAt, collision.Theirs.CreatedAt)
@@ -202,7 +202,7 @@ func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	var hasBlocks, hasRelated bool
-	for _, relation := range got.Provisional().Relations {
+	for _, relation := range provisional(t, got).Relations {
 		if relation.SrcID == "a" && relation.DstID == "b" && relation.Type == model.RelBlocks {
 			hasBlocks = true
 		}
@@ -210,8 +210,8 @@ func TestThreeWayUnionsConcurrentNonParentRelations(t *testing.T) {
 			hasRelated = true
 		}
 	}
-	if !hasBlocks || !hasRelated || len(got.Provisional().Relations) != 2 {
-		t.Fatalf("relations = %#v, want both concurrent non-parent edges unioned", got.Provisional().Relations)
+	if !hasBlocks || !hasRelated || len(provisional(t, got).Relations) != 2 {
+		t.Fatalf("relations = %#v, want both concurrent non-parent edges unioned", provisional(t, got).Relations)
 	}
 }
 
@@ -512,11 +512,11 @@ func TestThreeWayLabelTableHonorsConcurrentRemoval(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	names := map[string]bool{}
-	for _, label := range got.Provisional().Labels {
+	for _, label := range provisional(t, got).Labels {
 		names[label.Name] = true
 	}
 	if names["b"] || !names["a"] {
-		t.Fatalf("labels = %#v, want only [a] (authoritative table must honor removal)", got.Provisional().Labels)
+		t.Fatalf("labels = %#v, want only [a] (authoritative table must honor removal)", provisional(t, got).Labels)
 	}
 }
 
@@ -593,8 +593,8 @@ func TestThreeWayDetectsPromptAndLaneOnlyEdits(t *testing.T) {
 			local := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{edited}}
 			remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{open(t, "i1")}}
 			got := ThreeWay(base, local, remote)
-			if len(got.Provisional().Issues) != 1 || !tc.check(got.Provisional().Issues[0]) {
-				t.Fatalf("%s edit dropped: merged = %#v", tc.name, got.Provisional().Issues)
+			if len(provisional(t, got).Issues) != 1 || !tc.check(provisional(t, got).Issues[0]) {
+				t.Fatalf("%s edit dropped: merged = %#v", tc.name, provisional(t, got).Issues)
 			}
 		})
 	}
@@ -606,8 +606,8 @@ func TestThreeWayDeleteVsEditPreservesSurvivingEdit(t *testing.T) {
 	edited := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "edited" })
 	remote := model.Export{WorkspaceID: "wsB", Issues: []model.Issue{edited}}
 	got := ThreeWay(base, local, remote)
-	if len(got.Provisional().Issues) != 1 || got.Provisional().Issues[0].Title != "edited" {
-		t.Fatalf("issues = %#v, want the surviving remote edit kept (no silent drop)", got.Provisional().Issues)
+	if len(provisional(t, got).Issues) != 1 || provisional(t, got).Issues[0].Title != "edited" {
+		t.Fatalf("issues = %#v, want the surviving remote edit kept (no silent drop)", provisional(t, got).Issues)
 	}
 }
 
@@ -618,8 +618,8 @@ func TestThreeWayBothRemovedBaseRowAppendsNothing(t *testing.T) {
 	local := model.Export{WorkspaceID: "wsA"}
 	remote := model.Export{WorkspaceID: "wsB"}
 	got := ThreeWay(base, local, remote)
-	if len(got.Provisional().Issues) != 0 {
-		t.Fatalf("issues = %#v, want none (both removed; no zero-value row)", got.Provisional().Issues)
+	if len(provisional(t, got).Issues) != 0 {
+		t.Fatalf("issues = %#v, want none (both removed; no zero-value row)", provisional(t, got).Issues)
 	}
 }
 
@@ -637,11 +637,11 @@ func TestThreeWayUnionsConcurrentComments(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	ids := map[string]bool{}
-	for _, comment := range got.Provisional().Comments {
+	for _, comment := range provisional(t, got).Comments {
 		ids[comment.ID] = true
 	}
-	if !ids["c-ours"] || !ids["c-theirs"] || len(got.Provisional().Comments) != 2 {
-		t.Fatalf("comments = %#v, want both concurrent comments kept", got.Provisional().Comments)
+	if !ids["c-ours"] || !ids["c-theirs"] || len(provisional(t, got).Comments) != 2 {
+		t.Fatalf("comments = %#v, want both concurrent comments kept", provisional(t, got).Comments)
 	}
 }
 
@@ -662,7 +662,7 @@ func TestThreeWayBreaksConcurrentParentCycle(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	parentOf := map[string]string{}
-	for _, relation := range got.Provisional().Relations {
+	for _, relation := range provisional(t, got).Relations {
 		if relation.Type == model.RelParentChild {
 			parentOf[relation.SrcID] = relation.DstID
 		}
@@ -690,7 +690,7 @@ func TestThreeWayKeepsSingleParentOnConcurrentReparent(t *testing.T) {
 	}
 	got := ThreeWay(base, local, remote)
 	parents := 0
-	for _, relation := range got.Provisional().Relations {
+	for _, relation := range provisional(t, got).Relations {
 		if relation.SrcID == "c1" && relation.Type == model.RelParentChild {
 			parents++
 		}

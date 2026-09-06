@@ -225,6 +225,7 @@ func TestSyncReceiveOutcomeSettledCleanly(t *testing.T) {
 		{"reconcile no longer diverged", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileNotDiverged}}, true},
 		{"reconcile held prose", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileProsePending}}, false},
 		{"reconcile unrelated", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileUnrelated}}, false},
+		{"reconcile refused an id collision", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileIDCollision}}, false},
 		{"reconcile errored", syncReceiveOutcome{reconcile: &reconcileOutcome{state: storage.SyncReconcileLinearized, err: errors.New("gc")}}, false},
 	}
 	for _, tc := range cases {
