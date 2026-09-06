@@ -46,7 +46,7 @@ const (
 	ownerNotifyTraceCommand = "owner-notify"
 )
 
-// ownerNotifyKind is the closed set of owner-relevant degraded states. The three
+// ownerNotifyKind is the closed set of owner-relevant degraded states. The
 // divergence kinds ARE the sync-failure divergence classes — one vocabulary, so
 // the trace, the failure block, and the notification can never spell the same
 // condition two ways — plus the push kind, whose detection point (a completed
@@ -57,11 +57,12 @@ const ownerNotifyPushFailed ownerNotifyKind = "push_failed"
 
 // ownerNotifyDivergenceKinds is the group cleared together when a divergence
 // episode ends: any converged state (fast-forwarded, linearized, combined,
-// taken, not-diverged) resolves all three, whichever was notified.
+// taken, not-diverged) resolves them, whichever was notified.
 var ownerNotifyDivergenceKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
 	ownerNotifyKind(syncFailureUnrelatedHistories),
+	ownerNotifyKind(syncFailureIDCollision),
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
@@ -94,7 +95,7 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // unconditionally; the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories:
+	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision:
 		return ownerNotifyEvent{
 			Kind:    ownerNotifyKind(failure.Class),
 			Summary: failure.whatLine(),

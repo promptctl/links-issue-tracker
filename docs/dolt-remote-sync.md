@@ -211,16 +211,87 @@ rather than pick, so the reconcile commits nothing, leaves the local branch
 untouched (still diverged, still usable on local truth), and holds the conflict as
 a **prose-pending** state recorded on an automation trace for the agent surface to
 merge inline. Reverting a peer's semantic field is incoherent distrust, so every
-other field converges deterministically; prose is the sole agent boundary.
+other field converges deterministically; prose is the only class an agent
+merges, and one of two that stop the reconcile — the other, below, cannot be
+merged by anyone.
+
+## Two tickets under one id
+
+A child id is minted as `<parent>.<highest existing child number + 1>`, counted
+over the rows in the local store. Two disconnected stores that each hold the
+same fifteen children of an epic do not *race* for `.16` — both compute it,
+deterministically, every time. Disconnection is the only precondition, and
+disconnection is the ordinary state of parallel checkouts between syncs, so this
+is certain, not rare.
+
+The two rows are two pieces of work wearing one name, not one ticket that
+diverged. Field-merging them produces a well-formed, unexecutable row: one job's
+title over another job's description, the loser gone with no trace. Before this
+fix that is exactly what happened, and when the two tickets happened to carry
+similar text there was no prose conflict to hold, so the fused row was committed
+autonomously with no signal at all.
+
+The reconcile now distinguishes "the same ticket, diverged" from "two tickets,
+one id" and refuses to field-merge the second. It commits nothing, leaves the
+local branch where it found it (still diverged, still usable on local truth),
+and reports BOTH tickets whole — which side it came from, its creation
+timestamp, title, and description. Nothing was merged in, so the report is the
+only place the other side's ticket is visible; that is why it is printed in
+full rather than summarized. The side is named local or remote, not by
+workspace id: a reconcile stamps every export it reads with its own id, so a
+workspace column would print the same name on both rows. The state is surfaced
+through the same sync-failure block every other blocking sync condition uses,
+and it notifies the owner like the other divergence kinds.
+
+The two cases are told apart by ancestry first: a merge-base row for the id
+proves both sides descend from one creation, so they are one ticket however far
+their fields have drifted. With no merge-base — which is also the normal state
+on the unrelated-history `combine` path, where the base is empty by construction
+— the tie-breaker is the creation timestamp, which is fixed when a ticket is
+minted and never edited afterwards. Two `lit new` calls on two machines are two
+instants; a replica of one ticket is one instant twice.
+
+The resolution policy is settled: lit does not auto-resolve a collision, and it
+deliberately ships no "keep both and re-id one" command, because a re-id is
+harder than it sounds in two independent ways. Inside the store, an id is
+referenced by relations (source and destination), comments, issue events, and
+labels, so a re-id is a multi-table rewrite that must also carry the losing
+ticket's history intact. Outside the store it is worse: this project's
+convention is one PR per ticket named for its id, so ids are cited in commit
+messages, PR titles and bodies, changelog entries, branch names, and the prose
+of other tickets. A re-id leaves every one of those pointing at an id that still
+resolves — to the wrong ticket. That is not a dangling reference anyone would
+notice; it is a silently wrong one nobody would. So resolution stays
+human-directed: read both tickets in the report and re-file one of the two jobs
+under a free id. Retiring the duplicate id is not yet a lit operation, and
+closing or deleting the losing row does not free the id — both are soft states,
+the row still exports, so it still collides.
+
+A second decision, deferred to its own ticket: child ids stop encoding a
+locally-counted position. `<parent>.<max local child + 1>` is a map of every
+child that exists anywhere drawn from only the local corner, so every id minted
+while disconnected is a guess, and the guesses are *correlated* rather than
+random — which is why they collide reliably instead of occasionally. Top-level
+ids already avoid this: they hash content, creator, and timestamp, then check
+locally for uniqueness. Children are the only minting path that does not, so
+unifying them onto the same hashed mechanism removes the collision at its source
+and leaves one id-minting behavior where there are currently two. The ordinal is
+cosmetic — an epic's children are displayed in rank order, not id order — so
+what is lost is legibility, not meaning. It is deferred because it changes a
+user-visible id shape, and its blast radius (existing ids, branch and PR
+conventions, documentation) is much larger than the detection fix. Both halves
+are needed: detection does not stop the next collision, and prevention does not
+fix a store that already holds one.
 
 ## Owner notifications
 
 The in-band surfaces above talk to whoever runs the next command — usually an
 agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
-divergence (no common ancestor, a reconcile it could not converge, a held prose
-conflict) or a push attempt fails, it runs a shell command you configure —
-e.g. a push to an [ntfy](https://ntfy.sh) topic — at detection time:
+divergence (no common ancestor, a reconcile it could not converge, a held
+prose conflict, an id naming two different tickets) or a push attempt fails,
+it runs a shell command you configure — e.g. a push to an
+[ntfy](https://ntfy.sh) topic — at detection time:
 
 ```toml
 [sync]
@@ -232,7 +303,7 @@ event's facts in the environment:
 
 | variable             | value                                                            |
 | -------------------- | ---------------------------------------------------------------- |
-| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, or `push_failed` |
+| `LIT_NOTIFY_KIND`    | `unrelated_histories`, `prose_held`, `diverged_unresolved`, `id_collision`, or `push_failed` |
 | `LIT_NOTIFY_SUMMARY` | the one-sentence domain description of what degraded             |
 | `LIT_NOTIFY_REMOTE`  | the sync remote concerned (may be empty for an unresolved push)  |
 | `LIT_NOTIFY_BRANCH`  | the sync branch concerned                                        |
@@ -254,7 +325,10 @@ merge automatically — resolving them is a deliberate choice among:
 
 - `lit sync reconcile combine` — the union: every issue kept, shared ids
   field-merged, an on-both prose conflict held for inline resolution. This is
-  the keep-everything default and stays **agent-runnable** with no approval.
+  the keep-everything default and stays **agent-runnable** with no approval. It
+  stops wholesale on one condition: a shared id that names two different
+  tickets, where it commits nothing and reports both sides — see "Two tickets
+  under one id" above.
 - `lit sync reconcile take local|remote` — one side survives **wholesale and
   the other side's unique issues are permanently discarded**.
 

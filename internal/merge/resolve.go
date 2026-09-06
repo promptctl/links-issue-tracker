@@ -67,15 +67,24 @@ func (r IssueResolution) Provisional() model.Issue {
 // pure — no IO, no Dolt — so every policy is provable by value against
 // hand-written triples.
 //
-// base is nil when the same id was created independently on both sides (no
-// merge-base); every field is then treated as "both changed" from empty.
-// oursWS/theirsWS are the two workspaces' ids; the tiebreak compares THEM, never
-// "ours vs theirs", so both machines compute the same winner regardless of which
-// side each calls its own. [LAW:no-ambient-temporal-coupling] Causality comes
-// from the merge-base, not a clock: a field only one side moved is taken from
-// that side (Tier 1), which is what makes reopen converge with no timestamp.
-func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) IssueResolution {
-	r := resolver{oursWS: oursWS, theirsWS: theirsWS, hasBase: base != nil}
+// It takes a SameEntity — a triple Classify has PROVEN to be two versions of one
+// ticket — so the input can no longer mean "two tickets that happen to share an
+// id". That case is a Collision, it never reaches here, and the field merge is
+// therefore always combining edits someone made to one row.
+//
+// Inside a SameEntity a missing base means one thing only: the two sides share no
+// merge-base, so every field is treated as "both changed" from empty and the
+// symmetric policies decide. [LAW:parse-dont-validate] the ambiguity was resolved
+// at the checkpoint, not re-asked here.
+//
+// The workspace ids are the tiebreak's operands; it compares THEM, never "ours vs
+// theirs", so both machines compute the same winner regardless of which side each
+// calls its own. [LAW:no-ambient-temporal-coupling] Causality comes from the
+// merge-base, not a clock: a field only one side moved is taken from that side
+// (Tier 1), which is what makes reopen converge with no timestamp.
+func ResolveIssue(in SameEntity) IssueResolution {
+	base, ours, theirs := in.base, &in.ours, &in.theirs
+	r := resolver{oursWS: in.oursWS, theirsWS: in.theirsWS, hasBase: base != nil}
 	if r.hasBase {
 		r.base = *base
 	}
@@ -111,7 +120,10 @@ func ResolveIssue(base, ours, theirs *model.Issue, oursWS, theirsWS string) Issu
 	if r.hasBase {
 		merged.CreatedAt = r.base.CreatedAt
 	} else {
-		merged.CreatedAt = earliest(ours.CreatedAt, theirs.CreatedAt)
+		// No merge-base: Classify reached this triple only by proving both sides
+		// carry ONE birth certificate, so there is a single value to take and
+		// nothing left to reconcile between them.
+		merged.CreatedAt = ours.CreatedAt
 	}
 	merged.UpdatedAt = latest(ours.UpdatedAt, theirs.UpdatedAt)
 	// Retention merges on its two-timestamp wire projection: the per-flag
@@ -419,13 +431,6 @@ func unionNameSet(sets ...map[string]struct{}) map[string]struct{} {
 		}
 	}
 	return out
-}
-
-func earliest(a, b time.Time) time.Time {
-	if a.Before(b) {
-		return a
-	}
-	return b
 }
 
 func latest(a, b time.Time) time.Time {

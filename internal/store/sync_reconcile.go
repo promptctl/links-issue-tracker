@@ -190,7 +190,9 @@ func resolvedSettle(resolutions []merge.ProseResolution) settleFn {
 // the log reads as a single continuous stream and the subsequent push always
 // fast-forwards. When a free-text field diverged on both sides it commits
 // nothing, leaves the local branch untouched, and returns the prose conflicts
-// for the agent surface.
+// for the agent surface. When an id names a DIFFERENT ticket on each side it
+// likewise commits nothing and returns both rows: that pair has no merge to
+// hold, so it is refused rather than settled.
 //
 // [LAW:effects-at-boundaries] This method owns the effects (read/reset/commit);
 // the merge DECISION is the pure engine. The reconciling machine knows only its
@@ -237,8 +239,9 @@ func (s *Store) SyncReconcileResolved(ctx context.Context, remote string, branch
 // SyncReconcileCombine resolves an unrelated-history divergence by COMBINING both sides:
 // the union of every issue, with ids present on both field-merged against an empty base.
 // It is the explicit combine choice — autonomous prose policy (an on-both prose conflict is
-// HELD for the agent, never picked), landing SyncReconcileCombined when everything settled
-// or SyncReconcileProsePending when a shared id's free text diverged. The held prose is
+// HELD for the agent, never picked), landing SyncReconcileCombined when everything settled,
+// SyncReconcileProsePending when a shared id's free text diverged, or
+// SyncReconcileIDCollision when a shared id names two different tickets. The held prose is
 // finalized through the same `lit sync reconcile resolve` path as a three-way divergence.
 //
 // It shares SyncReconcile's boundary verbatim (lock, captured anchors, schema-ahead refusal,
@@ -542,6 +545,19 @@ type foldStepper struct {
 // that count back off the spine.
 func (f foldStepper) len() int { return len(f.chain) }
 
+// foldCollisionError carries a fold step's refusal as DATA rather than prose, so
+// the collisions found mid-chain reach the reconcile boundary and land in the same
+// SyncReconcileIDCollision result — same block, same guidance, same owner
+// notification — as one classified at the head. [LAW:no-silent-failure]
+type foldCollisionError struct {
+	commit     string
+	collisions []merge.Collision
+}
+
+func (e foldCollisionError) Error() string {
+	return fmt.Sprintf("replay folded commit %s: an id names a different ticket on each side", e.commit)
+}
+
 // step projects the i-th folded commit. Every step reads its own commit,
 // including the newest: it costs one export read to keep the loop uniform, and
 // the alternative — special-casing the last step to reuse the caller's
@@ -555,8 +571,16 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	if err != nil {
 		return replayStep{}, err
 	}
+	// mergeAndReplay's refusal classified ours@localHead; a row a folded commit
+	// still held and localHead no longer does reaches Classify only here, so the
+	// step refuses rather than landing a fused row in committed history.
+	projected := merge.ThreeWay(f.base, at, f.theirs)
+	export, ok := projected.Provisional()
+	if !ok {
+		return replayStep{}, foldCollisionError{commit: c.hash, collisions: projected.Collisions}
+	}
 	return replayStep{
-		export: merge.ThreeWay(f.base, at, f.theirs).Provisional(),
+		export: export,
 		stamp:  commitStamp{Message: c.message, Date: c.date, Author: c.author},
 	}, nil
 }
@@ -652,11 +676,22 @@ func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitS
 	return nil
 }
 
+// holdForCollisions is the ONE conversion from "an id names two tickets" to a
+// reconcile outcome, whether the classification happened at the head or inside the
+// fold replay. Pending is cleared because a collision is not a divergence an agent
+// can finish. [LAW:single-enforcer]
+func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.Collision) {
+	result.State = storage.SyncReconcileIDCollision
+	result.Collisions = collisions
+	result.Pending = nil
+}
+
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
 // merges them against base (a real merge-base export, or the empty export for a combine),
-// and either holds the prose divergence for the agent or replays the folded chain forward
-// onto remoteHead — each folded commit under its own provenance, settled by the marker
+// and either refuses an id that names two tickets, holds the prose divergence for the
+// agent, or replays the folded chain forward onto remoteHead — each folded commit under
+// its own provenance, settled by the marker
 // commit carrying message — landing settledState. The caller has already read base (or left
 // it empty), so the ONLY difference between the two producers is that value and the two
 // labels — the safety-critical replay is written once.
@@ -673,16 +708,34 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	}
 
 	merged := merge.ThreeWay(base, ours, theirs)
+	if len(merged.Collisions) > 0 {
+		// An id names a different ticket on each side. This is checked ahead of the
+		// prose hold because it is not the same KIND of thing: held prose is one
+		// ticket awaiting an author's merged text, and a resolution the agent
+		// supplies finishes it. Two tickets under one id have no merged text to
+		// supply — whatever an agent wrote would be a third ticket neither machine
+		// filed — so no settle policy, autonomous or resolved, may proceed past
+		// this. The data branch is still at localHead, so the clone keeps working
+		// on its own truth while the operator re-files one of the two.
+		// [LAW:no-silent-failure] [LAW:parse-dont-validate] the engine refuses the
+		// merge rather than returning a well-formed row that means nothing.
+		holdForCollisions(result, merged.Collisions)
+		return nil
+	}
 	export, pending := settle(merged)
 	if len(pending) > 0 {
 		// Prose still diverges on both sides: commit nothing. The data branch is still
 		// at localHead (only the scratch branch moved), so the clone keeps working on
 		// local truth, still diverged; the unresolved divergence IS the durable
 		// pending state, re-derivable from the refs rather than a snapshot that can
-		// drift. [LAW:one-source-of-truth] Hand the prose conflicts to the agent
-		// surface. [LAW:no-silent-failure] never auto-committed by picking a side. The
-		// resolved finalize reaches here only when the agent's resolutions no longer
-		// match the live divergence, so this same path re-surfaces the CURRENT state.
+		// drift. [LAW:one-source-of-truth] [LAW:no-silent-failure] never auto-committed
+		// by picking a side. The resolved finalize reaches here only when the agent's
+		// resolutions no longer match the live divergence, so this same path
+		// re-surfaces the CURRENT state.
+		//
+		// A fold-only collision waits behind this hold: the stepper is not built until
+		// prose settles, and finding those eagerly costs a full folded-chain export on
+		// every attempt. Deferred, never dropped. [LAW:carrying-cost]
 		result.State = storage.SyncReconcileProsePending
 		result.Pending = pending
 		return nil
@@ -694,6 +747,11 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	}
 	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
 	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
+	var foldCollision foldCollisionError
+	if errors.As(err, &foldCollision) {
+		holdForCollisions(result, foldCollision.collisions)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

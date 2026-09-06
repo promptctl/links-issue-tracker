@@ -176,6 +176,11 @@ const (
 	// committed; the divergence is surfaced for wholesale/union resolution rather
 	// than merged through an absent base. [LAW:no-silent-failure]
 	SyncPullUnrelated SyncPullState = "unrelated_histories"
+	// SyncPullIDCollision: local diverged and at least one id names a DIFFERENT
+	// ticket on each side. Nothing is committed; the two rows are surfaced whole,
+	// because no text and no side-pick resolves two independently minted tickets
+	// wearing one name. [LAW:no-silent-failure]
+	SyncPullIDCollision SyncPullState = "id_collision"
 	// SyncPullAhead: local has unpushed commits and the remote has nothing new;
 	// there is nothing to pull (push delivers local commits).
 	SyncPullAhead SyncPullState = "ahead"
@@ -201,6 +206,11 @@ type SyncPullResult struct {
 	// no-common-ancestor divergence, so the pull surface enumerates the same
 	// partition `lit sync reconcile` does. [LAW:one-source-of-truth]
 	Unrelated *UnrelatedInventory `json:"unrelated,omitempty"`
+	// Collisions carries the ids that name a different ticket on each side, both
+	// rows whole, non-empty only for SyncPullIDCollision. Carried straight off the
+	// reconcile that refused the merge, so the pull surface prints the same two
+	// tickets `lit sync reconcile` does. [LAW:one-source-of-truth]
+	Collisions []merge.Collision `json:"collisions,omitempty"`
 }
 
 // GCMode is how deep a compaction pass collects. The depths nest rather than
@@ -356,6 +366,17 @@ const (
 	// the engine cannot resolve alone is surfaced, never auto-committed by picking
 	// a side.
 	SyncReconcileProsePending SyncReconcileState = "prose_pending"
+	// SyncReconcileIDCollision: at least one id names a DIFFERENT ticket on each
+	// side — two disconnected stores each minted it for their own job (child ids
+	// are the parent's highest child plus one, counted locally, so two stores
+	// holding the same fifteen children both compute the sixteenth). Nothing is
+	// committed and the local branch is left untouched, exactly as with held
+	// prose, but this is not a divergence anyone can merge: there is no shared
+	// intent behind the two rows, so combining their fields would invent a ticket
+	// nobody wrote. Both rows are returned whole for the operator to read and
+	// re-file. [LAW:no-silent-failure] two tickets never converge into one row
+	// with the loser unmentioned.
+	SyncReconcileIDCollision SyncReconcileState = "id_collision"
 	// SyncReconcileUnrelated: the local branch and the remote-tracking ref share no
 	// common ancestor — independently-created stores, or one that was re-inited — so
 	// there is no base for a three-way merge. The reconcile DETECTS this before any
@@ -408,6 +429,11 @@ type SyncReconcileResult struct {
 	// base/ours/theirs, so the agent surface can merge intent instead of picking a
 	// side. Empty unless State is SyncReconcileProsePending.
 	Pending []merge.ProsePending
+	// Collisions carries the ids that name a different ticket on each side, both
+	// rows whole, so the surface can show the operator the two pieces of work that
+	// collided rather than a count. Empty unless State is
+	// SyncReconcileIDCollision.
+	Collisions []merge.Collision
 	// Unrelated carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both) so the operator can see what each side holds before choosing a
 	// wholesale/union resolution. Non-nil only for SyncReconcileUnrelated; there is
