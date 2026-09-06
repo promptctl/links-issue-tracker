@@ -120,3 +120,47 @@ func TestApplyProseResolutionsRejectsWrongIssue(t *testing.T) {
 		t.Fatalf("resolution for a non-pending issue accepted")
 	}
 }
+
+// proseAndCollisionFixture builds ONE merge that carries both halves at once: a
+// title diverged on both sides of `epic.2` (resolvable by the agent) and `epic.16`
+// naming a different ticket on each side (resolvable by nobody). Built through the
+// real engine, so the pending set and the collision set are both what ThreeWay
+// actually produces.
+func proseAndCollisionFixture(t *testing.T) MergeResult {
+	t.Helper()
+	base, local, remote := plantCollision(t)
+	titled := func(title string) model.Issue {
+		return leaf(t, "epic.2", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = title })
+	}
+	base.Issues = append(base.Issues, titled("base-title"))
+	local.Issues = append(local.Issues, titled("ours-title"))
+	remote.Issues = append(remote.Issues, titled("theirs-title"))
+
+	result := ThreeWay(base, local, remote)
+	if len(result.Pending) != 1 || len(result.Collisions) != 1 {
+		t.Fatalf("fixture = %d pending, %d collisions; want exactly one of each", len(result.Pending), len(result.Collisions))
+	}
+	return result
+}
+
+// TestApplyProseResolutionsRefusesCollisionDespiteExactBijection pins the gate that
+// stands between the agent's merged prose and an export in which one of two
+// colliding tickets is silently the survivor. The resolutions here are a PERFECT
+// bijection with the live pending set — right key, right fingerprint, no
+// duplicates — so every other refusal in this function is satisfied and the only
+// thing that can return ok=false is the collision gate itself. Its one production
+// caller cannot reach it today, which is exactly why it is pinned here: reordering
+// Provisional's tuple or dropping the early return upstream would otherwise remove
+// it with nothing failing. [LAW:no-silent-failure]
+func TestApplyProseResolutionsRefusesCollisionDespiteExactBijection(t *testing.T) {
+	result := proseAndCollisionFixture(t)
+	export, ok := ApplyProseResolutions(result, []ProseResolution{
+		{IssueID: "epic.2", Field: ProseTitle, Fingerprint: fingerprintOf(t, result, ProseTitle), Text: "merged-title"},
+	})
+	if ok {
+		t.Fatalf("an id collision spliced into a committable export; two tickets under one id have no merged text an agent can supply")
+	}
+	if len(export.Issues) != 0 {
+		t.Fatalf("refused export carries %d issues, want the zero export", len(export.Issues))
+	}
+}

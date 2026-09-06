@@ -288,9 +288,10 @@ fix a store that already holds one.
 The in-band surfaces above talk to whoever runs the next command — usually an
 agent. The party who can actually *lose work* when sync degrades is the OWNER,
 so lit also carries the event out of the terminal: when it detects a real
-divergence (no common ancestor, a reconcile it could not converge, a held prose
-conflict) or a push attempt fails, it runs a shell command you configure —
-e.g. a push to an [ntfy](https://ntfy.sh) topic — at detection time:
+divergence (no common ancestor, a reconcile it could not converge, a held
+prose conflict, an id naming two different tickets) or a push attempt fails,
+it runs a shell command you configure — e.g. a push to an
+[ntfy](https://ntfy.sh) topic — at detection time:
 
 ```toml
 [sync]
@@ -324,7 +325,10 @@ merge automatically — resolving them is a deliberate choice among:
 
 - `lit sync reconcile combine` — the union: every issue kept, shared ids
   field-merged, an on-both prose conflict held for inline resolution. This is
-  the keep-everything default and stays **agent-runnable** with no approval.
+  the keep-everything default and stays **agent-runnable** with no approval. It
+  stops wholesale on one condition: a shared id that names two different
+  tickets, where it commits nothing and reports both sides — see "Two tickets
+  under one id" above.
 - `lit sync reconcile take local|remote` — one side survives **wholesale and
   the other side's unique issues are permanently discarded**.
 

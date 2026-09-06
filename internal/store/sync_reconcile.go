@@ -545,6 +545,19 @@ type foldStepper struct {
 // that count back off the spine.
 func (f foldStepper) len() int { return len(f.chain) }
 
+// foldCollisionError carries a fold step's refusal as DATA rather than prose, so
+// the collisions found mid-chain reach the reconcile boundary and land in the same
+// SyncReconcileIDCollision result — same block, same guidance, same owner
+// notification — as one classified at the head. [LAW:no-silent-failure]
+type foldCollisionError struct {
+	commit     string
+	collisions []merge.Collision
+}
+
+func (e foldCollisionError) Error() string {
+	return fmt.Sprintf("replay folded commit %s: an id names a different ticket on each side", e.commit)
+}
+
 // step projects the i-th folded commit. Every step reads its own commit,
 // including the newest: it costs one export read to keep the loop uniform, and
 // the alternative — special-casing the last step to reuse the caller's
@@ -561,9 +574,10 @@ func (f foldStepper) step(ctx context.Context, i int) (replayStep, error) {
 	// mergeAndReplay's refusal classified ours@localHead; a row a folded commit
 	// still held and localHead no longer does reaches Classify only here, so the
 	// step refuses rather than landing a fused row in committed history.
-	export, ok := merge.ThreeWay(f.base, at, f.theirs).Provisional()
+	projected := merge.ThreeWay(f.base, at, f.theirs)
+	export, ok := projected.Provisional()
 	if !ok {
-		return replayStep{}, fmt.Errorf("replay folded commit %s: an id names a different ticket on each side", c.hash)
+		return replayStep{}, foldCollisionError{commit: c.hash, collisions: projected.Collisions}
 	}
 	return replayStep{
 		export: export,
@@ -662,6 +676,16 @@ func (w *spineWriter) land(ctx context.Context, next model.Export, stamp commitS
 	return nil
 }
 
+// holdForCollisions is the ONE conversion from "an id names two tickets" to a
+// reconcile outcome, whether the classification happened at the head or inside the
+// fold replay. Pending is cleared because a collision is not a divergence an agent
+// can finish. [LAW:single-enforcer]
+func holdForCollisions(result *storage.SyncReconcileResult, collisions []merge.Collision) {
+	result.State = storage.SyncReconcileIDCollision
+	result.Collisions = collisions
+	result.Pending = nil
+}
+
 // mergeAndReplay is the merge-settle-replay tail shared by the shared-history three-way and
 // the no-base combine: on the scratch branch it reads ours@localHead and theirs@remoteHead,
 // merges them against base (a real merge-base export, or the empty export for a combine),
@@ -695,9 +719,7 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		// on its own truth while the operator re-files one of the two.
 		// [LAW:no-silent-failure] [LAW:parse-dont-validate] the engine refuses the
 		// merge rather than returning a well-formed row that means nothing.
-		result.State = storage.SyncReconcileIDCollision
-		result.Collisions = merged.Collisions
-		result.Pending = nil
+		holdForCollisions(result, merged.Collisions)
 		return nil
 	}
 	export, pending := settle(merged)
@@ -721,6 +743,11 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	}
 	stepper := foldStepper{store: s, readBranch: scratch.read, chain: chain, base: base, theirs: theirs}
 	replayed, err := s.commitReplayAndAdvance(ctx, guard, dataBranch, scratch, remoteHead, message, export, stepper)
+	var foldCollision foldCollisionError
+	if errors.As(err, &foldCollision) {
+		holdForCollisions(result, foldCollision.collisions)
+		return nil
+	}
 	if err != nil {
 		return err
 	}

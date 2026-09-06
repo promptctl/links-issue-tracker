@@ -340,8 +340,6 @@ func reconcileCommandReasonForState(state storage.SyncReconcileState) string {
 		return "reconciled: the divergence merged into linear history"
 	case storage.SyncReconcileProsePending:
 		return "every field resolved but free-text diverged on both sides; held for inline merge"
-	case storage.SyncReconcileIDCollision:
-		return "an id names a different ticket on each side; refused the merge and committed nothing"
 	case storage.SyncReconcileCombined:
 		return "combined: unioned both backlogs, replaying the local commits with their provenance"
 	case storage.SyncReconcileNotDiverged:

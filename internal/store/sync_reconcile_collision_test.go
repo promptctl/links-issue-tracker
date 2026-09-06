@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -277,4 +278,105 @@ func TestSyncReconcileCombineRefusesIDCollision(t *testing.T) {
 	if local.Title != "Adaptive id length for large backlogs" {
 		t.Fatalf("local row = %q; B's ticket must survive the refusal unmodified", local.Title)
 	}
+}
+
+// removeIssueLocally hard-removes one issue in its own local commit, through the
+// export replace an ordinary `lit import` bottoms out in — the only path that
+// deletes an issues row. Afterwards the id is absent from local head and present
+// only in the commit above it.
+func removeIssueLocally(t *testing.T, ctx context.Context, root, workspace, id string) {
+	t.Helper()
+	st, err := Open(ctx, root, workspace)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", root, err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close(%s): %v", root, err)
+		}
+	}()
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(%s): %v", root, err)
+	}
+	export.Issues = filterRows(export.Issues, func(i model.Issue) bool { return i.ID != id })
+	export.Relations = filterRows(export.Relations, func(r model.Relation) bool { return r.SrcID != id && r.DstID != id })
+	export.Comments = filterRows(export.Comments, func(c model.Comment) bool { return c.IssueID != id })
+	export.Labels = filterRows(export.Labels, func(l model.Label) bool { return l.IssueID != id })
+	export.Events = filterRows(export.Events, func(e model.IssueEvent) bool { return e.IssueID != id })
+	if err := st.replaceFromExport(ctx, export, commitStamp{Message: "drop the locally filed child"}); err != nil {
+		t.Fatalf("replaceFromExport(%s): %v", root, err)
+	}
+}
+
+// TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit drives the collision the
+// HEAD-level classification cannot see. B files its own `<epic>.1`, then hard-removes
+// it in a later local commit, so local head no longer holds the id while the folded
+// commit under it still does — and the remote carries a DIFFERENT ticket under that
+// same id. merge.ThreeWay(base, ours@localHead, theirs) therefore sees a clean
+// remote-only add and raises nothing; the pair meets Classify for the first and only
+// time inside the fold replay.
+//
+// The refusal there must reach the operator as the SAME outcome a head-detected one
+// does — the collision state carrying both rows — not as an opaque replay error, or
+// every surface built on it renders an internal failure instead of the block, the
+// guidance and the owner notification.
+func TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	epicID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	oursID := createChildLocally(t, ctx, rootA, "wsA", epicID, "Wire the release watchdog",
+		"alarm when a pending release sits past its window")
+	pushRootOrFatal(t, ctx, rootA)
+	theirsID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
+		"hash ids grow a character past 4k issues")
+	if oursID != theirsID {
+		t.Fatalf("the two stores minted %q and %q; this test's premise is that a locally-counted child number collides", oursID, theirsID)
+	}
+	removeIssueLocally(t, ctx, rootB, "wsB", theirsID)
+
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	// The premise of the FOLD half, asserted rather than assumed: the id is gone
+	// from local head, so nothing the head-level check reads can classify it.
+	if _, err := syncB.GetIssue(ctx, theirsID); err == nil {
+		t.Fatalf("%q still present at local head; this test's premise is that only a folded commit holds it", theirsID)
+	}
+	headBefore := headCommit(t, ctx, syncB)
+
+	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B) returned an error instead of a collision state: %v", err)
+	}
+	if res.State != storage.SyncReconcileIDCollision {
+		t.Fatalf("reconcile state = %q, want %q: a collision found in the fold replay must surface like one found at the head",
+			res.State, storage.SyncReconcileIDCollision)
+	}
+	if len(res.Collisions) != 1 || res.Collisions[0].IssueID != theirsID {
+		t.Fatalf("collisions = %+v, want the one colliding id %q carried out of the fold step", res.Collisions, theirsID)
+	}
+	c := res.Collisions[0]
+	if c.Ours.Title != "Adaptive id length for large backlogs" {
+		t.Fatalf("ours title = %q, want B's own job as the folded commit held it", c.Ours.Title)
+	}
+	if c.Theirs.Title != "Wire the release watchdog" {
+		t.Fatalf("theirs title = %q, want A's job carried through the report", c.Theirs.Title)
+	}
+	if len(res.Pending) != 0 {
+		t.Fatalf("pending = %+v; a collision is not a divergence an agent can finish", res.Pending)
+	}
+	if after := headCommit(t, ctx, syncB); after != headBefore {
+		t.Fatalf("data branch moved from %s to %s; a refused replay must commit nothing", headBefore, after)
+	}
+	assertScratchBranchCleanedUp(t, ctx, syncB)
 }
