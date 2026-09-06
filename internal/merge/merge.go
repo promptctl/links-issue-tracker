@@ -19,15 +19,21 @@ import (
 type MergeResult struct {
 	export  model.Export
 	Pending []ProsePending
+	// Collisions are ids two disconnected stores minted independently — two
+	// tickets wearing one name. Unlike Pending these are not a merge awaiting an
+	// author's text: nothing about them is resolvable by combining, so they gate
+	// the commit and travel to an operator whole. Empty on every ordinary merge.
+	Collisions []Collision
 }
 
 // Settled returns the merged export to commit autonomously, and ok=true ONLY
-// when no prose field anywhere in the export needs the agent. A non-empty
-// Pending set returns ok=false, so the autonomous-commit path cannot publish an
-// export carrying provisional prose. [LAW:no-silent-failure] the gate is the
+// when no prose field anywhere in the export needs the agent AND no id collided.
+// Either set being non-empty returns ok=false, so the autonomous-commit path can
+// publish neither provisional prose nor an export in which one of two colliding
+// tickets is silently the survivor. [LAW:no-silent-failure] the gate is the
 // return value, not a convention.
 func (r MergeResult) Settled() (model.Export, bool) {
-	return r.export, len(r.Pending) == 0
+	return r.export, len(r.Pending) == 0 && len(r.Collisions) == 0
 }
 
 // Provisional returns the merged export carrying provisional prose values, for
@@ -46,6 +52,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 	allIDs := unionIssueIDs(baseMap, localMap, remoteMap)
 	mergedIssues := make([]model.Issue, 0, len(allIDs))
 	pending := make([]ProsePending, 0)
+	collisions := make([]Collision, 0)
 
 	for _, id := range allIDs {
 		baseIssue, hasBase := baseMap[id]
@@ -79,7 +86,19 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 			// genuine row removal, and presence is a collection fact, not a field.)
 			switch {
 			case hasLocal && hasRemote:
-				resolution := ResolveIssue(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+				same, collision := Classify(basePtr, localPtr, remotePtr, local.WorkspaceID, remote.WorkspaceID)
+				if collision != nil {
+					// Two tickets, one id. Report both and leave OUR row exactly as it
+					// stands: a field merge here would return an answer-shaped void —
+					// a well-formed ticket carrying one job's title over another job's
+					// description, with the loser gone and nothing said.
+					// [LAW:parse-dont-validate] Settled() refuses the export while this
+					// is unresolved, so the surviving local row is never a silent pick.
+					collisions = append(collisions, *collision)
+					mergedIssues = append(mergedIssues, localIssue)
+					continue
+				}
+				resolution := ResolveIssue(same)
 				mergedIssues = append(mergedIssues, resolution.Provisional())
 				pending = append(pending, resolution.Pending...)
 			case hasLocal:
@@ -109,7 +128,7 @@ func ThreeWay(base model.Export, local model.Export, remote model.Export) MergeR
 		Labels:      mergeLabels(issueSet, base.Labels, local.Labels, remote.Labels),
 		Events:      mergeEvents(issueSet, local.Events, remote.Events),
 	}
-	return MergeResult{export: merged, Pending: pending}
+	return MergeResult{export: merged, Pending: pending, Collisions: SortCollisions(collisions)}
 }
 
 func mapIssues(issues []model.Issue) map[string]model.Issue {

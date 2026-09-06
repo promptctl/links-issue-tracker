@@ -33,6 +33,20 @@ func open(t *testing.T, id string) model.Issue {
 	return leaf(t, id, model.StatusView{Value: model.StateOpen}, nil)
 }
 
+// same routes a fixture through the real checkpoint on its way to ResolveIssue,
+// so a triple a test MEANT as one diverged ticket cannot quietly reach the field
+// merge as two colliding ones. The t.Fatalf is the point: it fires only when a
+// fixture accidentally plants two birth certificates.
+func same(t *testing.T, base, ours, theirs *model.Issue, oursWS, theirsWS string) SameEntity {
+	t.Helper()
+	in, collision := Classify(base, ours, theirs, oursWS, theirsWS)
+	if collision != nil {
+		t.Fatalf("fixture %s is a collision, not a divergence: born %v (ours) vs %v (theirs)",
+			collision.IssueID, collision.Ours.CreatedAt, collision.Theirs.CreatedAt)
+	}
+	return in
+}
+
 func TestResolveIssueStatusTwoTier(t *testing.T) {
 	cases := []struct {
 		name               string
@@ -50,7 +64,7 @@ func TestResolveIssueStatusTwoTier(t *testing.T) {
 			base := leaf(t, "i1", model.StatusView{Value: tc.base}, nil)
 			ours := leaf(t, "i1", model.StatusView{Value: tc.ours}, nil)
 			theirs := leaf(t, "i1", model.StatusView{Value: tc.theirs}, nil)
-			got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+			got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 			if got.Provisional().StatusValue() != string(tc.want) {
 				t.Fatalf("status = %q, want %q", got.Provisional().StatusValue(), tc.want)
 			}
@@ -65,7 +79,7 @@ func TestResolveIssuePriorityUrgentWins(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityNormal })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityUrgent })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Priority = model.PriorityNormal })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if got.Provisional().Priority != model.PriorityUrgent {
 		t.Fatalf("priority = %d, want urgent", got.Provisional().Priority)
 	}
@@ -75,7 +89,7 @@ func TestResolveIssueProseTier1TakesMover(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "d" })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "b"; i.Description = "d" })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "d" })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if len(got.Pending) != 0 {
 		t.Fatalf("only one side rewrote title; should not need the agent: %#v", got.Pending)
 	}
@@ -89,7 +103,7 @@ func TestIssueResolutionSettledGatesOnPending(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, nil)
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, nil)
-	if row, ok := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Settled(); !ok || row.StatusValue() != string(model.StateClosed) {
+	if row, ok := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB")).Settled(); !ok || row.StatusValue() != string(model.StateClosed) {
 		t.Fatalf("Settled() = (%v, %v), want a committable closed row", row.StatusValue(), ok)
 	}
 
@@ -97,7 +111,7 @@ func TestIssueResolutionSettledGatesOnPending(t *testing.T) {
 	pbase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a" })
 	pours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "ours" })
 	ptheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "theirs" })
-	res := ResolveIssue(&pbase, &pours, &ptheirs, "wsA", "wsB")
+	res := ResolveIssue(same(t, &pbase, &pours, &ptheirs, "wsA", "wsB"))
 	if _, ok := res.Settled(); ok {
 		t.Fatalf("Settled() ok=true with prose pending; the autonomous-commit path must refuse unresolved prose")
 	}
@@ -107,7 +121,7 @@ func TestResolveIssueProseTier2EmitsPendingNeverAutoPicks(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "base d"; i.Prompt = "p" })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "ours d"; i.Prompt = "p" })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Title = "a"; i.Description = "theirs d"; i.Prompt = "p" })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if len(got.Pending) != 1 {
 		t.Fatalf("pending = %#v, want exactly the description", got.Pending)
 	}
@@ -129,8 +143,8 @@ func TestResolveIssueTiebreakSymmetry(t *testing.T) {
 	alice := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("alice"))
 	bob := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, mk("bob"))
 
-	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
-	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
+	forward := ResolveIssue(same(t, &base, &alice, &bob, "wsA", "wsB"))
+	swapped := ResolveIssue(same(t, &base, &bob, &alice, "wsB", "wsA"))
 	if forward.Provisional().Topic != swapped.Provisional().Topic {
 		t.Fatalf("tiebreak not symmetric: forward=%q swapped=%q", forward.Provisional().Topic, swapped.Provisional().Topic)
 	}
@@ -154,8 +168,8 @@ func TestResolveIssueAssigneeTiebreakSymmetry(t *testing.T) {
 	alice := leaf(t, "i1", inProgress, mk("alice"))
 	bob := leaf(t, "i1", inProgress, mk("bob"))
 
-	forward := ResolveIssue(&base, &alice, &bob, "wsA", "wsB")
-	swapped := ResolveIssue(&base, &bob, &alice, "wsB", "wsA")
+	forward := ResolveIssue(same(t, &base, &alice, &bob, "wsA", "wsB"))
+	swapped := ResolveIssue(same(t, &base, &bob, &alice, "wsB", "wsA"))
 	if forward.Provisional().AssigneeValue() != swapped.Provisional().AssigneeValue() {
 		t.Fatalf("assignee tiebreak not symmetric: forward=%q swapped=%q",
 			forward.Provisional().AssigneeValue(), swapped.Provisional().AssigneeValue())
@@ -206,7 +220,7 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t2}, nil)
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if got.Provisional().StatusValue() != string(model.StateClosed) {
 		t.Fatalf("status = %q, want closed", got.Provisional().StatusValue())
 	}
@@ -219,7 +233,7 @@ func TestResolveIssueClosedAtSlavedToStatus(t *testing.T) {
 	reopenBase := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
 	reopenOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	reopenTheirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed, ClosedAt: &t1}, nil)
-	reopened := ResolveIssue(&reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB")
+	reopened := ResolveIssue(same(t, &reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB"))
 	if reopened.Provisional().StatusValue() != string(model.StateOpen) {
 		t.Fatalf("reopen status = %q, want open", reopened.Provisional().StatusValue())
 	}
@@ -333,7 +347,7 @@ func TestResolveIssueRedirectTargetSlavedToResolution(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	theirs := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Provisional()
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB")).Provisional()
 	if got.StatusValue() != string(model.StateClosed) {
 		t.Fatalf("status = %q, want closed (dominant-state join)", got.StatusValue())
 	}
@@ -345,7 +359,7 @@ func TestResolveIssueRedirectTargetSlavedToResolution(t *testing.T) {
 	reopenBase := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
 	reopenOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	reopenTheirs := closedLeaf(t, "i1", model.ResolutionDuplicate, "links-canon")
-	reopened := ResolveIssue(&reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB").Provisional()
+	reopened := ResolveIssue(same(t, &reopenBase, &reopenOurs, &reopenTheirs, "wsA", "wsB")).Provisional()
 	if reopened.StatusValue() != string(model.StateOpen) {
 		t.Fatalf("reopen status = %q, want open", reopened.StatusValue())
 	}
@@ -358,7 +372,7 @@ func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if archived, ok := got.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t1) {
 		t.Fatalf("retention = %#v, want Archived at earliest %v", got.Provisional().Retention(), t1)
 	}
@@ -367,7 +381,7 @@ func TestResolveIssueArchivedAtEarliestWhenBothArchive(t *testing.T) {
 	soloBase := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
 	soloOurs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.SetRetention(model.Archived{At: t2}) })
 	soloTheirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
-	solo := ResolveIssue(&soloBase, &soloOurs, &soloTheirs, "wsA", "wsB")
+	solo := ResolveIssue(same(t, &soloBase, &soloOurs, &soloTheirs, "wsA", "wsB"))
 	if archived, ok := solo.Provisional().Retention().(model.Archived); !ok || !archived.At.Equal(t2) {
 		t.Fatalf("solo archive = %#v, want Archived at %v", solo.Provisional().Retention(), t2)
 	}
@@ -385,7 +399,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	// merge; the fold resolves the pair to Deleted.
 	ours := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	theirs := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
-	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, nil, &ours, &theirs, "wsA", "wsB"))
 	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
 		t.Fatalf("archive vs delete = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
 	}
@@ -397,7 +411,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	liveBase := leaf(t, "i1", open, nil)
 	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
-	got = ResolveIssue(&liveBase, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, &liveBase, &ours, &theirs, "wsA", "wsB"))
 	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t2) {
 		t.Fatalf("archive vs delete with base = %#v, want Deleted at %v", got.Provisional().Retention(), t2)
 	}
@@ -406,7 +420,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	// as the earliest of the two stamps.
 	ours = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t2}) })
 	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
-	got = ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, nil, &ours, &theirs, "wsA", "wsB"))
 	if deleted, ok := got.Provisional().Retention().(model.Deleted); !ok || !deleted.At.Equal(t1) {
 		t.Fatalf("delete vs delete = %#v, want Deleted at earliest %v", got.Provisional().Retention(), t1)
 	}
@@ -416,7 +430,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	base := leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
 	ours = leaf(t, "i1", open, nil)
 	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
-	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if _, ok := got.Provisional().Retention().(model.Live); !ok {
 		t.Fatalf("solo restore = %#v, want Live", got.Provisional().Retention())
 	}
@@ -425,7 +439,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	ours = leaf(t, "i1", open, nil)
 	theirs = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
-	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if _, ok := got.Provisional().Retention().(model.Live); !ok {
 		t.Fatalf("solo unarchive = %#v, want Live", got.Provisional().Retention())
 	}
@@ -435,7 +449,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Archived{At: t1}) })
 	ours = leaf(t, "i1", open, nil)
 	theirs = leaf(t, "i1", open, nil)
-	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if _, ok := got.Provisional().Retention().(model.Live); !ok {
 		t.Fatalf("both unarchive = %#v, want Live", got.Provisional().Retention())
 	}
@@ -445,7 +459,7 @@ func TestResolveIssueRetentionRaces(t *testing.T) {
 	base = leaf(t, "i1", open, func(i *model.Issue) { i.SetRetention(model.Deleted{At: t1}) })
 	ours = leaf(t, "i1", open, nil)
 	theirs = leaf(t, "i1", open, nil)
-	got = ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got = ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if _, ok := got.Provisional().Retention().(model.Live); !ok {
 		t.Fatalf("both restore = %#v, want Live", got.Provisional().Retention())
 	}
@@ -455,7 +469,7 @@ func TestResolveIssueLabelsUnion(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep"} })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "ours"} })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"keep", "theirs"} })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	want := []string{"keep", "ours", "theirs"}
 	if len(got.Provisional().Labels) != len(want) {
 		t.Fatalf("labels = %#v, want union %#v", got.Provisional().Labels, want)
@@ -473,7 +487,7 @@ func TestResolveIssueLabelRemovalNotResurrected(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a"} })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.Labels = []string{"a", "b"} })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB").Provisional()
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB")).Provisional()
 	if len(got.Labels) != 1 || got.Labels[0] != "a" {
 		t.Fatalf("labels = %#v, want [a] (b removed by ours must not be resurrected)", got.Labels)
 	}
@@ -510,7 +524,7 @@ func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
 	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil) // created_at = t0
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t2 })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
-	got := ResolveIssue(&base, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
 	if got.Provisional().ID != "i1" {
 		t.Fatalf("id = %q, want i1", got.Provisional().ID)
 	}
@@ -520,12 +534,16 @@ func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
 }
 
 func TestResolveIssueNoMergeBaseTreatsEveryFieldAsChanged(t *testing.T) {
-	// Same id created independently on both sides: no merge-base. The resolver
-	// must not touch the zero-value base's lifecycle accessors, and must converge
-	// every field as "both changed".
+	// ONE ticket reached from two histories that share no merge-base — the
+	// unrelated-history combine, where the base is empty by construction and the
+	// matching birth certificates are what prove the rows are the same ticket.
+	// (Two rows created INDEPENDENTLY under one id do not land here at all: that
+	// is a Collision, and Classify keeps it away from this path entirely.) The
+	// resolver must not touch the zero-value base's lifecycle accessors, and must
+	// converge every field as "both changed".
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.Title = "ours" })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateClosed}, func(i *model.Issue) { i.Title = "theirs" })
-	got := ResolveIssue(nil, &ours, &theirs, "wsA", "wsB")
+	got := ResolveIssue(same(t, nil, &ours, &theirs, "wsA", "wsB"))
 	if got.Provisional().StatusValue() != string(model.StateClosed) {
 		t.Fatalf("status = %q, want closed (dominant join with no base)", got.Provisional().StatusValue())
 	}

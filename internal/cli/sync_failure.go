@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/merge"
+	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/store"
 )
@@ -42,6 +43,16 @@ const (
 	// or `lit sync reconcile take <local|remote>` (adopt one side wholesale) — see
 	// resolutionSteps below for the full, current command list.
 	syncFailureUnrelatedHistories syncFailureClass = "unrelated_histories"
+	// syncFailureIDCollision: an id names a DIFFERENT ticket on each side — two
+	// disconnected stores each minted it for their own job. Unlike held prose this
+	// is not one ticket awaiting a semantic merge: there is no shared intent, so
+	// there is no text an agent could write that would be right. It clears only by
+	// one of the two jobs being re-filed under a free id, which lit cannot yet do
+	// for you — an id is referenced by relations, comments, events and labels
+	// inside the store, and by branch names, PR titles and changelog entries
+	// outside it. Remedy: read both tickets (the block prints them whole so no
+	// work is lost) and re-file one, then surface as blocking.
+	syncFailureIDCollision syncFailureClass = "id_collision"
 )
 
 // persistentDivergenceAge and persistentDivergenceCommits are the thresholds past
@@ -105,6 +116,13 @@ type SyncFailure struct {
 	// holds; this is that visibility, rendered as its own section of the block.
 	// [LAW:types-are-the-program] the field present names the class that produced it.
 	Inventory *storage.UnrelatedInventory
+	// Collisions carries the ids that name a different ticket on each side, both
+	// rows whole, populated only for syncFailureIDCollision. The merge is refused,
+	// so this block is the ONLY place the operator sees the other side's ticket —
+	// it is printed in full for that reason, never summarized to a count.
+	// [LAW:no-silent-failure] [LAW:types-are-the-program] the field present names
+	// the class that produced it.
+	Collisions []merge.Collision
 	// BuildNote is the dev-vs-release build status line, resolved once at the
 	// boundary that constructs this failure (asSyncFailure, syncFailureFromPull,
 	// doctorSyncReport.divergenceFailure) via resolveBuildStatusNote, never
@@ -201,6 +219,13 @@ func (f SyncFailure) blockString() string {
 		fmt.Fprintf(&b, "%s\n", line)
 	}
 
+	// (2b') What collided — both tickets whole, present only for the id-collision
+	// class. Same shape as the inventory section: the loop runs every call and
+	// yields nothing for the other classes. [LAW:dataflow-not-control-flow]
+	for _, line := range f.collisionLines() {
+		fmt.Fprintf(&b, "%s\n", line)
+	}
+
 	// (2c) Build status — names whether the binary that hit this failure is a
 	// dev build (and how stale), so a mysterious failure doesn't need a
 	// separate `lit version` round trip to rule out "this is a known-fixed bug
@@ -255,6 +280,10 @@ func (f SyncFailure) whatLine() string {
 		return fmt.Sprintf(
 			"the local backlog and %s share no common history — they were created independently, or one was re-initialized — so there is no shared ancestor to merge against. The field-aware reconcile combines a divergence relative to a common base; with no base it cannot merge these automatically, and it committed nothing rather than pick a side. Keeping both backlogs requires taking one side wholesale or unioning them.",
 			ref)
+	case syncFailureIDCollision:
+		return fmt.Sprintf(
+			"%s and this backlog each minted %s for a DIFFERENT ticket — two stores that hold the same children of a parent both number the next one the same, so this is ordinary between syncs, not a race. These are two pieces of work wearing one name, not one ticket that diverged: field-merging them would produce a well-formed ticket nobody filed, with one job's title over another's description and the loser gone. The merge was refused and nothing was committed; both tickets are printed below so neither is lost.",
+			ref, describeCollidedIDs(f.Collisions))
 	default:
 		// A class this renderer does not know must not render as a bland,
 		// authoritative-looking line. Name it as a bug the way the pull payload
@@ -308,6 +337,20 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit sync reconcile take local    # DESTRUCTIVE, owner approval required: keep your backlog wholesale (discards their remote-only issues), then push",
 			"lit sync reconcile               # re-shows what each side holds (only-local, only-remote, on-both)",
 		}
+	case syncFailureIDCollision:
+		// Deliberately short, and deliberately without a one-command fix: there
+		// isn't one. Closing or deleting the losing row does NOT free the id — both
+		// are soft states and the row still exports, so it still collides — and
+		// re-numbering it is a multi-table rewrite that would also silently
+		// re-point every branch name, PR title and changelog line citing that id.
+		// Naming a command that does not resolve this would be worse than naming
+		// none. [LAW:no-silent-failure] every step listed is real and does what it
+		// says.
+		return []string{
+			"lit show <id>             # your side of the collision in full (the other side is printed above)",
+			"lit new ...               # re-file ONE of the two jobs under a fresh id, so neither piece of work is lost",
+			"                          # then surface to the user: retiring the duplicate id is not yet a lit operation",
+		}
 	default:
 		return []string{"lit doctor                # unrecognized sync-failure class; report this"}
 	}
@@ -332,6 +375,14 @@ func (f SyncFailure) escalationLine() string {
 	// still routine" and invite the retry that can never work. [LAW:dataflow-not-control-flow]
 	if f.Class == syncFailureUnrelatedHistories {
 		return "ESCALATION — BLOCKED: unrelated histories never merge automatically and will not clear by retrying. Resolving requires a deliberate choice — take one side's backlog wholesale, or union the two — which lit cannot make for you. Surface it to the user as blocking before continuing ticket work."
+	}
+	// An id collision, like the two above, never resolves by retrying — the two
+	// rows will name two tickets on every future attempt. It is also the class
+	// most likely to be misread as routine, because everything about the backlog
+	// still looks well-formed. [LAW:dataflow-not-control-flow] the class selects
+	// the line.
+	if f.Class == syncFailureIDCollision {
+		return "ESCALATION — BLOCKED: two tickets share one id and will collide on every retry. lit cannot resolve this for you: one of the two jobs has to be re-filed under a free id, and that is a decision about which piece of work keeps the name. Surface it to the user as blocking before continuing ticket work."
 	}
 	span := f.Ahead + f.Behind
 	if f.persistent() {
@@ -374,6 +425,43 @@ func (f SyncFailure) inventoryLines() []string {
 	}
 }
 
+// collisionLines renders each colliding id as the two tickets that wear it, whole.
+// The merge was refused, so nothing was written and the operator's own store still
+// holds only ITS side — this block is the only place the other side's ticket is
+// visible, which is why the text is reproduced rather than counted or truncated.
+// The birth certificates are printed because they are the evidence: two instants
+// under one name is precisely what makes these two tickets and not one.
+// [LAW:no-silent-failure] a report that loses the losing ticket's content repeats
+// the defect it exists to expose.
+func (f SyncFailure) collisionLines() []string {
+	if len(f.Collisions) == 0 {
+		return nil
+	}
+	out := []string{fmt.Sprintf("WHAT COLLIDED (%d id(s), each naming a different ticket on each side):", len(f.Collisions))}
+	for _, c := range merge.SortCollisions(f.Collisions) {
+		out = append(out, "  "+c.IssueID)
+		out = append(out, describeCollisionSide("yours ", c.OursWS, c.Ours)...)
+		out = append(out, describeCollisionSide("theirs", c.TheirsWS, c.Theirs)...)
+	}
+	return append(out, "")
+}
+
+// describeCollisionSide renders one side of a collision: where it came from, when
+// it was minted, and the ticket itself. An empty description is stated rather than
+// rendered as a blank line the reader would have to interpret.
+func describeCollisionSide(label, workspace string, issue model.Issue) []string {
+	lines := []string{fmt.Sprintf("    %s (workspace %s, created %s): %s",
+		label, workspace, issue.CreatedAt.UTC().Format(time.RFC3339Nano), issue.Title)}
+	body := strings.TrimSpace(issue.Description)
+	if body == "" {
+		body = "(no description)"
+	}
+	for _, line := range strings.Split(body, "\n") {
+		lines = append(lines, "      "+line)
+	}
+	return lines
+}
+
 // describeIDSet renders one partition slice as its count and members, so an empty
 // side reads as an explicit "(0)" rather than a blank the reader must interpret.
 // [LAW:no-silent-failure] the absence of ids on a side is stated, not left blank.
@@ -382,6 +470,17 @@ func describeIDSet(ids []string) string {
 		return "(0)"
 	}
 	return fmt.Sprintf("(%d): %s", len(ids), strings.Join(ids, ", "))
+}
+
+// describeCollidedIDs names the colliding ids for the WHAT line, so the headline
+// states which ids are affected before the reader reaches the section below.
+func describeCollidedIDs(collisions []merge.Collision) string {
+	ordered := merge.SortCollisions(collisions)
+	ids := make([]string, 0, len(ordered))
+	for _, c := range ordered {
+		ids = append(ids, c.IssueID)
+	}
+	return strings.Join(ids, ", ")
 }
 
 // describeHeldFields names the held free-text fields for the WHAT line, so the

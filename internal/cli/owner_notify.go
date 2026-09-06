@@ -62,6 +62,7 @@ var ownerNotifyDivergenceKinds = []ownerNotifyKind{
 	ownerNotifyKind(syncFailureProseHeld),
 	ownerNotifyKind(syncFailureDivergedUnresolved),
 	ownerNotifyKind(syncFailureUnrelatedHistories),
+	ownerNotifyKind(syncFailureIDCollision),
 }
 
 // ownerNotifyEvent is one owner-relevant occurrence: what degraded (Kind), the
@@ -94,7 +95,7 @@ func (ev ownerNotifyEvent) fingerprint() string {
 // unconditionally; the class value decides.
 func ownerNotifyEventForFailure(failure SyncFailure) (ownerNotifyEvent, bool) {
 	switch failure.Class {
-	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories:
+	case syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision:
 		return ownerNotifyEvent{
 			Kind:    ownerNotifyKind(failure.Class),
 			Summary: failure.whatLine(),
