@@ -146,11 +146,12 @@ func TestClassifySharedRowsAcrossUnrelatedHistories(t *testing.T) {
 }
 
 // TestClassifyAncestryOutranksBirthCertificate pins the evidence order: a
-// merge-base row proves the two sides descend from one creation, so they are one
-// ticket even if their created_at has drifted — the birth certificate is the
-// fallback for when there is no ancestry, never an override of it.
+// merge-base row whose birth instant one side still carries proves the two sides
+// descend from one creation, so they are one ticket even if the other side's
+// created_at has drifted — the birth certificate is the fallback for when there
+// is no such ancestry, never an override of it.
 func TestClassifyAncestryOutranksBirthCertificate(t *testing.T) {
-	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil)
+	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t2 })
 
@@ -159,6 +160,36 @@ func TestClassifyAncestryOutranksBirthCertificate(t *testing.T) {
 	}
 	if _, collision := Classify(nil, ours, theirs, "wsA", "wsB"); collision == nil {
 		t.Fatalf("the same two rows with no ancestry must fall back to the birth certificate and collide")
+	}
+}
+
+// TestClassifyRefusesTwoTicketsMintedIntoAReusedID is the ancestry arm's own
+// fusion case. An id is hard-deleted by the import delta and re-minted from the
+// live-row maximum, so two diverged stores can each drop epic.3 and each file a
+// brand new one. The merge-base commit still holds the ORIGINAL epic.3, so
+// base != nil while that row is the ancestor of neither side — the ancestry
+// short-circuit would hand ResolveIssue two unrelated jobs to field-merge, which
+// is the defect this package exists to refuse, reached the other way round.
+func TestClassifyRefusesTwoTicketsMintedIntoAReusedID(t *testing.T) {
+	deleted := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "the ticket that used to wear this id"
+		i.CreatedAt = t0
+	})
+	ours := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "ship the exporter"
+		i.CreatedAt = t1
+	})
+	theirs := leaf(t, "epic.3", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+		i.Title = "rewrite the parser"
+		i.CreatedAt = t2
+	})
+
+	_, collision := Classify(&deleted, ours, theirs, "wsA", "wsB")
+	if collision == nil {
+		t.Fatal("a base row from a reused id passed as proof of one entity; two independently minted tickets would be field-merged")
+	}
+	if collision.Ours.Title != "ship the exporter" || collision.Theirs.Title != "rewrite the parser" {
+		t.Fatalf("collision carried %q/%q, want both jobs whole", collision.Ours.Title, collision.Theirs.Title)
 	}
 }
 

@@ -39,9 +39,17 @@ type SameEntity struct {
 //
 // It reads the strongest evidence available, in order.
 //
-// ANCESTRY, when there is any. A merge-base row for this id means both sides
-// descend from one creation, so they are one ticket however far their fields have
-// drifted — proof, not inference, and it is why base != nil short-circuits.
+// ANCESTRY, when the base row can be the ancestor. A merge-base row for this id
+// means both sides descend from one creation, so they are one ticket however far
+// their fields have drifted. But a merge-base is a COMMIT-level ancestor, and an
+// id can be hard-deleted (the import delta's deleteIssueTx) and re-minted, since
+// newChildIssueID counts live rows only. Delete the highest child on two diverged
+// stores, mint a fresh one on each, and the base commit still holds the OLD row:
+// base != nil while the base row is a stranger that used to wear this id. So
+// ancestry is proof only while the base row shares a birth instant with a side —
+// created_at is written once at mint, so a real ancestor carries its descendants'.
+// Matching neither means both sides were minted after it, and the reading below
+// decides instead.
 //
 // THE BIRTH CERTIFICATE, when there is not. created_at is fixed when a ticket is
 // minted, never edited afterwards, and rides every replication path unchanged, so
@@ -63,10 +71,19 @@ type SameEntity struct {
 func Classify(base *model.Issue, ours, theirs model.Issue, oursWS, theirsWS string) (SameEntity, *Collision) {
 	// Equal, not ==: created_at round-trips through RFC3339Nano, so two encodings
 	// of one instant may differ in offset while naming the same moment.
-	if base == nil && !ours.CreatedAt.Equal(theirs.CreatedAt) {
+	if !ancestryProves(base, ours, theirs) && !ours.CreatedAt.Equal(theirs.CreatedAt) {
 		return SameEntity{}, &Collision{IssueID: ours.ID, Ours: ours, Theirs: theirs}
 	}
 	return SameEntity{base: base, ours: ours, theirs: theirs, oursWS: oursWS, theirsWS: theirsWS}, nil
+}
+
+// ancestryProves reports whether the base row is evidence that ours and theirs
+// are one ticket. A row reached through a reused id answers no: it is present in
+// the base commit, but its birth instant belongs to the ticket that was deleted,
+// not to either row now wearing the id.
+func ancestryProves(base *model.Issue, ours, theirs model.Issue) bool {
+	return base != nil &&
+		(base.CreatedAt.Equal(ours.CreatedAt) || base.CreatedAt.Equal(theirs.CreatedAt))
 }
 
 // SortCollisions orders collisions by issue id so every surface — report, trace,
