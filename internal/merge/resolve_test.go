@@ -520,16 +520,30 @@ func TestThreeWayLabelTableHonorsConcurrentRemoval(t *testing.T) {
 	}
 }
 
+// TestResolveIssueImmutableIDAndCreatedAt pins that the resolver reproduces the id
+// and the birth instant instead of merging them as fields. Both bases that can
+// reach it are covered: a true ancestor, and the stranger Classify drops when an id
+// was reused — where the instant can only come from the two rows that agree on it.
 func TestResolveIssueImmutableIDAndCreatedAt(t *testing.T) {
-	base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, nil) // created_at = t0
-	ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t2 })
-	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
-	got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
-	if got.Provisional().ID != "i1" {
-		t.Fatalf("id = %q, want i1", got.Provisional().ID)
-	}
-	if !got.Provisional().CreatedAt.Equal(t0) {
-		t.Fatalf("created_at = %v, want immutable base %v", got.Provisional().CreatedAt, t0)
+	for _, tc := range []struct {
+		name   string
+		baseAt time.Time
+	}{
+		{"true ancestor", t0},
+		{"base dropped as a reused id", t2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = tc.baseAt })
+			ours := leaf(t, "i1", model.StatusView{Value: model.StateInProgress}, func(i *model.Issue) { i.CreatedAt = t0 })
+			theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t0 })
+			got := ResolveIssue(same(t, &base, &ours, &theirs, "wsA", "wsB"))
+			if got.Provisional().ID != "i1" {
+				t.Fatalf("id = %q, want i1", got.Provisional().ID)
+			}
+			if !got.Provisional().CreatedAt.Equal(t0) {
+				t.Fatalf("created_at = %v, want the shared birth instant %v", got.Provisional().CreatedAt, t0)
+			}
+		})
 	}
 }
 

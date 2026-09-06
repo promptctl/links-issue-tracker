@@ -73,8 +73,8 @@ func TestExplicitReconcileSurfacesUnrelatedHistories(t *testing.T) {
 	// two stores generated ids independently — nothing is on both.
 	for _, want := range []string{
 		"WHAT EACH SIDE HOLDS",
-		"only on local:  (1): " + consumerID,
-		"only on remote: (1): " + producerID,
+		"only on local:  (1): «" + consumerID + "»",
+		"only on remote: (1): «" + producerID + "»",
 		"on both:        (0)",
 	} {
 		if !strings.Contains(msg, want) {
