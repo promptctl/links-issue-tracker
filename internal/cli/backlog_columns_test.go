@@ -3,8 +3,11 @@ package cli
 import (
 	"bytes"
 	"fmt"
+	"regexp"
 	"strings"
 	"testing"
+
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
 // `lit backlog` gained the --columns rejection at the same moment `lit ls` did,
@@ -17,51 +20,139 @@ import (
 // runBacklogColumns runs `lit backlog --columns expr` through the workable
 // runner and returns stdout alongside the error, so a case can assert on both.
 // An error that still printed is the failure this boundary exists to prevent.
-func runBacklogColumns(t *testing.T, expr string) (string, error) {
-	t.Helper()
-	h := newReadyTestHarness(t)
+//
+// It takes the harness rather than building one, because a backlog with no rows
+// renders only the preamble and "(backlog empty)" — a constant that satisfies
+// any "did it print something" assertion no matter what the projection did.
+// Every caller here seeds rows first.
+func runBacklogColumns(h readyTestHarness, expr string) (string, error) {
+	h.t.Helper()
 	var stdout bytes.Buffer
 	err := runWorkable(h.ctx, &stdout, h.ap, []string{"--columns", expr}, backlogView)
 	return stdout.String(), err
+}
+
+var backlogRowPrefix = regexp.MustCompile(`^\s*\d+\.\s+`)
+
+// backlogCells returns the projected cells of the backlog row for id. Rows carry
+// a "NN. " list prefix and join their columns with two spaces; the per-row
+// context lines beneath a row carry no such prefix and are skipped, so what is
+// returned is the projection itself and nothing else.
+func backlogCells(t *testing.T, out, id string) []string {
+	t.Helper()
+	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+		if !backlogRowPrefix.MatchString(line) {
+			continue
+		}
+		cells := regexp.MustCompile(`\s{2,}`).Split(backlogRowPrefix.ReplaceAllString(line, ""), -1)
+		if len(cells) > 0 && cells[0] == id {
+			return cells
+		}
+	}
+	t.Fatalf("no backlog row for %q in:\n%s", id, out)
+	return nil
 }
 
 // TestBacklogRejectsUnknownColumn is the reject half on the backlog surface.
 // The `lit ls` table covers the vocabulary itself; what is specific here is
 // that the refusal reaches the caller as a usage error naming the offender,
 // on a view whose flag set is assembled differently (optionalString, gated on
-// hasColumns) than `lit ls`'s.
+// hasColumns) than `lit ls`'s. The store is seeded so that an accepted run
+// would have rows to print — an empty stdout below therefore means the command
+// refused, not that it had nothing to say.
 func TestBacklogRejectsUnknownColumn(t *testing.T) {
-	for _, expr := range []string{"bogus", "status", "id,bogus,title"} {
-		t.Run(expr, func(t *testing.T) {
-			out, err := runBacklogColumns(t, expr)
+	for _, tc := range []struct{ expr, unknown string }{
+		{expr: "bogus", unknown: "bogus"},
+		{expr: "status", unknown: "status"},
+		{expr: "id,bogus,title", unknown: "bogus"},
+	} {
+		t.Run(tc.expr, func(t *testing.T) {
+			h := newReadyTestHarness(t)
+			h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Row one", Topic: "cols", IssueType: "task", Priority: 0})
+
+			out, err := runBacklogColumns(h, tc.expr)
 			if err == nil {
-				t.Fatalf("backlog --columns %q: want error, got nil (output:\n%s)", expr, out)
+				t.Fatalf("backlog --columns %q: want error, got nil (output:\n%s)", tc.expr, out)
 			}
 			if got := ExitCode(err); got != ExitUsage {
-				t.Errorf("backlog --columns %q exit code = %d, want %d (ExitUsage)", expr, got, ExitUsage)
+				t.Errorf("backlog --columns %q exit code = %d, want %d (ExitUsage)", tc.expr, got, ExitUsage)
 			}
 			for _, valid := range sortedColumnNames() {
 				if !strings.Contains(err.Error(), valid) {
-					t.Errorf("backlog --columns %q error %q omits valid column %q", expr, err, valid)
+					t.Errorf("backlog --columns %q error %q omits valid column %q", tc.expr, err, valid)
 				}
 			}
+			// Quoted, for the same reason the `lit ls` rows are: the message
+			// carries the whole valid-columns list, so a bare substring match
+			// can be satisfied by a name the caller never typed.
+			if quoted := fmt.Sprintf("%q", tc.unknown); !strings.Contains(err.Error(), quoted) {
+				t.Errorf("backlog --columns %q error %q does not name the offender as %s", tc.expr, err, quoted)
+			}
 			if out != "" {
-				t.Errorf("backlog --columns %q printed before rejecting:\n%s", expr, out)
+				t.Errorf("backlog --columns %q printed before rejecting:\n%s", tc.expr, out)
 			}
 		})
 	}
 }
 
-// TestBacklogAcceptsValidColumns keeps the reject test honest: without it, a
-// backlog whose --columns flag was broken outright would pass every case above
-// for the wrong reason.
+// TestBacklogAcceptsValidColumns pins the projection actually reaching the
+// renderer. Asserting only that output is non-empty proves nothing here: an
+// empty backlog prints a constant preamble, and even a seeded one prints row
+// text regardless of which columns were selected. So this asserts the row's
+// exact cells — a regression that dropped knobs.columns and rendered
+// defaultColumns() instead would print `id state topic title` and fail.
 func TestBacklogAcceptsValidColumns(t *testing.T) {
-	out, err := runBacklogColumns(t, "id,rank,title")
+	h := newReadyTestHarness(t)
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Projected row", Topic: "cols", IssueType: "task", Priority: 0})
+
+	out, err := runBacklogColumns(h, "id,rank,title")
 	if err != nil {
 		t.Fatalf("backlog --columns id,rank,title: %v", err)
 	}
-	if strings.TrimSpace(out) == "" {
-		t.Error("backlog --columns id,rank,title: accepted but rendered nothing")
+	got := backlogCells(t, out, issue.ID)
+	want := []string{issue.ID, emptyDash(issue.Rank), "Projected row"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("backlog --columns id,rank,title cells = %v, want %v\nfull output:\n%s", got, want, out)
+	}
+}
+
+// TestBacklogRendersRelationColumns is the regression pin for the bug that
+// `--columns` validation on this surface created: `columnsFlagUsage()` began
+// advertising `parent` and `blocked` on `lit backlog`, and parseColumnSelection
+// began accepting them, while printBacklogOutput still rendered through a nil
+// relations map — so both cells were "-" on every row, including rows the
+// context line directly below described as blocked.
+//
+// "-" is the same value that honestly means "no parent" and "not blocked", so
+// the failure was indistinguishable from a true answer rather than visible as
+// one. Asserting the real ids and the `blocked` label is what makes reverting
+// the derivation in runWorkable fail here instead of printing dashes.
+func TestBacklogRendersRelationColumns(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
+	child := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Child", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	blocker := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Blocker", Topic: "cols", IssueType: "task", Priority: 0})
+	h.addDependency(child.ID, blocker.ID)
+
+	out, err := runBacklogColumns(h, "id,parent,blocked")
+	if err != nil {
+		t.Fatalf("backlog --columns id,parent,blocked: %v", err)
+	}
+
+	got := backlogCells(t, out, child.ID)
+	want := []string{child.ID, epic.ID, "blocked"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("blocked child cells = %v, want %v\nfull output:\n%s", got, want, out)
+	}
+
+	// The unblocked, parentless blocker is the control: it proves "-" still
+	// reaches the page for a row that genuinely has no parent and no live
+	// dependency, so the assertion above is reading real data rather than a
+	// map that happens to be populated for everything.
+	gotBlocker := backlogCells(t, out, blocker.ID)
+	wantBlocker := []string{blocker.ID, "-", "-"}
+	if strings.Join(gotBlocker, "|") != strings.Join(wantBlocker, "|") {
+		t.Errorf("blocker cells = %v, want %v\nfull output:\n%s", gotBlocker, wantBlocker, out)
 	}
 }
 

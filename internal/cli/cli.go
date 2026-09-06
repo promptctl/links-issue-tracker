@@ -549,11 +549,20 @@ func listRelationColumns(ctx context.Context, st storage.Store, columns []column
 	if err != nil {
 		return nil, err
 	}
+	return relationColumnsFor(relations), nil
+}
+
+// relationColumnsFor projects a whole relation graph down to the per-issue facts
+// the relationship columns render. Every surface that projects those columns
+// derives them here, from graph data it already holds, so `lit ls` and the
+// workable views cannot disagree about what `parent` or `blocked` means.
+// [LAW:one-source-of-truth]
+func relationColumnsFor(relations map[string]storage.IssueRelations) map[string]relationColumns {
 	out := make(map[string]relationColumns, len(relations))
 	for id, rel := range relations {
 		out[id] = deriveRelationColumns(rel)
 	}
-	return out, nil
+	return out
 }
 
 // deriveRelationColumns projects one issue's graph edges down to the flat facts

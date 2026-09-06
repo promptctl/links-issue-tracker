@@ -51,7 +51,13 @@ type workableView struct {
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render     func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error
+	// render receives the relationship facts already derived from details, so a
+	// view that lets its caller NAME a relation column cannot render one
+	// without the data behind it. The runner owns that derivation rather than
+	// each renderer, which is what keeps the next view added here from
+	// re-introducing a projection whose `parent` and `blocked` cells are
+	// permanently "-". [LAW:one-source-of-truth]
+	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -168,7 +174,10 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	if err := view.render(stdout, knobs.columns, rows, details, cc); err != nil {
+	// Derived unconditionally from graph data already gathered above: no extra
+	// query, and no branch deciding whether the renderer gets its data.
+	// [LAW:dataflow-not-control-flow]
+	if err := view.render(stdout, knobs.columns, rows, details, relationColumnsFor(details), cc); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

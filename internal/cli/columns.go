@@ -29,6 +29,14 @@ type columnSpec struct {
 	// for the relation query. [LAW:dataflow-not-control-flow] the load is
 	// chosen by a value carried on the selected columns, never by a branch on
 	// column identity.
+	//
+	// A nil rels map renders these as "-" for every row, which is the honest
+	// zero only for a projection that names no relation column — the case of
+	// the fixed, source-constant projections that pass nil. A surface whose
+	// caller CHOOSES the columns has to supply the map, or it accepts a name
+	// it cannot render and prints a dash indistinguishable from a real "no
+	// parent". That is why the workable runner derives the map for its views
+	// instead of leaving each renderer to remember.
 	needsRelations bool
 	// render receives the issue's own relationColumns rather than the whole
 	// map, so a renderer cannot read another issue's relations.
