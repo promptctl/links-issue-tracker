@@ -77,6 +77,31 @@ If you want an agent (Claude Code, Cursor, etc.) to do the work, give it
 workspace-init + core-loop guide written for agents. In a repo that's already initialized,
 the agent's entry point is simply `lit quickstart`, which prints the live command reference.
 
+## Claude Code plugin
+
+This repo is also a [Claude Code plugin marketplace](https://code.claude.com/docs/en/plugin-marketplaces). Install it from any project — no local clone of `links-issue-tracker` needed:
+
+```text
+/plugin marketplace add promptctl/links-issue-tracker
+/plugin install links@links-marketplace
+```
+
+That gets you the `links` plugin: the `/links:next` skill (pick up and start the
+next ticket) plus the `SessionStart`/`PreCompact` hooks that keep `lit quickstart`
+guidance current. For a team, wire it into every clone instead of asking everyone to
+run the two commands above — add to the repo's `.claude/settings.json`:
+
+```json
+{
+  "extraKnownMarketplaces": {
+    "links-marketplace": {
+      "source": { "source": "github", "repo": "promptctl/links-issue-tracker" }
+    }
+  },
+  "enabledPlugins": { "links@links-marketplace": true }
+}
+```
+
 ## How it works
 
 - **Storage** — issues are rows in an embedded Dolt SQL database under
