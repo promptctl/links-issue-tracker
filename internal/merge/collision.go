@@ -51,7 +51,7 @@ type SameEntity struct {
 // never a drift to see past, so ancestorOf drops it instead of letting it answer
 // this question or seed the three-way.
 //
-// Base presence cannot stand in for it either: the unrelated-history combine
+// Base-absence alone CANNOT decide it either: the unrelated-history combine
 // (Store.combineFromAnchors) feeds this engine an empty base by construction, so
 // "no merge-base" is uniform on that path and would condemn every legitimately
 // shared row. [LAW:parse-dont-validate] the ambiguity the old signature carried is
