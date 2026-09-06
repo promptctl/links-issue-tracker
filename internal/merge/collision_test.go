@@ -56,10 +56,6 @@ func TestThreeWayReportsIDCollisionInsteadOfFusing(t *testing.T) {
 	if c.Theirs.Title != "Adaptive id length for large backlogs" {
 		t.Fatalf("theirs title = %q, want the remote job intact", c.Theirs.Title)
 	}
-	if c.OursWS != "wsA" || c.TheirsWS != "wsB" {
-		t.Fatalf("workspaces = (%q,%q), want (wsA,wsB) so the report can name where each came from", c.OursWS, c.TheirsWS)
-	}
-
 	// [LAW:no-silent-failure] the merge is not committable while two tickets wear
 	// one id — no autonomous path may pick a survivor.
 	if _, ok := got.Settled(); ok {
@@ -67,8 +63,12 @@ func TestThreeWayReportsIDCollisionInsteadOfFusing(t *testing.T) {
 	}
 
 	// The provisional export keeps OUR row unfused rather than a synthesized blend.
+	provisional, ok := got.Provisional()
+	if ok {
+		t.Fatalf("Provisional() ok=true with an id collision; no consumer may reach an export past an unresolved collision")
+	}
 	var merged model.Issue
-	for _, issue := range got.Provisional().Issues {
+	for _, issue := range provisional.Issues {
 		if issue.ID == "epic.16" {
 			merged = issue
 		}
@@ -131,7 +131,7 @@ func TestClassifySharedRowsAcrossUnrelatedHistories(t *testing.T) {
 	}
 	ours, theirs := mk(model.StateInProgress, "one ticket"), mk(model.StateClosed, "one ticket")
 
-	if _, collision := Classify(nil, &ours, &theirs, "wsA", "wsB"); collision != nil {
+	if _, collision := Classify(nil, ours, theirs, "wsA", "wsB"); collision != nil {
 		t.Fatalf("one ticket replicated to two unrelated histories reported as a collision; the combine path merges every shared row with no base")
 	}
 
@@ -154,10 +154,71 @@ func TestClassifyAncestryOutranksBirthCertificate(t *testing.T) {
 	ours := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t1 })
 	theirs := leaf(t, "i1", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) { i.CreatedAt = t2 })
 
-	if _, collision := Classify(&base, &ours, &theirs, "wsA", "wsB"); collision != nil {
+	if _, collision := Classify(&base, ours, theirs, "wsA", "wsB"); collision != nil {
 		t.Fatalf("a row present in the merge-base reported as a collision; shared ancestry is proof of one entity")
 	}
-	if _, collision := Classify(nil, &ours, &theirs, "wsA", "wsB"); collision == nil {
+	if _, collision := Classify(nil, ours, theirs, "wsA", "wsB"); collision == nil {
 		t.Fatalf("the same two rows with no ancestry must fall back to the birth certificate and collide")
+	}
+}
+
+// TestThreeWayDoesNotFuseCollidingChildRows is the fusion defect one level below
+// the fields. The colliding id survives as OUR row, so unioning the child tables
+// onto it would hand our ticket the other job's comments, edges, labels and
+// history — a well-formed ticket nobody filed, exactly what refusing the field
+// merge exists to prevent.
+func TestThreeWayDoesNotFuseCollidingChildRows(t *testing.T) {
+	born := func(hour int) time.Time { return time.Date(2026, 8, 27, hour, 0, 0, 0, time.UTC) }
+	sixteen := func(hour int, title string) model.Issue {
+		return leaf(t, "epic.16", model.StatusView{Value: model.StateOpen}, func(i *model.Issue) {
+			i.Title = title
+			i.CreatedAt = born(hour)
+		})
+	}
+	endpoints := []model.Issue{open(t, "epic.a"), open(t, "epic.b")}
+	side := func(ws string, hour int, title, suffix, endpoint string) model.Export {
+		return model.Export{
+			WorkspaceID: ws,
+			Issues:      append([]model.Issue{sixteen(hour, title)}, endpoints...),
+			Relations:   []model.Relation{{SrcID: "epic.16", DstID: endpoint, Type: model.RelBlocks, CreatedAt: born(hour)}},
+			Comments:    []model.Comment{{ID: "c-" + suffix, IssueID: "epic.16", Body: suffix, CreatedAt: born(hour)}},
+			Labels:      []model.Label{{IssueID: "epic.16", Name: suffix, CreatedAt: born(hour)}},
+			Events:      []model.IssueEvent{{ID: "e-" + suffix, IssueID: "epic.16", Reason: suffix, CreatedAt: born(hour)}},
+		}
+	}
+	local := side("wsA", 9, "Wire the release watchdog", "ours", "epic.a")
+	remote := side("wsB", 16, "Adaptive id length for large backlogs", "theirs", "epic.b")
+
+	got := ThreeWay(model.Export{WorkspaceID: "wsA", Issues: endpoints}, local, remote)
+	if len(got.Collisions) != 1 {
+		t.Fatalf("collisions = %d, want 1; this fixture's premise is a collided id", len(got.Collisions))
+	}
+	export, _ := got.Provisional()
+
+	for _, comment := range export.Comments {
+		if comment.ID != "c-ours" {
+			t.Errorf("comment %q rode onto the colliding id; our ticket now carries the other job's discussion", comment.ID)
+		}
+	}
+	for _, event := range export.Events {
+		if event.ID != "e-ours" {
+			t.Errorf("event %q rode onto the colliding id; our ticket now carries the other job's history", event.ID)
+		}
+	}
+	for _, label := range export.Labels {
+		if label.Name != "ours" {
+			t.Errorf("label %q rode onto the colliding id", label.Name)
+		}
+	}
+	for _, relation := range export.Relations {
+		if relation.DstID != "epic.a" {
+			t.Errorf("relation epic.16 -> %q rode onto the colliding id; our ticket now blocks their job's dependency", relation.DstID)
+		}
+	}
+	// The local side's own rows are still there — refusing the union must not
+	// silently drop the rows that DO describe the surviving ticket.
+	if len(export.Comments) != 1 || len(export.Events) != 1 || len(export.Labels) != 1 || len(export.Relations) != 1 {
+		t.Fatalf("local child rows lost: comments=%d events=%d labels=%d relations=%d",
+			len(export.Comments), len(export.Events), len(export.Labels), len(export.Relations))
 	}
 }

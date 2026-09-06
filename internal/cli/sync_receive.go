@@ -121,11 +121,10 @@ func (o syncReceiveOutcome) settledCleanly() bool {
 
 // inlineSyncFailure derives the sync-failure contract for an inline reconcile
 // that could not converge, or reports ok=false when the receive/reconcile settled
-// cleanly. A held free-text conflict and a hard reconcile error are the two
-// non-converging outcomes; both route through the one contract, with the reconcile
-// error carried as the block's trailing cause rather than as an ignorable
-// headline. The divergence age is computed here, at the boundary that holds the
-// clock, from the timestamp the receive recorded. [LAW:dataflow-not-control-flow]
+// cleanly. Every non-converging outcome routes through the one contract, with the
+// reconcile error carried as the block's trailing cause rather than as an
+// ignorable headline. The divergence age is computed here, at the boundary that
+// holds the clock, from the timestamp the receive recorded. [LAW:dataflow-not-control-flow]
 func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool) {
 	if o.reconcile == nil {
 		return SyncFailure{}, false
@@ -153,6 +152,10 @@ func (o syncReceiveOutcome) inlineSyncFailure(now time.Time) (SyncFailure, bool)
 	case o.reconcile.state == storage.SyncReconcileProsePending:
 		base.Class = syncFailureProseHeld
 		base.Fields = o.reconcile.pending
+		return base, true
+	case o.reconcile.state == storage.SyncReconcileIDCollision:
+		base.Class = syncFailureIDCollision
+		base.Collisions = o.reconcile.collisions
 		return base, true
 	case o.reconcile.state == storage.SyncReconcileUnrelated:
 		// A no-common-ancestor divergence is non-transient like a held prose conflict —
@@ -194,10 +197,11 @@ type syncReceiveOutcome struct {
 
 // reconcileOutcome is the inline reconcile result the diverged receive triggers.
 type reconcileOutcome struct {
-	state     storage.SyncReconcileState
-	pending   []merge.ProsePending
-	unrelated *storage.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
-	err       error                       // the reconcile failure; its trace is already recorded when set
+	state      storage.SyncReconcileState
+	pending    []merge.ProsePending
+	unrelated  *storage.UnrelatedInventory // the both-sides partition; set only for SyncReconcileUnrelated
+	collisions []merge.Collision           // both rows of each colliding id; set only for SyncReconcileIDCollision
+	err        error                       // the reconcile failure; its trace is already recorded when set
 }
 
 // performSyncReceive resolves the sync target through the shared prologue (the
@@ -330,6 +334,8 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 		traceMetadata["error"] = reconcileErr.Error()
 	} else if result.State == storage.SyncReconcileProsePending {
 		traceMetadata["pending"] = strconv.Itoa(len(result.Pending))
+	} else if result.State == storage.SyncReconcileIDCollision {
+		traceMetadata["collisions"] = strconv.Itoa(len(result.Collisions))
 	}
 	if _, traceErr := maybeRecordAutomatedCommandTrace(
 		ws,
@@ -364,7 +370,13 @@ func performInlineReconcile(ctx context.Context, session syncSession, ws workspa
 	// unmissable block rather than a raw "will retry" line. This function stays the
 	// run-and-record step; the surfacing decision lives with the caller that holds
 	// the divergence's counts and age. [LAW:decomposition]
-	return &reconcileOutcome{state: result.State, pending: result.Pending, unrelated: result.Unrelated, err: reconcileErr}
+	return &reconcileOutcome{
+		state:      result.State,
+		pending:    result.Pending,
+		unrelated:  result.Unrelated,
+		collisions: result.Collisions,
+		err:        reconcileErr,
+	}
 }
 
 // reconcileReasonForState maps a reconcile outcome to its automation-trace
@@ -377,6 +389,8 @@ func reconcileReasonForState(state storage.SyncReconcileState) string {
 		return "automatic reconcile resolved every field but free-text diverged on both sides; held for the agent surface"
 	case storage.SyncReconcileUnrelated:
 		return "automatic reconcile found unrelated histories (no common ancestor); held for wholesale/union resolution"
+	case storage.SyncReconcileIDCollision:
+		return "automatic reconcile refused the merge: an id names a different ticket on each side; held for the operator to re-file one"
 	case storage.SyncReconcileNotDiverged:
 		return "automatic reconcile found the branch no longer diverged; nothing to do"
 	default:

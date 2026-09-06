@@ -234,12 +234,14 @@ autonomously with no signal at all.
 The reconcile now distinguishes "the same ticket, diverged" from "two tickets,
 one id" and refuses to field-merge the second. It commits nothing, leaves the
 local branch where it found it (still diverged, still usable on local truth),
-and reports BOTH tickets whole — title, description, workspace, and creation
-timestamp for each side. Nothing was merged in, so the report is the only place
-the other side's ticket is visible; that is why it is printed in full rather
-than summarized. The state is surfaced through the same sync-failure block every
-other blocking sync condition uses, and it notifies the owner like the other
-divergence kinds.
+and reports BOTH tickets whole — which side it came from, its creation
+timestamp, title, and description. Nothing was merged in, so the report is the
+only place the other side's ticket is visible; that is why it is printed in
+full rather than summarized. The side is named local or remote, not by
+workspace id: a reconcile stamps every export it reads with its own id, so a
+workspace column would print the same name on both rows. The state is surfaced
+through the same sync-failure block every other blocking sync condition uses,
+and it notifies the owner like the other divergence kinds.
 
 The two cases are told apart by ancestry first: a merge-base row for the id
 proves both sides descend from one creation, so they are one ticket however far

@@ -295,6 +295,14 @@ func (s *Store) SyncPull(ctx context.Context, remote string, branch string) (sto
 				// too, so the pull surface shows what each side holds.
 				result.State = storage.SyncPullUnrelated
 				result.Unrelated = rec.Unrelated
+			case storage.SyncReconcileIDCollision:
+				// An id names a different ticket on each side: the merge was refused and
+				// nothing committed, so the divergence stands exactly as the receive
+				// measured it — counts and fork timestamp ride along unchanged, like the
+				// unrelated case above. The two rows travel whole; the pull surface is
+				// the only place this machine can see the other side's ticket.
+				result.State = storage.SyncPullIDCollision
+				result.Collisions = rec.Collisions
 			case storage.SyncReconcileNotDiverged:
 				// Under the single lock a push race cannot resolve the divergence
 				// between the receive and the reconcile, so this is the benign

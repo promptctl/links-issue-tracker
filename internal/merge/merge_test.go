@@ -63,7 +63,7 @@ func TestThreeWayEmptyBaseUnionsUnrelatedSides(t *testing.T) {
 	remote := model.Export{WorkspaceID: "wsA", Issues: []model.Issue{mk("only-remote", "R"), mk("shared", "from-A")}}
 
 	result := ThreeWay(model.Export{}, local, remote)
-	settled := result.Provisional()
+	settled := provisional(t, result)
 
 	// The union carries every unique id AND the shared id — nothing dropped.
 	got := map[string]bool{}
@@ -107,8 +107,8 @@ func TestThreeWayComparesJSONUnmarshaledEpicData(t *testing.T) {
 	if len(result.Pending) != 0 {
 		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
-	if len(result.Provisional().Issues) != 1 || result.Provisional().Issues[0].Title != "remote" {
-		t.Fatalf("merged issues = %#v, want remote title", result.Provisional().Issues)
+	if len(provisional(t, result).Issues) != 1 || provisional(t, result).Issues[0].Title != "remote" {
+		t.Fatalf("merged issues = %#v, want remote title", provisional(t, result).Issues)
 	}
 }
 
@@ -166,7 +166,7 @@ func TestThreeWayPreservesResolutionOnlyReClose(t *testing.T) {
 	if len(result.Pending) != 0 {
 		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
-	issues := result.Provisional().Issues
+	issues := provisional(t, result).Issues
 	if len(issues) != 1 {
 		t.Fatalf("issues = %#v", issues)
 	}
@@ -194,11 +194,11 @@ func TestThreeWayMergesNonConflictingIssueChanges(t *testing.T) {
 	if len(result.Pending) != 0 {
 		t.Fatalf("unexpected pending = %#v", result.Pending)
 	}
-	if len(result.Provisional().Issues) != 2 {
-		t.Fatalf("issues = %#v", result.Provisional().Issues)
+	if len(provisional(t, result).Issues) != 2 {
+		t.Fatalf("issues = %#v", provisional(t, result).Issues)
 	}
 	merged := map[string]string{}
-	for _, issue := range result.Provisional().Issues {
+	for _, issue := range provisional(t, result).Issues {
 		merged[issue.ID] = issue.Title
 	}
 	if merged["i1"] != "local i1" || merged["i2"] != "remote i2" {
@@ -276,4 +276,16 @@ func TestBreakParentCyclesBreaksThreeNodeCycle(t *testing.T) {
 	if _, ok := edges["c"]; ok {
 		t.Fatalf("expected c's parent edge deleted as the loop victim, got %#v", edges)
 	}
+}
+
+// provisional unwraps a merge whose export the test expects to be reachable. A
+// merge holding an id collision hands out none, so the unwrap is where a fixture
+// that accidentally collided fails loudly instead of asserting on a zero export.
+func provisional(t *testing.T, r MergeResult) model.Export {
+	t.Helper()
+	export, ok := r.Provisional()
+	if !ok {
+		t.Fatalf("Provisional() ok=false; fixture collided on %#v", r.Collisions)
+	}
+	return export
 }
