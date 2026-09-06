@@ -673,6 +673,22 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 	}
 
 	merged := merge.ThreeWay(base, ours, theirs)
+	if len(merged.Collisions) > 0 {
+		// An id names a different ticket on each side. This is checked ahead of the
+		// prose hold because it is not the same KIND of thing: held prose is one
+		// ticket awaiting an author's merged text, and a resolution the agent
+		// supplies finishes it. Two tickets under one id have no merged text to
+		// supply — whatever an agent wrote would be a third ticket neither machine
+		// filed — so no settle policy, autonomous or resolved, may proceed past
+		// this. The data branch is still at localHead, so the clone keeps working
+		// on its own truth while the operator re-files one of the two.
+		// [LAW:no-silent-failure] [LAW:parse-dont-validate] the engine refuses the
+		// merge rather than returning a well-formed row that means nothing.
+		result.State = storage.SyncReconcileIDCollision
+		result.Collisions = merged.Collisions
+		result.Pending = nil
+		return nil
+	}
 	export, pending := settle(merged)
 	if len(pending) > 0 {
 		// Prose still diverges on both sides: commit nothing. The data branch is still

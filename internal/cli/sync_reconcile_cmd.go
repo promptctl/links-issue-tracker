@@ -340,6 +340,8 @@ func reconcileCommandReasonForState(state storage.SyncReconcileState) string {
 		return "reconciled: the divergence merged into linear history"
 	case storage.SyncReconcileProsePending:
 		return "every field resolved but free-text diverged on both sides; held for inline merge"
+	case storage.SyncReconcileIDCollision:
+		return "an id names a different ticket on each side; refused the merge and committed nothing"
 	case storage.SyncReconcileCombined:
 		return "combined: unioned both backlogs, replaying the local commits with their provenance"
 	case storage.SyncReconcileNotDiverged:
@@ -452,6 +454,28 @@ func reportReconcileResult(ctx context.Context, stdout io.Writer, ws workspace.I
 	// of the durable trace for every outcome, zero included.
 	metadata := map[string]string{"remote": remote, "sync_branch": branch, "replayed": strconv.Itoa(result.Replayed)}
 	switch result.State {
+	case storage.SyncReconcileIDCollision:
+		// Routed through the same one sync-failure contract as every other held
+		// state, so `lit sync reconcile`, `lit sync pull` and the inline receive
+		// surface a collision identically. Like the unrelated block it carries no
+		// Age: its severity is fixed by the class, not aged — two tickets under one
+		// id are exactly as blocking on minute one as on day five.
+		// [LAW:single-enforcer]
+		metadata["collisions"] = strconv.Itoa(len(result.Collisions))
+		failure := SyncFailureError{Failure: SyncFailure{
+			Class:      syncFailureIDCollision,
+			Remote:     remote,
+			Branch:     branch,
+			Ahead:      result.Ahead,
+			Behind:     result.Behind,
+			Collisions: result.Collisions,
+			BuildNote:  resolveBuildStatusNote(time.Now()),
+		}}
+		recordSyncHeldTrace(ws, command, failure, metadata)
+		if ev, ok := ownerNotifyEventForFailure(failure.Failure); ok {
+			maybeNotifyOwner(ctx, ws, ev)
+		}
+		return failure
 	case storage.SyncReconcileUnrelated:
 		// [LAW:single-enforcer] one contract, every surface — the block is the error's
 		// message, printed by the top-level sink, so no separate stdout write here (as

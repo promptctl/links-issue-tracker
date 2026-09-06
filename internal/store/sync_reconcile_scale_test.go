@@ -173,6 +173,12 @@ func TestSyncReconcileCombineIsBoundedOnALargeFoldedChain(t *testing.T) {
 // any other.
 const scaleFoldedChainOverhead = 2
 
+// scalePlantedBirth is the one creation instant every planted row carries on both
+// sides of the pair. A ticket's created_at is what identifies it across stores, so
+// a fixed value is what makes the two backlogs the same tickets rather than two
+// sets that merely agree on ids.
+var scalePlantedBirth = time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // assertCombinedBacklogContents checks the union actually landed: every planted
 // issue is present, and the lane edits the folded chain carried survived onto
 // the merged rows. A replay that lost a step, or landed steps in the wrong
@@ -285,6 +291,14 @@ func plantScaleBacklog(t *testing.T, ctx context.Context, st *Store, issues int)
 		issue.ID = scaleIssueID(i)
 		issue.Title = fmt.Sprintf("scale issue %05d", i)
 		issue.Rank = fmt.Sprintf("r%05d", i)
+		// Both stores plant this same backlog, and the pair is meant to hold ONE
+		// backlog reached by two histories — the shape a clone or a seeded init
+		// produces. Left as each store's own seed time, the two sides would be
+		// 1000 ids each naming a ticket minted independently on both machines,
+		// which is an id collision (merge.Classify) and not a divergence any
+		// combine may merge. Pinning the birth certificate is what makes the
+		// fixture mean what its name says. [LAW:one-source-of-truth]
+		issue.CreatedAt = scalePlantedBirth
 		export.Issues = append(export.Issues, issue)
 	}
 	// The seed issue's own events and relations reference the id being replaced,
