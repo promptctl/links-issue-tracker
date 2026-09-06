@@ -202,7 +202,7 @@ func (e SyncFailureError) Error() string {
 // fields decide the content. [LAW:dataflow-not-control-flow]
 func (f SyncFailure) blockString() string {
 	var b strings.Builder
-	b.WriteString("<agent-instructions>\n")
+	b.WriteString(agentInstructionsOpen + "\n")
 	b.WriteString("lit sync could not resolve a backlog divergence automatically and needs you.\n\n")
 
 	// (1) Directive — constant, unmissable, class-independent.
@@ -247,7 +247,7 @@ func (f SyncFailure) blockString() string {
 	if f.Cause != nil {
 		fmt.Fprintf(&b, "\ncause (backend detail, for diagnosis only — the steps above are the fix): %v\n", f.Cause)
 	}
-	b.WriteString("</agent-instructions>")
+	b.WriteString(agentInstructionsClose)
 	return b.String()
 }
 
@@ -439,7 +439,7 @@ func (f SyncFailure) collisionLines() []string {
 	}
 	out := []string{fmt.Sprintf("WHAT COLLIDED (%d id(s), each naming a different ticket on each side):", len(f.Collisions))}
 	for _, c := range merge.SortCollisions(f.Collisions) {
-		out = append(out, "  "+c.IssueID)
+		out = append(out, "  "+quoteRemote(c.IssueID).inline())
 		out = append(out, describeCollisionSide("yours  (local) ", c.Ours)...)
 		out = append(out, describeCollisionSide("theirs (remote)", c.Theirs)...)
 	}
@@ -449,27 +449,39 @@ func (f SyncFailure) collisionLines() []string {
 // describeCollisionSide renders one side of a collision: when it was minted and
 // the ticket itself. local/remote, not a workspace id: a reconcile stamps every
 // export it reads with its own. An empty description is stated, never left blank.
+// The title and body are authored on the other machine, so they reach the
+// envelope only through quoteRemoteText.
 func describeCollisionSide(label string, issue model.Issue) []string {
-	lines := []string{fmt.Sprintf("    %s (created %s): %s",
-		label, issue.CreatedAt.UTC().Format(time.RFC3339Nano), issue.Title)}
 	body := strings.TrimSpace(issue.Description)
 	if body == "" {
 		body = "(no description)"
 	}
-	for _, line := range strings.Split(body, "\n") {
-		lines = append(lines, "      "+line)
-	}
-	return lines
+	lines := []string{fmt.Sprintf("    %s (created %s):",
+		label, issue.CreatedAt.UTC().Format(time.RFC3339Nano))}
+	return append(lines, quoteRemote(issue.Title+"\n"+body).fenced("      ")...)
 }
 
 // describeIDSet renders one partition slice as its count and members, so an empty
 // side reads as an explicit "(0)" rather than a blank the reader must interpret.
 // [LAW:no-silent-failure] the absence of ids on a side is stated, not left blank.
+// The remote's ids are minted by a store this machine does not control and no
+// ingest boundary constrains their charset, so they are quoted like any other
+// remote value.
 func describeIDSet(ids []string) string {
 	if len(ids) == 0 {
 		return "(0)"
 	}
-	return fmt.Sprintf("(%d): %s", len(ids), strings.Join(ids, ", "))
+	return fmt.Sprintf("(%d): %s", len(ids), strings.Join(quoteRemoteEach(ids), ", "))
+}
+
+// quoteRemoteEach quotes a list of remote-authored ids for inline joining, so a
+// renderer cannot quote some members and forget others.
+func quoteRemoteEach(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	for _, id := range ids {
+		out = append(out, quoteRemote(id).inline())
+	}
+	return out
 }
 
 // describeCollidedIDs names the colliding ids for the WHAT line, so the headline
@@ -480,7 +492,7 @@ func describeCollidedIDs(collisions []merge.Collision) string {
 	for _, c := range ordered {
 		ids = append(ids, c.IssueID)
 	}
-	return strings.Join(ids, ", ")
+	return strings.Join(quoteRemoteEach(ids), ", ")
 }
 
 // describeHeldFields names the held free-text fields for the WHAT line, so the
@@ -489,7 +501,7 @@ func describeHeldFields(pending []merge.ProsePending) string {
 	ordered := merge.SortPending(pending)
 	names := make([]string, 0, len(ordered))
 	for _, p := range ordered {
-		names = append(names, fmt.Sprintf("%s·%s", p.IssueID, p.Field))
+		names = append(names, fmt.Sprintf("%s·%s", quoteRemote(p.IssueID).inline(), p.Field))
 	}
 	switch len(names) {
 	case 0:
