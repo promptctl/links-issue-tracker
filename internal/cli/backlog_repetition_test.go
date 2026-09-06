@@ -257,6 +257,48 @@ func TestBacklogTellsApartLanesThatSpellTheSame(t *testing.T) {
 	}
 }
 
+// The claim line had the epic line's ambiguity too: a blank meant both "this
+// lane is unclaimed" and "this row continues the claimed lane above". An agent
+// routes on who holds a lane, so the blank has to be corrected — but only when
+// a claim is actually standing, since nearly every lane is unclaimed and every
+// standalone row is a lane of one, and marking them all would put a line back
+// under almost every row.
+func TestBacklogSaysUnclaimedOnlyWhenAClaimIsStanding(t *testing.T) {
+	epic := model.Issue{ID: "E", IssueType: model.TypeEpic, Title: "Two lanes"}
+	held := openLeaf(t, "held", "In the claimed lane", "one")
+	free := openLeaf(t, "free", "In the unclaimed lane", "two")
+	details := map[string]storage.IssueRelations{held.ID: {Parent: &epic}, free.ID: {Parent: &epic}}
+	epicRef := &annotation.ParentEpicRef{ID: epic.ID, Title: epic.Title}
+	rows := []annotation.AnnotatedIssue{
+		{Issue: held, ParentEpic: epicRef},
+		{Issue: free, ParentEpic: epicRef},
+	}
+
+	// A claim stands over the first row; the second is a different, unclaimed
+	// lane under the same epic, so no epic line separates them either.
+	claimed := claimContext{
+		standings: claims.Standings{model.LaneOf(held, &epic): heldBy(otherAttribution)},
+		self:      selfAttribution,
+	}
+	var out bytes.Buffer
+	if err := printBacklogOutput(&out, nil, rows, details, claimed); err != nil {
+		t.Fatalf("printBacklogOutput error = %v", err)
+	}
+	if got := blockedOrEpicLines(out.String(), free.ID); !strings.Contains(got, "unclaimed") {
+		t.Errorf("%s states %q; with a claim standing above it, silence reads as continuing that claim:\n%s", free.ID, got, out.String())
+	}
+
+	// Nothing standing: the same row must stay silent rather than announce a
+	// fact no one could have misread.
+	out.Reset()
+	if err := printBacklogOutput(&out, nil, rows, details, claimContext{self: selfAttribution}); err != nil {
+		t.Fatalf("printBacklogOutput error = %v", err)
+	}
+	if got := blockedOrEpicLines(out.String(), free.ID); strings.Contains(got, "unclaimed") {
+		t.Errorf("%s states %q with no claim standing anywhere; there is nothing to correct:\n%s", free.ID, got, out.String())
+	}
+}
+
 // openLeaf builds an open task in the named lane, hydrated so it can report its
 // own state — the store is not involved, so the fixture can spell ids and lanes
 // the store would never mint.

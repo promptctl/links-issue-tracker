@@ -89,9 +89,14 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // Adjacency, not a set of every subject seen: a run that resumes further down
 // the list states its facts again, because a reader who has scrolled past the
 // first mention no longer has it on screen.
+//
+// claim is the claim text standing over the reader — carried alongside the lane
+// that owns it, not as a second identity for the run, so a row can tell whether
+// staying silent would leave a claim standing that is not true of it.
 type backlogRun struct {
 	epicID string
 	lane   model.LaneID
+	claim  string
 }
 
 // backlogRowContext is the group-scoped half of one row's context block,
@@ -117,12 +122,35 @@ func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext,
 	// printer's "no line" value — the discarded bool restates the empty string
 	// rather than carrying a signal this drops.
 	claim, _ := formatClaimLine(cc, lane, now)
-	here := backlogRun{epicID: epicID(epic), lane: lane}
+	here := backlogRun{epicID: epicID(epic), lane: lane, claim: claim}
 	return backlogRowContext{
 		epic:  openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
-		claim: openingRun(claim, here.lane, above.lane),
+		claim: openingRun(claimStatement(here.claim, above.claim), here.lane, above.lane),
 		run:   here,
 	}
+}
+
+// claimStatement is what a row states when it opens a lane run. A run that
+// opens unclaimed says so when a claim is standing above it: otherwise its
+// blank would mean both "this lane is unclaimed" and "this row continues the
+// claimed lane above", the same absence-shaped-like-an-answer that
+// backlogEpicLine exists to stop — and misreading who holds a lane is the kind
+// of thing an agent then routes on. [FRAMING:representation]
+//
+// Only when something is standing, because the cost here is not the epic
+// line's. LaneOf gives a leaf with no epic parent a lane of one keyed by its
+// own id, so every standalone row opens its own lane run, and nearly every lane
+// is unclaimed — marking them all would put a line back under almost every row,
+// which is the noise this change removes. With nothing standing there is
+// nothing to correct and silence is already unambiguous.
+//
+// Together with the lane subject this buys the invariant the preamble states: a
+// blank means the statement standing above it still holds.
+func claimStatement(claim, standing string) string {
+	if claim == "" && standing != "" {
+		return "unclaimed"
+	}
+	return claim
 }
 
 // backlogEpicLine is what a row that OPENS an epic run states. A run under no
