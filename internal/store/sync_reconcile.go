@@ -728,10 +728,14 @@ func (s *Store) mergeAndReplay(ctx context.Context, result *storage.SyncReconcil
 		// at localHead (only the scratch branch moved), so the clone keeps working on
 		// local truth, still diverged; the unresolved divergence IS the durable
 		// pending state, re-derivable from the refs rather than a snapshot that can
-		// drift. [LAW:one-source-of-truth] Hand the prose conflicts to the agent
-		// surface. [LAW:no-silent-failure] never auto-committed by picking a side. The
-		// resolved finalize reaches here only when the agent's resolutions no longer
-		// match the live divergence, so this same path re-surfaces the CURRENT state.
+		// drift. [LAW:one-source-of-truth] [LAW:no-silent-failure] never auto-committed
+		// by picking a side. The resolved finalize reaches here only when the agent's
+		// resolutions no longer match the live divergence, so this same path
+		// re-surfaces the CURRENT state.
+		//
+		// A fold-only collision waits behind this hold: the stepper is not built until
+		// prose settles, and finding those eagerly costs a full folded-chain export on
+		// every attempt. Deferred, never dropped. [LAW:carrying-cost]
 		result.State = storage.SyncReconcileProsePending
 		result.Pending = pending
 		return nil
