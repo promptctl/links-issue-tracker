@@ -16,11 +16,21 @@ import (
 // makes this the full workable view: nothing is hidden, blocked items keep their
 // ranked position, and the surrounding context (epic, depends-on, blocking
 // reasons) is visible so the order is auditable.
+//
+// It also has to state how the view says a group-scoped fact, because the view
+// only says it once. An agent that reads "each row carries its parent epic" and
+// then finds nine of ten siblings without an epic line will conclude those nine
+// have no epic. [FRAMING:representation] The preamble is a map of the view and
+// has to be redrawn whenever the view moves.
 const backlogPreamble = `This is the full backlog in priority/rank order — every workable item, blocked or not.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
-Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
+Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
+An epic line and a claim line describe a whole run of rows and are printed once, on the row that
+opens the run, so a row without one continues the run above it. 'blocked: earlier sibling X' names
+the one ticket directly ahead of it in its lane, not every ticket ahead of it — and X is the true
+prerequisite even when a filter or --limit keeps X's own row out of this list.
 Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
@@ -50,17 +60,140 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 
 	unblocksMap := buildUnblocksMap(issues)
 	now := time.Now()
+	var above backlogRun
 	for i, entry := range issues {
 		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  ", nil))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 		lane := model.LaneOf(entry.Issue, details[entry.ID].Parent)
-		if err := printBacklogContext(w, entry, unblocksMap, cc, lane, now); err != nil {
+		group := above.advance(entry.ParentEpic, cc, lane, now)
+		if err := printBacklogContext(w, entry, unblocksMap, group); err != nil {
 			return err
 		}
+		above = group.run
 	}
 	return printRankInversions(w, issues)
+}
+
+// backlogRun is the group-scoped context the rows above already put on screen:
+// the epic that was named and the lane whose claim was described. Neither fact
+// belongs to a row — every child of an epic shares one epic line, every member
+// of a lane shares one claim line — so a list that derives them per row prints
+// the same sentence verbatim under each of ten siblings and buries the lines
+// that ARE per-row.
+// [LAW:one-source-of-truth] The row that opens a run is where the fact is
+// stated; the rows below it read it from there. The zero value has stated
+// nothing, so row 1 always opens.
+//
+// Adjacency, not a set of every subject seen: a run that resumes further down
+// the list states its facts again, because a reader who has scrolled past the
+// first mention no longer has it on screen.
+//
+// claim is the claim text standing over the reader — carried alongside the lane
+// that owns it, not as a second identity for the run, so a row can tell whether
+// staying silent would leave a claim standing that is not true of it.
+type backlogRun struct {
+	epicID string
+	lane   model.LaneID
+	claim  string
+}
+
+// backlogRowContext is the group-scoped half of one row's context block,
+// resolved against the run above it, together with the run it leaves behind.
+// Returning both from one call is what keeps them honest: the run recorded is
+// by construction the run just rendered, so "what is on screen" cannot drift
+// from what was printed. [LAW:one-source-of-truth]
+//
+// The zero value of epic and claim carries two facts at once — "the row above
+// said it" and "there is nothing to say" — because both are the same
+// instruction to the printer, which is therefore unconditional over its data.
+// [LAW:dataflow-not-control-flow]
+type backlogRowContext struct {
+	epic  string
+	claim string
+	run   backlogRun
+}
+
+// advance resolves what a row under epic, in lane, states for itself given the
+// run above it. Both facts are looked up on every row; only the values differ.
+func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext, lane model.LaneID, now time.Time) backlogRowContext {
+	// formatClaimLine answers "" for an unclaimed lane, which is already the
+	// printer's "no line" value — the discarded bool restates the empty string
+	// rather than carrying a signal this drops.
+	claim, _ := formatClaimLine(cc, lane, now)
+	here := backlogRun{epicID: epicID(epic), lane: lane, claim: claim}
+	return backlogRowContext{
+		epic:  openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
+		claim: openingRun(claimStatement(here.claim, above.claim), here.lane, above.lane),
+		run:   here,
+	}
+}
+
+// claimStatement is what a row states when it opens a lane run. A run that
+// opens unclaimed says so when a claim is standing above it: otherwise its
+// blank would mean both "this lane is unclaimed" and "this row continues the
+// claimed lane above", the same absence-shaped-like-an-answer that
+// backlogEpicLine exists to stop — and misreading who holds a lane is the kind
+// of thing an agent then routes on. [FRAMING:representation]
+//
+// Only when something is standing, because the cost here is not the epic
+// line's. LaneOf gives a leaf with no epic parent a lane of one keyed by its
+// own id, so every standalone row opens its own lane run, and nearly every lane
+// is unclaimed — marking them all would put a line back under almost every row,
+// which is the noise this change removes. With nothing standing there is
+// nothing to correct and silence is already unambiguous.
+//
+// Together with the lane subject this buys the invariant the preamble states: a
+// blank means the statement standing above it still holds.
+func claimStatement(claim, standing string) string {
+	if claim == "" && standing != "" {
+		return "unclaimed"
+	}
+	return claim
+}
+
+// backlogEpicLine is what a row that OPENS an epic run states. A run under no
+// epic says so out loud, because suppressing a repeat costs the reader the
+// thing absence used to mean: before the runs existed every row carried its
+// own epic line, so a row without one had no epic, full stop. Leave the
+// no-epic run silent and that one blank now means both "continues the epic
+// above" and "has none" — an absence shaped exactly like an answer — and a
+// standalone ticket that happens to sort under an epic's last child reads as
+// part of it. sortByCompositeRank interleaves them by rank, so that adjacency
+// is routine, and in a real backlog most rows have no epic at all.
+// [FRAMING:representation]
+//
+// The zero-value run's empty epicID IS the no-epic subject, so a list that
+// opens with standalone rows opens already inside that run and says nothing.
+// That is right rather than merely convenient: the line exists to stop a row
+// being read as part of the epic above it, and the first row has none.
+func backlogEpicLine(epic *annotation.ParentEpicRef) string {
+	if line := formatEpicLine(epic); line != "" {
+		return line
+	}
+	return "epic: none"
+}
+
+// openingRun returns value when subject differs from the subject the row above
+// stated, and the zero value when the run continues. Suppressing a repeated
+// epic line and a repeated claim line is one behavior over two data types, so
+// it is one function. [LAW:one-type-per-behavior]
+//
+// A subject need only be comparable, never a string. Requiring a string forced
+// callers to hand over a rendering of the value instead of the value, and
+// LaneID.String — which exists "for logs and test failures" — is lossy: it
+// joins epic and lane with "#", so epic "AB" lane "C#D" reads the same as epic
+// "AB#C" lane "D", and a solo lane renders as a bare issue id that an
+// epic-scoped lane can also spell. Two distinct lanes comparing equal would
+// swallow a claim line the reader is owed. [LAW:types-are-the-program] the
+// constraint is comparability, so that is what the signature asks for.
+func openingRun[T any, S comparable](value T, subject, above S) T {
+	if subject == above {
+		var restated T
+		return restated
+	}
+	return value
 }
 
 // printBacklogContext prints the indented context block under a single
@@ -69,9 +202,9 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // "blocked: ..." surfaces non-dependency blockers, "depends on: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
-func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, cc claimContext, lane model.LaneID, now time.Time) error {
+func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, group backlogRowContext) error {
 	readiness := ClassifyReadiness(entry.Annotations)
-	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
+	if err := printContextLine(w, contextIndent, group.epic); err != nil {
 		return err
 	}
 	// "blocked:" joins reasons with "; " (not IDs with ", "), so it is its own
@@ -89,10 +222,8 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 			return err
 		}
 	}
-	if line, ok := formatClaimLine(cc, lane, now); ok {
-		if _, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line); err != nil {
-			return err
-		}
+	if err := printContextLine(w, contextIndent, group.claim); err != nil {
+		return err
 	}
 	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }

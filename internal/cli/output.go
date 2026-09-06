@@ -21,15 +21,46 @@ const contextIndent = "    "
 // canonical data. [LAW:one-source-of-truth]
 const historyTimestampLayout = "Jan 2, 2006 3:04 PM MST"
 
+// formatEpicLine renders the "epic:" context text for a ref, and "" — the
+// printer's "no line" value — for the absent ref. Formatting is split from
+// printing because the backlog must choose between this text and a different
+// one for the same row, and both spellings of an epic line have to come from
+// here. [LAW:one-source-of-truth]
+func formatEpicLine(epic *annotation.ParentEpicRef) string {
+	if epic == nil {
+		return ""
+	}
+	return fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title)
+}
+
 // printEpicLine renders the indented "epic:" context line shown identically
 // under ready and backlog rows. A nil ref (issue has no epic parent) emits
 // nothing — absence is data, not a caller-side branch.
 // [LAW:dataflow-not-control-flow]
 func printEpicLine(w io.Writer, indent string, epic *annotation.ParentEpicRef) error {
+	return printContextLine(w, indent, formatEpicLine(epic))
+}
+
+// epicID names the epic a ref points at, and "" for the absent ref. It sits
+// beside printEpicLine so ParentEpicRef's nil case is answered in one file
+// rather than at each caller that needs the id to compare.
+// [LAW:single-enforcer]
+func epicID(epic *annotation.ParentEpicRef) string {
 	if epic == nil {
+		return ""
+	}
+	return epic.ID
+}
+
+// printContextLine renders one already-formatted indented context line — the
+// shape behind context whose text a caller composed, such as the claim line.
+// The empty string emits nothing, so callers pass the text rather than
+// branching on whether they have any. [LAW:dataflow-not-control-flow]
+func printContextLine(w io.Writer, indent, text string) error {
+	if text == "" {
 		return nil
 	}
-	_, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, epic.ID, epic.Title)
+	_, err := fmt.Fprintf(w, "%s%s\n", indent, text)
 	return err
 }
 
