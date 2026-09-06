@@ -81,9 +81,9 @@ func TestSyncFailureBlockUnrelatedInventory(t *testing.T) {
 		t.Fatalf("block missing the both-sides inventory section:\n%s", block)
 	}
 	for _, want := range []string{
-		"only on local:  (2): proj-local1, proj-local2",
-		"only on remote: (1): proj-remote1",
-		"on both:        (1): proj-shared1",
+		"only on local:  (2): «proj-local1», «proj-local2»",
+		"only on remote: (1): «proj-remote1»",
+		"on both:        (1): «proj-shared1»",
 	} {
 		if !strings.Contains(block, want) {
 			t.Errorf("inventory section missing %q:\n%s", want, block)

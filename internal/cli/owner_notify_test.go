@@ -65,12 +65,14 @@ func TestOwnerNotifyDue(t *testing.T) {
 }
 
 // TestOwnerNotifyEventForFailure pins the trigger set to the ticket's "real
-// divergence" definition: the three divergence classes notify with the
-// failure's own domain sentence; a remote-schema-ahead block (a version
-// condition, not a divergence) does not.
+// divergence" definition: every divergence class notifies with the failure's own
+// domain sentence; a remote-schema-ahead block (a version condition, not a
+// divergence) does not. The list is spelled out rather than counted, so adding a
+// class to the switch without adding it here is the failure this test exists to
+// catch.
 func TestOwnerNotifyEventForFailure(t *testing.T) {
 	t.Parallel()
-	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories} {
+	for _, class := range []syncFailureClass{syncFailureProseHeld, syncFailureDivergedUnresolved, syncFailureUnrelatedHistories, syncFailureIDCollision} {
 		ev, ok := ownerNotifyEventForFailure(SyncFailure{Class: class, Remote: "origin", Branch: "master"})
 		if !ok {
 			t.Fatalf("class %q did not map to an owner notification", class)
