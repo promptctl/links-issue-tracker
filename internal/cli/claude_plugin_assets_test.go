@@ -3,6 +3,7 @@ package cli
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,6 +94,37 @@ func TestClaudePluginShipsNextSkill(t *testing.T) {
 	}
 	if !strings.HasPrefix(string(content), "---\nname: next\ndescription:") {
 		t.Fatalf("skill frontmatter missing/misplaced at byte 0: %q", content[:min(len(content), 80)])
+	}
+}
+
+// TestClaudePluginManifestsPassOfficialValidation runs the marketplace and
+// plugin manifests through the real `claude plugin validate --strict`, the
+// one checker that knows the manifest schema Claude Code actually loads —
+// hand-modeling that schema in Go would drift the moment the CLI adds or
+// retires a field. [LAW:verifiable-goals] Skips (not fails) when the CLI
+// isn't on PATH: no workflow in this repo installs `claude`, so today this
+// is a local-only check, not a CI gate — unlike the `dolt` binary, which CI
+// actually installs (`.github/actions/install-dolt`) for the tests that use
+// it as an oracle. Wiring `claude` into CI too is future work, deliberately
+// left out here rather than adding a new network dependency to the suite in
+// the same change that only needed a manifest tweak.
+func TestClaudePluginManifestsPassOfficialValidation(t *testing.T) {
+	t.Parallel()
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("claude CLI not on PATH; skipping manifest validation")
+	}
+	root := mustRepoRoot(t)
+
+	for _, target := range []string{".", "claude-plugin"} {
+		t.Run(target, func(t *testing.T) {
+			cmd := exec.Command(claudeBin, "plugin", "validate", target, "--strict")
+			cmd.Dir = root
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("claude plugin validate %s --strict failed: %v\n%s", target, err, out)
+			}
+		})
 	}
 }
 
