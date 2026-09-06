@@ -21,16 +21,24 @@ const contextIndent = "    "
 // canonical data. [LAW:one-source-of-truth]
 const historyTimestampLayout = "Jan 2, 2006 3:04 PM MST"
 
+// formatEpicLine renders the "epic:" context text for a ref, and "" — the
+// printer's "no line" value — for the absent ref. Formatting is split from
+// printing because the backlog must choose between this text and a different
+// one for the same row, and both spellings of an epic line have to come from
+// here. [LAW:one-source-of-truth]
+func formatEpicLine(epic *annotation.ParentEpicRef) string {
+	if epic == nil {
+		return ""
+	}
+	return fmt.Sprintf("epic: %s  %s", epic.ID, epic.Title)
+}
+
 // printEpicLine renders the indented "epic:" context line shown identically
 // under ready and backlog rows. A nil ref (issue has no epic parent) emits
 // nothing — absence is data, not a caller-side branch.
 // [LAW:dataflow-not-control-flow]
 func printEpicLine(w io.Writer, indent string, epic *annotation.ParentEpicRef) error {
-	if epic == nil {
-		return nil
-	}
-	_, err := fmt.Fprintf(w, "%sepic: %s  %s\n", indent, epic.ID, epic.Title)
-	return err
+	return printContextLine(w, indent, formatEpicLine(epic))
 }
 
 // epicID names the epic a ref points at, and "" for the absent ref. It sits

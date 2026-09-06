@@ -27,9 +27,9 @@ Items at the top are ranked higher than items below them. Blocked items stay whe
 so you can see WHY the queue is shaped this way, not just what is ready next.
 Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
-An epic line and a claim line describe a whole run of rows, so they are printed once, on the first
-row of the run: a row with no epic line belongs to the epic named above it, and 'blocked: earlier
-sibling X' names the one row directly ahead of it in its lane, not every row ahead of it.
+An epic line and a claim line describe a whole run of rows and are printed once, on the row that
+opens the run, so a row without one continues the run above it. 'blocked: earlier sibling X' names
+the one row directly ahead of it in its lane, not every row ahead of it.
 Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
@@ -104,7 +104,7 @@ type backlogRun struct {
 // instruction to the printer, which is therefore unconditional over its data.
 // [LAW:dataflow-not-control-flow]
 type backlogRowContext struct {
-	epic  *annotation.ParentEpicRef
+	epic  string
 	claim string
 	run   backlogRun
 }
@@ -118,10 +118,32 @@ func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext,
 	claim, _ := formatClaimLine(cc, lane, now)
 	here := backlogRun{epicID: epicID(epic), lane: lane}
 	return backlogRowContext{
-		epic:  openingRun(epic, here.epicID, above.epicID),
+		epic:  openingRun(backlogEpicLine(epic), here.epicID, above.epicID),
 		claim: openingRun(claim, here.lane.String(), above.lane.String()),
 		run:   here,
 	}
+}
+
+// backlogEpicLine is what a row that OPENS an epic run states. A run under no
+// epic says so out loud, because suppressing a repeat costs the reader the
+// thing absence used to mean: before the runs existed every row carried its
+// own epic line, so a row without one had no epic, full stop. Leave the
+// no-epic run silent and that one blank now means both "continues the epic
+// above" and "has none" — an absence shaped exactly like an answer — and a
+// standalone ticket that happens to sort under an epic's last child reads as
+// part of it. sortByCompositeRank interleaves them by rank, so that adjacency
+// is routine, and in a real backlog most rows have no epic at all.
+// [FRAMING:representation]
+//
+// The zero-value run's empty epicID IS the no-epic subject, so a list that
+// opens with standalone rows opens already inside that run and says nothing.
+// That is right rather than merely convenient: the line exists to stop a row
+// being read as part of the epic above it, and the first row has none.
+func backlogEpicLine(epic *annotation.ParentEpicRef) string {
+	if line := formatEpicLine(epic); line != "" {
+		return line
+	}
+	return "epic: none"
 }
 
 // openingRun returns value when subject differs from the subject the row above
@@ -144,7 +166,7 @@ func openingRun[T any](value T, subject, above string) T {
 // "unblocks: ..." shows leverage.
 func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, group backlogRowContext) error {
 	readiness := ClassifyReadiness(entry.Annotations)
-	if err := printEpicLine(w, contextIndent, group.epic); err != nil {
+	if err := printContextLine(w, contextIndent, group.epic); err != nil {
 		return err
 	}
 	// "blocked:" joins reasons with "; " (not IDs with ", "), so it is its own

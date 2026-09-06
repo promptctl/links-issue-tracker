@@ -163,6 +163,67 @@ func TestBacklogReopensARunAfterAnInterruption(t *testing.T) {
 	}
 }
 
+// Suppressing a repeat costs the reader what absence used to mean. Before the
+// runs existed, a row without an epic line had no epic; now that blank would
+// also mean "continues the epic above", and sortByCompositeRank interleaves
+// standalone leaves with epic children by rank, so a standalone ticket sitting
+// under an epic's last child is routine. A run opening under no epic therefore
+// says so.
+func TestBacklogSaysWhenARunOpensUnderNoEpic(t *testing.T) {
+	h := newBacklogTestHarness(t)
+	epicA := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Epic A", Topic: "solo", IssueType: "epic", Priority: 1})
+	a1 := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "A one", Topic: "solo", IssueType: "task", Priority: 1, ParentID: epicA})
+	loner := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "Belongs to nothing", Topic: "solo", IssueType: "task", Priority: 1})
+
+	rows, details, err := gatherWorkableAnnotated(h.ctx, h.ap, workableFilter{})
+	if err != nil {
+		t.Fatalf("gatherWorkableAnnotated error = %v", err)
+	}
+
+	// The standalone leaf directly below the epic's run must not read as part of it.
+	after := []annotation.AnnotatedIssue{rowByID(t, rows, a1), rowByID(t, rows, loner)}
+	var out bytes.Buffer
+	if err := printBacklogOutput(&out, nil, after, details, claimContext{self: selfAttribution}); err != nil {
+		t.Fatalf("printBacklogOutput error = %v", err)
+	}
+	if got := blockedOrEpicLines(out.String(), loner); !strings.Contains(got, "epic: none") {
+		t.Errorf("%s follows a row of epic %s and states %q; without an epic line it reads as part of that epic", loner, epicA, got)
+	}
+
+	// Opening the list with it is the other half: there is no row above to
+	// misattribute it to, so the marker would be noise.
+	out.Reset()
+	first := []annotation.AnnotatedIssue{rowByID(t, rows, loner), rowByID(t, rows, a1)}
+	if err := printBacklogOutput(&out, nil, first, details, claimContext{self: selfAttribution}); err != nil {
+		t.Fatalf("printBacklogOutput error = %v", err)
+	}
+	if got := blockedOrEpicLines(out.String(), loner); strings.Contains(got, "epic: none") {
+		t.Errorf("%s opens the list and states %q; nothing above it could claim it", loner, got)
+	}
+}
+
+// blockedOrEpicLines returns the context lines rendered under one row, joined,
+// for assertions about what that row states.
+func blockedOrEpicLines(text, id string) string {
+	lines := strings.Split(text, "\n")
+	var context []string
+	found := false
+	for _, line := range lines {
+		if _, ok := rowHeadingID(line, []string{id}); ok {
+			found = true
+			continue
+		}
+		if !found {
+			continue
+		}
+		if !strings.HasPrefix(line, contextIndent) {
+			break
+		}
+		context = append(context, strings.TrimSpace(line))
+	}
+	return strings.Join(context, " | ")
+}
+
 // blockedLinesByRow maps each id to the "blocked:" line rendered under its row,
 // omitting ids whose row carries none. It reads the rendered text rather than
 // the annotations so the assertions above are about what the reader sees.
