@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -75,6 +76,23 @@ func TestClaudePluginAssetsUseQuickstartHooks(t *testing.T) {
 		if events[0].Hooks[0].Command != "lit quickstart --refresh" {
 			t.Fatalf("%s hook command = %q, want lit quickstart --refresh", event, events[0].Hooks[0].Command)
 		}
+	}
+}
+
+// TestClaudePluginShipsNextSkill pins the /next skill's home: the plugin's
+// own skills/ directory, auto-discovered by the harness, never written into
+// a consuming repo. [LAW:verifiable-goals]
+func TestClaudePluginShipsNextSkill(t *testing.T) {
+	t.Parallel()
+	root := mustRepoRoot(t)
+
+	skillPath := filepath.Join(root, "claude-plugin", "skills", "next", "SKILL.md")
+	content, err := os.ReadFile(skillPath)
+	if err != nil {
+		t.Fatalf("ReadFile(%s) error = %v", skillPath, err)
+	}
+	if !strings.HasPrefix(string(content), "---\nname: next\ndescription:") {
+		t.Fatalf("skill frontmatter missing/misplaced at byte 0: %q", content[:min(len(content), 80)])
 	}
 }
 
