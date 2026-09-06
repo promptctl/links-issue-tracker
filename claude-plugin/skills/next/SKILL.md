@@ -1,4 +1,8 @@
-<!-- BEGIN LIT INTEGRATION -->
+---
+name: next
+description: Pull the next ticket
+---
+
 # Next
 
 Pick up the next ready ticket and start work.
@@ -82,4 +86,3 @@ A mature engineer knows when to ask for help, and it isn't at the slightest hint
 To be honest, rarely. You should be capable of figuring this stuff out. 
 
 If you think that there's a chance that this could have negative impacts on other work, you can ask a quick question, but like I said, You need to make an attempt to answer the question yourself.  (The one recurring case — a branch carrying uncommitted work that belongs to no current ticket — is already handled in "Uncommitted changes" above.)
-<!-- END LIT INTEGRATION -->
