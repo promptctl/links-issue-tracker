@@ -33,6 +33,29 @@ func printEpicLine(w io.Writer, indent string, epic *annotation.ParentEpicRef) e
 	return err
 }
 
+// epicID names the epic a ref points at, and "" for the absent ref. It sits
+// beside printEpicLine so ParentEpicRef's nil case is answered in one file
+// rather than at each caller that needs the id to compare.
+// [LAW:single-enforcer]
+func epicID(epic *annotation.ParentEpicRef) string {
+	if epic == nil {
+		return ""
+	}
+	return epic.ID
+}
+
+// printContextLine renders one already-formatted indented context line — the
+// shape behind context whose text a caller composed, such as the claim line.
+// The empty string emits nothing, so callers pass the text rather than
+// branching on whether they have any. [LAW:dataflow-not-control-flow]
+func printContextLine(w io.Writer, indent, text string) error {
+	if text == "" {
+		return nil
+	}
+	_, err := fmt.Fprintf(w, "%s%s\n", indent, text)
+	return err
+}
+
 // printIDListLine renders one indented "<label>: id, id, ..." context line —
 // the shared shape behind both "depends on:" and "unblocks:". An empty list
 // emits nothing, so callers pass the list rather than branching on its length.

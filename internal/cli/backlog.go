@@ -16,11 +16,20 @@ import (
 // makes this the full workable view: nothing is hidden, blocked items keep their
 // ranked position, and the surrounding context (epic, depends-on, blocking
 // reasons) is visible so the order is auditable.
+//
+// It also has to state how the view says a group-scoped fact, because the view
+// only says it once. An agent that reads "each row carries its parent epic" and
+// then finds nine of ten siblings without an epic line will conclude those nine
+// have no epic. [FRAMING:representation] The preamble is a map of the view and
+// has to be redrawn whenever the view moves.
 const backlogPreamble = `This is the full backlog in priority/rank order — every workable item, blocked or not.
 Items at the top are ranked higher than items below them. Blocked items stay where they were ranked
 so you can see WHY the queue is shaped this way, not just what is ready next.
-Read every row: each carries its parent epic, dependencies, blocking reasons, and what closing it would unblock.
+Read every row: each carries its dependencies, blocking reasons, and what closing it would unblock.
 That context is the ordering rationale — the dependency graph IS the priority story.
+An epic line and a claim line describe a whole run of rows, so they are printed once, on the first
+row of the run: a row with no epic line belongs to the epic named above it, and 'blocked: earlier
+sibling X' names the one row directly ahead of it in its lane, not every row ahead of it.
 Rows claimed by another checkout show who holds them and how fresh, but claim visibility here is
 just that — visibility; only 'lit next' routes by claim, serving this checkout's own lanes first.
 Use 'lit next' to pick the top workable item to start.`
@@ -50,17 +59,81 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 
 	unblocksMap := buildUnblocksMap(issues)
 	now := time.Now()
+	var above backlogRun
 	for i, entry := range issues {
 		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  ", nil))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}
 		lane := model.LaneOf(entry.Issue, details[entry.ID].Parent)
-		if err := printBacklogContext(w, entry, unblocksMap, cc, lane, now); err != nil {
+		group := above.advance(entry.ParentEpic, cc, lane, now)
+		if err := printBacklogContext(w, entry, unblocksMap, group); err != nil {
 			return err
 		}
+		above = group.run
 	}
 	return printRankInversions(w, issues)
+}
+
+// backlogRun is the group-scoped context the rows above already put on screen:
+// the epic that was named and the lane whose claim was described. Neither fact
+// belongs to a row — every child of an epic shares one epic line, every member
+// of a lane shares one claim line — so a list that derives them per row prints
+// the same sentence verbatim under each of ten siblings and buries the lines
+// that ARE per-row.
+// [LAW:one-source-of-truth] The row that opens a run is where the fact is
+// stated; the rows below it read it from there. The zero value has stated
+// nothing, so row 1 always opens.
+//
+// Adjacency, not a set of every subject seen: a run that resumes further down
+// the list states its facts again, because a reader who has scrolled past the
+// first mention no longer has it on screen.
+type backlogRun struct {
+	epicID string
+	lane   model.LaneID
+}
+
+// backlogRowContext is the group-scoped half of one row's context block,
+// resolved against the run above it, together with the run it leaves behind.
+// Returning both from one call is what keeps them honest: the run recorded is
+// by construction the run just rendered, so "what is on screen" cannot drift
+// from what was printed. [LAW:one-source-of-truth]
+//
+// The zero value of epic and claim carries two facts at once — "the row above
+// said it" and "there is nothing to say" — because both are the same
+// instruction to the printer, which is therefore unconditional over its data.
+// [LAW:dataflow-not-control-flow]
+type backlogRowContext struct {
+	epic  *annotation.ParentEpicRef
+	claim string
+	run   backlogRun
+}
+
+// advance resolves what a row under epic, in lane, states for itself given the
+// run above it. Both facts are looked up on every row; only the values differ.
+func (above backlogRun) advance(epic *annotation.ParentEpicRef, cc claimContext, lane model.LaneID, now time.Time) backlogRowContext {
+	// formatClaimLine answers "" for an unclaimed lane, which is already the
+	// printer's "no line" value — the discarded bool restates the empty string
+	// rather than carrying a signal this drops.
+	claim, _ := formatClaimLine(cc, lane, now)
+	here := backlogRun{epicID: epicID(epic), lane: lane}
+	return backlogRowContext{
+		epic:  openingRun(epic, here.epicID, above.epicID),
+		claim: openingRun(claim, here.lane.String(), above.lane.String()),
+		run:   here,
+	}
+}
+
+// openingRun returns value when subject differs from the subject the row above
+// stated, and the zero value when the run continues. Suppressing a repeated
+// epic line and a repeated claim line is one behavior over two data types, so
+// it is one function. [LAW:one-type-per-behavior]
+func openingRun[T any](value T, subject, above string) T {
+	if subject == above {
+		var restated T
+		return restated
+	}
+	return value
 }
 
 // printBacklogContext prints the indented context block under a single
@@ -69,9 +142,9 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 // "blocked: ..." surfaces non-dependency blockers, "depends on: ..." names
 // open dependencies, "in_progress: ..." surfaces age/orphan status, and
 // "unblocks: ..." shows leverage.
-func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, cc claimContext, lane model.LaneID, now time.Time) error {
+func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksMap map[string][]string, group backlogRowContext) error {
 	readiness := ClassifyReadiness(entry.Annotations)
-	if err := printEpicLine(w, contextIndent, entry.ParentEpic); err != nil {
+	if err := printEpicLine(w, contextIndent, group.epic); err != nil {
 		return err
 	}
 	// "blocked:" joins reasons with "; " (not IDs with ", "), so it is its own
@@ -89,10 +162,8 @@ func printBacklogContext(w io.Writer, entry annotation.AnnotatedIssue, unblocksM
 			return err
 		}
 	}
-	if line, ok := formatClaimLine(cc, lane, now); ok {
-		if _, err := fmt.Fprintf(w, "%s%s\n", contextIndent, line); err != nil {
-			return err
-		}
+	if err := printContextLine(w, contextIndent, group.claim); err != nil {
+		return err
 	}
 	return printIDListLine(w, contextIndent, "unblocks", unblocksMap[entry.ID])
 }

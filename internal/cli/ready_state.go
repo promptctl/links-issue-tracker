@@ -172,8 +172,11 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.A
 // fully-sequential lane and a per-child distinct lane is fully parallel — the
 // old binary "parallel opt-out" is this mechanism's degenerate case.
 // [LAW:dataflow-not-control-flow] Grouping is by lane value, never a branch on
-// "has a lane". The annotator runs for every issue; a leaf with no epic parent
-// or no earlier same-lane sibling yields nil, not a skipped operation.
+// "has a lane". The annotator runs for every issue; model.LaneOf answers for a
+// leaf with no epic parent with a solo lane whose Epic() is "", and
+// siblingsByEpic has no such key, so that leaf flows through the same lookup and
+// yields nil instead of taking a guarded exit. [LAW:single-enforcer] LaneOf is
+// the one answer to "which lane is this issue in".
 // [LAW:one-type-per-behavior] "explicit dep unfinished" and "earlier same-lane
 // sibling unfinished" are the same blocking fact behind the same enforcer.
 //
@@ -181,21 +184,47 @@ func newBlockerAnnotator(details map[string]storage.IssueRelations) annotation.A
 // predicate once), so the annotator compares lane and rank alone.
 func newSiblingGateAnnotator(details map[string]storage.IssueRelations, siblingsByEpic map[string][]model.Issue) annotation.Annotator {
 	return func(_ context.Context, issue model.Issue) ([]annotation.Annotation, error) {
-		parent := details[issue.ID].Parent
-		if parent == nil || !parent.IsContainer() {
-			return nil, nil
-		}
-		var annotations []annotation.Annotation
-		for _, sib := range siblingsByEpic[parent.ID] {
-			if isEarlierSameLaneSibling(sib, issue) {
-				annotations = append(annotations, annotation.Annotation{
-					Kind:    annotation.EarlierSiblingPending,
-					Message: sib.ID,
-				})
-			}
-		}
-		return annotations, nil
+		lane := model.LaneOf(issue, details[issue.ID].Parent)
+		return nearestPendingLaneMate(siblingsByEpic[lane.Epic()], issue), nil
 	}
+}
+
+// nearestPendingLaneMate names the ONE unfinished lane-mate standing directly
+// between leaf and the front of its lane — the latest-ranked sibling still ahead
+// of it — as leaf's single blocking annotation, or nothing when the lane ahead
+// is clear.
+//
+// One witness, not all of them, because the gate is an existential: "∃ an
+// earlier unfinished lane-mate" is proved by one, and the rest of the prefix is
+// the lane's own rank order, which every consumer already has.
+// [LAW:one-source-of-truth] The lane order is the authority on the prefix; the
+// annotation carries the edge, never a second copy of the order. Carrying all of
+// them made a sequential lane's blocking text grow quadratically down the epic —
+// the tenth child restating the nine facts its nine predecessors had each
+// already stated — which is the noise links-listing-x943 was filed for.
+//
+// The nearest predecessor, not the earliest, because it is the edge that is
+// locally true and locally actionable: close it and this leaf is next. The
+// earliest would make every row in a lane carry the identical id, which is the
+// same restatement in a shorter costume.
+func nearestPendingLaneMate(pending []model.Issue, leaf model.Issue) []annotation.Annotation {
+	var nearest *model.Issue
+	for i := range pending {
+		sib := &pending[i]
+		if !isEarlierSameLaneSibling(*sib, leaf) {
+			continue
+		}
+		// Rank is a lexicographic fractional index, so ">" is the same ordering
+		// isEarlierSameLaneSibling reads; the id breaks a rank tie so two
+		// equally-ranked lane-mates cannot make the rendered row flap.
+		if nearest == nil || sib.Rank > nearest.Rank || (sib.Rank == nearest.Rank && sib.ID > nearest.ID) {
+			nearest = sib
+		}
+	}
+	if nearest == nil {
+		return nil
+	}
+	return []annotation.Annotation{{Kind: annotation.EarlierSiblingPending, Message: nearest.ID}}
 }
 
 // isEarlierSameLaneSibling reports whether sib precedes leaf within the same
