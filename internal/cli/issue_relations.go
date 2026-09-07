@@ -134,5 +134,5 @@ func runChildren(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	return printIssueLines(stdout, children, []string{"id", "state", "title"}, nil)
+	return printIssueLines(stdout, children, mustColumns("id", "state", "title"), nil)
 }

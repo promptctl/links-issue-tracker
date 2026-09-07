@@ -131,13 +131,13 @@ func TestListRelationColumnsGating(t *testing.T) {
 	}
 	issues := []model.Issue{issue}
 
-	if rels, err := listRelationColumns(ctx, ap.Store, nil, issues); err != nil || rels != nil {
+	if rels, err := listRelationColumns(ctx, ap.Store, defaultColumns(), issues); err != nil || rels != nil {
 		t.Fatalf("default columns: want nil map, got %v (err %v)", rels, err)
 	}
-	if rels, err := listRelationColumns(ctx, ap.Store, []string{"id", "title"}, issues); err != nil || rels != nil {
+	if rels, err := listRelationColumns(ctx, ap.Store, mustColumns("id", "title"), issues); err != nil || rels != nil {
 		t.Fatalf("non-relationship columns: want nil map, got %v (err %v)", rels, err)
 	}
-	rels, err := listRelationColumns(ctx, ap.Store, []string{"id", "parent"}, issues)
+	rels, err := listRelationColumns(ctx, ap.Store, mustColumns("id", "parent"), issues)
 	if err != nil {
 		t.Fatalf("relationship columns: %v", err)
 	}

@@ -37,7 +37,7 @@ type workableKnobs struct {
 	status    model.State
 	labels    []string
 	limit     int
-	columns   []string
+	columns   []columnSpec
 }
 
 // workableView is the preset that specializes the one workable runner into a
@@ -51,7 +51,13 @@ type workableView struct {
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	render     func(w io.Writer, columns []string, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error
+	// render receives the relationship cells already derived from the rows and
+	// the graph, so a view that lets its caller NAME a relation column cannot
+	// render one without the data behind it. The runner owns that derivation
+	// rather than each renderer, which is what keeps the next view added here
+	// from re-introducing a projection whose `parent` and `blocked` cells are
+	// permanently "-". [LAW:one-source-of-truth]
+	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
 	// already succeeded on the same rows — backlog's is a constant (a
 	// backlog-wide view names no single ticket), next's reads the one row
@@ -77,6 +83,27 @@ func (v workableView) usage() string {
 		parts = append(parts, "[--columns ...]")
 	}
 	return strings.Join(parts, " ")
+}
+
+// workableRelationColumns builds the relationship cells for a workable view's
+// rows. `parent` comes from the graph; `blocked` comes from ClassifyReadiness.
+// [LAW:one-source-of-truth] the annotation registry decides what blocks, and
+// rendering may not carry a shorter list; deriving this cell from DependsOn
+// edges alone carried exactly that shorter list, and it disagreed on screen for
+// any row gated by an earlier sibling, a missing field, or needs-design.
+//
+// Deliberately not relationColumnsFor: `lit ls` runs no annotators, so there
+// `blocked` still reflects dependency edges alone. That divergence is a gap on
+// the list path rather than a second opinion, and closing it needs the
+// annotation pipeline there — tracked as links-columns-4hdq.
+func workableRelationColumns(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]relationColumns {
+	out := make(map[string]relationColumns, len(rows))
+	for _, row := range rows {
+		cells := deriveRelationColumns(details[row.ID])
+		cells.blocked = !ClassifyReadiness(row.Annotations).IsReady()
+		out[row.ID] = cells
+	}
+	return out
 }
 
 func orderCanonical([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, workableKnobs) {}
@@ -114,7 +141,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	status := optionalString(fs, view.hasFilters, "status", "Filter by status: open|in_progress")
 	labels := optionalString(fs, view.hasFilters, "labels", "Comma-separated labels all of which must match")
 	limit := optionalInt(fs, view.hasLimit, "limit", "Limit results")
-	columnsExpr := optionalString(fs, view.hasColumns, "columns", "Comma-separated output columns")
+	columnsExpr := optionalString(fs, view.hasColumns, "columns", columnsFlagUsage())
 	if err := parseFlagSet(fs, args, stdout); err != nil {
 		return err
 	}
@@ -126,6 +153,13 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		return err
 	}
 	issueTypeValue, err := parseWorkableType(*issueType)
+	if err != nil {
+		return err
+	}
+	// Parsed alongside the other flag boundaries, and so before the staleness
+	// warning below prints: a bad column name must not reach the caller as a
+	// rejection that already emitted output.
+	columns, err := parseColumnSelection(*columnsExpr)
 	if err != nil {
 		return err
 	}
@@ -143,7 +177,7 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 		status:    statusState,
 		labels:    splitCSV(*labels),
 		limit:     *limit,
-		columns:   parseColumns(*columnsExpr),
+		columns:   columns,
 	}
 	annotated, details, err := gatherWorkableAnnotated(ctx, ap, workableFilter{
 		Assignee:  knobs.assignee,
@@ -161,7 +195,10 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	if err := view.render(stdout, knobs.columns, rows, details, cc); err != nil {
+	// Derived unconditionally from the rows and graph data already gathered
+	// above: no extra query, and no branch deciding whether the renderer gets
+	// its data. [LAW:dataflow-not-control-flow]
+	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))

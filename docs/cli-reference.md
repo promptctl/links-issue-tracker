@@ -122,6 +122,19 @@ the queue is legible. Use when grooming or re-ranking.
 (`backlog`, `next`); anything else — including `closed`, which could only ever match
 nothing — is a usage error (exit 2) naming the legal values.
 
+`--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
+name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
+warning, so a rejected `lit backlog` prints nothing at all. One column means more on
+this command than it does on `ls`: `blocked` marks a ticket that is not workable, for
+any of the four reasons the readiness classifier knows — a still-open dependency, an
+earlier same-lane sibling still open, a missing required field, or needs-design. The
+column agrees with that classification, and so with the context block printed under
+the row, but the block splits the reasons across two lines: `depends on:` names the
+still-open dependencies as concrete blocker ids, and `blocked:` carries the other
+three. A ticket held up by nothing but a dependency therefore prints `blocked` in the
+column with a `depends on:` line under it and no `blocked:` line at all. `lit ls` sees
+only the dependency reason; that gap is tracked as `links-columns-4hdq`.
+
 ### `lit next`
 
 ```text
@@ -186,11 +199,22 @@ explicitly included. Output-shaping flags (`--columns`, `--format`) have no toke
 they are not filter concerns.
 
 `--columns` projects a chosen subset, default `id,state,topic,title`. Beyond the
-issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `title`, `assignee`,
-`labels`, `created_at`, `updated_at`) two opt-in columns surface relationships from
-the canonical graph: `parent` (the parent/epic id, `-` if none) and `blocked`
-(`blocked` when a still-open dependency blocks the ticket, else `-`). Default output
-is unchanged unless a relationship column is selected.
+issue's own fields (`id`, `state`, `type`, `topic`, `priority`, `rank`, `title`,
+`assignee`, `labels`, `created_at`, `updated_at`) two opt-in columns surface
+relationships from the canonical graph: `parent` (the parent/epic id, `-` if none) and
+`blocked` (`blocked` when a still-open dependency blocks the ticket, else `-`).
+`blocked` reads dependency edges and nothing else here: `ls` runs no annotators, so
+it cannot see the other things that hold a ticket up — an earlier same-lane sibling
+still open, a missing required field, needs-design. `lit backlog --columns blocked`
+answers that fuller question, so a ticket blocked only by a sibling prints `blocked`
+there and `-` here; closing the gap is tracked as `links-columns-4hdq`.
+`rank` prints the issue's own rank string, the key `ls` orders by. Default output is
+unchanged unless a relationship column is selected. A name outside that set is a usage
+error (exit 2) that quotes the offending word and lists the valid columns — the same
+list the flag's `--help` prints — and the command exits before any row is fetched or
+printed. Watch for near-misses: the status column is spelled `state`, `lane` is a
+`lit show --field` name but not a column, and `description` and `prompt` are
+multi-line, so they are read with `--field` rather than projected into a table.
 
 ### `lit show`
 
