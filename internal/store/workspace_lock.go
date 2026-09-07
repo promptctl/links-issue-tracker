@@ -330,9 +330,12 @@ func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive boo
 // rides the sentinel out to every wrapper's message for free.
 // [LAW:single-enforcer]
 func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	stopAnnouncing := announceLockWait(ctx, storageDir, lockPath)
+	// Deferred, not called after the acquire: the reporter is a goroutine
+	// whose only other exit is ctx.Done(), and callers pass
+	// context.Background(), so a panic in the acquire would strand it waking
+	// to do filesystem I/O for the life of the process.
+	defer announceLockWait(ctx, storageDir, lockPath)()
 	release, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, maxAttempts, delay)
-	stopAnnouncing()
 	if err != nil {
 		return nil, err
 	}
