@@ -69,8 +69,19 @@ const (
 // [LAW:one-source-of-truth] One naming convention for the workspace-busy lock;
 // any callsite that needs the path reads it from this function.
 func WorkspaceLockPath(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
-	return filepath.Join(filepath.Dir(cleaned), ".links-workspace.lock")
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-workspace.lock")
+}
+
+// workspaceStorageDir is the lit-owned directory a workspace's locks and lock
+// state sit in: the parent of the Dolt directory, which is what keeps them in
+// place when `lit snapshots restore` rotates that directory out from under
+// concurrent acquirers.
+//
+// [LAW:one-source-of-truth] Every *LockPath helper in this package spelled
+// this derivation out for itself; they now read it from one place, so the
+// position the ONE HOME rule names has exactly one definition.
+func workspaceStorageDir(databasePath string) string {
+	return filepath.Dir(filepath.Clean(databasePath))
 }
 
 // acquireWorkspaceShared takes a shared hold on the workspace lock for the
@@ -130,8 +141,7 @@ func LockWorkspaceExclusive(ctx context.Context, doltRootDir string) (func() err
 // rotates the Dolt directory. [LAW:one-source-of-truth] One naming convention;
 // every mirror reads the path from here.
 func SyncPushLockPath(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
-	return filepath.Join(filepath.Dir(cleaned), ".links-sync-push.lock")
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-sync-push.lock")
 }
 
 // TryAcquireSyncPushLock takes a non-blocking exclusive hold guaranteeing only
@@ -153,8 +163,7 @@ func TryAcquireSyncPushLock(databasePath string) (func() error, bool, error) {
 // [LAW:one-source-of-truth] One naming convention; holders and probers both
 // read the path from here.
 func MirrorBeaconLockPath(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
-	return filepath.Join(filepath.Dir(cleaned), ".links-sync-mirror.lock")
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-sync-mirror.lock")
 }
 
 const (
@@ -182,7 +191,7 @@ const (
 // claimants may each spawn a mirror, and every one is a live owner the probe
 // must count.
 func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, MirrorBeaconLockPath(databasePath), false, mirrorBeaconRetryAttempts, mirrorBeaconRetryDelay)
+	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), MirrorBeaconLockPath(databasePath), false, mirrorBeaconRetryAttempts, mirrorBeaconRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// Only a probe's instantaneous exclusive hold can legitimately contend,
 		// so outlasting the whole budget means something anomalous is squatting
@@ -191,8 +200,11 @@ func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, e
 		// serialization ErrWorkspaceBusy names, so the sentinel is deliberately
 		// NOT propagated: wrapping it would record the ending as the non-paging
 		// workspace_busy class and stop pushes with no FAILING banner and no
-		// owner page. [LAW:no-silent-failure]
-		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?)", MirrorBeaconLockPath(databasePath))
+		// owner page. [LAW:no-silent-failure] Its TEXT still rides along, via
+		// %v rather than %w — naming the squatter is the whole question this
+		// message raises, and %v carries the holder account without carrying
+		// the sentinel's identity.
+		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?): %v", MirrorBeaconLockPath(databasePath), err)
 	}
 	return release, err
 }
@@ -300,7 +312,7 @@ func ProbeMirrorBeacon(databasePath string) (MirrorBeaconVerdict, error) {
 }
 
 func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
-	return acquireStoreLock(ctx, WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
+	return acquireStoreLock(ctx, workspaceStorageDir(doltRootDir), WorkspaceLockPath(doltRootDir), exclusive, maxAttempts, delay)
 }
 
 // acquireStoreLock runs the shared filelock acquisition and stamps its
@@ -310,15 +322,27 @@ func acquireWorkspaceLock(ctx context.Context, doltRootDir string, exclusive boo
 // lock being held is not a failure of the primitive); this is the one
 // boundary where that value becomes ErrWorkspaceBusy, so every store lock's
 // contention carries the same errors.Is discriminator.
-func acquireStoreLock(ctx context.Context, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
+//
+// It is also the one boundary where a lock says who holds it. Both halves of
+// that live here rather than at each wrapper: while the wait runs,
+// announceLockWait reports it instead of leaving the caller to guess whether
+// lit is wedged or merely slow; when the budget elapses, the holder account
+// rides the sentinel out to every wrapper's message for free.
+// [LAW:single-enforcer]
+func acquireStoreLock(ctx context.Context, storageDir, lockPath string, exclusive bool, maxAttempts int, delay time.Duration) (func() error, error) {
+	// Deferred, not called after the acquire: the reporter is a goroutine
+	// whose only other exit is ctx.Done(), and callers pass
+	// context.Background(), so a panic in the acquire would strand it waking
+	// to do filesystem I/O for the life of the process.
+	defer announceLockWait(ctx, storageDir, lockPath)()
 	release, acquired, err := filelock.Acquire(ctx, lockPath, exclusive, maxAttempts, delay)
 	if err != nil {
 		return nil, err
 	}
 	if !acquired {
-		return nil, ErrWorkspaceBusy
+		return nil, fmt.Errorf("%s: %w", describeLockHolders(storageDir, lockPath), ErrWorkspaceBusy)
 	}
-	return release, nil
+	return recordLockHolder(storageDir, lockPath, release), nil
 }
 
 // DoltJournalLockPath returns Dolt's own journal-manifest lock path for a
@@ -403,7 +427,7 @@ func LockDoltJournalExclusive(ctx context.Context, databasePath string) (func() 
 		}
 		return nil, fmt.Errorf("stat dolt journal dir: %w", statErr)
 	}
-	release, err := acquireStoreLock(ctx, lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
+	release, err := acquireStoreLock(ctx, workspaceStorageDir(databasePath), lockPath, true, doltJournalRetryAttempts, doltJournalRetryDelay)
 	if errors.Is(err, ErrWorkspaceBusy) {
 		// [LAW:no-silent-failure] Wrap rather than replace so errors.Is(err,
 		// ErrWorkspaceBusy) still detects contention while the operator sees

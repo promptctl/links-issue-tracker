@@ -391,7 +391,8 @@ func TestClassifyTransientGCErrorLeavesGenericFailures(t *testing.T) {
 func TestWithCommitLockSerializesConcurrentOperations(t *testing.T) {
 	// serial: no t.Parallel — asserts non-entry through a 25ms window; load-
 	// sensitive.
-	s := &Store{commitLockPath: filepath.Join(t.TempDir(), ".links-commit.lock")}
+	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
+	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 	firstEntered := make(chan struct{}, 1)
 	releaseFirst := make(chan struct{})
 	secondEntered := make(chan struct{})

@@ -144,7 +144,7 @@ func TestOpenSyncOnNormalizedStoreIgnoresHeldCommitLock(t *testing.T) {
 	ctx := context.Background()
 	doltRoot := migratedDoltDir(t)
 
-	release, err := LockCommitPath(ctx, CommitLockPath(doltRoot))
+	release, err := LockCommitPath(ctx, doltRoot)
 	if err != nil {
 		t.Fatalf("LockCommitPath() error = %v", err)
 	}

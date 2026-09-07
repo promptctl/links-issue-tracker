@@ -71,7 +71,6 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	}
 
 	ws, cadenceConfig := setupWedgeWorkspace(t, self)
-	lockPath := store.CommitLockPath(ws.DatabasePath)
 
 	cmd := exec.Command(self, "new", "--title", "wedge-me", "--topic", "demo")
 	cmd.Dir = ws.RootDir
@@ -113,7 +112,7 @@ func TestSIGTERMDuringWedgedSyncExitsCleanly(t *testing.T) {
 	// plant first.
 	seizeCtx, cancelSeize := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancelSeize()
-	releaseSeize, err := store.LockCommitPath(seizeCtx, lockPath)
+	releaseSeize, err := store.LockCommitPath(seizeCtx, ws.DatabasePath)
 	if err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 		t.Fatalf("seize commit lock (child's receive won the race to re-acquire?): %v", err)
