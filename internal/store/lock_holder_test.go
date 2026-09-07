@@ -400,16 +400,30 @@ func TestHolderRecordSurvivesConcurrentAcquisitions(t *testing.T) {
 	}
 }
 
-// TestPublishSurvivesASweepRacingIt pins the ordering that makes a reader's
-// retirement safe. A record carries content only once its hold is in place, so
-// a sweep landing mid-publish can retire nothing but an empty file the
-// publisher immediately replaces. Filled in first, the sweep retires a
-// finished record and the publisher's own acquire recreates that name empty
-// and holds it for the life of the lock — every later account reporting a
-// parse failure about a holder whose record was written perfectly.
+// TestPublishSurvivesASweepRacingIt pins what publishing under two names buys:
+// a lock that is held is named to whoever is waiting on it, however hard the
+// waiting is sweeping.
 //
-// The sweeper is exactly what announceLockWait runs on a contended lock, so
-// this is the production pairing, not a contrived one.
+// A sweep retires every record it proves unheld, and both halves of that proof
+// are hostile to a record still being made. It is decided under the record's
+// hold and acted on after that hold is gone, and the probe establishing it
+// opens with O_CREATE, so a sweep can manufacture the record it retires. Under
+// one name they compound: one sweep unlinks a name mid-publish, another
+// recreates it empty, and the publisher fills and publishes a file nothing
+// holds — a live holder anonymous for the life of its lock. Publishing by
+// rename keeps every sweepable name a finished record and every in-flight name
+// out of the sweep's sight.
+//
+// The sweepers are exactly what announceLockWait runs on a contended lock, one
+// per waiting contender, so this is the production pairing rather than a
+// contrived one — and one sweeper is not the pairing, because the failure this
+// pins needs a second one to recreate what the first retired.
+//
+// The assertion is the whole contract, not the absence of any one failure. A
+// sweep can cost a holder its name several ways — an empty record parsing as
+// nothing, a published record nothing holds, a mint retired until the publisher
+// gives up — and every one of them ends with an account that cannot say who is
+// holding the lock. Whether this pid is in it answers all of them at once.
 func TestPublishSurvivesASweepRacingIt(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -417,21 +431,24 @@ func TestPublishSurvivesASweepRacingIt(t *testing.T) {
 	storageDir := storageDirOf(lockPath)
 
 	stop := make(chan struct{})
-	swept := make(chan struct{})
-	go func() {
-		defer close(swept)
-		for {
-			select {
-			case <-stop:
-				return
-			default:
-				readLockHolders(storageDir, lockPath)
+	var sweeps sync.WaitGroup
+	for sweeper := 0; sweeper < 4; sweeper++ {
+		sweeps.Add(1)
+		go func() {
+			defer sweeps.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+					readLockHolders(storageDir, lockPath)
+				}
 			}
-		}
-	}()
+		}()
+	}
 	defer func() {
 		close(stop)
-		<-swept
+		sweeps.Wait()
 	}()
 
 	for i := 0; i < 300; i++ {
@@ -439,25 +456,26 @@ func TestPublishSurvivesASweepRacingIt(t *testing.T) {
 		if err != nil {
 			t.Fatalf("acquire %d: %v", i, err)
 		}
-		// The account this holder's own contenders would read. A record lost
-		// to the sweep shows up here as a parse failure that no later read
-		// ever repairs, because the empty file lives as long as the hold.
+		// The account this holder's own contenders would read, taken while the
+		// hold is live — the only moment the record is supposed to answer for
+		// it, and the moment a lost record turns into an unnamed holder.
 		account := describeLockHolders(storageDir, lockPath)
 		if err := release(); err != nil {
 			t.Fatalf("release %d: %v", i, err)
 		}
-		if strings.Contains(account, "does not parse") {
-			t.Fatalf("acquire %d: the sweep cost a live holder its record: %s", i, account)
+		if named := fmt.Sprintf("pid %d ", os.Getpid()); !strings.Contains(account, named) {
+			t.Fatalf("acquire %d: the sweep cost a live holder its name, want %q in the account: %s", i, named, account)
 		}
 	}
 }
 
-// TestMintedRecordIsRetiredNotLeaked pins that a publisher killed before it
-// fills its record leaves nothing permanent behind. The empty file it leaves
-// carries the same prefix as any other record, so it is probed and retired by
-// the sweep that was already there — the reason no separate staging name, and
-// no separate sweeper for one, needs to exist.
-func TestMintedRecordIsRetiredNotLeaked(t *testing.T) {
+// TestStrayRecordIsRetiredNotLeaked pins that an empty file under a record's
+// name never accumulates. Publishing by rename means no publisher writes one —
+// but a reader's own probe does, because filelock opens with O_CREATE and a
+// sweep meeting a name its holder has just retired recreates it. The sweep that
+// made it is the sweep that collects it, so nothing has to know it was ever a
+// special case.
+func TestStrayRecordIsRetiredNotLeaked(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	dir := lockHolderDir(storageDirOf(lockPath), lockPath)
@@ -474,10 +492,40 @@ func TestMintedRecordIsRetiredNotLeaked(t *testing.T) {
 
 	holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
 	if len(holders) != 0 || len(problems) != 0 {
-		t.Errorf("holders = %v, problems = %v, want an unfilled record to report neither", holders, problems)
+		t.Errorf("holders = %v, problems = %v, want an empty record to report neither", holders, problems)
 	}
 	if left := recordFiles(t, lockPath); len(left) != 0 {
-		t.Errorf("an unfilled record survived the read: %v", left)
+		t.Errorf("an empty record survived the read: %v", left)
+	}
+}
+
+// TestSweepLeavesAMintAlone pins the cost side of publishing under two names,
+// so it stays a decision rather than a discovery. A mint carries no record
+// prefix, so no sweep opens it, retires it, or counts it against the account —
+// which is exactly what keeps a sweep from destroying one mid-flight, and
+// exactly why a publisher killed before its rename leaves a file behind that
+// nothing collects. An empty file naming nobody is the cheap end of that trade.
+func TestSweepLeavesAMintAlone(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	dir := lockHolderDir(storageDirOf(lockPath), lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir holder dir: %v", err)
+	}
+	minting, err := os.CreateTemp(dir, lockHolderMintingPrefix+"*")
+	if err != nil {
+		t.Fatalf("mint record: %v", err)
+	}
+	if err := minting.Close(); err != nil {
+		t.Fatalf("close mint: %v", err)
+	}
+
+	holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
+	if len(holders) != 0 || len(problems) != 0 {
+		t.Errorf("holders = %v, problems = %v, want a mint to report neither", holders, problems)
+	}
+	if _, err := os.Stat(minting.Name()); err != nil {
+		t.Errorf("stat mint after a sweep: %v, want a sweep to leave it untouched", err)
 	}
 }
 
