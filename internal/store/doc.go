@@ -107,10 +107,9 @@
 // records do not go there. They are descriptive only: the kernel remains
 // the sole authority on whether a lock is held, and no code branches on a
 // record's contents, so a wrong record can cost a diagnostic and nothing
-// else. Nothing that holds a record's own flock ever waits while holding it
-// — a reader's liveness probe passes maxAttempts 1 and releases with no
-// blocking call in between — so the bounded budget a publisher spends
-// waiting that probe out cannot close a cycle. See lock_holder.go.
+// else. No wait edge exists here at all: a reader's liveness probe passes
+// maxAttempts 1, and a publisher holds only a private name no reader can
+// reach, so neither ever waits on a record's flock. See lock_holder.go.
 //
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in
