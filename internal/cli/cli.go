@@ -553,10 +553,16 @@ func listRelationColumns(ctx context.Context, st storage.Store, columns []column
 }
 
 // relationColumnsFor projects a whole relation graph down to the per-issue facts
-// the relationship columns render. Every surface that projects those columns
-// derives them here, from graph data it already holds, so `lit ls` and the
-// workable views cannot disagree about what `parent` or `blocked` means.
-// [LAW:one-source-of-truth]
+// the relationship columns render on the list path, where no annotators have
+// run: `blocked` here can only mean "a still-open dependency edge".
+//
+// The workable views build these cells through workableRelationColumns instead,
+// because they hold each row's annotations and so can ask the readiness
+// classifier the fuller question their own context lines already ask. A row
+// gated by an earlier sibling is blocked there and "-" here — a gap on this
+// path, not a second opinion, and one that closes by running the annotators for
+// the list view rather than by teaching this function a shorter answer.
+// Tracked as links-columns-4hdq.
 func relationColumnsFor(relations map[string]storage.IssueRelations) map[string]relationColumns {
 	out := make(map[string]relationColumns, len(relations))
 	for id, rel := range relations {

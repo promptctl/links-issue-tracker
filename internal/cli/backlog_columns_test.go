@@ -156,6 +156,42 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 	}
 }
 
+// TestBacklogBlockedColumnAgreesWithTheContextLine covers the blocker that has
+// no dependency edge at all. A leaf whose only blocker is the sibling gate used
+// to render "-" under `blocked` on the line directly above its own
+// "blocked: earlier sibling X still open" context line — the column asked
+// DependsOn while the line asked the readiness classifier, so one row said both
+// things at once.
+//
+// The assertion is deliberately the pair, not the cell: it reads the column and
+// the context line out of the same output and requires them to agree, so any
+// future predicate that drifts from the annotation registry fails here whatever
+// the two happen to say.
+func TestBacklogBlockedColumnAgreesWithTheContextLine(t *testing.T) {
+	h := newReadyTestHarness(t)
+	epic := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Epic", Topic: "cols", IssueType: "epic", Priority: 1})
+	first := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "First", Topic: "cols", IssueType: "task", Priority: 0, ParentID: epic.ID})
+	second := h.createIssue(storage.CreateIssueInput{Prefix: "cols", Title: "Second", Topic: "cols", IssueType: "task", Priority: 1, ParentID: epic.ID})
+
+	out, err := runBacklogColumns(h, "id,blocked")
+	if err != nil {
+		t.Fatalf("backlog --columns id,blocked: %v", err)
+	}
+
+	// The gate has to actually be firing, or the agreement below is vacuous.
+	if !strings.Contains(out, "earlier sibling "+first.ID+" still open") {
+		t.Fatalf("sibling gate did not fire for %s, so this proves nothing:\n%s", second.ID, out)
+	}
+
+	if got := backlogCells(t, out, second.ID); strings.Join(got, "|") != second.ID+"|blocked" {
+		t.Errorf("sibling-gated row cells = %v, want [%s blocked] — the column and the "+
+			"context line beneath it disagree\nfull output:\n%s", got, second.ID, out)
+	}
+	if got := backlogCells(t, out, first.ID); strings.Join(got, "|") != first.ID+"|-" {
+		t.Errorf("ungated row cells = %v, want [%s -]\nfull output:\n%s", got, first.ID, out)
+	}
+}
+
 // TestBacklogHelpEnumeratesValidColumns: backlog builds its --columns flag
 // through optionalString rather than fs.String, so its help text is a separate
 // call site from `lit ls`'s and can drift out of the shared usage string.

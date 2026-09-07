@@ -51,11 +51,11 @@ type workableView struct {
 	hasColumns bool
 	order      func(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, knobs workableKnobs)
 	keep       func(rows []annotation.AnnotatedIssue) []annotation.AnnotatedIssue
-	// render receives the relationship facts already derived from details, so a
-	// view that lets its caller NAME a relation column cannot render one
-	// without the data behind it. The runner owns that derivation rather than
-	// each renderer, which is what keeps the next view added here from
-	// re-introducing a projection whose `parent` and `blocked` cells are
+	// render receives the relationship cells already derived from the rows and
+	// the graph, so a view that lets its caller NAME a relation column cannot
+	// render one without the data behind it. The runner owns that derivation
+	// rather than each renderer, which is what keeps the next view added here
+	// from re-introducing a projection whose `parent` and `blocked` cells are
 	// permanently "-". [LAW:one-source-of-truth]
 	render func(w io.Writer, columns []columnSpec, rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error
 	// occasion builds the workflow event this view fires once render has
@@ -83,6 +83,29 @@ func (v workableView) usage() string {
 		parts = append(parts, "[--columns ...]")
 	}
 	return strings.Join(parts, " ")
+}
+
+// workableRelationColumns builds the relationship cells for a workable view's
+// rows. `parent` comes from the graph; `blocked` comes from ClassifyReadiness —
+// the same authority the per-row context line reads — so a row cannot print "-"
+// under `blocked` directly above a line naming the sibling that blocks it.
+// [LAW:one-source-of-truth] the annotation registry decides what blocks, and
+// rendering may not carry a shorter list; deriving this cell from DependsOn
+// edges alone carried exactly that shorter list, and it disagreed on screen for
+// any row gated by an earlier sibling, a missing field, or needs-design.
+//
+// Deliberately not relationColumnsFor: `lit ls` runs no annotators, so there
+// `blocked` still reflects dependency edges alone. That divergence is a gap on
+// the list path rather than a second opinion, and closing it needs the
+// annotation pipeline there — tracked as links-columns-4hdq.
+func workableRelationColumns(rows []annotation.AnnotatedIssue, details map[string]storage.IssueRelations) map[string]relationColumns {
+	out := make(map[string]relationColumns, len(rows))
+	for _, row := range rows {
+		cells := deriveRelationColumns(details[row.ID])
+		cells.blocked = !ClassifyReadiness(row.Annotations).IsReady()
+		out[row.ID] = cells
+	}
+	return out
 }
 
 func orderCanonical([]annotation.AnnotatedIssue, map[string]storage.IssueRelations, workableKnobs) {}
@@ -174,10 +197,10 @@ func runWorkable(ctx context.Context, stdout io.Writer, ap *app.App, args []stri
 	if err != nil {
 		return err
 	}
-	// Derived unconditionally from graph data already gathered above: no extra
-	// query, and no branch deciding whether the renderer gets its data.
-	// [LAW:dataflow-not-control-flow]
-	if err := view.render(stdout, knobs.columns, rows, details, relationColumnsFor(details), cc); err != nil {
+	// Derived unconditionally from the rows and graph data already gathered
+	// above: no extra query, and no branch deciding whether the renderer gets
+	// its data. [LAW:dataflow-not-control-flow]
+	if err := view.render(stdout, knobs.columns, rows, details, workableRelationColumns(rows, details), cc); err != nil {
 		return err
 	}
 	return workflows.Dispatch(stdout, os.Stderr, ap.Workspace, view.occasion(rows))
