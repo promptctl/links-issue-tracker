@@ -1,7 +1,9 @@
 package issueid
 
 import (
+	"crypto/sha256"
 	"errors"
+	"math/big"
 	"strings"
 	"testing"
 	"time"
@@ -118,21 +120,110 @@ func TestMint(t *testing.T) {
 	})
 }
 
-func TestHashBytesForLength(t *testing.T) {
-	cases := map[int]int{
-		3:  2,
-		4:  3,
-		5:  4,
-		6:  4,
-		7:  5,
-		8:  5,
-		99: 3, // out-of-range falls to the default
+// TestNamespacesAreDisjoint pins the property Mint's length policy rests on: an
+// id rendered in one id-space can never equal an id rendered in another, so the
+// namespace population Mint sizes the hash by IS the whole set the store-wide
+// occupancy probe can reach. The two legs are asserted where they live — a slug
+// carries no dot (TestNormalizeSlugEmitsOnlyItsAlphabet), and a rendered suffix
+// carries neither dot nor dash, here. If this fails, the population feeding
+// ComputeAdaptiveLength has stopped being the colliding set and the policy
+// recorded on Mint needs revisiting rather than this test relaxing.
+// [LAW:behavior-not-structure]
+func TestNamespacesAreDisjoint(t *testing.T) {
+	const base36 = "0123456789abcdefghijklmnopqrstuvwxyz"
+	if Base36Alphabet != base36 {
+		t.Fatalf("Base36Alphabet = %q, want %q; the disjointness below is stated over this alphabet", Base36Alphabet, base36)
 	}
-	for length, want := range cases {
-		if got := hashBytesForLength(length); got != want {
-			t.Errorf("hashBytesForLength(%d) = %d, want %d", length, got, want)
+
+	// The id-spaces one workspace mints into, including the pair that is kept
+	// apart by the separator alone: a topic slug may carry dashes, so the topic
+	// "storage-a7k9" reaches the same characters as a child space of the parent
+	// "proj-storage-a7k9" would if a child hung under a dash.
+	spaces := map[string]Namespace{
+		"top-level":                    TopLevelNamespace("proj", "storage"),
+		"another topic":                TopLevelNamespace("proj", "sync"),
+		"a topic spelling a parent id": TopLevelNamespace("proj", "storage-a7k9"),
+		"a child space":                ChildNamespace("proj-storage-a7k9"),
+		"a sibling's space":            ChildNamespace("proj-storage-b1x2"),
+		"a grandchild space":           ChildNamespace("proj-storage-a7k9.m3p"),
+	}
+
+	t.Run("no two id-spaces render as one namespace", func(t *testing.T) {
+		byText := map[Namespace]string{}
+		for name, ns := range spaces {
+			if other, clash := byText[ns]; clash {
+				t.Errorf("%q and %q both render %q; two id-spaces under one namespace share a population the other never counted", other, name, ns)
+			}
+			byText[ns] = name
+		}
+	})
+
+	t.Run("where one namespace prefixes another, the remainder leaves base36", func(t *testing.T) {
+		// An id is its namespace followed by base36 and nothing else, so ids of A
+		// can reach into B's space exactly when B extends A by base36 alone.
+		for aName, a := range spaces {
+			for bName, b := range spaces {
+				remainder, extends := strings.CutPrefix(string(b), string(a))
+				if a == b || !extends {
+					continue
+				}
+				if strings.Trim(remainder, base36) == "" {
+					t.Errorf("%q extends %q by %q, which is all base36: an id of %q can render as one of %q", bName, aName, remainder, aName, bName)
+				}
+			}
+		}
+	})
+
+	t.Run("a rendered suffix is base36 only, so it cannot carry a separator", func(t *testing.T) {
+		content := Content{Topic: "sync", Title: "t", Description: "d", Creator: "links", CreatedAt: time.Unix(0, 1)}
+		for name, ns := range spaces {
+			for length := MinHashLength; length <= MaxHashLength; length++ {
+				suffix, ok := strings.CutPrefix(GenerateHashID(ns, content, length, 0), string(ns))
+				if !ok {
+					t.Fatalf("%s: id does not render under its own namespace %q", name, ns)
+				}
+				if stray := strings.Trim(suffix, base36); stray != "" {
+					t.Errorf("%s at length %d: suffix %q carries %q from outside base36", name, length, suffix, stray)
+				}
+			}
+		}
+	})
+}
+
+// TestHashBytesForLength states the contract as a property rather than a table
+// of answers: the byte count is the fewest whose value space addresses every id
+// the length can render. The expectation is formulated independently of the
+// implementation — a doubling loop rather than the same bits-to-bytes rounding
+// — because a table restating the arithmetic is exactly what drifted from it.
+// [LAW:behavior-not-structure]
+func TestHashBytesForLength(t *testing.T) {
+	byteSpace := func(bytes int) *big.Int { return new(big.Int).Lsh(big.NewInt(1), uint(8*bytes)) }
+
+	for length := MinHashLength; length <= MaxHashLength; length++ {
+		renderable := new(big.Int).Exp(big.NewInt(36), big.NewInt(int64(length)), nil)
+		got := hashBytesForLength(length)
+		if byteSpace(got).Cmp(renderable) < 0 {
+			t.Errorf("hashBytesForLength(%d) = %d bytes, too few to address all 36^%d ids", length, got, length)
+		}
+		if byteSpace(got-1).Cmp(renderable) >= 0 {
+			t.Errorf("hashBytesForLength(%d) = %d bytes, but %d already covers 36^%d", length, got, got-1, length)
 		}
 	}
+
+	t.Run("MaxHashLength gets the six bytes its space needs", func(t *testing.T) {
+		// The entry the old table got wrong, called out by name because this is
+		// the length Mint escalates to when a namespace is crowded: five bytes
+		// address 2^40 values against 36^8, under half of them.
+		if got := hashBytesForLength(MaxHashLength); got != 6 {
+			t.Errorf("hashBytesForLength(MaxHashLength) = %d, want 6", got)
+		}
+	})
+
+	t.Run("a length wider than a digest stops at the digest", func(t *testing.T) {
+		if got := hashBytesForLength(99); got != sha256.Size {
+			t.Errorf("hashBytesForLength(99) = %d, want %d, all a digest holds", got, sha256.Size)
+		}
+	})
 }
 
 func TestEncodeBase36(t *testing.T) {
@@ -215,6 +306,19 @@ func TestComputeAdaptiveLength(t *testing.T) {
 				t.Errorf("ComputeAdaptiveLength(%d) = %d, want >= previous %d", n, got, prev)
 			}
 			prev = got
+		}
+	})
+
+	// Mint's recorded length policy leans on where the floor gives way: a
+	// namespace is one parent's direct children, and 163 is far past any epic,
+	// which is what makes the floor the right size for a child rather than a
+	// shortfall. Pinned so that claim cannot drift from the arithmetic.
+	t.Run("the minimum length holds to 163 ids in one namespace", func(t *testing.T) {
+		if got := ComputeAdaptiveLength(163); got != MinHashLength {
+			t.Errorf("ComputeAdaptiveLength(163) = %d, want %d", got, MinHashLength)
+		}
+		if got := ComputeAdaptiveLength(164); got <= MinHashLength {
+			t.Errorf("ComputeAdaptiveLength(164) = %d, want more than %d", got, MinHashLength)
 		}
 	})
 
