@@ -1,40 +1,119 @@
 package issueid
 
 import (
+	"errors"
+	"strings"
 	"testing"
 	"time"
 )
 
 func TestGenerateHashID(t *testing.T) {
 	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	content := Content{Topic: "parser", Title: "Fix parser", Description: "desc", Creator: "links", CreatedAt: createdAt}
+	topLevel := TopLevelNamespace("test", "parser")
 
 	t.Run("deterministic for identical inputs", func(t *testing.T) {
-		first := GenerateHashID("test", "parser", "Fix parser", "desc", "links", createdAt, 6, 0)
-		second := GenerateHashID("test", "parser", "Fix parser", "desc", "links", createdAt, 6, 0)
+		first := GenerateHashID(topLevel, content, 6, 0)
+		second := GenerateHashID(topLevel, content, 6, 0)
 		if first != second {
 			t.Errorf("GenerateHashID() = %q then %q, want deterministic output", first, second)
 		}
 	})
 
 	t.Run("different nonce changes the ID", func(t *testing.T) {
-		a := GenerateHashID("test", "parser", "Fix parser", "desc", "links", createdAt, 6, 0)
-		b := GenerateHashID("test", "parser", "Fix parser", "desc", "links", createdAt, 6, 1)
+		a := GenerateHashID(topLevel, content, 6, 0)
+		b := GenerateHashID(topLevel, content, 6, 1)
 		if a == b {
 			t.Errorf("expected different nonces to produce different IDs, both got %q", a)
 		}
 	})
 
-	t.Run("output shape is prefix-topic-hash", func(t *testing.T) {
-		for _, length := range []int{MinHashLength, 5, MaxHashLength} {
-			id := GenerateHashID("proj", "storage", "Title", "Description", "author", createdAt, length, 0)
-			want := "proj-storage-"
-			if len(id) <= len(want) || id[:len(want)] != want {
-				t.Fatalf("GenerateHashID() = %q, want prefix %q-", id, want)
+	// Every field of Content reaches the hash — the property Content's own doc
+	// comment claims. Asserted field by field, in the order GenerateHashID
+	// renders them, so dropping one from that format string fails here instead
+	// of silently collapsing two siblings born in one nanosecond onto one id.
+	// [LAW:one-type-per-behavior] The fields are rows, not five subtests.
+	for _, field := range []struct {
+		name  string
+		alter func(*Content)
+	}{
+		{"topic", func(c *Content) { c.Topic = "renderer" }},
+		{"title", func(c *Content) { c.Title = "Fix the other parser" }},
+		{"description", func(c *Content) { c.Description = "other desc" }},
+		{"creator", func(c *Content) { c.Creator = "someone-else" }},
+		{"creation instant", func(c *Content) { c.CreatedAt = createdAt.Add(time.Nanosecond) }},
+	} {
+		t.Run("a different "+field.name+" changes the ID", func(t *testing.T) {
+			other := content
+			field.alter(&other)
+			base := GenerateHashID(topLevel, content, 6, 0)
+			if base == GenerateHashID(topLevel, other, 6, 0) {
+				t.Errorf("a different %s still minted %q; every Content field must reach the hash", field.name, base)
 			}
-			hashPart := id[len(want):]
-			if len(hashPart) != length {
-				t.Errorf("hash part %q has length %d, want %d", hashPart, len(hashPart), length)
-			}
+		})
+	}
+
+	t.Run("a top-level id renders under prefix-topic-", func(t *testing.T) {
+		assertNamespacedShape(t, TopLevelNamespace("proj", "storage"), "proj-storage-", content)
+	})
+
+	t.Run("a child id renders under its parent id and a dot", func(t *testing.T) {
+		assertNamespacedShape(t, ChildNamespace("proj-storage-a7k9"), "proj-storage-a7k9.", content)
+	})
+}
+
+// assertNamespacedShape checks that every hash length renders as the namespace
+// followed by exactly that many hash characters — the property both id-spaces
+// share, asserted once rather than per namespace.
+func assertNamespacedShape(t *testing.T, ns Namespace, want string, content Content) {
+	t.Helper()
+	for _, length := range []int{MinHashLength, 5, MaxHashLength} {
+		id := GenerateHashID(ns, content, length, 0)
+		suffix, ok := strings.CutPrefix(id, want)
+		if !ok {
+			t.Fatalf("GenerateHashID() = %q, want prefix %q", id, want)
+		}
+		if len(suffix) != length {
+			t.Errorf("hash part %q has length %d, want %d", suffix, len(suffix), length)
+		}
+	}
+}
+
+func TestMint(t *testing.T) {
+	createdAt := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	content := Content{Topic: "sync", Title: "A child", Description: "d", Creator: "links", CreatedAt: createdAt}
+
+	t.Run("re-rolls past an occupied id", func(t *testing.T) {
+		first := GenerateHashID(ChildNamespace("p"), content, MinHashLength, 0)
+		got, err := Mint(ChildNamespace("p"), content, 0, func(candidate string) (bool, error) {
+			return candidate == first, nil
+		})
+		if err != nil {
+			t.Fatalf("Mint() error = %v", err)
+		}
+		if got == first {
+			t.Errorf("Mint() = %q, want an id other than the occupied %q", got, first)
+		}
+	})
+
+	t.Run("a failed occupancy probe is an error, never a free id", func(t *testing.T) {
+		_, err := Mint(ChildNamespace("p"), content, 0, func(string) (bool, error) {
+			return false, errors.New("store unreachable")
+		})
+		if err == nil {
+			t.Fatal("Mint() error = nil, want the probe failure surfaced")
+		}
+		if !strings.Contains(err.Error(), "store unreachable") {
+			t.Errorf("Mint() error = %v, want it to carry the probe failure", err)
+		}
+	})
+
+	t.Run("reports exhaustion instead of returning a taken id", func(t *testing.T) {
+		_, err := Mint(ChildNamespace("p"), content, 0, func(string) (bool, error) {
+			return true, nil
+		})
+		if err == nil {
+			t.Fatal("Mint() error = nil, want exhaustion reported")
 		}
 	})
 }

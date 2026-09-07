@@ -16,8 +16,8 @@ import (
 // --json removed, text is the sole surface, so a test that needs the
 // created/updated issue extracts its ID here and re-reads the row from the
 // store to assert fields the summary line doesn't carry. Child IDs carry a
-// ".<n>" suffix, so this reads the first field verbatim rather than validating
-// against the flat-ID token shape.
+// dotted hash suffix, so this reads the first field verbatim rather than
+// validating against the flat-ID token shape.
 func firstIssueID(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -56,8 +56,10 @@ func TestRunNewSupportsTopicAndParent(t *testing.T) {
 	}
 
 	createdID := firstIssueID(t, stdout.String())
-	if createdID != parent.ID+".1" {
-		t.Fatalf("created.ID = %q, want %q", createdID, parent.ID+".1")
+	// The id hangs under the parent; the segment beneath it is a content hash,
+	// not a position, so nothing asserts its value. [LAW:behavior-not-structure]
+	if !strings.HasPrefix(createdID, parent.ID+".") {
+		t.Fatalf("created.ID = %q, want it to hang under %q", createdID, parent.ID)
 	}
 	created, err := ap.Store.GetIssue(ctx, createdID)
 	if err != nil {
