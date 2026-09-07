@@ -173,41 +173,37 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 // A remote-schema-ahead block routes to `lit upgrade` and — unlike a divergence —
 // frames the state as BLOCKED-until-upgrade, never an age-based "still routine"
 // line that would invite the wait-and-retry the epic kills.
+//
+// The remedy names the schema REQUIREMENT and never a `--to` target. It used to
+// name the producer that advanced the remote whenever the head carried a stamp,
+// which is a build identity rather than a requirement: an unresolvable
+// describe-built version, or — when this block is replayed later out of a
+// push-outcome record — an instruction to install something older than what the
+// reader is already running. `lit upgrade` with no argument installs the latest
+// release, which answers every case the old branch was distinguishing.
 func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 	t.Parallel()
-	t.Run("producer named", func(t *testing.T) {
-		block := SyncFailure{
-			Class:               syncFailureRemoteSchemaAhead,
-			Remote:              "origin",
-			Branch:              "master",
-			RemoteSchemaVersion: 7,
-			LocalSupportedMax:   4,
-			RemoteProducer:      "v9.9.0",
-		}.blockString()
-		assertContractElements(t, block, "lit upgrade --to v9.9.0")
-		for _, want := range []string{"origin/master", "schema version 7", "version 4", "BLOCKED"} {
-			if !strings.Contains(block, want) {
-				t.Errorf("remote-schema-ahead block missing %q:\n%s", want, block)
-			}
+	block := SyncFailure{
+		Class:               syncFailureRemoteSchemaAhead,
+		Remote:              "origin",
+		Branch:              "master",
+		RemoteSchemaVersion: 7,
+		LocalSupportedMax:   4,
+	}.blockString()
+	assertContractElements(t, block, "lit upgrade")
+	for _, want := range []string{"origin/master", "schema version 7", "version 4", "BLOCKED"} {
+		if !strings.Contains(block, want) {
+			t.Errorf("remote-schema-ahead block missing %q:\n%s", want, block)
 		}
-		// It must not read as a transient, age-decaying divergence.
-		if strings.Contains(block, "INCIDENT") || strings.Contains(block, "still within the window") {
-			t.Errorf("remote-schema-ahead block used the divergence-age escalation:\n%s", block)
-		}
-	})
-	t.Run("no producer stamp falls back to generic upgrade", func(t *testing.T) {
-		block := SyncFailure{
-			Class:               syncFailureRemoteSchemaAhead,
-			Remote:              "origin",
-			Branch:              "master",
-			RemoteSchemaVersion: 7,
-			LocalSupportedMax:   4,
-		}.blockString()
-		assertContractElements(t, block, "lit upgrade")
-		if strings.Contains(block, "--to ") {
-			t.Errorf("no-producer block should not name a --to target:\n%s", block)
-		}
-	})
+	}
+	// The remedy is the requirement, never a build to install by name.
+	if strings.Contains(block, "--to ") {
+		t.Errorf("remote-schema-ahead block named a --to target:\n%s", block)
+	}
+	// It must not read as a transient, age-decaying divergence.
+	if strings.Contains(block, "INCIDENT") || strings.Contains(block, "still within the window") {
+		t.Errorf("remote-schema-ahead block used the divergence-age escalation:\n%s", block)
+	}
 }
 
 // TestSyncFailureBlockNamesBuildStatus pins that a populated BuildNote renders
@@ -247,14 +243,14 @@ func TestRemoteSchemaAheadFailureMapping(t *testing.T) {
 	t.Parallel()
 	storeErr := &store.RemoteSchemaAheadError{
 		Remote: "origin", Branch: "master",
-		RemoteVersion: 7, BinarySupportedMax: 4, RemoteProducerVersion: "v9.9.0",
+		RemoteVersion: 7, BinarySupportedMax: 4,
 	}
 	failure, ok := remoteSchemaAheadFailure(storeErr)
 	if !ok {
 		t.Fatal("remoteSchemaAheadFailure did not recognize the store error")
 	}
 	if failure.Class != syncFailureRemoteSchemaAhead || failure.RemoteSchemaVersion != 7 ||
-		failure.LocalSupportedMax != 4 || failure.RemoteProducer != "v9.9.0" {
+		failure.LocalSupportedMax != 4 {
 		t.Fatalf("mapped failure = %+v", failure)
 	}
 	// The construction boundary must resolve build status itself — a bare

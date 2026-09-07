@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 
 	embedded "github.com/dolthub/driver"
 
@@ -18,39 +17,45 @@ import (
 // author a commit BELOW the remote head's schema: this binary knows only its own
 // older columns, so it would regress the shared remote to a schema it understands
 // and drop every field the newer schema added. That is the exact 2026-07-08
-// incident. The lossless fix is to run the newer binary, so the error names the
-// remote head's producer version for `lit upgrade --to <it>`.
+// incident. The lossless fix is to run a binary whose schema support reaches the
+// remote's version, so the error states that REQUIREMENT and routes to `lit
+// upgrade`, whose argument-free form installs the latest release.
+//
+// It deliberately does not name the binary that authored the remote head. A
+// producer stamp is a build IDENTITY, not a requirement, and the two come apart
+// in both directions: the stamp can be a describe-built version
+// (`0.2.1-5-g50dfc53`) that no release feed can resolve, and a reader meeting the
+// message later — replayed from a push-outcome record by `lit doctor` — is told
+// to install a build older than the one they are already running. The remote's
+// schema version is the fact that stays true however many binaries come and go.
+// [FRAMING:representation] the requirement is the territory; a build id is a map
+// that goes stale the moment anything moves.
 //
 // [LAW:types-are-the-program] The refusal is version arithmetic on data —
-// (RemoteVersion, BinarySupportedMax, RemoteProducerVersion) — never inferred from
-// a query happening to succeed or fail on a column. It is the REMOTE mirror of
+// (RemoteVersion, BinarySupportedMax) — never inferred from a query happening to
+// succeed or fail on a column. It is the REMOTE mirror of
 // UnsupportedSchemaVersionError (the LOCAL workspace-ahead refusal): each names the
 // same remedy, install the newer binary, for the boundary it guards.
 // [LAW:one-type-per-behavior] one refusal shape per boundary, both routing to
 // `lit upgrade`.
 type RemoteSchemaAheadError struct {
-	Remote                string
-	Branch                string
-	RemoteVersion         int64
-	BinarySupportedMax    int64
-	RemoteProducerVersion string // "" when the remote head records no producer stamp
+	Remote             string
+	Branch             string
+	RemoteVersion      int64
+	BinarySupportedMax int64
 }
 
+// [LAW:dataflow-not-control-flow] One rendering, every call. The requirement is
+// always the remote's own schema version, so there is nothing left to branch on —
+// the producer-populated arm this replaced was the only variability, and it was
+// variability in the answer, not in the question.
 func (e *RemoteSchemaAheadError) Error() string {
-	ref := e.Remote + "/" + e.Branch
-	var b strings.Builder
-	fmt.Fprintf(&b,
-		"remote %s is at schema version %d but this binary supports only up to %d; refusing to write a commit below the remote head's schema",
-		ref, e.RemoteVersion, e.BinarySupportedMax,
+	return fmt.Sprintf(
+		"remote %s/%s is at schema version %d but this binary supports only up to %d; "+
+			"refusing to write a commit below the remote head's schema — run `lit upgrade` "+
+			"to install a lit that supports schema version %d",
+		e.Remote, e.Branch, e.RemoteVersion, e.BinarySupportedMax, e.RemoteVersion,
 	)
-	// [LAW:dataflow-not-control-flow] Same renderer every call; the populated
-	// producer field decides whether the upgrade line names a concrete target.
-	if e.RemoteProducerVersion != "" {
-		fmt.Fprintf(&b, " — run `lit upgrade --to %s`", e.RemoteProducerVersion)
-	} else {
-		b.WriteString(" — upgrade lit to a version that supports this schema")
-	}
-	return b.String()
 }
 
 // guardRemoteSchemaAhead refuses when the remote-tracking head's schema exceeds
@@ -90,7 +95,7 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, comm
 	if err != nil {
 		return err
 	}
-	remoteVersion, producer, err := s.remoteHeadSchema(ctx, commitHash)
+	remoteVersion, err := s.remoteHeadSchema(ctx, commitHash)
 	if err != nil {
 		return err
 	}
@@ -100,11 +105,10 @@ func (s *Store) guardCommitSchemaAhead(ctx context.Context, remote, branch, comm
 		return nil
 	}
 	return &RemoteSchemaAheadError{
-		Remote:                remote,
-		Branch:                branch,
-		RemoteVersion:         remoteVersion,
-		BinarySupportedMax:    registryMax,
-		RemoteProducerVersion: producer,
+		Remote:             remote,
+		Branch:             branch,
+		RemoteVersion:      remoteVersion,
+		BinarySupportedMax: registryMax,
 	}
 }
 
@@ -130,29 +134,25 @@ func (s *Store) trackingHeadHash(ctx context.Context, remote, branch string) (ha
 	return head, true, nil
 }
 
-// remoteHeadSchema reads the schema version and producer binary version recorded at
-// a Dolt commit as raw handshake DATA. It reads AS OF the commit hash so no branch
-// moves and nothing is lifted — lifting an ahead commit is exactly the schema
-// regression this guard exists to prevent, so the read must never trigger it.
+// remoteHeadSchema reads the schema version recorded at a Dolt commit as raw
+// handshake DATA. It reads AS OF the commit hash so no branch moves and nothing is
+// lifted — lifting an ahead commit is exactly the schema regression this guard
+// exists to prevent, so the read must never trigger it.
 // [LAW:effects-at-boundaries] a pure read. [LAW:one-source-of-truth] MAX(version_id)
 // is goose's own mysql-dialect definition of the applied version, not a second one.
-func (s *Store) remoteHeadSchema(ctx context.Context, commitHash string) (version int64, producer string, err error) {
+//
+// It reads the schema version and nothing else. The producer stamp beside it is
+// deliberately not read: the refusal states a schema REQUIREMENT, and a fact no
+// consumer needs is a fact that cannot go stale on one. [LAW:polishing-by-subtraction]
+func (s *Store) remoteHeadSchema(ctx context.Context, commitHash string) (version int64, err error) {
 	if !isDoltCommitHash(commitHash) {
 		// [LAW:no-silent-failure] AS OF takes a literal, not a bound parameter, so
 		// the hash is interpolated; a value that is not a Dolt hash must never reach
 		// the query text. commitHashOfRef only ever yields a real hash, so this
 		// fires only on a caller bug — loudly, not by interpolating something unsafe.
-		return 0, "", fmt.Errorf("remote head schema: %q is not a Dolt commit hash", commitHash)
+		return 0, fmt.Errorf("remote head schema: %q is not a Dolt commit hash", commitHash)
 	}
-	version, err = s.schemaVersionAtCommit(ctx, commitHash)
-	if err != nil {
-		return 0, "", err
-	}
-	producer, err = s.producerVersionAtCommit(ctx, commitHash)
-	if err != nil {
-		return 0, "", err
-	}
-	return version, producer, nil
+	return s.schemaVersionAtCommit(ctx, commitHash)
 }
 
 // schemaVersionAtCommit reads goose's applied schema version at a commit. A commit
@@ -173,23 +173,6 @@ func (s *Store) schemaVersionAtCommit(ctx context.Context, commitHash string) (i
 		return 0, nil
 	}
 	return version.Int64, nil
-}
-
-// producerVersionAtCommit reads the producer binary version stamped at a commit,
-// or "" when the commit records none (an older workspace, a recovery path that
-// bypassed the migrate tail) or predates the meta table. The empty string is a real
-// domain value — "no producer to name" — which the sync-failure contract renders as
-// a generic upgrade instruction rather than a specific `--to` target.
-func (s *Store) producerVersionAtCommit(ctx context.Context, commitHash string) (string, error) {
-	query := fmt.Sprintf(`SELECT meta_value FROM meta AS OF '%s' WHERE meta_key = ?`, commitHash)
-	var value sql.NullString
-	if err := s.db.QueryRowContext(ctx, query, producerBinaryVersionMetaKey).Scan(&value); err != nil {
-		if errors.Is(err, sql.ErrNoRows) || isMissingTableError(err) {
-			return "", nil
-		}
-		return "", fmt.Errorf("read producer version at %q: %w", commitHash, err)
-	}
-	return strings.TrimSpace(value.String), nil
 }
 
 // isMissingTableError reports whether a query failed because the table does not

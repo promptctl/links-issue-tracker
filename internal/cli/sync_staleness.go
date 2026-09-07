@@ -139,7 +139,7 @@ func fetchStalenessLines(ref string, fetchAge time.Duration, fetchAgeKnown bool)
 // failed" is the discriminator that separates degraded from healthy, and it
 // needs no engine — exactly what a post-close, post-mutation print site can
 // afford. Pure over the already-read marker state. [LAW:dataflow-not-control-flow]
-func syncPushFailureLines(rec pushOutcomeRecord, age time.Duration, known bool) []string {
+func syncPushFailureLines(rec pushOutcomeRecord, age time.Duration, known bool, running string) []string {
 	if !known || !rec.failed() {
 		return nil
 	}
@@ -148,8 +148,8 @@ func syncPushFailureLines(rec pushOutcomeRecord, age time.Duration, known bool) 
 		to = " to " + rec.Remote + "/" + rec.Branch
 	}
 	return []string{fmt.Sprintf(
-		"sync: automatic push%s is FAILING — last attempt %s ago: %s — changes stay on this machine until a push succeeds; run 'lit sync push'",
-		to, humanizeCoarseDuration(age), oneLineReason(rec.Reason),
+		"sync: automatic push%s is FAILING — last attempt %s ago%s: %s — changes stay on this machine until a push succeeds; run 'lit sync push'",
+		to, humanizeCoarseDuration(age), pushOutcomeProvenance(rec, running), oneLineReason(rec.Reason),
 	)}
 }
 
@@ -189,7 +189,7 @@ func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.In
 	// The push-failure line leads: it names the CAUSE (pushes are failing),
 	// which the ahead-count line below only shows the accumulating effect of.
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
-	lines := syncPushFailureLines(rec, pushAge, pushKnown)
+	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
 	lines = append(lines, syncStalenessLines(report, fetchAge, fetchAgeKnown)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {
@@ -217,7 +217,7 @@ func printSyncStalenessWarning(ctx context.Context, w io.Writer, ws workspace.In
 func printMutationSyncStalenessWarning(w io.Writer, ws workspace.Info, now time.Time) {
 	rec, pushAge, pushKnown := lastPushOutcome(ws, now)
 	fetchAge, fetchAgeKnown := lastFetchSuccessAge(ws, now)
-	lines := syncPushFailureLines(rec, pushAge, pushKnown)
+	lines := syncPushFailureLines(rec, pushAge, pushKnown, runningBinaryVersion())
 	lines = append(lines, fetchStalenessLines("", fetchAge, fetchAgeKnown)...)
 	for _, line := range lines {
 		if _, err := fmt.Fprintln(w, line); err != nil {

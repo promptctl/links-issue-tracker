@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/promptctl/links-issue-tracker/internal/storage"
@@ -86,20 +87,17 @@ func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
 	if err != nil || !synced {
 		t.Fatalf("trackingHeadHash: synced=%v err=%v", synced, err)
 	}
-	version, producer, err := syncB.remoteHeadSchema(ctx, head)
+	version, err := syncB.remoteHeadSchema(ctx, head)
 	if err != nil {
 		t.Fatalf("remoteHeadSchema: %v", err)
 	}
 	if version != future {
 		t.Fatalf("remote head version = %d, want %d", version, future)
 	}
-	if producer != "v9.9.0" {
-		t.Fatalf("remote head producer = %q, want v9.9.0", producer)
-	}
 }
 
 // TestGuardRemoteSchemaAheadDetects proves the guard returns the typed refusal
-// carrying the versions and producer when the remote head is ahead.
+// carrying the versions when the remote head is ahead.
 func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -122,8 +120,8 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	if !errors.As(err, &ahead) {
 		t.Fatalf("guardRemoteSchemaAhead = %v, want *RemoteSchemaAheadError", err)
 	}
-	if ahead.RemoteVersion != future || ahead.BinarySupportedMax != registryMax || ahead.RemoteProducerVersion != "v9.9.0" {
-		t.Fatalf("refusal = %+v, want RemoteVersion=%d Max=%d Producer=v9.9.0", ahead, future, registryMax)
+	if ahead.RemoteVersion != future || ahead.BinarySupportedMax != registryMax {
+		t.Fatalf("refusal = %+v, want RemoteVersion=%d Max=%d", ahead, future, registryMax)
 	}
 }
 
@@ -314,5 +312,33 @@ func TestIsDoltCommitHash(t *testing.T) {
 		if got := isDoltCommitHash(c.in); got != c.want {
 			t.Errorf("isDoltCommitHash(%q) = %v, want %v", c.in, got, c.want)
 		}
+	}
+}
+
+// TestRemoteSchemaAheadErrorStatesTheRequirement pins what the refusal tells an
+// operator to do: install a lit that supports the remote's schema version. It
+// must never name a build identity to install.
+//
+// The 2026-08-25 field incident is why. The message named the producer that had
+// advanced the remote — `lit upgrade --to 0.2.1-5-g50dfc53`, a describe-built
+// version no release feed resolves — and that sentence was then replayed out of
+// a push-outcome record for eight days, by which time the reader was running
+// v0.9.0 and was being told to install four minor versions backwards. A schema
+// version is a requirement and stays true; a build id is a map of who happened
+// to write the head, and it goes stale the moment anything moves.
+func TestRemoteSchemaAheadErrorStatesTheRequirement(t *testing.T) {
+	t.Parallel()
+	msg := (&RemoteSchemaAheadError{
+		Remote: "origin", Branch: "master",
+		RemoteVersion: 5, BinarySupportedMax: 4,
+	}).Error()
+
+	for _, want := range []string{"origin/master", "schema version 5", "up to 4", "lit upgrade", "supports schema version 5"} {
+		if !strings.Contains(msg, want) {
+			t.Errorf("refusal missing %q:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "--to") {
+		t.Errorf("refusal named a build to install by identity:\n%s", msg)
 	}
 }

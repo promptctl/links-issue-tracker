@@ -32,7 +32,7 @@ const (
 	// syncFailureRemoteSchemaAhead: the remote head is at a schema version this
 	// binary cannot produce, so no sync write may author a commit below it. Unlike
 	// a divergence, this never clears by retrying — it clears only by upgrading the
-	// binary. Remedy: `lit upgrade` to the producer that advanced the remote.
+	// binary. Remedy: `lit upgrade`, which installs the latest release.
 	syncFailureRemoteSchemaAhead syncFailureClass = "remote_schema_ahead"
 	// syncFailureUnrelatedHistories: the local backlog and the remote share no
 	// common ancestor (independently-created or re-inited stores), so there is no
@@ -101,15 +101,16 @@ type SyncFailure struct {
 	// the backend detail is preserved; it is just demoted below the directive so
 	// it can no longer read as the whole (ignorable) message.
 	Cause error
-	// RemoteSchemaVersion, LocalSupportedMax, and RemoteProducer are populated only
-	// for syncFailureRemoteSchemaAhead: the remote head's applied schema version,
-	// this binary's registry max, and the producer binary version to upgrade to
-	// (empty when the remote head names none). [LAW:types-are-the-program] the
-	// fields present name which class rendered, so a consumer cannot read a
-	// remote-schema-ahead block without the versions that make it actionable.
+	// RemoteSchemaVersion and LocalSupportedMax are populated only for
+	// syncFailureRemoteSchemaAhead: the remote head's applied schema version and
+	// this binary's registry max. [LAW:types-are-the-program] the fields present
+	// name which class rendered, so a consumer cannot read a remote-schema-ahead
+	// block without the versions that make it actionable. The producer stamp that
+	// used to ride alongside them is gone: the remedy names a schema requirement,
+	// and carrying a build id no renderer reads is carrying a fact that can only
+	// go stale. [LAW:polishing-by-subtraction]
 	RemoteSchemaVersion int64
 	LocalSupportedMax   int64
-	RemoteProducer      string
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
 	// on-both), populated only for syncFailureUnrelatedHistories. Before choosing to
 	// take one side wholesale or union the two, the operator must see what each side
@@ -153,7 +154,6 @@ func remoteSchemaAheadFailure(err error) (SyncFailure, bool) {
 		Branch:              ahead.Branch,
 		RemoteSchemaVersion: ahead.RemoteVersion,
 		LocalSupportedMax:   ahead.BinarySupportedMax,
-		RemoteProducer:      ahead.RemoteProducerVersion,
 		BuildNote:           resolveBuildStatusNote(time.Now()),
 	}, true
 }
@@ -309,17 +309,15 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit sync reconcile        # only if the pull reports a held text conflict — then merge it inline",
 		}
 	case syncFailureRemoteSchemaAhead:
-		// [LAW:dataflow-not-control-flow] the producer field selects whether the step
-		// names a concrete `--to` target or the generic upgrade; the remedy — install
-		// a newer binary — is the same either way. This is the REMOTE counterpart to
-		// the `lit upgrade --to <producer>` line the schema-ahead LOCAL refusal emits.
-		if f.RemoteProducer != "" {
-			return []string{
-				fmt.Sprintf("lit upgrade --to %s   # install the binary that advanced the remote to schema v%d, then retry", f.RemoteProducer, f.RemoteSchemaVersion),
-			}
-		}
+		// [LAW:dataflow-not-control-flow] One step, every time. The arm this replaced
+		// named the producer that advanced the remote as a `--to` target, which is a
+		// build identity rather than the requirement: an unresolvable describe-built
+		// stamp, or — when this block is replayed later from a push-outcome record —
+		// a version below the one the reader is already running. `lit upgrade` with no
+		// argument installs the latest release, which is the right answer in every
+		// case the branch was distinguishing.
 		return []string{
-			fmt.Sprintf("lit upgrade               # install a newer lit that supports schema v%d, then retry (the remote head names no producer version to target)", f.RemoteSchemaVersion),
+			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteSchemaVersion),
 		}
 	case syncFailureUnrelatedHistories:
 		// All three resolutions now exist: the two wholesale takes (destructive of the
