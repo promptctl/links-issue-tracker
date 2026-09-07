@@ -48,10 +48,10 @@ func ChildNamespace(parentID string) Namespace {
 // nanosecond the first did.
 //
 // The guarantee is the one top-level ids have always run on, no weaker and no
-// stronger: two ids collide only if their whole content AND their creation
-// nanosecond match. Creator is hashed for the same reason, but note the Dolt
-// store stamps every create with the same literal creator today, so the
-// creation instant is carrying this alone.
+// stronger, and it is probabilistic: the hash is truncated, so Mint re-rolls
+// against the local store and a birthday chance remains against ids no local
+// probe can see. Creator is hashed for the same reason, but the Dolt store
+// stamps every create with one literal creator, so the instant carries it alone.
 type Content struct {
 	Topic       string
 	Title       string

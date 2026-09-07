@@ -288,11 +288,12 @@ top-level ids go through, with the parent's id as the namespace instead of
 
 What that buys, and what it does not:
 
-- **Two disconnected stores mint different ids for different work.** The hash
-  carries the creation instant at nanosecond resolution, so an id is no longer a
-  claim about what exists on other machines. This is exactly the guarantee
-  top-level ids have always run on — no weaker, and no stronger: two ids collide
-  only if their whole content *and* their creation nanosecond match.
+- **Two disconnected stores are unlikely to mint the same id.** The hash carries
+  the creation instant at nanosecond resolution, so an id is no longer a claim
+  about what exists on other machines. This is exactly the guarantee top-level
+  ids have always run on — no weaker, no stronger, and probabilistic: the hash
+  is truncated, so `Mint` re-rolls against the local store and a birthday chance
+  remains against ids no local probe can see.
 - **A freed id stays unreachable.** The old counter ran over LIVE rows, and the
   import delta hard-deletes, so deleting the highest child freed its number for
   a brand new, unrelated ticket — which then inherited the deleted ticket's
