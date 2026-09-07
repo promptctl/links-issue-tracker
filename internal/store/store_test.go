@@ -8,7 +8,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -898,14 +897,14 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 	}
 }
 
-// TestCreateIssueChildIDsAreUnguessableAndKeepParentage replaces an older test
+// TestCreateIssueChildIDsKeepParentageAndAreDistinct replaces an older test
 // that asserted children were numbered .1, .2, .3. That numbering WAS the
-// defect: the number is a count over the local rows standing in for every row
-// that exists anywhere, so two disconnected stores holding the same siblings
-// both computed the same next id. What a child id must actually carry is its
-// parentage — asserted here — and what it must NOT carry is a position anything
-// else could compute. [LAW:behavior-not-structure]
-func TestCreateIssueChildIDsAreUnguessableAndKeepParentage(t *testing.T) {
+// defect: a count over local rows standing in for every row that exists
+// anywhere, so two disconnected stores holding the same siblings both computed
+// the same next id. Parentage is what a child id must carry, asserted here;
+// that it carries no computable position is asserted against two real stores
+// by TestTwoDisconnectedStoresMintDistinctChildIDs. [LAW:behavior-not-structure]
+func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -946,9 +945,6 @@ func TestCreateIssueChildIDsAreUnguessableAndKeepParentage(t *testing.T) {
 		}
 		if suffix == "" || strings.Contains(suffix, ".") {
 			t.Fatalf("child id = %q, want exactly one segment under the parent", child.ID)
-		}
-		if _, err := strconv.Atoi(suffix); err == nil {
-			t.Fatalf("child id = %q: a bare number is a position another store computes identically", child.ID)
 		}
 	}
 	if childOne.ID == childTwo.ID {

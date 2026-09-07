@@ -28,21 +28,30 @@ func TestGenerateHashID(t *testing.T) {
 		}
 	})
 
-	t.Run("a different creator changes the ID", func(t *testing.T) {
-		other := content
-		other.Creator = "someone-else"
-		if GenerateHashID(topLevel, content, 6, 0) == GenerateHashID(topLevel, other, 6, 0) {
-			t.Error("expected the creator to change the ID; two machines must not mint the same id for the same work")
-		}
-	})
-
-	t.Run("a different creation instant changes the ID", func(t *testing.T) {
-		other := content
-		other.CreatedAt = createdAt.Add(time.Nanosecond)
-		if GenerateHashID(topLevel, content, 6, 0) == GenerateHashID(topLevel, other, 6, 0) {
-			t.Error("expected the creation instant to change the ID; a re-created ticket must not reoccupy a freed id")
-		}
-	})
+	// Every field of Content reaches the hash — the property Content's own doc
+	// comment claims. Asserted field by field, in the order GenerateHashID
+	// renders them, so dropping one from that format string fails here instead
+	// of silently collapsing two siblings born in one nanosecond onto one id.
+	// [LAW:one-type-per-behavior] The fields are rows, not five subtests.
+	for _, field := range []struct {
+		name  string
+		alter func(*Content)
+	}{
+		{"topic", func(c *Content) { c.Topic = "renderer" }},
+		{"title", func(c *Content) { c.Title = "Fix the other parser" }},
+		{"description", func(c *Content) { c.Description = "other desc" }},
+		{"creator", func(c *Content) { c.Creator = "someone-else" }},
+		{"creation instant", func(c *Content) { c.CreatedAt = createdAt.Add(time.Nanosecond) }},
+	} {
+		t.Run("a different "+field.name+" changes the ID", func(t *testing.T) {
+			other := content
+			field.alter(&other)
+			base := GenerateHashID(topLevel, content, 6, 0)
+			if base == GenerateHashID(topLevel, other, 6, 0) {
+				t.Errorf("a different %s still minted %q; every Content field must reach the hash", field.name, base)
+			}
+		})
+	}
 
 	t.Run("a top-level id renders under prefix-topic-", func(t *testing.T) {
 		assertNamespacedShape(t, TopLevelNamespace("proj", "storage"), "proj-storage-", content)
