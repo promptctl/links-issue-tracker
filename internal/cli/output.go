@@ -82,24 +82,22 @@ func printIssueSummary(w io.Writer, issue model.Issue) error {
 	return err
 }
 
-func printIssueTable(w io.Writer, issues []model.Issue, columns []string, rels map[string]relationColumns) error {
-	resolved := resolveColumns(columns)
+func printIssueTable(w io.Writer, issues []model.Issue, columns []columnSpec, rels map[string]relationColumns) error {
 	tw := tabwriter.NewWriter(w, 2, 2, 2, ' ', 0)
-	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(resolved, "\t"))); err != nil {
+	if _, err := fmt.Fprintln(tw, strings.ToUpper(strings.Join(columnNames(columns), "\t"))); err != nil {
 		return err
 	}
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, resolved, "\t", rels)); err != nil {
+		if _, err := fmt.Fprintln(tw, formatIssueColumns(issue, columns, "\t", rels)); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
 }
 
-func printIssueLines(w io.Writer, issues []model.Issue, columns []string, rels map[string]relationColumns) error {
-	resolved := resolveColumns(columns)
+func printIssueLines(w io.Writer, issues []model.Issue, columns []columnSpec, rels map[string]relationColumns) error {
 	for _, issue := range issues {
-		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, resolved, " | ", rels)); err != nil {
+		if _, err := fmt.Fprintln(w, formatIssueColumns(issue, columns, " | ", rels)); err != nil {
 			return err
 		}
 	}
@@ -207,10 +205,14 @@ func printIssueDetail(w io.Writer, detail model.IssueDetail) error {
 }
 
 // issueFieldNames is the single definition of which field names `lit show
-// --field` accepts and how each renders. It is a superset of the table
-// --columns set (resolveColumns): it also exposes the multi-line fields
+// --field` accepts and how each renders. It overlaps the --columns vocabulary
+// (columns.go) without matching it: it also exposes the multi-line fields
 // (description, prompt) the field-limited view exists to serve, which a
-// single-line table row cannot carry. [LAW:one-source-of-truth]
+// single-line table row cannot carry, and it does not name the relationship
+// columns, which are not the issue's own fields. That the two vocabularies
+// differ is why `--columns` must name the ones it rejects — `status` and
+// `description` are field names a caller reasonably tries as columns.
+// [LAW:one-source-of-truth]
 var issueFieldNames = map[string]func(model.Issue) string{
 	"id":          func(i model.Issue) string { return i.ID },
 	"title":       func(i model.Issue) string { return i.Title },
@@ -373,57 +375,15 @@ type relationColumns struct {
 	blocked  bool
 }
 
-// relationColumnNames is the single definition of which projection columns are
-// served from the relationship graph rather than the issue row. Selecting one
-// is what triggers the batch relation load in the list path. These are populated
-// only on the `lit ls` path (listRelationColumns); other --columns surfaces pass
-// a nil rels map, so until they thread one these columns render "-" there.
-// [LAW:one-source-of-truth] relationship-column membership decided once, here.
-var relationColumnNames = map[string]struct{}{"parent": {}, "blocked": {}}
+// The columns a projection can name — and which of them are served from the
+// relationship graph — are the column registry's to state; see columns.go.
 
-// projectsRelationColumn reports whether any resolved column is served from the
-// relationship graph — the data-shaped signal the list path uses to decide
-// whether to pay the relation-graph query.
-func projectsRelationColumn(columns []string) bool {
-	for _, column := range columns {
-		if _, ok := relationColumnNames[column]; ok {
-			return true
-		}
-	}
-	return false
-}
-
-func formatIssueColumns(issue model.Issue, columns []string, delimiter string, rels map[string]relationColumns) string {
+func formatIssueColumns(issue model.Issue, columns []columnSpec, delimiter string, rels map[string]relationColumns) string {
 	values := make([]string, 0, len(columns))
 	for _, column := range columns {
-		switch column {
-		case "id":
-			values = append(values, issue.ID)
-		case "state":
-			values = append(values, formatIssueState(issue))
-		case "type":
-			values = append(values, string(issue.IssueType))
-		case "topic":
-			values = append(values, issue.Topic)
-		case "priority":
-			values = append(values, issue.Priority.String())
-		case "title":
-			values = append(values, issue.Title)
-		case "assignee":
-			values = append(values, emptyDash(issue.AssigneeValue()))
-		case "labels":
-			values = append(values, emptyDash(strings.Join(issue.Labels, ",")))
-		case "updated_at":
-			values = append(values, issue.UpdatedAt.Format(time.RFC3339))
-		case "created_at":
-			values = append(values, issue.CreatedAt.Format(time.RFC3339))
-		case "parent":
-			// Reading a nil map yields the zero relationColumns — "-" for an issue
-			// whose relations weren't loaded — so the column needs no guard.
-			values = append(values, emptyDash(rels[issue.ID].parentID))
-		case "blocked":
-			values = append(values, blockedLabel(rels[issue.ID].blocked))
-		}
+		// Reading a nil map yields the zero relationColumns — "-" for an issue
+		// whose relations weren't loaded — so no renderer needs a guard.
+		values = append(values, column.render(issue, rels[issue.ID]))
 	}
 	return strings.Join(values, delimiter)
 }
@@ -436,30 +396,6 @@ func blockedLabel(blocked bool) string {
 		return "blocked"
 	}
 	return "-"
-}
-
-func resolveColumns(columns []string) []string {
-	if len(columns) == 0 {
-		// [LAW:dataflow-not-control-flow] Default listing still flows through the same projection path.
-		return []string{"id", "state", "topic", "title"}
-	}
-	valid := map[string]struct{}{
-		"id": {}, "state": {}, "type": {}, "topic": {}, "priority": {}, "title": {}, "assignee": {}, "labels": {}, "updated_at": {}, "created_at": {}, "parent": {}, "blocked": {},
-	}
-	out := make([]string, 0, len(columns))
-	for _, column := range columns {
-		normalized := strings.ToLower(strings.TrimSpace(column))
-		if normalized == "" {
-			continue
-		}
-		if _, ok := valid[normalized]; ok {
-			out = append(out, normalized)
-		}
-	}
-	if len(out) == 0 {
-		return []string{"id", "state", "topic", "title"}
-	}
-	return out
 }
 
 func emptyDash(s string) string {
@@ -590,10 +526,6 @@ func formatIssueState(issue model.Issue) string {
 		parts = append(parts, model.RetentionName(issue.Retention()))
 	}
 	return strings.Join(parts, "+")
-}
-
-func parseColumns(input string) []string {
-	return splitCSV(strings.ToLower(input))
 }
 
 // indentLines prefixes every line of s with prefix, preserving internal line

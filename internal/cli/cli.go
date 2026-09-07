@@ -423,10 +423,17 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, a
 	updatedBefore := fs.String("updated-before", "", "Only include issues updated at or before RFC3339 timestamp")
 	queryExpr := fs.String("query", "", "Query language: status:in_progress resolution:wontfix type:task has:comments sort:rank:asc limit:5 archived deleted text")
 	sortExpr := fs.String("sort", "", "Sort fields, e.g. rank:asc,updated_at:desc")
-	columnsExpr := fs.String("columns", "", "Comma-separated output columns")
+	columnsExpr := fs.String("columns", "", columnsFlagUsage())
 	format := fs.String("format", "lines", "Output format: lines|table")
 	limit := fs.Int("limit", 0, "Limit results")
 	if err := parseFlagSet(fs, args, stdout); err != nil {
+		return err
+	}
+	// Parsed before the query runs and before anything prints: a rejection that
+	// had already emitted rows would be a partial answer, which is the silent
+	// drop this boundary exists to prevent, wearing an error message.
+	columns, err := parseColumnSelection(*columnsExpr)
+	if err != nil {
 		return err
 	}
 	visited := map[string]bool{}
@@ -509,7 +516,6 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, a
 	if err != nil {
 		return err
 	}
-	columns := parseColumns(*columnsExpr)
 	rels, err := listRelationColumns(ctx, st, columns, issues)
 	if err != nil {
 		return err
@@ -535,19 +541,34 @@ func runListWithStore(ctx context.Context, stdout io.Writer, st storage.Store, a
 // not a forked code path.
 // [LAW:one-source-of-truth] reuses fetchIssueRelations + the canonical graph
 // rather than reinterpreting parent/blocks edges for the list view.
-func listRelationColumns(ctx context.Context, st storage.Store, columns []string, issues []model.Issue) (map[string]relationColumns, error) {
-	if !projectsRelationColumn(resolveColumns(columns)) {
+func listRelationColumns(ctx context.Context, st storage.Store, columns []columnSpec, issues []model.Issue) (map[string]relationColumns, error) {
+	if !projectsRelationColumn(columns) {
 		return nil, nil
 	}
 	relations, err := fetchIssueRelations(ctx, st, issues)
 	if err != nil {
 		return nil, err
 	}
+	return relationColumnsFor(relations), nil
+}
+
+// relationColumnsFor projects a whole relation graph down to the per-issue facts
+// the relationship columns render on the list path, where no annotators have
+// run: `blocked` here can only mean "a still-open dependency edge".
+//
+// The workable views build these cells through workableRelationColumns instead,
+// because they hold each row's annotations and so can ask the readiness
+// classifier the fuller question their own context lines already ask. A row
+// gated by an earlier sibling is blocked there and "-" here — a gap on this
+// path, not a second opinion, and one that closes by running the annotators for
+// the list view rather than by teaching this function a shorter answer.
+// Tracked as links-columns-4hdq.
+func relationColumnsFor(relations map[string]storage.IssueRelations) map[string]relationColumns {
 	out := make(map[string]relationColumns, len(relations))
 	for id, rel := range relations {
 		out[id] = deriveRelationColumns(rel)
 	}
-	return out, nil
+	return out
 }
 
 // deriveRelationColumns projects one issue's graph edges down to the flat facts
@@ -739,7 +760,7 @@ func printOrphanedText(w io.Writer, rows []annotation.AnnotatedIssue) error {
 		_, err := fmt.Fprintln(w, "No orphaned issues.")
 		return err
 	}
-	columns := []string{"id", "state", "topic", "assignee", "title"}
+	columns := mustColumns("id", "state", "topic", "assignee", "title")
 	for _, entry := range rows {
 		line := formatIssueColumns(entry.Issue, columns, " | ", nil)
 		age := time.Since(entry.UpdatedAt).Truncate(time.Minute)

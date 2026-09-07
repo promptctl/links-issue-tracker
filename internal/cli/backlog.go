@@ -39,8 +39,7 @@ Use 'lit next' to pick the top workable item to start.`
 // per-row context (parent epic, dependencies, blocking reasons, in-progress
 // suffix, unblocks). Empty data flows through the same path — the "(backlog
 // empty)" message is one path-end, not a branch around the rendering loop.
-func printBacklogOutput(w io.Writer, columns []string, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, cc claimContext) error {
-	resolved := resolveColumns(columns)
+func printBacklogOutput(w io.Writer, columns []columnSpec, issues []annotation.AnnotatedIssue, details map[string]storage.IssueRelations, rels map[string]relationColumns, cc claimContext) error {
 	if _, err := fmt.Fprintln(w, backlogPreamble); err != nil {
 		return err
 	}
@@ -62,7 +61,7 @@ func printBacklogOutput(w io.Writer, columns []string, issues []annotation.Annot
 	now := time.Now()
 	var above backlogRun
 	for i, entry := range issues {
-		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, resolved, "  ", nil))
+		line := fmt.Sprintf("%2d. %s", i+1, formatIssueColumns(entry.Issue, columns, "  ", rels))
 		if _, err := fmt.Fprintln(w, line); err != nil {
 			return err
 		}

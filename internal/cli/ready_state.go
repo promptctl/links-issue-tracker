@@ -593,8 +593,7 @@ func applyLimit(issues []annotation.AnnotatedIssue, limit int) []annotation.Anno
 // dependency annotations so the agent knows what context to load before
 // `lit start`.
 func printNextSummary(w io.Writer, row annotation.AnnotatedIssue, cc claimContext, lane model.LaneID) error {
-	columns := resolveColumns(nil)
-	line := formatIssueColumns(row.Issue, columns, "  ", nil)
+	line := formatIssueColumns(row.Issue, defaultColumns(), "  ", nil)
 	if _, err := fmt.Fprintln(w, line); err != nil {
 		return err
 	}
