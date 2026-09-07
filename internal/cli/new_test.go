@@ -16,8 +16,8 @@ import (
 // --json removed, text is the sole surface, so a test that needs the
 // created/updated issue extracts its ID here and re-reads the row from the
 // store to assert fields the summary line doesn't carry. Child IDs carry a
-// ".<n>" suffix, so this reads the first field verbatim rather than validating
-// against the flat-ID token shape.
+// dotted hash suffix, so this reads the first field verbatim rather than
+// validating against the flat-ID token shape.
 func firstIssueID(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {

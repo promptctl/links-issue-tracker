@@ -231,7 +231,7 @@ func runNew(ctx context.Context, stdout io.Writer, ap *app.App, args []string) e
 	prompt := fs.String("prompt", "", "Reusable agent prompt for the work this issue captures")
 	issueType := fs.String("type", string(model.TypeTask), "Issue type: "+issueTypeChoices())
 	topic := fs.String("topic", "", "Required immutable issue topic slug (1-2 words; stable area of focus; e.g., 'refactor' or 'field-history')")
-	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<n>")
+	parentID := fs.String("parent", "", "Optional parent issue ID; child IDs become parentID.<hash>")
 	priority := fs.Int("priority", int(model.PriorityNormal), "Priority: 0=normal, 1=urgent")
 	assignee := fs.String("assignee", "", "Assignee")
 	labels := fs.String("labels", "", "Comma-separated labels")
