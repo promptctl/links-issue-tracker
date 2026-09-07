@@ -57,7 +57,9 @@ var transientRetryMaxAttempts = 30
 const (
 	transientRetryBaseDelay = 50 * time.Millisecond
 	transientRetryMaxDelay  = 1 * time.Second
+)
 
+var (
 	// commitLockRetryAttempts/commitLockRetryDelay bound the wait for a
 	// co-resident writer — a mutation in this or another process, or a
 	// snapshot copy quiescing writers via LockCommitPath — to release the
@@ -73,6 +75,9 @@ const (
 	// unbounded loop did, a wedged holder still surfaces with the sentinel
 	// instead of hanging forever, and context cancellation escapes the wait
 	// at any moment.
+	//
+	// Variables, not constants, by the convention above: a test whose premise
+	// is contention shrinks the budget rather than sleeping through it.
 	commitLockRetryAttempts = 9000
 	commitLockRetryDelay    = 100 * time.Millisecond
 )
@@ -358,24 +363,32 @@ func (s *Store) acquireCommitLock(ctx context.Context) (context.Context, func() 
 	if alreadyLocked, _ := ctx.Value(commitLockContextKey{}).(bool); alreadyLocked {
 		return ctx, func() error { return nil }, nil
 	}
-	release, err := acquireCommitLockAtPath(ctx, s.commitLockPath)
+	release, err := acquireCommitLockAtPath(ctx, s.commitLockStorageDir, s.commitLockPath)
 	if err != nil {
 		return ctx, nil, err
 	}
 	return context.WithValue(ctx, commitLockContextKey{}, true), release, nil
 }
 
-// LockCommitPath acquires the writer-exclusion commit lock at lockPath without
-// requiring an open Store. Callers outside the Store (e.g. `lit snapshots
-// new`/`restore`, which must operate without a Dolt SQL connection) use this
-// to quiesce concurrent mutations for the duration of a filesystem operation.
-// Returns a release function that the caller must defer; its error reports a
-// failed unlock or FD close and must not be discarded. [LAW:no-silent-failure]
+// LockCommitPath acquires the writer-exclusion commit lock for the workspace
+// at databasePath without requiring an open Store. Callers outside the Store
+// (e.g. `lit snapshots new`/`restore`, which must operate without a Dolt SQL
+// connection) use this to quiesce concurrent mutations for the duration of a
+// filesystem operation. Returns a release function that the caller must defer;
+// its error reports a failed unlock or FD close and must not be discarded.
+// [LAW:no-silent-failure]
+//
+// It takes the database path rather than a prepared lock path so that the lock
+// file and the directory its holder records live in are drawn from the one
+// pair of helpers below. Handed a lock path, this boundary could only recover
+// the second fact by inverting the first — a derivation that agrees with
+// commitLockPathForDolt today and nothing enforces tomorrow.
+// [LAW:one-source-of-truth]
 //
 // [LAW:single-enforcer] Routes through the same acquireCommitLockAtPath
 // primitive Store uses, so writer serialization stays at one boundary.
-func LockCommitPath(ctx context.Context, lockPath string) (func() error, error) {
-	return acquireCommitLockAtPath(ctx, lockPath)
+func LockCommitPath(ctx context.Context, databasePath string) (func() error, error) {
+	return acquireCommitLockAtPath(ctx, workspaceStorageDir(databasePath), commitLockPathForDolt(databasePath))
 }
 
 // CommitLockPath returns the conventional commit-lock path for a workspace's
@@ -392,14 +405,13 @@ func CommitLockPath(databasePath string) string {
 }
 
 func commitLockPathForDolt(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
 	// The historical name .links-commit.lock is burned: O_EXCL-era binaries
 	// os.Remove that path on release (and on 10-minute age eviction), and an
 	// unlink under a live flock splits the lock across two inodes — the next
 	// acquirer opens a fresh inode and runs concurrently with the orphaned
 	// holder. A name no historical binary ever touches makes that split
 	// unrepresentable; do not "restore" the old spelling.
-	return filepath.Join(filepath.Dir(cleaned), ".links-commit-flock.lock")
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-commit-flock.lock")
 }
 
 // acquireCommitLockAtPath takes the exclusive commit flock, waiting out a
@@ -413,8 +425,8 @@ func commitLockPathForDolt(databasePath string) string {
 // ErrWorkspaceBusy; this boundary only adds the commit-specific operator
 // guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
 // contention exactly as it does every other store lock's.
-func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
+func acquireCommitLockAtPath(ctx context.Context, storageDir, lockPath string) (func() error, error) {
+	release, err := acquireStoreLock(ctx, storageDir, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
 	if err != nil {
 		return nil, wrapCommitLockContention(err)
 	}
