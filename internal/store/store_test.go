@@ -964,9 +964,9 @@ func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 // TestCreateIssueDoesNotReuseADeletedChildID covers the second half of the
 // defect: a count over LIVE rows frees the highest slot when that child is hard
 // deleted, so a brand new, unrelated ticket lands on the deleted one's id and
-// inherits its ancestry as evidence. A content hash carrying the creation
-// instant cannot land there, because no second create shares the first's
-// nanosecond.
+// inherits its ancestry as evidence. A content hash does not hand the freed id
+// to the next create the way the counter did; landing there again takes a hash
+// coincidence, which is what this asserts does not happen for an ordinary pair.
 func TestCreateIssueDoesNotReuseADeletedChildID(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()

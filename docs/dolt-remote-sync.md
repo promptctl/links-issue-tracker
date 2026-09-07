@@ -294,11 +294,13 @@ What that buys, and what it does not:
   ids have always run on — no weaker, no stronger, and probabilistic: the hash
   is truncated, so `Mint` re-rolls against the local store and a birthday chance
   remains against ids no local probe can see.
-- **A freed id stays unreachable.** The old counter ran over LIVE rows, and the
-  import delta hard-deletes, so deleting the highest child freed its number for
-  a brand new, unrelated ticket — which then inherited the deleted ticket's
-  ancestry as apparent evidence that the two were one ticket diverged. No second
-  create lands on the first's nanosecond, so the slot cannot be reoccupied.
+- **A freed id is no longer handed to the next create.** The old counter ran
+  over LIVE rows, and the import delta hard-deletes, so deleting the highest
+  child freed its number for a brand new, unrelated ticket, which inherited the
+  deleted ticket's ancestry as apparent evidence the two were one ticket
+  diverged. That reuse was certain. Reoccupying a freed id now takes the same
+  hash coincidence as any other collision — roughly one create in 46656 at the
+  minimum hash length.
 - **Existing ids are untouched.** This changes how NEW children are minted and
   migrates nothing. Every `<epic>.7` still resolves, still ranks, still exports.
   An epic will commonly hold both shapes.

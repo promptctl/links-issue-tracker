@@ -43,9 +43,9 @@ func ChildNamespace(parentID string) Namespace {
 // nanosecond resolution and is what decorrelates two disconnected stores: an id
 // derived from content plus the instant of creation is not a claim about what
 // exists elsewhere, so two stores holding identical rows do not converge on one
-// id the way a count over local rows does. It is also what puts a hard-deleted
-// id out of a later create's reach, since no second create can land on the
-// nanosecond the first did.
+// id the way a count over local rows does. It also stops a hard-deleted id
+// from being handed straight to the next create the way the counter did:
+// reaching it again takes a hash coincidence rather than a certainty.
 //
 // The guarantee is the one top-level ids have always run on, no weaker and no
 // stronger, and it is probabilistic: the hash is truncated, so Mint re-rolls
