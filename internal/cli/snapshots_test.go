@@ -145,7 +145,7 @@ func TestSnapshotsNew_AcquiresCommitLock(t *testing.T) {
 	repo, ws := initBootstrapTestRepo(t)
 	chdir(t, repo)
 
-	release, err := store.LockCommitPath(context.Background(), store.CommitLockPath(ws.DatabasePath))
+	release, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock: %v", err)
 	}
@@ -247,7 +247,7 @@ func TestSnapshotsRestore_LockSurvivesRotation(t *testing.T) {
 		t.Fatalf("lock dir moved across Restore: was %q, now %q", filepath.Dir(lockPath), pathDir)
 	}
 	// And another lock acquisition succeeds at the same path afterwards.
-	release, err := store.LockCommitPath(context.Background(), store.CommitLockPath(ws.DatabasePath))
+	release, err := store.LockCommitPath(context.Background(), ws.DatabasePath)
 	if err != nil {
 		t.Fatalf("acquire commit lock after restore: %v", err)
 	}

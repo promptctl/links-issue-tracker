@@ -22,7 +22,7 @@ import (
 func TestAcquireCommitLockNeverEvictsLiveHolderByAge(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), ".links-commit.lock")
-	s := &Store{commitLockPath: lockPath}
+	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	holderRelease, err := acquireStoreLock(context.Background(), storageDirOf(lockPath), lockPath, true, 1, 0)
 	if err != nil {
@@ -77,7 +77,7 @@ func TestAcquireCommitLockIgnoresDeadResidue(t *testing.T) {
 	if err := os.Chtimes(lockPath, ancient, ancient); err != nil {
 		t.Fatalf("Chtimes(lock) error = %v", err)
 	}
-	s := &Store{commitLockPath: lockPath}
+	s := &Store{commitLockPath: lockPath, commitLockStorageDir: storageDirOf(lockPath)}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

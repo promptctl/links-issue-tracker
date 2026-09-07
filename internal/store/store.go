@@ -48,6 +48,7 @@ type Store struct {
 	doltRootDir          string
 	access               engineAccess
 	commitLockPath       string
+	commitLockStorageDir string
 	telemetryDir         string
 	releaseWorkspaceLock func() error
 
@@ -398,13 +399,17 @@ func openStoreConnection(ctx context.Context, doltRootDir string, workspaceID st
 		}
 	}
 	return &Store{
-		db:             db,
-		workspaceID:    workspaceID,
-		doltRootDir:    doltRootDir,
-		access:         access,
-		clock:          storage.SystemClock,
-		commitLockPath: commitLockPathForDolt(doltRootDir),
-		telemetryDir:   filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
+		db:          db,
+		workspaceID: workspaceID,
+		doltRootDir: doltRootDir,
+		access:      access,
+		clock:       storage.SystemClock,
+		// Both facts about the commit lock, drawn side by side from the one
+		// root, so neither is ever recovered by inverting the other.
+		// [LAW:one-source-of-truth]
+		commitLockPath:       commitLockPathForDolt(doltRootDir),
+		commitLockStorageDir: workspaceStorageDir(doltRootDir),
+		telemetryDir:         filepath.Join(filepath.Clean(doltRootDir), "telemetry"),
 	}, nil
 }
 

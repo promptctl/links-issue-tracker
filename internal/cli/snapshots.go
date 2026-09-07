@@ -59,7 +59,7 @@ func isUserSnapshotName(name string) bool {
 // callers live at store/workspace_lock.go); this commit lock remains the
 // writer-vs-writer gate only.
 func withCommitLock(ctx context.Context, ws workspace.Info, fn func() error) (err error) {
-	release, err := store.LockCommitPath(ctx, store.CommitLockPath(ws.DatabasePath))
+	release, err := store.LockCommitPath(ctx, ws.DatabasePath)
 	if err != nil {
 		// The snapshots family has no handler-level trace writer, so unlike
 		// the mutation family's mid-command commit contention this acquisition
