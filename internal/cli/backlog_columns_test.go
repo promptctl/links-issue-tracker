@@ -34,23 +34,45 @@ func runBacklogColumns(h readyTestHarness, expr string) (string, error) {
 
 var backlogRowPrefix = regexp.MustCompile(`^\s*\d+\.\s+`)
 
-// backlogCells returns the projected cells of the backlog row for id. Rows carry
-// a "NN. " list prefix and join their columns with two spaces; the per-row
-// context lines beneath a row carry no such prefix and are skipped, so what is
-// returned is the projection itself and nothing else.
-func backlogCells(t *testing.T, out, id string) []string {
+var backlogCellGap = regexp.MustCompile(`\s{2,}`)
+
+// backlogRow locates the backlog row for id and returns two things: its
+// projected cells, and the trimmed context lines printed beneath it up to the
+// next row. Rows carry a "NN. " list prefix and join their columns with two
+// spaces; the context lines carry no such prefix.
+//
+// The context half exists because the preamble discusses "blocked:" and
+// "depends on:" in prose, so a substring match against the whole output is
+// satisfied by text no row ever printed. Scoping to one row's own block is what
+// makes an assertion about that row's context lines mean anything.
+func backlogRow(t *testing.T, out, id string) (cells, context []string) {
 	t.Helper()
-	for _, line := range strings.Split(strings.TrimRight(out, "\n"), "\n") {
+	lines := strings.Split(strings.TrimRight(out, "\n"), "\n")
+	for i, line := range lines {
 		if !backlogRowPrefix.MatchString(line) {
 			continue
 		}
-		cells := regexp.MustCompile(`\s{2,}`).Split(backlogRowPrefix.ReplaceAllString(line, ""), -1)
-		if len(cells) > 0 && cells[0] == id {
-			return cells
+		cells = backlogCellGap.Split(backlogRowPrefix.ReplaceAllString(line, ""), -1)
+		if len(cells) == 0 || cells[0] != id {
+			continue
 		}
+		for _, next := range lines[i+1:] {
+			if backlogRowPrefix.MatchString(next) {
+				break
+			}
+			context = append(context, strings.TrimSpace(next))
+		}
+		return cells, context
 	}
 	t.Fatalf("no backlog row for %q in:\n%s", id, out)
-	return nil
+	return nil, nil
+}
+
+// backlogCells returns just the projection of the backlog row for id.
+func backlogCells(t *testing.T, out, id string) []string {
+	t.Helper()
+	cells, _ := backlogRow(t, out, id)
+	return cells
 }
 
 // TestBacklogRejectsUnknownColumn is the reject half on the backlog surface.
@@ -139,10 +161,29 @@ func TestBacklogRendersRelationColumns(t *testing.T) {
 		t.Fatalf("backlog --columns id,parent,blocked: %v", err)
 	}
 
-	got := backlogCells(t, out, child.ID)
+	got, context := backlogRow(t, out, child.ID)
 	want := []string{child.ID, epic.ID, "blocked"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("blocked child cells = %v, want %v\nfull output:\n%s", got, want, out)
+	}
+
+	// The cell reads "blocked" and no "blocked:" line explains it: this row is
+	// held up by a dependency, and nonDependencyBlockingReasons routes
+	// OpenDependency to the "depends on:" id list instead. Pinning the absence
+	// is what keeps the prose true — cli-reference and the CHANGELOG both
+	// describe which line carries which reason, and folding OpenDependency back
+	// into the reasons list would make both wrong with nothing to say so.
+	var explained bool
+	for _, line := range context {
+		explained = explained || line == "depends on: "+blocker.ID
+		if strings.HasPrefix(line, "blocked:") {
+			t.Errorf("dependency-blocked row printed %q; this case is carried by the "+
+				"depends-on list, and the docs say so\ncontext: %q\nfull output:\n%s", line, context, out)
+		}
+	}
+	if !explained {
+		t.Errorf("dependency-blocked row context = %q, want a %q line explaining the blocked cell\nfull output:\n%s",
+			context, "depends on: "+blocker.ID, out)
 	}
 
 	// The unblocked, parentless blocker is the control: it proves "-" still

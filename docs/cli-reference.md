@@ -125,11 +125,15 @@ nothing — is a usage error (exit 2) naming the legal values.
 `--columns` takes the same vocabulary `lit ls` documents below and rejects an unknown
 name the same way, exit 2. Here the rejection lands ahead of the sync-staleness
 warning, so a rejected `lit backlog` prints nothing at all. One column means more on
-this command than it does on `ls`: `blocked` marks a ticket that is not workable,
-decided by the same authority as the `blocked:` context line printed under the row and
-so always agreeing with it — a still-open dependency, an earlier same-lane sibling
-still open, a missing required field, or needs-design. `lit ls` sees only the first of
-those; that gap is tracked as `links-columns-4hdq`.
+this command than it does on `ls`: `blocked` marks a ticket that is not workable, for
+any of the four reasons the readiness classifier knows — a still-open dependency, an
+earlier same-lane sibling still open, a missing required field, or needs-design. The
+column agrees with that classification, and so with the context block printed under
+the row, but the block splits the reasons across two lines: `depends on:` names the
+still-open dependencies as concrete blocker ids, and `blocked:` carries the other
+three. A ticket held up by nothing but a dependency therefore prints `blocked` in the
+column with a `depends on:` line under it and no `blocked:` line at all. `lit ls` sees
+only the dependency reason; that gap is tracked as `links-columns-4hdq`.
 
 ### `lit next`
 

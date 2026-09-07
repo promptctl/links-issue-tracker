@@ -86,9 +86,7 @@ func (v workableView) usage() string {
 }
 
 // workableRelationColumns builds the relationship cells for a workable view's
-// rows. `parent` comes from the graph; `blocked` comes from ClassifyReadiness —
-// the same authority the per-row context line reads — so a row cannot print "-"
-// under `blocked` directly above a line naming the sibling that blocks it.
+// rows. `parent` comes from the graph; `blocked` comes from ClassifyReadiness.
 // [LAW:one-source-of-truth] the annotation registry decides what blocks, and
 // rendering may not carry a shorter list; deriving this cell from DependsOn
 // edges alone carried exactly that shorter list, and it disagreed on screen for
