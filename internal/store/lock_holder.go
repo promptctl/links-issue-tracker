@@ -30,23 +30,24 @@ import (
 //
 // One record per ACQUISITION, not per process or per lock: a uniquely-named
 // file, minted under the lock's directory in lockHolderDir, whose creator
-// holds it SHARED for exactly as long as it holds the lock. Uniqueness is
-// what makes the reader's cleanup safe — no future holder can ever open a name
-// already minted, so unlinking a record whose hold the reader just acquired
-// cannot race a live acquirer — and shared is what makes it readable: a reader
-// on Windows, where LockFileEx is mandatory, can read a shared-held record but
-// not an exclusively-held one.
+// holds it SHARED for exactly as long as it holds the lock. Shared is what
+// makes it readable: a reader on Windows, where LockFileEx is mandatory, can
+// read a shared-held record but not an exclusively-held one.
 //
-// [LAW:no-ambient-temporal-coupling] A visible record is a complete record:
-// content is written to a temp name and renamed into place, so "created but
-// not yet filled in" is not a state a reader can observe rather than a window
-// a reader is trusted to miss.
+// [LAW:no-ambient-temporal-coupling] A record carries content only once its
+// hold is in place, and that order is what makes a reader's cleanup safe: the
+// only unheld record a reader can ever find is one whose holder is gone or
+// one not yet filled in, and retiring either costs nothing. Filling it in
+// first loses records instead — filelock opens by path with O_CREATE, so a
+// reader retiring a finished record leaves the writer's own acquire to
+// recreate that name empty and hold it, unreadable, for the life of the lock.
 //
-// NO WAIT EDGE. Every acquisition of a record's flock — the holder's own and
-// every reader's probe — passes maxAttempts 1, so no process ever waits on
-// one, and a lock with no inbound wait edge cannot complete a cycle. That is
-// the whole of this file's standing in the package's acquisition order; it
-// needs no slot, for the same reason the sync-push lock needs none.
+// NO WAIT EDGE. Nothing that holds a record's flock ever waits while holding
+// it: a reader's liveness probe passes maxAttempts 1 and releases with no
+// blocking call in between, so the bounded budget a publisher spends waiting
+// that probe out cannot close a cycle. That is the whole of this file's
+// standing in the package's acquisition order; it needs no slot, for the same
+// reason the sync-push lock needs none.
 
 // lockHolderDir is the directory of holder records for one lock, under the
 // workspace storage dir the caller names — the same rotation-surviving
@@ -63,12 +64,19 @@ func lockHolderDir(storageDir, lockPath string) string {
 	return filepath.Join(storageDir, ".links-lock-holders", filepath.Base(lockPath))
 }
 
-// lockHolderRecordPrefix marks a file as a complete record. Content is staged
-// under lockHolderTempPrefix and renamed on, so a reader that filters on this
-// prefix cannot pick up a half-written stage file.
+// lockHolderRecordPrefix marks a file as a holder record, so a reader can tell
+// one from anything else that ever lands in the directory.
+const lockHolderRecordPrefix = "holder-"
+
 const (
-	lockHolderRecordPrefix = "holder-"
-	lockHolderTempPrefix   = "staging-"
+	// A reader's liveness probe takes a record exclusively for the
+	// microseconds between acquiring it and releasing it, so a publisher
+	// minting a record while a sweep is in flight meets real contention on
+	// its own name. The budget waits that probe out instead of dying to the
+	// collision — the same shape, and the same reason, as the mirror beacon's
+	// Take-side budget.
+	lockHolderRetryAttempts = 20
+	lockHolderRetryDelay    = 5 * time.Millisecond
 )
 
 // lockHolderRecord is what one holder says about itself. It is descriptive
@@ -104,8 +112,9 @@ func recordLockHolder(storageDir, lockPath string, lockRelease func() error) fun
 	}
 }
 
-// publishLockHolder writes one record and takes the shared hold that makes it
-// live. Failure leaves nothing behind that a reader would report.
+// publishLockHolder mints one record, takes the shared hold that makes it
+// live, and only then fills it in. Failure leaves nothing behind that a reader
+// would report.
 func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 	dir := lockHolderDir(storageDir, lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -123,50 +132,52 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 	if err != nil {
 		return nil, fmt.Errorf("encode holder record: %w", err)
 	}
-	staged, err := os.CreateTemp(dir, lockHolderTempPrefix+"*")
+	minted, err := os.CreateTemp(dir, lockHolderRecordPrefix+"*")
 	if err != nil {
 		return nil, fmt.Errorf("create holder record: %w", err)
 	}
-	recordPath := filepath.Join(dir, lockHolderRecordPrefix+strings.TrimPrefix(filepath.Base(staged.Name()), lockHolderTempPrefix))
-	if err := writeAndRename(staged, payload, recordPath); err != nil {
-		return nil, err
+	recordPath := minted.Name()
+	if err := minted.Close(); err != nil {
+		return nil, errors.Join(fmt.Errorf("create holder record: %w", err), retireRecord(recordPath))
 	}
-	// maxAttempts 1: the name was minted by CreateTemp moments ago and no
-	// other process can have opened it, so contention here is unrepresentable
-	// and a non-acquisition is a real fault, not a healthy holder.
-	release, acquired, err := filelock.Acquire(context.Background(), recordPath, false, 1, 0)
+	release, acquired, err := filelock.Acquire(context.Background(), recordPath, false, lockHolderRetryAttempts, lockHolderRetryDelay)
 	if err != nil || !acquired {
 		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(recordPath))
+	}
+	if err := fillHeldRecord(recordPath, payload); err != nil {
+		return nil, errors.Join(err, release(), retireRecord(recordPath))
 	}
 	return func() error {
 		return errors.Join(release(), retireRecord(recordPath))
 	}, nil
 }
 
-// retireRecord ensures a record file is gone. Already-gone is the goal
-// reached, not a failure: a reader that proves a record unheld retires it, and
-// it can prove exactly that about a record in the instant between its rename
-// into place and its writer's hold. Two parties may therefore remove one
-// record, and neither is wrong. Every other removal failure still surfaces.
+// fillHeldRecord writes the payload into a record the caller already holds.
+// It opens WITHOUT O_CREATE so that a name a reader retired in the instant
+// before the hold landed fails here, loudly, instead of being recreated as a
+// second file — one carrying this holder's identity while nothing holds it,
+// which the next reader would find ownerless and retire.
 // [LAW:no-silent-failure]
-func retireRecord(recordPath string) error {
-	if err := os.Remove(recordPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("retire holder record: %w", err)
+func fillHeldRecord(recordPath string, payload []byte) error {
+	file, err := os.OpenFile(recordPath, os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("open holder record to fill in: %w", err)
+	}
+	_, writeErr := file.Write(payload)
+	if err := errors.Join(writeErr, file.Close()); err != nil {
+		return fmt.Errorf("write holder record: %w", err)
 	}
 	return nil
 }
 
-// writeAndRename fills the staged file and moves it onto its final name, so
-// the record becomes visible to readers whole or not at all. A failure clears
-// the stage rather than leaving a partial file for the next crash to inherit.
-func writeAndRename(staged *os.File, payload []byte, recordPath string) error {
-	_, writeErr := staged.Write(payload)
-	err := errors.Join(writeErr, staged.Close())
-	if err == nil {
-		err = os.Rename(staged.Name(), recordPath)
-	}
-	if err != nil {
-		return errors.Join(fmt.Errorf("write holder record: %w", err), retireRecord(staged.Name()))
+// retireRecord ensures a record file is gone. Already-gone is the goal
+// reached, not a failure: a reader that proves a record unheld retires it, and
+// it can prove exactly that of a record minted but not yet held. Two parties
+// may therefore remove one record, and neither is wrong. Every other removal
+// failure still surfaces. [LAW:no-silent-failure]
+func retireRecord(recordPath string) error {
+	if err := os.Remove(recordPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("retire holder record: %w", err)
 	}
 	return nil
 }
@@ -194,10 +205,22 @@ func describeLockHolders(storageDir, lockPath string) string {
 		))
 	}
 	if len(described) == 0 {
-		described = append(described, "a process that left no record (a foreign holder, or a lit older than holder records)")
+		described = append(described, unnamedHolder(problems))
 	}
 	account := "held by " + strings.Join(described, ", ")
 	return strings.Join(append([]string{account}, problems...), "; ")
+}
+
+// unnamedHolder is what the account says about a holder no record named. After
+// a clean read that is a fact: nothing recorded itself. After a failed read it
+// is not — the records may name the holder perfectly well and this call could
+// not see them — and asserting the guess anyway sends an operator hunting a
+// foreign process while the real cause sits in the problem list beside it.
+func unnamedHolder(problems []string) string {
+	if len(problems) == 0 {
+		return "a process that left no record (a foreign holder, or a lit older than holder records)"
+	}
+	return "a process these records could not name"
 }
 
 // readLockHolders returns the live records under lockPath's holder directory,
@@ -205,8 +228,9 @@ func describeLockHolders(storageDir, lockPath string) string {
 // decided the one way this package's discipline permits — by acquiring, which
 // is right on every death mode including SIGKILL — never by a PID probe or an
 // age threshold. A record whose hold this call takes had no live owner, so it
-// is retired here; unlinking under that hold is safe because the name is
-// unique and no future acquirer will ever open it.
+// is retired here; an unheld record carries nothing to lose, and a publisher
+// whose mint is retired out from under it fails loudly rather than leaving a
+// stray file behind (fillHeldRecord).
 //
 // [LAW:no-silent-failure] Read failures travel back beside the holders instead
 // of shrinking the account silently: a diagnostic that quietly reports fewer
@@ -293,9 +317,13 @@ func renderHolderCommand(command string) string {
 var (
 	// lockWaitNoticeGrace is how long a wait stays quiet before it is worth
 	// reporting: long enough that the ordinary case — two lit commands
-	// overlapping for a few milliseconds — prints nothing, short enough that
-	// it lands inside even the briefest budget here (the workspace shared
-	// lock's ~5s). lockWaitNoticeInterval then repeats the notice, because one
+	// overlapping for a few milliseconds — prints nothing, short enough to
+	// land inside the budget of every wait an operator could mistake for a
+	// hang, starting with the workspace shared lock's ~5s. The mirror
+	// beacon's ~1s is deliberately below it and never prints: a wait that
+	// short is over before anyone asks whether lit is wedged, and a grace
+	// under a second would report the overlaps this one exists to ignore.
+	// lockWaitNoticeInterval then repeats the notice, because one
 	// line at the two-second mark has scrolled away long before a 15-minute
 	// commit-lock budget elapses, and a wait that stops reporting itself is
 	// indistinguishable from the hang this notice exists to rule out.
