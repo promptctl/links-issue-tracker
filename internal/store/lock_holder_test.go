@@ -638,6 +638,41 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 	}
 }
 
+// TestCommitContentionNamesTheHolder pins the account reaching the operator
+// through the commit lock — the busiest of the three, and the one whose only
+// other coverage feeds wrapCommitLockContention a bare sentinel that carries
+// no account at all. Dropping the %w in either wrap would leave that coverage
+// green while every commit-contention message stopped naming its holder.
+//
+// Serial by construction: it shrinks the 15-minute production budget, which is
+// package state. [LAW:no-shared-mutable-globals]
+func TestCommitContentionNamesTheHolder(t *testing.T) {
+	attempts, delay := commitLockRetryAttempts, commitLockRetryDelay
+	commitLockRetryAttempts, commitLockRetryDelay = 1, 0
+	t.Cleanup(func() { commitLockRetryAttempts, commitLockRetryDelay = attempts, delay })
+
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	lockPath := commitLockPathForDolt(doltRoot)
+	holder, err := acquireStoreLock(ctx, workspaceStorageDir(doltRoot), lockPath, true, 1, 0)
+	if err != nil {
+		t.Fatalf("holder acquireStoreLock() error = %v", err)
+	}
+	defer func() {
+		if err := holder(); err != nil {
+			t.Errorf("release holder: %v", err)
+		}
+	}()
+
+	_, err = LockCommitPath(ctx, doltRoot)
+	if !errors.Is(err, ErrWorkspaceBusy) {
+		t.Fatalf("LockCommitPath() error = %v, want ErrWorkspaceBusy", err)
+	}
+	if want := fmt.Sprintf("pid %d", os.Getpid()); !strings.Contains(err.Error(), want) {
+		t.Errorf("LockCommitPath() error %q does not carry %q", err, want)
+	}
+}
+
 // TestBeaconContentionNamesTheSquatter pins the one wrapper that built its own
 // message rather than carrying the account out. A foreign process holding the
 // beacon past every probe window is the case where naming it matters most, and
