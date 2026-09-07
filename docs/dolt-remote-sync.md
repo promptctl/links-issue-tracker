@@ -300,7 +300,19 @@ What that buys, and what it does not:
   deleted ticket's ancestry as apparent evidence the two were one ticket
   diverged. That reuse was certain. Reoccupying a freed id now takes the same
   hash coincidence as any other collision — roughly one create in 46656 at the
-  minimum hash length.
+  minimum hash length. A child normally mints at that minimum, and it is the
+  right length rather than a shortfall: an id can only collide inside the space
+  it renders under, a child's space is one parent's direct children, and the
+  hash length is sized to exactly that population. Sizing a child by the whole
+  workspace instead would lengthen every id a user reads and types, against a
+  set those ids cannot reach. What the sizing cannot see is the freed ids
+  themselves — the delete takes the row, so they leave the count while a fresh
+  candidate can still land on them. That residual is accepted rather than
+  designed out, on two grounds: it is bounded, since the minimum length holds
+  until one parent's direct children number in the hundreds, and a reoccupation
+  that matters is caught rather than absorbed, because the other store still
+  holding the original presents `reconcile` with two tickets under one id,
+  which it refuses on their differing creation instants instead of fusing.
 - **Existing ids are untouched.** This changes how NEW children are minted and
   migrates nothing. Every `<epic>.7` still resolves, still ranks, still exports.
   An epic will commonly hold both shapes.

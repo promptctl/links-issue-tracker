@@ -1,6 +1,9 @@
 package issueid
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestNormalizeSlug(t *testing.T) {
 	cases := []struct {
@@ -24,6 +27,30 @@ func TestNormalizeSlug(t *testing.T) {
 				t.Errorf("NormalizeSlug(%q) = %q, want %q", tc.input, got, tc.want)
 			}
 		})
+	}
+}
+
+// TestNormalizeSlugEmitsOnlyItsAlphabet pins the slug's own alphabet, which id
+// minting then leans on: a prefix and topic carrying no dot are what make a
+// top-level id dot-free and therefore unable to collide with any child id. See
+// Mint's doc comment for the length policy that rests on that disjointness.
+// [LAW:behavior-not-structure]
+func TestNormalizeSlugEmitsOnlyItsAlphabet(t *testing.T) {
+	for _, input := range []string{
+		"epic.child",
+		"Fix the .5 case",
+		"a..b",
+		"  MiXeD Case / punctuation! ",
+		"tabs\tand\nnewlines",
+		"unicode — em dash",
+	} {
+		got := NormalizeSlug(input)
+		if strings.Trim(got, "abcdefghijklmnopqrstuvwxyz0123456789-") != "" {
+			t.Errorf("NormalizeSlug(%q) = %q, want only lowercase alphanumerics and dashes", input, got)
+		}
+		if strings.Contains(got, ".") {
+			t.Errorf("NormalizeSlug(%q) = %q, want no dot: a dot in a slug would let a top-level id wear a child id's shape", input, got)
+		}
 	}
 }
 

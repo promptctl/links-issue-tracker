@@ -68,8 +68,30 @@ type TakenFunc func(candidate string) (bool, error)
 // Mint returns an id in ns that no existing id occupies, widening the hash as
 // the population grows and re-rolling on the nonce within each length.
 // population is the number of ids already sharing ns, which sets the starting
-// hash length; taken decides occupancy against the whole store, since an id is
-// unique store-wide and not merely within its namespace.
+// hash length; taken decides occupancy against the whole store.
+//
+// Those two scopes read as a mismatch and are not, which is recorded here
+// because the reading recurs: a candidate rendered in ns cannot equal any id
+// outside ns, so a store-wide probe can only ever report a collision with an id
+// ns already holds. The spaces are disjoint by rendering — NormalizeSlug emits
+// no dot, so no top-level id carries one and every child id does, and two child
+// spaces differ unless their parents do, a base36 suffix carrying neither dot
+// nor dash to make up the difference. Sizing the hash by ns's population
+// therefore sizes it by exactly the set the probe can reach, and a three-child
+// epic minting at MinHashLength is not the workspace's size leaking out of the
+// estimate; it is the estimate over the only ids within reach. Top-level ids
+// are the loosely sized ones: store.countTopLevelIssues counts across every
+// topic though a candidate can only collide inside its own, deliberately
+// conservative in the direction that costs id length rather than uniqueness.
+//
+// What population cannot see is the ids hard-deleted out of ns, which leave the
+// count while a fresh candidate can still land on them — a freed id is
+// reoccupiable by coincidence and uncountable by construction, since the delete
+// takes the row. That residual is bounded and accepted rather than fixed:
+// MinHashLength holds until one parent's direct children number in the
+// hundreds, a boundary TestComputeAdaptiveLength pins so this claim cannot
+// drift from the arithmetic.
+//
 // [LAW:dataflow-not-control-flow] One sweep runs for every id ever minted;
 // the namespace and population are values it reads, never branches it takes.
 func Mint(ns Namespace, c Content, population int, taken TakenFunc) (string, error) {
@@ -117,19 +139,19 @@ func GenerateHashID(ns Namespace, c Content, length int, nonce int) string {
 	return string(ns) + encodeBase36(hash[:hashBytesForLength(length)], length)
 }
 
+// hashBytesForLength is how many digest bytes an id of the given length may
+// carry: enough to address every value it can render, and no more. Derived
+// rather than tabulated, because a table is a second copy of this arithmetic
+// and the table had already drifted from it — it handed MaxHashLength five
+// bytes, 2^40 values, against 36^8 renderable ids, so the length Mint escalates
+// to when a space is crowded delivered under 40% of the room CollisionProbability
+// credited it with, and an out-of-range length silently fell to three bytes.
+// [LAW:one-source-of-truth] sha256.Size caps the result because a digest holds
+// 32 bytes and no length can spend more, not as a guard against the caller.
 func hashBytesForLength(length int) int {
-	switch length {
-	case 3:
-		return 2
-	case 4:
-		return 3
-	case 5, 6:
-		return 4
-	case 7, 8:
-		return 5
-	default:
-		return 3
-	}
+	renderable := new(big.Int).Exp(big.NewInt(36), big.NewInt(int64(length)), nil)
+	largest := renderable.Sub(renderable, big.NewInt(1))
+	return min((largest.BitLen()+7)/8, sha256.Size)
 }
 
 func encodeBase36(data []byte, length int) string {
