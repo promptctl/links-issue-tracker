@@ -96,8 +96,8 @@ const lockHolderRecordPrefix = "holder-"
 // private sibling on the strength of the same proof, since it is the same
 // inode). The one case the split gives up is a publisher killed before it
 // links, which leaves a private name no record name points at and so nothing
-// collects. A stray byte-less file that names nobody is the cheap end of this
-// trade; the holder it would otherwise cost is the expensive one.
+// collects. A stray file nothing ever opens is the cheap end of this trade;
+// the holder it would otherwise cost is the expensive one.
 const lockHolderPrivatePrefix = "private-"
 
 // lockHolderRecordSeq numbers this process's records, and with the pid it

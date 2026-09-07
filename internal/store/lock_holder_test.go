@@ -504,8 +504,9 @@ func TestStrayRecordIsRetiredNotLeaked(t *testing.T) {
 // carries no record prefix, so no sweep opens it, retires it, or counts it
 // against the account — which is exactly what keeps a sweep from destroying a
 // record mid-flight, and exactly why a publisher killed before it links leaves
-// a file behind that nothing collects. An empty file naming nobody is the
-// cheap end of that trade.
+// a file behind that nothing collects. A file nothing ever opens is the cheap
+// end of that trade — it is staged filled here because the fill lands before
+// the link, so most of that window leaves a complete record, not an empty one.
 func TestSweepLeavesAPrivateNameAlone(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
@@ -513,19 +514,20 @@ func TestSweepLeavesAPrivateNameAlone(t *testing.T) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir holder dir: %v", err)
 	}
-	private, err := os.CreateTemp(dir, lockHolderPrivatePrefix+"*")
+	payload, err := json.Marshal(lockHolderRecord{PID: 424243, Command: "lit ls", Since: time.Now()})
 	if err != nil {
-		t.Fatalf("create private record: %v", err)
+		t.Fatalf("marshal record: %v", err)
 	}
-	if err := private.Close(); err != nil {
-		t.Fatalf("close private record: %v", err)
+	private := filepath.Join(dir, lockHolderPrivatePrefix+"424243-1")
+	if err := os.WriteFile(private, payload, 0o600); err != nil {
+		t.Fatalf("write private record: %v", err)
 	}
 
 	holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
 	if len(holders) != 0 || len(problems) != 0 {
 		t.Errorf("holders = %v, problems = %v, want a private name to report neither", holders, problems)
 	}
-	if _, err := os.Stat(private.Name()); err != nil {
+	if _, err := os.Stat(private); err != nil {
 		t.Errorf("stat private record after a sweep: %v, want a sweep to leave it untouched", err)
 	}
 }
