@@ -609,7 +609,7 @@ func TestSyncResolveUnrelatedTakeLocalRefusesSchemaAheadRemote(t *testing.T) {
 	// schema and pushes; B forks an UNRELATED clone (own root, own issue) and fetches,
 	// so B is unrelated-diverged from a schema-ahead remote head.
 	remoteIssueID := seedReconcileRemote(t, ctx, rootA, remoteURL)
-	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, "v9.9.0", storage.UpdateIssueInput{Lane: strptr("from-a")})
+	advanceRemoteToFutureSchema(t, ctx, rootA, remoteIssueID, storage.UpdateIssueInput{Lane: strptr("from-a")})
 	forkUnrelatedClone(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)

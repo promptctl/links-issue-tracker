@@ -192,7 +192,7 @@ func TestSyncPushFailureLines(t *testing.T) {
 		},
 		{
 			// The 2026-08-25 incident, rendered: a schema refusal recorded by
-			// v0.7.0, still being replayed to an operator running v0.9.0 — whose
+			// 0.7.0, still being replayed to an operator running 0.9.0 — whose
 			// binary has supported that schema for days. The reason text cannot
 			// say so (it was frozen at write time), so the line must.
 			name: "a verdict from an older binary is dated, not replayed as current",
@@ -201,26 +201,26 @@ func TestSyncPushFailureLines(t *testing.T) {
 				Reason:     "remote origin/master is at schema version 5 but this binary supports only up to 4",
 				Remote:     "origin",
 				Branch:     "master",
-				ObservedBy: "v0.7.0",
+				ObservedBy: "0.7.0",
 			},
 			age:         8 * 24 * time.Hour,
 			known:       true,
-			running:     "v0.9.0",
+			running:     "0.9.0",
 			wantLines:   1,
-			wantSubstrs: []string{"recorded by lit v0.7.0", "now running v0.9.0", "predates your binary", "supports only up to 4"},
+			wantSubstrs: []string{"recorded by lit 0.7.0", "now running 0.9.0", "the binary has changed since this verdict", "supports only up to 4"},
 		},
 		{
 			name: "a verdict from this same binary carries no provenance clause",
 			rec: pushOutcomeRecord{
 				Decision: pushDecisionError, Reason: "connection refused",
-				Remote: "origin", Branch: "master", ObservedBy: "v0.9.0",
+				Remote: "origin", Branch: "master", ObservedBy: "0.9.0",
 			},
 			age:         time.Minute,
 			known:       true,
-			running:     "v0.9.0",
+			running:     "0.9.0",
 			wantLines:   1,
 			wantSubstrs: []string{"FAILING", "connection refused"},
-			wantAbsent:  []string{"recorded by lit", "predates your binary"},
+			wantAbsent:  []string{"recorded by lit", "the binary has changed"},
 		},
 		{
 			// Records written before the stamp existed, and dev builds, name no
@@ -232,10 +232,10 @@ func TestSyncPushFailureLines(t *testing.T) {
 			},
 			age:         time.Minute,
 			known:       true,
-			running:     "v0.9.0",
+			running:     "0.9.0",
 			wantLines:   1,
 			wantSubstrs: []string{"FAILING", "connection refused"},
-			wantAbsent:  []string{"recorded by lit", "predates your binary"},
+			wantAbsent:  []string{"recorded by lit", "the binary has changed"},
 		},
 	}
 	for _, tc := range cases {
@@ -345,7 +345,7 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 // TestDoctorPushHealthDatesTheReplayedVerdict pins doctor's half of the
 // stale-verdict fix. The recorded Reason is a sentence frozen at write time and
 // printed verbatim; the incident was an operator reading "this binary supports
-// only up to 4" off a v0.7.0 record while running a binary that had supported
+// only up to 4" off a 0.7.0 record while running a binary that had supported
 // schema 5 for six days, and concluding the workspace was broken. Doctor cannot
 // re-test the push — it is a read-only diagnostic and re-testing means pushing —
 // so what it owes the reader is the date on the verdict it is replaying, and the
@@ -358,19 +358,19 @@ func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 		Reason:     "remote origin/master is at schema version 5 but this binary supports only up to 4",
 		Remote:     "origin",
 		Branch:     "master",
-		ObservedBy: "v0.7.0",
+		ObservedBy: "0.7.0",
 	})
 
 	var out bytes.Buffer
-	if err := printPushOutcomeHealth(&out, ws, time.Now(), "v0.9.0"); err != nil {
+	if err := printPushOutcomeHealth(&out, ws, time.Now(), "0.9.0"); err != nil {
 		t.Fatalf("printPushOutcomeHealth: %v", err)
 	}
 	got := out.String()
 	for _, want := range []string{
 		"FAILED",
-		"recorded by lit v0.7.0",
-		"now running v0.9.0",
-		"predates your binary",
+		"recorded by lit 0.7.0",
+		"now running 0.9.0",
+		"the binary has changed since this verdict",
 		"supports only up to 4",
 		"run 'lit sync push' to re-test",
 	} {
@@ -392,23 +392,23 @@ func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
 		remote: "origin", branch: "master",
 		pushErr: errors.New("remote origin/master is at schema version 5 but this binary supports only up to 4"),
-	}, nil, "v0.7.0"))
+	}, nil, "0.7.0"))
 
 	rec, age, known := lastPushOutcome(ws, time.Now())
-	if lines := syncPushFailureLines(rec, age, known, "v0.9.0"); len(lines) != 1 {
+	if lines := syncPushFailureLines(rec, age, known, "0.9.0"); len(lines) != 1 {
 		t.Fatalf("a recorded failure did not warn: %q", lines)
 	}
 
 	// The condition clears and the next attempt lands.
 	recordPushOutcome(ws, pushOutcomeOf(syncPushOutcome{
 		remote: "origin", branch: "master", skip: syncTargetReady,
-	}, nil, "v0.9.0"))
+	}, nil, "0.9.0"))
 
 	rec, age, known = lastPushOutcome(ws, time.Now())
 	if rec.Decision != pushDecisionPushed {
 		t.Fatalf("the later success did not replace the recorded failure: %+v", rec)
 	}
-	if lines := syncPushFailureLines(rec, age, known, "v0.9.0"); len(lines) != 0 {
+	if lines := syncPushFailureLines(rec, age, known, "0.9.0"); len(lines) != 0 {
 		t.Fatalf("the warning outlived the failure it described: %q", lines)
 	}
 }

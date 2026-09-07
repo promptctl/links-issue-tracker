@@ -227,7 +227,7 @@ func pushOutcomeProvenance(rec pushOutcomeRecord, running string) string {
 	if rec.ObservedBy == "" || running == "" || rec.ObservedBy == running {
 		return ""
 	}
-	return fmt.Sprintf(" (recorded by lit %s; you are now running %s, so this verdict predates your binary)", rec.ObservedBy, running)
+	return fmt.Sprintf(" (recorded by lit %s; you are now running %s, so the binary has changed since this verdict)", rec.ObservedBy, running)
 }
 
 // lastPushOutcome reads the marker. ok is false when no push has ever been

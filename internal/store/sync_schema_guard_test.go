@@ -14,12 +14,11 @@ import (
 // seedFutureSchemaRemote seeds a remote whose head records a goose schema version
 // ABOVE this binary's registry max — the shape a NEWER binary leaves behind after
 // advancing the shared remote. It stamps a synthetic future goose_db_version row
-// (and, when producer != "", a producer binary version) and pushes; the first push
-// is to an empty remote, so the schema guard is a no-op and the bump lands. Returns
-// the seeded issue id and the future version. This binary cannot itself produce
-// that version — which is exactly the state links-sync-7p7q.4 must refuse to write
-// over.
-func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL, producer string) (string, int64) {
+// and pushes; the first push is to an empty remote, so the schema guard is a no-op
+// and the bump lands. Returns the seeded issue id and the future version. This
+// binary cannot itself produce that version — which is exactly the state
+// links-sync-7p7q.4 must refuse to write over.
+func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL string) (string, int64) {
 	t.Helper()
 	registryMax, err := migrations.MaxVersion()
 	if err != nil {
@@ -38,11 +37,6 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL, 
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, future); err != nil {
 		t.Fatalf("insert synthetic future goose row: %v", err)
-	}
-	if producer != "" {
-		if err := st.setMeta(ctx, nil, producerBinaryVersionMetaKey, producer); err != nil {
-			t.Fatalf("stamp producer: %v", err)
-		}
 	}
 	if err := st.commitWorkingSet(ctx, "seed: synthetic future schema marker"); err != nil {
 		t.Fatalf("commit future marker: %v", err)
@@ -64,10 +58,10 @@ func seedFutureSchemaRemote(t *testing.T, ctx context.Context, root, remoteURL, 
 	return issue.ID, future
 }
 
-// TestRemoteHeadSchemaReadsVersionAndProducer proves the read primitive returns the
-// remote head's applied schema version and producer stamp as raw data, AS OF the
-// commit hash — no branch move, no lift.
-func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
+// TestRemoteHeadSchemaReadsVersion proves the read primitive returns the remote
+// head's applied schema version as raw data, AS OF the commit hash — no branch
+// move, no lift.
+func TestRemoteHeadSchemaReadsVersion(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	base := t.TempDir()
@@ -75,7 +69,7 @@ func TestRemoteHeadSchemaReadsVersionAndProducer(t *testing.T) {
 	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
+	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
@@ -106,7 +100,7 @@ func TestGuardRemoteSchemaAheadDetects(t *testing.T) {
 	rootB := unrelatedDoltDir(t)
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
+	_, future := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
 	registryMax, _ := migrations.MaxVersion()
 	adoptRemote(t, ctx, rootB, remoteURL)
 
@@ -168,7 +162,7 @@ func TestSyncPushRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	rootC := filepath.Join(base, "c")
 	remoteURL := "file://" + filepath.Join(base, "remote")
 
-	id, _ := seedFutureSchemaRemote(t, ctx, rootA, remoteURL, "v9.9.0")
+	id, _ := seedFutureSchemaRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 	// B edits locally — a would-be fast-forward push onto the remote.
 	updateLocal(t, ctx, rootB, id, storage.UpdateIssueInput{Lane: strptr("from-b")})
@@ -225,7 +219,7 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 	// A advances the remote divergently AND bumps it to a future schema in the same
 	// push. The push runs while the remote is still at the current schema, so the
 	// guard does not block the bump itself; only clones that fetch it are refused.
-	advanceRemoteToFutureSchema(t, ctx, rootA, id, "v9.9.0", storage.UpdateIssueInput{Lane: strptr("from-a")})
+	advanceRemoteToFutureSchema(t, ctx, rootA, id, storage.UpdateIssueInput{Lane: strptr("from-a")})
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -256,10 +250,10 @@ func TestSyncReconcileRefusesWhenRemoteSchemaAhead(t *testing.T) {
 }
 
 // advanceRemoteToFutureSchema applies a field edit at root, stamps a synthetic
-// future goose schema version plus a producer, and pushes — all while the remote is
-// still at the current schema, so the push is not self-blocked. The remote head then
-// sits at a schema this binary cannot produce.
-func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id, producer string, in storage.UpdateIssueInput) {
+// future goose schema version, and pushes — all while the remote is still at the
+// current schema, so the push is not self-blocked. The remote head then sits at a
+// schema this binary cannot produce.
+func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id string, in storage.UpdateIssueInput) {
 	t.Helper()
 	updateLocal(t, ctx, root, id, in) // commits the divergent edit
 	registryMax, err := migrations.MaxVersion()
@@ -273,11 +267,6 @@ func advanceRemoteToFutureSchema(t *testing.T, ctx context.Context, root, id, pr
 	if _, err := st.db.ExecContext(ctx,
 		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, registryMax+1); err != nil {
 		t.Fatalf("insert synthetic future goose row: %v", err)
-	}
-	if producer != "" {
-		if err := st.setMeta(ctx, nil, producerBinaryVersionMetaKey, producer); err != nil {
-			t.Fatalf("stamp producer: %v", err)
-		}
 	}
 	if err := st.commitWorkingSet(ctx, "advance: synthetic future schema marker"); err != nil {
 		t.Fatalf("commit future marker: %v", err)

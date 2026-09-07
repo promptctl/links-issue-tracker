@@ -154,12 +154,12 @@ value is rejected at config load.
 A recorded failure is dated, never replayed as a live one. The reason is a
 sentence frozen when the attempt ran, so both the banner and `lit doctor` name
 the lit version that recorded it whenever that differs from the version now
-running — `(recorded by lit v0.7.0; you are now running v0.9.0, so this verdict
-predates your binary)` — and doctor's line ends by pointing at `lit sync push`,
-the only thing that turns a stored verdict back into a current one. Nothing
-consults the marker to decide whether to attempt a push: every attempt
-re-evaluates its own preconditions, so a condition that has since cleared is
-discovered by the next push rather than re-asserted from the record.
+running — `(recorded by lit 0.7.0; you are now running 0.9.0, so the binary
+has changed since this verdict)` — and doctor's line ends by pointing at
+`lit sync push`, the only thing that turns a stored verdict back into a
+current one. Nothing consults the marker to decide whether to attempt a push:
+every attempt re-evaluates its own preconditions, so a condition that has since
+cleared is discovered by the next push rather than re-asserted from the record.
 
 ## Receive automation
 
