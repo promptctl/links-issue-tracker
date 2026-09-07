@@ -97,6 +97,20 @@
 // probe's microsecond window (~1s budget). No inbound wait-edge from any
 // inner holder exists, so it cannot complete a cycle either.
 //
+// Holder records sit outside the slots as well. Every acquisition through
+// acquireStoreLock publishes one — a uniquely-named file under <storage
+// dir>/.links-lock-holders/<lock file name>/, held SHARED for exactly the
+// life of the hold it describes — so a contender can name the pid,
+// command, and age of what is blocking it instead of guessing. They sit
+// under the storage dir and never beside the lock, because one lock
+// (Dolt's journal LOCK) lives in a directory lit does not own, and lit's
+// records do not go there. They are descriptive only: the kernel remains
+// the sole authority on whether a lock is held, and no code branches on a
+// record's contents, so a wrong record can cost a diagnostic and nothing
+// else. Every acquisition of a record's own flock — the holder's and every
+// reader's liveness probe alike — passes maxAttempts 1, so nothing ever
+// waits on one and no cycle can close through them. See lock_holder.go.
+//
 // ONE HOME. A lock file sits beside the dolt directory — at
 // dirname(databasePath), the position every lit-minted *LockPath helper in
 // this package mints — so a `lit snapshots restore` that rotates the dolt

@@ -17,7 +17,7 @@ import (
 // release assertion means the same thing.
 func assertCommitLockFree(t *testing.T, lockPath string) {
 	t.Helper()
-	release, err := acquireStoreLock(context.Background(), lockPath, true, 1, 0)
+	release, err := acquireStoreLock(context.Background(), storageDirOf(lockPath), lockPath, true, 1, 0)
 	if err != nil {
 		t.Fatalf("commit lock still held: probe error = %v", err)
 	}
@@ -157,7 +157,7 @@ func TestAcquireCommitLockContextCancellation(t *testing.T) {
 	s := &Store{commitLockPath: lockPath}
 
 	// Hold the lock with a live in-test holder.
-	release, err := acquireStoreLock(context.Background(), lockPath, true, 1, 0)
+	release, err := acquireStoreLock(context.Background(), storageDirOf(lockPath), lockPath, true, 1, 0)
 	if err != nil {
 		t.Fatalf("holder acquisition error = %v", err)
 	}

@@ -392,14 +392,13 @@ func CommitLockPath(databasePath string) string {
 }
 
 func commitLockPathForDolt(databasePath string) string {
-	cleaned := filepath.Clean(databasePath)
 	// The historical name .links-commit.lock is burned: O_EXCL-era binaries
 	// os.Remove that path on release (and on 10-minute age eviction), and an
 	// unlink under a live flock splits the lock across two inodes — the next
 	// acquirer opens a fresh inode and runs concurrently with the orphaned
 	// holder. A name no historical binary ever touches makes that split
 	// unrepresentable; do not "restore" the old spelling.
-	return filepath.Join(filepath.Dir(cleaned), ".links-commit-flock.lock")
+	return filepath.Join(workspaceStorageDir(databasePath), ".links-commit-flock.lock")
 }
 
 // acquireCommitLockAtPath takes the exclusive commit flock, waiting out a
@@ -414,7 +413,9 @@ func commitLockPathForDolt(databasePath string) string {
 // guidance, so errors.Is(err, ErrWorkspaceBusy) discriminates commit
 // contention exactly as it does every other store lock's.
 func acquireCommitLockAtPath(ctx context.Context, lockPath string) (func() error, error) {
-	release, err := acquireStoreLock(ctx, lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
+	// The commit lock is lit-minted at the storage dir, so the lock's own
+	// directory IS that dir; no caller has to thread it separately.
+	release, err := acquireStoreLock(ctx, filepath.Dir(lockPath), lockPath, true, commitLockRetryAttempts, commitLockRetryDelay)
 	if err != nil {
 		return nil, wrapCommitLockContention(err)
 	}
