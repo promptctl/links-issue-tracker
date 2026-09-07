@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/doltcli"
-	"github.com/promptctl/links-issue-tracker/internal/issueid"
 	"github.com/promptctl/links-issue-tracker/internal/model"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
@@ -845,18 +844,6 @@ func TestStorePromptRoundTripCreateUpdateAndSearch(t *testing.T) {
 	}
 }
 
-func TestGenerateHashIssueIDIsDeterministicForSameInputs(t *testing.T) {
-	t.Parallel()
-	createdAt := time.Date(2026, 3, 19, 12, 0, 0, 0, time.UTC)
-
-	first := issueid.GenerateHashID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
-	second := issueid.GenerateHashID("test", "parser", "Fix parser", "Adopt beads ID shape", "links", createdAt, 6, 0)
-
-	if first != second {
-		t.Fatalf("issueid.GenerateHashID() = %q then %q, want deterministic output", first, second)
-	}
-}
-
 func TestCreateIssueNormalizesAndClampsConfiguredPrefix(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -910,7 +897,14 @@ func TestNewIssueIDCollisionsAdvanceNonce(t *testing.T) {
 	}
 }
 
-func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
+// TestCreateIssueChildIDsKeepParentageAndAreDistinct replaces an older test
+// that asserted children were numbered .1, .2, .3. That numbering WAS the
+// defect: a count over local rows standing in for every row that exists
+// anywhere, so two disconnected stores holding the same siblings both computed
+// the same next id. Parentage is what a child id must carry, asserted here;
+// that it carries no computable position is asserted against two real stores
+// by TestTwoDisconnectedStoresMintDistinctChildIDs. [LAW:behavior-not-structure]
+func TestCreateIssueChildIDsKeepParentageAndAreDistinct(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	st := openIssueStore(t, ctx)
@@ -925,39 +919,114 @@ func TestCreateIssueChildIDsIncrementFromParent(t *testing.T) {
 		t.Fatalf("CreateIssue(parent) error = %v", err)
 	}
 
-	childOne, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Fix first race",
-		Topic:     "renderer",
-		ParentID:  parent.ID,
-		IssueType: "task",
-		Priority:  0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue(childOne) error = %v", err)
+	newChild := func(title string) model.Issue {
+		t.Helper()
+		child, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+			Title:     title,
+			Topic:     "renderer",
+			ParentID:  parent.ID,
+			IssueType: "task",
+			Priority:  0,
+		})
+		if err != nil {
+			t.Fatalf("CreateIssue(%s) error = %v", title, err)
+		}
+		return child
 	}
-	childTwo, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
-		Title:     "Fix second race",
-		Topic:     "renderer",
-		ParentID:  parent.ID,
-		IssueType: "task",
-		Priority:  0,
-	})
-	if err != nil {
-		t.Fatalf("CreateIssue(childTwo) error = %v", err)
+	childOne := newChild("Fix first race")
+	childTwo := newChild("Fix second race")
+
+	// Parentage still rides the id, which is what every reader of an id's shape
+	// keys on — the top-level population count excludes ids carrying a dot.
+	for _, child := range []model.Issue{childOne, childTwo} {
+		suffix, ok := strings.CutPrefix(child.ID, parent.ID+".")
+		if !ok {
+			t.Fatalf("child id = %q, want it to hang under %q", child.ID, parent.ID)
+		}
+		if suffix == "" || strings.Contains(suffix, ".") {
+			t.Fatalf("child id = %q, want exactly one segment under the parent", child.ID)
+		}
+	}
+	if childOne.ID == childTwo.ID {
+		t.Fatalf("both children minted %q", childOne.ID)
 	}
 
-	if childOne.ID != parent.ID+".1" {
-		t.Fatalf("childOne.ID = %q, want %q", childOne.ID, parent.ID+".1")
-	}
-	if childTwo.ID != parent.ID+".2" {
-		t.Fatalf("childTwo.ID = %q, want %q", childTwo.ID, parent.ID+".2")
-	}
+	// Parentage is read back from the relation, not parsed out of the id.
 	detail, err := st.GetIssueDetail(ctx, childTwo.ID)
 	if err != nil {
 		t.Fatalf("GetIssueDetail(childTwo) error = %v", err)
 	}
 	if detail.Parent == nil || detail.Parent.ID != parent.ID {
 		t.Fatalf("detail.Parent = %#v, want %q", detail.Parent, parent.ID)
+	}
+}
+
+// TestCreateIssueDoesNotReuseADeletedChildID covers the second half of the
+// defect: a count over LIVE rows frees the highest slot when that child is hard
+// deleted, so a brand new, unrelated ticket lands on the deleted one's id and
+// inherits its ancestry as evidence. A content hash does not hand the freed id
+// to the next create the way the counter did; landing there again takes a hash
+// coincidence, which is what this asserts does not happen for an ordinary pair.
+func TestCreateIssueDoesNotReuseADeletedChildID(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	parent, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Sync hardening", Topic: "sync", IssueType: "epic",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(parent) error = %v", err)
+	}
+	first, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Retry the fetch", Topic: "sync", ParentID: parent.ID, IssueType: "task",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(first) error = %v", err)
+	}
+
+	// Hard delete, the way an import delta removes a row: the id leaves the table
+	// entirely rather than being tombstoned.
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	keptIssues := export.Issues[:0]
+	for _, issue := range export.Issues {
+		if issue.ID != first.ID {
+			keptIssues = append(keptIssues, issue)
+		}
+	}
+	export.Issues = keptIssues
+	keptRelations := export.Relations[:0]
+	for _, rel := range export.Relations {
+		if rel.SrcID != first.ID && rel.DstID != first.ID {
+			keptRelations = append(keptRelations, rel)
+		}
+	}
+	export.Relations = keptRelations
+	keptEvents := export.Events[:0]
+	for _, event := range export.Events {
+		if event.IssueID != first.ID {
+			keptEvents = append(keptEvents, event)
+		}
+	}
+	export.Events = keptEvents
+	if err := st.ReplaceFromExport(ctx, export); err != nil {
+		t.Fatalf("ReplaceFromExport() error = %v", err)
+	}
+	if _, err := st.GetIssue(ctx, first.ID); err == nil {
+		t.Fatalf("%q survived the delete; this test's premise is that its id is free", first.ID)
+	}
+
+	second, err := st.CreateIssue(ctx, storage.CreateIssueInput{Prefix: "test",
+		Title: "Name the lock holder", Topic: "sync", ParentID: parent.ID, IssueType: "task",
+	})
+	if err != nil {
+		t.Fatalf("CreateIssue(second) error = %v", err)
+	}
+	if second.ID == first.ID {
+		t.Fatalf("the new ticket reoccupied %q; a freed id must stay unreachable, or ancestry stops being evidence", first.ID)
 	}
 }
 

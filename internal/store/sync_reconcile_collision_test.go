@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -32,6 +33,67 @@ func createChildLocally(t *testing.T, ctx context.Context, root, workspace, pare
 		t.Fatalf("CreateIssue(child on %s): %v", root, err)
 	}
 	return child.ID
+}
+
+// retagIssueLocally rewrites one issue's id in place, carrying every edge,
+// label, comment and event that names it. It plants the premise these tests
+// need: two stores holding one id for two unrelated jobs.
+//
+// The minter no longer produces that pair by itself — links-multi-machine-qn6x
+// made child ids content-hashed, so two disconnected stores mint different ids
+// for different work. Colliding pairs still reach reconcile from the field:
+// every child minted before that change carries a locally-counted number, and
+// an import or a restore writes whatever ids its file names. Reconcile refuses
+// two rows under one id however they came to share it, so these tests state the
+// shared id outright rather than leaning on a minter that once produced it by
+// accident. [LAW:behavior-not-structure]
+func retagIssueLocally(t *testing.T, ctx context.Context, root, workspace, oldID, newID string) {
+	t.Helper()
+	st, err := Open(ctx, root, workspace)
+	if err != nil {
+		t.Fatalf("Open(%s): %v", root, err)
+	}
+	defer func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("Close(%s): %v", root, err)
+		}
+	}()
+	export, err := st.Export(ctx)
+	if err != nil {
+		t.Fatalf("Export(%s): %v", root, err)
+	}
+	swap := func(id string) string {
+		if id == oldID {
+			return newID
+		}
+		return id
+	}
+	found := false
+	for i := range export.Issues {
+		if export.Issues[i].ID == oldID {
+			found = true
+		}
+		export.Issues[i].ID = swap(export.Issues[i].ID)
+	}
+	if !found {
+		t.Fatalf("retagIssueLocally: %q is not in %s's export", oldID, root)
+	}
+	for i := range export.Relations {
+		export.Relations[i].SrcID = swap(export.Relations[i].SrcID)
+		export.Relations[i].DstID = swap(export.Relations[i].DstID)
+	}
+	for i := range export.Comments {
+		export.Comments[i].IssueID = swap(export.Comments[i].IssueID)
+	}
+	for i := range export.Labels {
+		export.Labels[i].IssueID = swap(export.Labels[i].IssueID)
+	}
+	for i := range export.Events {
+		export.Events[i].IssueID = swap(export.Events[i].IssueID)
+	}
+	if err := st.ReplaceFromExport(ctx, export); err != nil {
+		t.Fatalf("ReplaceFromExport(%s): %v", root, err)
+	}
 }
 
 // pushRootOrFatal sends a root's committed local work to the shared remote.
@@ -74,11 +136,12 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 	theirsID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
 		"hash ids grow a character past 4k issues")
 
-	// The premise, asserted rather than assumed: two disconnected stores minted
-	// one id for two unrelated jobs, with nothing racing.
-	if oursID != theirsID {
-		t.Fatalf("the two stores minted %q and %q; this test's premise is that a locally-counted child number collides", oursID, theirsID)
-	}
+	// The premise, stated outright: the two stores hold one id for two unrelated
+	// jobs. B's row is retagged onto A's id because the minter no longer produces
+	// the pair; a store carrying pre-hash children, or one restored from an
+	// import, arrives at reconcile in exactly this state.
+	retagIssueLocally(t, ctx, rootB, "wsB", theirsID, oursID)
+	theirsID = oursID
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -123,6 +186,62 @@ func TestSyncReconcileRefusesIDCollisionAndCommitsNothing(t *testing.T) {
 	}
 }
 
+// TestTwoDisconnectedStoresMintDistinctChildIDs is this ticket's defect driven
+// end to end through two real stores and the real minter — the prevention half
+// of what TestSyncReconcileRefusesIDCollisionAndCommitsNothing detects.
+//
+// Both clones hold the same epic and neither can see the other's work. Under the
+// old rule each counted the epic's children locally and each handed out the same
+// next number: nothing raced, the number was simply computed from a view that
+// was only ever partial. The ids must now differ, and reconcile must carry both
+// tickets through rather than refusing.
+func TestTwoDisconnectedStoresMintDistinctChildIDs(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	base := t.TempDir()
+	rootA := migratedDoltDir(t)
+	rootB := unrelatedDoltDir(t)
+	remoteURL := "file://" + filepath.Join(base, "remote")
+
+	epicID := seedReconcileRemote(t, ctx, rootA, remoteURL)
+	adoptRemote(t, ctx, rootB, remoteURL)
+
+	oursID := createChildLocally(t, ctx, rootA, "wsA", epicID, "Wire the release watchdog",
+		"alarm when a pending release sits past its window")
+	pushRootOrFatal(t, ctx, rootA)
+	theirsID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
+		"hash ids grow a character past 4k issues")
+
+	if oursID == theirsID {
+		t.Fatalf("both stores minted %q for two unrelated jobs; a child id must not be a locally-counted position", oursID)
+	}
+	for _, id := range []string{oursID, theirsID} {
+		if !strings.HasPrefix(id, epicID+".") {
+			t.Fatalf("child id = %q, want it to hang under the epic %q", id, epicID)
+		}
+	}
+
+	// The pair now merges instead of colliding, which is the whole point: two
+	// machines filing different work under one epic is ordinary, not a conflict.
+	syncB := openSyncOrFatal(t, ctx, rootB)
+	defer syncB.Close()
+	if err := syncB.SyncFetch(ctx, "origin", false); err != nil {
+		t.Fatalf("SyncFetch(B): %v", err)
+	}
+	res, err := syncB.SyncReconcile(ctx, "origin", "master")
+	if err != nil {
+		t.Fatalf("SyncReconcile(B): %v", err)
+	}
+	if res.State == storage.SyncReconcileIDCollision {
+		t.Fatalf("reconcile refused a collision between %q and %q; distinct ids must not collide", oursID, theirsID)
+	}
+	for _, id := range []string{oursID, theirsID} {
+		if _, err := syncB.GetIssue(ctx, id); err != nil {
+			t.Fatalf("GetIssue(%s) after reconcile: %v; both machines' tickets must survive", id, err)
+		}
+	}
+}
+
 // TestSyncPullSurfacesIDCollision drives the same planted defect through `lit sync
 // pull`'s engine path. The pull maps every reconcile outcome to its own state, and
 // an unmapped one is a returned error — so without this the operator's explicit
@@ -139,11 +258,12 @@ func TestSyncPullSurfacesIDCollision(t *testing.T) {
 	epicID := seedReconcileRemote(t, ctx, rootA, remoteURL)
 	adoptRemote(t, ctx, rootB, remoteURL)
 
-	createChildLocally(t, ctx, rootA, "wsA", epicID, "Wire the release watchdog",
+	theirsID := createChildLocally(t, ctx, rootA, "wsA", epicID, "Wire the release watchdog",
 		"alarm when a pending release sits past its window")
 	pushRootOrFatal(t, ctx, rootA)
-	theirsID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
+	oursID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
 		"hash ids grow a character past 4k issues")
+	retagIssueLocally(t, ctx, rootB, "wsB", oursID, theirsID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
 	defer syncB.Close()
@@ -337,9 +457,8 @@ func TestSyncReconcileRefusesIDCollisionFoundInFoldedCommit(t *testing.T) {
 	pushRootOrFatal(t, ctx, rootA)
 	theirsID := createChildLocally(t, ctx, rootB, "wsB", epicID, "Adaptive id length for large backlogs",
 		"hash ids grow a character past 4k issues")
-	if oursID != theirsID {
-		t.Fatalf("the two stores minted %q and %q; this test's premise is that a locally-counted child number collides", oursID, theirsID)
-	}
+	retagIssueLocally(t, ctx, rootB, "wsB", theirsID, oursID)
+	theirsID = oursID
 	removeIssueLocally(t, ctx, rootB, "wsB", theirsID)
 
 	syncB := openSyncOrFatal(t, ctx, rootB)
