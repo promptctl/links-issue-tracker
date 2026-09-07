@@ -36,12 +36,12 @@ import (
 // read a shared-held record but not an exclusively-held one.
 //
 // [LAW:no-ambient-temporal-coupling] A record is created, held, and filled in
-// under a private name, and reaches the name a reader sweeps by being renamed
+// under a private name, and reaches the name a reader sweeps by being LINKED
 // there — so under that name it is complete and held from the instant it
 // exists, and there is no moment a reader can catch it half-made. That is what
 // makes a reader's cleanup safe: proving a swept record unheld proves its
 // holder gone, because no publisher is ever working on a name a reader can
-// see. lockHolderMintingPrefix carries the full account of why the naive
+// see. lockHolderPrivatePrefix carries the full account of why the naive
 // single-name version cannot be made safe by ordering alone.
 //
 // NO WAIT EDGE. Nothing here ever waits on a record's flock at all. A reader's
@@ -69,10 +69,10 @@ func lockHolderDir(storageDir, lockPath string) string {
 // one from anything else that ever lands in the directory.
 const lockHolderRecordPrefix = "holder-"
 
-// lockHolderMintingPrefix names a record that is not one yet: created, held,
-// and being filled in. It deliberately does NOT carry lockHolderRecordPrefix,
-// so a reader's sweep never sees it — and that, with the rename into the final
-// name, is what keeps a reader's cleanup from destroying a live record.
+// lockHolderPrivatePrefix names the record under the name only its own holder
+// ever touches. It deliberately does NOT carry lockHolderRecordPrefix, so a
+// reader's sweep never sees it — and that, with the link into the swept name,
+// is what keeps a reader's cleanup from destroying a live record.
 //
 // A reader retires any record it proves unheld, deciding that under the
 // record's own hold but acting on it after dropping that hold, so the proof
@@ -85,36 +85,53 @@ const lockHolderRecordPrefix = "holder-"
 // exists to prevent.
 //
 // Splitting the names retires the question rather than narrowing the window. A
-// record reaches lockHolderRecordPrefix by being RENAMED there, already held
+// record reaches lockHolderRecordPrefix by being LINKED there, already held
 // and already filled, so every name a reader can see is a finished record and
 // proving one unheld really does prove its holder dead. Every name a publisher
 // works on is one no reader will ever open.
 //
-// The cost is the one case the split gives up: a publisher killed between
-// creating its mint and renaming it — a window of local filesystem calls with
-// nothing blocking in it — leaves an empty file no sweep collects. A stray
-// byte-less file that names nobody is the cheap end of this trade; the holder
-// it would otherwise cost is the expensive one.
-const lockHolderMintingPrefix = "minting-"
+// Both names live exactly as long as the record does: one inode, two
+// directory entries, retired together by whoever ends it — its own holder at
+// release, or the sweep that proves it dead (readLockHolder retires the
+// private sibling on the strength of the same proof, since it is the same
+// inode). The one case the split gives up is a publisher killed before it
+// links, which leaves a private name no record name points at and so nothing
+// collects. A stray byte-less file that names nobody is the cheap end of this
+// trade; the holder it would otherwise cost is the expensive one.
+const lockHolderPrivatePrefix = "private-"
 
-// lockHolderMintSeq numbers this process's mints, and with the pid it makes a
-// record's name unique among every record that can be live at once: two live
-// processes cannot share a pid, and one process cannot draw the same number
-// twice. A random name would be unique only by luck, and publishing renames
-// ONTO the name it picks — so the day two draws collide, a live holder's record
-// is replaced silently, which is the failure this file exists to prevent, run
-// at long odds instead of avoided.
+// lockHolderRecordSeq numbers this process's records, and with the pid it
+// makes a record's names unique among every record that can be live at once:
+// two live processes cannot share a pid, and one process cannot draw the same
+// number twice. What keeps a live record safe against the rest — a pid reused
+// after a killed holder, whose un-swept record still squats the name a fresh
+// process would draw — is not the draw but the publish: both names are created
+// by primitives that refuse to replace (O_EXCL, and link), so a collision
+// costs a loud publish failure and never a silently overwritten record.
 //
 // [LAW:no-shared-mutable-globals] One writer, one operation, one invariant:
 // every read is an Add, and the value means nothing except that it differs
 // from the last.
-var lockHolderMintSeq atomic.Uint64
+var lockHolderRecordSeq atomic.Uint64
 
-// lockHolderRecordName is the name one acquisition publishes under.
-// [LAW:one-source-of-truth] The uniqueness argument above holds only while
-// every record is named here.
-func lockHolderRecordName() string {
-	return fmt.Sprintf("%s%d-%d", lockHolderRecordPrefix, os.Getpid(), lockHolderMintSeq.Add(1))
+// lockHolderRecordNames draws the two names one acquisition lives under: the
+// private one only its own holder ever touches, and the one a reader sweeps.
+// [LAW:one-source-of-truth] Both are cut from a single suffix here, which is
+// what lets a sweep read the split backwards to find a dead record's private
+// sibling; privateNameFor is that inverse.
+func lockHolderRecordNames(dir string) (privatePath, recordPath string) {
+	suffix := fmt.Sprintf("%d-%d", os.Getpid(), lockHolderRecordSeq.Add(1))
+	return filepath.Join(dir, lockHolderPrivatePrefix+suffix),
+		filepath.Join(dir, lockHolderRecordPrefix+suffix)
+}
+
+// privateNameFor names the private sibling of the record at recordPath. The
+// two names are one inode, so proving the swept name unheld proves the private
+// one unheld by the same acquisition — and retiring only the swept name would
+// strand its sibling with nothing left that could collect it.
+func privateNameFor(recordPath string) string {
+	dir, name := filepath.Split(recordPath)
+	return filepath.Join(dir, lockHolderPrivatePrefix+strings.TrimPrefix(name, lockHolderRecordPrefix))
 }
 
 // lockHolderRecord is what one holder says about itself. It is descriptive
@@ -178,34 +195,47 @@ func publishLockHolder(storageDir, lockPath string) (func() error, error) {
 // is complete and held from the instant it exists, so no reader ever meets a
 // half-made one.
 func mintHeldRecord(dir string, payload []byte) (func() error, error) {
-	minted, err := os.CreateTemp(dir, lockHolderMintingPrefix+"*")
+	privatePath, recordPath := lockHolderRecordNames(dir)
+	// O_EXCL so a name already on disk — a private sibling stranded by a
+	// publisher killed before it linked, under a since-reused pid — is refused
+	// here rather than adopted as this holder's record.
+	// [LAW:no-silent-failure]
+	created, err := os.OpenFile(privatePath, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("create holder record: %w", err)
 	}
-	mintPath := minted.Name()
-	if err := minted.Close(); err != nil {
-		return nil, errors.Join(fmt.Errorf("create holder record: %w", err), retireRecord(mintPath))
+	if err := created.Close(); err != nil {
+		return nil, errors.Join(fmt.Errorf("create holder record: %w", err), retireRecord(privatePath))
 	}
-	// One attempt is the whole budget: this name came from CreateTemp and no
-	// reader will ever open it, so the hold is uncontended by construction and
-	// contention here would mean the invariant is broken, not that waiting
-	// would help. [LAW:no-silent-failure]
-	release, acquired, err := filelock.Acquire(context.Background(), mintPath, false, 1, 0)
+	// One attempt is the whole budget: no reader will ever open this name, so
+	// the hold is uncontended by construction and contention here would mean
+	// the invariant is broken, not that waiting would help.
+	// [LAW:no-silent-failure]
+	release, acquired, err := filelock.Acquire(context.Background(), privatePath, false, 1, 0)
 	if err != nil || !acquired {
-		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(mintPath))
+		return nil, errors.Join(fmt.Errorf("hold holder record (acquired=%v): %w", acquired, err), retireRecord(privatePath))
 	}
-	if err := fillHeldRecord(mintPath, payload); err != nil {
-		return nil, errors.Join(err, release(), retireRecord(mintPath))
+	if err := fillHeldRecord(privatePath, payload); err != nil {
+		return nil, errors.Join(err, release(), retireRecord(privatePath))
 	}
 	// A hold rides the inode, not the name, so the record a reader now finds
 	// under recordPath is the one this call is already holding — and this is
 	// the first instant any reader can see it at all.
-	recordPath := filepath.Join(dir, lockHolderRecordName())
-	if err := os.Rename(mintPath, recordPath); err != nil {
-		return nil, errors.Join(fmt.Errorf("publish holder record: %w", err), release(), retireRecord(mintPath))
+	//
+	// Linked, never renamed: MoveFileEx opens its source for DELETE, and
+	// filelock holds this file through os.OpenFile, whose Windows share mode
+	// omits FILE_SHARE_DELETE — so a rename here fails with a sharing
+	// violation on every acquisition on that platform, where nothing in CI
+	// would see it. CreateHardLink asks the source for no such right. Linking
+	// also refuses to replace an existing name, which is what keeps a record
+	// some other holder is still alive under from being published over.
+	if err := os.Link(privatePath, recordPath); err != nil {
+		return nil, errors.Join(fmt.Errorf("publish holder record: %w", err), release(), retireRecord(privatePath))
 	}
+	// Both names, and only once the hold is dropped: unlinking either would
+	// want the same DELETE right the open handle denies on Windows.
 	return func() error {
-		return errors.Join(release(), retireRecord(recordPath))
+		return errors.Join(release(), retireRecord(recordPath), retireRecord(privatePath))
 	}, nil
 }
 
@@ -288,7 +318,7 @@ func unnamedHolder(problems []string) string {
 // age threshold. A record whose hold this call takes had no live owner, so it
 // is retired here — and that is safe to conclude only because no publisher
 // ever works under a name this loop can see: a record arrives under its own
-// name finished and held, by rename (lockHolderMintingPrefix).
+// name finished and held, by link (lockHolderPrivatePrefix).
 //
 // [LAW:no-silent-failure] Read failures travel back beside the holders instead
 // of shrinking the account silently: a diagnostic that quietly reports fewer
@@ -326,8 +356,11 @@ func readLockHolder(recordPath string) ([]lockHolderRecord, []string) {
 		return nil, []string{fmt.Sprintf("holder record %s unprobeable: %v", filepath.Base(recordPath), err)}
 	}
 	if acquired {
-		// Nobody held it: the recorder died without releasing. Retire it.
-		return nil, describeProblem(errors.Join(release(), retireRecord(recordPath)), "retiring dead holder record "+filepath.Base(recordPath))
+		// Nobody held it: the recorder died without releasing. Retire it —
+		// both its names, since this one proof covers the inode they share.
+		return nil, describeProblem(
+			errors.Join(release(), retireRecord(recordPath), retireRecord(privateNameFor(recordPath))),
+			"retiring dead holder record "+filepath.Base(recordPath))
 	}
 	if readErr != nil {
 		return nil, []string{fmt.Sprintf("a holder is live but its record %s is unreadable: %v", filepath.Base(recordPath), readErr)}

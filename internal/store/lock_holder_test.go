@@ -470,7 +470,7 @@ func TestPublishSurvivesASweepRacingIt(t *testing.T) {
 }
 
 // TestStrayRecordIsRetiredNotLeaked pins that an empty file under a record's
-// name never accumulates. Publishing by rename means no publisher writes one —
+// name never accumulates. Publishing by link means no publisher writes one —
 // but a reader's own probe does, because filelock opens with O_CREATE and a
 // sweep meeting a name its holder has just retired recreates it. The sweep that
 // made it is the sweep that collects it, so nothing has to know it was ever a
@@ -499,33 +499,79 @@ func TestStrayRecordIsRetiredNotLeaked(t *testing.T) {
 	}
 }
 
-// TestSweepLeavesAMintAlone pins the cost side of publishing under two names,
-// so it stays a decision rather than a discovery. A mint carries no record
-// prefix, so no sweep opens it, retires it, or counts it against the account —
-// which is exactly what keeps a sweep from destroying one mid-flight, and
-// exactly why a publisher killed before its rename leaves a file behind that
-// nothing collects. An empty file naming nobody is the cheap end of that trade.
-func TestSweepLeavesAMintAlone(t *testing.T) {
+// TestSweepLeavesAPrivateNameAlone pins the cost side of living under two
+// names, so it stays a decision rather than a discovery. A private name
+// carries no record prefix, so no sweep opens it, retires it, or counts it
+// against the account — which is exactly what keeps a sweep from destroying a
+// record mid-flight, and exactly why a publisher killed before it links leaves
+// a file behind that nothing collects. An empty file naming nobody is the
+// cheap end of that trade.
+func TestSweepLeavesAPrivateNameAlone(t *testing.T) {
 	t.Parallel()
 	lockPath := filepath.Join(t.TempDir(), "test.lock")
 	dir := lockHolderDir(storageDirOf(lockPath), lockPath)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		t.Fatalf("mkdir holder dir: %v", err)
 	}
-	minting, err := os.CreateTemp(dir, lockHolderMintingPrefix+"*")
+	private, err := os.CreateTemp(dir, lockHolderPrivatePrefix+"*")
 	if err != nil {
-		t.Fatalf("mint record: %v", err)
+		t.Fatalf("create private record: %v", err)
 	}
-	if err := minting.Close(); err != nil {
-		t.Fatalf("close mint: %v", err)
+	if err := private.Close(); err != nil {
+		t.Fatalf("close private record: %v", err)
 	}
 
 	holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
 	if len(holders) != 0 || len(problems) != 0 {
-		t.Errorf("holders = %v, problems = %v, want a mint to report neither", holders, problems)
+		t.Errorf("holders = %v, problems = %v, want a private name to report neither", holders, problems)
 	}
-	if _, err := os.Stat(minting.Name()); err != nil {
-		t.Errorf("stat mint after a sweep: %v, want a sweep to leave it untouched", err)
+	if _, err := os.Stat(private.Name()); err != nil {
+		t.Errorf("stat private record after a sweep: %v, want a sweep to leave it untouched", err)
+	}
+}
+
+// TestSweepRetiresBothNamesOfADeadRecord pins that a record's two names die
+// together. A record lives under a swept name and a private one, and only the
+// swept name is ever proved dead — so a sweep that retired that one alone
+// would strand the private sibling with nothing left in the system that could
+// ever collect it, turning every killed holder into permanent debris. One
+// proof, one inode, both names.
+func TestSweepRetiresBothNamesOfADeadRecord(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+
+	// The two linked names a SIGKILLed holder leaves behind: content intact,
+	// hold gone with the process.
+	dir := lockHolderDir(storageDir, lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir holder dir: %v", err)
+	}
+	payload, err := json.Marshal(lockHolderRecord{PID: 424242, Command: "lit backlog", Since: time.Now()})
+	if err != nil {
+		t.Fatalf("marshal record: %v", err)
+	}
+	record := filepath.Join(dir, lockHolderRecordPrefix+"424242-1")
+	if err := os.WriteFile(record, payload, 0o600); err != nil {
+		t.Fatalf("write record: %v", err)
+	}
+	if err := os.Link(record, privateNameFor(record)); err != nil {
+		t.Fatalf("link private name: %v", err)
+	}
+
+	if _, problems := readLockHolders(storageDir, lockPath); len(problems) != 0 {
+		t.Errorf("problems = %v, want a dead record to be retired quietly", problems)
+	}
+	left, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("read holder dir: %v", err)
+	}
+	if len(left) != 0 {
+		names := make([]string, 0, len(left))
+		for _, e := range left {
+			names = append(names, e.Name())
+		}
+		t.Errorf("names surviving the sweep = %v, want both retired together", names)
 	}
 }
 
