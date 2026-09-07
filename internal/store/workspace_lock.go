@@ -200,8 +200,11 @@ func HoldMirrorBeacon(ctx context.Context, databasePath string) (func() error, e
 		// serialization ErrWorkspaceBusy names, so the sentinel is deliberately
 		// NOT propagated: wrapping it would record the ending as the non-paging
 		// workspace_busy class and stop pushes with no FAILING banner and no
-		// owner page. [LAW:no-silent-failure]
-		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?)", MirrorBeaconLockPath(databasePath))
+		// owner page. [LAW:no-silent-failure] Its TEXT still rides along, via
+		// %v rather than %w — naming the squatter is the whole question this
+		// message raises, and %v carries the holder account without carrying
+		// the sentinel's identity.
+		return nil, fmt.Errorf("mirror liveness beacon held exclusively past every probe window (a foreign process holding %s?): %v", MirrorBeaconLockPath(databasePath), err)
 	}
 	return release, err
 }

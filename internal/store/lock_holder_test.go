@@ -400,6 +400,123 @@ func TestHolderRecordSurvivesConcurrentAcquisitions(t *testing.T) {
 	}
 }
 
+// TestPublishSurvivesASweepRacingIt pins the ordering that makes a reader's
+// retirement safe. A record carries content only once its hold is in place, so
+// a sweep landing mid-publish can retire nothing but an empty file the
+// publisher immediately replaces. Filled in first, the sweep retires a
+// finished record and the publisher's own acquire recreates that name empty
+// and holds it for the life of the lock — every later account reporting a
+// parse failure about a holder whose record was written perfectly.
+//
+// The sweeper is exactly what announceLockWait runs on a contended lock, so
+// this is the production pairing, not a contrived one.
+func TestPublishSurvivesASweepRacingIt(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	storageDir := storageDirOf(lockPath)
+
+	stop := make(chan struct{})
+	swept := make(chan struct{})
+	go func() {
+		defer close(swept)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+				readLockHolders(storageDir, lockPath)
+			}
+		}
+	}()
+	defer func() {
+		close(stop)
+		<-swept
+	}()
+
+	for i := 0; i < 300; i++ {
+		release, err := acquireStoreLock(ctx, storageDir, lockPath, true, 1, 0)
+		if err != nil {
+			t.Fatalf("acquire %d: %v", i, err)
+		}
+		// The account this holder's own contenders would read. A record lost
+		// to the sweep shows up here as a parse failure that no later read
+		// ever repairs, because the empty file lives as long as the hold.
+		account := describeLockHolders(storageDir, lockPath)
+		if err := release(); err != nil {
+			t.Fatalf("release %d: %v", i, err)
+		}
+		if strings.Contains(account, "does not parse") {
+			t.Fatalf("acquire %d: the sweep cost a live holder its record: %s", i, account)
+		}
+	}
+}
+
+// TestMintedRecordIsRetiredNotLeaked pins that a publisher killed before it
+// fills its record leaves nothing permanent behind. The empty file it leaves
+// carries the same prefix as any other record, so it is probed and retired by
+// the sweep that was already there — the reason no separate staging name, and
+// no separate sweeper for one, needs to exist.
+func TestMintedRecordIsRetiredNotLeaked(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	dir := lockHolderDir(storageDirOf(lockPath), lockPath)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir holder dir: %v", err)
+	}
+	minted, err := os.CreateTemp(dir, lockHolderRecordPrefix+"*")
+	if err != nil {
+		t.Fatalf("mint record: %v", err)
+	}
+	if err := minted.Close(); err != nil {
+		t.Fatalf("close minted record: %v", err)
+	}
+
+	holders, problems := readLockHolders(storageDirOf(lockPath), lockPath)
+	if len(holders) != 0 || len(problems) != 0 {
+		t.Errorf("holders = %v, problems = %v, want an unfilled record to report neither", holders, problems)
+	}
+	if left := recordFiles(t, lockPath); len(left) != 0 {
+		t.Errorf("an unfilled record survived the read: %v", left)
+	}
+}
+
+// TestFillingARetiredRecordFailsRatherThanRecreatingIt pins the O_CREATE-less
+// open. A record retired in the instant before its hold landed must not be
+// written back into existence: the file would carry this holder's identity
+// with nothing holding it, and the next reader would find it ownerless and
+// retire it — costing the account a holder that is very much alive, silently.
+func TestFillingARetiredRecordFailsRatherThanRecreatingIt(t *testing.T) {
+	t.Parallel()
+	retired := filepath.Join(t.TempDir(), lockHolderRecordPrefix+"gone")
+
+	if err := fillHeldRecord(retired, []byte(`{"pid":1}`)); err == nil {
+		t.Fatal("fillHeldRecord() on a retired record returned no error")
+	}
+	if _, err := os.Stat(retired); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("fillHeldRecord() recreated the retired record: stat err = %v, want not-exist", err)
+	}
+}
+
+// TestUnnamedHolderDoesNotGuessPastAFailedRead pins that the account stops
+// asserting "left no record" when it could not read the records at all. The
+// two facts are different — nothing recorded itself, versus this call could
+// not see what did — and printing the first beside "holder records unreadable"
+// sends an operator hunting a foreign process over a local read failure.
+func TestUnnamedHolderDoesNotGuessPastAFailedRead(t *testing.T) {
+	t.Parallel()
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	blockHolderDir(t, lockPath)
+
+	account := describeLockHolders(storageDirOf(lockPath), lockPath)
+	if !strings.Contains(account, "holder records unreadable") {
+		t.Fatalf("account = %q, want it to report the read failure", account)
+	}
+	if strings.Contains(account, "left no record") {
+		t.Errorf("account = %q, want no claim about what the holder recorded when the records could not be read", account)
+	}
+}
+
 // TestContentionAccountReachesTheWrappers pins that the holder account is not
 // a detail of acquireStoreLock but reaches the operator through the messages
 // the wrappers actually print — the reason both halves live at the single
@@ -424,6 +541,38 @@ func TestContentionAccountReachesTheWrappers(t *testing.T) {
 	}
 	if want := fmt.Sprintf("pid %d", os.Getpid()); !strings.Contains(err.Error(), want) {
 		t.Errorf("LockWorkspaceExclusive() error %q does not carry %q", err, want)
+	}
+}
+
+// TestBeaconContentionNamesTheSquatter pins the one wrapper that built its own
+// message rather than carrying the account out. A foreign process holding the
+// beacon past every probe window is the case where naming it matters most, and
+// it was the only path where the answer was dropped. The sentinel stays
+// un-propagated — that classification is deliberate — so the account has to
+// travel as text, and both halves are pinned here together.
+func TestBeaconContentionNamesTheSquatter(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	doltRoot := filepath.Join(t.TempDir(), "dolt")
+	squatter, err := acquireStoreLock(ctx, workspaceStorageDir(doltRoot), MirrorBeaconLockPath(doltRoot), true, 1, 0)
+	if err != nil {
+		t.Fatalf("squatter acquireStoreLock() error = %v", err)
+	}
+	defer func() {
+		if err := squatter(); err != nil {
+			t.Errorf("release squatter: %v", err)
+		}
+	}()
+
+	release, err := HoldMirrorBeacon(ctx, doltRoot)
+	if err == nil {
+		t.Fatalf("HoldMirrorBeacon() succeeded against an exclusive squatter; release = %v", release())
+	}
+	if errors.Is(err, ErrWorkspaceBusy) {
+		t.Errorf("HoldMirrorBeacon() error = %v, want the busy sentinel deliberately not propagated", err)
+	}
+	if want := fmt.Sprintf("pid %d", os.Getpid()); !strings.Contains(err.Error(), want) {
+		t.Errorf("HoldMirrorBeacon() error %q does not name the squatter (%s)", err, want)
 	}
 }
 
