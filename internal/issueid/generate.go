@@ -17,6 +17,78 @@ const (
 	Base36Alphabet                = "0123456789abcdefghijklmnopqrstuvwxyz"
 )
 
+// Namespace is the text every id in one id-space hangs under: a workspace's
+// top-level space renders "<prefix>-<topic>-", one parent's child space renders
+// "<parentID>.". It is the ONLY thing that differs between the two minting
+// paths, so both reach Mint through the same call and there is one minting
+// behavior rather than two that can drift apart.
+// [LAW:one-type-per-behavior] The variability is a value crossing one boundary,
+// not a second function with a second algorithm.
+type Namespace string
+
+// TopLevelNamespace is the id-space a parentless issue is minted into.
+func TopLevelNamespace(prefix, topic string) Namespace {
+	return Namespace(prefix + "-" + topic + "-")
+}
+
+// ChildNamespace is the id-space the direct children of parentID are minted
+// into. The dot is what every reader of an id's shape keys on — the top-level
+// population count excludes ids containing one — so it stays part of the
+// rendering rather than becoming a second parentage record.
+func ChildNamespace(parentID string) Namespace {
+	return Namespace(parentID + ".")
+}
+
+// Content is the identifying material an id is derived from. CreatedAt carries
+// nanosecond resolution and is what decorrelates two disconnected stores: an id
+// derived from content plus the instant of creation is not a claim about what
+// exists elsewhere, so two stores holding identical rows do not converge on one
+// id the way a count over local rows does. It is also what puts a hard-deleted
+// id out of a later create's reach, since no second create can land on the
+// nanosecond the first did.
+//
+// The guarantee is the one top-level ids have always run on, no weaker and no
+// stronger: two ids collide only if their whole content AND their creation
+// nanosecond match. Creator is hashed for the same reason, but note the Dolt
+// store stamps every create with the same literal creator today, so the
+// creation instant is carrying this alone.
+type Content struct {
+	Topic       string
+	Title       string
+	Description string
+	Creator     string
+	CreatedAt   time.Time
+}
+
+// TakenFunc reports whether a candidate id already exists in the store. It
+// carries an error because the probe is a query; a failed probe is never
+// reported as "free". [LAW:no-silent-failure]
+type TakenFunc func(candidate string) (bool, error)
+
+// Mint returns an id in ns that no existing id occupies, widening the hash as
+// the population grows and re-rolling on the nonce within each length.
+// population is the number of ids already sharing ns, which sets the starting
+// hash length; taken decides occupancy against the whole store, since an id is
+// unique store-wide and not merely within its namespace.
+// [LAW:dataflow-not-control-flow] One sweep runs for every id ever minted;
+// the namespace and population are values it reads, never branches it takes.
+func Mint(ns Namespace, c Content, population int, taken TakenFunc) (string, error) {
+	baseLength := min(ComputeAdaptiveLength(population), MaxHashLength)
+	for length := baseLength; length <= MaxHashLength; length++ {
+		for nonce := 0; nonce < NonceAttempts; nonce++ {
+			candidate := GenerateHashID(ns, c, length, nonce)
+			occupied, err := taken(candidate)
+			if err != nil {
+				return "", fmt.Errorf("check issue id collision: %w", err)
+			}
+			if !occupied {
+				return candidate, nil
+			}
+		}
+	}
+	return "", fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, MaxHashLength)
+}
+
 // ComputeAdaptiveLength returns the smallest hash length whose collision
 // probability for the given issue count stays under CollisionProbabilityThreshold.
 func ComputeAdaptiveLength(numIssues int) int {
@@ -35,15 +107,14 @@ func CollisionProbability(numIssues int, idLength int) float64 {
 	return 1.0 - math.Exp(exponent)
 }
 
-// GenerateHashID builds a deterministic ID from the issue's identifying
-// fields plus a nonce. Same inputs + same nonce always produce the same ID;
-// the nonce exists to retry on collision without changing the title or
-// description.
-func GenerateHashID(prefix string, topic string, title string, description string, creator string, createdAt time.Time, length int, nonce int) string {
-	content := fmt.Sprintf("%s|%s|%s|%s|%d|%d", topic, title, description, creator, createdAt.UnixNano(), nonce)
+// GenerateHashID renders one candidate id: the namespace followed by a
+// base36 hash of the content plus a nonce. Same content and nonce always
+// produce the same id; the nonce exists to retry on collision without
+// changing the title or description.
+func GenerateHashID(ns Namespace, c Content, length int, nonce int) string {
+	content := fmt.Sprintf("%s|%s|%s|%s|%d|%d", c.Topic, c.Title, c.Description, c.Creator, c.CreatedAt.UnixNano(), nonce)
 	hash := sha256.Sum256([]byte(content))
-	shortHash := encodeBase36(hash[:hashBytesForLength(length)], length)
-	return fmt.Sprintf("%s-%s-%s", prefix, topic, shortHash)
+	return string(ns) + encodeBase36(hash[:hashBytesForLength(length)], length)
 }
 
 func hashBytesForLength(length int) int {

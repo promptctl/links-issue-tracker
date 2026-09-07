@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strconv"
 	"strings"
 	"time"
 
@@ -107,24 +106,36 @@ func (e *Engine) place(id string, placement storage.RankPlacement) {
 	e.order = append(e.order, id)
 }
 
-// mintID names a new issue. A child is numbered under its parent so the id
-// carries the structure a reader reads it for; a top-level issue gets a
-// content hash long enough that a collision at this store's size is unlikely,
-// retried at increasing length until one is free.
+// mintID names a new issue. Top-level and child ids differ only in the
+// namespace they hang under and the population that sets their hash length;
+// the minting rule itself is one function in issueid, reached the same way
+// from both, so this engine and the Dolt store cannot drift apart on what an
+// id is. [LAW:one-type-per-behavior]
 func (e *Engine) mintID(prefix, topic, title, description string, createdAt time.Time, parentID string) (string, error) {
-	if parentID != "" {
-		return e.nextChildID(parentID), nil
+	content := issueid.Content{
+		Topic:       topic,
+		Title:       title,
+		Description: description,
+		Creator:     createdBy,
+		CreatedAt:   createdAt,
 	}
-	baseLength := min(issueid.ComputeAdaptiveLength(e.topLevelCount()), issueid.MaxHashLength)
-	for length := baseLength; length <= issueid.MaxHashLength; length++ {
-		for nonce := 0; nonce < issueid.NonceAttempts; nonce++ {
-			candidate := issueid.GenerateHashID(prefix, topic, title, description, createdBy, createdAt, length, nonce)
-			if _, taken := e.issues[candidate]; !taken {
-				return candidate, nil
-			}
-		}
+	namespace, population := e.idSpace(prefix, topic, parentID)
+	return issueid.Mint(namespace, content, population, func(candidate string) (bool, error) {
+		_, taken := e.issues[candidate]
+		return taken, nil
+	})
+}
+
+// idSpace resolves which id-space a new issue is minted into and how populated
+// that space already is. The population sets a starting hash length and never a
+// position: an id derived from a count over the LOCAL rows is a claim about
+// every row that exists anywhere, and two disconnected stores holding the same
+// rows make that claim identically. [LAW:one-source-of-truth]
+func (e *Engine) idSpace(prefix, topic, parentID string) (issueid.Namespace, int) {
+	if parentID == "" {
+		return issueid.TopLevelNamespace(prefix, topic), e.topLevelCount()
 	}
-	return "", fmt.Errorf("generate unique issue id: exhausted lengths %d-%d", baseLength, issueid.MaxHashLength)
+	return issueid.ChildNamespace(parentID), e.childCount(parentID)
 }
 
 func (e *Engine) topLevelCount() int {
@@ -137,23 +148,18 @@ func (e *Engine) topLevelCount() int {
 	return count
 }
 
-// nextChildID numbers a child one past the highest direct child of parentID.
-// Only direct children count: a grandchild's id carries a further dot, and
-// counting it would collide the next sibling with an existing branch.
-func (e *Engine) nextChildID(parentID string) string {
-	highest := 0
-	for id := range e.issues {
-		suffix, ok := strings.CutPrefix(id, parentID+".")
-		if !ok || suffix == "" || strings.Contains(suffix, ".") {
-			continue
+// childCount counts the direct children already recorded under parentID.
+// Parentage is read from the relation edges, the only place it lives — an id
+// prefix scan would also sweep up grandchildren and would take the id shape as
+// evidence of structure it does not own. [LAW:one-source-of-truth]
+func (e *Engine) childCount(parentID string) int {
+	count := 0
+	for _, rel := range e.relations {
+		if rel.Type == model.RelParentChild && rel.DstID == parentID {
+			count++
 		}
-		number, err := strconv.Atoi(suffix)
-		if err != nil {
-			continue
-		}
-		highest = max(highest, number)
 	}
-	return fmt.Sprintf("%s.%d", parentID, highest+1)
+	return count
 }
 
 func (e *Engine) GetIssue(ctx context.Context, id string) (model.Issue, error) {

@@ -217,12 +217,16 @@ merged by anyone.
 
 ## Two tickets under one id
 
-A child id is minted as `<parent>.<highest existing child number + 1>`, counted
-over the rows in the local store. Two disconnected stores that each hold the
-same fifteen children of an epic do not *race* for `.16` — both compute it,
-deterministically, every time. Disconnection is the only precondition, and
-disconnection is the ordinary state of parallel checkouts between syncs, so this
-is certain, not rare.
+A child id used to be minted as `<parent>.<highest existing child number + 1>`,
+counted over the rows in the local store. Two disconnected stores that each held
+the same fifteen children of an epic did not *race* for `.16` — both computed
+it, deterministically, every time. Disconnection was the only precondition, and
+disconnection is the ordinary state of parallel checkouts between syncs, so it
+was certain, not rare. New child ids no longer work that way (see *Child ids are
+minted, not counted* below), but every child minted before that change still
+carries its number, and an import or restore writes whatever ids its file names
+— so the refusal described here is still what stands between those rows and a
+silent fusion.
 
 The two rows are two pieces of work wearing one name, not one ticket that
 diverged. Field-merging them produces a well-formed, unexecutable row: one job's
@@ -267,21 +271,47 @@ under a free id. Retiring the duplicate id is not yet a lit operation, and
 closing or deleting the losing row does not free the id — both are soft states,
 the row still exports, so it still collides.
 
-A second decision, deferred to its own ticket: child ids stop encoding a
-locally-counted position. `<parent>.<max local child + 1>` is a map of every
-child that exists anywhere drawn from only the local corner, so every id minted
-while disconnected is a guess, and the guesses are *correlated* rather than
-random — which is why they collide reliably instead of occasionally. Top-level
-ids already avoid this: they hash content, creator, and timestamp, then check
-locally for uniqueness. Children are the only minting path that does not, so
-unifying them onto the same hashed mechanism removes the collision at its source
-and leaves one id-minting behavior where there are currently two. The ordinal is
-cosmetic — an epic's children are displayed in rank order, not id order — so
-what is lost is legibility, not meaning. It is deferred because it changes a
-user-visible id shape, and its blast radius (existing ids, branch and PR
-conventions, documentation) is much larger than the detection fix. Both halves
-are needed: detection does not stop the next collision, and prevention does not
-fix a store that already holds one.
+## Child ids are minted, not counted
+
+`<parent>.<max local child + 1>` was a map of every child that exists anywhere
+drawn from only the local corner, so every id minted while disconnected was a
+guess — and the guesses were *correlated* rather than random, which is why they
+collided reliably instead of occasionally. Top-level ids never had the problem:
+they hash the issue's content, creator, and creation instant, then check locally
+for uniqueness, widening the hash as the population grows. Children were the
+only minting path that did not.
+
+Children now mint the same way. A new child id is `<parent>.<hash>` — the parent
+id, a dot, and a base36 content hash — produced by the same one minting function
+top-level ids go through, with the parent's id as the namespace instead of
+`<prefix>-<topic>-`. There is one id-minting behavior where there were two.
+
+What that buys, and what it does not:
+
+- **Two disconnected stores mint different ids for different work.** The hash
+  carries the creation instant at nanosecond resolution, so an id is no longer a
+  claim about what exists on other machines. This is exactly the guarantee
+  top-level ids have always run on — no weaker, and no stronger: two ids collide
+  only if their whole content *and* their creation nanosecond match.
+- **A freed id stays unreachable.** The old counter ran over LIVE rows, and the
+  import delta hard-deletes, so deleting the highest child freed its number for
+  a brand new, unrelated ticket — which then inherited the deleted ticket's
+  ancestry as apparent evidence that the two were one ticket diverged. No second
+  create lands on the first's nanosecond, so the slot cannot be reoccupied.
+- **Existing ids are untouched.** This changes how NEW children are minted and
+  migrates nothing. Every `<epic>.7` still resolves, still ranks, still exports.
+  An epic will commonly hold both shapes.
+- **Parentage still rides the id.** A child id is still its parent's id plus a
+  dot plus one segment, which is what the top-level population count keys on.
+  Parentage itself is read from the `relations` table, not parsed out of the id;
+  the prefix is a display convenience, not the record.
+
+What is lost is legibility, not meaning: an epic's children are displayed in
+rank order, never id order, so the ordinal conveyed nothing the tool relied on.
+
+Detection and prevention are both needed, and neither replaces the other:
+prevention does not fix a store that already holds a collided pair, and
+detection does not stop the next one.
 
 ## Owner notifications
 

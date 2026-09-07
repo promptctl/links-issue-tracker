@@ -39,8 +39,10 @@ func TestRunFollowupParentsToClosedTicket(t *testing.T) {
 	}
 
 	createdID := firstIssueID(t, stdout.String())
-	if createdID != parent.ID+".1" {
-		t.Fatalf("created.ID = %q, want %q", createdID, parent.ID+".1")
+	// The id hangs under the parent; the segment beneath it is a content hash,
+	// not a position, so nothing asserts its value. [LAW:behavior-not-structure]
+	if !strings.HasPrefix(createdID, parent.ID+".") {
+		t.Fatalf("created.ID = %q, want it to hang under %q", createdID, parent.ID)
 	}
 	created, err := ap.Store.GetIssue(ctx, createdID)
 	if err != nil {
