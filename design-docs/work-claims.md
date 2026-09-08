@@ -374,11 +374,25 @@ metadata.
 
 Cold start is graceful by construction, but by freshness rather than by
 absence. Historical events carry no attribution, so a freshly upgraded
-repository derives claims held by the **public checkout** — and that history is
+repository derives claims held by the **public checkout**, and that history is
 far older than the freshness window, so every one of them reads as stale:
-available for takeover, carrying its provenance, routing nobody away from work.
-The repository therefore behaves as it did before until newly attributed work
-exists, and it does so without pretending nobody ever worked those lanes.
+available for takeover, carrying its provenance.
+
+One qualifier is what makes that true, and the design is wrong without it. A
+checkout that has minted no token of its own computes the *same* zero
+attribution as the history it is reading — `next` opens read-only, and the read
+path never mints — so equality between the two sides establishes that both are
+unaddressable, not that both are the same checkout. Read as identity, it
+adopted the entire pre-attribution backlog on the very first `next`, announcing
+lanes the checkout had never touched as work already in flight in lanes it
+holds. A **stale** public lane is therefore nobody's own work; a **fresh** one
+still is, because the write path mints a token before it can record anything,
+so fresh unattributed evidence is evidence this checkout produced itself.
+
+Scoped that way, cold start withholds no work that was on offer before — but it
+does not behave identically to a pre-claims repository, and the earlier claim
+that it did was wrong. Those lanes now carry provenance, and taking one is
+announced as the takeover it is.
 
 ## The privacy invariant
 

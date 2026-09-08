@@ -308,6 +308,32 @@ func TestContestedAnnotatesWithoutMovingRouting(t *testing.T) {
 	})
 }
 
+// TestPublicCheckoutContestsAnIdentifiedHolder is the mirror of the case above,
+// and the one the public checkout could not reach before it was a holder at all.
+// An unattributed establisher that is still fresh is disputing possession on the
+// same terms as any identified rival, so it belongs in Contested rather than
+// being filtered out for having no address.
+//
+// Excluding it would silently pick a side: the one race an unidentified checkout
+// can lose would also be the one race nobody is told about, and the losing side
+// would read the lane as uncontested while its own establishing event sat in the
+// history. Freshness, not presence, is what keeps the pre-attribution backlog out
+// of this list — that evidence is old, so it never covers.
+func TestPublicCheckoutContestsAnIdentifiedHolder(t *testing.T) {
+	issues, parents := epicOf(t, leaf(t, "T1", "", model.StateInProgress), leaf(t, "T2", "", model.StateInProgress))
+	standings := derive(t, issues, parents, []model.IssueEvent{
+		// A binary that could not stamp its writes took T1 and is still active.
+		event("e1", "T1", model.ActionStart, ago(3*time.Hour), public),
+		// An identified checkout established later, so the lane is its.
+		event("e2", "T2", model.ActionStart, ago(time.Hour), streamA),
+	}, bothLive)
+
+	assertStanding(t, standings.Of(laneIn(epicID, "")), claims.Held{
+		Tenure:    claims.Tenure{By: streamA, Since: ago(time.Hour), LastActivity: ago(time.Hour)},
+		Contested: []model.Attribution{public},
+	})
+}
+
 // TestContestLapsesWithTheRivalsEvidence: a rival whose own evidence has aged
 // out is no longer contesting anything.
 func TestContestLapsesWithTheRivalsEvidence(t *testing.T) {
