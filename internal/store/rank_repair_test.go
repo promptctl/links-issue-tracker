@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -13,10 +14,17 @@ import (
 
 // seq turns a deliberate order into the rankedIssue sequence the repair reads,
 // spacing the ranks so every gap can hold a mover.
+//
+// The width is derived from the run rather than fixed, because these are rank
+// strings — compared lexicographically, never numerically. A literal "%02d"
+// stops ascending at the tenth id, where "100" sorts between "10" and "20", and
+// hands the repair an order that violates its sorted-by-rank precondition.
+// Deriving the width means no future caller can outgrow it.
 func seq(ids ...string) []rankedIssue {
+	width := len(strconv.Itoa(len(ids) * 10))
 	order := make([]rankedIssue, len(ids))
 	for i, id := range ids {
-		order[i] = rankedIssue{id: id, rank: fmt.Sprintf("%02d", (i+1)*10)}
+		order[i] = rankedIssue{id: id, rank: fmt.Sprintf("%0*d", width, (i+1)*10)}
 	}
 	return order
 }
