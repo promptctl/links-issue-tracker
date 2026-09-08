@@ -247,7 +247,11 @@ var doctorFixes = map[string]func(context.Context, io.Writer, storage.Repairer) 
 			return err
 		}
 		if fixed > 0 {
-			_, err = fmt.Fprintf(w, "Re-ranked %d dependency issue(s) to repair rank order.\n", fixed)
+			// The count is issues MOVED, not dependencies hoisted: the repair
+			// sinks a dependent below its blockers just as readily, and picks
+			// whichever costs fewer moves. Naming one side would misreport
+			// which end of the edge the run actually touched.
+			_, err = fmt.Fprintf(w, "Re-ranked %d issue(s) to place every dependency above its dependent.\n", fixed)
 		}
 		return err
 	},

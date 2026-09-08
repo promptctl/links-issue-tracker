@@ -81,13 +81,15 @@ func (s *Store) Doctor(ctx context.Context) (storage.HealthReport, error) {
 		report.Warnings = append(report.Warnings, fmt.Sprintf("orphan issue event rows: %d", report.OrphanHistoryRows))
 	}
 	// Rank inversions: blocks relations where the dependency (dst) is ranked
-	// below the dependent (src) among lifecycle-live issues. Counted via the
-	// same Go-side classifier FixRankInversions consumes so the two cannot
-	// disagree about what is an inversion. (Pre-fix this read used a SQL
-	// `status != 'closed'` filter that silently excluded every blocks-edge
-	// pointing at an epic, since epics carry status=NULL by design.)
-	// [LAW:single-enforcer] Doctor count and FixRankInversions are routed
-	// through Store.liveRankInversions.
+	// below the dependent (src) among lifecycle-live issues. (Pre-fix this read
+	// used a SQL `status != 'closed'` filter that silently excluded every
+	// blocks-edge pointing at an epic, since epics carry status=NULL by design.)
+	// [LAW:single-enforcer] This number and what `--fix` leaves behind read the
+	// same edges through the same projection (store.projectEdges), and
+	// store.invertedEdges is the one function that decides what "inverted"
+	// means. TestRepairRankOrderProperties asserts the join: the order the
+	// repair returns leaves invertedEdges empty, so this count going to zero is
+	// a property of the repair rather than a second opinion about it.
 	inversions, err := s.liveRankInversions(ctx)
 	if err != nil {
 		return report, fmt.Errorf("count rank inversions: %w", err)

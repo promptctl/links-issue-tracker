@@ -166,9 +166,17 @@ type Repairer interface {
 	FixIntegrity(ctx context.Context) (HealthReport, error)
 
 	// FixRankInversions repairs orderings that contradict themselves and
-	// reports how many it corrected. It exists only because rank is stored as
-	// a fractional position that concurrent writers can invert; an engine that
-	// derives order from rank intents has nothing to fix.
+	// reports how many issues it moved. It exists only because rank is stored
+	// as a fractional position that concurrent writers can invert; an engine
+	// that derives order from rank intents has nothing to fix.
+	//
+	// The repair is minimal and order-preserving: it moves an issue only where
+	// a dependency edge forces it past another, and leaves every pair the
+	// edges do not constrain in the relative order it found them. That is what
+	// lets callers offer this as safe to run unattended — a repair free to
+	// choose any satisfying order would silently discard the priority order
+	// the backlog was ranked into (links-doctor-e91j). A second run over a
+	// repaired store writes nothing.
 	FixRankInversions(ctx context.Context) (int, error)
 }
 

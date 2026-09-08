@@ -499,90 +499,30 @@ func smoothRanksIfNeededTx(ctx context.Context, tx *sql.Tx, triggerRank string) 
 	return nil
 }
 
-// rankInversionCandidatesClause is a SQL pre-filter only: it picks blocks-edges
-// where ranks are inverted and both endpoints are non-deleted. It deliberately
-// does NOT filter on status — the canonical "is this issue closed?" predicate
-// lives in the lifecycle (model.Issue.State()), not in the SQL row, because
-// epics store status=NULL by design and their state is derived from children
-// via AllOf (the issues_status_check constraint in migrations/00001_baseline.sql
-// encodes this: epics have status IS NULL; leaves have status in the known
-// set). A SQL-side
-// `status != 'closed'` test evaluates to NULL (not TRUE) for every epic and
-// would silently drop every blocks-edge that points at one. Liveness filtering
-// is therefore done in Go after hydration — see Store.liveRankInversions.
-// [LAW:one-source-of-truth] Lifecycle is the only authority for issue state;
-// SQL paths that need that classification round-trip through model.State().
-// [LAW:single-enforcer] Both Doctor count and FixRankInversions consume the
-// same liveRankInversions helper so the two cannot drift in what they call
-// an inversion.
-const rankInversionCandidatesClause = `FROM relations r
-	JOIN issues src ON src.id = r.src_id
-	JOIN issues dst ON dst.id = r.dst_id
-	WHERE r.type = 'blocks'
-	AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
-	AND dst.item_rank > src.item_rank`
-
-type rankInversion struct {
-	depID       string // the dependency/blocker (should be ranked above)
-	dependentID string // the dependent (src in blocks relation)
-}
-
 // rowQueryer abstracts the QueryContext surface that *sql.DB and *sql.Tx
-// share, letting one helper run candidate-edge SQL inside or outside a tx.
-// [LAW:single-enforcer] One inversion-loader for both Doctor (read, no tx)
-// and FixRankInversions (mutating, intra-tx) — same SQL pre-filter, same
-// liveness intersect, no second site.
+// share, so one loader serves Doctor (reading, no tx) and FixRankInversions
+// (reading inside its own mutating tx).
+// [LAW:single-enforcer] Each thing the two need to read — the blocks edges and
+// the live rank order — is loaded by exactly one function taking this
+// interface, so neither caller can read a different store than the other.
 type rowQueryer interface {
 	QueryContext(ctx context.Context, query string, args ...any) (*sql.Rows, error)
-}
-
-// loadInversionCandidates runs the SQL pre-filter and returns every blocks
-// edge whose endpoints are non-deleted and whose dst is ranked below src.
-// Liveness (is the issue closed per its lifecycle?) is filtered separately
-// in Go — see filterLiveInversions.
-func loadInversionCandidates(ctx context.Context, q rowQueryer) ([]rankInversion, error) {
-	// In blocks relations: src_id is the dependent, dst_id is the dependency (blocker).
-	rows, err := q.QueryContext(ctx, `SELECT r.dst_id, r.src_id `+rankInversionCandidatesClause+` ORDER BY src.item_rank ASC`)
-	if err != nil {
-		return nil, fmt.Errorf("query: %w", err)
-	}
-	defer rows.Close()
-	inversions := make([]rankInversion, 0)
-	for rows.Next() {
-		var inv rankInversion
-		if err := rows.Scan(&inv.depID, &inv.dependentID); err != nil {
-			return nil, fmt.Errorf("scan: %w", err)
-		}
-		inversions = append(inversions, inv)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("rows: %w", err)
-	}
-	return inversions, nil
-}
-
-// filterLiveInversions drops every candidate whose dependent or dependency
-// has lifecycle State() == StateClosed. Closed work doesn't participate in
-// dependency ordering, so an inversion across a closed endpoint is not an
-// actionable inversion.
-func filterLiveInversions(candidates []rankInversion, liveIDs map[string]struct{}) []rankInversion {
-	out := make([]rankInversion, 0, len(candidates))
-	for _, inv := range candidates {
-		_, depLive := liveIDs[inv.depID]
-		_, dependentLive := liveIDs[inv.dependentID]
-		if depLive && dependentLive {
-			out = append(out, inv)
-		}
-	}
-	return out
 }
 
 // liveIssueIDs returns the set of non-archived, non-deleted issue IDs whose
 // lifecycle State() is not Closed. Archived issues are user-deprioritized and
 // do not generate actionable inversions, for the same reason closed issues do
-// not. Lifecycle is computed via the canonical hydration path, so epics get
-// AllOf rollup over their children — never a raw column peek that would lie
-// about epic state.
+// not.
+//
+// The classification is settled in Go, never in SQL, and that is load-bearing.
+// Epics store status=NULL by design — the issues_status_check constraint in
+// migrations/00001_baseline.sql encodes it: epics have status IS NULL, leaves
+// carry a known value — and derive their state from their children via AllOf.
+// So a SQL-side `status != 'closed'` test evaluates to NULL rather than TRUE
+// for every epic and silently drops every blocks-edge pointing at one, which is
+// exactly the bug that once had Doctor reporting zero inversions while ready.go
+// flagged the same edge. Hydrating through the canonical path instead gets the
+// AllOf rollup, never a raw column peek that would lie about an epic.
 // [LAW:one-source-of-truth] State classification rides the lifecycle here,
 // the same predicate ready uses for its rank_inversion annotations.
 func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
@@ -597,20 +537,29 @@ func (s *Store) liveIssueIDs(ctx context.Context) (map[string]struct{}, error) {
 	return out, nil
 }
 
-// liveRankInversions returns blocks-edges whose dependency is ranked below
-// the dependent and whose endpoints are both lifecycle-live. This is the
-// single classification path; Doctor counts len(liveRankInversions) and
-// FixRankInversions consumes the same inversions for remediation.
-func (s *Store) liveRankInversions(ctx context.Context) ([]rankInversion, error) {
+// liveRankInversions returns the blocks edges the stored rank order
+// contradicts: those whose dependency sits below the dependent it blocks,
+// among lifecycle-live issues.
+//
+// [LAW:single-enforcer] It reads the same order and the same edges the repair
+// reads, through the same projection, and asks the question the repair answers
+// — repairRankOrder returns an order for which this set is empty. What Doctor
+// counts and what --fix leaves at zero are therefore one predicate, not two
+// that have to be kept in agreement.
+func (s *Store) liveRankInversions(ctx context.Context) ([]blocksEdge, error) {
 	liveIDs, err := s.liveIssueIDs(ctx)
 	if err != nil {
 		return nil, err
 	}
-	candidates, err := loadInversionCandidates(ctx, s.db)
+	order, err := loadRankOrder(ctx, s.db, liveIDs)
 	if err != nil {
-		return nil, fmt.Errorf("load inversion candidates: %w", err)
+		return nil, fmt.Errorf("load rank order: %w", err)
 	}
-	return filterLiveInversions(candidates, liveIDs), nil
+	edges, err := loadBlocksEdges(ctx, s.db)
+	if err != nil {
+		return nil, fmt.Errorf("load blocks edges: %w", err)
+	}
+	return invertedEdges(order, edges), nil
 }
 
 // blocksEdge is one blocks relation hydrated as a precedence constraint: the
@@ -772,109 +721,87 @@ func (s *Store) liveBlocksCycle(ctx context.Context) ([]string, error) {
 	return findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)), nil
 }
 
-// FixRankInversions finds all blocks relations where the dependency is ranked
-// below the dependent and ranks each dependency above its dependent. Returns
-// the number of dependency issues that were re-ranked.
+// loadRankOrder returns the live issues in the order the store ranks them:
+// item_rank ascending, with id breaking ties so the sequence is total even
+// where two rows share a rank. This sequence is both the repair's input order
+// and its membership test for which blocks edges constrain live work.
+func loadRankOrder(ctx context.Context, q rowQueryer, liveIDs map[string]struct{}) ([]rankedIssue, error) {
+	rows, err := q.QueryContext(ctx, `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("query rank order: %w", err)
+	}
+	defer rows.Close()
+	order := make([]rankedIssue, 0, len(liveIDs))
+	for rows.Next() {
+		var item rankedIssue
+		if err := rows.Scan(&item.id, &item.rank); err != nil {
+			return nil, fmt.Errorf("scan rank order: %w", err)
+		}
+		if _, live := liveIDs[item.id]; !live {
+			continue
+		}
+		order = append(order, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rank order rows: %w", err)
+	}
+	return order, nil
+}
+
+// FixRankInversions re-ranks the backlog so every dependency outranks its
+// dependent, moving as few issues as possible: it computes the stable
+// topological order of the live rank sequence (see repairRankOrder) and writes
+// only the issues that order actually moved. Returns that count.
+//
+// [LAW:single-enforcer] Doctor's rank_inversions count and this repair read the
+// same blocks edges over the same live set, so "no edge is inverted" is one
+// predicate seen twice: the count reports the edges that break it, and the
+// order this produces satisfies it by construction.
 func (s *Store) FixRankInversions(ctx context.Context) (int, error) {
-	// Liveness is computed once before the tx: FixRankInversions only mutates
-	// item_rank, so closure status is invariant across the loop's iterations.
-	// Re-classifying inside the tx would require plumbing the queryer through
-	// hydrateIssues; the snapshot semantics here are equivalent and simpler.
-	// [LAW:dataflow-not-control-flow] Liveness is data the loop reads; it is
-	// not branched on per-iteration.
+	// Liveness is computed once before the tx: the repair only mutates
+	// item_rank, so closure status is invariant across the write. Re-classifying
+	// inside the tx would require plumbing the queryer through hydrateIssues;
+	// the snapshot semantics are equivalent and simpler.
+	// [LAW:dataflow-not-control-flow] Liveness is data the repair reads, not a
+	// branch it takes.
 	liveIDs, err := s.liveIssueIDs(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("fix rank inversions: snapshot live set: %w", err)
 	}
-	loadInversions := func(ctx context.Context, tx *sql.Tx) ([]rankInversion, error) {
-		candidates, err := loadInversionCandidates(ctx, tx)
-		if err != nil {
-			return nil, err
-		}
-		return filterLiveInversions(candidates, liveIDs), nil
-	}
-	serializeInversions := func(inversions []rankInversion) string {
-		parts := make([]string, 0, len(inversions))
-		for _, inv := range inversions {
-			parts = append(parts, inv.depID+"<-"+inv.dependentID)
-		}
-		return strings.Join(parts, "|")
-	}
 	rerankedCount := 0
 	if err := s.withMutation(ctx, "fix rank inversions", func(ctx context.Context, tx *sql.Tx) error {
-		// A blocks cycle is unsatisfiable by any rank order: ranking each
-		// dependency above its dependent would require placing every cycle
-		// member above itself. Detect it before the rerank loop and fail with
-		// the offending members, rather than oscillating between two equally
-		// invalid states until the snapshot guard trips on an opaque message.
-		// [LAW:types-are-the-program] The loop below assumes a DAG; this guard
-		// is the constraint that makes that assumption true on entry.
+		order, err := loadRankOrder(ctx, tx, liveIDs)
+		if err != nil {
+			return fmt.Errorf("fix rank inversions: %w", err)
+		}
 		edges, err := loadBlocksEdges(ctx, tx)
 		if err != nil {
 			return fmt.Errorf("fix rank inversions: load blocks edges: %w", err)
 		}
-		if cycle := findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)); cycle != nil {
-			return fmt.Errorf("fix rank inversions: blocks dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(cycle, " -> "))
+		rewrites, err := repairRankOrder(order, edges)
+		if err != nil {
+			return fmt.Errorf("fix rank inversions: %w", err)
 		}
-		seenSnapshots := map[string]struct{}{}
-		for {
-			inversions, err := loadInversions(ctx, tx)
-			if err != nil {
-				return fmt.Errorf("fix rank inversions: %w", err)
-			}
-			if len(inversions) == 0 {
-				return nil
-			}
-			snapshot := serializeInversions(inversions)
-			if _, seen := seenSnapshots[snapshot]; seen {
-				return fmt.Errorf("fix rank inversions: unable to converge in one run; remaining inversions=%d", len(inversions))
-			}
-			seenSnapshots[snapshot] = struct{}{}
-
-			// [LAW:dataflow-not-control-flow] Every pass applies one deterministic update per dependency;
-			// selected target dependents come from ordered inversion data rather than branch-specific handling.
-			targets := make([]rankInversion, 0, len(inversions))
-			seenDeps := map[string]struct{}{}
-			for _, inv := range inversions {
-				if _, seen := seenDeps[inv.depID]; seen {
-					continue
-				}
-				seenDeps[inv.depID] = struct{}{}
-				targets = append(targets, inv)
-			}
-			for _, target := range targets {
-				// Place the dependency just above the highest-priority dependent by
-				// computing a rank between the dependent's predecessor and the dependent itself.
-				var targetRank string
-				if err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE id = ?", target.dependentID).Scan(&targetRank); err != nil {
-					return fmt.Errorf("fix rank inversions: read target rank %s: %w", target.dependentID, err)
-				}
-				var aboveRank sql.NullString
-				err := tx.QueryRowContext(ctx, "SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1", targetRank, target.depID).Scan(&aboveRank)
-				if err != nil {
-					if !errors.Is(err, sql.ErrNoRows) {
-						return fmt.Errorf("fix rank inversions: query neighbor: %w", err)
-					}
-				}
-				var newRank string
-				if !aboveRank.Valid || aboveRank.String == "" {
-					newRank = rank.Before(targetRank)
-				} else {
-					newRank, err = rank.Midpoint(aboveRank.String, targetRank)
-					if err != nil {
-						return fmt.Errorf("fix rank inversions: midpoint: %w", err)
-					}
-				}
-				now := s.clock.Now().Format(time.RFC3339Nano)
-				if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", newRank, now, target.depID); err != nil {
-					return fmt.Errorf("fix rank inversions: update %s: %w", target.depID, err)
-				}
-				if err := smoothRanksIfNeededTx(ctx, tx, newRank); err != nil {
-					return fmt.Errorf("fix rank inversions: smooth ranks: %w", err)
-				}
-				rerankedCount++
+		now := s.clock.Now().Format(time.RFC3339Nano)
+		for _, rewrite := range rewrites {
+			if _, err := tx.ExecContext(ctx, "UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?", rewrite.newRank, now, rewrite.id); err != nil {
+				return fmt.Errorf("fix rank inversions: update %s: %w", rewrite.id, err)
 			}
 		}
+		// Smoothing runs once the repair is fully applied, never interleaved
+		// with it: a pass that re-spaced a window mid-repair would move the
+		// anchor ranks the remaining placements were computed against. It
+		// preserves relative order, so it can only shorten rank strings.
+		for _, rewrite := range rewrites {
+			if err := smoothRanksIfNeededTx(ctx, tx, rewrite.newRank); err != nil {
+				return fmt.Errorf("fix rank inversions: smooth ranks: %w", err)
+			}
+		}
+		// Assigned, never accumulated: withStampedMutation may re-run this
+		// function after a transient failure rolls its writes back, and a
+		// running total would count the discarded attempt too.
+		rerankedCount = len(rewrites)
+		return nil
 	}); err != nil {
 		return 0, err
 	}
