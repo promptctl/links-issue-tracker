@@ -61,20 +61,29 @@ func claimPrefix(by model.Attribution, stale bool, cc claimContext) string {
 		}
 		return fmt.Sprintf("claimed here%s: %s (%s)", tag, checkout.Path, branch)
 	}
-	// Holding the lane AND having no address is the one combination the address
-	// book cannot express, and it is exactly this checkout's own state when it
-	// has minted no stream token: the book is keyed by token, so the public
-	// checkout is never in it. Left to fall through, a checkout reading its OWN
-	// lane would be told it belongs to somebody "elsewhere" and would hesitate
-	// over work that is its to continue. [LAW:no-silent-failure]
-	if !by.Present() && by == cc.self {
-		return fmt.Sprintf("claimed here%s: this checkout (no stream token minted)", tag)
+	return fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), holdState(by, stale))
+}
+
+// holdState is the parenthetical half of a claim line a listing cannot walk
+// over to: how much the reader can conclude about a holder they cannot address.
+//
+// "elsewhere" asserts the hold is not this checkout's, and only an addressable
+// holder supports that. The public checkout is a bucket every unattributed
+// write shares, so comparing it against this checkout's own identity
+// establishes that both are unaddressable and nothing more -- it was once read
+// here as proof the lane was ours, which rendered "claimed here: this checkout"
+// on `lit sync`'s contested-lane report, where the identity being compared is
+// the zero Attribution of an app.App built with no Stream at all rather than
+// any real checkout's. Freshness is the whole of what an unaddressable holder
+// can honestly report. [LAW:parse-dont-validate]
+func holdState(by model.Attribution, stale bool) string {
+	switch {
+	case stale:
+		return "stale"
+	case by.Present():
+		return "elsewhere"
 	}
-	state := "elsewhere"
-	if stale {
-		state = "stale"
-	}
-	return fmt.Sprintf("claimed: %s (%s)", nameCheckout(by), state)
+	return "unaddressed"
 }
 
 // formatLaneProgress renders the "how is it going" fraction. A lane with no

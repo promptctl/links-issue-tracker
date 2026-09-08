@@ -68,7 +68,15 @@ func relationOf(standing claims.Standing, self model.Attribution) laneRelation {
 		}
 		return laneHeldForeign
 	case claims.Stale:
-		if s.By == self {
+		// An identified holder equal to self proves continuity: the token was
+		// minted by this checkout and by nothing else, so a lane it left is
+		// still its own to resume. The public checkout proves nothing of the
+		// kind -- it is a bucket every unattributed write shares, so equality
+		// against it means "both unaddressable", not "both us". Pre-attribution
+		// history is stale by construction, so without this a brand-new
+		// checkout that has minted no token would adopt every historical lane
+		// in the repository as its own work. [LAW:types-are-the-program]
+		if s.By == self && self.Present() {
 			return laneOurs
 		}
 		return laneStaleForeign

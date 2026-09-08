@@ -689,10 +689,17 @@ func (a Attribution) IsZero() bool { return a == Attribution{} }
 // what makes an unidentified checkout recognise its own work. Read as nobody,
 // such a checkout owns no lane, so every pick is a fresh lane and it wanders
 // the backlog forever — the "infinite lanes" degeneracy. Read as the public
-// checkout, it holds the lanes it worked and routing serves it out of them, the
-// same as any identified checkout. Nothing about lanes changes: LaneOf still
-// partitions an epic's children and still gives a parentless issue a lane of
-// one, so the public checkout occupies ordinary lanes on ordinary terms.
+// checkout, it holds the lanes it worked and routing serves it out of them.
+// Nothing about lanes changes: LaneOf still partitions an epic's children and
+// still gives a parentless issue a lane of one, so the public checkout occupies
+// ordinary lanes on ordinary terms.
+//
+// It is a holder, never a proof of identity, and the difference decides what
+// may be matched against it. Equality with an identified holder proves the same
+// checkout minted that token; equality with the public checkout proves only
+// that both sides are unaddressable. So a STALE public lane is nobody's own
+// work — see relationOf — which is what keeps a fresh checkout from adopting a
+// repository's whole pre-attribution history the moment it runs `next`.
 //
 // The price is that two unidentified checkouts are indistinguishable, which is
 // the definition of the bucket rather than a defect in it — an identity nobody
