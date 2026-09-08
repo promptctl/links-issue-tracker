@@ -2856,14 +2856,15 @@ via `fmt.Sprintf` with placeholder lists from `repeatPlaceholder` (`internal/sto
 
 `SpacedRanks(n)` — `internal/rank/rank.go:129-136`: `spacedRanks(n, "", "")`; panics `fmt.Sprintf("rank: spaced ranks with empty bounds failed: %v", err)` if that ever errors.
 
-`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:141-149`: `n == 0` → `(nil, nil)`; both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`.
+`SpacedRanksBetween(lower, upper, n)` — `internal/rank/rank.go:138-154`: `n == 0` → `(nil, nil)`; both bounds non-empty with `lower >= upper` → `errors.New("rank: lower must be less than upper")`; else `spacedRanks`. That guard admits bounds nothing can sort between (`"10"` and `"100"`); `spacedRanks` enforces the rest.
 
-`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:151-196`:
-- `n < 0` → `errors.New("rank: n must be non-negative")` (`:153-155`); `n == 0` → `(nil, nil)` (`:156-158`).
-- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:161-183`). Lengths whose span is `<= 0` are skipped (`:177-179`).
-- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:184-193`). All returned ranks share one length.
-- `lowerBoundInt(s, length)` — `:200-212`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
-- `upperBoundInt(s, length)` — `:216-232`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`; a zero value → `errors.New("rank: upper bound too low to generate spaced ranks")`.
+`spacedRanks(n, lower, upper)` — `internal/rank/rank.go:156-209`:
+- `n < 0` → `errors.New("rank: n must be non-negative")` (`:158-160`); `n == 0` → `(nil, nil)` (`:161-163`).
+- Starting at `length = max(len(lower), len(upper)) + 1`, increments length until the integer span between the bounds divided by `n+1` is at least `minGap` (16) (`:166-195`).
+- A **negative** span ends the search instead of skipping the length: `fmt.Errorf("rank: no room between %q and %q: the bounds pad to the same value, so no rank longer than both sorts between them", lower, upper)` (`:189-191`). Every candidate is longer than both bounds, so `span(L+1) = 62*(span(L)+1) - 1`; a negative span stays negative at every greater length, while a non-negative one grows 62-fold, so this is the only case that would not terminate.
+- Emits `n` values at `lo + step*(i+1)` encoded fixed-width via `encodeBase62` (`:196-206`). All returned ranks share one length.
+- `lowerBoundInt(s, length)` — `:210-225`: empty → 0; else `stringToInt(s, length)`, plus 1 when `len(s) >= length`.
+- `upperBoundInt(s, length)` — `:226-245`: empty → `pow62(length)`; else `stringToInt(s,length) - 1`, unchecked; an all-zero bound yields `-1`, which the negative-span arm above reports.
 - `stringToInt` — `:236-250`: base-62 accumulation, right-padded with index 0; invalid byte → `errors.New("rank: invalid character in bounds")`.
 - `encodeBase62(value, length)` — `:261-280`: negative → `errors.New("rank: cannot encode negative value")`; remainder out of `[0,62)` → `errors.New("rank: base62 remainder out of range")`; leftover quotient → `errors.New("rank: value does not fit fixed-width encoding")`.
 
@@ -3009,41 +3010,32 @@ Tests: absolute top ordering — `internal/store/store_test.go:2700-2730`; dupli
    SELECT item_rank FROM issues WHERE deleted_at IS NULL AND item_rank > ? ORDER BY item_rank ASC LIMIT 1
    ```
    against the last window rank, error → `"smooth: upper bound: %w"` (`:476-485`). Missing bounds stay `""` (meaning open-ended).
-7. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:487-490`).
+7. `rank.SpacedRanksBetween(lowerBound, upperBound, len(window))`; error → `fmt.Errorf("smooth: compute ranks: %w", err)` (`:487-490`). Both bounds are stored ranks, so this is a caller that can hand the primitive a pair admitting nothing — bounds that pad to the same value, one being the other extended by zeros — which it reports rather than searching for a string that cannot exist (`internal/rank/rank.go:189-191`).
 8. `UPDATE issues SET item_rank = ? WHERE id = ?` for each window entry whose new rank differs from the old — `updated_at` is **not** touched here (`:492-498`); error → `fmt.Errorf("smooth: update %s: %w", item.id, err)` (`:495`).
 
-Smoothing is invoked from `RankToTop` (`:37`), `RankSet` (`:154`), `RankToBottom` (`:181`), `RankAbove` (`:363`), `RankBelow` (`:393`), and `FixRankInversions` (`:872`). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
+Smoothing is invoked from `RankToTop` (`:37`), `RankSet` (`:154`), `RankToBottom` (`:181`), `RankAbove` (`:363`), `RankBelow` (`:393`), and `FixRankInversions` (`:796`, once per rewritten rank after every repair write has landed). It ignores parent/epic frames entirely: the window is whatever is adjacent in the global rank keyspace.
 
 ### 5.8 Rank inversions
 
-`rankInversionCandidatesClause` — `internal/store/ranking.go:518-523`:
-```sql
-FROM relations r
-JOIN issues src ON src.id = r.src_id
-JOIN issues dst ON dst.id = r.dst_id
-WHERE r.type = 'blocks'
-AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
-AND dst.item_rank > src.item_rank
-```
-Deliberately no status filter, because epics store `status IS NULL` and a SQL `status != 'closed'` would evaluate NULL for them (`:502-517`).
+`rowQueryer` interface with just `QueryContext` so the same loaders run on `*sql.DB` and `*sql.Tx` — `internal/store/ranking.go:502-510`.
 
-`rankInversion{depID, dependentID}` — `internal/store/ranking.go:525-528` (depID = dependency/blocker, dependentID = blocks-src).
+`liveIssueIDs(ctx)` — `internal/store/ranking.go:512-538`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)` (`:531`). Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek.
 
-`rowQueryer` interface with just `QueryContext` so the same loader runs on `*sql.DB` and `*sql.Tx` — `internal/store/ranking.go:535-537`.
+`loadRankOrder(ctx, q, liveIDs)` — `internal/store/ranking.go:724-749`: `SELECT id, item_rank FROM issues WHERE deleted_at IS NULL ORDER BY item_rank ASC, id ASC`, appending only rows present in `liveIDs`; errors `fmt.Errorf("query rank order: %w", err)` (`:731`), `fmt.Errorf("scan rank order: %w", err)` (`:738`), `fmt.Errorf("rank order rows: %w", err)` (`:746`). The `id ASC` tiebreak makes the sequence deterministic where two rows share a rank. This sequence is both the repair's input order and its membership test for which blocks edges constrain live work.
 
-`loadInversionCandidates(ctx, q)` — `internal/store/ranking.go:543-562`: `SELECT r.dst_id, r.src_id ` + the clause + ` ORDER BY src.item_rank ASC`; errors `fmt.Errorf("query: %w", err)` (`:547`), `fmt.Errorf("scan: %w", err)` (`:553`), `fmt.Errorf("rows: %w", err)` (`:559`).
+`rankedIssue{id, rank}` — `internal/store/rank_repair.go:12-17`: one row of that sequence.
 
-`filterLiveInversions(candidates, liveIDs)` — `internal/store/ranking.go:568-578`: keeps a candidate only when both endpoints are in the live set.
+`projectEdges(edges, position)` — `internal/store/rank_repair.go:48-71`: drops any edge with an endpoint outside `position` and dedupes the rest, so every surviving edge indexes in range and is counted exactly once.
 
-`liveIssueIDs(ctx)` — `internal/store/ranking.go:588-598`: `s.ListIssues(ctx, storage.ListIssuesFilter{Statuses: []model.State{model.StateOpen, model.StateInProgress}})`; error → `fmt.Errorf("list live issues: %w", err)`. Archived and deleted issues are excluded by that listing; epics get their state by rollup over children rather than a column peek (`:580-587`).
+`invertedEdges(order, edges)` — `internal/store/rank_repair.go:224-243`: indexes `order` into `position`, then over `projectEdges(edges, position)` keeps every edge with `position[dependency] > position[dependent]`. Pure; no DB access.
 
-`liveRankInversions(ctx)` — `internal/store/ranking.go:604-614`: live set + `loadInversionCandidates(ctx, s.db)` (error `fmt.Errorf("load inversion candidates: %w", err)`) + filter. Doctor counts `len(...)` of this and `FixRankInversions` consumes the same set (`:600-603`).
+`liveRankInversions(ctx)` — `internal/store/ranking.go:540-563`: `liveIssueIDs(ctx)`, `loadRankOrder(ctx, s.db, liveIDs)` (error `fmt.Errorf("load rank order: %w", err)` — `:556`), `loadBlocksEdges(ctx, s.db)` (error `fmt.Errorf("load blocks edges: %w", err)` — `:560`), returning `invertedEdges(order, edges)`. Doctor counts `len(...)` of this; `FixRankInversions` produces an order for which it is empty, so the reported count and the repaired state are one predicate rather than two kept in agreement.
 
 ### 5.9 Blocks graph helpers
 
-`blocksEdge{dependent, dependency}` — `internal/store/ranking.go:623-626` (src = dependent, ranked below; dst = dependency, ranked above).
+`blocksEdge{dependent, dependency}` — `internal/store/ranking.go:565-575` (src = dependent, ranked below; dst = dependency, ranked above).
 
-`loadBlocksEdges(ctx, q)` — `internal/store/ranking.go:632-658`:
+`loadBlocksEdges(ctx, q)` — `internal/store/ranking.go:577-607`:
 ```sql
 SELECT r.src_id, r.dst_id FROM relations r
 JOIN issues src ON src.id = r.src_id
@@ -3052,45 +3044,56 @@ WHERE r.type = 'blocks'
 AND src.deleted_at IS NULL AND dst.deleted_at IS NULL
 ORDER BY r.src_id, r.dst_id
 ```
-No rank pre-filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic (`:633-635`). Errors: `"query blocks edges: %w"` (`:643`), `"scan blocks edge: %w"` (`:650`), `"blocks edges rows: %w"` (`:655`).
+No rank filter; the ORDER BY exists to make DFS adjacency order — and therefore the reported cycle path — deterministic. Errors: `"query blocks edges: %w"` (`:592`), `"scan blocks edge: %w"` (`:599`), `"blocks edges rows: %w"` (`:604`).
 
-`blocksPrecedenceAdj(edges)` — `internal/store/ranking.go:661-667`: adjacency `dependency -> []dependent`.
+`blocksPrecedenceAdj(edges)` — `internal/store/ranking.go:609-616`: adjacency `dependency -> []dependent`.
 
-`blocksPrecedes(adj, from, to)` — `internal/store/ranking.go:673-692`: recursive DFS with a `seen` set; returns true as soon as `to` is reached. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
+`blocksPrecedes(adj, from, to)` — `internal/store/ranking.go:618-641`: recursive DFS with a `seen` set; returns true as soon as `to` is reached. (The `seen` set is populated after the `next == to` check, so a node is compared before being marked.)
 
-`filterLiveBlocksEdges(edges, liveIDs)` — `internal/store/ranking.go:697-707`: both endpoints must be live.
+`filterLiveBlocksEdges(edges, liveIDs)` — `internal/store/ranking.go:643-656`: both endpoints must be live.
 
-`findBlocksCycle(edges)` — `internal/store/ranking.go:712-756`: three-color DFS (`white = 0`, `gray = 1`, `black = 2` — `:719-723`) over adjacency keys sorted with `sort.Strings` (`:715-718`); on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a` (`:731-737`); returns nil for an acyclic graph.
+`findBlocksCycle(edges)` — `internal/store/ranking.go:658-705`: three-color DFS (`white = 0`, `gray = 1`, `black = 2`) over adjacency keys sorted with `sort.Strings`; on hitting a gray node it slices the current stack from that node and appends it again, returning a repeated-endpoint path `a -> b -> … -> a`; returns nil for an acyclic graph.
 
-`liveBlocksCycle(ctx)` — `internal/store/ranking.go:763-773`: live set, `loadBlocksEdges(ctx, s.db)` (error `fmt.Errorf("load blocks edges: %w", err)`), live filter, `findBlocksCycle`.
+`liveBlocksCycle(ctx)` — `internal/store/ranking.go:707-722`: live set, `loadBlocksEdges(ctx, s.db)` (error `fmt.Errorf("load blocks edges: %w", err)` — `:719`), live filter, `findBlocksCycle`.
 
-### 5.10 FixRankInversions
+### 5.10 The rank repair
 
-`Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go:778-882`:
-1. Live set snapshotted **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)` (`:785-788`). Liveness is not recomputed per iteration (`:779-784`).
+Pure and DB-free, in `internal/store/rank_repair.go`; `FixRankInversions` supplies its inputs and applies its outputs.
+
+`rankRewrite{id, newRank}` — `internal/store/rank_repair.go:19-23`: one issue whose rank must change, and the value to write.
+
+`blocksCycleError{path}` — `internal/store/rank_repair.go:25-32`: `Error()` renders `blocks dependency cycle <a -> b -> … -> a> — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'`.
+
+`repairRankOrder(order, edges)` — `internal/store/rank_repair.go:34-46`: `stableTopoOrder(order, edges)`, then `rankRewrites(order, target)`.
+
+`stableTopoOrder(order, edges)` — `internal/store/rank_repair.go:73-132`: Kahn's algorithm over `projectEdges`, with the ready set held ascending by position in `order` (`slices.Insert` at `sort.SearchInts`), so each step emits the issue that stood earliest in the backlog among those whose dependencies are all placed. An issue changes place only when an edge forces it past another, so a band carrying no edges among its own members comes out in the order it went in. Ordering by position rather than by id is what keeps the tiebreak off id spelling. When Kahn stalls (`len(sorted) < len(order)`) it returns `&blocksCycleError{path: findBlocksCycle(constraints)}` rather than the partial sequence.
+
+`rankRewrites(order, target)` — `internal/store/rank_repair.go:134-178`: marks the indices `anchorRun` returns and walks `target` as runs of movers delimited by anchors, closing the final run at the sentinel index past the end. Each run is spaced into the open interval its neighbouring anchors bound, via `rank.SpacedRanksBetween(lower, upper, len(movers))`; an absent bound is `""`, which that primitive reads as "past that end", so a run at either extreme — and a target with no anchors at all — needs no special case. Error → `fmt.Errorf("space %d rank(s) between %q and %q: %w", len(movers), lower, upper, err)` (`:170`).
+
+`anchorRun(target, rankOf)` — `internal/store/rank_repair.go:180-222`: a longest strictly-increasing subsequence of `target` by stored rank, by patience sort (`tails` + `prev`, `sort.Search` over `tails`). Issues in the run are never written, so they keep both `item_rank` and `updated_at`, and the rewrite count is the count of issues the new order actually moved. An anchor must sort strictly above the one before it, because movers are spaced into the open interval two anchors bound, and must satisfy `rank.Valid` because nothing sorts below the empty rank; unranked issues are therefore always movers, which hands them a real rank on the way past.
+
+`Store.FixRankInversions(ctx) (int, error)` — `internal/store/ranking.go:751-809`:
+1. `liveIssueIDs(ctx)` **before** the transaction; error → `fmt.Errorf("fix rank inversions: snapshot live set: %w", err)` (`:769`). The repair mutates only `item_rank`, so closure status is invariant across the write.
 2. In `withMutation(ctx, "fix rank inversions", …)`:
-   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)` (`:812-815`).
-   - If `findBlocksCycle(filterLiveBlocksEdges(edges, liveIDs)) != nil` → `fmt.Errorf("fix rank inversions: blocks dependency cycle %s — a cycle has no valid rank order; break it by removing one edge with 'lit dep rm'", strings.Join(cycle, " -> "))` (`:816-818`).
-   - Loop:
-     a. `loadInversions` = candidates in-tx filtered by the snapshot live set (`:789-795`); error → `fmt.Errorf("fix rank inversions: %w", err)` (`:823`).
-     b. Zero inversions → return nil (loop exit) (`:825-827`).
-     c. Snapshot key = `strings.Join(parts, "|")` where each part is `inv.depID + "<-" + inv.dependentID` (`:796-802`, `:828`). A repeated snapshot → `fmt.Errorf("fix rank inversions: unable to converge in one run; remaining inversions=%d", len(inversions))` (`:829-831`).
-     d. Targets: first inversion per distinct `depID` (later inversions sharing a dependency are skipped in this pass) (`:836-844`). Because candidates are ordered by `src.item_rank ASC`, the retained dependent is the highest-priority one.
-     e. Per target: `SELECT item_rank FROM issues WHERE id = ?` for the dependent, error → `fmt.Errorf("fix rank inversions: read target rank %s: %w", target.dependentID, err)` (`:848-851`).
-     f. `SELECT item_rank FROM issues WHERE item_rank < ? AND deleted_at IS NULL AND id != ? ORDER BY item_rank DESC LIMIT 1` bound `(targetRank, target.depID)`; non-`ErrNoRows` error → `fmt.Errorf("fix rank inversions: query neighbor: %w", err)` (`:852-858`).
-     g. No neighbor → `rank.Before(targetRank)`, else `rank.Midpoint(aboveRank, targetRank)` with error `fmt.Errorf("fix rank inversions: midpoint: %w", err)` (`:859-867`).
-     h. `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` on the dependency; error → `fmt.Errorf("fix rank inversions: update %s: %w", target.depID, err)` (`:868-871`).
-     i. `smoothRanksIfNeededTx`; error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)` (`:872-874`).
-     j. `rerankedCount++` per re-ranked dependency (`:875`).
-3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)` (`:878-881`). The count counts dependency re-rank operations across all passes, not distinct issues.
+   - `loadRankOrder(ctx, tx, liveIDs)`; error → `fmt.Errorf("fix rank inversions: %w", err)` (`:775`).
+   - `loadBlocksEdges(ctx, tx)`; error → `fmt.Errorf("fix rank inversions: load blocks edges: %w", err)` (`:779`).
+   - `repairRankOrder(order, edges)`; error → `fmt.Errorf("fix rank inversions: %w", err)` (`:783`). This is the arm a dependency cycle takes.
+   - `UPDATE issues SET item_rank = ?, updated_at = ? WHERE id = ?` per rewrite, stamped `s.clock.Now().Format(time.RFC3339Nano)`; error → `fmt.Errorf("fix rank inversions: update %s: %w", rewrite.id, err)` (`:788`).
+   - `smoothRanksIfNeededTx` per rewritten rank, in a second loop after every write has landed rather than interleaved with them: a pass that re-spaced a window mid-repair would move the anchor ranks the remaining placements were computed against. Error → `fmt.Errorf("fix rank inversions: smooth ranks: %w", err)` (`:797`).
+   - `rerankedCount = len(rewrites)`, assigned rather than accumulated, because `withStampedMutation` may re-run the function after a transient failure rolls its writes back.
+3. On mutation error returns `(0, err)`; otherwise `(rerankedCount, nil)`. The count is issues whose rank was rewritten by the repair, one per issue. Smoothing may rewrite further ranks without touching `updated_at`, and those are not counted.
 
 Test-pinned behavior in `internal/store/store_test.go`:
-- One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` returns 1, Doctor reports 0 after — `:294-342`.
-- A pass that creates a new inversion still converges: 1 before, `>= 1` fixed, 0 after — `:344-391`.
-- An epic dependency ranked below its dependent counts as 1 inversion and is fixed — `:399-444`.
-- A closed epic dependency yields 0 inversions — `:447-483`.
-- Deleted issues yield 0 inversions and 0 fixes — `:486-519`.
-- A cycle injected past `AddRelation` makes `FixRankInversions` fail with a message naming the cycle rather than an opaque non-convergence — `:650-694`.
+- One dependency blocking two dependents: Doctor reports 2 inversions before, `FixRankInversions` reports 1, 0 after — `:293-341`.
+- A pass that creates a new inversion still resolves: 1 before, `>= 1` fixed, 0 after — `:343-392`.
+- An epic dependency ranked below its dependent counts as 1 inversion and is fixed — `:393-444`.
+- A closed epic dependency yields 0 inversions — `:446-483`.
+- Deleted issues yield 0 inversions and 0 fixes — `:485-520`.
+- A cycle injected past `AddRelation` makes `FixRankInversions` fail with a message naming the cycle — `:649-692`.
+
+Test-pinned behavior in `internal/store/rank_repair_test.go`, against the pure repair with no database: a band whose members carry no edges among themselves keeps its ranked order while the dependent they share sinks below it (`:63-92`); only the ticket an edge actually forces moves (`:93-111`); an already-ordered sequence produces no writes (`:112-124`); duplicate edges change nothing (`:125-139`); a cycle returns `blocksCycleError` (`:140-156`); unranked issues are always movers and come back with a real rank (`:157-235`). Two tests cover the same shapes through the store end to end (`:236-300`, `:301-370`), and a 300-trial property run over random acyclic layerings asserts the repair permutes the backlog without resizing it, leaves no inverted edge, and writes nothing on a second pass (`:371-428`).
+
+`seq(ids...)` (`:15-31`) builds those fixtures' ranks with a field width derived from the length of the run, because ranks compare lexicographically: a fixed two-digit width stops ascending at the tenth id, where `"100"` sorts between `"10"` and `"20"`, which violates the sorted-by-rank precondition `rankRewrites` reads its anchors under.
 
 ---
 

@@ -575,9 +575,9 @@ type blocksEdge struct {
 }
 
 // loadBlocksEdges returns every blocks relation whose endpoints are both
-// non-deleted. Unlike loadInversionCandidates it does not pre-filter on rank,
-// because cycle detection asks about the constraint graph itself, not the
-// current rank assignment.
+// non-deleted. It does not filter on rank: the constraint graph is what it is
+// whatever the current ranks say, and both callers — cycle detection and the
+// repair — ask about the graph rather than about placement.
 func loadBlocksEdges(ctx context.Context, q rowQueryer) ([]blocksEdge, error) {
 	// ORDER BY makes edge iteration — and therefore the adjacency order that
 	// findBlocksCycle's DFS follows — stable across runs and engines, so the
@@ -641,8 +641,8 @@ func blocksPrecedes(adj map[string][]string, from, to string) bool {
 }
 
 // filterLiveBlocksEdges keeps only edges whose endpoints are both
-// lifecycle-live, mirroring filterLiveInversions: a cycle through closed work
-// cannot block the rank order of live work.
+// lifecycle-live: a cycle through closed work cannot block the rank order of
+// live work.
 func filterLiveBlocksEdges(edges []blocksEdge, liveIDs map[string]struct{}) []blocksEdge {
 	out := make([]blocksEdge, 0, len(edges))
 	for _, e := range edges {
