@@ -60,6 +60,26 @@ No ticket PR, whatever its type, cuts a release on its own — leave
 `## [Unreleased]` as-is. Only the dedicated `chore(release)` promotion above,
 merged at the end of an epic, cuts one.
 
+### A tagged section never changes
+
+Once a version is tagged its `CHANGELOG` section is the record of what that
+release contained, and it is immutable from then on.
+[`scripts/changelog-frozen.sh`](scripts/changelog-frozen.sh) enforces that in
+CI's `verify` job on every PR and master push: everything from the newest tag's
+own heading down to end-of-file must be byte-identical to that region in the tag
+itself.
+
+The guard exists because nothing else can see the failure. A ticket PR branched
+before a promotion writes its entry under `## [Unreleased]`; the promotion
+renames that heading and opens a fresh one above it; the ticket PR then merges
+with no conflict and its entry lands in the *released* section. Both sides are
+correct alone, which is why review and every other gate pass over it. The result
+is a tag whose notes describe code it does not contain and a pending release
+carrying no note at all.
+
+If the guard fires, move the entry up to `## [Unreleased]`, where the change is
+genuinely pending. Never edit the released section to match the tree.
+
 ### How the pipeline is verified
 
 Two tiers, split by cost so the per-PR loop stays fast:

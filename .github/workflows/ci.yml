@@ -99,6 +99,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # scripts/changelog-frozen.sh compares the released notes against the
+          # tag that shipped them, so the tag objects have to be here. The
+          # default shallow checkout carries none; the script then fails loudly
+          # instead of passing blind, and the cure is fetching them rather than
+          # softening the check.
+          fetch-depth: 0
+
+      # First in this job because it is the cheapest gate here and needs no
+      # toolchain: a CHANGELOG section that has shipped is immutable. On a
+      # pull_request this runs against the MERGE result, which is the only place
+      # the defect can be seen at all — a ticket branch writing under
+      # [Unreleased] and a promotion renaming that heading are each correct
+      # alone, and git combines them into a released section describing code the
+      # tag does not contain, with no conflict to stop it.
+      # [LAW:single-enforcer] the one place this invariant is checked.
+      - name: Released changelog notes are frozen
+        run: bash scripts/changelog-frozen.sh
 
       - uses: actions/setup-go@v5
         with:
