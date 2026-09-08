@@ -110,8 +110,12 @@ func gatherClaimContext(ctx context.Context, stdout io.Writer, ap *app.App) (cla
 // report itself as nothing.
 //
 // NewAttribution collapses an absent stream (a checkout that has never mutated)
-// to the zero Attribution, which is exactly "no live claims" — no branch needed
-// here for the never-minted case.
+// to the zero Attribution, which is the public checkout — the identity every
+// unminted checkout shares, and the same one its own unattributed writes carry.
+// So the never-minted case needs no branch here AND is not a degenerate one:
+// this checkout gets back the identity that will hold whatever lanes it works,
+// which is what lets `next` serve it out of them instead of treating every pick
+// as a brand-new lane. [LAW:dataflow-not-control-flow]
 func ownAttribution(ap *app.App) model.Attribution {
 	return model.NewAttribution(ap.Stream.Value(), ap.Workspace.WorkspaceID)
 }

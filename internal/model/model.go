@@ -643,10 +643,11 @@ type Attribution struct {
 //
 // The collapse is deliberately quiet rather than an error. A half pair cannot be
 // produced by any writer, so the only thing that can present one is a corrupted
-// or hand-edited export, and reading corrupt attribution as "unattributed" lands
+// or hand-edited export, and reading corrupt attribution as unattributed lands
 // on a state that is already legal and meaningful everywhere. Nothing is skipped
 // and no operation is abandoned, so there is no failure here to be loud about —
-// claim derivation simply learns that this event names no producer.
+// claim derivation simply reads the event as the public checkout's (see
+// Present), which is a holder it can route, not a hole it has to work around.
 //
 // [LAW:parse-dont-validate] Two loose strings go in and a value whose
 // complete-or-zero invariant already holds comes out, which is why nothing
@@ -672,14 +673,37 @@ func (a Attribution) Workspace() string { return a.workspace }
 // than writing an empty object into every historical record.
 func (a Attribution) IsZero() bool { return a == Attribution{} }
 
-// Present reports whether this event carries attribution at all. Absence is a
-// permanent, legal state — events predating the attribution feature carry none
-// and never will, because attribution is historical fact and is never
-// backfilled — and it reads as "derives no claim", never as missing data.
+// Present reports whether this event names an IDENTIFIED checkout — one with a
+// stream token another checkout can address, route around, and prove absent.
+//
+// What absence means is the whole ruling this type carries, so it is stated
+// here and nowhere else. An unattributed event is NOT missing data and NOT
+// "derives no claim": it is work done by THE PUBLIC CHECKOUT, the single holder
+// every unattributed write in a workspace shares. Absence is permanent and
+// legal — events predating the attribution feature carry none and never will,
+// because attribution is historical fact and is never backfilled — and the
+// public checkout is what those events, and every future write from a checkout
+// that has minted no token, belong to.
+//
+// Collapsing them all to ONE holder rather than to a fresh nobody each time is
+// what makes an unidentified checkout recognise its own work. Read as nobody,
+// such a checkout owns no lane, so every pick is a fresh lane and it wanders
+// the backlog forever — the "infinite lanes" degeneracy. Read as the public
+// checkout, it holds the lanes it worked and routing serves it out of them, the
+// same as any identified checkout. Nothing about lanes changes: LaneOf still
+// partitions an epic's children and still gives a parentless issue a lane of
+// one, so the public checkout occupies ordinary lanes on ordinary terms.
+//
+// The price is that two unidentified checkouts are indistinguishable, which is
+// the definition of the bucket rather than a defect in it — an identity nobody
+// minted is one nobody can tell apart. That is also why an identified checkout
+// is the only kind LocalCheckouts can void (local.go) and the only kind a
+// contest names by token: those need an address, and the public checkout has
+// none.
 //
 // Defined against IsZero rather than repeating the comparison: "present" and
 // "not zero" are one fact, and two spellings of it could later disagree.
-// [LAW:one-source-of-truth]
+// [LAW:one-source-of-truth] [LAW:types-are-the-program]
 func (a Attribution) Present() bool { return !a.IsZero() }
 
 // attributionWire is the serialized shape, kept as a separate type so that

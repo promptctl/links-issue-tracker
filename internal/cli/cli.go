@@ -1136,15 +1136,6 @@ func registerActor(fs *cobraFlagSet) actorResolver {
 	return func() string { return resolveIdentity(*by) }
 }
 
-// displayAssignee renders an assignee value for human output; the empty value
-// means "nobody owns this" and must read that way rather than vanish.
-func displayAssignee(assignee string) string {
-	if assignee == "" {
-		return "(unassigned)"
-	}
-	return assignee
-}
-
 // transitionBreadcrumbTopics maps transition actions to the quickstart topic
 // whose guidance follows naturally from that success: claiming work points at
 // the finding-work guidance, finishing (done or close) at the wrap-up

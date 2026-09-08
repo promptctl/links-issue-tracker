@@ -80,24 +80,32 @@ func standingOf(members []model.Issue, events []model.IssueEvent, fresh Freshnes
 		return local.Void(event.Attribution)
 	})
 
-	// Leg 2 — the holder produced the latest establishing event. Two ways for
-	// that to name nobody, and they are one answer: no lifecycle transition ever
-	// happened here, or the one that did carries no attribution.
+	// Leg 2 — the holder produced the latest establishing event. Exactly one way
+	// for that to name nobody: no lifecycle transition ever happened in this
+	// lane, so there is no holder to find rather than one we cannot address.
 	//
-	// The unattributed case is the common one on any repository with history,
-	// because attribution was added to events that already existed and is never
-	// backfilled — it is historical fact, so the events that predate it will
-	// carry none forever. The derivation stops at it rather than scanning back to
-	// the newest ancestor that does carry attribution, and that restraint is the
-	// point: an unattributed `start` says somebody took this lane and the record
-	// does not say who, so an older attributed event is not the best available
-	// answer — it is an answer we have positive evidence was superseded. Handing
-	// the lane to a checkout that demonstrably walked away from it, more
-	// confidently the older the repository, is worse than admitting we cannot
-	// tell. Unclaimed is the honest reading, and it is also the pre-claims
-	// behavior, so the cost of admitting it is nil.
+	// An establishing event carrying no attribution names the PUBLIC CHECKOUT
+	// (model.Attribution.Present) and holds the lane like any other holder. The
+	// derivation still stops at it rather than scanning back to the newest
+	// ancestor that does carry attribution, and that restraint is the point: an
+	// unattributed `start` supersedes every older event, so an attributed
+	// ancestor is not the best available answer — it is an answer we have
+	// positive evidence was replaced.
+	//
+	// What changed is only who the superseding event belongs to. Reading it as
+	// nobody made the lane Unclaimed, which meant an unidentified checkout could
+	// never hold a lane, never be served out of one, and never resume its own
+	// work — it re-entered the global pool on every invocation. Reading it as
+	// the public checkout keeps the honest "we cannot address this holder"
+	// (nothing here resolves a token that was never minted) while restoring the
+	// one thing that reading cost: the holder is a stable identity, so the
+	// checkout that produced the event recognises the lane as its own.
+	//
+	// The pre-attribution history this makes visible is old by construction, so
+	// leg 3 reads it as Stale — available, with provenance — rather than as a
+	// live hold that would route identified checkouts away from real work.
 	establisher, found := LatestEstablisher(admissible)
-	if !found || !establisher.Attribution.Present() {
+	if !found {
 		return Unclaimed{}
 	}
 	holder := establisher.Attribution
@@ -140,12 +148,18 @@ func trails(events []model.IssueEvent) (activity map[model.Attribution]time.Time
 // the looser reading every lane anyone had ever glanced at would report as
 // contested, and an annotation that fires constantly is one nobody reads.
 //
+// The public checkout contests on the same terms as any identified one: it is a
+// holder, so it can be the OTHER holder. Excluding it would have made the one
+// race an unidentified checkout can lose the one race nobody is told about, and
+// freshness already keeps the pre-attribution backlog out — that evidence is
+// old, so it never covers.
+//
 // Most recently active first, then by stream token so that two checkouts
 // last seen in the same instant still render in a stable order.
 func contestants(holder model.Attribution, activity map[model.Attribution]time.Time, establishers map[model.Attribution]struct{}, fresh Freshness) []model.Attribution {
 	contested := []model.Attribution{}
 	for candidate := range establishers {
-		if candidate == holder || !candidate.Present() || !fresh.Covers(activity[candidate]) {
+		if candidate == holder || !fresh.Covers(activity[candidate]) {
 			continue
 		}
 		contested = append(contested, candidate)

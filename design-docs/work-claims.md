@@ -145,6 +145,22 @@ id)** — the checkout's token plus the already-existing per-store workspace
 identifier. Both are opaque. Attribution is historical fact and is never
 rewritten.
 
+An event carrying no pair belongs to the **public checkout**: the single holder
+every unattributed write in a workspace shares. It is a holder like any other —
+it takes lanes, ages out, and can be contested — with one difference that
+follows from having no token: nothing can address it, so no machine's liveness
+prune can void it and no claim line can walk you over to it. A checkout that has
+minted no token *is* the public checkout, which is the point of collapsing all
+of them to one identity rather than to a fresh nobody each time: read as nobody,
+such a checkout owns no lane, so every pick is a new lane and it wanders the
+backlog; read as the public checkout, it holds what it worked and is served out
+of it. Lanes are unaffected — the public checkout occupies ordinary lanes on
+ordinary terms.
+
+The price is that two checkouts with no token are indistinguishable. That is the
+definition of the bucket rather than a defect in it: an identity nobody minted
+is one nobody can tell apart.
+
 Sessions, agent identities, and user names play no role in claims. Many
 sessions in one checkout are one claimant; a new session inherits its
 checkout's claims with no re-briefing, which is precisely the behavior the
@@ -356,9 +372,13 @@ not by silent policy. The worst case under partition is *visible duplicate
 effort*, never blocked work — the correct failure mode for coordination
 metadata.
 
-Cold start is graceful by construction: historical events carry no
-attribution, so a freshly upgraded repository derives zero claims and behaves
-exactly as before until newly attributed work exists.
+Cold start is graceful by construction, but by freshness rather than by
+absence. Historical events carry no attribution, so a freshly upgraded
+repository derives claims held by the **public checkout** — and that history is
+far older than the freshness window, so every one of them reads as stale:
+available for takeover, carrying its provenance, routing nobody away from work.
+The repository therefore behaves as it did before until newly attributed work
+exists, and it does so without pretending nobody ever worked those lanes.
 
 ## The privacy invariant
 

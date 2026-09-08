@@ -39,9 +39,10 @@ type Claimant struct {
 // events is that issue's history — the write side hands over what it read for
 // the one row it is about to move, not a lane's run — because the question here
 // is "who does the log say last took THIS ticket", which is exactly the event
-// a new start supersedes. An issue whose history establishes nothing, or whose
-// establishing event predates attribution, carries the absent checkout: the
-// same "the record does not say who" that Derive reports as Unclaimed.
+// a new start supersedes. An issue whose establishing event predates
+// attribution carries the public checkout, the same holder Derive reads it as;
+// one whose history establishes nothing carries that same zero value with
+// Established false, which is why Held reads the flag and not the pair.
 func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
 	establisher, found := LatestEstablisher(events)
 	return Claimant{Established: found, Assignee: issue.AssigneeValue(), Checkout: establisher.Attribution}
@@ -52,12 +53,12 @@ func ClaimantOf(issue model.Issue, events []model.IssueEvent) Claimant {
 // [LAW:one-source-of-truth]
 //
 // Note what it does NOT read: the identity halves. An empty assignee is the
-// ordinary state of a human checkout, and an absent checkout is the ordinary
+// ordinary state of a human checkout, and the public checkout is the ordinary
 // state of a record older than attribution — either one read as "nobody" makes
-// a real holder vanish. Derive answers a different question and is right to
-// insist on the checkout: it routes lanes, and a hold it cannot address is one
-// it must call Unclaimed. Announcing a hand-off only needs a predecessor to
-// have existed.
+// a real holder vanish. The flag is the only half that separates "somebody took
+// this" from "nobody has", because both identity halves go empty on holders
+// that are real: announcing a hand-off needs a predecessor to have EXISTED, not
+// to have been addressable.
 func (c Claimant) Held() bool { return c.Established }
 
 // After returns the claimant a status action installs, taken by the checkout

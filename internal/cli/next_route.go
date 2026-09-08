@@ -219,10 +219,17 @@ func capacityFor(row annotation.AnnotatedIssue, standing claims.Standing, self m
 // epics because it asked for one issue type (links-claims-1b0p, N1). Ownership
 // is a fact about the workspace; a display filter must not be able to change it.
 //
-// An absent self needs no guard here: claims.Derive refuses to build a Held or
-// Stale standing from an unattributed establisher (derive.go), so no standing
-// carries the zero Attribution and relationOf can never call a lane ours by
-// matching absence against absence.
+// An unidentified self needs no guard here, and the reason inverted with the
+// public-checkout ruling. Derive once refused to build a Held or Stale standing
+// from an unattributed establisher, so no standing could carry the zero
+// Attribution and the match was unreachable. Now it is reachable and CORRECT:
+// an unidentified checkout and the lanes it worked are the same public
+// checkout, so matching them is how it recognises its own work rather than
+// re-entering the global pool on every invocation.
+//
+// The match is total, never partial. model.NewAttribution admits only the
+// complete pair or the zero value, so "absence matching absence" cannot mean
+// two half-pairs agreeing on the half they happen to share.
 func ownScope(standings claims.Standings, self model.Attribution) (map[model.LaneID]bool, map[string]bool) {
 	lanes := map[model.LaneID]bool{}
 	epics := map[string]bool{}

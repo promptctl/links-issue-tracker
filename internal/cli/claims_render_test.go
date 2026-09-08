@@ -175,7 +175,7 @@ func TestFormatClaimLineContestedAppendsContestants(t *testing.T) {
 	if !ok {
 		t.Fatalf("formatClaimLine on a contested lane returned ok=false")
 	}
-	if !strings.Contains(line, "contested by "+shortStream(contestant)) {
+	if !strings.Contains(line, "contested by "+nameCheckout(contestant)) {
 		t.Fatalf("line = %q, want the contestant named", line)
 	}
 }
