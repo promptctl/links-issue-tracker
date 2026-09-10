@@ -87,8 +87,7 @@ This repo is also a [Claude Code plugin marketplace](https://code.claude.com/doc
 ```
 
 That gets you the `links` plugin: the `/links:next` skill (pick up and start the
-next ticket) plus the `SessionStart`/`PreCompact` hooks that keep `lit quickstart`
-guidance current. For a team, wire it into every clone instead of asking everyone to
+next ticket). For a team, wire it into every clone instead of asking everyone to
 run the two commands above — add to the repo's `.claude/settings.json`:
 
 ```json

@@ -10,7 +10,7 @@
       "name": "links",
       "source": "./claude-plugin",
       "description": "Issue tracking workflow integration for links",
-      "version": "0.3.0"
+      "version": "0.4.0"
     }
   ]
 }

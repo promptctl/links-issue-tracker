@@ -1,7 +1,7 @@
 {
   "name": "links",
-  "description": "Agent-native issue tracking (lit quickstart, /next) for repos using links-issue-tracker.",
-  "version": "0.3.0",
+  "description": "Agent-native issue tracking (/next) for repos using links-issue-tracker.",
+  "version": "0.4.0",
   "author": {
     "name": "links",
     "url": "https://github.com/promptctl/links-issue-tracker"
@@ -9,29 +9,5 @@
   "homepage": "https://github.com/promptctl/links-issue-tracker#readme",
   "repository": "https://github.com/promptctl/links-issue-tracker",
   "license": "MIT",
-  "keywords": ["issue-tracker", "backlog", "agent", "lit", "dolt"],
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "lit quickstart --refresh"
-          }
-        ]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "lit quickstart --refresh"
-          }
-        ]
-      }
-    ]
-  }
+  "keywords": ["issue-tracker", "backlog", "agent", "lit", "dolt"]
 }
