@@ -154,8 +154,9 @@ minted no token *is* the public checkout, which is the point of collapsing all
 of them to one identity rather than to a fresh nobody each time: read as nobody,
 such a checkout owns no lane, so every pick is a new lane and it wanders the
 backlog; read as the public checkout, it holds what it worked and is served out
-of it. Lanes are unaffected — the public checkout occupies ordinary lanes on
-ordinary terms.
+of it only while that hold is fresh (see cold start, under "Distribution,
+races, and failure modes"). Lanes are unaffected — the public checkout occupies
+ordinary lanes on ordinary terms.
 
 The price is that two checkouts with no token are indistinguishable. That is the
 definition of the bucket rather than a defect in it: an identity nobody minted
