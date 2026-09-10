@@ -62,22 +62,11 @@ type pushOutcomeRecord struct {
 	Reason   string `json:"reason,omitempty"`
 	Remote   string `json:"remote,omitempty"`
 	Branch   string `json:"branch,omitempty"`
-	// ObservedBy is the lit version that ran the attempt this record describes.
-	// Reason is a sentence that was true when it was written and is rendered
-	// verbatim forever after, so without a stamp naming its observer a reader
-	// cannot tell a live constraint from an expired one: the field incident was
-	// `lit doctor` reporting "this binary supports only up to 4" while running a
-	// binary that supports 5, because the text was replayed rather than
-	// recomputed. The observer is the one condition behind such a verdict that is
-	// cheap to compare and that the remediation itself asks the operator to
-	// change, so it travels WITH the sentence it dates.
-	// [FRAMING:representation] the record is a map of a past attempt; stamping it
-	// is what stops it being read as a map of the present.
-	//
-	// Empty means the attempt could not name its own version — a dev build
-	// (version.Info.Version is "" there) or an unreadable build stamp — and also
-	// what every record written before this field existed reads as. Empty is a
-	// real domain value, "no observer to compare", never a failure to hide.
+	// ObservedBy is the lit version that ran the attempt. Reason is frozen at
+	// write time and replayed verbatim, so this stamp is what tells a reader
+	// whether the binary has changed since the verdict was reached. Empty for a
+	// dev build, an unreadable build stamp, or a record written before the field
+	// existed: "no observer to compare", not an error.
 	ObservedBy string `json:"observed_by,omitempty"`
 }
 
@@ -109,21 +98,14 @@ func pushOutcomeMarkerPath(ws workspace.Info) string {
 // attempt they interrupted.
 func pushOutcomeOf(outcome syncPushOutcome, err error, observedBy string) pushOutcomeRecord {
 	rec := classifyPushOutcome(outcome, err)
-	// [LAW:dataflow-not-control-flow] Every outcome is stamped, not just the
-	// failing ones: which decisions a future reader will want dated is not a fact
-	// this derivation knows, and a stamp applied on one arm only is a field whose
-	// emptiness would mean two different things.
+	// [LAW:dataflow-not-control-flow] Every outcome is stamped, so an empty
+	// ObservedBy means only "no observer", never "not a failure".
 	rec.ObservedBy = observedBy
 	return rec
 }
 
-// classifyPushOutcome is the classification half: which decision this ending
-// was, and the remote/branch/reason that name it. It is split out so
-// pushOutcomeOf stays a TOTAL derivation — inputs to whole record, stamp
-// included — rather than handing a half-filled record back to its caller to
-// finish. A record completed at the call site is a record some future call site
-// forgets to complete. [LAW:single-enforcer] [LAW:decomposition] one sentence
-// each: this one classifies, its caller dates what was classified.
+// classifyPushOutcome decides which decision an attempt's ending was, and the
+// remote, branch and reason that name it; pushOutcomeOf dates what it classifies.
 func classifyPushOutcome(outcome syncPushOutcome, err error) pushOutcomeRecord {
 	switch {
 	case errors.Is(err, context.Canceled) || errors.Is(outcome.pushErr, context.Canceled):
@@ -187,17 +169,11 @@ func recordPushOutcome(ws workspace.Info, rec pushOutcomeRecord) {
 	}
 }
 
-// runningBinaryVersion reads this binary's version for the provenance stamp,
-// mirroring resolveBuildStatusNote's shape: the effect (reading build info) is
-// resolved at the boundary so everything below it stays pure over a string.
-// [LAW:effects-at-boundaries]
-//
-// A version that cannot be read is reported and recorded as "" — the same value
-// a dev build produces — rather than failing the completion around it: the push
-// this record describes has already succeeded or failed, and bookkeeping must
-// not re-color that verdict, exactly as recordPushOutcome's own write failure
-// does not. [LAW:no-silent-failure] the failure is loud on the channel that
-// cannot lie about the push.
+// runningBinaryVersion reads this binary's version at the boundary, so the
+// renderers below stay pure over a string. [LAW:effects-at-boundaries] An
+// unreadable version is reported on stderr and returned as "", the value a dev
+// build has: bookkeeping must not fail a push whose outcome is already decided.
+// [LAW:no-silent-failure]
 func runningBinaryVersion() string {
 	info, err := version.Get()
 	if err != nil {
@@ -207,22 +183,13 @@ func runningBinaryVersion() string {
 	return info.Version
 }
 
-// pushOutcomeProvenance renders the clause that keeps a recorded failure from
-// reading as a live one. A record's Reason is a sentence frozen at write time —
-// "this binary supports only up to 4" stays in the present tense however many
-// binaries later it is printed — so when the binary has CHANGED since the
-// attempt, the reader is told so and pointed at the one thing that settles it: a
-// fresh attempt. Nothing here re-tests anything; re-testing is what `lit sync
-// push` is, and every push already re-evaluates its preconditions from scratch.
-//
-// An empty clause is the answer whenever the comparison cannot be made — no
-// observer stamped, no readable running version, or the same version on both
-// sides — and the callers interpolate it unconditionally, so the sentence they
-// build reads exactly as it did before when there is nothing to say.
-// [LAW:dataflow-not-control-flow] the versions decide the text, never whether a
-// renderer runs. Pure over two strings. [LAW:single-enforcer] both surfaces that
-// replay a recorded failure — the banner and doctor — date it through this one
-// function, so they cannot drift into dating it two ways.
+// pushOutcomeProvenance renders the clause that stops a recorded failure reading
+// as a live one: when the binary has changed since the attempt, it says so. It
+// claims only a change, never which version is newer, because after a rollback
+// the recorded verdict may still hold. Empty when there is nothing to compare or
+// nothing changed; callers interpolate it unconditionally.
+// [LAW:dataflow-not-control-flow] [LAW:single-enforcer] the banner and doctor
+// both date a recorded failure through this one function.
 func pushOutcomeProvenance(rec pushOutcomeRecord, running string) string {
 	if rec.ObservedBy == "" || running == "" || rec.ObservedBy == running {
 		return ""

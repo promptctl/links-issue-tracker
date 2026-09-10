@@ -173,14 +173,7 @@ func TestSyncFailureErrorExitAndRemediation(t *testing.T) {
 // A remote-schema-ahead block routes to `lit upgrade` and — unlike a divergence —
 // frames the state as BLOCKED-until-upgrade, never an age-based "still routine"
 // line that would invite the wait-and-retry the epic kills.
-//
-// The remedy names the schema REQUIREMENT and never a `--to` target. It used to
-// name the producer that advanced the remote whenever the head carried a stamp,
-// which is a build identity rather than a requirement: an unresolvable
-// describe-built version, or — when this block is replayed later out of a
-// push-outcome record — an instruction to install something older than what the
-// reader is already running. `lit upgrade` with no argument installs the latest
-// release, which answers every case the old branch was distinguishing.
+// The remedy names the schema requirement, never a `--to` build target.
 func TestSyncFailureBlockRemoteSchemaAhead(t *testing.T) {
 	t.Parallel()
 	block := SyncFailure{

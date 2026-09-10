@@ -152,15 +152,9 @@ func resolveDoctorSyncFreshness(ctx context.Context, ws workspace.Info, st stora
 // freshness line above already covers those states, and a second line about
 // them would be a drifting copy. [LAW:one-source-of-truth]
 //
-// What it prints is a PAST observation, and the line now says so: the age, the
-// provenance clause when the binary has changed since the attempt, and a
-// standing pointer at `lit sync push` — the only thing that can turn a recorded
-// verdict back into a current one. Doctor deliberately does not re-test the
-// attempt itself: it is a read-only diagnostic, and re-testing a push means
-// pushing. What it owes the reader is not a fresh verdict but an honest date on
-// the one it replays, which is exactly what the 2026-08-25 incident lacked — a
-// stale "this binary supports only up to 4" read as a live constraint by an
-// operator whose binary had supported 5 for six days.
+// The line is a past observation and says so: its age, the provenance clause
+// when the binary has changed since, and `lit sync push`, the command that
+// produces a current verdict. Doctor is read-only, so it cannot re-test a push.
 func printPushOutcomeHealth(w io.Writer, ws workspace.Info, now time.Time, running string) error {
 	rec, age, known := lastPushOutcome(ws, now)
 	if !known || !rec.failed() {

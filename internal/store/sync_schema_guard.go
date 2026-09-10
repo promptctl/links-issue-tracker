@@ -17,19 +17,11 @@ import (
 // author a commit BELOW the remote head's schema: this binary knows only its own
 // older columns, so it would regress the shared remote to a schema it understands
 // and drop every field the newer schema added. That is the exact 2026-07-08
-// incident. The lossless fix is to run a binary whose schema support reaches the
-// remote's version, so the error states that REQUIREMENT and routes to `lit
-// upgrade`, whose argument-free form installs the latest release.
-//
-// It deliberately does not name the binary that authored the remote head. A
-// producer stamp is a build IDENTITY, not a requirement, and the two come apart
-// in both directions: the stamp can be a describe-built version
-// (`0.2.1-5-g50dfc53`) that no release feed can resolve, and a reader meeting the
-// message later — replayed from a push-outcome record by `lit doctor` — is told
-// to install a build older than the one they are already running. The remote's
-// schema version is the fact that stays true however many binaries come and go.
-// [FRAMING:representation] the requirement is the territory; a build id is a map
-// that goes stale the moment anything moves.
+// incident. The lossless fix is a binary whose schema support reaches the remote's
+// version, so the error states that requirement and routes to `lit upgrade`. It
+// does not name the binary that authored the remote head: a build identity can be
+// unresolvable, and when the message is replayed later it can be older than the
+// binary the reader is already running.
 //
 // [LAW:types-are-the-program] The refusal is version arithmetic on data —
 // (RemoteVersion, BinarySupportedMax) — never inferred from a query happening to
@@ -45,10 +37,6 @@ type RemoteSchemaAheadError struct {
 	BinarySupportedMax int64
 }
 
-// [LAW:dataflow-not-control-flow] One rendering, every call. The requirement is
-// always the remote's own schema version, so there is nothing left to branch on —
-// the producer-populated arm this replaced was the only variability, and it was
-// variability in the answer, not in the question.
 func (e *RemoteSchemaAheadError) Error() string {
 	return fmt.Sprintf(
 		"remote %s/%s is at schema version %d but this binary supports only up to %d; "+
@@ -140,10 +128,6 @@ func (s *Store) trackingHeadHash(ctx context.Context, remote, branch string) (ha
 // exists to prevent, so the read must never trigger it.
 // [LAW:effects-at-boundaries] a pure read. [LAW:one-source-of-truth] MAX(version_id)
 // is goose's own mysql-dialect definition of the applied version, not a second one.
-//
-// It reads the schema version and nothing else. The producer stamp beside it is
-// deliberately not read: the refusal states a schema REQUIREMENT, and a fact no
-// consumer needs is a fact that cannot go stale on one. [LAW:polishing-by-subtraction]
 func (s *Store) remoteHeadSchema(ctx context.Context, commitHash string) (version int64, err error) {
 	if !isDoltCommitHash(commitHash) {
 		// [LAW:no-silent-failure] AS OF takes a literal, not a bound parameter, so

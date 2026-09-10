@@ -304,17 +304,9 @@ func TestIsDoltCommitHash(t *testing.T) {
 	}
 }
 
-// TestRemoteSchemaAheadErrorStatesTheRequirement pins what the refusal tells an
-// operator to do: install a lit that supports the remote's schema version. It
-// must never name a build identity to install.
-//
-// The 2026-08-25 field incident is why. The message named the producer that had
-// advanced the remote — `lit upgrade --to 0.2.1-5-g50dfc53`, a describe-built
-// version no release feed resolves — and that sentence was then replayed out of
-// a push-outcome record for eight days, by which time the reader was running
-// v0.9.0 and was being told to install four minor versions backwards. A schema
-// version is a requirement and stays true; a build id is a map of who happened
-// to write the head, and it goes stale the moment anything moves.
+// TestRemoteSchemaAheadErrorStatesTheRequirement pins that the refusal tells an
+// operator to install a lit supporting the remote's schema version, and never
+// names a build identity to install.
 func TestRemoteSchemaAheadErrorStatesTheRequirement(t *testing.T) {
 	t.Parallel()
 	msg := (&RemoteSchemaAheadError{

@@ -191,10 +191,6 @@ func TestSyncPushFailureLines(t *testing.T) {
 			wantSubstrs: []string{"FAILING", "check remote refs", "lit sync push"},
 		},
 		{
-			// The 2026-08-25 incident, rendered: a schema refusal recorded by
-			// 0.7.0, still being replayed to an operator running 0.9.0 — whose
-			// binary has supported that schema for days. The reason text cannot
-			// say so (it was frozen at write time), so the line must.
 			name: "a verdict from an older binary is dated, not replayed as current",
 			rec: pushOutcomeRecord{
 				Decision:   pushDecisionError,
@@ -342,14 +338,8 @@ func TestPrintMutationSyncStalenessWarning(t *testing.T) {
 	})
 }
 
-// TestDoctorPushHealthDatesTheReplayedVerdict pins doctor's half of the
-// stale-verdict fix. The recorded Reason is a sentence frozen at write time and
-// printed verbatim; the incident was an operator reading "this binary supports
-// only up to 4" off a 0.7.0 record while running a binary that had supported
-// schema 5 for six days, and concluding the workspace was broken. Doctor cannot
-// re-test the push — it is a read-only diagnostic and re-testing means pushing —
-// so what it owes the reader is the date on the verdict it is replaying, and the
-// one command that produces a current one.
+// TestDoctorPushHealthDatesTheReplayedVerdict pins that doctor dates a failure
+// recorded by a different binary and points at the command that re-tests it.
 func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}
@@ -380,12 +370,9 @@ func TestDoctorPushHealthDatesTheReplayedVerdict(t *testing.T) {
 	}
 }
 
-// TestRecordedPushFailureIsNotALatch pins the ticket's first claim as behavior:
-// a recorded failure is an observation of one attempt, not a state the workspace
-// gets stuck in. The next attempt overwrites it, and a success clears the warning
-// — nothing consults the stored verdict to decide whether to try again, so a
-// precondition that has since cleared is discovered by the next push rather than
-// re-asserted from the record.
+// TestRecordedPushFailureIsNotALatch pins that a recorded failure is an
+// observation of one attempt, not a state the workspace gets stuck in: the next
+// attempt overwrites it, and a success clears the warning.
 func TestRecordedPushFailureIsNotALatch(t *testing.T) {
 	t.Parallel()
 	ws := workspace.Info{Location: workspace.Location{StorageDir: t.TempDir()}}

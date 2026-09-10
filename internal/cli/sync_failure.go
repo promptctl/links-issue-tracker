@@ -105,10 +105,7 @@ type SyncFailure struct {
 	// syncFailureRemoteSchemaAhead: the remote head's applied schema version and
 	// this binary's registry max. [LAW:types-are-the-program] the fields present
 	// name which class rendered, so a consumer cannot read a remote-schema-ahead
-	// block without the versions that make it actionable. The producer stamp that
-	// used to ride alongside them is gone: the remedy names a schema requirement,
-	// and carrying a build id no renderer reads is carrying a fact that can only
-	// go stale. [LAW:polishing-by-subtraction]
+	// block without the versions that make it actionable.
 	RemoteSchemaVersion int64
 	LocalSupportedMax   int64
 	// Inventory carries the both-sides issue-id partition (only-local, only-remote,
@@ -309,13 +306,8 @@ func (f SyncFailure) resolutionSteps() []string {
 			"lit sync reconcile        # only if the pull reports a held text conflict — then merge it inline",
 		}
 	case syncFailureRemoteSchemaAhead:
-		// [LAW:dataflow-not-control-flow] One step, every time. The arm this replaced
-		// named the producer that advanced the remote as a `--to` target, which is a
-		// build identity rather than the requirement: an unresolvable describe-built
-		// stamp, or — when this block is replayed later from a push-outcome record —
-		// a version below the one the reader is already running. `lit upgrade` with no
-		// argument installs the latest release, which is the right answer in every
-		// case the branch was distinguishing.
+		// Bare `lit upgrade` installs the latest release. No `--to <producer>`: a
+		// build identity can be unresolvable, or older than the running binary.
 		return []string{
 			fmt.Sprintf("lit upgrade               # install a lit that supports schema v%d, then retry", f.RemoteSchemaVersion),
 		}
