@@ -1,15 +1,15 @@
 {
-  "name": "links-marketplace",
-  "description": "Plugin marketplace for links (lit), the agent-native issue tracker that lives in your git repo.",
+  "name": "lit",
+  "description": "Plugin marketplace for lit, the agent-native issue tracker that lives in your git repo.",
   "owner": {
-    "name": "links",
+    "name": "lit",
     "url": "https://github.com/promptctl/links-issue-tracker"
   },
   "plugins": [
     {
-      "name": "links",
+      "name": "lit",
       "source": "./claude-plugin",
-      "description": "Issue tracking workflow integration for links",
+      "description": "The /next skill for repos tracked with lit",
       "version": "0.4.0"
     }
   ]

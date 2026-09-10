@@ -1,9 +1,9 @@
 {
-  "name": "links",
-  "description": "Agent-native issue tracking (/next) for repos using links-issue-tracker.",
+  "name": "lit",
+  "description": "The /next skill for repos tracked with lit, the agent-native issue tracker.",
   "version": "0.4.0",
   "author": {
-    "name": "links",
+    "name": "lit",
     "url": "https://github.com/promptctl/links-issue-tracker"
   },
   "homepage": "https://github.com/promptctl/links-issue-tracker#readme",

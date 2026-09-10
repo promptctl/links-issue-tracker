@@ -33,7 +33,7 @@ func TestClaudeMarketplaceListsPlugin(t *testing.T) {
 	if len(marketplace.Plugins) == 0 {
 		t.Fatalf("marketplace plugins missing: %#v", marketplace)
 	}
-	if marketplace.Plugins[0].Name != "links" || marketplace.Plugins[0].Source != "./claude-plugin" {
+	if marketplace.Plugins[0].Name != "lit" || marketplace.Plugins[0].Source != "./claude-plugin" {
 		t.Fatalf("unexpected marketplace plugin entry: %#v", marketplace.Plugins[0])
 	}
 }

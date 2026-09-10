@@ -83,21 +83,21 @@ This repo is also a [Claude Code plugin marketplace](https://code.claude.com/doc
 
 ```text
 /plugin marketplace add promptctl/links-issue-tracker
-/plugin install links@links-marketplace
+/plugin install lit@lit
 ```
 
-That gets you the `links` plugin: the `/links:next` skill (pick up and start the
+That gets you the `lit` plugin: the `/lit:next` skill (pick up and start the
 next ticket). For a team, wire it into every clone instead of asking everyone to
 run the two commands above — add to the repo's `.claude/settings.json`:
 
 ```json
 {
   "extraKnownMarketplaces": {
-    "links-marketplace": {
+    "lit": {
       "source": { "source": "github", "repo": "promptctl/links-issue-tracker" }
     }
   },
-  "enabledPlugins": { "links@links-marketplace": true }
+  "enabledPlugins": { "lit@lit": true }
 }
 ```
 

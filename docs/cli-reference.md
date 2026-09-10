@@ -84,7 +84,7 @@ managed `lit` sections to `AGENTS.md` / `CLAUDE.md`, and installs the sync git h
 Idempotent: re-running reconciles the managed files. `--skip-hooks` and `--skip-agents`
 suppress the respective side effects.
 
-The `/next` skill for pulling the next ticket ships from the `links` Claude Code plugin
+The `/next` skill for pulling the next ticket ships from the `lit` Claude Code plugin
 (`.claude-plugin/marketplace.json` at the repo root), not written into the target
 repo — see [Agent setup](agent-setup.md#4-install-the-next-skill-optional-recommended).
 
