@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/promptctl/links-issue-tracker/internal/rank"
 	"github.com/promptctl/links-issue-tracker/internal/storage"
 )
 
@@ -482,5 +483,77 @@ func TestRepairRankOrderProperties(t *testing.T) {
 		if len(again) != 0 {
 			t.Fatalf("trial %d: second repair wrote %d rank(s), want 0 — the repair must be idempotent", trial, len(again))
 		}
+	}
+}
+
+// Idempotence through the store, with smoothing in the path. The property run
+// above never reaches smoothRanksIfNeededTx, so here every planted rank is
+// already longer than rank.SmoothingThreshold, and so is each mover's: three
+// movers in one call, two sharing a gap, all re-spacing overlapping windows.
+// Smoothing may rewrite any rank in the store, but it must leave the repaired
+// order standing, and a second call over that store must write nothing at all.
+func TestFixRankInversionsTwiceWritesNothingWithSmoothing(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	st := openIssueStore(t, ctx)
+
+	ids := make([]string, 0, 8)
+	for _, title := range []string{"Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"} {
+		ids = append(ids, createRankTestIssue(t, ctx, st, title))
+	}
+	prefix := strings.Repeat("V", rank.SmoothingThreshold)
+	for _, item := range seq(ids...) {
+		if err := st.ExecRawForTest(ctx, "UPDATE issues SET item_rank = ? WHERE id = ?", prefix+item.rank, item.id); err != nil {
+			t.Fatalf("plant rank for %s: %v", item.id, err)
+		}
+	}
+	for _, edge := range []struct{ dependent, dependency string }{
+		{ids[0], ids[3]},
+		{ids[1], ids[3]},
+		{ids[5], ids[7]},
+	} {
+		if _, err := st.AddRelation(ctx, storage.AddRelationInput{SrcID: edge.dependent, DstID: edge.dependency, Type: "blocks", CreatedBy: "tester"}); err != nil {
+			t.Fatalf("AddRelation(%s blocked by %s) error = %v", edge.dependent, edge.dependency, err)
+		}
+	}
+	report, err := st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(before) error = %v", err)
+	}
+	if report.RankInversions != 3 {
+		t.Fatalf("Doctor(before).RankInversions = %d, want 3", report.RankInversions)
+	}
+
+	fixed, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("FixRankInversions() error = %v", err)
+	}
+	if fixed != 3 {
+		t.Fatalf("FixRankInversions() = %d, want 3 — five of the eight already ascend, so three move", fixed)
+	}
+	repaired := ranksByID(t, ctx, st, ids)
+	want := []string{ids[2], ids[3], ids[0], ids[1], ids[4], ids[6], ids[7], ids[5]}
+	if got := orderByRank(repaired); !equalIDs(got, want) {
+		t.Fatalf("order after fix = %v, want %v", got, want)
+	}
+
+	again, err := st.FixRankInversions(ctx)
+	if err != nil {
+		t.Fatalf("second FixRankInversions() error = %v", err)
+	}
+	if again != 0 {
+		t.Fatalf("second FixRankInversions() = %d, want 0 — the store was already repaired", again)
+	}
+	for id, after := range ranksByID(t, ctx, st, ids) {
+		if after != repaired[id] {
+			t.Fatalf("second FixRankInversions() moved %s from %q to %q; a repaired store must come back byte-identical", id, repaired[id], after)
+		}
+	}
+	report, err = st.Doctor(ctx)
+	if err != nil {
+		t.Fatalf("Doctor(after) error = %v", err)
+	}
+	if report.RankInversions != 0 {
+		t.Fatalf("Doctor(after).RankInversions = %d, want 0", report.RankInversions)
 	}
 }

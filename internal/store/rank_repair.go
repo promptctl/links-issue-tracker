@@ -127,9 +127,9 @@ func stableTopoOrder(order []rankedIssue, edges []blocksEdge) ([]string, error) 
 //
 // The issues whose stored ranks already ascend along target need no write: they
 // are in the right relative order, and rewriting them would touch — and restamp
-// updated_at on — rows that did not move. The longest such run is a longest
-// strictly-increasing subsequence of target by stored rank; every issue outside
-// it is spaced into the gap its neighbouring anchors leave.
+// updated_at on — rows that did not move. anchorRun chooses the longest such
+// run, comparing significant ranks; every issue outside it is spaced into the
+// gap its neighbouring anchors leave.
 func rankRewrites(order []rankedIssue, target []string) ([]rankRewrite, error) {
 	rankOf := make(map[string]string, len(order))
 	for _, item := range order {
