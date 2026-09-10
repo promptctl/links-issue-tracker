@@ -1,12 +1,14 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/promptctl/links-issue-tracker/internal/claims"
 	"github.com/promptctl/links-issue-tracker/internal/model"
+	"github.com/promptctl/links-issue-tracker/internal/storage"
 	"github.com/promptctl/links-issue-tracker/internal/workspace"
 )
 
@@ -162,17 +164,9 @@ func TestFormatClaimLineStaleHolderStillResolvesALiveAddress(t *testing.T) {
 
 // TestDescribeClaimantNamesAnUnaddressableHolder pins the transfer notice's
 // half of the public-checkout ruling: the four renderings describeClaimant can
-// produce, each against the exact string a reader sees.
-//
-// The unattributed row is the one that had no coverage. It cannot be reached
-// through the end-to-end takeover tests beside this file, and that is a fact
-// about the write path rather than a gap in them: app.Open mints a token before
-// any real write lands, so a notice naming the public checkout announces
-// PRE-ATTRIBUTION history being taken over -- history no CLI in this repo can
-// author any more. Driving it end-to-end would mean writing an unattributed
-// event behind the CLI's back, which pins the harness rather than the contract.
-// The composition around these strings is already pinned end-to-end by
-// TestStartRefusesAndThenTakesOverAFreshForeignClaim's both-halves regexp.
+// produce, each against the exact string a reader sees. The unattributed row is
+// driven through the notice it appears in by
+// TestTransferNoticeNamesAPredecessorThatMintedNoToken.
 //
 // The empty-assignee rows are the ruling: the old text read "(unassigned)",
 // which described the empty field while saying nothing about the holder being
@@ -210,6 +204,32 @@ func TestDescribeClaimantNamesAnUnaddressableHolder(t *testing.T) {
 				t.Fatalf("describeClaimant(%+v) = %q, want %q", row.claimant, got, row.want)
 			}
 		})
+	}
+}
+
+// TestTransferNoticeNamesAPredecessorThatMintedNoToken takes a ticket over from
+// a hold that carries no stream token and reads the notice a reader actually
+// sees. The harness app opens its store with no Stream, so its own start records
+// exactly that hold: the public checkout, with no assignee beside it.
+func TestTransferNoticeNamesAPredecessorThatMintedNoToken(t *testing.T) {
+	h := newReadyTestHarness(t)
+	issue := h.createIssue(storage.CreateIssueInput{Prefix: "test", Title: "unattributed hold", Topic: "claims", IssueType: "task"})
+	h.transition(issue.ID, model.Start{})
+
+	stream, err := workspace.EnsureStream(t.TempDir())
+	if err != nil {
+		t.Fatalf("EnsureStream error = %v", err)
+	}
+	taker := *h.ap
+	taker.Stream = stream
+
+	notice, err := transferNotice(h.ctx, &taker, issue.ID, model.Start{Assignee: "bravo-agent"})
+	if err != nil {
+		t.Fatalf("transferNotice error = %v", err)
+	}
+	want := fmt.Sprintf("claim transferred: the public checkout -> bravo-agent (%s)\n", nameCheckout(ownAttribution(&taker)))
+	if notice != want {
+		t.Fatalf("transferNotice = %q, want %q", notice, want)
 	}
 }
 
